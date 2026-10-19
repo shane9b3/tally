@@ -1,8 +1,37 @@
 //! Number formatting for Tally (WP4).
 //!
-//! Will contain the OOo format-code parser and formatter, the input
-//! recognizer (typed text to number/date/bool), date serial conversions for
-//! all three epochs and en-US locale data. See `docs/architecture-plan.md`
-//! §3.8 and §7 WP4.
+//! - [`parse_format`] / [`print_format`]: OOo format codes ⇄ [`FormatAst`];
+//! - [`format_value`] / [`format_value_with`]: value + format → [`Formatted`];
+//! - [`recognize_input`] / [`recognize_input_with`]: typed text → value and
+//!   implied format; [`parse_number_unambiguous`] for ConvertUnambiguous;
+//! - [`date`]: proleptic Gregorian serials for the three epochs;
+//! - [`Locale`] (en-US data), [`builtin_format`] and Excel translation.
+//!
+//! See `docs/architecture-plan.md` §3.8 and §7 WP4.
 
-// TODO(WP4): implement. This crate is a WP0 skeleton.
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+mod builtin;
+pub mod date;
+mod decimal;
+pub mod excel;
+mod format;
+mod format_ast;
+mod locale;
+mod parse_format;
+mod recognize;
+
+pub use builtin::{builtin_format, QuickFormat};
+pub use format::{format_value, format_value_with, general_string, AlignHint, Formatted, OVERFLOW};
+pub use format_ast::{
+    Color, CompareOp, Condition, DateLayout, DateTimeToken, Digit, ElapsedUnit, ExponentLayout,
+    FormatAst, FractionLayout, GeneralKeyword, NamedColor, NumberLayout, Section, SectionKind,
+    Token, COLOR_PALETTE,
+};
+pub use locale::{DateOrder, Locale, EN_US};
+pub use parse_format::{parse_format, print_format, FormatError};
+pub use recognize::{
+    parse_number_unambiguous, parse_number_unambiguous_with, recognize_input, recognize_input_with,
+    RecognizeContext, Recognized,
+};

@@ -10,7 +10,8 @@ pub enum DateEpoch {
     /// Serial 0 is 1899-12-30 (OpenOffice / LibreOffice default).
     #[default]
     D1899,
-    /// Serial 1 is 1900-01-01, including Excel's fictitious 1900-02-29.
+    /// Serial 0 is 1900-01-01 (StarCalc 1.0 convention; no fictitious
+    /// 1900-02-29). XLSX import/export must shift Excel serials 1..60.
     D1900,
     /// Serial 0 is 1904-01-01 (classic Mac Excel).
     D1904,
