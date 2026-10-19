@@ -1,0 +1,74 @@
+# CUMIPMT conformance vectors. Ported AOO 4.1 semantics (interpr2.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=CUMIPMT(0.09/12;30*12;125000;13;24;0)"
+expect = -11135.23213
+tol = 1e-05
+
+[[case]]
+name = "Excel reference, first month"
+formula = "=CUMIPMT(0.09/12;30*12;125000;1;1;0)"
+expect = -937.5
+tol = 1e-09
+
+[[case]]
+name = "advance"
+formula = "=CUMIPMT(0.09/12;30*12;125000;1;12;1)"
+expect = -10201.3328844946
+tol = 1.02013328844946e-08
+
+[[case]]
+name = "periods are floored"
+formula = "=CUMIPMT(0.09/12;360;125000;13.9;24.2;0)"
+expect = -11135.2321307508
+tol = 1.11352321307508e-08
+
+[[case]]
+name = "rate must be positive"
+formula = "=CUMIPMT(0;360;125000;1;12;0)"
+expect = "Err:502"
+
+[[case]]
+name = "start below 1"
+formula = "=CUMIPMT(0.01;360;125000;0;12;0)"
+expect = "Err:502"
+
+[[case]]
+name = "end before start"
+formula = "=CUMIPMT(0.01;360;125000;12;11;0)"
+expect = "Err:502"
+
+[[case]]
+name = "pv must be positive"
+formula = "=CUMIPMT(0.01;360;-5;1;12;0)"
+expect = "Err:502"
+
+[[case]]
+name = "type 2 counts as advance (built-in)"
+formula = "=CUMIPMT(0.01;360;125000;1;12;2)"
+expect = -13589.6928420581
+tol = 1.35896928420581e-08
+note = "The built-in only tests type > 0; CUMIPMT_ADD rejects 2."
+
+[[case]]
+name = "non-numeric text"
+formula = "=CUMIPMT(\"x\";360;125000;1;12;0)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=CUMIPMT(A4;360;125000;1;12;0)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=CUMIPMT(0.01;360;125000;1;12)"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=CUMIPMT(0.01;360;125000;1;12;0;1)"
+expect = "Err:504"

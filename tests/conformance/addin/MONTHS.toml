@@ -1,0 +1,45 @@
+# MONTHS conformance vectors. Date add-in: type 0 interval, 1 calendar months. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=MONTHS(DATE(2026;1;31);DATE(2026;3;30);0)"
+expect = 1
+
+[[case]]
+formula = "=MONTHS(DATE(2026;1;31);DATE(2026;3;30);1)"
+expect = 2
+
+[[case]]
+formula = "=MONTHS(DATE(2026;1;15);DATE(2026;3;15);0)"
+expect = 2
+
+[[case]]
+formula = "=MONTHS(DATE(2026;3;30);DATE(2026;1;31);0)"
+expect = -1
+
+[[case]]
+formula = "=MONTHS(DATE(2026;3;30);DATE(2026;1;31);1)"
+expect = -2
+
+[[case]]
+formula = "=MONTHS(DATE(2025;12;31);DATE(2026;1;1);1)"
+expect = 1
+
+[[case]]
+formula = "=MONTHS(DATE(2025;12;31);DATE(2026;1;1);0)"
+expect = 0
+
+[[case]]
+formula = "=MONTHS(DATE(2020;1;1);DATE(2026;1;1);0)"
+expect = 72
+
+[[case]]
+formula = "=MONTHS(DATE(2020;1;1);DATE(2026;1;1);2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=MONTHS(\"x\";1;0)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=MONTHS(1;2)"
+expect = "Err:511"

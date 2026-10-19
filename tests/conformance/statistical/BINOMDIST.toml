@@ -1,0 +1,76 @@
+# BINOMDIST conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "mass"
+formula = "=BINOMDIST(3;10;0.5;FALSE)"
+expect = 0.1171875
+tol = 1e-14
+
+[[case]]
+name = "cumulative"
+formula = "=BINOMDIST(3;10;0.5;TRUE)"
+expect = 0.171875
+tol = 2e-14
+
+[[case]]
+name = "x = n"
+formula = "=BINOMDIST(10;10;0.5;TRUE)"
+expect = 1.0
+tol = 0
+
+[[case]]
+name = "x = 0"
+formula = "=BINOMDIST(0;10;0.3;TRUE)"
+expect = 0.0282475249
+tol = 3e-15
+
+[[case]]
+name = "large n"
+formula = "=BINOMDIST(500;2000;0.25;TRUE)"
+expect = 0.5120143601681714
+tol = 5e-13
+
+[[case]]
+name = "q^n underflows"
+formula = "=BINOMDIST(1450;2000;0.75;TRUE)"
+expect = 0.00564480180765903
+tol = 6e-14
+
+[[case]]
+name = "p = 0 mass"
+formula = "=BINOMDIST(3;10;0;FALSE)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "p = 0 cumulative"
+formula = "=BINOMDIST(3;10;0;TRUE)"
+expect = 1.0
+tol = 0
+
+[[case]]
+name = "x > n"
+formula = "=BINOMDIST(11;10;0.5;0)"
+expect = "Err:502"
+
+[[case]]
+name = "p negative"
+formula = "=BINOMDIST(3;10;-0.1;0)"
+expect = "Err:502"
+
+[[case]]
+name = "counts floored"
+formula = "=BINOMDIST(3.9;10.5;0.5;0)"
+expect = 0.1171875
+tol = 1e-14
+
+[[case]]
+name = "text"
+formula = "=BINOMDIST(\"x\";10;0.5;0)"
+expect = "#VALUE!"
+
+[[case]]
+name = "too few"
+formula = "=BINOMDIST(3;10;0.5)"
+expect = "Err:511"

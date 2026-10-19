@@ -1,0 +1,51 @@
+# MROUND conformance vectors. Analysis add-in. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=MROUND(10;3)"
+expect = 9
+
+[[case]]
+formula = "=MROUND(11;3)"
+expect = 12
+
+[[case]]
+formula = "=MROUND(-10;-3)"
+expect = -9
+
+[[case]]
+name = "signs differ"
+formula = "=MROUND(10;-3)"
+expect = "Err:502"
+
+[[case]]
+formula = "=MROUND(-10;3)"
+expect = "Err:502"
+
+[[case]]
+formula = "=MROUND(5;0)"
+expect = 0
+
+[[case]]
+formula = "=MROUND(1.5;1)"
+expect = 2
+
+[[case]]
+formula = "=MROUND(1.2;0.5)"
+expect = 1
+
+[[case]]
+formula = "=MROUND(0;5)"
+expect = 0
+
+[[case]]
+name = "half rounds away"
+formula = "=MROUND(7.5;5)"
+expect = 10
+
+[[case]]
+formula = "=MROUND(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=MROUND(1)"
+expect = "Err:511"

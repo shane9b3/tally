@@ -25,6 +25,7 @@ export type Hit =
   | { area: "colHeader"; c: number }
   | { area: "rowHeader"; r: number }
   | { area: "colGutter"; c: number }
+  | { area: "rowGutter"; r: number }
   | { area: "cell"; r: number; c: number };
 
 export class Geometry {
@@ -131,7 +132,19 @@ export class Geometry {
       }
       return { area: "colHeader", c };
     }
-    if (inRowHeader) return { area: "rowHeader", r: this.rowAt(y) };
+    if (inRowHeader) {
+      const r = this.rowAt(y);
+      const top = this.rowY(r);
+      const bottom = top + this.rowH(r);
+      // Row gutters are thinner than column gutters (rows are short).
+      const g = Math.min(RESIZE_GUTTER, 3);
+      if (bottom - y <= g) return { area: "rowGutter", r };
+      if (y - top <= g) {
+        const prev = this.rows.nextVisible(r, -1);
+        if (prev >= 0) return { area: "rowGutter", r: prev };
+      }
+      return { area: "rowHeader", r };
+    }
     return { area: "cell", r: this.rowAt(y), c: this.colAt(x) };
   }
 

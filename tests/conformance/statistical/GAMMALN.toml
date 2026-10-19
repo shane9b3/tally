@@ -1,0 +1,53 @@
+# GAMMALN conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "10"
+formula = "=GAMMALN(10)"
+expect = 12.801827480081469
+tol = 1e-12
+
+[[case]]
+name = "small"
+formula = "=GAMMALN(0.001)"
+expect = 6.907178885383853
+tol = 7e-13
+
+[[case]]
+name = "large"
+formula = "=GAMMALN(1000)"
+expect = 5905.220423209181
+tol = 6e-10
+
+[[case]]
+name = "one"
+formula = "=GAMMALN(1)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "zero"
+formula = "=GAMMALN(0)"
+expect = "Err:502"
+
+[[case]]
+name = "negative"
+formula = "=GAMMALN(-1.5)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=GAMMALN(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell"
+formula = "=GAMMALN(A1)"
+expect = "Err:502"
+
+[[case]]
+name = "bool"
+cells = { A1 = true }
+formula = "=GAMMALN(A1)"
+expect = 0
+tol = 0

@@ -1,0 +1,70 @@
+# BESSELJ conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=BESSELJ(1;0)"
+expect = 0.7651976865579666
+tol = 7.651976865579666e-13
+
+[[case]]
+formula = "=BESSELJ(1;1)"
+expect = 0.44005058574493355
+tol = 4.4005058574493354e-13
+
+[[case]]
+formula = "=BESSELJ(2.5;3)"
+expect = 0.21660039103911358
+tol = 2.1660039103911358e-13
+
+[[case]]
+formula = "=BESSELJ(10;2)"
+expect = 0.2546303136851206
+tol = 2.5463031368512063e-13
+
+[[case]]
+formula = "=BESSELJ(30;5)"
+expect = -0.1432402955120771
+tol = 1.4324029551207709e-13
+
+[[case]]
+formula = "=BESSELJ(100;10)"
+expect = -0.05473217693547203
+tol = 5.4732176935472027e-14
+
+[[case]]
+formula = "=BESSELJ(0.5;0)"
+expect = 0.938469807240813
+tol = 9.38469807240813e-13
+
+[[case]]
+formula = "=BESSELJ(-2.5;3)"
+expect = -0.21660039103911358
+tol = 2.1660039103911358e-13
+
+[[case]]
+formula = "=BESSELJ(7;0)"
+expect = 0.30007927051955563
+tol = 3.000792705195556e-13
+
+[[case]]
+formula = "=BESSELJ(1;-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BESSELJ(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=BESSELJ(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=BESSELJ(A1;1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "order truncated"
+formula = "=BESSELJ(1;2.9)"
+expect = 0.1149034849319005
+tol = 1.149034849319005e-13
+

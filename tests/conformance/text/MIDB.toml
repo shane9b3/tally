@@ -1,0 +1,39 @@
+[[case]]
+formula = "=MIDB(\"hello\";2;3)"
+expect = "ell"
+
+[[case]]
+formula = "=MIDB(\"日本a\";3;2)"
+expect = "本"
+
+[[case]]
+formula = "=MIDB(\"日本a\";2;2)"
+expect = "  "
+
+[[case]]
+formula = "=MIDB(\"abc\";0;1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=MIDB(\"abc\";1;-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=MIDB(\"abc\";2;99)"
+expect = "bc"
+
+[[case]]
+formula = "=MIDB(\"abc\";5;2)"
+expect = ""
+
+[[case]]
+formula = "=MIDB(12345;2;2)"
+expect = "23"
+
+[[case]]
+formula = "=MIDB(1/0;1;1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=MIDB(\"abc\";1)"
+expect = "Err:511"

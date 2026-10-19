@@ -1,0 +1,55 @@
+[[case]]
+formula = "=FIXED(1234.567)"
+expect = "1,234.57"
+
+[[case]]
+formula = "=FIXED(1234.567;1)"
+expect = "1,234.6"
+
+[[case]]
+formula = "=FIXED(1234.567;0;TRUE)"
+expect = "1235"
+
+[[case]]
+formula = "=FIXED(1234.567;-2)"
+expect = "1,200"
+
+[[case]]
+formula = "=FIXED(-1234.5;1)"
+expect = "-1,234.5"
+
+[[case]]
+formula = "=FIXED(-0.001)"
+expect = "0.00"
+
+[[case]]
+formula = "=FIXED(2.675)"
+expect = "2.68"
+
+[[case]]
+formula = "=FIXED(1;16)"
+expect = "Err:502"
+
+[[case]]
+formula = "=FIXED(0.5;0)"
+expect = "1"
+
+[[case]]
+formula = "=FIXED(1234567.891;2;FALSE)"
+expect = "1,234,567.89"
+
+[[case]]
+formula = "=FIXED(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=FIXED()"
+expect = "Err:511"
+
+[[case]]
+formula = "=FIXED(A1)"
+expect = "0.00"
+
+[[case]]
+formula = "=FIXED(1/0)"
+expect = "#DIV/0!"

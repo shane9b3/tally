@@ -1,0 +1,62 @@
+# BITOR conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=BITOR(12;10)"
+expect = 14
+
+[[case]]
+formula = "=BITOR(0;0)"
+expect = 0
+
+[[case]]
+formula = "=BITOR(281474976710655;1)"
+expect = 281474976710655
+
+[[case]]
+formula = "=BITOR(-1;1)"
+expect = "Err:502"
+note = "Negative operand."
+
+[[case]]
+formula = "=BITOR(1;-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BITOR(281474976710656;1)"
+expect = "Err:502"
+note = "2^48 is out of range."
+
+[[case]]
+formula = "=BITOR(7.9;3)"
+expect = 7
+note = "Truncated."
+
+[[case]]
+formula = "=BITOR(\"12\";\"10\")"
+expect = 14
+
+[[case]]
+formula = "=BITOR(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell"
+formula = "=BITOR(A1;5)"
+expect = 5
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=BITOR(A1;5)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=BITOR(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=BITOR(1;2;3)"
+expect = "Err:504"
+
+[[case]]
+formula = "=BITOR(TRUE;3)"
+expect = 3

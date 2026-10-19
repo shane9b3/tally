@@ -1,0 +1,50 @@
+# CONFIDENCE conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "0.05/2.5/50"
+formula = "=CONFIDENCE(0.05;2.5;50)"
+expect = 0.6929519121748389
+tol = 7e-14
+
+[[case]]
+name = "n = 1"
+formula = "=CONFIDENCE(0.05;1;1)"
+expect = 1.9599639845400538
+tol = 2e-13
+
+[[case]]
+name = "size floored"
+formula = "=CONFIDENCE(0.1;2;10.9)"
+expect = 1.0402967757511148
+tol = 1e-13
+
+[[case]]
+name = "alpha zero"
+formula = "=CONFIDENCE(0;1;1)"
+expect = "Err:502"
+
+[[case]]
+name = "alpha one"
+formula = "=CONFIDENCE(1;1;1)"
+expect = "Err:502"
+
+[[case]]
+name = "stdev zero"
+formula = "=CONFIDENCE(0.05;0;1)"
+expect = "Err:502"
+
+[[case]]
+name = "size below 1"
+formula = "=CONFIDENCE(0.05;1;0.5)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=CONFIDENCE(\"x\";1;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "too many"
+formula = "=CONFIDENCE(0.05;1;1;1)"
+expect = "Err:504"

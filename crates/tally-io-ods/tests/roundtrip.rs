@@ -401,8 +401,8 @@ fn unsupported_things_are_reported() {
     let w = report.warnings.join("\n");
     assert!(w.contains("[NatNum1]0"), "{w}");
     assert!(w.contains("fourth"), "{w}");
-    assert!(w.contains("named expressions"), "{w}");
-    assert!(w.contains("merged"), "{w}");
+    assert!(!w.contains("named expressions"), "{w}");
+    assert!(!w.contains("merged"), "{w}");
     assert!(w.contains("array value"), "{w}");
     let back = read_ods(Cursor::new(buf.into_inner()), &Limits::default()).unwrap();
     // Unsupported formats fall back to General (no number format).

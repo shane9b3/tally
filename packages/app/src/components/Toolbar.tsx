@@ -1,11 +1,11 @@
-/** Top row: (traffic-light inset), document title, action pills, Share. */
+/** Top row: (traffic-light inset), document title, action pills, panel/theme toggles, Share. */
 import { useState, type ReactNode } from "react";
 import { COMING_SOON } from "../commands";
 import { cx, useController } from "../context";
-import { useActiveStyle } from "../hooks";
 import { useDocStore } from "../stores/docStore";
+import { useEditStore } from "../stores/editStore";
 import { useUiStore } from "../stores/uiStore";
-import { ChartIcon, FilterIcon, RedoIcon, SidebarIcon, SortIcon, UndoIcon } from "./icons";
+import { ChartIcon, FilterIcon, GlanceIcon, MoonIcon, RedoIcon, SidebarIcon, SortIcon, UndoIcon } from "./icons";
 import { Popover } from "./Popover";
 import styles from "./Toolbar.module.css";
 
@@ -22,9 +22,10 @@ interface PillProps {
 
 function Pill({ command, label, icon, children, active, iconOnly, tooltip }: PillProps) {
   const ctl = useController();
-  // Re-render on undo state / sheet changes so `enabled` is fresh.
+  // Re-render on undo state / sheet / edit changes so `enabled` is fresh.
   useDocStore((s) => s.undo);
   useDocStore((s) => s.info?.sheets.length);
+  useEditStore((s) => s.edit !== null);
   const cmd = ctl.registry.get(command);
   const enabled = ctl.registry.isEnabled(command);
   const tip = !enabled && cmd?.reason ? cmd.reason : [tooltip ?? label, cmd?.shortcut].filter(Boolean).join("  ");
@@ -52,7 +53,8 @@ export function Toolbar({ inset }: { inset: boolean }) {
   const ctl = useController();
   const info = useDocStore((s) => s.info);
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
-  const style = useActiveStyle();
+  const glanceOpen = useUiStore((s) => s.glanceOpen);
+  const themePref = useUiStore((s) => s.themePref);
   const [share, setShare] = useState<{ x: number; y: number } | null>(null);
 
   const title = info?.title ?? "Untitled";
@@ -84,21 +86,6 @@ export function Toolbar({ inset }: { inset: boolean }) {
         <Pill command="edit.undo" label="Undo" icon={<UndoIcon />} />
         <Pill command="edit.redo" label="Redo" icon={<RedoIcon />} iconOnly />
         <span className={styles.sep} />
-        <Pill command="format.bold" label="Bold" iconOnly={false} active={style?.bold ?? false}>
-          <span className={styles.glyphBold}>B</span>
-        </Pill>
-        <Pill command="format.italic" label="Italic" active={style?.italic ?? false}>
-          <span className={styles.glyphItalic}>I</span>
-        </Pill>
-        <Pill command="format.currency" label="Currency" tooltip="Format as currency">
-          <span className={styles.glyph}>$</span>
-          <span>Currency</span>
-        </Pill>
-        <Pill command="format.percent" label="Percent" tooltip="Format as percent">
-          <span className={styles.glyph}>%</span>
-          <span>Percent</span>
-        </Pill>
-        <span className={styles.sep} />
         <Pill command="data.sort" label="Sort" icon={<SortIcon />} tooltip={COMING_SOON} />
         <Pill command="data.filter" label="Filter" icon={<FilterIcon />} tooltip={COMING_SOON} />
         <Pill command="insert.addUp" label="Add up" tooltip="Add up the numbers above (Σ)">
@@ -108,6 +95,19 @@ export function Toolbar({ inset }: { inset: boolean }) {
         <Pill command="insert.chart" label="Chart" icon={<ChartIcon />} tooltip={COMING_SOON} />
       </nav>
       <div className={styles.spacer} data-tauri-drag-region />
+      <button
+        type="button"
+        className={cx(styles.pill, styles.iconOnly, styles.ghost)}
+        aria-label="Theme"
+        title={`Theme: ${themePref === "system" ? "match system" : themePref} (click to change)`}
+        data-testid="theme-toggle"
+        data-theme-pref={themePref}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => ctl.registry.run("view.theme")}
+      >
+        <MoonIcon />
+      </button>
+      <Pill command="view.glance" label="At a glance" icon={<GlanceIcon />} iconOnly active={glanceOpen} tooltip="At a glance" />
       <button
         type="button"
         className={styles.share}
@@ -128,7 +128,8 @@ export function Toolbar({ inset }: { inset: boolean }) {
           alignRight
           onClose={() => setShare(null)}
           items={[
-            { id: "csv", label: "Export as CSV…", onSelect: () => ctl.registry.run("file.exportCsv") },
+            { id: "ods", label: "Export ODS…", hint: ".ods", onSelect: () => ctl.registry.run("file.exportOds") },
+            { id: "csv", label: "Export as CSV…", hint: ".csv", onSelect: () => ctl.registry.run("file.exportCsv") },
             { id: "saveAs", label: "Save a copy…", hint: "⇧⌘S", onSelect: () => ctl.registry.run("file.saveAs") },
           ]}
         />

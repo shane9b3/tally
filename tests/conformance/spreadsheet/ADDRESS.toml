@@ -1,0 +1,77 @@
+[[case]]
+formula = "=ADDRESS(1;1)"
+expect = "$A$1"
+
+[[case]]
+formula = "=ADDRESS(3;28;4)"
+expect = "AB3"
+
+[[case]]
+formula = "=ADDRESS(3;2;2)"
+expect = "B$3"
+
+[[case]]
+formula = "=ADDRESS(3;2;3)"
+expect = "$B3"
+
+[[case]]
+formula = "=ADDRESS(2;3;1;FALSE)"
+expect = "R2C3"
+
+[[case]]
+formula = "=ADDRESS(2;3;4;FALSE)"
+expect = "R[2]C[3]"
+
+[[case]]
+formula = "=ADDRESS(2;3;2;FALSE)"
+expect = "R2C[3]"
+
+[[case]]
+formula = "=ADDRESS(1;1;1;1;\"Sheet2\")"
+expect = "$Sheet2.$A$1"
+
+[[case]]
+formula = "=ADDRESS(1;1;4;TRUE;\"My Sheet\")"
+expect = "$'My Sheet'.A1"
+
+[[case]]
+formula = "=ADDRESS(1;16384)"
+expect = "$XFD$1"
+
+[[case]]
+formula = "=ADDRESS(1048576;1)"
+expect = "$A$1048576"
+
+[[case]]
+formula = "=ADDRESS(0;1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=ADDRESS(1;0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=ADDRESS(1;16385)"
+expect = "Err:502"
+
+[[case]]
+formula = "=ADDRESS(1;1;5)"
+expect = "Err:502"
+
+[[case]]
+formula = "=ADDRESS(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=ADDRESS(1)"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=ADDRESS(A1;1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=ADDRESS(1;1;;;)"
+expect = "$A$1"
+note = "Omitted arguments take defaults."

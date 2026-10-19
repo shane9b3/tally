@@ -1,0 +1,44 @@
+[[case]]
+formula = "=UNICHAR(65)"
+expect = "A"
+
+[[case]]
+formula = "=UNICHAR(8364)"
+expect = "€"
+
+[[case]]
+formula = "=UNICHAR(128512)"
+expect = "😀"
+
+[[case]]
+formula = "=UNICHAR(0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=UNICHAR(55296)"
+expect = "Err:502"
+
+[[case]]
+formula = "=UNICHAR(1114112)"
+expect = "Err:502"
+
+[[case]]
+formula = "=UNICHAR(-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=UNICHAR(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=UNICHAR(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+cells = { A1 = 233 }
+formula = "=UNICHAR(A1)"
+expect = "é"
+
+[[case]]
+formula = "=UNICHAR()"
+expect = "Err:511"

@@ -1,0 +1,59 @@
+[[case]]
+formula = "=WEEKNUM(DATE(2026;10;19);1)"
+expect = 43
+
+[[case]]
+formula = "=WEEKNUM(DATE(2026;10;19);2)"
+expect = 43
+
+[[case]]
+formula = "=WEEKNUM(DATE(2026;1;1);1)"
+expect = 1
+note = "Week 1 contains 1 January."
+
+[[case]]
+formula = "=WEEKNUM(DATE(2026;1;4);1)"
+expect = 2
+note = "Sunday starts week 2 in mode 1."
+
+[[case]]
+formula = "=WEEKNUM(DATE(2026;1;4);2)"
+expect = 1
+note = "Sunday still week 1 in mode 2."
+
+[[case]]
+formula = "=WEEKNUM(DATE(2026;1;5);2)"
+expect = 2
+
+[[case]]
+formula = "=WEEKNUM(DATE(2026;12;31);1)"
+expect = 53
+
+[[case]]
+formula = "=WEEKNUM(DATE(2021;1;1);2)"
+expect = 1
+
+[[case]]
+formula = "=WEEKNUM(DATE(2021;1;3);2)"
+expect = 1
+
+[[case]]
+formula = "=WEEKNUM(DATE(2021;1;4);2)"
+expect = 2
+
+[[case]]
+formula = "=WEEKNUM(46314;3)"
+expect = "Err:502"
+note = "Only modes 1 and 2 exist in AOO 4.1."
+
+[[case]]
+formula = "=WEEKNUM(46314;0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=WEEKNUM(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=WEEKNUM(46314)"
+expect = "Err:511"

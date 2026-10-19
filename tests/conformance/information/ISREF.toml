@@ -1,0 +1,41 @@
+[[case]]
+formula = "=ISREF(A1)"
+expect = true
+
+[[case]]
+formula = "=ISREF(A1:B2)"
+expect = true
+
+[[case]]
+formula = "=ISREF(1)"
+expect = false
+
+[[case]]
+formula = "=ISREF(\"A1\")"
+expect = false
+
+[[case]]
+formula = "=ISREF(1/0)"
+expect = false
+
+[[case]]
+formula = "=ISREF(B9)"
+expect = true
+
+[[case]]
+formula = "=ISREF()"
+expect = "Err:511"
+
+[[case]]
+formula = "=ISREF(A1+1)"
+expect = false
+
+[[case]]
+formula = "=ISREF(SUM(A1))"
+expect = false
+
+[[case]]
+cells = { A1 = 1, A2 = 2 }
+origin = "C5"
+formula = "=ISREF(A1:A2)"
+expect = true

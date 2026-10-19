@@ -1,0 +1,48 @@
+[[case]]
+formula = "=JIS(\"ABC123\")"
+expect = "ＡＢＣ１２３"
+
+[[case]]
+formula = "=JIS(\"abc\")"
+expect = "ａｂｃ"
+
+[[case]]
+formula = "=JIS(\" \")"
+expect = "　"
+
+[[case]]
+formula = "=JIS(\"!\")"
+expect = "！"
+
+[[case]]
+formula = "=JIS(\"ｶﾀｶﾅ\")"
+expect = "カタカナ"
+
+[[case]]
+formula = "=JIS(\"ｶﾞﾊﾟｳﾞ\")"
+expect = "ガパヴ"
+
+[[case]]
+formula = "=JIS(\"日本\")"
+expect = "日本"
+
+[[case]]
+cells = { A1 = "AB" }
+formula = "=JIS(A1)"
+expect = "ＡＢ"
+
+[[case]]
+formula = "=JIS(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=JIS(\"ｰ､｡\")"
+expect = "ー、。"
+
+[[case]]
+formula = "=JIS()"
+expect = "Err:511"
+
+[[case]]
+formula = "=JIS(12)"
+expect = "１２"

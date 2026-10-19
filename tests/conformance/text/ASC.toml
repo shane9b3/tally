@@ -1,0 +1,48 @@
+[[case]]
+formula = "=ASC(\"ＡＢＣ１２３\")"
+expect = "ABC123"
+
+[[case]]
+formula = "=ASC(\"ａｂｃ\")"
+expect = "abc"
+
+[[case]]
+formula = "=ASC(\"　\")"
+expect = " "
+
+[[case]]
+formula = "=ASC(\"！\")"
+expect = "!"
+
+[[case]]
+formula = "=ASC(\"カタカナ\")"
+expect = "ｶﾀｶﾅ"
+
+[[case]]
+formula = "=ASC(\"ガパヴ\")"
+expect = "ｶﾞﾊﾟｳﾞ"
+
+[[case]]
+formula = "=ASC(\"abc\")"
+expect = "abc"
+
+[[case]]
+formula = "=ASC(\"日本\")"
+expect = "日本"
+
+[[case]]
+cells = { A1 = "テスト" }
+formula = "=ASC(A1)"
+expect = "ﾃｽﾄ"
+
+[[case]]
+formula = "=ASC(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=ASC(\"ー、。\")"
+expect = "ｰ､｡"
+
+[[case]]
+formula = "=ASC()"
+expect = "Err:511"

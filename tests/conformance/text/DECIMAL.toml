@@ -1,0 +1,49 @@
+[[case]]
+formula = "=DECIMAL(\"FF\";16)"
+expect = 255
+
+[[case]]
+formula = "=DECIMAL(\"ff\";16)"
+expect = 255
+
+[[case]]
+formula = "=DECIMAL(\"111\";2)"
+expect = 7
+
+[[case]]
+formula = "=DECIMAL(\"\";2)"
+expect = 0
+note = "LibreOffice: empty text is 0."
+
+[[case]]
+formula = "=DECIMAL(\"12\";2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=DECIMAL(\"Z\";36)"
+expect = 35
+
+[[case]]
+formula = "=DECIMAL(\"1\";1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=DECIMAL(\"1\";37)"
+expect = "Err:502"
+
+[[case]]
+formula = "=DECIMAL(\"zz\";36)"
+expect = 1295
+
+[[case]]
+formula = "=DECIMAL(1/0;2)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=DECIMAL(101;2)"
+expect = 5
+note = "Number argument is converted to text."
+
+[[case]]
+formula = "=DECIMAL(\"1\")"
+expect = "Err:511"

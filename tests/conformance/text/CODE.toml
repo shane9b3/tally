@@ -1,0 +1,46 @@
+[[case]]
+formula = "=CODE(\"A\")"
+expect = 65
+
+[[case]]
+formula = "=CODE(\"abc\")"
+expect = 97
+
+[[case]]
+formula = "=CODE(\"\")"
+expect = 0
+note = "AOO: empty text gives 0."
+
+[[case]]
+formula = "=CODE(\"€\")"
+expect = 128
+
+[[case]]
+formula = "=CODE(\"é\")"
+expect = 233
+
+[[case]]
+formula = "=CODE(\"日\")"
+expect = 63
+note = "Not representable in Windows-1252: '?'."
+
+[[case]]
+formula = "=CODE(65)"
+expect = 54
+
+[[case]]
+formula = "=CODE(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+cells = { A1 = "xyz" }
+formula = "=CODE(A1)"
+expect = 120
+
+[[case]]
+formula = "=CODE()"
+expect = "Err:511"
+
+[[case]]
+formula = "=CODE(\" \")"
+expect = 32

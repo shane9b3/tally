@@ -35,12 +35,48 @@ export interface Binding {
   label: string;
 }
 
+/**
+ * Keys the grid handles itself (navigation, editing, clipboard), listed in
+ * the shortcut reference (⌘/) next to {@link BINDINGS}.
+ */
+export const GRID_KEYS: readonly { keys: string; action: string; group: string }[] = [
+  { group: "Move", keys: "← ↑ → ↓", action: "Move (⇧ extends the selection)" },
+  { group: "Move", keys: "⌘ + arrows", action: "Jump to the edge of the data" },
+  { group: "Move", keys: "Home / End", action: "Start / end of the row" },
+  { group: "Move", keys: "⌘Home / ⌘End", action: "A1 / last used cell" },
+  { group: "Move", keys: "PgUp / PgDn", action: "One screen up / down" },
+  { group: "Move", keys: "Tab / ⇧Tab", action: "Next / previous cell" },
+  { group: "Select", keys: "⌘A", action: "Select the data, then everything" },
+  { group: "Select", keys: "⌘ + click", action: "Add a range to the selection" },
+  { group: "Edit", keys: "F2", action: "Edit the active cell" },
+  { group: "Edit", keys: "Enter / ⇧Enter", action: "Commit and move down / up" },
+  { group: "Edit", keys: "⌥Enter", action: "New line in the cell" },
+  { group: "Edit", keys: "Esc", action: "Cancel editing" },
+  { group: "Edit", keys: "⌫ / Delete", action: "Clear contents" },
+  { group: "Edit", keys: "⌘C / ⌘X / ⌘V", action: "Copy / cut / paste" },
+  { group: "Edit", keys: "⇧⌘V", action: "Paste values only" },
+  { group: "Formulas", keys: "Arrows after = + ( ,", action: "Point at a reference" },
+  { group: "Formulas", keys: "Tab / Enter", action: "Accept a function suggestion" },
+];
+
 export const BINDINGS: readonly Binding[] = [
   { key: "z", mod: true, shift: false, command: "edit.undo", menu: true, label: "⌘Z" },
   { key: "z", mod: true, shift: true, command: "edit.redo", menu: true, label: "⇧⌘Z" },
   { key: "y", mod: true, shift: false, command: "edit.redo", label: "⌘Y" },
   { key: "b", mod: true, shift: false, command: "format.bold", label: "⌘B" },
   { key: "i", mod: true, shift: false, command: "format.italic", label: "⌘I" },
+  { key: "u", mod: true, shift: false, command: "format.underline", label: "⌘U" },
+  { key: "l", mod: true, shift: true, command: "format.alignLeft", label: "⇧⌘L" },
+  { key: "e", mod: true, shift: true, command: "format.alignCenter", label: "⇧⌘E" },
+  { key: "r", mod: true, shift: true, command: "format.alignRight", label: "⇧⌘R" },
+  { key: "!", code: "Digit1", mod: true, shift: true, command: "format.number.number", label: "⇧⌘1" },
+  { key: "@", code: "Digit2", mod: true, shift: true, command: "format.number.scientific", label: "⇧⌘2" },
+  { key: "#", code: "Digit3", mod: true, shift: true, command: "format.number.date", label: "⇧⌘3" },
+  { key: "$", code: "Digit4", mod: true, shift: true, command: "format.currency", label: "⇧⌘4" },
+  { key: "%", code: "Digit5", mod: true, shift: true, command: "format.percent", label: "⇧⌘5" },
+  { key: "^", code: "Digit6", mod: true, shift: true, command: "format.number.general", label: "⇧⌘6" },
+  { key: "g", mod: true, shift: true, command: "view.glance", global: true, label: "⇧⌘G" },
+  { key: "/", code: "Slash", mod: true, shift: false, command: "help.shortcuts", global: true, label: "⌘/" },
   { key: "k", mod: true, shift: false, command: "palette.toggle", global: true, label: "⌘K" },
   { key: "\\", code: "Backslash", mod: true, shift: false, command: "view.toggleSidebar", menu: true, global: true, label: "⌘\\" },
   { key: "s", mod: true, shift: false, command: "file.save", menu: true, global: true, label: "⌘S" },

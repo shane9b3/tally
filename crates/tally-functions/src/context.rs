@@ -157,6 +157,15 @@ pub trait EvalContext {
     fn in_array_context(&self) -> bool {
         false
     }
+
+    /// `true` if `row` (0-based) of `sheet` is hidden, manually or by a
+    /// filter. SUBTOTAL codes 101 to 111 skip such rows. The default (no
+    /// hidden rows) keeps implementations that do not track visibility
+    /// correct for every other function.
+    fn hidden_row(&self, sheet: SheetId, row: u32) -> bool {
+        let _ = (sheet, row);
+        false
+    }
 }
 
 /// The arguments of one call, evaluated on demand by the engine.

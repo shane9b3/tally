@@ -59,6 +59,9 @@ importers:
       '@tally/bridge':
         specifier: workspace:*
         version: link:../bridge
+      '@tally/formula-ts':
+        specifier: workspace:*
+        version: link:../formula-ts
       '@tally/grid':
         specifier: workspace:*
         version: link:../grid
@@ -99,6 +102,18 @@ importers:
 
   packages/bridge:
     devDependencies:
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 3.2.7
+        version: 3.2.7(@types/node@26.6.5)(happy-dom@21.0.3)
+
+  packages/formula-ts:
+    devDependencies:
+      '@types/node':
+        specifier: 26.6.5
+        version: 26.6.5
       typescript:
         specifier: 5.9.3
         version: 5.9.3

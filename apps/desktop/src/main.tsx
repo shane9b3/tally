@@ -4,8 +4,8 @@
  * `EngineClient` and `ShellClient`; templates are built by the engine (or
  * the mock) from their id.
  */
-import { App, type AppController } from "@tally/app";
-import { MockClient, type EngineClient, type ShellClient } from "@tally/bridge";
+import { App, WebMockClient, type AppController } from "@tally/app";
+import type { EngineClient, ShellClient } from "@tally/bridge";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { isTauri, makeTauriClient, setWindowTitle } from "./tauri";
@@ -14,7 +14,8 @@ const tauri = isTauri();
 const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const params = new URLSearchParams(location.search);
 
-const client: EngineClient & ShellClient = tauri ? makeTauriClient() : new MockClient();
+// The browser build uses MockClient plus emulated row/column insert/delete.
+const client: EngineClient & ShellClient = tauri ? makeTauriClient() : new WebMockClient();
 
 declare global {
   interface Window {

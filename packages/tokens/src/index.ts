@@ -1,8 +1,9 @@
 /**
  * @tally/tokens: design tokens for Tally.
  *
- * - `@tally/tokens/tokens.css`: CSS custom properties (light, plus a
- *   placeholder dark set under `[data-theme="dark"]`).
+ * - `@tally/tokens/tokens.css`: CSS custom properties: light, and dark under
+ *   `[data-theme="dark"]` (also the default when the OS prefers dark and no
+ *   `data-theme` is set).
  * - `@tally/tokens/fonts`: bundles Inter Variable.
  * - `readTheme()`: reads the variables into a typed {@link Theme}, because
  *   canvas drawing cannot use CSS variables. Call it again whenever

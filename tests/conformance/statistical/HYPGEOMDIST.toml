@@ -1,0 +1,64 @@
+# HYPGEOMDIST conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "1/4/8/20"
+formula = "=HYPGEOMDIST(1;4;8;20)"
+expect = 0.3632610939112487
+tol = 4e-14
+
+[[case]]
+name = "x = 0"
+formula = "=HYPGEOMDIST(0;4;8;20)"
+expect = 0.1021671826625387
+tol = 1e-14
+
+[[case]]
+name = "all successes"
+formula = "=HYPGEOMDIST(4;4;8;20)"
+expect = 0.014447884416924664
+tol = 1e-15
+
+[[case]]
+name = "large"
+formula = "=HYPGEOMDIST(50;100;500;1000)"
+expect = 0.08389209209281304
+tol = 8e-14
+
+[[case]]
+name = "sample > successes"
+formula = "=HYPGEOMDIST(3;10;5;12)"
+expect = 0.15151515151515152
+tol = 2e-14
+
+[[case]]
+name = "whole population"
+formula = "=HYPGEOMDIST(3;3;3;3)"
+expect = 1.0
+tol = 0
+
+[[case]]
+name = "x > n"
+formula = "=HYPGEOMDIST(5;4;8;20)"
+expect = "Err:502"
+
+[[case]]
+name = "population too small"
+formula = "=HYPGEOMDIST(1;4;8;5)"
+expect = "Err:502"
+
+[[case]]
+name = "negative x"
+formula = "=HYPGEOMDIST(-1;4;8;20)"
+expect = "Err:502"
+
+[[case]]
+name = "floored"
+formula = "=HYPGEOMDIST(1.9;4.5;8;20)"
+expect = 0.3632610939112487
+tol = 4e-14
+
+[[case]]
+name = "text"
+formula = "=HYPGEOMDIST(\"x\";4;8;20)"
+expect = "#VALUE!"

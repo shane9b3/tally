@@ -1,0 +1,60 @@
+[[case]]
+formula = "=TIME(12;0;0)"
+expect = 0.5
+
+[[case]]
+formula = "=TIME(1;2;3)"
+expect = 0.043090277777777776
+tol = 1e-12
+
+[[case]]
+formula = "=TIME(25;0;0)"
+expect = 0.041666666666666664
+tol = 1e-12
+note = "Overflow wraps modulo one day."
+
+[[case]]
+formula = "=TIME(0;90;0)"
+expect = 0.0625
+tol = 1e-12
+
+[[case]]
+formula = "=TIME(24;0;0)"
+expect = 0
+
+[[case]]
+formula = "=TIME(0;0;86400)"
+expect = "Err:502"
+note = "Seconds above 32767 are illegal in AOO."
+
+[[case]]
+formula = "=TIME(1.9;0;0)"
+expect = 0.041666666666666664
+tol = 1e-12
+note = "Arguments are truncated."
+
+[[case]]
+formula = "=TIME(0;0;-1)"
+expect = "Err:502"
+note = "Negative totals are illegal in AOO."
+
+[[case]]
+formula = "=TIME(40000;0;0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=TIME(\"x\";0;0)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=TIME(A1;0;0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=TIME(6;0)"
+expect = "Err:511"
+
+[[case]]
+formula = "=TIME(0;0;0)"
+expect = 0

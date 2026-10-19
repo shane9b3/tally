@@ -1,0 +1,459 @@
+//! Named ranges and expressions (plan §3.5/§3.6, inventory §20).
+//!
+//! - Workbook- and sheet-scoped names live in a [`NameTable`]. A name's
+//!   [`NameId`] is never reused: deleting a name leaves a tombstone, so
+//!   formulas that use it keep printing its text (and show `#NAME?`), and
+//!   defining it again revives the same id.
+//! - Formulas keep `Expr::Name` nodes. For evaluation and dependency
+//!   tracking the engine *expands* them: each name node is replaced by the
+//!   name's expression (in parentheses), recursively up to
+//!   [`MAX_NAME_DEPTH`]. A name's relative references are relative to the
+//!   cell using it (OpenOffice semantics); names entered through the API
+//!   are usually absolute (`$Sheet1.$A$1:$B$5`).
+//! - The dependency index maps each name key (lowercase text) to the
+//!   formulas using it, directly or through other names, so (re)defining or
+//!   deleting a name dirties exactly those formulas.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tally_api::ApiError;
+use tally_formula::{Dialect, Expr, Formula, NameId, NameRef};
+use tally_types::{CellAddr, ErrorKind, SheetId};
+
+use crate::deps::DepIndex;
+use crate::formula_cells::{CellState, FormulaCellId};
+use crate::workbook::Workbook;
+
+/// Deepest chain of names referring to names; deeper gives `#NAME?`.
+pub const MAX_NAME_DEPTH: u32 = 16;
+
+/// Most names per workbook.
+pub const MAX_NAMES: usize = 100_000;
+
+/// A name's definition.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NameDef {
+    /// The expression, relative to `base`.
+    pub formula: Arc<Formula>,
+    /// The cell the expression was parsed at.
+    pub base: CellAddr,
+}
+
+/// One name (defined or a tombstone).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NameEntry {
+    /// The name as defined.
+    pub name: Arc<str>,
+    /// Sheet scope, or `None` for the workbook.
+    pub scope: Option<SheetId>,
+    /// The definition; `None` after deletion.
+    pub def: Option<NameDef>,
+}
+
+/// The workbook's names.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NameTable {
+    entries: Vec<NameEntry>,
+    index: HashMap<(String, Option<SheetId>), u32>,
+}
+
+/// The dependency key of a name.
+pub fn name_key(name: &str) -> String {
+    name.to_lowercase()
+}
+
+impl NameTable {
+    /// The entry with `id`.
+    pub fn get(&self, id: NameId) -> Option<&NameEntry> {
+        self.entries.get(id.0 as usize)
+    }
+
+    /// The id of `name` in exactly `scope` (defined or not).
+    pub fn lookup(&self, name: &str, scope: Option<SheetId>) -> Option<NameId> {
+        self.index.get(&(name_key(name), scope)).map(|i| NameId(*i))
+    }
+
+    /// The name visible from `sheet`: a defined sheet-scoped name first,
+    /// then a defined workbook name, then a tombstone (sheet, workbook).
+    pub fn visible(&self, name: &str, sheet: SheetId) -> Option<NameId> {
+        let local = self.lookup(name, Some(sheet));
+        let global = self.lookup(name, None);
+        let defined = |id: &NameId| self.get(*id).is_some_and(|e| e.def.is_some());
+        local
+            .filter(defined)
+            .or_else(|| global.filter(defined))
+            .or(local)
+            .or(global)
+    }
+
+    /// The definition used for `n` in a formula on `sheet`.
+    pub fn resolve(&self, n: &NameRef, sheet: SheetId) -> Option<&NameEntry> {
+        let id = match n {
+            NameRef::Id(id) => *id,
+            NameRef::Unresolved(t) => self.visible(t, sheet)?,
+        };
+        self.get(id)
+    }
+
+    /// Defines `name` in `scope` (reviving or replacing an entry).
+    pub fn define(&mut self, name: &str, scope: Option<SheetId>, def: NameDef) -> NameId {
+        if let Some(id) = self.lookup(name, scope) {
+            if let Some(e) = self.entries.get_mut(id.0 as usize) {
+                e.name = name.into();
+                e.def = Some(def);
+            }
+            return id;
+        }
+        let id = self.entries.len() as u32;
+        self.entries.push(NameEntry {
+            name: name.into(),
+            scope,
+            def: Some(def),
+        });
+        self.index.insert((name_key(name), scope), id);
+        NameId(id)
+    }
+
+    /// Deletes the definition of `id` (the entry stays as a tombstone).
+    pub fn undefine(&mut self, id: NameId) -> bool {
+        match self.entries.get_mut(id.0 as usize) {
+            Some(e) if e.def.is_some() => {
+                e.def = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Defined names with their ids.
+    pub fn defined(&self) -> impl Iterator<Item = (NameId, &NameEntry)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.def.is_some())
+            .map(|(i, e)| (NameId(i as u32), e))
+    }
+
+    /// Number of defined names.
+    pub fn len(&self) -> usize {
+        self.defined().count()
+    }
+
+    /// `true` if no name is defined.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Mutable access to every definition (structure changes, moves).
+    pub fn defs_mut(&mut self) -> impl Iterator<Item = &mut NameDef> {
+        self.entries.iter_mut().filter_map(|e| e.def.as_mut())
+    }
+
+    /// Drops the definitions scoped to `sheet` (when it is deleted).
+    pub fn undefine_scope(&mut self, sheet: SheetId) {
+        for e in &mut self.entries {
+            if e.scope == Some(sheet) {
+                e.def = None;
+            }
+        }
+    }
+}
+
+/// `true` if the expression contains a name.
+pub fn has_names(e: &Expr) -> bool {
+    let mut found = false;
+    e.walk(|x| found |= matches!(x, Expr::Name(_)));
+    found
+}
+
+/// Replaces every name in `f` (a formula on `sheet`) by its expression.
+/// Returns the expanded formula and the keys of every name met (for the
+/// dependency index), including names used by names.
+pub fn expand(names: &NameTable, f: &Formula, sheet: SheetId) -> (Formula, Vec<String>) {
+    let mut expr = f.expr.clone();
+    let mut keys = Vec::new();
+    let mut stack: Vec<(&mut Expr, u32)> = vec![(&mut expr, 0)];
+    while let Some((node, depth)) = stack.pop() {
+        if let Expr::Name(n) = node {
+            let key = match n {
+                NameRef::Id(id) => names.get(*id).map(|e| name_key(&e.name)),
+                NameRef::Unresolved(t) => Some(name_key(t)),
+            };
+            keys.extend(key);
+            let repl = match names.resolve(n, sheet).and_then(|e| e.def.as_ref()) {
+                Some(def) if depth < MAX_NAME_DEPTH => {
+                    Expr::Paren(Box::new(def.formula.expr.clone()))
+                }
+                _ => Expr::Err(ErrorKind::Name),
+            };
+            *node = repl;
+            stack.push((node, depth + 1));
+            continue;
+        }
+        match node {
+            Expr::ArrayLit(a) => stack.extend(a.items.iter_mut().map(|x| (x, depth))),
+            Expr::Call { args, .. } => stack.extend(args.iter_mut().map(|x| (x, depth))),
+            Expr::Unary(_, x) | Expr::Postfix(_, x) | Expr::Paren(x) => stack.push((x, depth)),
+            Expr::Binary(_, l, r) => {
+                stack.push((r, depth));
+                stack.push((l, depth));
+            }
+            _ => {}
+        }
+    }
+    (
+        Formula {
+            expr,
+            flags: f.flags,
+        },
+        keys,
+    )
+}
+
+/// Checks a name: `[A-Za-z_][A-Za-z0-9_.]*`, at most 255 characters, not a
+/// cell or range reference, not `TRUE`/`FALSE`, not R1C1-like.
+pub fn validate_name(wb: &Workbook, name: &str) -> Result<(), ApiError> {
+    let bad = |why: &str| Err(ApiError::invalid_argument(format!("{name:?} {why}")));
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        Some(_) => return bad("must start with a letter or _"),
+        None => return Err(ApiError::invalid_argument("the name is empty")),
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+        return bad("may contain only letters, digits, _ and .");
+    }
+    if name.len() > 255 {
+        return bad("is too long");
+    }
+    if name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE") {
+        return bad("is reserved");
+    }
+    let upper = name.to_ascii_uppercase();
+    let r1c1 = upper.strip_prefix('R').is_some_and(|rest| {
+        let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+        rest.is_empty()
+            || rest
+                .strip_prefix('C')
+                .is_some_and(|x| x.chars().all(|c| c.is_ascii_digit()))
+    }) || upper
+        .strip_prefix('C')
+        .is_some_and(|x| x.chars().all(|c| c.is_ascii_digit()));
+    if r1c1 {
+        return bad("looks like an R1C1 reference");
+    }
+    // Anything the formula parser would not read back as a name (a cell
+    // reference such as AB12, a sheet-qualified reference…) is refused.
+    let origin = CellAddr::new(wb.sheets.first().map_or(1, |s| s.id), 0, 0);
+    match tally_formula::parse(
+        &format!("={name}"),
+        origin,
+        Dialect::calc_a1_en_us(),
+        &NoNames(wb),
+    ) {
+        Ok(f) if matches!(f.expr, Expr::Name(_)) => Ok(()),
+        _ => bad("is a cell reference or not a valid name"),
+    }
+}
+
+/// A resolver over the workbook that knows no names (for validation).
+struct NoNames<'a>(&'a Workbook);
+
+impl tally_formula::Resolver for NoNames<'_> {
+    fn sheet_by_name(&self, name: &str) -> Option<SheetId> {
+        self.0.sheet_by_name_ci(name)
+    }
+    fn sheet_name(&self, id: SheetId) -> Option<Arc<str>> {
+        self.0.sheet(id).map(|s| s.name.clone())
+    }
+    fn name(&self, _name: &str, _sheet: SheetId) -> Option<NameId> {
+        None
+    }
+    fn function(&self, name: &str) -> Option<tally_formula::FuncId> {
+        tally_formula::Resolver::function(self.0, name)
+    }
+}
+
+impl Workbook {
+    /// The base cell for a name in `scope`: A1 of that sheet, else of the
+    /// first sheet.
+    pub fn name_base(&self, scope: Option<SheetId>) -> CellAddr {
+        let sheet = scope
+            .filter(|s| self.sheet(*s).is_some())
+            .or_else(|| self.sheets.first().map(|s| s.id))
+            .unwrap_or(1);
+        CellAddr::new(sheet, 0, 0)
+    }
+
+    /// Parses a name's `refers_to` text (CalcA1, with or without `=`).
+    pub fn parse_name_expr(
+        &self,
+        refers_to: &str,
+        scope: Option<SheetId>,
+    ) -> Result<NameDef, ApiError> {
+        let t = refers_to.trim();
+        let t = t.strip_prefix('=').unwrap_or(t);
+        if t.is_empty() {
+            return Err(ApiError::invalid_argument("the name refers to nothing"));
+        }
+        let base = self.name_base(scope);
+        let f = self
+            .parse_formula(&format!("={t}"), base)
+            .map_err(|e| ApiError::invalid_argument(format!("bad expression {t:?}: {e}")))?;
+        Ok(NameDef {
+            formula: Arc::new(f),
+            base,
+        })
+    }
+
+    /// The `refers_to` text of a definition (CalcA1, without `=`).
+    pub fn name_text_of(&self, def: &NameDef) -> String {
+        let t = tally_formula::print(&def.formula, def.base, Dialect::calc_a1_en_us(), self);
+        t.strip_prefix('=').map(str::to_owned).unwrap_or(t)
+    }
+
+    /// Re-registers the dependencies of the formulas using `key` and marks
+    /// them dirty (after a name was defined, changed or deleted).
+    pub fn refresh_name_dependents(&mut self, key: &str) {
+        for id in self.deps.name_dependents(key) {
+            self.refresh_formula(id);
+        }
+    }
+
+    /// Like [`Self::refresh_name_dependents`] for every formula using names.
+    pub fn refresh_all_name_dependents(&mut self) {
+        let mut ids = self.deps.all_name_dependents();
+        ids.extend(
+            self.formulas
+                .iter()
+                .filter(|(_, f)| f.has_names)
+                .map(|(id, _)| id),
+        );
+        ids.sort();
+        ids.dedup();
+        for id in ids {
+            self.refresh_formula(id);
+        }
+    }
+
+    /// Recomputes the precedents (and name registrations) of formula `id`
+    /// from its AST and marks it dirty.
+    pub fn refresh_formula(&mut self, id: FormulaCellId) {
+        let Some(fc) = self.formulas.get(id) else {
+            return;
+        };
+        let (formula, addr) = (fc.formula.clone(), fc.addr);
+        let (p, strict, keys, has_3d) = self.analyze(&formula, addr);
+        // Volatility may come from a name's expression.
+        let vol = if keys.is_empty() {
+            crate::workbook::is_volatile(&formula)
+        } else {
+            crate::workbook::is_volatile(&expand(&self.names, &formula, addr.sheet).0)
+        };
+        let dynamic = fc.dynamic_deps.clone();
+        self.deps.remove(id);
+        let mut all = p.clone();
+        all.extend(dynamic);
+        self.deps.add(id, &all);
+        self.deps.set_volatile(id, vol);
+        self.deps.set_names(id, &keys);
+        if let Some(fc) = self.formulas.get_mut(id) {
+            fc.precedents = p;
+            fc.strict_precedents = strict;
+            fc.has_names = !keys.is_empty() || has_names(&formula.expr);
+            fc.has_3d = has_3d;
+            fc.volatile = vol;
+            fc.state = CellState::Dirty;
+        }
+        self.pending.dirty.push(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recalc::recalc;
+    use tally_types::Value;
+
+    fn a(s: &str) -> CellAddr {
+        CellAddr::from_a1(1, s).unwrap()
+    }
+
+    #[test]
+    fn validation() {
+        let wb = Workbook::new();
+        for ok in ["Total", "_x", "tax.rate", "Q1_sales", "A1B"] {
+            assert!(validate_name(&wb, ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "",
+            "1abc",
+            "A1",
+            "XFD1048576",
+            "a b",
+            "TRUE",
+            "R1C1",
+            "R2",
+            "C3",
+            "x-y",
+        ] {
+            assert!(validate_name(&wb, bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn table_scopes_and_tombstones() {
+        let wb = Workbook::new();
+        let mut t = NameTable::default();
+        let def = wb.parse_name_expr("$Sheet1.$A$1", None).unwrap();
+        let g = t.define("Total", None, def.clone());
+        let l = t.define("total", Some(1), def.clone());
+        assert_ne!(g, l);
+        assert_eq!(t.visible("TOTAL", 1), Some(l));
+        assert_eq!(t.visible("TOTAL", 2), Some(g));
+        assert!(t.undefine(l));
+        assert_eq!(
+            t.visible("TOTAL", 1),
+            Some(g),
+            "defined global wins over tombstone"
+        );
+        assert_eq!(t.define("TOTAL", Some(1), def), l, "id is revived");
+        assert_eq!(t.len(), 2);
+    }
+
+    #[test]
+    fn expansion_and_evaluation() {
+        let mut wb = Workbook::new();
+        wb.set_input(a("A1"), "2");
+        wb.set_input(a("A2"), "3");
+        let def = wb.parse_name_expr("$Sheet1.$A$1:$A$2", None).unwrap();
+        wb.names.define("Data", None, def);
+        let rate = wb.parse_name_expr("Data*0+0.5", None).unwrap();
+        wb.names.define("Rate", None, rate);
+        wb.set_input(a("B1"), "=SUM(Data)*Rate");
+        recalc(&mut wb);
+        assert_eq!(wb.value(a("B1")), Value::Number(2.5));
+        let (_, f) = wb.formula_at(a("B1")).unwrap();
+        let (_, keys) = expand(&wb.names, &f.formula, 1);
+        assert!(keys.contains(&"data".to_string()) && keys.contains(&"rate".to_string()));
+        assert_eq!(
+            wb.formula_text(wb.formula_at(a("B1")).unwrap().0).unwrap(),
+            "=SUM(Data)*Rate"
+        );
+        // Editing a cell inside the name's range recalculates.
+        wb.set_input(a("A2"), "13");
+        recalc(&mut wb);
+        assert_eq!(wb.value(a("B1")), Value::Number(7.5));
+    }
+
+    #[test]
+    fn self_referential_names_stop() {
+        let mut wb = Workbook::new();
+        let d = wb.parse_name_expr("Loop+1", None).unwrap();
+        wb.names.define("Loop", None, d);
+        wb.set_input(a("A1"), "=Loop");
+        recalc(&mut wb);
+        assert_eq!(wb.value(a("A1")), Value::Error(ErrorKind::Name));
+    }
+}

@@ -1,0 +1,55 @@
+# CHISQDIST conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "cdf"
+formula = "=CHISQDIST(3;2)"
+expect = 0.7768698398515702
+tol = 8e-14
+
+[[case]]
+name = "pdf even df"
+formula = "=CHISQDIST(3;2;FALSE)"
+expect = 0.11156508007421491
+tol = 1e-14
+
+[[case]]
+name = "pdf odd df"
+formula = "=CHISQDIST(3;3;FALSE)"
+expect = 0.15418032980376928
+tol = 2e-14
+
+[[case]]
+name = "large df"
+formula = "=CHISQDIST(90;100;TRUE)"
+expect = 0.24680203440017026
+tol = 2e-13
+
+[[case]]
+name = "x = 0"
+formula = "=CHISQDIST(0;2)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "negative density"
+formula = "=CHISQDIST(-1;2;FALSE)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "df zero"
+formula = "=CHISQDIST(3;0)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=CHISQDIST(\"x\";2)"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cumulative is FALSE"
+formula = "=CHISQDIST(3;2;)"
+expect = 0.11156508007421491
+tol = 1e-14
+note = "AOO counts a written but empty argument, which reads as 0/FALSE (GetDouble on svMissing)."

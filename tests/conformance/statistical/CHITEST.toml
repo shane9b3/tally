@@ -1,0 +1,61 @@
+# CHITEST conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "columns"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=CHITEST(A1:A5;B1:B5)"
+expect = 0.4636911727748992
+tol = 5e-14
+
+[[case]]
+name = "table"
+cells = { A1 = 10, A2 = 20, B1 = 30, B2 = 40, C1 = 12, C2 = 18, D1 = 28, D2 = 42 }
+formula = "=CHITEST(A1:B2;C1:D2)"
+expect = 0.37299848361348714
+tol = 4e-14
+
+[[case]]
+name = "inline arrays"
+formula = "=CHITEST({10;20;30};{12;18;30})"
+expect = 0.7574651283969664
+tol = 8e-14
+
+[[case]]
+name = "dimension mismatch"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=CHITEST(A1:A5;B1:B4)"
+expect = "Err:502"
+
+[[case]]
+name = "text cell"
+cells = { A1 = 3, A2 = 4, A3 = "x", A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=CHITEST(A1:A5;B1:B5)"
+expect = "Err:502"
+note = "AOO ScChiTest: every position must be numeric in both ranges."
+
+[[case]]
+name = "empty cell"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=CHITEST(A1:A6;B1:B6)"
+expect = "Err:502"
+
+[[case]]
+name = "single cell"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=CHITEST(A1;B1)"
+expect = "#VALUE!"
+note = "One observation has zero degrees of freedom (NoValue)."
+
+[[case]]
+name = "error cell"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = "=1/0", B3 = 6, B4 = 9, B5 = 13 }
+formula = "=CHITEST(A1:A5;B1:B5)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "bool counts as number"
+cells = { A1 = true, A2 = 4, B1 = 2, B2 = 3 }
+formula = "=CHITEST(A1:A2;B1:B2)"
+expect = 0.36131042852617884
+tol = 4e-14

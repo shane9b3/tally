@@ -1,0 +1,36 @@
+{
+  "src": "=SUM('Jan 1:Dec 31'!A1)",
+  "dialect": "excel-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Func",
+      "text": "SUM",
+      "start": 1,
+      "end": 4
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 4,
+      "end": 5
+    },
+    {
+      "kind": "RangeRef",
+      "text": "'Jan 1:Dec 31'!A1",
+      "start": 5,
+      "end": 22
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 22,
+      "end": 23
+    }
+  ]
+}

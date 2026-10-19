@@ -1,0 +1,39 @@
+[[case]]
+formula = "=RIGHTB(\"hello\";2)"
+expect = "lo"
+
+[[case]]
+formula = "=RIGHTB(\"hello\")"
+expect = "o"
+
+[[case]]
+formula = "=RIGHTB(\"日本a\";3)"
+expect = "本a"
+
+[[case]]
+formula = "=RIGHTB(\"日本a\";2)"
+expect = " a"
+
+[[case]]
+formula = "=RIGHTB(\"abc\";0)"
+expect = ""
+
+[[case]]
+formula = "=RIGHTB(\"abc\";-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=RIGHTB(\"abc\";10)"
+expect = "abc"
+
+[[case]]
+formula = "=RIGHTB(12345;2)"
+expect = "45"
+
+[[case]]
+formula = "=RIGHTB(1/0;1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=RIGHTB()"
+expect = "Err:511"

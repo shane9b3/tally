@@ -1,0 +1,36 @@
+{
+  "src": "=_xlfn._xlws.SORT(A1:A10)",
+  "dialect": "excel-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Func",
+      "text": "_xlfn._xlws.SORT",
+      "start": 1,
+      "end": 17
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 17,
+      "end": 18
+    },
+    {
+      "kind": "RangeRef",
+      "text": "A1:A10",
+      "start": 18,
+      "end": 24
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 24,
+      "end": 25
+    }
+  ]
+}

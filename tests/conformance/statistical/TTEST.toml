@@ -1,0 +1,66 @@
+# TTEST conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "paired two-tailed"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=TTEST(A1:A5;B1:B5;2;1)"
+expect = 0.019554212720304612
+tol = 2e-14
+
+[[case]]
+name = "equal variance"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=TTEST(A1:A5;B1:B5;2;2)"
+expect = 0.2630796331166135
+tol = 3e-13
+
+[[case]]
+name = "Welch one-tailed"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=TTEST(A1:A5;B1:B5;1;3)"
+expect = 0.13218679215830412
+tol = 1e-13
+
+[[case]]
+name = "paired one-tailed arrays"
+formula = "=TTEST({1;2;3;4};{2;2;5;7};1;1)"
+expect = 0.0513640394291995
+tol = 5e-14
+
+[[case]]
+name = "tails 3"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=TTEST(A1:A5;B1:B5;3;1)"
+expect = "Err:502"
+
+[[case]]
+name = "type 4"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=TTEST(A1:A5;B1:B5;2;4)"
+expect = "Err:502"
+
+[[case]]
+name = "paired size mismatch"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=TTEST(A1:A5;B1:B4;2;1)"
+expect = "Err:502"
+
+[[case]]
+name = "text skipped"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13, A6 = "x" }
+formula = "=TTEST(A1:A6;B1:B5;2;2)"
+expect = 0.2630796331166135
+tol = 3e-13
+
+[[case]]
+name = "one value"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = 13 }
+formula = "=TTEST(A1;B1:B5;2;2)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error cell"
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 8, A5 = 9, B1 = 5, B2 = 7, B3 = 6, B4 = 9, B5 = "=1/0" }
+formula = "=TTEST(A1:A5;B1:B5;2;2)"
+expect = "#DIV/0!"

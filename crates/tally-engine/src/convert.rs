@@ -12,12 +12,13 @@ use std::sync::Arc;
 
 use tally_formula::{parse, print, Dialect, Expr, Formula};
 use tally_model::{
-    CellContentData, CellData, DocSettings, SheetData, StyleData, StyleRun, WorkbookData,
+    CellContentData, CellData, CellRangeLocal, DocSettings, NameData, SheetData, StyleData,
+    StyleRun, WorkbookData,
 };
-use tally_types::{CellAddr, Value, MAX_ROWS};
+use tally_types::{CellAddr, Matrix, Value, MAX_COLS, MAX_ROWS};
 
 use crate::formula_cells::CellState;
-use crate::storage::{CellContent, ColumnStore, DimRuns, Sheet, StyleId};
+use crate::storage::{CellContent, ColumnStore, DimRuns, Sheet, Spans, StyleId};
 use crate::workbook::{Pending, SheetNamer, Workbook, MAX_SHEETS};
 
 /// Style runs of at least this many rows are exported as [`StyleRun`]s
@@ -73,6 +74,29 @@ impl Workbook {
         }
         if ids.is_empty() {
             ids.push(wb.add_sheet(Some("Sheet1"), None));
+        }
+        // Names before formulas, so formulas resolve them while parsing.
+        load_names(&mut wb, &data.names, &ids);
+        for (sd, &sheet) in sheet_data.iter().zip(&ids) {
+            if let Some(s) = wb.sheet_mut(sheet) {
+                s.meta.merges = clean_merges(&sd.merges);
+                s.meta.frozen = sd
+                    .frozen
+                    .filter(|(r, c)| (*r > 0 || *c > 0) && *r < MAX_ROWS && *c < MAX_COLS);
+                if let Some(af) = &sd.auto_filter {
+                    let r = af.range;
+                    if r.r0 <= r.r1 && r.c0 <= r.c1 && r.r1 < MAX_ROWS && r.c1 < MAX_COLS {
+                        s.meta.auto_filter = Some(crate::filter::from_model(af));
+                        s.filtered_rows = Spans::from_spans(
+                            af.filtered_rows
+                                .iter()
+                                .copied()
+                                .filter(|(a, b)| *a > r.r0 && *b <= r.r1)
+                                .collect(),
+                        );
+                    }
+                }
+            }
         }
         let style_ids: Vec<StyleId> = data
             .styles
@@ -131,6 +155,9 @@ impl Workbook {
                     }
                 }
             }
+            for block in &sd.array_formulas {
+                load_array(&mut wb, sheet, block);
+            }
         }
         let active = ids
             .get(data.settings.active_sheet as usize)
@@ -158,6 +185,8 @@ impl Workbook {
                     let addr = CellAddr::new(sheet.id, r, c);
                     let content = match content {
                         CellContent::Value(v) => CellContentData::Value(v.clone()),
+                        // Covered cells of an array block keep their values.
+                        CellContent::ArrayPart(_) => CellContentData::Value(self.value(addr)),
                         CellContent::Formula(id) => match self.formulas.get(*id) {
                             // A formula that does not parse is saved as a
                             // text cell holding what was typed, so other
@@ -223,27 +252,167 @@ impl Workbook {
             for run in &mut style_runs {
                 run.style = index_of(StyleId(run.style));
             }
+            let mut array_formulas: Vec<CellRangeLocal> = Vec::new();
+            for col in &sheet.columns {
+                for r in &col.formula_rows {
+                    if let Some(CellContent::Formula(id)) = col.cells.get(*r) {
+                        if let Some(b) = self.formulas.get(*id).and_then(|f| f.array_range()) {
+                            array_formulas.push(CellRangeLocal {
+                                r0: b.r0,
+                                c0: b.c0,
+                                r1: b.r1,
+                                c1: b.c1,
+                            });
+                        }
+                    }
+                }
+            }
+            array_formulas.sort_by_key(|b| (b.r0, b.c0));
             sheets.push(SheetData {
                 name: sheet.name.to_string(),
                 cells,
                 col_widths: sheet.col_dims.runs().to_vec(),
                 row_heights: sheet.row_dims.runs().to_vec(),
-                merges: Vec::new(),
-                frozen: None,
+                merges: sheet.meta.merges.clone(),
+                frozen: sheet.meta.frozen,
                 tab_color: sheet.tab_color,
                 hidden: sheet.hidden,
                 style_runs,
+                array_formulas,
+                auto_filter: sheet
+                    .meta
+                    .auto_filter
+                    .as_ref()
+                    .map(|af| crate::filter::to_model(af, &sheet.filtered_rows)),
             });
         }
+        let mut names: Vec<NameData> = Vec::new();
+        for (_, e) in self.names.defined() {
+            let Some(def) = &e.def else { continue };
+            let sheet = match e.scope {
+                None => None,
+                Some(s) => match self.tab_of(s) {
+                    Some(i) => Some(i as u32),
+                    None => continue,
+                },
+            };
+            names.push(NameData {
+                name: e.name.to_string(),
+                sheet,
+                formula: print(&def.formula, def.base, Dialect::open_formula(), self),
+            });
+        }
+        names.sort_by(|a, b| {
+            (a.sheet, a.name.to_lowercase()).cmp(&(b.sheet, b.name.to_lowercase()))
+        });
         WorkbookData {
             sheets,
             styles,
-            names: Vec::new(),
+            names,
             settings: DocSettings {
                 active_sheet: self.tab_of(self.active_sheet).unwrap_or(0) as u32,
                 calc_settings: self.settings.clone(),
             },
             meta: self.meta.clone(),
+        }
+    }
+}
+
+/// Loads interchange names (invalid, duplicate or unparsable ones are skipped).
+fn load_names(wb: &mut Workbook, names: &[NameData], ids: &[tally_types::SheetId]) {
+    for n in names.iter().take(crate::names::MAX_NAMES) {
+        let scope = match n.sheet {
+            None => None,
+            Some(i) => match ids.get(i as usize) {
+                Some(id) => Some(*id),
+                None => continue,
+            },
+        };
+        if crate::names::validate_name(wb, &n.name).is_err() {
+            continue;
+        }
+        if wb
+            .names
+            .lookup(&n.name, scope)
+            .and_then(|id| wb.names.get(id))
+            .is_some_and(|e| e.def.is_some())
+        {
+            continue;
+        }
+        // Model names are relative to A1 of the first sheet.
+        let base = CellAddr::new(ids.first().copied().unwrap_or(1), 0, 0);
+        let text = if n.formula.starts_with("of:") || n.formula.starts_with("oooc:") {
+            n.formula.clone()
+        } else {
+            format!("of:={}", n.formula.trim_start_matches('='))
+        };
+        let Ok(f) = parse(&text, base, Dialect::open_formula(), &*wb) else {
+            continue;
+        };
+        wb.names.define(
+            &n.name,
+            scope,
+            crate::names::NameDef {
+                formula: Arc::new(f),
+                base,
+            },
+        );
+    }
+}
+
+/// Valid, non-overlapping merges of more than one cell.
+fn clean_merges(merges: &[CellRangeLocal]) -> Vec<CellRangeLocal> {
+    let mut out: Vec<CellRangeLocal> = Vec::new();
+    for m in merges.iter().take(1_000_000) {
+        let ok = m.r0 <= m.r1
+            && m.c0 <= m.c1
+            && m.r1 < MAX_ROWS
+            && m.c1 < MAX_COLS
+            && (m.r0, m.c0) != (m.r1, m.c1);
+        let overlaps =
+            |o: &CellRangeLocal| m.r0 <= o.r1 && o.r0 <= m.r1 && m.c0 <= o.c1 && o.c0 <= m.c1;
+        if ok && !out.iter().any(overlaps) {
+            out.push(*m);
+        }
+    }
+    out
+}
+
+/// Turns the formula at a block's anchor into an array formula, keeping the
+/// covered cells' values from the file as the cached result.
+fn load_array(wb: &mut Workbook, sheet: tally_types::SheetId, b: &CellRangeLocal) {
+    if b.r0 > b.r1 || b.c0 > b.c1 || b.r1 >= MAX_ROWS || b.c1 >= MAX_COLS {
+        return;
+    }
+    let (rows, cols) = (b.r1 - b.r0 + 1, b.c1 - b.c0 + 1);
+    if u64::from(rows) * u64::from(cols) > crate::ops::MAX_OP_CELLS {
+        return;
+    }
+    let anchor = CellAddr::new(sheet, b.r0, b.c0);
+    let Some((_, fc)) = wb.formula_at(anchor) else {
+        return;
+    };
+    if fc.invalid_text.is_some() || fc.array.is_some() {
+        return;
+    }
+    let formula = fc.formula.clone();
+    let mut m = Matrix::new_filled(rows, cols, Value::Empty);
+    for r in 0..rows {
+        for c in 0..cols {
+            m.set(r, c, wb.value(CellAddr::new(sheet, b.r0 + r, b.c0 + c)));
+        }
+    }
+    // Other blocks overlapping this one are dropped first.
+    for other in wb.array_blocks_in(&tally_types::CellRange::new(sheet, b.r0, b.c0, b.r1, b.c1)) {
+        if other.start() != anchor {
+            return;
+        }
+    }
+    wb.set_array_formula(anchor, formula, rows, cols);
+    if let Some((id, _)) = wb.formula_at(anchor) {
+        if let Some(fc) = wb.formulas.get_mut(id) {
+            fc.cached = m.get(0, 0).cloned().unwrap_or(Value::Empty);
+            fc.array_result = Some(Arc::new(m));
         }
     }
 }

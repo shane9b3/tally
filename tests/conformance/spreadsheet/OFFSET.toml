@@ -1,0 +1,113 @@
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+formula = "=OFFSET(A1;2;0)"
+expect = 3
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+formula = "=OFFSET(A1;1;1)"
+expect = 20
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+formula = "=SUM(OFFSET(A1;0;0;3;1))"
+expect = 6
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+formula = "=SUM(OFFSET(A1:A2;1;1))"
+expect = 50
+note = "Size defaults to the reference size."
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+formula = "=SUM(OFFSET(A1;0;1;5))"
+expect = 150
+note = "Width defaults to the reference width."
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+formula = "=SUM(OFFSET(A1;0;0;2;2))"
+expect = 33
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+formula = "=OFFSET(A3;-1;0)"
+expect = 2
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+formula = "=OFFSET(B2;-1;-1)"
+expect = 1
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+formula = "=OFFSET(A1;1;1;;)"
+expect = 20
+note = "Empty height/width use defaults."
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+formula = "=ROWS(OFFSET(A1;0;0;4;2))"
+expect = 4
+
+[[case]]
+formula = "=OFFSET(A1;1048575;0)"
+expect = 0
+note = "Last row, empty cell."
+
+[[case]]
+formula = "=OFFSET(A1;1048576;0)"
+expect = "#REF!"
+
+[[case]]
+formula = "=OFFSET(A1;-1;0)"
+expect = "#REF!"
+
+[[case]]
+formula = "=OFFSET(A1;0;-1)"
+expect = "#REF!"
+
+[[case]]
+formula = "=OFFSET(A1;0;16384)"
+expect = "#REF!"
+
+[[case]]
+formula = "=OFFSET(A1;0;0;0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=OFFSET(A1;0;0;1;0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=OFFSET(A1;0;0;-2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=OFFSET(5;1;1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=OFFSET(A1;\"x\";0)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=OFFSET(A1;1/0;0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=OFFSET(A1;1)"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+formula = "=OFFSET(A1;1.9;0)"
+expect = 2
+note = "Offsets are truncated."
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50 }
+origin = "A1"
+formula = "=SUM(OFFSET(A1;1;0;2;1))"
+expect = 5

@@ -1,0 +1,36 @@
+{
+  "src": "=Table1[Col]",
+  "dialect": "excel-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Ident",
+      "text": "Table1",
+      "start": 1,
+      "end": 7
+    },
+    {
+      "kind": "Invalid",
+      "text": "[",
+      "start": 7,
+      "end": 8
+    },
+    {
+      "kind": "Ident",
+      "text": "Col",
+      "start": 8,
+      "end": 11
+    },
+    {
+      "kind": "Invalid",
+      "text": "]",
+      "start": 11,
+      "end": 12
+    }
+  ]
+}

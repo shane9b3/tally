@@ -1,0 +1,110 @@
+# COUPPCD conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);2;1)"
+expect = 39036
+
+[[case]]
+name = "ISO date text"
+formula = "=COUPPCD(\"2007-01-25\";\"2008-11-15\";2;1)"
+expect = 39036
+
+[[case]]
+name = "basis omitted (30/360)"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);2)"
+expect = 39036
+
+[[case]]
+name = "annual"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);1;1)"
+expect = 39036
+
+[[case]]
+name = "quarterly"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);4;3)"
+expect = 39036
+
+[[case]]
+name = "end-of-month maturity, 30/360"
+formula = "=COUPPCD(DATE(2008;2;29);DATE(2010;8;31);2;0)"
+expect = 39507
+
+[[case]]
+name = "end-of-month maturity, actual"
+formula = "=COUPPCD(DATE(2008;2;29);DATE(2010;8;31);2;1)"
+expect = 39507
+
+[[case]]
+name = "1904 epoch returns serials in that epoch"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);2;1)=DATE(2006;11;15)"
+expect = true
+settings = { date_epoch = "1904" }
+
+[[case]]
+name = "basis 0"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);2;0)"
+expect = 39036
+
+[[case]]
+name = "basis 1"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);2;1)"
+expect = 39036
+
+[[case]]
+name = "basis 2"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);2;2)"
+expect = 39036
+
+[[case]]
+name = "basis 3"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);2;3)"
+expect = 39036
+
+[[case]]
+name = "basis 4"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);2;4)"
+expect = 39036
+
+[[case]]
+name = "basis 5 is illegal"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);2;5)"
+expect = "Err:502"
+
+[[case]]
+name = "empty text basis takes the default"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);2;\"\")"
+expect = 39036
+tol = 3.9036e-08
+
+[[case]]
+name = "non-numeric text basis"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);2;\"x\")"
+expect = "Err:502"
+
+[[case]]
+name = "frequency must be 1, 2 or 4"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15);3;1)"
+expect = "Err:502"
+
+[[case]]
+name = "settlement after maturity"
+formula = "=COUPPCD(DATE(2008;11;15);DATE(2007;1;25);2;1)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=COUPPCD(\"x\";DATE(2008;11;15);2;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=COUPPCD(A4;DATE(2008;11;15);2;1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=COUPPCD(DATE(2007;1;25);DATE(2008;11;15))"
+expect = "Err:511"

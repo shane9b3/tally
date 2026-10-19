@@ -1,0 +1,89 @@
+# IMEXP conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMREAL(IMEXP(\"1+i\"))"
+expect = 1.4686939399158851
+tol = 1.468693939915885e-11
+
+[[case]]
+formula = "=IMAGINARY(IMEXP(\"1+i\"))"
+expect = 2.2873552871788423
+tol = 2.287355287178842e-11
+
+[[case]]
+formula = "=IMREAL(IMEXP(\"3+4i\"))"
+expect = -13.128783081462158
+tol = 1.3128783081462158e-10
+
+[[case]]
+formula = "=IMAGINARY(IMEXP(\"3+4i\"))"
+expect = -15.200784463067956
+tol = 1.5200784463067956e-10
+
+[[case]]
+formula = "=IMREAL(IMEXP(\"2-3j\"))"
+expect = -7.315110094901103
+tol = 7.315110094901102e-11
+
+[[case]]
+formula = "=IMAGINARY(IMEXP(\"2-3j\"))"
+expect = -1.0427436562359045
+tol = 1.0427436562359044e-11
+
+[[case]]
+formula = "=IMREAL(IMEXP(\"-0.5+0.25i\"))"
+expect = 0.5876750903439226
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMEXP(\"-0.5+0.25i\"))"
+expect = 0.15005808662216327
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMEXP(\"2\"))"
+expect = 7.38905609893065
+tol = 7.38905609893065e-11
+
+[[case]]
+formula = "=IMAGINARY(IMEXP(\"2\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMEXP(\"-i\"))"
+expect = 0.5403023058681398
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMEXP(\"-i\"))"
+expect = -0.8414709848078965
+tol = 1e-11
+
+[[case]]
+formula = "=IMEXP(\"0\")"
+expect = "1"
+
+[[case]]
+formula = "=IMEXP(\"1+i\")"
+expect = "1.46869393991589+2.28735528717884i"
+
+[[case]]
+formula = "=IMEXP(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMEXP()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMEXP(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "number argument"
+formula = "=IMREAL(IMEXP(2))"
+expect = 7.38905609893065
+tol = 1e-11
+

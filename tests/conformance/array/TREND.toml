@@ -1,0 +1,69 @@
+# TREND conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "extrapolate (column new_x)"
+formula = "=TREND({6|18|54|162};{1|2|3|4};{5|6})"
+expect = [[186], [236.4]]
+tol = 1e-9
+
+[[case]]
+name = "new_x defaults to x: fitted values"
+formula = "=TREND({3|5|7|9};{1|2|3|4})"
+expect = [[3], [5], [7], [9]]
+tol = 1e-12
+
+[[case]]
+name = "x defaults to 1..n"
+formula = "=TREND({3|5|7|9})"
+expect = [[3], [5], [7], [9]]
+tol = 1e-12
+
+[[case]]
+name = "result takes the shape of new_x (row)"
+formula = "=TREND({3|5|7|9};{1|2|3|4};{5;6;7})"
+expect = [[11, 13, 15]]
+tol = 1e-12
+
+[[case]]
+name = "const FALSE"
+formula = "=TREND({3|5|7|9};{1|2|3|4};{5};FALSE)"
+expect = [[11.666666666666666]]
+tol = 1e-12
+
+[[case]]
+name = "row-oriented y and x"
+formula = "=TREND({3;5;7;9};{1;2;3;4};{5;6})"
+expect = [[11, 13]]
+tol = 1e-12
+
+[[case]]
+name = "two regressors"
+cells = { A1 = 9, A2 = 8, A3 = 19, A4 = 18, A5 = 32, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5, C1 = 2, C2 = 1, C3 = 4, C4 = 3, C5 = 7, E1 = 10, F1 = 10 }
+origin = "H1"
+formula = "=TREND(A1:A5;B1:C5;E1:F1)"
+expect = [[51]]
+tol = 1e-9
+note = "y = 1 + 2*x1 + 3*x2 exactly (A3:A5 were 18/17/28, off the plane, in the first draft) at (10, 10)."
+
+[[case]]
+name = "new_x column count must match"
+cells = { A1 = 9, A2 = 8, A3 = 18, A4 = 17, A5 = 28, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5, C1 = 2, C2 = 1, C3 = 4, C4 = 3, C5 = 7, E1 = 10 }
+origin = "H1"
+formula = "=TREND(A1:A5;B1:C5;E1)"
+expect = "Err:502"
+
+[[case]]
+name = "text in y"
+cells = { A1 = 1, A2 = "x", A3 = 3 }
+formula = "=TREND(A1:A3)"
+expect = "Err:502"
+
+[[case]]
+name = "collinear"
+formula = "=TREND({1|2|3};{4|4|4};{5})"
+expect = "Err:502"
+
+[[case]]
+name = "error in new_x"
+formula = "=TREND({3|5|7};{1|2|3};1/0)"
+expect = "#DIV/0!"

@@ -1,0 +1,36 @@
+[[case]]
+formula = "=CURRENT()"
+expect = "#N/A"
+note = "Not supported: the running formula value is not available to functions."
+
+[[case]]
+formula = "=CURRENT(1)"
+expect = "Err:504"
+
+[[case]]
+formula = "=ISNA(CURRENT())"
+expect = true
+
+[[case]]
+formula = "=IFERROR(CURRENT();7)"
+expect = 7
+
+[[case]]
+formula = "=ISERROR(CURRENT())"
+expect = true
+
+[[case]]
+formula = "=ISERR(CURRENT())"
+expect = false
+
+[[case]]
+formula = "=CURRENT()+1"
+expect = "#N/A"
+
+[[case]]
+formula = "=ISNUMBER(CURRENT())"
+expect = false
+
+[[case]]
+formula = "=CURRENT(;)"
+expect = "Err:504"

@@ -1,0 +1,54 @@
+# EDATE conformance vectors. Analysis add-in. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "day clamped"
+formula = "=EDATE(DATE(2026;1;31);1)"
+expect = 46081
+
+[[case]]
+formula = "=EDATE(DATE(2024;1;31);1)"
+expect = 45351
+
+[[case]]
+formula = "=EDATE(DATE(2026;3;15);-5)"
+expect = 45945
+
+[[case]]
+formula = "=EDATE(DATE(2026;3;15);0)"
+expect = 46096
+
+[[case]]
+formula = "=EDATE(DATE(2026;3;15);12)"
+expect = 46461
+
+[[case]]
+formula = "=EDATE(DATE(2026;12;31);2)"
+expect = 46446
+
+[[case]]
+name = "ISO text date"
+formula = "=EDATE(\"2026-01-31\";1)"
+expect = 46081
+
+[[case]]
+name = "time part dropped"
+formula = "=EDATE(DATE(2026;3;15)+0.75;1)"
+expect = 46127
+
+[[case]]
+formula = "=EDATE(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty start is serial 0"
+formula = "=EDATE(A1;1)"
+expect = 31
+note = "Serial 0 is 1899-12-30; one month later is 1900-01-30."
+
+[[case]]
+formula = "=EDATE(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=EDATE(1;1;1)"
+expect = "Err:504"

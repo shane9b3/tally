@@ -1,0 +1,58 @@
+# MMULT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "2x2 product"
+formula = "=MMULT({1;2|3;4};{5;6|7;8})"
+expect = [[19, 22], [43, 50]]
+
+[[case]]
+name = "row times column"
+formula = "=MMULT({1;2;3};{4|5|6})"
+expect = [[32]]
+
+[[case]]
+name = "column times row"
+formula = "=MMULT({1|2};{3;4})"
+expect = [[3, 4], [6, 8]]
+
+[[case]]
+name = "dimension mismatch"
+formula = "=MMULT({1;2;3};{1;2;3})"
+expect = "#VALUE!"
+
+[[case]]
+name = "ranges"
+cells = { A1 = 1, B1 = 2, A2 = 3, B2 = 4, D1 = 1, D2 = 1 }
+origin = "F1"
+formula = "=MMULT(A1:B2;D1:D2)"
+expect = [[3], [7]]
+
+[[case]]
+name = "empty counts as 0"
+cells = { A1 = 1, A2 = 3, B1 = 2 }
+origin = "F1"
+formula = "=MMULT(A1:B2;{1|1})"
+expect = [[3], [3]]
+
+[[case]]
+name = "text in matrix is #VALUE!"
+cells = { A1 = 1, B1 = "x" }
+formula = "=MMULT(A1:B1;{1|1})"
+expect = "#VALUE!"
+note = "AOO matrix operations reject text."
+
+[[case]]
+name = "error element propagates"
+cells = { A1 = "=1/0", B1 = 2 }
+formula = "=MMULT(A1:B1;{1|1})"
+expect = "#DIV/0!"
+
+[[case]]
+name = "identity"
+formula = "=MMULT({1;2|3;4};{1;0|0;1})"
+expect = [[1, 2], [3, 4]]
+
+[[case]]
+name = "missing argument"
+formula = "=MMULT({1;2})"
+expect = "Err:511"

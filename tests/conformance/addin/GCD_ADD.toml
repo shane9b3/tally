@@ -1,0 +1,49 @@
+# GCD_ADD conformance vectors. Analysis add-in GCD; the plain name GCD is the built-in Mathematical function. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=GCD_ADD(24;36;60)"
+expect = 12
+
+[[case]]
+formula = "=GCD_ADD(5)"
+expect = 5
+
+[[case]]
+formula = "=GCD_ADD(0;0)"
+expect = 0
+
+[[case]]
+formula = "=GCD_ADD(0;7)"
+expect = 7
+
+[[case]]
+formula = "=GCD_ADD(7;13)"
+expect = 1
+
+[[case]]
+name = "truncated"
+formula = "=GCD_ADD(12.9;18.2)"
+expect = 6
+
+[[case]]
+cells = { A1 = 24, A2 = 36, A3 = 60 }
+formula = "=GCD_ADD(A1:A3)"
+expect = 12
+
+[[case]]
+name = "2-D range"
+cells = { A1 = 12, B1 = 18, A2 = 24, B2 = 30 }
+formula = "=GCD_ADD(A1:B2;6)"
+expect = 6
+
+[[case]]
+formula = "=GCD_ADD(-2;4)"
+expect = "Err:502"
+
+[[case]]
+formula = "=GCD_ADD(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=GCD_ADD()"
+expect = "Err:511"

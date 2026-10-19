@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 use std::io::BufRead;
 
-use tally_model::{HAlign, StyleData, VAlign};
+use tally_model::{BorderLine, HAlign, StyleData, VAlign};
 
 use crate::numfmt::{DataStyle, DataStyles, Kind, Part};
-use crate::units::{font_size_pt, length_to_hmm, parse_color};
+use crate::units::{font_size_pt, length_to_hmm, parse_border, parse_color};
 use crate::xml::{Elem, Ev, XmlReader};
 use crate::OdsError;
 
@@ -29,6 +29,10 @@ pub(crate) struct RawCellStyle {
     align_fixed: Option<bool>,
     v: Option<VAlign>,
     wrap: Option<bool>,
+    border_top: Option<Option<BorderLine>>,
+    border_bottom: Option<Option<BorderLine>>,
+    border_left: Option<Option<BorderLine>>,
+    border_right: Option<Option<BorderLine>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -183,7 +187,11 @@ impl StyleSheet {
                 h,
                 align_fixed,
                 v,
-                wrap
+                wrap,
+                border_top,
+                border_bottom,
+                border_left,
+                border_right
             );
         }
         let mut s = StyleData::default();
@@ -206,6 +214,10 @@ impl StyleSheet {
         };
         s.align.v = m.v.unwrap_or_default();
         s.align.wrap = m.wrap.unwrap_or(false);
+        s.borders.top = m.border_top.flatten();
+        s.borders.bottom = m.border_bottom.flatten();
+        s.borders.left = m.border_left.flatten();
+        s.borders.right = m.border_right.flatten();
         s.number_format = m
             .data_style
             .as_deref()
@@ -383,6 +395,23 @@ fn apply_cell_props(s: &mut RawCellStyle, p: &Elem) {
             "middle" => VAlign::Middle,
             _ => VAlign::Bottom,
         });
+    }
+    // `fo:border` sets all four sides; the side attributes override it.
+    if let Some(b) = p.attr("fo:border").and_then(parse_border) {
+        s.border_top = Some(b.clone());
+        s.border_bottom = Some(b.clone());
+        s.border_left = Some(b.clone());
+        s.border_right = Some(b);
+    }
+    for (key, slot) in [
+        ("fo:border-top", &mut s.border_top),
+        ("fo:border-bottom", &mut s.border_bottom),
+        ("fo:border-left", &mut s.border_left),
+        ("fo:border-right", &mut s.border_right),
+    ] {
+        if let Some(b) = p.attr(key).and_then(parse_border) {
+            *slot = Some(b);
+        }
     }
     if let Some(v) = p.attr("style:text-align-source") {
         s.align_fixed = Some(v == "fix");

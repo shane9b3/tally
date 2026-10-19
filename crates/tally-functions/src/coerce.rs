@@ -177,17 +177,27 @@ const fn bool_num(b: bool) -> f64 {
 ///
 /// - `GenerateError`: always `#VALUE!`;
 /// - `TreatAsZero`: always 0;
-/// - `ConvertUnambiguous` (default) and, until `tally-numfmt` lands,
-///   `ConvertLocale`: [`parse_unambiguous`] or `#VALUE!` (the empty string
-///   is `#VALUE!`).
+/// - `ConvertUnambiguous` (default): [`parse_unambiguous`] or `#VALUE!`;
+/// - `ConvertLocale`: tally-numfmt's en-US input recognizer
+///   ([`tally_numfmt::recognize_input_with`]: thousands separators,
+///   currency, percent, fractions, US dates and times; `TRUE`/`FALSE` are
+///   1/0), `#VALUE!` if it recognises no number.
+///
+/// The empty string is `#VALUE!` in both converting modes.
 pub fn text_to_number(s: &str, settings: &CalcSettings) -> Result<f64, ErrorKind> {
     match settings.text_to_number {
         TextToNumber::GenerateError => Err(ErrorKind::Value),
         TextToNumber::TreatAsZero => Ok(0.0),
-        // TODO(WP4): ConvertLocale should use tally-numfmt's en-US input
-        // recognizer (thousands separators, currency, US dates).
-        TextToNumber::ConvertUnambiguous | TextToNumber::ConvertLocale => {
+        TextToNumber::ConvertUnambiguous => {
             parse_unambiguous(s, settings.date_epoch).ok_or(ErrorKind::Value)
+        }
+        TextToNumber::ConvertLocale => {
+            let ctx = tally_numfmt::RecognizeContext::now(settings.date_epoch);
+            match tally_numfmt::recognize_input_with(s, &tally_numfmt::EN_US, &ctx).value {
+                Value::Number(n) => Ok(n),
+                Value::Bool(b) => Ok(bool_num(b)),
+                _ => Err(ErrorKind::Value),
+            }
         }
     }
 }
@@ -207,37 +217,13 @@ pub fn parse_unambiguous(s: &str, epoch: DateEpoch) -> Option<f64> {
 }
 
 /// Renders a number the way General format does in a text context
-/// (CONCATENATE, `&`): rounded to 15 significant digits, shortest form,
-/// decimal notation for `1e-4 <= |x| < 1e15`, otherwise scientific with a
-/// two-digit signed exponent (`1E+20`, `1.5E-05`). `-0` renders as `0`.
-///
-/// TODO(WP4): switch to tally-numfmt's General formatter.
+/// (CONCATENATE, `&`): tally-numfmt's [`tally_numfmt::general_string`]
+/// without a width, en-US: rounded to 15 significant digits, shortest
+/// form, decimal notation for `1e-4 <= |x| < 1e15`, otherwise scientific
+/// with a two-digit signed exponent (`1E+20`, `1.5E-05`). `-0` renders as
+/// `0`; NaN and infinities as `#NUM!`.
 pub fn number_to_text(x: f64) -> String {
-    if x.is_nan() {
-        return ErrorKind::Num.display().into_owned();
-    }
-    if x.is_infinite() {
-        return ErrorKind::Num.display().into_owned();
-    }
-    let r = round_to_15_digits(x);
-    if r == 0.0 {
-        return "0".to_owned();
-    }
-    let a = r.abs();
-    if (1e-4..1e15).contains(&a) {
-        return format!("{r}");
-    }
-    let s = format!("{r:e}");
-    match s.split_once('e') {
-        Some((mantissa, exp)) => {
-            let (sign, digits) = match exp.strip_prefix('-') {
-                Some(d) => ('-', d),
-                None => ('+', exp),
-            };
-            format!("{mantissa}E{sign}{digits:0>2}")
-        }
-        None => s,
-    }
+    tally_numfmt::general_string(x, None, &tally_numfmt::EN_US)
 }
 
 /// Where a value visited by [`values_seq`] came from.

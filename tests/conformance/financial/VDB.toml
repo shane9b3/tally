@@ -1,0 +1,80 @@
+# VDB conformance vectors. Ported AOO 4.1 semantics (interpr2.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference, first day"
+formula = "=VDB(2400;300;10*365;0;1)"
+expect = 1.31506849315
+tol = 1e-10
+
+[[case]]
+name = "Excel reference, first month"
+formula = "=VDB(2400;300;10*12;0;1)"
+expect = 40
+tol = 1e-10
+
+[[case]]
+name = "Excel reference, first year"
+formula = "=VDB(2400;300;10;0;1)"
+expect = 480
+tol = 1e-10
+
+[[case]]
+name = "Excel reference, months 6-18"
+formula = "=VDB(2400;300;10*12;6;18)"
+expect = 396.306053242
+tol = 1e-06
+
+[[case]]
+name = "Excel reference, factor 1.5"
+formula = "=VDB(2400;300;10*12;6;18;1.5)"
+expect = 311.808936658
+tol = 1e-06
+
+[[case]]
+name = "Excel reference, partial year"
+formula = "=VDB(2400;300;10;0;0.875;1.5)"
+expect = 315
+tol = 1e-09
+
+[[case]]
+name = "no switch to straight line"
+formula = "=VDB(2400;300;10;0;10;2;TRUE())"
+expect = 2100
+
+[[case]]
+name = "whole life depreciates to salvage"
+formula = "=VDB(2400;300;10;0;10)"
+expect = 2100
+tol = 1e-09
+
+[[case]]
+name = "end before start"
+formula = "=VDB(2400;300;10;5;4)"
+expect = "Err:502"
+
+[[case]]
+name = "end beyond life"
+formula = "=VDB(2400;300;10;0;11)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=VDB(\"x\";300;10;0;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=VDB(A4;300;10;0;1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=VDB(2400;300;10;0)"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=VDB(2400;300;10;0;1;1;1;1)"
+expect = "Err:504"

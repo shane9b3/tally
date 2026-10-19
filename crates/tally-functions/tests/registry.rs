@@ -23,6 +23,7 @@ struct MasterEntry {
     name: String,
     category: String,
     odf_name: String,
+    ooxml_name: Option<String>,
     min_args: u8,
     max_args: u8,
     batch: Option<u8>,
@@ -64,17 +65,104 @@ fn registry_matches_master_list() {
     let m = master();
     assert_eq!(m.len(), 407);
     assert_eq!(m.values().filter(|f| f.batch == Some(0)).count(), 68);
-    assert!(m["IFERROR"].extension && m["IFNA"].extension);
+    assert!(m["IFERROR"].extension && m["IFNA"].extension && m["NUMBERVALUE"].extension);
+    // Collect every mismatch so one run shows the whole picture.
+    let mut problems: Vec<String> = Vec::new();
+    let mut check = |name: &str, what: &str, got: String, want: String| {
+        if got != want {
+            problems.push(format!("{name}: {what} is {got}, master list says {want}"));
+        }
+    };
     for (_, def) in registry().iter() {
-        let e = m
-            .get(def.name)
-            .unwrap_or_else(|| panic!("{} not in master list", def.name));
-        assert_eq!(def.category.aoo_name(), e.category, "{}", def.name);
-        assert_eq!(def.odf_name, e.odf_name, "{}", def.name);
-        assert_eq!(def.min_args, e.min_args, "{}", def.name);
-        assert_eq!(def.max_args, e.max_args, "{}", def.name);
-        assert_eq!(def.extension, e.extension, "{}", def.name);
+        let Some(e) = m.get(def.name) else {
+            check(
+                def.name,
+                "master-list entry",
+                "missing".into(),
+                "present".into(),
+            );
+            continue;
+        };
+        let n = def.name;
+        check(
+            n,
+            "category",
+            def.category.aoo_name().into(),
+            e.category.clone(),
+        );
+        check(n, "odf_name", def.odf_name.into(), e.odf_name.clone());
+        check(
+            n,
+            "ooxml_name",
+            format!("{:?}", def.ooxml_name),
+            format!("{:?}", e.ooxml_name.as_deref()),
+        );
+        check(
+            n,
+            "min_args",
+            def.min_args.to_string(),
+            e.min_args.to_string(),
+        );
+        check(
+            n,
+            "max_args",
+            def.max_args.to_string(),
+            e.max_args.to_string(),
+        );
+        check(
+            n,
+            "extension",
+            def.extension.to_string(),
+            e.extension.to_string(),
+        );
     }
+    for name in m.keys() {
+        if registry().lookup(name).is_none() {
+            problems.push(format!("{name}: in master list but not registered"));
+        }
+    }
+    problems.sort();
+    assert!(
+        problems.is_empty(),
+        "{} registry/master-list mismatch(es):\n  {}",
+        problems.len(),
+        problems.join("\n  ")
+    );
+}
+
+/// AOO's add-in clash rule (docs/phase-a.md): plain ISEVEN/ISODD/GCD/LCM/
+/// EFFECT/CUMPRINC/CUMIPMT/NOMINAL mean the built-in, plain WEEKNUM/CONVERT/
+/// DURATION mean the add-in, in both ODF and OOXML.
+#[test]
+fn addin_name_clashes_follow_aoo() {
+    let r = registry();
+    let name = |id: Option<FuncId>| id.and_then(|i| r.get(i)).map(|d| d.name);
+    for (plain, want) in [
+        ("ISEVEN", "ISEVEN"),
+        ("ISODD", "ISODD"),
+        ("GCD", "GCD"),
+        ("LCM", "LCM"),
+        ("EFFECT", "EFFECTIVE"),
+        ("CUMPRINC", "CUMPRINC"),
+        ("CUMIPMT", "CUMIPMT"),
+        ("NOMINAL", "NOMINAL"),
+        ("WEEKNUM", "WEEKNUM_ADD"),
+        ("CONVERT", "CONVERT_ADD"),
+        ("DURATION", "DURATION_ADD"),
+    ] {
+        assert_eq!(name(r.lookup_odf(plain)), Some(want), "ODF {plain}");
+        assert_eq!(name(r.lookup_ooxml(plain)), Some(want), "OOXML {plain}");
+    }
+    assert_eq!(name(r.lookup_odf("PDURATION")), Some("DURATION"));
+    assert_eq!(name(r.lookup_odf("RRI")), Some("ZGZ"));
+    assert_eq!(name(r.lookup_odf("ISOWEEKNUM")), Some("WEEKNUM"));
+    assert_eq!(name(r.lookup_ooxml("_xlfn.RRI")), Some("ZGZ"));
+    assert_eq!(
+        name(r.lookup_odf("com.sun.star.sheet.addin.Analysis.getGcd")),
+        Some("GCD_ADD")
+    );
+    // AOO 4.1 has ERRORTYPE (OpenOffice codes) but not Excel's ERROR.TYPE.
+    assert!(r.lookup_any("ERROR.TYPE").is_none());
 }
 
 #[test]

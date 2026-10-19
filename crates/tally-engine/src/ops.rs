@@ -1,27 +1,37 @@
 //! Applying [`Op`]s. Each op validates its arguments, records the inverse
 //! [`Change`]s it needs for undo, and mutates the workbook; recalculation
 //! happens once per transaction in [`crate::document`].
+//!
+//! Ops that would change only part of an array formula block are refused
+//! with the error code [`ARRAY_BLOCK`]; ops that would split a merged area
+//! with [`MERGED`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use tally_api::{ApiError, ClearWhat, Op, PastePayload, RangeDto};
+use tally_api::{ApiError, ClearWhat, Op, PasteOptions, RangeDto};
 use tally_formula::{adjust_for_structure_change, RefExpr, SheetRef, StructureChange};
+use tally_model::CellRangeLocal;
 use tally_numfmt::parse_format;
 use tally_types::{CellAddr, CellRange, SheetId, MAX_COLS, MAX_ROWS};
 
-use crate::clipboard::{parse_tsv, ClipSnapshot};
+use crate::clipboard::ClipSnapshot;
 use crate::formula_cells::FormulaCellId;
-use crate::storage::StyleId;
+use crate::storage::{AutoFilter, StyleId};
 use crate::undo::{
-    apply_change, capture_range, clear_range_content, clear_range_styles, remove_sheet, Change,
-    Effects,
+    apply_change, capture_range, clear_range_content, clear_range_styles, names_snapshot,
+    remove_sheet, sheet_meta, Change, Effects,
 };
-use crate::units::px_to_hmm;
-use crate::workbook::{SnapContent, Workbook};
+use crate::units::{px_to_hmm, DEFAULT_COL_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX};
+use crate::workbook::Workbook;
 
 /// Most cells one op may write (paste, range inputs).
 pub const MAX_OP_CELLS: u64 = 1_048_576;
+
+/// Error code: the op would change part of an array formula block.
+pub const ARRAY_BLOCK: &str = "array_block";
+/// Error code: the op would change part of a merged area.
+pub const MERGED: &str = "merged";
 
 /// Calls `f` on every sheet qualifier of `r`.
 fn sheet_refs_mut(r: &mut RefExpr, f: &mut impl FnMut(&mut SheetRef)) {
@@ -66,7 +76,6 @@ fn resolve_sheet_refs(wb: &mut Workbook, id: SheetId) -> Change {
             continue;
         };
         let mut nf = (*f.formula).clone();
-        let invalid = f.invalid_text.clone();
         nf.expr.walk_refs_mut(|r| {
             sheet_refs_mut(r, &mut |s| {
                 if matches(s) {
@@ -74,14 +83,8 @@ fn resolve_sheet_refs(wb: &mut Workbook, id: SheetId) -> Change {
                 }
             });
         });
-        old_cells.push((addr, wb.snapshot_content(addr)));
-        wb.restore_content(
-            addr,
-            Some(SnapContent::Formula {
-                formula: Arc::new(nf),
-                invalid_text: invalid,
-            }),
-        );
+        let old = wb.replace_formula_ast(addr, Arc::new(nf));
+        old_cells.push((addr, old));
     }
     Change::Cells(old_cells)
 }
@@ -93,7 +96,8 @@ fn not_found_sheet(sheet: SheetId) -> ApiError {
     ApiError::not_found(format!("no sheet {sheet}"))
 }
 
-fn check_sheet(wb: &Workbook, sheet: SheetId) -> Result<(), ApiError> {
+/// `Ok` if the sheet exists.
+pub fn check_sheet(wb: &Workbook, sheet: SheetId) -> Result<(), ApiError> {
     if wb.sheet(sheet).is_some() {
         Ok(())
     } else {
@@ -121,8 +125,43 @@ fn check_cell(r: u32, c: u32) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// The error for changing part of an array.
+pub fn array_block_error() -> ApiError {
+    ApiError::new(ARRAY_BLOCK, "You cannot change only part of an array.")
+}
+
+/// Refuses when an array block intersects one of `ranges` without lying
+/// entirely inside it.
+pub fn check_array_blocks(wb: &Workbook, ranges: &[CellRange]) -> Result<(), ApiError> {
+    for r in ranges {
+        for b in wb.array_blocks_in(r) {
+            if !r.contains_range(&b) {
+                return Err(array_block_error());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuses when a merge intersects `range` without lying entirely inside it.
+pub fn check_merges(wb: &Workbook, range: &CellRange) -> Result<(), ApiError> {
+    let Some(s) = wb.sheet(range.sheet) else {
+        return Ok(());
+    };
+    for m in &s.meta.merges {
+        let mr = CellRange::new(range.sheet, m.r0, m.c0, m.r1, m.c1);
+        if mr.intersects(range) && !range.contains_range(&mr) {
+            return Err(ApiError::new(
+                MERGED,
+                "You cannot change only part of a merged range.",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Applies `f(table, old)` to the style of every cell in `range`.
-fn map_styles(
+pub fn map_styles(
     wb: &mut Workbook,
     range: CellRange,
     mut f: impl FnMut(&mut crate::styles::StyleTable, StyleId) -> StyleId,
@@ -146,20 +185,38 @@ fn map_styles(
     wb.pending.display_only.push(range);
 }
 
-/// Writes a block of raw inputs with its top-left at `addr`.
-fn write_inputs(wb: &mut Workbook, sheet: SheetId, r: u32, c: u32, rows: &[Vec<String>]) {
+/// Writes a block of raw inputs with its top-left at `addr` (cells covered
+/// by a merge are skipped). With `constants`, `=…` stays text.
+pub fn write_inputs(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    r: u32,
+    c: u32,
+    rows: &[Vec<String>],
+    constants: bool,
+) {
     for (dr, row) in rows.iter().enumerate() {
         for (dc, input) in row.iter().enumerate() {
             let (rr, cc) = (r as u64 + dr as u64, c as u64 + dc as u64);
             if rr >= u64::from(MAX_ROWS) || cc >= u64::from(MAX_COLS) {
                 continue;
             }
-            wb.set_input(CellAddr::new(sheet, rr as u32, cc as u32), input);
+            let (rr, cc) = (rr as u32, cc as u32);
+            if wb.sheet(sheet).is_some_and(|s| s.is_merge_covered(rr, cc)) {
+                continue;
+            }
+            let addr = CellAddr::new(sheet, rr, cc);
+            if constants {
+                wb.set_constant_input(addr, input);
+            } else {
+                wb.set_input(addr, input);
+            }
         }
     }
 }
 
-fn block_range(
+/// The rectangle a block of inputs covers (validated).
+pub fn block_range(
     sheet: SheetId,
     r: u32,
     c: u32,
@@ -194,6 +251,19 @@ pub fn check_sheet_name(name: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn ranges_of(sheet: SheetId, ranges: &[RangeDto]) -> Result<Vec<CellRange>, ApiError> {
+    ranges.iter().map(|r| to_range(sheet, r)).collect()
+}
+
+fn local(r: &CellRange) -> CellRangeLocal {
+    CellRangeLocal {
+        r0: r.r0,
+        c0: r.c0,
+        r1: r.r1,
+        c1: r.c1,
+    }
+}
+
 /// Applies one op, returning the inverse changes (in apply order).
 pub fn apply_op(
     wb: &mut Workbook,
@@ -205,16 +275,23 @@ pub fn apply_op(
         Op::SetCellInput { sheet, r, c, input } => {
             check_sheet(wb, *sheet)?;
             check_cell(*r, *c)?;
-            let range = CellRange::new(*sheet, *r, *c, *r, *c);
+            // Typing into a merged area edits its anchor.
+            let (r, c) = match wb.sheet(*sheet).and_then(|s| s.merge_at(*r, *c)) {
+                Some(m) => (m.r0, m.c0),
+                None => (*r, *c),
+            };
+            let range = CellRange::new(*sheet, r, c, r, c);
+            check_array_blocks(wb, &[range])?;
             let inv = capture_range(wb, range, true, true);
-            wb.set_input(CellAddr::new(*sheet, *r, *c), input);
+            wb.set_input(CellAddr::new(*sheet, r, c), input);
             Ok(vec![Change::Range(inv)])
         }
         Op::SetRangeInputs { sheet, r, c, rows } => {
             check_sheet(wb, *sheet)?;
             let range = block_range(*sheet, *r, *c, rows)?;
+            check_array_blocks(wb, &[range])?;
             let inv = capture_range(wb, range, true, true);
-            write_inputs(wb, *sheet, *r, *c, rows);
+            write_inputs(wb, *sheet, *r, *c, rows, false);
             Ok(vec![Change::Range(inv)])
         }
         Op::Clear {
@@ -223,12 +300,12 @@ pub fn apply_op(
             what,
         } => {
             check_sheet(wb, *sheet)?;
-            let ranges: Vec<CellRange> = ranges
-                .iter()
-                .map(|r| to_range(*sheet, r))
-                .collect::<Result<_, _>>()?;
+            let ranges = ranges_of(*sheet, ranges)?;
             let content = matches!(what, ClearWhat::Contents | ClearWhat::All);
             let style = matches!(what, ClearWhat::Formats | ClearWhat::All);
+            if content {
+                check_array_blocks(wb, &ranges)?;
+            }
             let mut inv = Vec::with_capacity(ranges.len());
             for range in ranges {
                 inv.push(Change::Range(capture_range(wb, range, content, style)));
@@ -251,14 +328,14 @@ pub fn apply_op(
                 parse_format(code)
                     .map_err(|e| ApiError::invalid_argument(format!("bad number format: {e}")))?;
             }
-            let ranges: Vec<CellRange> = ranges
-                .iter()
-                .map(|r| to_range(*sheet, r))
-                .collect::<Result<_, _>>()?;
+            let ranges = ranges_of(*sheet, ranges)?;
             let mut inv = Vec::with_capacity(ranges.len());
             for range in ranges {
                 inv.push(Change::Range(capture_range(wb, range, false, true)));
                 map_styles(wb, range, |t, old| t.patched(old, patch));
+                if let Some(b) = &patch.borders {
+                    crate::styles::apply_borders(wb, range, b);
+                }
             }
             Ok(inv)
         }
@@ -270,10 +347,7 @@ pub fn apply_op(
             check_sheet(wb, *sheet)?;
             parse_format(code)
                 .map_err(|e| ApiError::invalid_argument(format!("bad number format: {e}")))?;
-            let ranges: Vec<CellRange> = ranges
-                .iter()
-                .map(|r| to_range(*sheet, r))
-                .collect::<Result<_, _>>()?;
+            let ranges = ranges_of(*sheet, ranges)?;
             let mut inv = Vec::with_capacity(ranges.len());
             for range in ranges {
                 inv.push(Change::Range(capture_range(wb, range, false, true)));
@@ -383,6 +457,7 @@ pub fn apply_op(
                     "the last sheet cannot be deleted",
                 ));
             }
+            let names = names_snapshot(wb);
             // Formulas elsewhere that reference the sheet become #REF!.
             let change = StructureChange::DeleteSheet { sheet: *sheet };
             let mut adjusted: Vec<(FormulaCellId, CellAddr)> = Vec::new();
@@ -397,20 +472,29 @@ pub fn apply_op(
                     continue;
                 };
                 let mut nf = (*f.formula).clone();
-                let invalid = f.invalid_text.clone();
                 if adjust_for_structure_change(&mut nf, addr, &change) {
-                    old_cells.push((addr, wb.snapshot_content(addr)));
-                    wb.restore_content(
-                        addr,
-                        Some(SnapContent::Formula {
-                            formula: Arc::new(nf),
-                            invalid_text: invalid,
-                        }),
-                    );
+                    let old = wb.replace_formula_ast(addr, Arc::new(nf));
+                    old_cells.push((addr, old));
+                }
+            }
+            // Names scoped to the sheet go; names pointing at it become #REF!.
+            wb.names.undefine_scope(*sheet);
+            for def in wb.names.defs_mut() {
+                let mut f = (*def.formula).clone();
+                if adjust_for_structure_change(&mut f, def.base, &change) {
+                    def.formula = Arc::new(f);
                 }
             }
             let ins = remove_sheet(wb, *sheet, fx).ok_or_else(|| not_found_sheet(*sheet))?;
-            Ok(vec![Change::Cells(old_cells), ins])
+            // Bases on the deleted sheet move to the first sheet (same cell).
+            let first = wb.name_base(None).sheet;
+            for def in wb.names.defs_mut() {
+                if def.base.sheet == *sheet {
+                    def.base.sheet = first;
+                }
+            }
+            wb.refresh_all_name_dependents();
+            Ok(vec![names, Change::Cells(old_cells), ins])
         }
         Op::MoveSheet { sheet, to } => {
             check_sheet(wb, *sheet)?;
@@ -431,31 +515,287 @@ pub fn apply_op(
         } => {
             check_sheet(wb, *sheet)?;
             let target = to_range(*sheet, target)?;
-            match payload {
-                PastePayload::Tsv { text } => {
-                    let rows = parse_tsv(text);
-                    if rows.is_empty() {
-                        return Ok(Vec::new());
+            crate::clipboard::paste(
+                wb,
+                *sheet,
+                target,
+                payload,
+                &PasteOptions::default(),
+                clip,
+                fx,
+            )
+        }
+        Op::PasteSpecial {
+            sheet,
+            target,
+            payload,
+            options,
+        } => {
+            check_sheet(wb, *sheet)?;
+            let target = to_range(*sheet, target)?;
+            crate::clipboard::paste(wb, *sheet, target, payload, options, clip, fx)
+        }
+        Op::DefineName {
+            name,
+            scope,
+            refers_to,
+        } => {
+            if let Some(s) = scope {
+                check_sheet(wb, *s)?;
+            }
+            crate::names::validate_name(wb, name)?;
+            let exists = wb
+                .names
+                .lookup(name, *scope)
+                .and_then(|id| wb.names.get(id))
+                .is_some_and(|e| e.def.is_some());
+            if !exists && wb.names.len() >= crate::names::MAX_NAMES {
+                return Err(ApiError::invalid_argument("too many names"));
+            }
+            let def = wb.parse_name_expr(refers_to, *scope)?;
+            let inv = names_snapshot(wb);
+            wb.names.define(name, *scope, def);
+            wb.refresh_name_dependents(&crate::names::name_key(name));
+            Ok(vec![inv])
+        }
+        Op::DeleteName { name, scope } => {
+            let id = wb
+                .names
+                .lookup(name, *scope)
+                .filter(|id| wb.names.get(*id).is_some_and(|e| e.def.is_some()))
+                .ok_or_else(|| ApiError::not_found(format!("no name {name:?}")))?;
+            let inv = names_snapshot(wb);
+            wb.names.undefine(id);
+            wb.refresh_name_dependents(&crate::names::name_key(name));
+            Ok(vec![inv])
+        }
+        Op::SetArrayFormula {
+            sheet,
+            range,
+            input,
+        } => {
+            check_sheet(wb, *sheet)?;
+            let range = to_range(*sheet, range)?;
+            if range.cell_count() > MAX_OP_CELLS {
+                return Err(ApiError::invalid_argument("the array is too large"));
+            }
+            let text = input.trim();
+            if !text.starts_with('=') || text.len() < 2 {
+                return Err(ApiError::invalid_argument(
+                    "an array formula must start with =",
+                ));
+            }
+            let anchor = range.start();
+            let f = wb
+                .parse_formula(text, anchor)
+                .map_err(|e| ApiError::invalid_argument(format!("bad formula: {e}")))?;
+            check_array_blocks(wb, &[range])?;
+            check_merges(wb, &range)?;
+            let inv = capture_range(wb, range, true, false);
+            wb.set_array_formula(anchor, Arc::new(f), range.rows(), range.cols());
+            Ok(vec![Change::Range(inv)])
+        }
+        Op::MoveRange { sheet, from, to } => {
+            check_sheet(wb, *sheet)?;
+            let from = to_range(*sheet, from)?;
+            check_cell(to.r, to.c)?;
+            crate::moves::move_range(wb, from, *to, fx)
+        }
+        Op::MergeCells { sheet, range } => {
+            check_sheet(wb, *sheet)?;
+            let range = to_range(*sheet, range)?;
+            if range.is_single() {
+                return Err(ApiError::invalid_argument(
+                    "a merge needs at least two cells",
+                ));
+            }
+            check_merges(wb, &range)?;
+            check_array_blocks(wb, &[range])?;
+            let meta = sheet_meta(wb, *sheet).ok_or_else(|| not_found_sheet(*sheet))?;
+            let content = capture_range(wb, range, true, false);
+            // Only the top-left cell keeps its content.
+            let anchor = range.start();
+            let mut cells: Vec<CellAddr> = Vec::new();
+            if let Some(s) = wb.sheet(*sheet) {
+                for c in range.c0..=range.c1.min(s.columns.len().saturating_sub(1) as u32) {
+                    if let Some(col) = s.column(c) {
+                        use crate::storage::ColumnStore;
+                        cells.extend(
+                            col.cells
+                                .iter_range(range.r0, range.r1)
+                                .map(|(r, _)| CellAddr::new(*sheet, r, c))
+                                .filter(|a| *a != anchor),
+                        );
                     }
-                    let range = block_range(*sheet, target.r0, target.c0, &rows)?;
-                    let inv = capture_range(wb, range, true, true);
-                    write_inputs(wb, *sheet, target.r0, target.c0, &rows);
-                    Ok(vec![Change::Range(inv)])
-                }
-                PastePayload::Internal { token } => {
-                    let clip = clip.filter(|c| c.token == *token).ok_or_else(|| {
-                        ApiError::not_found("the clipboard token is no longer valid")
-                    })?;
-                    paste_internal(wb, *sheet, target, clip)
                 }
             }
+            for a in cells {
+                wb.clear_content(a);
+            }
+            if let Some(s) = wb.sheet_mut(*sheet) {
+                let l = local(&range);
+                s.meta
+                    .merges
+                    .retain(|m| !(l.r0 <= m.r0 && m.r1 <= l.r1 && l.c0 <= m.c0 && m.c1 <= l.c1));
+                s.meta.merges.push(l);
+            }
+            wb.pending.ranges.push(range);
+            fx.layout(*sheet);
+            Ok(vec![meta, Change::Range(content)])
+        }
+        Op::UnmergeCells { sheet, range } => {
+            check_sheet(wb, *sheet)?;
+            let range = to_range(*sheet, range)?;
+            let meta = sheet_meta(wb, *sheet).ok_or_else(|| not_found_sheet(*sheet))?;
+            let mut hit = Vec::new();
+            if let Some(s) = wb.sheet_mut(*sheet) {
+                s.meta.merges.retain(|m| {
+                    let mr = CellRange::new(*sheet, m.r0, m.c0, m.r1, m.c1);
+                    let keep = !mr.intersects(&range);
+                    if !keep {
+                        hit.push(mr);
+                    }
+                    keep
+                });
+            }
+            wb.pending.display_only.extend(hit);
+            fx.layout(*sheet);
+            Ok(vec![meta])
+        }
+        Op::SetFrozen { sheet, rows, cols } => {
+            check_sheet(wb, *sheet)?;
+            if *rows >= MAX_ROWS || *cols >= MAX_COLS {
+                return Err(ApiError::invalid_argument("cannot freeze the whole sheet"));
+            }
+            let meta = sheet_meta(wb, *sheet).ok_or_else(|| not_found_sheet(*sheet))?;
+            if let Some(s) = wb.sheet_mut(*sheet) {
+                s.meta.frozen = (*rows > 0 || *cols > 0).then_some((*rows, *cols));
+            }
+            fx.layout(*sheet);
+            Ok(vec![meta])
+        }
+        Op::SetRowsHidden {
+            sheet,
+            start,
+            end,
+            hidden,
+        } => {
+            if start > end || *end >= MAX_ROWS {
+                return Err(ApiError::invalid_argument("bad row range"));
+            }
+            let s = wb
+                .sheet_mut(*sheet)
+                .ok_or_else(|| not_found_sheet(*sheet))?;
+            let old = s.row_dims.clone();
+            s.row_dims
+                .set_hidden(*start, *end, *hidden, px_to_hmm(DEFAULT_ROW_HEIGHT_PX));
+            fx.layout(*sheet);
+            Ok(vec![Change::RowDims {
+                sheet: *sheet,
+                dims: old,
+            }])
+        }
+        Op::SetColsHidden {
+            sheet,
+            start,
+            end,
+            hidden,
+        } => {
+            if start > end || *end >= MAX_COLS {
+                return Err(ApiError::invalid_argument("bad column range"));
+            }
+            let s = wb
+                .sheet_mut(*sheet)
+                .ok_or_else(|| not_found_sheet(*sheet))?;
+            let old = s.col_dims.clone();
+            s.col_dims
+                .set_hidden(*start, *end, *hidden, px_to_hmm(DEFAULT_COL_WIDTH_PX));
+            fx.layout(*sheet);
+            Ok(vec![Change::ColDims {
+                sheet: *sheet,
+                dims: old,
+            }])
+        }
+        Op::SetAutoFilter { sheet, range } => {
+            check_sheet(wb, *sheet)?;
+            let range = range.as_ref().map(|r| to_range(*sheet, r)).transpose()?;
+            let meta = sheet_meta(wb, *sheet).ok_or_else(|| not_found_sheet(*sheet))?;
+            if let Some(s) = wb.sheet_mut(*sheet) {
+                s.meta.auto_filter = range.map(|r| AutoFilter {
+                    range: local(&r),
+                    columns: BTreeMap::new(),
+                });
+            }
+            wb.reapply_filter(*sheet);
+            fx.layout(*sheet);
+            Ok(vec![meta])
+        }
+        Op::SetColumnFilter { sheet, col, filter } => {
+            check_sheet(wb, *sheet)?;
+            let meta = sheet_meta(wb, *sheet).ok_or_else(|| not_found_sheet(*sheet))?;
+            let s = wb
+                .sheet_mut(*sheet)
+                .ok_or_else(|| not_found_sheet(*sheet))?;
+            let af = s
+                .meta
+                .auto_filter
+                .as_mut()
+                .ok_or_else(|| ApiError::invalid_argument("the sheet has no AutoFilter"))?;
+            if *col < af.range.c0 || *col > af.range.c1 {
+                return Err(ApiError::invalid_argument(
+                    "the column is outside the AutoFilter range",
+                ));
+            }
+            match filter {
+                Some(f) if f.values.is_some() || f.condition.is_some() => {
+                    af.columns.insert(*col, crate::filter::criteria_from_api(f));
+                }
+                _ => {
+                    af.columns.remove(col);
+                }
+            }
+            wb.reapply_filter(*sheet);
+            fx.layout(*sheet);
+            Ok(vec![meta])
+        }
+        Op::SortRange {
+            sheet,
+            range,
+            keys,
+            has_header,
+            case_sensitive,
+        } => {
+            check_sheet(wb, *sheet)?;
+            let range = to_range(*sheet, range)?;
+            crate::sort::sort_range(wb, range, keys, *has_header, *case_sensitive)
+        }
+        Op::ReplaceAll {
+            sheet,
+            query,
+            replace,
+        } => {
+            if let Some(s) = sheet {
+                check_sheet(wb, *s)?;
+            }
+            crate::find::replace_all(wb, *sheet, query, replace, fx)
+        }
+        Op::FillRange {
+            sheet,
+            source,
+            target,
+            mode,
+        } => {
+            check_sheet(wb, *sheet)?;
+            let source = to_range(*sheet, source)?;
+            let target = to_range(*sheet, target)?;
+            crate::fill::fill_range(wb, source, target, *mode)
         }
     }
 }
 
-/// Inserts or deletes rows/columns, recording: the dimensions, the lost
-/// cells (deleted, or pushed off the end), the rewritten formulas and the
-/// inverse structural change.
+/// Inserts or deletes rows/columns, recording: the names and sheet meta
+/// state, the dimensions, the lost cells (deleted, or pushed off the end),
+/// the rewritten formulas and the inverse structural change.
 fn structure(
     wb: &mut Workbook,
     change: StructureChange,
@@ -479,6 +819,13 @@ fn structure(
             "cannot insert a whole sheet of rows/columns",
         ));
     }
+    let splits = wb.formulas.iter().any(|(_, f)| {
+        f.array_range()
+            .is_some_and(|b| crate::structure::splits_block(&shape, &b))
+    });
+    if splits {
+        return Err(array_block_error());
+    }
     let sheet = wb
         .sheet(shape.sheet)
         .ok_or_else(|| not_found_sheet(shape.sheet))?;
@@ -493,70 +840,18 @@ fn structure(
             dims: sheet.col_dims.clone(),
         }
     };
+    let names = names_snapshot(wb);
+    let meta = sheet_meta(wb, shape.sheet).ok_or_else(|| not_found_sheet(shape.sheet))?;
     let lost = Change::Range(capture_range(wb, shape.lost(), true, true));
     let old = wb.structure_change(&change);
+    wb.adjust_meta_for_structure(&change);
     fx.layout(shape.sheet);
     Ok(vec![
+        names,
+        meta,
         dims,
         lost,
         Change::Cells(old),
         Change::Structure(shape.inverse()),
     ])
-}
-
-fn paste_internal(
-    wb: &mut Workbook,
-    sheet: SheetId,
-    target: CellRange,
-    clip: &ClipSnapshot,
-) -> Result<Vec<Change>, ApiError> {
-    let (rows, cols) = (clip.rows.max(1), clip.cols.max(1));
-    let reps_r = if target.rows().is_multiple_of(rows) {
-        target.rows() / rows
-    } else {
-        1
-    };
-    let reps_c = if target.cols().is_multiple_of(cols) {
-        target.cols() / cols
-    } else {
-        1
-    };
-    let total = u64::from(rows) * u64::from(cols) * u64::from(reps_r) * u64::from(reps_c);
-    if total > MAX_OP_CELLS {
-        return Err(ApiError::invalid_argument("paste area is too large"));
-    }
-    let r1 =
-        (u64::from(target.r0) + u64::from(rows * reps_r) - 1).min(u64::from(MAX_ROWS - 1)) as u32;
-    let c1 =
-        (u64::from(target.c0) + u64::from(cols * reps_c) - 1).min(u64::from(MAX_COLS - 1)) as u32;
-    let area = CellRange::new(sheet, target.r0, target.c0, r1, c1);
-    let inv = capture_range(wb, area, true, true);
-    clear_range_content(wb, area);
-    clear_range_styles(wb, area);
-    let style_ids: Vec<StyleId> = clip
-        .styles
-        .iter()
-        .map(|s| wb.styles.intern(s.clone()))
-        .collect();
-    for rr in 0..reps_r {
-        for rc in 0..reps_c {
-            for (dr, dc, content, style) in &clip.cells {
-                let row = u64::from(target.r0) + u64::from(rr * rows + dr);
-                let col = u64::from(target.c0) + u64::from(rc * cols + dc);
-                if row > u64::from(r1) || col > u64::from(c1) {
-                    continue;
-                }
-                let addr = CellAddr::new(sheet, row as u32, col as u32);
-                if let Some(content) = content {
-                    wb.restore_content(addr, Some(content.clone()));
-                }
-                if let Some(st) = style.and_then(|i| style_ids.get(i)) {
-                    if let Some(c) = wb.sheet_mut(sheet).and_then(|s| s.column_mut(addr.col)) {
-                        c.styles.set(addr.row, addr.row, *st);
-                    }
-                }
-            }
-        }
-    }
-    Ok(vec![Change::Range(inv)])
 }

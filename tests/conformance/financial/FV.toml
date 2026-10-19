@@ -1,0 +1,65 @@
+# FV conformance vectors. Ported AOO 4.1 semantics (interpr2.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=FV(0.06/12;10;-200;-500;1)"
+expect = 2581.4033740601
+tol = 1e-09
+
+[[case]]
+name = "Excel reference 2"
+formula = "=FV(0.12/12;12;-1000)"
+expect = 12682.5030131
+tol = 1e-06
+
+[[case]]
+name = "zero rate"
+formula = "=FV(0;10;-100;-1000)"
+expect = 2000
+
+[[case]]
+name = "type omitted"
+formula = "=FV(0.06/12;10;-200;-500)"
+expect = 2571.17534765198
+tol = 2.5711753476519796e-09
+
+[[case]]
+name = "empty pv slot"
+formula = "=FV(0.06/12;10;-200;;1)"
+expect = 2055.83330803974
+tol = 2.05583330803974e-09
+
+[[case]]
+name = "boolean type"
+cells = { A1 = true }
+formula = "=FV(0.06/12;10;-200;-500;A1)"
+expect = 2581.40337406014
+tol = 2.5814033740601396e-09
+
+[[case]]
+name = "type > 0 means advance"
+formula = "=FV(0.06/12;10;-200;-500;2)"
+expect = 2581.40337406014
+tol = 2.5814033740601396e-09
+
+[[case]]
+name = "non-numeric text"
+formula = "=FV(\"x\";10;-200)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=FV(A4;10;-200)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=FV(0.005;10)"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=FV(0.005;10;-200;1;1;1)"
+expect = "Err:504"

@@ -1,0 +1,54 @@
+# MUNIT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=MUNIT(2)"
+expect = [[1, 0], [0, 1]]
+
+[[case]]
+formula = "=MUNIT(1)"
+expect = [[1]]
+
+[[case]]
+formula = "=MUNIT(3)"
+expect = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+
+[[case]]
+name = "zero"
+formula = "=MUNIT(0)"
+expect = "Err:502"
+
+[[case]]
+name = "negative"
+formula = "=MUNIT(-2)"
+expect = "Err:502"
+
+[[case]]
+name = "truncates"
+formula = "=MUNIT(2.9)"
+expect = [[1, 0], [0, 1]]
+
+[[case]]
+name = "numeric text"
+formula = "=MUNIT(\"2\")"
+expect = [[1, 0], [0, 1]]
+
+[[case]]
+name = "text"
+formula = "=MUNIT(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "reference"
+cells = { A1 = 2 }
+formula = "=MUNIT(A1)"
+expect = [[1, 0], [0, 1]]
+
+[[case]]
+name = "error"
+formula = "=MUNIT(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "missing"
+formula = "=MUNIT()"
+expect = "Err:511"

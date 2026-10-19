@@ -1,0 +1,46 @@
+[[case]]
+formula = "=ISLOGICAL(TRUE)"
+expect = true
+
+[[case]]
+formula = "=ISLOGICAL(FALSE)"
+expect = true
+
+[[case]]
+formula = "=ISLOGICAL(1)"
+expect = false
+
+[[case]]
+formula = "=ISLOGICAL(\"TRUE\")"
+expect = false
+
+[[case]]
+cells = { A1 = true }
+formula = "=ISLOGICAL(A1)"
+expect = true
+
+[[case]]
+cells = { A1 = 1 }
+formula = "=ISLOGICAL(A1)"
+expect = false
+
+[[case]]
+formula = "=ISLOGICAL(1=1)"
+expect = true
+
+[[case]]
+formula = "=ISLOGICAL(1/0)"
+expect = false
+
+[[case]]
+formula = "=ISLOGICAL(B9)"
+expect = false
+
+[[case]]
+formula = "=ISLOGICAL()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1>0" }
+formula = "=ISLOGICAL(A1)"
+expect = true

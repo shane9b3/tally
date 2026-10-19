@@ -66,3 +66,22 @@ describe("CommandRegistry", () => {
     expect(ran).toBe(2);
   });
 });
+
+describe("v0.2 bindings", () => {
+  const ev = (key: string, mods: Partial<{ meta: boolean; shift: boolean; code: string }> = {}) => ({
+    key,
+    code: mods.code,
+    metaKey: mods.meta ?? true,
+    ctrlKey: false,
+    shiftKey: mods.shift ?? false,
+    altKey: false,
+  });
+  it("maps the new shortcuts", () => {
+    expect(resolveKey(ev("u"), { typing: false, nativeMenu: false })).toBe("format.underline");
+    expect(resolveKey(ev("G", { shift: true }), { typing: true, nativeMenu: false })).toBe("view.glance");
+    expect(resolveKey(ev("/", { code: "Slash" }), { typing: true, nativeMenu: false })).toBe("help.shortcuts");
+    expect(resolveKey(ev("$", { shift: true, code: "Digit4" }), { typing: false, nativeMenu: false })).toBe("format.currency");
+    // Undo while typing belongs to the editor, not the document keymap.
+    expect(resolveKey(ev("z"), { typing: true, nativeMenu: false })).toBeNull();
+  });
+});

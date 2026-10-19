@@ -1,0 +1,80 @@
+# FACT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=FACT(5.0)"
+expect = 120
+
+[[case]]
+name = "numeric text"
+formula = "=FACT(\"5.0\")"
+expect = 120
+
+[[case]]
+name = "non-numeric text"
+formula = "=FACT(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=FACT(A1)"
+expect = 1
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=FACT(A1)"
+expect = 1
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=FACT(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 5 }
+origin = "C2"
+formula = "=FACT(A1:A2)"
+expect = 120
+
+[[case]]
+name = "no arguments"
+formula = "=FACT()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=FACT(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=FACT(0)"
+expect = 1
+
+[[case]]
+formula = "=FACT(10)"
+expect = 3628800
+
+[[case]]
+formula = "=FACT(5.9)"
+expect = 120
+note = "Truncated."
+
+[[case]]
+formula = "=FACT(170)"
+expect = 7.257415615307999e+306
+
+[[case]]
+formula = "=FACT(171)"
+expect = "Err:502"
+note = "Above 170 is an illegal argument."
+
+[[case]]
+formula = "=FACT(-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=FACT(-0.5)"
+expect = "Err:502"
+note = "Floored to -1."

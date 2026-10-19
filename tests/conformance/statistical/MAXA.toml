@@ -1,0 +1,58 @@
+# MAXA conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "text counts as 0, boolean as 1"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 5 }
+formula = "=MAXA(A1:A4)"
+expect = 5
+
+[[case]]
+name = "text 0 beats negatives"
+cells = { A1 = -3, A2 = "x", A3 = -1 }
+formula = "=MAXA(A1:A3)"
+expect = 0
+
+[[case]]
+formula = "=MAXA(1;5;3)"
+expect = 5
+
+[[case]]
+name = "empty cells ignored"
+cells = { A1 = -3, A3 = -1 }
+formula = "=MAXA(A1:A3)"
+expect = -1
+
+[[case]]
+name = "no values gives 0"
+formula = "=MAXA(A1:A3)"
+expect = 0
+
+[[case]]
+name = "error propagates"
+cells = { A1 = 1, A2 = "=NA()" }
+formula = "=MAXA(A1:A3)"
+expect = "#N/A"
+
+[[case]]
+cells = { A1 = 1, A2 = true }
+formula = "=MAXA(A1:A2;10)"
+expect = 10
+
+[[case]]
+name = "numeric text direct"
+formula = "=MAXA(\"4\";2)"
+expect = 4
+
+[[case]]
+name = "bad text direct"
+formula = "=MAXA(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = true, A2 = false }
+formula = "=MAXA(A1:A2)"
+expect = 1
+
+[[case]]
+formula = "=MAXA()"
+expect = "Err:511"

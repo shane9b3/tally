@@ -21,10 +21,14 @@ export {
   stepWithin,
   rangeOf,
   sameSelection,
+  allRanges,
+  addRange,
   type KeyAction,
   type Limits,
   type Mods,
 } from "./selection";
 export { Geometry, HEADER_HEIGHT } from "./geometry";
+export { fillTarget, fillDirection, type FillDir } from "./fillHandle";
+export { wrapLines, luminance, textColor, cssColor } from "./renderer";
 export { EngineClientSource, type EngineClientSourceOptions } from "./engineSource";
 export { SyntheticSource, type SyntheticOptions } from "./synthetic";

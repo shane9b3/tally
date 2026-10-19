@@ -1,0 +1,48 @@
+[[case]]
+formula = "=CLEAN(\"a\"&CHAR(1)&\"b\")"
+expect = "ab"
+
+[[case]]
+formula = "=CLEAN(\"a\"&CHAR(10)&\"b\")"
+expect = "ab"
+
+[[case]]
+formula = "=CLEAN(\"abc\")"
+expect = "abc"
+
+[[case]]
+formula = "=CLEAN(\"\")"
+expect = ""
+
+[[case]]
+formula = "=CLEAN(123)"
+expect = "123"
+
+[[case]]
+formula = "=CLEAN(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=CLEAN(A1)"
+expect = ""
+
+[[case]]
+formula = "=CLEAN(\"a\"&CHAR(9)&\"b\")"
+expect = "ab"
+
+[[case]]
+formula = "=CLEAN(\"a\"&CHAR(31)&\"b\")"
+expect = "ab"
+
+[[case]]
+formula = "=CLEAN(\" a \")"
+expect = " a "
+
+[[case]]
+formula = "=CLEAN()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "x\u0007y" }
+formula = "=CLEAN(A1)"
+expect = "xy"

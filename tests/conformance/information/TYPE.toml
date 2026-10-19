@@ -1,0 +1,56 @@
+[[case]]
+formula = "=TYPE(1)"
+expect = 1
+
+[[case]]
+formula = "=TYPE(\"a\")"
+expect = 2
+
+[[case]]
+formula = "=TYPE(TRUE)"
+expect = 4
+
+[[case]]
+formula = "=TYPE(1/0)"
+expect = 16
+
+[[case]]
+formula = "=TYPE({1;2})"
+expect = 64
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3 }
+formula = "=TYPE(A1:A3)"
+expect = 64
+
+[[case]]
+cells = { A1 = 5 }
+formula = "=TYPE(A1)"
+expect = 1
+
+[[case]]
+cells = { A1 = "t" }
+formula = "=TYPE(A1)"
+expect = 2
+
+[[case]]
+formula = "=TYPE(B9)"
+expect = 1
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=TYPE(A1)"
+expect = 16
+
+[[case]]
+formula = "=TYPE(NA())"
+expect = 16
+
+[[case]]
+formula = "=TYPE()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = true }
+formula = "=TYPE(A1)"
+expect = 4

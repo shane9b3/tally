@@ -1,0 +1,45 @@
+[[case]]
+formula = "=DAYS(DATE(2026;10;19);DATE(2026;10;5))"
+expect = 14
+
+[[case]]
+formula = "=DAYS(DATE(2026;1;1);DATE(2026;12;31))"
+expect = -364
+
+[[case]]
+formula = "=DAYS(10.9;3.1)"
+expect = 7
+note = "Integer parts are subtracted."
+
+[[case]]
+cells = { A1 = 46314, A2 = 46300 }
+formula = "=DAYS(A1;A2)"
+expect = 14
+
+[[case]]
+cells = { A1 = 46314 }
+formula = "=DAYS(A1;A2)"
+expect = 46314
+note = "Empty start date is 0."
+
+[[case]]
+formula = "=DAYS(\"2026-10-19\";\"2026-10-05\")"
+expect = 14
+note = "ISO text converts."
+
+[[case]]
+formula = "=DAYS(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=DAYS(A1;1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=DAYS(TRUE;FALSE)"
+expect = 1
+
+[[case]]
+formula = "=DAYS(1)"
+expect = "Err:511"

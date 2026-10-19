@@ -1,0 +1,42 @@
+# GESTEP conformance vectors. Analysis add-in. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=GESTEP(3;4)"
+expect = 0
+
+[[case]]
+formula = "=GESTEP(4;4)"
+expect = 1
+
+[[case]]
+formula = "=GESTEP(5;4)"
+expect = 1
+
+[[case]]
+name = "default step 0"
+formula = "=GESTEP(-1)"
+expect = 0
+
+[[case]]
+formula = "=GESTEP(0)"
+expect = 1
+
+[[case]]
+formula = "=GESTEP(1)"
+expect = 1
+
+[[case]]
+formula = "=GESTEP(-3;-4)"
+expect = 1
+
+[[case]]
+formula = "=GESTEP(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=GESTEP()"
+expect = "Err:511"
+
+[[case]]
+formula = "=GESTEP(1;2;3)"
+expect = "Err:504"

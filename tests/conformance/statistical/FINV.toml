@@ -1,0 +1,47 @@
+# FINV conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "0.05/5/10"
+formula = "=FINV(0.05;5;10)"
+expect = 3.325834530413012
+tol = 3e-13
+
+[[case]]
+name = "median 1/1"
+formula = "=FINV(0.5;1;1)"
+expect = 1.0
+tol = 1e-13
+
+[[case]]
+name = "0.01/3/100"
+formula = "=FINV(0.01;3;100)"
+expect = 3.983695313880891
+tol = 4e-13
+
+[[case]]
+name = "p = 1"
+formula = "=FINV(1;5;10)"
+expect = 0
+tol = 0
+note = "The bracket search reaches x = 0, where FDIST is 1."
+
+[[case]]
+name = "p = 0"
+formula = "=FINV(0;5;10)"
+expect = "Err:502"
+
+[[case]]
+name = "df1 zero"
+formula = "=FINV(0.05;0;10)"
+expect = "Err:502"
+
+[[case]]
+name = "df2 too large"
+formula = "=FINV(0.05;5;1E10)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=FINV(\"x\";5;10)"
+expect = "#VALUE!"

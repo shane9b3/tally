@@ -1,0 +1,48 @@
+# CHIINV conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "0.05/10"
+formula = "=CHIINV(0.05;10)"
+expect = 18.307038053275146
+tol = 2e-12
+
+[[case]]
+name = "tiny p"
+formula = "=CHIINV(1E-12;100)"
+expect = 233.81056795920782
+tol = 2e-10
+
+[[case]]
+name = "one df"
+formula = "=CHIINV(0.5;1)"
+expect = 0.4549364231195728
+tol = 5e-14
+
+[[case]]
+name = "df floored"
+formula = "=CHIINV(0.05;10.7)"
+expect = 18.307038053275146
+tol = 2e-12
+
+[[case]]
+name = "p = 1"
+formula = "=CHIINV(1;10)"
+expect = 0
+tol = 0
+note = "The bracket search reaches x = 0, where CHIDIST is 1."
+
+[[case]]
+name = "p = 0"
+formula = "=CHIINV(0;10)"
+expect = "Err:502"
+
+[[case]]
+name = "df zero"
+formula = "=CHIINV(0.05;0)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=CHIINV(\"x\";10)"
+expect = "#VALUE!"

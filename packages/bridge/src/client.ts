@@ -13,6 +13,10 @@
  */
 import type { ApiError } from "./generated/ApiError";
 import type { ApplyResult } from "./generated/ApplyResult";
+import type { AutoFilterInfo } from "./generated/AutoFilterInfo";
+import type { FindQuery } from "./generated/FindQuery";
+import type { FindResult } from "./generated/FindResult";
+import type { NameInfo } from "./generated/NameInfo";
 import type { CellBlock } from "./generated/CellBlock";
 import type { CellEditInfo } from "./generated/CellEditInfo";
 import type { CellPos } from "./generated/CellPos";
@@ -85,6 +89,26 @@ export interface EngineClient {
   onDocChanged(cb: (event: DocChangedEvent) => void): Unsubscribe;
   /** `menu-action` event: a native menu item was chosen. */
   onMenuAction(cb: (event: MenuActionEvent) => void): Unsubscribe;
+}
+
+/**
+ * v0.2 additions to {@link EngineClient} (named ranges, AutoFilter, find,
+ * sort header detection, hard recalc). Kept as a separate interface so
+ * existing `EngineClient` implementations keep compiling; `MockClient`
+ * implements it, `TauriClient` should too (Tauri commands `names`,
+ * `filter_info`, `find`, `detect_header`, `recalc_all`, see docs/api.md).
+ */
+export interface EngineClientV2 extends EngineClient {
+  /** Every defined name (workbook scope first, then by sheet), sorted. */
+  names(doc: DocId): Promise<NameInfo[]>;
+  /** The sheet's AutoFilter with each column's distinct values. */
+  filterInfo(doc: DocId, sheet: SheetId): Promise<AutoFilterInfo>;
+  /** Find (at most 10,000 hits). */
+  find(doc: DocId, query: FindQuery): Promise<FindResult>;
+  /** `true` if the first row of `range` looks like column labels. */
+  detectHeader(doc: DocId, sheet: SheetId, range: RangeDto): Promise<boolean>;
+  /** Hard recalculation (⇧⌘F9). */
+  recalcAll(doc: DocId): Promise<ApplyResult>;
 }
 
 /** Narrows an unknown rejection value to {@link ApiError}. */

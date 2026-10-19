@@ -1,0 +1,96 @@
+# ODDFYIELD conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx). AOO 4.1 does not implement ODDFPRICE/ODDFYIELD (#VALUE!); Tally uses the Excel formula.
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;2;0)"
+expect = 0.0772
+tol = 0.0001
+aoo_expect = "#VALUE!"
+note = "AOO 4.1 does not implement ODDFPRICE/ODDFYIELD (#VALUE!); Tally uses the Excel formula."
+
+[[case]]
+name = "inverse of ODDFPRICE"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0785;ODDFPRICE(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0785;0.0625;100;2;1);100;2;1)"
+expect = 0.0625
+tol = 1e-09
+aoo_expect = "#VALUE!"
+
+[[case]]
+name = "long first period"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;1;15);DATE(2009;3;1);0.0785;110;100;2;1)"
+expect = 0.0663473339049145
+tol = 1e-09
+aoo_expect = "#VALUE!"
+
+[[case]]
+name = "price must be positive"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0785;0;100;2)"
+expect = "Err:502"
+
+[[case]]
+name = "basis 0"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;2;0)"
+expect = 0.0772455415978175
+tol = 1e-09
+
+[[case]]
+name = "basis 1"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;2;1)"
+expect = 0.0772470625979234
+tol = 1e-09
+
+[[case]]
+name = "basis 2"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;2;2)"
+expect = 0.0772450219211749
+tol = 1e-09
+
+[[case]]
+name = "basis 3"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;2;3)"
+expect = 0.0772500780541174
+tol = 1e-09
+
+[[case]]
+name = "basis 4"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;2;4)"
+expect = 0.0772455415978175
+tol = 1e-09
+
+[[case]]
+name = "basis 5 is illegal"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;2;5)"
+expect = "Err:502"
+
+[[case]]
+name = "empty text basis takes the default"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;2;\"\")"
+expect = 0.0772455415978175
+tol = 1e-09
+
+[[case]]
+name = "non-numeric text basis"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;2;\"x\")"
+expect = "Err:502"
+
+[[case]]
+name = "frequency must be 1, 2 or 4"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;3;0)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=ODDFYIELD(\"x\";DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;2;0)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=ODDFYIELD(A4;DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100;2;0)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=ODDFYIELD(DATE(2008;11;11);DATE(2021;3;1);DATE(2008;10;15);DATE(2009;3;1);0.0575;84.5;100)"
+expect = "Err:511"

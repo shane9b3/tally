@@ -2,7 +2,7 @@
 //! [`MockArgs`] (an argument list that records which arguments were
 //! evaluated). Available under `cfg(test)` and the `test-support` feature.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
 use tally_types::{CalcSettings, CellAddr, CellRange, SheetId, Value};
@@ -32,6 +32,8 @@ pub struct MockEvalContext {
     pub dynamic_deps: Vec<CellRange>,
     /// Cells read through [`EvalContext::cell_value`] (in order).
     pub reads: Vec<CellAddr>,
+    /// Rows reported by [`EvalContext::hidden_row`], as `(sheet, row)`.
+    pub hidden_rows: HashSet<(SheetId, u32)>,
     rng: u64,
 }
 
@@ -58,6 +60,7 @@ impl MockEvalContext {
             sheets: 1,
             dynamic_deps: Vec::new(),
             reads: Vec::new(),
+            hidden_rows: HashSet::new(),
             rng: 0x2545_F491_4F6C_DD1D,
         }
     }
@@ -207,6 +210,10 @@ impl EvalContext for MockEvalContext {
 
     fn cell_format_info(&self, addr: CellAddr) -> CellFormatInfo {
         self.formats.get(&addr).cloned().unwrap_or_default()
+    }
+
+    fn hidden_row(&self, sheet: SheetId, row: u32) -> bool {
+        self.hidden_rows.contains(&(sheet, row))
     }
 
     fn in_array_context(&self) -> bool {

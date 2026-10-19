@@ -1,0 +1,75 @@
+# BESSELK conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=BESSELK(1;0)"
+expect = 0.42102443824070834
+tol = 8.420488764814167e-06
+note = "AOO polynomial approximation (about 1e-7 accurate); reference from scipy"
+
+[[case]]
+formula = "=BESSELK(1;1)"
+expect = 0.6019072301972346
+tol = 1.2038144603944693e-05
+note = "AOO polynomial approximation (about 1e-7 accurate); reference from scipy"
+
+[[case]]
+formula = "=BESSELK(2.5;3)"
+expect = 0.26822714639344925
+tol = 5.364542927868985e-06
+note = "AOO polynomial approximation (about 1e-7 accurate); reference from scipy"
+
+[[case]]
+formula = "=BESSELK(0.5;0)"
+expect = 0.9244190712276656
+tol = 1.8488381424553315e-05
+note = "AOO polynomial approximation (about 1e-7 accurate); reference from scipy"
+
+[[case]]
+formula = "=BESSELK(7;0)"
+expect = 0.0004247957418692318
+tol = 2e-08
+note = "AOO polynomial approximation (about 1e-7 accurate); reference from scipy"
+
+[[case]]
+formula = "=BESSELK(3;2)"
+expect = 0.06151045847174205
+tol = 1.230209169434841e-06
+note = "AOO polynomial approximation (about 1e-7 accurate); reference from scipy"
+
+[[case]]
+formula = "=BESSELK(10;1)"
+expect = 1.8648773453825585e-05
+tol = 2e-08
+note = "AOO polynomial approximation (about 1e-7 accurate); reference from scipy"
+
+[[case]]
+formula = "=BESSELK(1;-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BESSELK(0;1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BESSELK(-1;1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BESSELK(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=BESSELK(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=BESSELK(A1;1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "order truncated"
+formula = "=BESSELK(1;2.9)"
+expect = 1.6248388986351774
+tol = 3.2496777972703554e-05
+

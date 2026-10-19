@@ -1,0 +1,53 @@
+# DOLLARDE conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=DOLLARDE(1.02;16)"
+expect = 1.125
+tol = 1e-12
+
+[[case]]
+name = "Excel reference 2"
+formula = "=DOLLARDE(1.1;32)"
+expect = 1.3125
+tol = 1e-12
+
+[[case]]
+name = "negative"
+formula = "=DOLLARDE(-1.02;16)"
+expect = -1.125
+tol = 1e-12
+
+[[case]]
+name = "fraction truncated"
+formula = "=DOLLARDE(1.02;16.9)"
+expect = 1.125
+tol = 1e-12
+
+[[case]]
+name = "fraction 1"
+formula = "=DOLLARDE(1.5;1)"
+expect = 1.5
+tol = 1e-12
+
+[[case]]
+name = "fraction must be positive"
+formula = "=DOLLARDE(1.02;0)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=DOLLARDE(\"x\";16)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=DOLLARDE(A4;16)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=DOLLARDE(1.02)"
+expect = "Err:511"

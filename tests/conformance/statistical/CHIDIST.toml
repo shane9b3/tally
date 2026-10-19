@@ -1,0 +1,61 @@
+# CHIDIST conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "right tail"
+formula = "=CHIDIST(3;2)"
+expect = 0.22313016014842982
+tol = 2e-14
+
+[[case]]
+name = "critical value"
+formula = "=CHIDIST(18.307038053275146;10)"
+expect = 0.05
+tol = 5e-15
+
+[[case]]
+name = "negative x"
+formula = "=CHIDIST(-1;2)"
+expect = 1.0
+tol = 0
+
+[[case]]
+name = "zero"
+formula = "=CHIDIST(0;5)"
+expect = 1.0
+tol = 0
+
+[[case]]
+name = "df below 1"
+formula = "=CHIDIST(1;0.5)"
+expect = "Err:502"
+
+[[case]]
+name = "df floored"
+formula = "=CHIDIST(3;2.9)"
+expect = 0.22313016014842982
+tol = 2e-14
+
+[[case]]
+name = "text"
+formula = "=CHIDIST(\"x\";2)"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell x"
+formula = "=CHIDIST(A1;2)"
+expect = 1.0
+tol = 0
+
+[[case]]
+name = "bool x"
+cells = { A1 = true }
+formula = "=CHIDIST(A1;1)"
+expect = 0.3173105078629141
+tol = 3e-14
+
+[[case]]
+name = "large df"
+formula = "=CHIDIST(120;100)"
+expect = 0.08440668109369183
+tol = 8e-14

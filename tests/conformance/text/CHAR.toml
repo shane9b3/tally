@@ -1,0 +1,53 @@
+[[case]]
+formula = "=CHAR(65)"
+expect = "A"
+
+[[case]]
+formula = "=CHAR(97)"
+expect = "a"
+
+[[case]]
+formula = "=CHAR(128)"
+expect = "€"
+note = "Windows-1252 mapping."
+
+[[case]]
+formula = "=CHAR(233)"
+expect = "é"
+
+[[case]]
+formula = "=CHAR(0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=CHAR(256)"
+expect = "Err:502"
+
+[[case]]
+formula = "=CHAR(32)"
+expect = " "
+
+[[case]]
+formula = "=CHAR(255)"
+expect = "ÿ"
+
+[[case]]
+formula = "=CHAR(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = 66 }
+formula = "=CHAR(A1)"
+expect = "B"
+
+[[case]]
+formula = "=CHAR(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=CHAR()"
+expect = "Err:511"
+
+[[case]]
+formula = "=CHAR(65.9)"
+expect = "A"

@@ -13,6 +13,18 @@
   min-width: 0;
 }
 
+/* Grid plus the optional "At a glance" panel. */
+.work {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.work > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
 .footer {
   display: flex;
   align-items: center;
@@ -32,7 +44,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(17, 24, 39, 0.12);
+  background: var(--tally-scrim);
 }
 
 .about {

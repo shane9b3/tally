@@ -22,9 +22,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use tally_api::{
-    ApiError, ApplyResult, CellBlock, CellEditInfo, CellPos, ClipboardOut, Direction, DocId,
-    DocumentService, FileFormat, FunctionInfo, RangeDto, Result, SelectionDto, SelectionStats,
-    SheetLayout, StyleDto, Suggestion, Transaction, WorkbookInfo,
+    ApiError, ApplyResult, AutoFilterInfo, CellBlock, CellEditInfo, CellPos, ClipboardOut,
+    Direction, DocId, DocumentService, FileFormat, FindQuery, FindResult, FunctionInfo, NameInfo,
+    RangeDto, Result, SelectionDto, SelectionStats, SheetLayout, StyleDto, Suggestion, Transaction,
+    WorkbookInfo,
 };
 use tally_functions::registry;
 use tally_types::{CellAddr, CellRange, Value};
@@ -327,9 +328,6 @@ impl DocumentService for EngineService {
         path: Option<&Path>,
         format: FileFormat,
     ) -> Result<WorkbookInfo> {
-        if format == FileFormat::Xlsx {
-            return Err(ApiError::unsupported("XLSX is not supported in Phase A"));
-        }
         let d = self.docs.get(&doc.0).ok_or_else(|| not_found_doc(doc))?;
         let target = match path {
             Some(p) => p.to_path_buf(),
@@ -500,5 +498,60 @@ impl DocumentService for EngineService {
             sheet: SheetView::new(&d.wb, sel.sheet),
         };
         Ok(p(&req))
+    }
+
+    fn names(&self, doc: DocId) -> Result<Vec<NameInfo>> {
+        let wb = &self.document(doc)?.wb;
+        let mut out: Vec<NameInfo> = wb
+            .names
+            .defined()
+            .filter_map(|(_, e)| {
+                let def = e.def.as_ref()?;
+                let sheet_name = match e.scope {
+                    None => None,
+                    Some(s) => Some(wb.sheet(s)?.name.to_string()),
+                };
+                Some(NameInfo {
+                    name: e.name.to_string(),
+                    scope: e.scope,
+                    refers_to: wb.name_text_of(def),
+                    sheet_name,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            let tab = |s: Option<tally_types::SheetId>| s.and_then(|s| wb.tab_of(s));
+            tab(a.scope)
+                .cmp(&tab(b.scope))
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Ok(out)
+    }
+
+    fn filter_info(&self, doc: DocId, sheet: tally_types::SheetId) -> Result<AutoFilterInfo> {
+        crate::filter::filter_info(&self.document(doc)?.wb, sheet)
+            .ok_or_else(|| ApiError::not_found(format!("no sheet {sheet}")))
+    }
+
+    fn find(&self, doc: DocId, query: &FindQuery) -> Result<FindResult> {
+        crate::find::find(&self.document(doc)?.wb, query)
+    }
+
+    fn detect_header(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        range: RangeDto,
+    ) -> Result<bool> {
+        let wb = &self.document(doc)?.wb;
+        if wb.sheet(sheet).is_none() {
+            return Err(ApiError::not_found(format!("no sheet {sheet}")));
+        }
+        let r = to_range(sheet, &range)?;
+        Ok(crate::sort::detect_header(wb, &r))
+    }
+
+    fn recalc_all(&mut self, doc: DocId) -> Result<ApplyResult> {
+        Ok(self.document_mut(doc)?.recalc_all())
     }
 }

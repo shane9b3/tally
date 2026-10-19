@@ -19,4 +19,9 @@ size: number,
 /**
  * Hidden rows/columns have size 0 on screen.
  */
-hidden: boolean, };
+hidden: boolean, 
+/**
+ * `true` when the rows are hidden by an AutoFilter (as opposed to
+ * hidden by the user). Absent or `null` means not filtered.
+ */
+filtered?: boolean | null, };

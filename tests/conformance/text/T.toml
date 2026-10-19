@@ -1,0 +1,48 @@
+[[case]]
+formula = "=T(\"x\")"
+expect = "x"
+
+[[case]]
+formula = "=T(1)"
+expect = ""
+
+[[case]]
+formula = "=T(TRUE)"
+expect = ""
+
+[[case]]
+cells = { A1 = "hello" }
+formula = "=T(A1)"
+expect = "hello"
+
+[[case]]
+cells = { A1 = 5 }
+formula = "=T(A1)"
+expect = ""
+
+[[case]]
+formula = "=T(A1)"
+expect = ""
+
+[[case]]
+formula = "=T(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+cells = { A1 = "=\"a\"&\"b\"" }
+formula = "=T(A1)"
+expect = "ab"
+
+[[case]]
+cells = { A1 = "first", A2 = "second" }
+origin = "C2"
+formula = "=T(A1:A2)"
+expect = "second"
+
+[[case]]
+formula = "=T()"
+expect = "Err:511"
+
+[[case]]
+formula = "=T(\"\")"
+expect = ""

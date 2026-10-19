@@ -1,0 +1,61 @@
+# SINH conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=SINH(0.5)"
+expect = 0.5210953054937474
+
+[[case]]
+name = "numeric text"
+formula = "=SINH(\"0.5\")"
+expect = 0.5210953054937474
+
+[[case]]
+name = "non-numeric text"
+formula = "=SINH(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=SINH(A1)"
+expect = 0
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=SINH(A1)"
+expect = 1.1752011936438014
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=SINH(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 0.5 }
+origin = "C2"
+formula = "=SINH(A1:A2)"
+expect = 0.5210953054937474
+
+[[case]]
+name = "no arguments"
+formula = "=SINH()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=SINH(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=SINH(0)"
+expect = 0
+
+[[case]]
+formula = "=SINH(-1000)"
+expect = "#NUM!"
+
+[[case]]
+formula = "=SINH(2)"
+expect = 3.6268604078470186

@@ -44,8 +44,11 @@ pub struct HashDepIndex {
     areas: HashMap<SheetId, Vec<(CellRange, FormulaCellId)>>,
     back: SecondaryMap<FormulaCellId, SmallVec<[Loc; 4]>>,
     volatile: HashSet<FormulaCellId>,
-    /// Named-range dependents (no names in Phase A).
+    /// Name key (lowercase) → formulas using that name (directly or
+    /// through other names).
     names: HashMap<String, Vec<FormulaCellId>>,
+    /// Formula → the name keys it is registered under.
+    name_back: SecondaryMap<FormulaCellId, Vec<String>>,
 }
 
 impl HashDepIndex {
@@ -71,6 +74,67 @@ impl HashDepIndex {
         self.back.clear();
         self.volatile.clear();
         self.names.clear();
+        self.name_back.clear();
+    }
+
+    /// Registers formula `id` as using the names `keys` (lowercase),
+    /// replacing its previous name registrations.
+    pub fn set_names(&mut self, id: FormulaCellId, keys: &[String]) {
+        self.remove_names(id);
+        if keys.is_empty() {
+            return;
+        }
+        let mut uniq: Vec<String> = keys.to_vec();
+        uniq.sort();
+        uniq.dedup();
+        for k in &uniq {
+            self.names.entry(k.clone()).or_default().push(id);
+        }
+        self.name_back.insert(id, uniq);
+    }
+
+    /// Unregisters the names of `id`.
+    pub fn remove_names(&mut self, id: FormulaCellId) {
+        if let Some(keys) = self.name_back.remove(id) {
+            for k in keys {
+                if let Some(v) = self.names.get_mut(&k) {
+                    v.retain(|x| *x != id);
+                    if v.is_empty() {
+                        self.names.remove(&k);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The formulas using name `key` (lowercase).
+    pub fn name_dependents(&self, key: &str) -> Vec<FormulaCellId> {
+        self.names.get(key).cloned().unwrap_or_default()
+    }
+
+    /// Every formula registered under some name.
+    pub fn all_name_dependents(&self) -> Vec<FormulaCellId> {
+        self.name_back.keys().collect()
+    }
+
+    /// Unregisters everything about `id` (references, volatility, names):
+    /// for a formula cell that goes away.
+    pub fn forget(&mut self, id: FormulaCellId) {
+        self.remove(id);
+        self.remove_names(id);
+    }
+
+    /// The ranges `id` is registered for (static plus dynamic), for tests.
+    pub fn registered_ranges(&self, id: FormulaCellId) -> Vec<CellRange> {
+        let Some(locs) = self.back.get(id) else {
+            return Vec::new();
+        };
+        locs.iter()
+            .filter_map(|l| match l {
+                Loc::Single(a) => Some(CellRange::single(*a)),
+                Loc::Area(sheet, i) => self.areas.get(sheet).and_then(|v| v.get(*i)).map(|e| e.0),
+            })
+            .collect()
     }
 }
 
@@ -292,6 +356,47 @@ mod tests {
         d.remove(id[2]);
         assert_eq!(d.area_count(0), 0);
         assert_eq!(d.single_count(), 0);
+    }
+
+    #[test]
+    fn names_map() {
+        let id = ids(2);
+        let mut d = HashDepIndex::new();
+        d.set_names(id[0], &["total".into(), "rate".into()]);
+        d.set_names(id[1], &["total".into()]);
+        let mut t = d.name_dependents("total");
+        t.sort();
+        let mut e = vec![id[0], id[1]];
+        e.sort();
+        assert_eq!(t, e);
+        d.add(id[0], &[r("A1")]);
+        d.remove(id[0]);
+        assert_eq!(d.name_dependents("rate"), vec![id[0]], "remove keeps names");
+        d.forget(id[0]);
+        assert!(d.name_dependents("rate").is_empty());
+        assert_eq!(d.name_dependents("total"), vec![id[1]]);
+        d.set_names(id[1], &[]);
+        assert!(d.name_dependents("total").is_empty());
+    }
+
+    #[test]
+    fn dynamic_ranges_are_indexed_like_static_ones() {
+        let id = ids(1);
+        let mut d = HashDepIndex::new();
+        // Static A1, dynamic B5:B9 (as re-registered after an evaluation).
+        d.add(id[0], &[r("A1"), r("B5:B9")]);
+        let mut out = Vec::new();
+        d.dependents_of(&[r("B7")], &mut out);
+        assert_eq!(out, vec![id[0]]);
+        assert_eq!(d.registered_ranges(id[0]).len(), 2);
+        // Re-collected: now only C1.
+        d.remove(id[0]);
+        d.add(id[0], &[r("A1"), r("C1")]);
+        out.clear();
+        d.dependents_of(&[r("B7")], &mut out);
+        assert!(out.is_empty());
+        d.dependents_of(&[r("C1")], &mut out);
+        assert_eq!(out, vec![id[0]]);
     }
 
     #[test]

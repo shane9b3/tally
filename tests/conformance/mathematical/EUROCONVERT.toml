@@ -1,0 +1,86 @@
+# EUROCONVERT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=EUROCONVERT(100;\"DEM\";\"EUR\")"
+expect = 51.13
+note = "Rounded to the 2 decimals of EUR (100/1.95583 = 51.1292)."
+
+[[case]]
+formula = "=EUROCONVERT(100;\"DEM\";\"EUR\";TRUE)"
+expect = 51.12918811962185
+
+[[case]]
+formula = "=EUROCONVERT(1;\"EUR\";\"ITL\")"
+expect = 1936
+note = "ITL has 0 decimals."
+
+[[case]]
+formula = "=EUROCONVERT(1;\"EUR\";\"ITL\";TRUE)"
+expect = 1936.27
+
+[[case]]
+formula = "=EUROCONVERT(100;\"DEM\";\"FRF\")"
+expect = 335.39
+note = "No triangulation precision: 100/1.95583*6.55957 = 335.3898."
+
+[[case]]
+formula = "=EUROCONVERT(100;\"DEM\";\"FRF\";FALSE;3)"
+expect = 335.38
+note = "Intermediate euro value rounded to 3 decimals: 51.129."
+
+[[case]]
+formula = "=EUROCONVERT(100;\"DEM\";\"FRF\";TRUE;3)"
+expect = 335.38425452999996
+note = "Triangulation precision with full precision."
+
+[[case]]
+formula = "=EUROCONVERT(10;\"EUR\";\"EUR\")"
+expect = 10
+
+[[case]]
+formula = "=EUROCONVERT(1;\"EUR\";\"XXX\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=EUROCONVERT(1;\"dem\";\"EUR\")"
+expect = 0.51
+note = "AOO lclConvertMoney matches codes ASCII case-insensitively (the first draft expected Err:502)."
+
+[[case]]
+formula = "=EUROCONVERT(\"x\";\"DEM\";\"EUR\")"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=EUROCONVERT(A1;\"DEM\";\"EUR\")"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=EUROCONVERT(1;\"EUR\")"
+expect = "Err:511"
+
+[[case]]
+formula = "=EUROCONVERT(1;\"EUR\";\"DEM\";TRUE;3;1)"
+expect = "Err:504"
+
+[[case]]
+formula = "=EUROCONVERT(1.5;\"EUR\";\"BEF\")"
+expect = 61
+note = "60.50985 rounded to 0 decimals."
+
+[[case]]
+name = "triangulation precision below 3"
+formula = "=EUROCONVERT(100;\"DEM\";\"FRF\";TRUE;2)"
+expect = "Err:502"
+note = "AOO ScEuroConvert: PushIllegalArgument when the precision is < 3."
+
+[[case]]
+name = "PTE has 2 decimals in AOO's table"
+formula = "=EUROCONVERT(1;\"EUR\";\"PTE\")"
+expect = 200.48
+
+[[case]]
+name = "intermediate rounding also applies when the target is EUR"
+formula = "=EUROCONVERT(100;\"DEM\";\"EUR\";TRUE;3)"
+expect = 51.129
+tol = 1e-12

@@ -1,0 +1,65 @@
+# BESSELI conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=BESSELI(1;0)"
+expect = 1.2660658777520084
+tol = 1.2660658777520084e-12
+
+[[case]]
+formula = "=BESSELI(1;1)"
+expect = 0.565159103992485
+tol = 5.65159103992485e-13
+
+[[case]]
+formula = "=BESSELI(2.5;3)"
+expect = 0.4743704087780359
+tol = 4.743704087780359e-13
+
+[[case]]
+formula = "=BESSELI(10;2)"
+expect = 2281.5189677260037
+tol = 2.2815189677260035e-09
+
+[[case]]
+formula = "=BESSELI(30;5)"
+expect = 512151465476.93506
+tol = 0.512151465476935
+
+[[case]]
+formula = "=BESSELI(0;0)"
+expect = 1.0
+tol = 1e-12
+
+[[case]]
+formula = "=BESSELI(-2.5;3)"
+expect = -0.4743704087780359
+tol = 4.743704087780359e-13
+
+[[case]]
+formula = "=BESSELI(0.5;0)"
+expect = 1.0634833707413236
+tol = 1.0634833707413236e-12
+
+[[case]]
+formula = "=BESSELI(1;-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BESSELI(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=BESSELI(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=BESSELI(A1;1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "order truncated"
+formula = "=BESSELI(1;2.9)"
+expect = 0.1357476697670383
+tol = 1.357476697670383e-13
+

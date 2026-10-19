@@ -1,7 +1,7 @@
 //! Shared lexer fixtures in `tests/fixtures/tokens/*.json`, consumed by this
 //! test and by the future TypeScript lexer.
 //!
-//! Format: `{ "src": "...", "dialect": "calc-a1" | "open-formula",
+//! Format: `{ "src": "...", "dialect": "calc-a1" | "open-formula" | "excel-a1",
 //! "tokens": [{ "kind": "CellRef", "text": "A1", "start": 1, "end": 3 }] }`
 //! where `start`/`end` are UTF-8 byte offsets into `src` and `kind` is
 //! `TokenKind::name()`.
@@ -73,9 +73,61 @@ const LEXER: &[&str] = &[
     "=_a.b_c(1)",
 ];
 
+/// ExcelA1 (OOXML) inputs: `!` sheets, 3D references, `{1,2;3,4}` arrays,
+/// space intersections, `_xlfn.` prefixes, Excel error literals.
+const EXCEL: &[&str] = &[
+    "=Sheet1!A1",
+    "=Sheet1!$A$1:$B$2",
+    "='My Sheet'!A1",
+    "='It''s'!A1:B2",
+    "='2020'!A1",
+    "=Sheet2!A:A",
+    "=Sheet2!1:3",
+    "=SUM(Jan:Dec!B2)",
+    "=SUM(Jan:Dec!B2:C3)",
+    "=SUM('Jan 1:Dec 31'!A1)",
+    "=A1:B2!C3",
+    "=Q1:Q4!A1",
+    "=SUM(A1,B1)",
+    "=IF(A1>0,\"pos\",\"neg\")",
+    "=IF(A1,,1)",
+    "={1,2;3,4}",
+    "={\"a\",TRUE;#N/A,-1.5}",
+    "=SUM({1,2,3})",
+    "=A1:B2 B1:C3",
+    "=SUM(A1:B2  B1:C3)",
+    "=(A1:B2) (B2:C3)",
+    "=SUM((A1,B1,C1))",
+    "=_xlfn.IFS(A1>1,1,TRUE,0)",
+    "=_xlfn._xlws.SORT(A1:A10)",
+    "=_xlfn.XLOOKUP(A1,B:B,C:C)",
+    "=#NULL!",
+    "=#DIV/0!+#VALUE!",
+    "=#REF!",
+    "=Sheet1!#REF!",
+    "=#NAME?",
+    "=#NUM!",
+    "=IFERROR(#N/A,0)",
+    "=TRUE",
+    "=FALSE()",
+    "=10%",
+    "=A1>=B1",
+    "=A1<>\"\"",
+    "=\"a\"&\"b\"",
+    "=1E+20",
+    "=-2^2",
+    "=MyName",
+    "=Tax.Rate*2",
+    "=Sales.EU!A1",
+    "=Table1[Col]",
+    "=SUM(A1;B1)",
+];
+
 fn dialect_name(src: &str, d: Dialect) -> &'static str {
     if d.is_open_formula() || src.starts_with("of:=") || src.starts_with("oooc:=") {
         "open-formula"
+    } else if d.is_excel() {
+        "excel-a1"
     } else {
         "calc-a1"
     }
@@ -84,6 +136,7 @@ fn dialect_name(src: &str, d: Dialect) -> &'static str {
 fn dialect_from(name: &str) -> Dialect {
     match name {
         "open-formula" => Dialect::open_formula(),
+        "excel-a1" => Dialect::excel_a1(),
         _ => Dialect::calc_a1_en_us(),
     }
 }
@@ -111,7 +164,7 @@ fn dir() -> PathBuf {
 
 fn corpus() -> Vec<(String, Dialect, &'static str)> {
     let calc = Dialect::calc_a1_en_us();
-    let groups: [(&str, &[&str], Dialect); 10] = [
+    let groups: [(&str, &[&str], Dialect); 11] = [
         ("literals", LITERALS, calc),
         ("references", REFERENCES, calc),
         ("operators", OPERATORS, calc),
@@ -122,6 +175,7 @@ fn corpus() -> Vec<(String, Dialect, &'static str)> {
         ("malformed", MALFORMED, calc),
         ("openformula", OPEN_FORMULA, Dialect::open_formula()),
         ("lexer", LEXER, calc),
+        ("excel", EXCEL, Dialect::excel_a1()),
     ];
     let mut out = Vec::new();
     for (group, srcs, d) in groups {
@@ -171,6 +225,19 @@ fn lexer_matches_fixtures() {
         n += 1;
     }
     assert!(n >= 150, "only {n} token fixtures");
+}
+
+#[test]
+fn excel_fixtures_exist() {
+    let n = std::fs::read_dir(dir())
+        .unwrap()
+        .filter(|e| {
+            let p = e.as_ref().unwrap().path();
+            let text = std::fs::read_to_string(&p).unwrap_or_default();
+            text.contains("\"dialect\": \"excel-a1\"")
+        })
+        .count();
+    assert!(n >= 40, "only {n} excel-a1 token fixtures");
 }
 
 #[test]

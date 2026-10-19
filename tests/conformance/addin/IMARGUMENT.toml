@@ -1,0 +1,56 @@
+# IMARGUMENT conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMARGUMENT(\"3+4i\")"
+expect = 0.9272952180016122
+tol = 1e-12
+
+[[case]]
+formula = "=IMARGUMENT(\"1+i\")"
+expect = 0.7853981633974483
+tol = 1e-12
+
+[[case]]
+formula = "=IMARGUMENT(\"-1+i\")"
+expect = 2.356194490192345
+tol = 1e-12
+
+[[case]]
+formula = "=IMARGUMENT(\"-1-i\")"
+expect = -2.356194490192345
+tol = 1e-12
+
+[[case]]
+formula = "=IMARGUMENT(\"2\")"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMARGUMENT(\"-2\")"
+expect = 3.141592653589793
+tol = 1e-12
+
+[[case]]
+formula = "=IMARGUMENT(\"-i\")"
+expect = -1.5707963267948966
+tol = 1e-12
+
+[[case]]
+formula = "=IMARGUMENT(\"1-3j\")"
+expect = -1.2490457723982544
+tol = 1e-12
+
+[[case]]
+formula = "=IMARGUMENT(\"0\")"
+expect = "Err:502"
+note = "AOO: argument of zero is an IllegalArgumentException (Excel: #DIV/0!)"
+
+[[case]]
+formula = "=IMARGUMENT()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMARGUMENT(A1)"
+expect = "#DIV/0!"
+

@@ -1,0 +1,63 @@
+# LCM conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=LCM(4;6)"
+expect = 12
+
+[[case]]
+formula = "=LCM(0;5)"
+expect = 0
+
+[[case]]
+formula = "=LCM(3;4;5)"
+expect = 60
+
+[[case]]
+formula = "=LCM(-1;2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=LCM(1;1)"
+expect = 1
+
+[[case]]
+name = "text in range skipped"
+cells = { A1 = 12, A2 = 18, A3 = "x" }
+formula = "=LCM(A1:A3)"
+expect = 36
+
+[[case]]
+formula = "=LCM(7)"
+expect = 7
+
+[[case]]
+formula = "=LCM(6;8;10)"
+expect = 120
+
+[[case]]
+formula = "=LCM(\"x\";2)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0", A2 = 4 }
+formula = "=LCM(A1:A2)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=LCM(7.9;3)"
+expect = 21
+note = "Truncated."
+
+[[case]]
+formula = "=LCM(1.7976931348623157E+308;4503599627370496)"
+expect = "#NUM!"
+note = "Overflow is #NUM!."
+
+[[case]]
+formula = "=LCM()"
+expect = "Err:511"
+
+[[case]]
+name = "empty range"
+formula = "=LCM(A1:A2)"
+expect = 0

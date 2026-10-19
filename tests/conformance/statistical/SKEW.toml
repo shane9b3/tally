@@ -1,0 +1,55 @@
+# SKEW conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+cells = { A1 = 3, A2 = 4, A3 = 5, A4 = 2, A5 = 3, A6 = 4, A7 = 5, A8 = 6, A9 = 4, A10 = 7 }
+formula = "=SKEW(A1:A10)"
+expect = 0.3595430714067978
+tol = 1e-12
+
+[[case]]
+formula = "=SKEW(3;4;5;2;3;4;5;6;4;7)"
+expect = 0.3595430714067978
+tol = 1e-12
+
+[[case]]
+formula = "=SKEW(1;2;3)"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+formula = "=SKEW(1;2;10)"
+expect = 1.652316740332991
+tol = 1e-12
+
+[[case]]
+formula = "=SKEW(1;2)"
+expect = "#DIV/0!"
+note = "Fewer than 3 values gives #DIV/0!."
+
+[[case]]
+formula = "=SKEW(4;4;4)"
+expect = "#DIV/0!"
+note = "Zero standard deviation gives #DIV/0!."
+
+[[case]]
+name = "text skipped"
+cells = { A1 = 1, A2 = 2, A3 = "x", A4 = 6 }
+formula = "=SKEW(A1:A5)"
+expect = 1.4578629673213053
+tol = 1e-12
+
+[[case]]
+name = "error propagates"
+cells = { A1 = 1, A2 = 2, A3 = "=1/0", A4 = 3 }
+formula = "=SKEW(A1:A5)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "no numbers"
+cells = { A1 = "x" }
+formula = "=SKEW(A1:A2)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=SKEW()"
+expect = "Err:511"

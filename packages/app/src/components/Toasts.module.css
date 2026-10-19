@@ -43,15 +43,15 @@
   height: 18px;
   flex: none;
   border-radius: 50%;
-  background: #dcfce7;
-  color: #166534;
+  background: var(--tally-chip-green-bg);
+  color: var(--tally-chip-green-fg);
   font-size: 11px;
   font-weight: 700;
 }
 
 .error .icon {
-  background: #fee2e2;
-  color: #b91c1c;
+  background: var(--tally-chip-red-bg);
+  color: var(--tally-chip-red-fg);
 }
 
 .message {
@@ -70,5 +70,5 @@
 }
 
 .close:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--tally-hover);
 }

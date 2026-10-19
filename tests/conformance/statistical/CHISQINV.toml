@@ -1,0 +1,47 @@
+# CHISQINV conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "0.95/10"
+formula = "=CHISQINV(0.95;10)"
+expect = 18.307038053275146
+tol = 2e-12
+
+[[case]]
+name = "one df"
+formula = "=CHISQINV(0.5;1)"
+expect = 0.4549364231195728
+tol = 5e-14
+
+[[case]]
+name = "three df"
+formula = "=CHISQINV(0.05;3)"
+expect = 0.3518463177492714
+tol = 4e-14
+
+[[case]]
+name = "p = 0"
+formula = "=CHISQINV(0;10)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "p = 1"
+formula = "=CHISQINV(1;10)"
+expect = "Err:502"
+
+[[case]]
+name = "df zero"
+formula = "=CHISQINV(0.5;0)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=CHISQINV(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "bool p is 1"
+cells = { A1 = true }
+formula = "=CHISQINV(A1;1)"
+expect = "Err:502"

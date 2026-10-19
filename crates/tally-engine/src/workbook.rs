@@ -96,7 +96,20 @@ pub enum SnapContent {
         formula: Arc<Formula>,
         /// Raw text of an invalid formula.
         invalid_text: Option<Arc<str>>,
+        /// For an array formula anchor: the block size `(rows, cols)`.
+        array: Option<(u32, u32)>,
     },
+}
+
+impl SnapContent {
+    /// A plain (non-array) formula.
+    pub fn formula(formula: Arc<Formula>, invalid_text: Option<Arc<str>>) -> Self {
+        SnapContent::Formula {
+            formula,
+            invalid_text,
+            array: None,
+        }
+    }
 }
 
 /// A small xorshift64* generator for RAND (the `rand` crate is not a dependency).
@@ -171,6 +184,8 @@ pub struct Workbook {
     pub meta: DocMeta,
     /// Id of the active sheet.
     pub active_sheet: SheetId,
+    /// Named ranges and expressions.
+    pub names: crate::names::NameTable,
 }
 
 impl Default for Workbook {
@@ -201,6 +216,7 @@ impl Workbook {
             pending: Pending::default(),
             meta: DocMeta::default(),
             active_sheet: 1,
+            names: crate::names::NameTable::default(),
         }
     }
 
@@ -304,7 +320,7 @@ impl Workbook {
         for col in &sheet.columns {
             for (_, c) in col.cells.iter_range(0, MAX_ROWS - 1) {
                 if let CellContent::Formula(fid) = c {
-                    self.deps.remove(*fid);
+                    self.deps.forget(*fid);
                     self.formulas.remove(*fid);
                 }
             }
@@ -345,6 +361,7 @@ impl Workbook {
             if p != fc.precedents {
                 let strict = self.strict_precedents_of(&fc.formula, fc.addr);
                 let dynamic = fc.dynamic_deps.clone();
+                // (Names are unaffected by tab order.)
                 self.deps.remove(id);
                 let mut all = p.clone();
                 all.extend(dynamic);
@@ -373,14 +390,60 @@ impl Workbook {
                 .formulas
                 .get(*id)
                 .map_or(Value::Empty, |f| f.cached.clone()),
+            Some(CellContent::ArrayPart(id)) => self.formulas.get(*id).map_or(Value::Empty, |f| {
+                f.array_value(
+                    addr.row.saturating_sub(f.addr.row),
+                    addr.col.saturating_sub(f.addr.col),
+                )
+            }),
         }
+    }
+
+    /// The array formula anchor whose block contains `addr` (the anchor
+    /// itself or a covered cell).
+    pub fn array_at(&self, addr: CellAddr) -> Option<(FormulaCellId, &FormulaCell)> {
+        let id = match self.sheet(addr.sheet)?.get(addr.row, addr.col)? {
+            CellContent::Formula(id) | CellContent::ArrayPart(id) => *id,
+            CellContent::Value(_) => return None,
+        };
+        self.formulas
+            .get(id)
+            .filter(|f| f.array.is_some())
+            .map(|f| (id, f))
+    }
+
+    /// The array blocks on `sheet` intersecting `range`.
+    pub fn array_blocks_in(&self, range: &CellRange) -> Vec<CellRange> {
+        let mut out: Vec<CellRange> = Vec::new();
+        let Some(sheet) = self.sheet(range.sheet) else {
+            return out;
+        };
+        let c1 = range.c1.min(sheet.columns.len().saturating_sub(1) as u32);
+        if sheet.columns.is_empty() {
+            return out;
+        }
+        for c in range.c0..=c1 {
+            let Some(col) = sheet.column(c) else {
+                continue;
+            };
+            for r in col.formula_rows.range(range.r0..=range.r1) {
+                if let Some(id) = col.cells.get(*r).and_then(CellContent::formula_id) {
+                    if let Some(b) = self.formulas.get(id).and_then(|f| f.array_range()) {
+                        if !out.contains(&b) {
+                            out.push(b);
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// The formula cell at `addr`.
     pub fn formula_at(&self, addr: CellAddr) -> Option<(FormulaCellId, &FormulaCell)> {
         match self.sheet(addr.sheet)?.get(addr.row, addr.col)? {
             CellContent::Formula(id) => self.formulas.get(*id).map(|f| (*id, f)),
-            CellContent::Value(_) => None,
+            CellContent::Value(_) | CellContent::ArrayPart(_) => None,
         }
     }
 
@@ -397,7 +460,10 @@ impl Workbook {
             CellContent::Formula(id) => self.formulas.get(*id).map(|f| SnapContent::Formula {
                 formula: f.formula.clone(),
                 invalid_text: f.invalid_text.clone(),
+                array: f.array,
             }),
+            // Covered cells of an array block are restored with their anchor.
+            CellContent::ArrayPart(_) => None,
         }
     }
 
@@ -409,15 +475,111 @@ impl Workbook {
             Some(SnapContent::Formula {
                 formula,
                 invalid_text,
+                array: None,
             }) => self.set_formula(addr, formula, invalid_text),
+            Some(SnapContent::Formula {
+                formula,
+                array: Some((rows, cols)),
+                ..
+            }) => self.set_array_formula(addr, formula, rows, cols),
         }
     }
 
     fn drop_formula(&mut self, content: Option<CellContent>) {
         if let Some(CellContent::Formula(id)) = content {
-            self.deps.remove(id);
+            let block = self.formulas.get(id).and_then(|f| f.array_range());
+            self.deps.forget(id);
             self.formulas.remove(id);
+            if let Some(b) = block {
+                self.remove_array_parts(b, id);
+            }
         }
+    }
+
+    /// Removes the covered cells of the array block `b` owned by `id`.
+    fn remove_array_parts(&mut self, b: CellRange, id: FormulaCellId) {
+        let Some(sheet) = self.sheet_mut(b.sheet) else {
+            return;
+        };
+        let mut removed = false;
+        for c in b.c0..=b.c1 {
+            for r in b.r0..=b.r1 {
+                if sheet.get(r, c) == Some(&CellContent::ArrayPart(id)) {
+                    sheet.remove(r, c);
+                    removed = true;
+                }
+            }
+        }
+        if removed {
+            self.pending.ranges.push(b);
+        }
+    }
+
+    /// Stores an array formula over the `rows × cols` block whose top-left is
+    /// `addr`; the other cells of the block become covered cells (their
+    /// previous content is dropped).
+    pub fn set_array_formula(
+        &mut self,
+        addr: CellAddr,
+        formula: Arc<Formula>,
+        rows: u32,
+        cols: u32,
+    ) {
+        let (rows, cols) = (rows.max(1), cols.max(1));
+        if u64::from(addr.row) + u64::from(rows) > u64::from(MAX_ROWS)
+            || u64::from(addr.col) + u64::from(cols) > u64::from(MAX_COLS)
+        {
+            return;
+        }
+        // Clear the block first (this also drops other array blocks' parts
+        // overlapping it, through their anchors).
+        for c in addr.col..addr.col + cols {
+            for r in addr.row..addr.row + rows {
+                if (r, c) != (addr.row, addr.col) {
+                    self.clear_content(CellAddr::new(addr.sheet, r, c));
+                }
+            }
+        }
+        self.set_formula(addr, formula, None);
+        let Some((id, _)) = self.formula_at(addr) else {
+            return;
+        };
+        if let Some(f) = self.formulas.get_mut(id) {
+            f.array = Some((rows, cols));
+        }
+        if let Some(sheet) = self.sheet_mut(addr.sheet) {
+            for c in addr.col..addr.col + cols {
+                for r in addr.row..addr.row + rows {
+                    if (r, c) != (addr.row, addr.col) {
+                        sheet.set(r, c, CellContent::ArrayPart(id));
+                    }
+                }
+            }
+        }
+        self.pending.ranges.push(CellRange::new(
+            addr.sheet,
+            addr.row,
+            addr.col,
+            addr.row + rows - 1,
+            addr.col + cols - 1,
+        ));
+    }
+
+    /// Replaces the AST of the formula at `addr` in place (keeping its raw
+    /// text and array block) and returns the previous content for undo.
+    pub fn replace_formula_ast(
+        &mut self,
+        addr: CellAddr,
+        formula: Arc<Formula>,
+    ) -> Option<SnapContent> {
+        let (id, _) = self.formula_at(addr)?;
+        let old = self.snapshot_content(addr);
+        if let Some(fc) = self.formulas.get_mut(id) {
+            fc.formula = formula;
+        }
+        self.refresh_formula(id);
+        self.pending.cells.push(addr);
+        old
     }
 
     /// Removes the content of a cell.
@@ -449,14 +611,52 @@ impl Workbook {
         self.drop_formula(old);
     }
 
-    /// The static precedents of `f` at `addr`, 3-D spans expanded by tab order.
+    /// The static precedents of `f` at `addr`, 3-D spans expanded by tab
+    /// order (names expanded).
     pub fn precedents_of(&self, f: &Formula, addr: CellAddr) -> Vec<CellRange> {
+        if crate::names::has_names(&f.expr) {
+            let (e, _) = crate::names::expand(&self.names, f, addr.sheet);
+            return self.expand_refs(e.static_precedents(addr));
+        }
         self.expand_refs(f.static_precedents(addr))
+    }
+
+    /// Everything the dependency index needs about `f` at `addr`:
+    /// precedents, strict precedents, name keys and whether it has 3-D refs.
+    pub fn analyze(
+        &self,
+        f: &Formula,
+        addr: CellAddr,
+    ) -> (Vec<CellRange>, Option<Vec<CellRange>>, Vec<String>, bool) {
+        let expanded;
+        let (g, keys) = if crate::names::has_names(&f.expr) {
+            let (e, keys) = crate::names::expand(&self.names, f, addr.sheet);
+            expanded = e;
+            (&expanded, keys)
+        } else {
+            (f, Vec::new())
+        };
+        let refs = g.static_precedents(addr);
+        let has_3d = refs.iter().any(|r| matches!(r, ResolvedRef::Span3d { .. }));
+        (
+            self.expand_refs(refs),
+            self.strict_precedents_of_raw(g, addr),
+            keys,
+            has_3d,
+        )
     }
 
     /// The precedents of `f` whose values are always read (see
     /// [`FormulaCell::strict_precedents`]); `None` when that is all of them.
     pub fn strict_precedents_of(&self, f: &Formula, addr: CellAddr) -> Option<Vec<CellRange>> {
+        if crate::names::has_names(&f.expr) {
+            let (e, _) = crate::names::expand(&self.names, f, addr.sheet);
+            return self.strict_precedents_of_raw(&e, addr);
+        }
+        self.strict_precedents_of_raw(f, addr)
+    }
+
+    fn strict_precedents_of_raw(&self, f: &Formula, addr: CellAddr) -> Option<Vec<CellRange>> {
         let reg = registry();
         let mut strict = Vec::new();
         let mut excluded = false;
@@ -536,13 +736,13 @@ impl Workbook {
         if self.sheet(addr.sheet).is_none() || addr.row >= MAX_ROWS || addr.col >= MAX_COLS {
             return;
         }
-        let volatile = is_volatile(&formula);
-        let precedents = self.precedents_of(&formula, addr);
-        let strict_precedents = self.strict_precedents_of(&formula, addr);
-        let has_3d = formula
-            .static_precedents(addr)
-            .iter()
-            .any(|r| matches!(r, ResolvedRef::Span3d { .. }));
+        let (precedents, strict_precedents, name_keys, has_3d) = self.analyze(&formula, addr);
+        let has_names = !name_keys.is_empty();
+        let volatile = if has_names {
+            is_volatile(&crate::names::expand(&self.names, &formula, addr.sheet).0)
+        } else {
+            is_volatile(&formula)
+        };
         let id = self.formulas.insert(FormulaCell {
             addr,
             formula,
@@ -554,9 +754,13 @@ impl Workbook {
             strict_precedents,
             dynamic_deps: Vec::new(),
             has_3d,
+            has_names,
+            array: None,
+            array_result: None,
         });
         self.deps.add(id, &precedents);
         self.deps.set_volatile(id, volatile);
+        self.deps.set_names(id, &name_keys);
         let old = self
             .sheet_mut(addr.sheet)
             .and_then(|s| s.set(addr.row, addr.col, CellContent::Formula(id)));
@@ -695,8 +899,12 @@ impl Resolver for Workbook {
         self.sheet(id).map(|s| s.name.clone())
     }
 
-    fn name(&self, _name: &str, _sheet: SheetId) -> Option<NameId> {
-        None
+    fn name(&self, name: &str, sheet: SheetId) -> Option<NameId> {
+        self.names.visible(name, sheet)
+    }
+
+    fn name_text(&self, id: NameId) -> Option<Arc<str>> {
+        self.names.get(id).map(|e| e.name.clone())
     }
 
     fn function(&self, name: &str) -> Option<AstFuncId> {

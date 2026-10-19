@@ -1,0 +1,74 @@
+# PERCENTRANK conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "truncated to 3 digits"
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4 }
+formula = "=PERCENTRANK(A1:A4;2)"
+expect = 0.333
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4 }
+formula = "=PERCENTRANK(A1:A4;1)"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4 }
+formula = "=PERCENTRANK(A1:A4;4)"
+expect = 1.0
+tol = 1e-12
+
+[[case]]
+name = "interpolated"
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4 }
+formula = "=PERCENTRANK(A1:A4;2.5)"
+expect = 0.5
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 4 }
+formula = "=PERCENTRANK(A1:A3;3)"
+expect = 0.75
+tol = 1e-12
+
+[[case]]
+name = "below minimum"
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4 }
+formula = "=PERCENTRANK(A1:A4;0)"
+expect = "#N/A"
+
+[[case]]
+name = "above maximum"
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4 }
+formula = "=PERCENTRANK(A1:A4;5)"
+expect = "#N/A"
+
+[[case]]
+name = "single value"
+formula = "=PERCENTRANK({7};7)"
+expect = 1.0
+tol = 1e-12
+
+[[case]]
+name = "text skipped"
+cells = { A1 = 1, A2 = "x", A3 = 2, A4 = 3 }
+formula = "=PERCENTRANK(A1:A4;2)"
+expect = 0.5
+tol = 1e-12
+
+[[case]]
+name = "error propagates"
+cells = { A1 = 1, A2 = "=1/0" }
+formula = "=PERCENTRANK(A1:A3;1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "empty data"
+formula = "=PERCENTRANK(B1:B3;1)"
+expect = "#N/A"
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = 4 }
+formula = "=PERCENTRANK(A1:A4)"
+expect = "Err:511"

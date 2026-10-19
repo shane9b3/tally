@@ -1,0 +1,42 @@
+# ISEVEN_ADD conformance vectors. Analysis add-in ISEVEN; the plain name is the built-in. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=ISEVEN_ADD(4)"
+expect = true
+
+[[case]]
+formula = "=ISEVEN_ADD(3)"
+expect = false
+
+[[case]]
+formula = "=ISEVEN_ADD(0)"
+expect = true
+
+[[case]]
+formula = "=ISEVEN_ADD(-4)"
+expect = true
+
+[[case]]
+formula = "=ISEVEN_ADD(-3)"
+expect = false
+
+[[case]]
+name = "truncated"
+formula = "=ISEVEN_ADD(2.9)"
+expect = true
+
+[[case]]
+formula = "=ISEVEN_ADD(1000000)"
+expect = true
+
+[[case]]
+formula = "=ISEVEN_ADD(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=ISEVEN_ADD()"
+expect = "Err:511"
+
+[[case]]
+formula = "=ISEVEN_ADD(1;2)"
+expect = "Err:504"

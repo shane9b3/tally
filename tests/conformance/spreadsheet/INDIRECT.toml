@@ -1,0 +1,90 @@
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+formula = "=INDIRECT(\"A1\")"
+expect = 5
+
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+formula = "=INDIRECT(B1)"
+expect = 5
+
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+formula = "=SUM(INDIRECT(\"A1:A3\"))"
+expect = 18
+
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+formula = "=SUM(INDIRECT(C1))"
+expect = 13
+
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+formula = "=INDIRECT(\"Sheet2.A1\")"
+expect = 99
+
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+formula = "=INDIRECT(D1)"
+expect = 99
+
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+formula = "=INDIRECT(\"a2\")"
+expect = 6
+note = "Case-insensitive."
+
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+formula = "=INDIRECT(\"$A$3\")"
+expect = 7
+
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+formula = "=INDIRECT(\" A1 \")"
+expect = 5
+note = "Surrounding blanks are ignored."
+
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+origin = "C5"
+formula = "=INDIRECT(\"A1\")"
+expect = 5
+
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+formula = "=ROWS(INDIRECT(E1))"
+expect = 3
+
+[[case]]
+cells = { A1 = 5, A2 = 6, A3 = 7, B1 = "A1", C1 = "A2:A3", D1 = "Sheet2.A1", E1 = "A1:A3", "Sheet2.A1" = 99 }
+formula = "=INDIRECT(\"A\"&2)"
+expect = 6
+
+[[case]]
+formula = "=INDIRECT(\"\")"
+expect = "#REF!"
+
+[[case]]
+formula = "=INDIRECT(\"nonsense\")"
+expect = "#REF!"
+
+[[case]]
+formula = "=INDIRECT(\"A0\")"
+expect = "#REF!"
+
+[[case]]
+formula = "=INDIRECT(1)"
+expect = "#REF!"
+
+[[case]]
+formula = "=INDIRECT(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=INDIRECT()"
+expect = "Err:511"
+
+[[case]]
+formula = "=INDIRECT(\"A1\";TRUE;1)"
+expect = "Err:504"

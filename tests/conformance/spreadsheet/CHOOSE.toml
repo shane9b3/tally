@@ -1,0 +1,75 @@
+[[case]]
+formula = "=CHOOSE(2;\"a\";\"b\";\"c\")"
+expect = "b"
+
+[[case]]
+formula = "=CHOOSE(1;10)"
+expect = 10
+
+[[case]]
+formula = "=CHOOSE(2.9;\"a\";\"b\";\"c\")"
+expect = "b"
+note = "Index is truncated."
+
+[[case]]
+formula = "=CHOOSE(1;5;1/0)"
+expect = 5
+note = "Unchosen branches are not evaluated."
+
+[[case]]
+formula = "=CHOOSE(2;1/0;7)"
+expect = 7
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, B1 = 10, B2 = 20, B3 = 30 }
+formula = "=SUM(CHOOSE(2;A1:A3;B1:B3))"
+expect = 60
+note = "Reference passes through."
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, B1 = 10, B2 = 20, B3 = 30 }
+formula = "=SUM(CHOOSE(1;A1:A3;B1:B3))"
+expect = 6
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3, B1 = 10, B2 = 20, B3 = 30 }
+formula = "=CHOOSE(2;A1;B1)"
+expect = 10
+
+[[case]]
+formula = "=CHOOSE(0;1;2)"
+expect = "Err:502"
+note = "AOO illegal argument (Excel: #VALUE!)."
+
+[[case]]
+formula = "=CHOOSE(3;1;2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=CHOOSE(-1;1;2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=CHOOSE(\"x\";1;2)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=CHOOSE(1/0;1;2)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=CHOOSE(A9;1;2)"
+expect = "Err:502"
+note = "Empty index is 0."
+
+[[case]]
+formula = "=CHOOSE(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=CHOOSE(TRUE;\"yes\";\"no\")"
+expect = "yes"
+
+[[case]]
+formula = "=CHOOSE(3;1;2;\"third\")"
+expect = "third"

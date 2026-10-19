@@ -1,0 +1,65 @@
+# ACOS conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=ACOS(0.5)"
+expect = 1.0471975511965976
+
+[[case]]
+name = "numeric text"
+formula = "=ACOS(\"0.5\")"
+expect = 1.0471975511965976
+
+[[case]]
+name = "non-numeric text"
+formula = "=ACOS(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=ACOS(A1)"
+expect = 1.5707963267948966
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=ACOS(A1)"
+expect = 0
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=ACOS(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 0.5 }
+origin = "C2"
+formula = "=ACOS(A1:A2)"
+expect = 1.0471975511965976
+
+[[case]]
+name = "no arguments"
+formula = "=ACOS()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=ACOS(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=ACOS(2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=ACOS(-1)"
+expect = 3.141592653589793
+
+[[case]]
+formula = "=ACOS(1)"
+expect = 0
+
+[[case]]
+formula = "=ACOS(-1.0000001)"
+expect = "Err:502"

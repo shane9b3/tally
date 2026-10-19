@@ -15,7 +15,7 @@ import { colToLetters } from "./colLetters";
 import { fitNumber, isGeneralNumberText } from "./fitNumber";
 import { snapFill, type Geometry, type Rect } from "./geometry";
 import { Lru } from "./lru";
-import type { GridDataSource, Selection } from "./types";
+import type { GridDataSource, RefHighlight, Selection } from "./types";
 
 /** Horizontal text padding inside a cell at zoom 100%. */
 export const CELL_PADDING = 6;
@@ -125,10 +125,14 @@ export interface OverlayFrame extends MainFrame {
   selection: Selection;
   /** Hide the fill handle and active-cell clearing while editing. */
   editing: boolean;
-  /** Column gutter under the pointer. */
-  hoverGutter: number | null;
-  /** Live resize: the column and its new right edge (screen x). */
-  resizeGuide: { c: number; x: number } | null;
+  /** Header gutter under the pointer. */
+  hoverGutter: { axis: "col" | "row"; index: number } | null;
+  /** Live resize: the axis, index and its new far edge (screen px). */
+  resizeGuide: { axis: "col" | "row"; index: number; pos: number } | null;
+  /** Fill-handle drag preview: the target range. */
+  fillPreview?: RangeDto | null;
+  /** Coloured reference outlines while editing a formula. */
+  refHighlights?: readonly RefHighlight[];
 }
 
 /** Per-frame statistics, for the perf demo. */
@@ -247,7 +251,7 @@ export class Renderer {
     for (let i = 0; i < nr; i++) {
       for (let j = 0; j < nc; j++) {
         const st = styles[i * nc + j];
-        if (!st || st.fill === null) continue;
+        if (!st || st.fill === null || (st.fill & 255) === 0) continue;
         this.setFill(cssColor(st.fill));
         const x0 = snapFill(xs[j] ?? 0, dpr);
         const y0 = snapFill(ys[i] ?? 0, dpr);
@@ -456,6 +460,10 @@ export class Renderer {
     else if (vAlign === "middle") ty = top + (h + capH) / 2;
     else ty = top + h - Math.max(2 * zoom, (rowRef - capH) / 2);
 
+    if (style?.wrap && cell.kind !== "number" && width > avail) {
+      return this.drawWrapped(f, cell, style, font, fpx, x, top, cw, h, align, vAlign);
+    }
+
     const clip = overflow || width > avail;
     if (overflow && (spanL < x || spanR > x + cw)) {
       // Cover the gridlines under the overflowing text.
@@ -471,8 +479,7 @@ export class Renderer {
       ctx.clip();
     }
     this.setFont(font);
-    const color = cell.color !== null ? cssColor(cell.color) : style?.color != null ? cssColor(style.color) : theme.colors.text;
-    this.setFill(color);
+    this.setFill(textColor(cell, style, theme));
     ctx.textBaseline = "alphabetic";
     ctx.fillText(text, tx, ty);
     if (style?.underline || style?.strike) {
@@ -485,6 +492,50 @@ export class Renderer {
       this.curFill = "";
       this.curFont = "";
     }
+    return 1;
+  }
+
+  /** Word-wrapped text (style.wrap), clipped to the cell. */
+  private drawWrapped(
+    f: MainFrame,
+    cell: CellView,
+    style: StyleDto,
+    font: string,
+    fpx: number,
+    x: number,
+    top: number,
+    cw: number,
+    h: number,
+    align: EffectiveAlign,
+    vAlign: string,
+  ): number {
+    const ctx = this.main;
+    const zoom = f.geo.zoom;
+    const pad = CELL_PADDING * zoom;
+    const avail = Math.max(1, cw - 2 * pad);
+    const lines = wrapLines(cell.text, avail, (t) => this.measurer.measure(font, t));
+    const lineH = Math.round(fpx * 1.3);
+    const total = lines.length * lineH;
+    const capH = CAP_HEIGHT * fpx;
+    let y0: number;
+    if (vAlign === "top") y0 = top + 3 * zoom;
+    else if (vAlign === "middle") y0 = top + (h - total) / 2;
+    else y0 = top + h - total - 3 * zoom;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, top, cw, h);
+    ctx.clip();
+    this.setFont(font);
+    this.setFill(textColor(cell, style, f.theme));
+    ctx.textBaseline = "alphabetic";
+    lines.forEach((line, i) => {
+      const w = this.measurer.measure(font, line);
+      const tx = align === "right" ? x + cw - pad - w : align === "center" ? x + (cw - w) / 2 : x + pad;
+      ctx.fillText(line, tx, y0 + i * lineH + (lineH + capH) / 2);
+    });
+    ctx.restore();
+    this.curFill = "";
+    this.curFont = "";
     return 1;
   }
 
@@ -544,6 +595,18 @@ export class Renderer {
     this.curFill = "";
     this.curFont = "";
 
+    // The select-all corner: header background and a small triangle.
+    this.setFill(c.headerBg);
+    ctx.fillRect(0, 0, geo.headerW, geo.headerH);
+    this.setFill(c.headerLine);
+    const t = Math.round(8 * geo.zoom);
+    ctx.beginPath();
+    ctx.moveTo(geo.headerW - 4, geo.headerH - 4 - t);
+    ctx.lineTo(geo.headerW - 4, geo.headerH - 4);
+    ctx.lineTo(geo.headerW - 4 - t, geo.headerH - 4);
+    ctx.closePath();
+    ctx.fill();
+
     // Strip edges and the corner.
     this.setFill(c.headerLine);
     ctx.fillRect(0, snapFill(geo.headerH, dpr) - lw, geo.width, lw);
@@ -561,6 +624,8 @@ export class Renderer {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, geo.width, geo.height);
     const range = selection.range;
+    const others = selection.others ?? [];
+    const ranges = [...others, range];
     const vis = geo.visibleRange();
     const lw = Math.max(1, Math.round(dpr)) / dpr;
     const rect = geo.rangeRect(range);
@@ -570,11 +635,17 @@ export class Renderer {
     ctx.font = font;
     ctx.textBaseline = "middle";
     ctx.textAlign = "center";
+    const colsOn = new Set<number>();
+    const rowsOn = new Set<number>();
+    for (const rg of ranges) {
+      for (let col = Math.max(vis.c0, rg.c0); col <= Math.min(vis.c1, rg.c1); col++) colsOn.add(col);
+      for (let row = Math.max(vis.r0, rg.r0); row <= Math.min(vis.r1, rg.r1); row++) rowsOn.add(row);
+    }
     ctx.save();
     ctx.beginPath();
     ctx.rect(geo.headerW, 0, geo.cellsW, geo.headerH);
     ctx.clip();
-    for (let col = Math.max(vis.c0, range.c0); col <= Math.min(vis.c1, range.c1); col++) {
+    for (const col of colsOn) {
       const x0 = geo.colX(col);
       const w = geo.colW(col);
       if (w <= 0) continue;
@@ -592,7 +663,7 @@ export class Renderer {
     ctx.beginPath();
     ctx.rect(0, geo.headerH, geo.headerW, geo.cellsH);
     ctx.clip();
-    for (let row = Math.max(vis.r0, range.r0); row <= Math.min(vis.r1, range.r1); row++) {
+    for (const row of rowsOn) {
       const y0 = geo.rowY(row);
       const h = geo.rowH(row);
       if (h <= 0) continue;
@@ -610,10 +681,18 @@ export class Renderer {
 
     // Hovered resize gutter.
     if (f.hoverGutter !== null && f.resizeGuide === null) {
-      const gx = geo.colX(f.hoverGutter + 1);
-      if (gx >= geo.headerW && gx <= geo.width) {
-        ctx.fillStyle = c.resizeGuide;
-        ctx.fillRect(snapFill(gx, dpr) - 1.5, 3, 2, geo.headerH - 6);
+      if (f.hoverGutter.axis === "col") {
+        const gx = geo.colX(f.hoverGutter.index + 1);
+        if (gx >= geo.headerW && gx <= geo.width) {
+          ctx.fillStyle = c.resizeGuide;
+          ctx.fillRect(snapFill(gx, dpr) - 1.5, 3, 2, geo.headerH - 6);
+        }
+      } else {
+        const gy = geo.rowY(f.hoverGutter.index + 1);
+        if (gy >= geo.headerH && gy <= geo.height) {
+          ctx.fillStyle = c.resizeGuide;
+          ctx.fillRect(3, snapFill(gy, dpr) - 1.5, geo.headerW - 6, 2);
+        }
       }
     }
 
@@ -622,36 +701,93 @@ export class Renderer {
     ctx.beginPath();
     ctx.rect(geo.headerW, geo.headerH, geo.cellsW, geo.cellsH);
     ctx.clip();
+    const box = (rg: RangeDto): { x0: number; y0: number; x1: number; y1: number } | null => {
+      const r = geo.rangeRect(rg);
+      if (r.w <= 0 || r.h <= 0) return null;
+      return { x0: snapFill(r.x, dpr) - lw, y0: snapFill(r.y, dpr) - lw, x1: snapFill(r.x + r.w, dpr), y1: snapFill(r.y + r.h, dpr) };
+    };
+    const frame = (b: { x0: number; y0: number; x1: number; y1: number }, bw: number): void => {
+      ctx.fillRect(b.x0, b.y0, b.x1 - b.x0, bw);
+      ctx.fillRect(b.x0, b.y1 - bw, b.x1 - b.x0, bw);
+      ctx.fillRect(b.x0, b.y0, bw, b.y1 - b.y0);
+      ctx.fillRect(b.x1 - bw, b.y0, bw, b.y1 - b.y0);
+    };
+    // Earlier ranges of a multi-selection: tint and a thin border.
+    for (const rg of others) {
+      const r = geo.rangeRect(rg);
+      if (r.w <= 0 || r.h <= 0) continue;
+      ctx.fillStyle = c.selection;
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      const b = box(rg);
+      if (b) {
+        ctx.fillStyle = c.selectionBorder;
+        frame(b, 1);
+      }
+    }
     if (rect.w > 0 && rect.h > 0) {
       const single = range.r0 === range.r1 && range.c0 === range.c1;
-      if (!single) {
+      if (!single || others.length > 0) {
         ctx.fillStyle = c.selection;
-        ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+        if (!single) ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
         // The active cell stays clear.
         const a = geo.cellRect(selection.active.r, selection.active.c);
-        ctx.clearRect(a.x, a.y, a.w - lw, a.h - lw);
+        if (!single) ctx.clearRect(a.x, a.y, a.w - lw, a.h - lw);
       }
       // 2 px border, drawn inside the range's top-left gridlines.
-      const x0 = snapFill(rect.x, dpr) - lw;
-      const y0 = snapFill(rect.y, dpr) - lw;
-      const x1 = snapFill(rect.x + rect.w, dpr);
-      const y1 = snapFill(rect.y + rect.h, dpr);
-      ctx.fillStyle = c.selectionBorder;
-      const bw = 2;
-      ctx.fillRect(x0, y0, x1 - x0, bw);
-      ctx.fillRect(x0, y1 - bw, x1 - x0, bw);
-      ctx.fillRect(x0, y0, bw, y1 - y0);
-      ctx.fillRect(x1 - bw, y0, bw, y1 - y0);
-      // Fill handle at the bottom-right corner (only if that corner is on screen).
-      const cornerVisible = geo.colX(range.c1 + 1) <= geo.width + 4 && geo.rowY(range.r1 + 1) <= geo.height + 4;
-      if (!f.editing && cornerVisible) {
-        const s = 7;
-        const hx = x1 - 1 - s / 2;
-        const hy = y1 - 1 - s / 2;
-        ctx.fillStyle = c.bg;
-        ctx.fillRect(hx - 1, hy - 1, s + 2, s + 2);
-        ctx.fillStyle = c.fillHandle;
-        ctx.fillRect(hx, hy, s, s);
+      const b = box(range);
+      if (b) {
+        ctx.fillStyle = c.selectionBorder;
+        frame(b, 2);
+        // Fill handle at the bottom-right corner (only if that corner is on screen).
+        const cornerVisible = geo.colX(range.c1 + 1) <= geo.width + 4 && geo.rowY(range.r1 + 1) <= geo.height + 4;
+        if (!f.editing && cornerVisible && others.length === 0) {
+          const s = 7;
+          const hx = b.x1 - 1 - s / 2;
+          const hy = b.y1 - 1 - s / 2;
+          ctx.fillStyle = c.bg;
+          ctx.fillRect(hx - 1, hy - 1, s + 2, s + 2);
+          ctx.fillStyle = c.fillHandle;
+          ctx.fillRect(hx, hy, s, s);
+        }
+      }
+    }
+
+    // Fill-handle drag preview: a dashed outline of the target.
+    if (f.fillPreview) {
+      const b = box(f.fillPreview);
+      if (b) {
+        ctx.save();
+        ctx.strokeStyle = c.selectionBorder;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 3]);
+        ctx.strokeRect(b.x0 + 0.75, b.y0 + 0.75, b.x1 - b.x0 - 1.5, b.y1 - b.y0 - 1.5);
+        ctx.restore();
+      }
+    }
+
+    // Formula reference outlines (each reference in its own colour).
+    for (const h of f.refHighlights ?? []) {
+      const r = geo.rangeRect(h.range);
+      if (r.w <= 0 || r.h <= 0) continue;
+      ctx.save();
+      ctx.globalAlpha = 0.1;
+      ctx.fillStyle = h.color;
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.restore();
+      const b = box(h.range);
+      if (b) {
+        ctx.fillStyle = h.color;
+        frame(b, 2);
+        // Small corner squares, like the fill handle, mark it as a reference.
+        const s = 5;
+        for (const [x, y] of [
+          [b.x0, b.y0],
+          [b.x1, b.y0],
+          [b.x0, b.y1],
+          [b.x1, b.y1],
+        ] as const) {
+          ctx.fillRect(x - s / 2 + (x === b.x0 ? 1 : -1), y - s / 2 + (y === b.y0 ? 1 : -1), s, s);
+        }
       }
     }
     ctx.restore();
@@ -659,9 +795,61 @@ export class Renderer {
     // Live resize guide.
     if (f.resizeGuide) {
       ctx.fillStyle = c.resizeGuide;
-      ctx.fillRect(snapFill(f.resizeGuide.x, dpr) - 1, 0, 2, geo.height);
+      if (f.resizeGuide.axis === "col") ctx.fillRect(snapFill(f.resizeGuide.pos, dpr) - 1, 0, 2, geo.height);
+      else ctx.fillRect(0, snapFill(f.resizeGuide.pos, dpr) - 1, geo.width, 2);
     }
   }
+}
+
+/** Relative luminance (0..1) of a `0xRRGGBBAA` colour. */
+export function luminance(rgba: number): number {
+  const n = rgba >>> 0;
+  const ch = (v: number): number => {
+    const x = v / 255;
+    return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * ch((n >>> 24) & 255) + 0.7152 * ch((n >>> 16) & 255) + 0.0722 * ch((n >>> 8) & 255);
+}
+
+/**
+ * The text colour of a cell: the format's colour ([RED]), else the style's,
+ * else the theme text, except on a filled cell, where theme text that would
+ * be illegible (dark theme text on a light fill, or the reverse) flips to a
+ * contrasting dark or light grey.
+ */
+export function textColor(cell: CellView, style: StyleDto | undefined, theme: Theme): string {
+  if (cell.color !== null) return cssColor(cell.color);
+  if (style?.color != null) return cssColor(style.color);
+  const fill = style?.fill;
+  if (fill != null && (fill & 255) > 0) return luminance(fill) > 0.4 ? "#111827" : "#f3f4f6";
+  return theme.colors.text;
+}
+
+/** Greedy word wrap of `text` into lines no wider than `max` (long words are split). */
+export function wrapLines(text: string, max: number, measure: (s: string) => number): string[] {
+  const out: string[] = [];
+  for (const para of text.split("\n")) {
+    const words = para.split(/(\s+)/).filter((w) => w !== "");
+    let line = "";
+    for (const w of words) {
+      const next = line + w;
+      if (line === "" || measure(next.trimEnd()) <= max) {
+        line = line === "" ? next.trimStart() : next;
+      } else {
+        out.push(line.trimEnd());
+        line = /^\s+$/.test(w) ? "" : w;
+      }
+      // Split a single word that is wider than the cell.
+      while (line.trimEnd().length > 1 && measure(line.trimEnd()) > max) {
+        let k = line.length - 1;
+        while (k > 1 && measure(line.slice(0, k)) > max) k--;
+        out.push(line.slice(0, k));
+        line = line.slice(k);
+      }
+    }
+    out.push(line.trimEnd());
+  }
+  return out;
 }
 
 export function headerFont(theme: Theme, zoom: number, active: boolean): string {

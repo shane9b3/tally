@@ -27,6 +27,7 @@ mod eval;
 pub mod mock;
 pub mod numeric;
 mod registry;
+mod stats_util;
 
 pub use args::{check_arity, check_text_len, run, run_ref, sanitize, Args, MAX_TEXT_BYTES};
 pub use context::{ArgList, CellFormatInfo, EvalContext, EvalValue};

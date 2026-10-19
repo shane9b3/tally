@@ -1,0 +1,56 @@
+# COMBINA conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=COMBINA(3;2)"
+expect = 6
+
+[[case]]
+formula = "=COMBINA(4;3)"
+expect = 20
+
+[[case]]
+formula = "=COMBINA(0;0)"
+expect = 1
+
+[[case]]
+formula = "=COMBINA(0;1)"
+expect = "Err:502"
+note = "Excel gives #NUM!; recorded as Err:502."
+
+[[case]]
+formula = "=COMBINA(5;0)"
+expect = 1
+
+[[case]]
+formula = "=COMBINA(-1;2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=COMBINA(10;3)"
+expect = 220
+
+[[case]]
+formula = "=COMBINA(2.9;2.1)"
+expect = 3
+note = "Both arguments truncated."
+
+[[case]]
+formula = "=COMBINA(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=COMBINA(A1;1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=COMBINA(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=COMBINA(1;2;3)"
+expect = "Err:504"
+
+[[case]]
+formula = "=COMBINA(1;5)"
+expect = 1

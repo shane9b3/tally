@@ -1,0 +1,49 @@
+# PI conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=PI()"
+expect = 3.141592653589793
+
+[[case]]
+formula = "=PI()*2"
+expect = 6.283185307179586
+
+[[case]]
+formula = "=PI(1)"
+expect = "Err:504"
+
+[[case]]
+formula = "=SIN(PI()/2)"
+expect = 1
+
+[[case]]
+formula = "=DEGREES(PI())"
+expect = 180
+
+[[case]]
+formula = "=ROUND(PI();4)"
+expect = 3.1416
+
+[[case]]
+name = "text operand"
+cells = { A1 = "x" }
+formula = "=PI()+A1"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty operand"
+formula = "=PI()+A1"
+expect = 3.141592653589793
+
+[[case]]
+formula = "=PI()/PI()"
+expect = 1
+
+[[case]]
+formula = "=PI()^2"
+expect = 9.869604401089358
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=PI()+A1"
+expect = "#DIV/0!"

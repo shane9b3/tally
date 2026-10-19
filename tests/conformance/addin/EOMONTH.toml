@@ -1,0 +1,41 @@
+# EOMONTH conformance vectors. Analysis add-in. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=EOMONTH(DATE(2026;2;10);0)"
+expect = 46081
+
+[[case]]
+formula = "=EOMONTH(DATE(2024;2;10);0)"
+expect = 45351
+
+[[case]]
+formula = "=EOMONTH(DATE(2026;1;31);1)"
+expect = 46081
+
+[[case]]
+formula = "=EOMONTH(DATE(2026;1;15);-1)"
+expect = 46022
+
+[[case]]
+formula = "=EOMONTH(DATE(2026;1;15);12)"
+expect = 46418
+
+[[case]]
+formula = "=EOMONTH(DATE(2026;11;30);3)"
+expect = 46446
+
+[[case]]
+formula = "=EOMONTH(DATE(2026;5;5);-17)"
+expect = 45657
+
+[[case]]
+formula = "=EOMONTH(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=EOMONTH(DATE(9999;12;1);1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=EOMONTH(1)"
+expect = "Err:511"

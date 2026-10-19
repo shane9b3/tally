@@ -1,0 +1,47 @@
+# ISLEAPYEAR conformance vectors. Date add-in. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=ISLEAPYEAR(DATE(2024;1;1))"
+expect = true
+
+[[case]]
+formula = "=ISLEAPYEAR(DATE(2025;1;1))"
+expect = false
+
+[[case]]
+formula = "=ISLEAPYEAR(DATE(1900;1;1))"
+expect = false
+
+[[case]]
+formula = "=ISLEAPYEAR(DATE(2000;1;1))"
+expect = true
+
+[[case]]
+formula = "=ISLEAPYEAR(DATE(2100;1;1))"
+expect = false
+
+[[case]]
+formula = "=ISLEAPYEAR(DATE(2026;1;1))"
+expect = false
+
+[[case]]
+formula = "=ISLEAPYEAR(DATE(1996;1;1))"
+expect = true
+
+[[case]]
+formula = "=ISLEAPYEAR(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=ISLEAPYEAR()"
+expect = "Err:511"
+
+[[case]]
+formula = "=ISLEAPYEAR(1;2)"
+expect = "Err:504"
+
+[[case]]
+name = "empty is 1899-12-30"
+cells = {  }
+formula = "=ISLEAPYEAR(A1)"
+expect = false

@@ -64,6 +64,78 @@ pub struct SheetData {
     /// writes them sorted by column, then start row, without overlaps.
     #[serde(default)]
     pub style_runs: Vec<StyleRun>,
+    /// Array (Ctrl+Shift+Enter) formula blocks. The anchor cell (`r0`,
+    /// `c0`) holds the formula in [`cells`](Self::cells); the other cells of
+    /// the block hold their cached result values (ODS writes them as plain
+    /// value cells) and are replaced by the block on load.
+    #[serde(default)]
+    pub array_formulas: Vec<CellRangeLocal>,
+    /// The sheet's AutoFilter, if any (ODS: an anonymous
+    /// `table:database-range` with `table:display-filter-buttons`).
+    #[serde(default)]
+    pub auto_filter: Option<AutoFilterData>,
+}
+
+/// An AutoFilter: the filtered area (header row first), the per-column
+/// criteria and the rows they currently hide.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct AutoFilterData {
+    /// The area including its header row (`r0`).
+    pub range: CellRangeLocal,
+    /// Active column filters (absolute column numbers inside `range`).
+    pub columns: Vec<FilterColumnData>,
+    /// Rows hidden by the filter, as inclusive `(first, last)` spans,
+    /// sorted. These are distinct from user-hidden rows
+    /// ([`DimRun::hidden`]); ODS writes them as `table:visibility="filter"`.
+    pub filtered_rows: Vec<(u32, u32)>,
+}
+
+/// The filter of one AutoFilter column. A row is kept when its cell passes
+/// both parts that are set.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct FilterColumnData {
+    /// Absolute 0-based column.
+    pub col: u32,
+    /// Keep only cells whose formatted text is one of these (`""` = empty).
+    pub values: Option<Vec<String>>,
+    /// Keep only cells matching this condition.
+    pub condition: Option<FilterConditionData>,
+}
+
+/// One filter condition.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FilterConditionData {
+    /// Comparison.
+    pub op: FilterOpData,
+    /// Operand (numbers compare numerically when both sides are numbers).
+    pub value: String,
+}
+
+/// Filter comparison operators (ODS `table:operator`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FilterOpData {
+    /// `=`
+    Eq,
+    /// `!=`
+    Ne,
+    /// `>`
+    Gt,
+    /// `>=`
+    Ge,
+    /// `<`
+    Lt,
+    /// `<=`
+    Le,
+    /// `contains`
+    Contains,
+    /// `begins`
+    BeginsWith,
+    /// `ends`
+    EndsWith,
+    /// `empty`
+    Empty,
+    /// `!empty`
+    NotEmpty,
 }
 
 /// A vertical run of one style in one column, rows `start_row..=end_row`.
@@ -254,6 +326,10 @@ pub struct NameData {
     /// Index of the sheet the name is local to, or `None` for workbook scope.
     pub sheet: Option<u32>,
     /// Expression in the OpenFormula dialect, e.g. `of:=[$Sheet1.$A$1:.$A$10]`.
+    ///
+    /// Relative references are relative to cell A1 of the first sheet (the
+    /// model has no base cell; ODS `table:base-cell-address` is ignored on
+    /// read and written as `$<first sheet>.$A$1`).
     pub formula: String,
 }
 
@@ -411,6 +487,29 @@ mod tests {
                     end_row: 20_000,
                     style: 0,
                 }],
+                array_formulas: vec![CellRangeLocal {
+                    r0: 6,
+                    c0: 0,
+                    r1: 7,
+                    c1: 1,
+                }],
+                auto_filter: Some(AutoFilterData {
+                    range: CellRangeLocal {
+                        r0: 0,
+                        c0: 0,
+                        r1: 9,
+                        c1: 2,
+                    },
+                    columns: vec![FilterColumnData {
+                        col: 1,
+                        values: Some(vec!["Paid".into(), String::new()]),
+                        condition: Some(FilterConditionData {
+                            op: FilterOpData::BeginsWith,
+                            value: "P".into(),
+                        }),
+                    }],
+                    filtered_rows: vec![(3, 4)],
+                }),
             };
         WorkbookData {
             sheets: vec![

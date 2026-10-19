@@ -1,0 +1,65 @@
+# ATAN2 conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=ATAN2(1;1)"
+expect = 0.7853981633974483
+
+[[case]]
+formula = "=ATAN2(-1;0)"
+expect = 3.141592653589793
+note = "ATAN2(x;y): x first."
+
+[[case]]
+formula = "=ATAN2(0;1)"
+expect = 1.5707963267948966
+
+[[case]]
+formula = "=ATAN2(1;0)"
+expect = 0
+
+[[case]]
+formula = "=ATAN2(0;0)"
+expect = "#DIV/0!"
+note = "Excel and LibreOffice give #DIV/0!."
+
+[[case]]
+formula = "=ATAN2(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=ATAN2(\"1\";\"1\")"
+expect = 0.7853981633974483
+
+[[case]]
+name = "empty is 0"
+cells = { A2 = 1 }
+formula = "=ATAN2(A1;A2)"
+expect = 1.5707963267948966
+
+[[case]]
+formula = "=ATAN2(TRUE;TRUE)"
+expect = 0.7853981633974483
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=ATAN2(A1;1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=ATAN2(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=ATAN2(1;2;3)"
+expect = "Err:504"
+
+[[case]]
+formula = "=ATAN2(-1;-1)"
+expect = -2.356194490192345
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 9, A2 = 4, B1 = 9, B2 = 5 }
+origin = "D2"
+formula = "=ATAN2(A1:A2;B1:B2)"
+expect = 0.8960553845713439

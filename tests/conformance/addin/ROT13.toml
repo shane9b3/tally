@@ -1,0 +1,49 @@
+# ROT13 conformance vectors. Date add-in (text). Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=ROT13(\"Hello\")"
+expect = "Uryyb"
+
+[[case]]
+formula = "=ROT13(\"Uryyb\")"
+expect = "Hello"
+
+[[case]]
+formula = "=ROT13(\"\")"
+expect = ""
+
+[[case]]
+formula = "=ROT13(\"Hello, World 123!\")"
+expect = "Uryyb, Jbeyq 123!"
+
+[[case]]
+formula = "=ROT13(\"abcdefghijklmnopqrstuvwxyz\")"
+expect = "nopqrstuvwxyzabcdefghijklm"
+
+[[case]]
+formula = "=ROT13(\"ABCXYZ\")"
+expect = "NOPKLM"
+
+[[case]]
+name = "number to text"
+formula = "=ROT13(123)"
+expect = "123"
+
+[[case]]
+name = "empty cell"
+formula = "=ROT13(A1)"
+expect = ""
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=ROT13(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=ROT13()"
+expect = "Err:511"
+
+[[case]]
+formula = "=ROT13(\"a\";\"b\")"
+expect = "Err:504"

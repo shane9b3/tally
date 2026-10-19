@@ -1,0 +1,52 @@
+# FDIST conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "right tail"
+formula = "=FDIST(2;5;10)"
+expect = 0.16419495089973882
+tol = 2e-14
+
+[[case]]
+name = "asymmetric df"
+formula = "=FDIST(0.5;100;3)"
+expect = 0.8811575321060003
+tol = 9e-14
+
+[[case]]
+name = "x = 0"
+formula = "=FDIST(0;5;10)"
+expect = 1.0
+tol = 0
+
+[[case]]
+name = "negative x"
+formula = "=FDIST(-1;5;10)"
+expect = "Err:502"
+
+[[case]]
+name = "df1 zero"
+formula = "=FDIST(2;0;10)"
+expect = "Err:502"
+
+[[case]]
+name = "df2 too large"
+formula = "=FDIST(2;5;1E10)"
+expect = "Err:502"
+
+[[case]]
+name = "df floored"
+formula = "=FDIST(2;5.9;10.9)"
+expect = 0.16419495089973882
+tol = 2e-14
+
+[[case]]
+name = "text"
+formula = "=FDIST(\"x\";5;10)"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty x"
+formula = "=FDIST(A1;1;1)"
+expect = 1.0
+tol = 0

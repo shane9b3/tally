@@ -1,0 +1,65 @@
+# IMAGINARY conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMAGINARY(\"3+4i\")"
+expect = 4.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMAGINARY(\"3+4j\")"
+expect = 4.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMAGINARY(\"i\")"
+expect = 1.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMAGINARY(\"-i\")"
+expect = -1.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMAGINARY(\"5\")"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMAGINARY(\"1e2+3.5e-1i\")"
+expect = 0.35
+tol = 1e-12
+
+[[case]]
+formula = "=IMAGINARY(\"-2.5j\")"
+expect = -2.5
+tol = 1e-12
+
+[[case]]
+formula = "=IMAGINARY(\"2-i\")"
+expect = -1.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMAGINARY(\"3+4k\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMAGINARY(\"3+4i\";1)"
+expect = "Err:504"
+
+[[case]]
+formula = "=IMAGINARY()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMAGINARY(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "number input"
+formula = "=IMAGINARY(7)"
+expect = 0.0
+tol = 0
+

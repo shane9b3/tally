@@ -19,18 +19,50 @@ export type Dir = "up" | "down" | "left" | "right";
 /** Where the selection moves after an edit is committed. */
 export type CommitMove = Dir | "none";
 
-/** Single-range selection (Phase A). `anchor` is where Shift-extension starts. */
+/**
+ * The selection. `range` is the current (last added) range, which holds
+ * `active`; `anchor` is where Shift-extension starts. Cmd/Ctrl+click adds
+ * ranges: the earlier ones are kept in `others` (oldest first).
+ */
 export interface Selection {
   range: RangeDto;
   active: CellPos;
   anchor: CellPos;
+  /** Earlier ranges of a multi-range selection (absent or empty for one range). */
+  others?: RangeDto[];
 }
+
+/** A coloured reference outline drawn while editing a formula. */
+export interface RefHighlight {
+  range: RangeDto;
+  /** CSS colour of the outline (the tint is derived from it). */
+  color: string;
+}
+
+/** A coloured span of the editor text (UTF-16 offsets, end exclusive). */
+export interface TextHighlight {
+  start: number;
+  end: number;
+  color: string;
+}
+
+/** Point mode: the phase of a reference being picked with the mouse or keys. */
+export type PointPhase = "start" | "move" | "end";
+
+/** Which part of the grid was right-clicked. */
+export type ContextArea = "cell" | "rowHeader" | "colHeader" | "corner";
 
 /** An in-progress cell edit, owned by the app (shared with the formula bar). */
 export interface EditState {
   cell: CellPos;
   text: string;
   caret: number;
+  /**
+   * Bumped by the app for programmatic changes (point mode, autocomplete,
+   * editor undo): the editor then always takes `text`/`caret`, even if it
+   * looks like an echo of something it typed earlier.
+   */
+  seq?: number;
 }
 
 /** What a data-source notification covers. */
@@ -80,12 +112,34 @@ export interface GridEvents {
   onCommitEdit(move: CommitMove): void;
   /** Discard the edit. */
   onCancelEdit(): void;
-  /** Column (Phase A) or row size set by dragging a header gutter. */
+  /** Column or row size set by dragging a header gutter. */
   onResize(axis: "col" | "row", start: number, end: number, px: number): void;
+  /** Double-click on a column header gutter: fit columns `start..=end` to their contents. */
+  onAutoFit(axis: "col", start: number, end: number): void;
+  /**
+   * The fill handle was dragged. `source` is the selection range; `target`
+   * is the whole filled range INCLUDING `source` (it extends `source` down,
+   * up, right or left). The grid selects `target` afterwards.
+   */
+  onFill(source: RangeDto, target: RangeDto): void;
+  /** Double-click on the fill handle (fill down to the adjacent data's end). */
+  onFillHandleDoubleClick(source: RangeDto): void;
+  /**
+   * Point mode (only while `pointMode` is set): the user picked `range` with
+   * a click/drag or an arrow key in the editor. The app inserts or replaces
+   * the reference at the caret.
+   */
+  onPointRange(range: RangeDto, phase: PointPhase): void;
+  /**
+   * Called first for every key pressed in the open in-cell editor. Return
+   * true if the app handled it (the grid then does nothing else). Used for
+   * autocomplete navigation and editor-local undo.
+   */
+  onEditorKeyDown(e: KeyboardEvent): boolean;
   /** Ctrl/Cmd+arrow: resolve the data edge (engine `navigateEdge`). */
   onNavigateEdge(from: CellPos, dir: Dir): Promise<CellPos>;
   /** Right click (selection already updated). Coordinates are client px. */
-  onContextMenu(cell: CellPos, x: number, y: number): void;
+  onContextMenu(cell: CellPos, x: number, y: number, area: ContextArea): void;
   /** Delete/Backspace outside the editor: clear the selection's contents. */
   onDeleteContents(range: RangeDto): void;
   /**
@@ -94,8 +148,11 @@ export interface GridEvents {
    */
   onCopy(data: DataTransfer | null): void;
   onCut(data: DataTransfer | null): void;
-  /** DOM `paste` outside the editor (default prevented). */
-  onPaste(data: DataTransfer | null): void;
+  /**
+   * DOM `paste` outside the editor (default prevented). `plain` is set for
+   * ⇧⌘V / Ctrl+Shift+V (paste values only).
+   */
+  onPaste(data: DataTransfer | null, opts?: { plain: boolean }): void;
 }
 
 /** Everything the grid is configured with. */
@@ -109,6 +166,16 @@ export interface GridProps extends Partial<GridEvents> {
   selection: Selection;
   /** The edit in progress, or `null`. */
   edit: EditState | null;
+  /**
+   * While editing a formula with the caret where a reference may go: clicks
+   * on cells (and, in "enter" mode, arrow keys) pick references
+   * (`onPointRange`) instead of committing.
+   */
+  pointMode?: boolean;
+  /** Coloured outlines of the references in the formula being edited. */
+  refHighlights?: RefHighlight[];
+  /** Coloured spans of the editor text (formula references). */
+  editHighlights?: TextHighlight[];
 }
 
 /** The visible cells (inclusive), plus pixel offsets of the scroll position. */

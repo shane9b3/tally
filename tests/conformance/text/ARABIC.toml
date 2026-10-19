@@ -1,0 +1,49 @@
+[[case]]
+formula = "=ARABIC(\"MCMXCIV\")"
+expect = 1994
+
+[[case]]
+formula = "=ARABIC(\"mcmxciv\")"
+expect = 1994
+
+[[case]]
+formula = "=ARABIC(\"-IV\")"
+expect = -4
+
+[[case]]
+formula = "=ARABIC(\"\")"
+expect = 0
+
+[[case]]
+formula = "=ARABIC(\"ABC\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=ARABIC(\"MMMM\")"
+expect = "Err:502"
+
+[[case]]
+cells = { A1 = "XII" }
+formula = "=ARABIC(A1)"
+expect = 12
+
+[[case]]
+formula = "=ARABIC(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=ARABIC(12)"
+expect = "Err:502"
+
+[[case]]
+formula = "=ARABIC(\"MMMCMXCIX\")"
+expect = 3999
+
+[[case]]
+formula = "=ARABIC()"
+expect = "Err:511"
+
+[[case]]
+formula = "=ARABIC(\"IIII\")"
+expect = 4
+note = "Lax grammar like Excel."

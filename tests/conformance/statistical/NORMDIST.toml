@@ -1,0 +1,84 @@
+# NORMDIST conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "cdf"
+formula = "=NORMDIST(1;0;1;TRUE)"
+expect = 0.8413447460685429
+tol = 8e-14
+
+[[case]]
+name = "cumulative defaults to TRUE"
+formula = "=NORMDIST(1;0;1)"
+expect = 0.8413447460685429
+tol = 8e-14
+
+[[case]]
+name = "density"
+formula = "=NORMDIST(1;0;2;FALSE)"
+expect = 0.17603266338214973
+tol = 2e-14
+
+[[case]]
+name = "far tail"
+formula = "=NORMDIST(-10;0;1;1)"
+expect = 7.619853024160525e-24
+tol = 8e-36
+
+[[case]]
+name = "shifted"
+formula = "=NORMDIST(42;40;1.5;TRUE)"
+expect = 0.9087887802741321
+tol = 9e-14
+
+[[case]]
+name = "stdev zero"
+formula = "=NORMDIST(1;0;0)"
+expect = "Err:502"
+
+[[case]]
+name = "stdev negative"
+formula = "=NORMDIST(1;0;-1;TRUE)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=NORMDIST(\"x\";0;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "numeric text"
+formula = "=NORMDIST(\"1\";0;1)"
+expect = 0.8413447460685429
+tol = 8e-14
+
+[[case]]
+name = "empty cell is 0"
+formula = "=NORMDIST(A1;0;1)"
+expect = 0.5
+tol = 5e-14
+
+[[case]]
+name = "bool cell"
+cells = { A1 = true }
+formula = "=NORMDIST(A1;0;1;0)"
+expect = 0.24197072451914334
+tol = 2e-14
+
+[[case]]
+name = "error propagates"
+cells = { A2 = "=1/0" }
+formula = "=NORMDIST(A2;0;1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "empty cumulative is FALSE"
+formula = "=NORMDIST(1;0;1;)"
+expect = 0.24197072451914334
+tol = 2e-14
+note = "AOO counts a written but empty argument, which reads as 0/FALSE (GetDouble on svMissing)."
+
+[[case]]
+name = "too few"
+formula = "=NORMDIST(1;0)"
+expect = "Err:511"

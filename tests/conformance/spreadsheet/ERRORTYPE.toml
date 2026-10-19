@@ -1,0 +1,56 @@
+[[case]]
+formula = "=ERRORTYPE(1/0)"
+expect = 532
+
+[[case]]
+formula = "=ERRORTYPE(EASTERSUNDAY(1000))"
+expect = 502
+
+[[case]]
+formula = "=ERRORTYPE(TIME(0;0;-1))"
+expect = 502
+
+[[case]]
+formula = "=ERRORTYPE(INDIRECT(\"zz\"))"
+expect = 524
+note = "#REF!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=ERRORTYPE(A1)"
+expect = 532
+
+[[case]]
+cells = { A1 = "x" }
+formula = "=ERRORTYPE(A1)"
+expect = "#N/A"
+note = "Not an error: #N/A."
+
+[[case]]
+formula = "=ERRORTYPE(5)"
+expect = "#N/A"
+
+[[case]]
+formula = "=ERRORTYPE(\"x\")"
+expect = "#N/A"
+
+[[case]]
+formula = "=ERRORTYPE(A5)"
+expect = "#N/A"
+note = "Empty cell."
+
+[[case]]
+formula = "=ERRORTYPE(ERRORTYPE(1))"
+expect = 32767
+
+[[case]]
+formula = "=ERRORTYPE()"
+expect = "Err:511"
+
+[[case]]
+formula = "=ERRORTYPE(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=ERRORTYPE(CHOOSE(0;1))"
+expect = 502

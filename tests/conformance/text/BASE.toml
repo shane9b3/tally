@@ -1,0 +1,56 @@
+[[case]]
+formula = "=BASE(255;16)"
+expect = "FF"
+
+[[case]]
+formula = "=BASE(7;2;8)"
+expect = "00000111"
+
+[[case]]
+formula = "=BASE(0;2)"
+expect = "0"
+
+[[case]]
+formula = "=BASE(35;36)"
+expect = "Z"
+
+[[case]]
+formula = "=BASE(-1;2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BASE(5;1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BASE(5;37)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BASE(10;2;256)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BASE(\"x\";2)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=BASE(255.9;16)"
+expect = "FF"
+
+[[case]]
+formula = "=BASE(1/0;2)"
+expect = "#DIV/0!"
+
+[[case]]
+cells = { A1 = 10 }
+formula = "=BASE(A1;2)"
+expect = "1010"
+
+[[case]]
+formula = "=BASE(5)"
+expect = "Err:511"
+
+[[case]]
+formula = "=BASE(1;2;3;4)"
+expect = "Err:504"

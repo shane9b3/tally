@@ -1,0 +1,86 @@
+# IMCSC conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMREAL(IMCSC(\"1+i\"))"
+expect = 0.6215180171704284
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMCSC(\"1+i\"))"
+expect = -0.30393100162842646
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMCSC(\"3+4i\"))"
+expect = 0.005174473184019397
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMCSC(\"3+4i\"))"
+expect = 0.03627588962862601
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMCSC(\"2-3j\"))"
+expect = 0.09047320975320743
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMCSC(\"2-3j\"))"
+expect = -0.041200986288574125
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMCSC(\"-0.5+0.25i\"))"
+expect = -1.6838612682157232
+tol = 1.683861268215723e-11
+
+[[case]]
+formula = "=IMAGINARY(IMCSC(\"-0.5+0.25i\"))"
+expect = -0.7549097014050444
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMCSC(\"2\"))"
+expect = 1.0997501702946164
+tol = 1.0997501702946163e-11
+
+[[case]]
+formula = "=IMAGINARY(IMCSC(\"2\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMCSC(\"-i\"))"
+expect = -0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMCSC(\"-i\"))"
+expect = 0.8509181282393216
+tol = 1e-11
+
+[[case]]
+formula = "=IMCSC(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMCSC()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMCSC(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=IMCSC(\"0\")"
+expect = "Err:502"
+note = "AOO: IllegalArgumentException"
+
+[[case]]
+name = "number argument"
+formula = "=IMREAL(IMCSC(2))"
+expect = 1.0997501702946164
+tol = 1e-11
+

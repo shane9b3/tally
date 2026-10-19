@@ -14,7 +14,7 @@
   height: 28px;
   flex: none;
   padding: 0 10px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--tally-border-subtle);
   border-radius: var(--tally-radius-pill);
   background: var(--tally-gray-50);
   color: var(--tally-text);
@@ -46,8 +46,32 @@
   padding: 0 2px;
 }
 
-.formula {
+/* The input and, behind it, the coloured mirror of its text. */
+.field {
+  position: relative;
   flex: 1;
+  min-width: 0;
+  height: 30px;
+}
+
+.mirror {
+  position: absolute;
+  inset: 0;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--tally-gray-50);
+  color: var(--tally-text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 30px;
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.formula {
+  position: relative;
+  width: 100%;
   min-width: 0;
   height: 30px;
   padding: 0 6px;
@@ -63,6 +87,10 @@
 
 .formula:focus {
   background: var(--tally-gray-50);
+}
+
+.formula {
+  caret-color: var(--tally-accent);
 }
 
 .hint {

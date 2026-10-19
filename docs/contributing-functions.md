@@ -1,7 +1,7 @@
 # Adding a spreadsheet function
 
 Functions live in `crates/tally-functions`. They depend only on `tally-types`
-(and, once WP4 lands, `tally-numfmt`), never on the engine. The engine
+and `tally-numfmt`, never on the engine. The engine
 reaches them through `tally_functions::eval_call`.
 
 ## Where things go
@@ -15,11 +15,15 @@ crates/tally-functions/src/
   criteria.rs            COUNTIF-style criteria
   args.rs                Args helpers, run / run_ref, check_arity
   numeric.rs             approx_add, ApproxSum
+  stats_util.rs          THE erf/erfc, normal density/CDF/inverse (AOO ports) and the
+                         SparseData column-major argument reader; reuse, never copy
   mock.rs                MockEvalContext, MockArgs, call() (feature `test-support`)
   categories/<category>/mod.rs     one `register` list per category (owned by that category's engineer)
   categories/<category>/<family>.rs  one file per function family
+  categories/ooxml.rs    OOXML (Excel) names, one table for every function
 tests/conformance/<category>/<FUNC>.toml   end-to-end vectors (repo root; run by tally-engine)
 docs/functions/master-list.toml            generated: python3 -I docs/functions/gen-master-list.py
+docs/functions/coverage.md                 generated: cargo xtask function-coverage --doc
 ```
 
 Category directories: `mathematical statistical logical text datetime
@@ -127,8 +131,10 @@ Too few arguments is `Err:511`, too many `Err:504`, checked before any argument 
 
 - Scalar: empty/missing → 0, `""`, FALSE; bool → 1/0; text → number per
   `settings.text_to_number` (default `ConvertUnambiguous`: plain decimals and
-  ISO 8601 dates/times only, `""` is `#VALUE!`); errors propagate; arrays give
-  their top-left element.
+  ISO 8601 dates/times only, `""` is `#VALUE!`; `ConvertLocale` uses
+  tally-numfmt's en-US input recognizer); errors propagate; arrays give
+  their top-left element. Numbers become text through tally-numfmt's
+  General formatter (`coerce::number_to_text`).
 - Sequences (`number_seq`): direct arguments are coerced as scalars (so
   `SUM("3")` is 3); inside references and arrays numbers **and booleans**
   count (AOO stores booleans as numbers), text and empties are skipped, the
@@ -221,12 +227,58 @@ against this schema (allowed keys, settings values, at least 8 cases, file in
 the right category directory, one file per registered function). The
 end-to-end runner is `crates/tally-engine/tests/conformance.rs` (WP1).
 
+## Names: the master list is the source of truth
+
+`docs/functions/master-list.toml` is generated from `docs/calc-functions.json`
+by `docs/functions/gen-master-list.py`; never edit it by hand. Lead-approved
+departures from the AOO JSON live in explicit tables at the top of the script,
+each checked against the JSON so a stale entry fails the generator:
+
+- `ARITY_OVERRIDES` (TRUNC's optional count, NUMBERVALUE's 1..3 arguments);
+- `ODF_OVERRIDES` (ZGZ is stored as `RRI`);
+- `ADDIN_LOSES_PLAIN_NAME` / `ADDIN_KEEPS_PLAIN_NAME`: AOO's add-in clash rule.
+  Plain ISEVEN/ISODD/GCD/LCM/EFFECT/CUMPRINC/CUMIPMT/NOMINAL mean the
+  built-in, so those `_ADD` add-ins are stored under their UNO programmatic
+  name (`COM.SUN.STAR.SHEET.ADDIN.ANALYSIS.GETGCD`); plain WEEKNUM/CONVERT/
+  DURATION mean the add-in, so the built-ins keep `ISOWEEKNUM`,
+  `ORG.OPENOFFICE.CONVERT` and `PDURATION`;
+- `EXTENSION_OVERRIDES` (NUMBERVALUE: listed but never implemented by AOO);
+- `XLFN_2010_PLUS` / `OOXML_RENAMED`: `ooxml_name`s. Mirror any change in
+  `crates/tally-functions/src/categories/ooxml.rs`.
+
+Register functions with exactly the master list's ODF name (`.odf(..)`),
+arity, category and `.extension()`; `registry_matches_master_list` reports
+every mismatch at once, and `addin_name_clashes_follow_aoo` pins the clash
+rule. To change a name, change the generator table, regenerate, then the
+registration.
+
+## Lessons from the parallel batches
+
+- **Quotes in TOML formulas**: write formulas that contain `"` as TOML
+  literal strings, `formula = '=LEFT("abc";2)'`. Literal strings cannot
+  contain `'` and have no escapes (`''` is *not* an escaped quote); for a
+  formula with both quote kinds use a basic string with `\"`.
+- **Per-agent target directories**: when several people or agents build at
+  once, give each its own `CARGO_TARGET_DIR` (`.targets/<name>`) and `-j 4`;
+  a shared target directory serialises on the build lock and rebuilds
+  everything when feature sets differ.
+- **Check vector data against its note**: a case documented as
+  "y = 1 + 2·x1 + 3·x2" must have data on that plane (LINEST/TREND had
+  off-plane rows and the function was blamed).
+- **Before changing an expectation**, decide which side is wrong from the
+  AOO source; never delete a case to make it pass, and record the reason in
+  `note` when an expectation changes.
+- **No private copies of shared helpers**: erf, the normal distribution and
+  sparse range readers are in `stats_util.rs`, coercion in `coerce.rs`.
+
 ## Checklist
 
 ```sh
-cargo fmt --all
+cargo fmt -p tally-functions
 cargo clippy -p tally-functions --all-targets -- -D warnings
 cargo test -p tally-functions
+cargo test -p tally-engine --test conformance --features tally-engine/io
+cargo xtask function-coverage --check
 ```
 
 - Port AOO algorithms only with a comment naming the source file (Apache-2.0);

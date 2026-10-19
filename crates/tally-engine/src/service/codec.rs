@@ -1,7 +1,7 @@
 //! File codecs behind a trait, so the engine builds while the IO crates are
 //! being written. [`UnsupportedCodec`] is the default; with the `io` feature
-//! [`IoCodec`] reads and writes ODS and CSV through `tally-io-ods` and
-//! `tally-io-csv`.
+//! [`IoCodec`] reads and writes ODS, XLSX and CSV through `tally-io-ods`,
+//! `tally-io-xlsx` and `tally-io-csv`.
 //!
 //! Wiring (one line in the shell):
 //! `let svc = EngineService::new().with_codec(Box::new(tally_engine::service::IoCodec));`
@@ -59,7 +59,7 @@ impl FileCodec for UnsupportedCodec {
     }
 }
 
-/// ODS and CSV through the IO crates.
+/// ODS, XLSX and CSV through the IO crates.
 #[cfg(feature = "io")]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct IoCodec;
@@ -71,6 +71,18 @@ impl FileCodec for IoCodec {
             let data = tally_io_ods::read_ods(
                 std::io::Cursor::new(bytes),
                 &tally_io_ods::Limits::default(),
+            )
+            .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
+            return Ok(Decoded {
+                data,
+                recognize_text: false,
+                evaluate_formulas: false,
+            });
+        }
+        if tally_io_xlsx::sniff_is_xlsx(bytes) || ext == "xlsx" || ext == "xlsm" {
+            let data = tally_io_xlsx::read_xlsx(
+                std::io::Cursor::new(bytes),
+                &tally_io_xlsx::Limits::default(),
             )
             .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
             return Ok(Decoded {
@@ -134,7 +146,12 @@ impl FileCodec for IoCodec {
                 .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
                 Ok(out)
             }
-            FileFormat::Xlsx => Err(ApiError::unsupported("XLSX is not supported in Phase A")),
+            FileFormat::Xlsx => {
+                let mut cur = std::io::Cursor::new(Vec::new());
+                tally_io_xlsx::write_xlsx(export.data, &mut cur)
+                    .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+                Ok(cur.into_inner())
+            }
         }
     }
 }

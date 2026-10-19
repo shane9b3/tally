@@ -42,12 +42,20 @@
   --tally-header-text: var(--tally-gray-500); /* (theme) */
   --tally-header-line: #e2e4e8; /* (theme) */
   --tally-header-active-bg: #e8effd; /* (theme) */
-  --tally-header-active-text: var(--tally-accent-hover); /* (theme) */
+  --tally-header-active-text: var(--tally-accent-text); /* (theme) */
   --tally-selection: rgba(37, 99, 235, 0.08); /* (theme) */
   --tally-selection-border: var(--tally-accent); /* (theme) */
   --tally-fill-handle: var(--tally-accent); /* (theme) */
   --tally-resize-guide: var(--tally-accent); /* (theme) */
   --tally-editor-bg: var(--tally-gray-0); /* (theme) */
+
+  /* Interaction and chrome */
+  --tally-accent-text: #1d4ed8;
+  --tally-accent-border: rgba(37, 99, 235, 0.25);
+  --tally-hover: rgba(0, 0, 0, 0.045);
+  --tally-scrim: rgba(17, 24, 39, 0.12);
+  --tally-danger: #dc2626;
+  --tally-text-disabled: #9ca3af;
 
   /* Status chips */
   --tally-chip-green-bg: #dcfce7; /* (theme) */
@@ -63,6 +71,7 @@
   --tally-font-size-header: 11px; /* (theme) */
   --tally-font-size-sm: 12px;
   --tally-font-size-lg: 15px;
+  --tally-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   /* Radii */
   --tally-radius-sm: 4px; /* (theme) */
@@ -80,61 +89,78 @@
 
   /* Elevation */
   --tally-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --tally-shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --tally-shadow-palette: 0 24px 60px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --tally-shadow-pill: 0 1px 1px rgba(0, 0, 0, 0.02);
+  --tally-shadow-accent: 0 1px 2px rgba(37, 99, 235, 0.3);
 }
 
 /*
- * Dark theme: same variable names. Phase A ships light only; values below
- * are placeholders.
- * TODO(v0.2): design the dark palette. Also add a
- * `@media (prefers-color-scheme: dark)` default for `:root:not([data-theme])`.
+ * Dark theme: the same variable names. Applied with data-theme="dark", and
+ * by default (no data-theme attribute) when the OS prefers dark. User-set
+ * fill and chip colours are absolute; the grid flips unstyled text on a
+ * light fill to dark ink (textColor() in @tally/grid) so they stay legible.
  */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --tally-gray-0: #111317; /* TODO */
-  --tally-gray-50: #181b20; /* TODO */
-  --tally-gray-100: #1f2329; /* TODO */
-  --tally-gray-200: #2a2f36; /* TODO */
-  --tally-gray-300: #3a4049; /* TODO */
-  --tally-gray-500: #9aa1ab; /* TODO */
-  --tally-gray-700: #cfd4da; /* TODO */
-  --tally-gray-900: #f3f4f6; /* TODO */
+  /* Neutral greys (cool, slightly blue-tinted) */
+  --tally-gray-0: #16181c;
+  --tally-gray-50: #1b1e23;
+  --tally-gray-100: #23272d;
+  --tally-gray-200: #2d3239;
+  --tally-gray-300: #3b414a;
+  --tally-gray-500: #9aa1ac;
+  --tally-gray-700: #d0d5dc;
+  --tally-gray-900: #eceef2;
 
-  --tally-accent: #60a5fa; /* TODO */
-  --tally-accent-hover: #93c5fd; /* TODO */
-  --tally-accent-subtle: rgba(96, 165, 250, 0.16); /* TODO */
+  /* Accent: buttons keep white text; text on tints uses the lighter accent-text. */
+  --tally-accent: #3b82f6;
+  --tally-accent-hover: #2f6fe0;
+  --tally-accent-subtle: rgba(96, 165, 250, 0.16);
+  --tally-accent-text: #93bbff;
+  --tally-accent-border: rgba(96, 165, 250, 0.35);
 
+  /* Surfaces and text */
   --tally-bg: var(--tally-gray-0);
   --tally-surface: var(--tally-gray-50);
   --tally-text: var(--tally-gray-900);
   --tally-text-muted: var(--tally-gray-500);
-  --tally-border-subtle: rgba(255, 255, 255, 0.06); /* TODO */
-  --tally-border: rgba(255, 255, 255, 0.12); /* TODO */
+  --tally-border-subtle: rgba(255, 255, 255, 0.07);
+  --tally-border: rgba(255, 255, 255, 0.14);
+  --tally-hover: rgba(255, 255, 255, 0.06);
+  --tally-scrim: rgba(0, 0, 0, 0.45);
+  --tally-danger: #f87171;
+  --tally-text-disabled: #5f6672;
 
-  --tally-grid-line: #262a30; /* TODO */
+  /* Grid */
+  --tally-grid-line: #25292f;
   --tally-header-bg: var(--tally-gray-50);
   --tally-header-text: var(--tally-gray-500);
-  --tally-header-line: #30353c; /* TODO */
-  --tally-header-active-bg: #1e2a3d; /* TODO */
-  --tally-header-active-text: var(--tally-accent); /* TODO */
-  --tally-selection: rgba(96, 165, 250, 0.14); /* TODO */
-  --tally-selection-border: var(--tally-accent);
-  --tally-fill-handle: var(--tally-accent); /* TODO */
-  --tally-resize-guide: var(--tally-accent); /* TODO */
-  --tally-editor-bg: var(--tally-gray-50); /* TODO */
+  --tally-header-line: #30353d;
+  --tally-header-active-bg: #1c2b45;
+  --tally-header-active-text: var(--tally-accent-text);
+  --tally-selection: rgba(96, 165, 250, 0.16);
+  --tally-selection-border: #4f8ff7;
+  --tally-fill-handle: #4f8ff7;
+  --tally-resize-guide: #4f8ff7;
+  --tally-editor-bg: var(--tally-gray-50);
 
-  --tally-chip-green-bg: #14532d; /* TODO */
-  --tally-chip-green-fg: #bbf7d0; /* TODO */
-  --tally-chip-amber-bg: #78350f; /* TODO */
-  --tally-chip-amber-fg: #fde68a; /* TODO */
-  --tally-chip-red-bg: #7f1d1d; /* TODO */
-  --tally-chip-red-fg: #fecaca; /* TODO */
+  /* Status chips (dark tints, light ink) */
+  --tally-chip-green-bg: #143524;
+  --tally-chip-green-fg: #86efac;
+  --tally-chip-amber-bg: #3a2a0e;
+  --tally-chip-amber-fg: #fcd34d;
+  --tally-chip-red-bg: #3d1719;
+  --tally-chip-red-fg: #fca5a5;
 
+  /* Typography, radii and spacing are the same as light. */
   --tally-font-family: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --tally-font-size: 13px;
   --tally-font-size-header: 11px;
   --tally-font-size-sm: 12px;
   --tally-font-size-lg: 15px;
+  --tally-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   --tally-radius-sm: 4px;
   --tally-radius-md: 6px;
@@ -148,5 +174,93 @@
   --tally-space-6: 24px;
   --tally-space-8: 32px;
 
-  --tally-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.4); /* TODO */
+  /* Elevation: deeper shadows plus a hairline, since shadows barely show on dark. */
+  --tally-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.35);
+  --tally-shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 12px 32px rgba(0, 0, 0, 0.5);
+  --tally-shadow-palette: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 24px 60px rgba(0, 0, 0, 0.6);
+  --tally-shadow-pill: 0 1px 1px rgba(0, 0, 0, 0.2);
+  --tally-shadow-accent: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    /* Neutral greys (cool, slightly blue-tinted) */
+    --tally-gray-0: #16181c;
+    --tally-gray-50: #1b1e23;
+    --tally-gray-100: #23272d;
+    --tally-gray-200: #2d3239;
+    --tally-gray-300: #3b414a;
+    --tally-gray-500: #9aa1ac;
+    --tally-gray-700: #d0d5dc;
+    --tally-gray-900: #eceef2;
+
+    /* Accent: buttons keep white text; text on tints uses the lighter accent-text. */
+    --tally-accent: #3b82f6;
+    --tally-accent-hover: #2f6fe0;
+    --tally-accent-subtle: rgba(96, 165, 250, 0.16);
+    --tally-accent-text: #93bbff;
+    --tally-accent-border: rgba(96, 165, 250, 0.35);
+
+    /* Surfaces and text */
+    --tally-bg: var(--tally-gray-0);
+    --tally-surface: var(--tally-gray-50);
+    --tally-text: var(--tally-gray-900);
+    --tally-text-muted: var(--tally-gray-500);
+    --tally-border-subtle: rgba(255, 255, 255, 0.07);
+    --tally-border: rgba(255, 255, 255, 0.14);
+    --tally-hover: rgba(255, 255, 255, 0.06);
+    --tally-scrim: rgba(0, 0, 0, 0.45);
+    --tally-danger: #f87171;
+    --tally-text-disabled: #5f6672;
+
+    /* Grid */
+    --tally-grid-line: #25292f;
+    --tally-header-bg: var(--tally-gray-50);
+    --tally-header-text: var(--tally-gray-500);
+    --tally-header-line: #30353d;
+    --tally-header-active-bg: #1c2b45;
+    --tally-header-active-text: var(--tally-accent-text);
+    --tally-selection: rgba(96, 165, 250, 0.16);
+    --tally-selection-border: #4f8ff7;
+    --tally-fill-handle: #4f8ff7;
+    --tally-resize-guide: #4f8ff7;
+    --tally-editor-bg: var(--tally-gray-50);
+
+    /* Status chips (dark tints, light ink) */
+    --tally-chip-green-bg: #143524;
+    --tally-chip-green-fg: #86efac;
+    --tally-chip-amber-bg: #3a2a0e;
+    --tally-chip-amber-fg: #fcd34d;
+    --tally-chip-red-bg: #3d1719;
+    --tally-chip-red-fg: #fca5a5;
+
+    /* Typography, radii and spacing are the same as light. */
+    --tally-font-family: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --tally-font-size: 13px;
+    --tally-font-size-header: 11px;
+    --tally-font-size-sm: 12px;
+    --tally-font-size-lg: 15px;
+    --tally-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+    --tally-radius-sm: 4px;
+    --tally-radius-md: 6px;
+    --tally-radius-card: 10px;
+    --tally-radius-pill: 999px;
+
+    --tally-space-1: 4px;
+    --tally-space-2: 8px;
+    --tally-space-3: 12px;
+    --tally-space-4: 16px;
+    --tally-space-6: 24px;
+    --tally-space-8: 32px;
+
+    /* Elevation: deeper shadows plus a hairline, since shadows barely show on dark. */
+    --tally-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.35);
+    --tally-shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 12px 32px rgba(0, 0, 0, 0.5);
+    --tally-shadow-palette: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 24px 60px rgba(0, 0, 0, 0.6);
+    --tally-shadow-pill: 0 1px 1px rgba(0, 0, 0, 0.2);
+    --tally-shadow-accent: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
 }

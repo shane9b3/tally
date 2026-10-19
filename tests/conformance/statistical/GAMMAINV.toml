@@ -1,0 +1,53 @@
+# GAMMAINV conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "median"
+formula = "=GAMMAINV(0.5;2;1)"
+expect = 1.6783469900166605
+tol = 2e-13
+
+[[case]]
+name = "upper"
+formula = "=GAMMAINV(0.95;5;3)"
+expect = 27.46055707991272
+tol = 3e-12
+
+[[case]]
+name = "small shape"
+formula = "=GAMMAINV(0.001;0.5;2)"
+expect = 1.5707971492624898e-06
+tol = 2e-17
+
+[[case]]
+name = "p = 0"
+formula = "=GAMMAINV(0;2;1)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "p = 1"
+formula = "=GAMMAINV(1;2;1)"
+expect = "Err:502"
+
+[[case]]
+name = "alpha zero"
+formula = "=GAMMAINV(0.5;0;1)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=GAMMAINV(\"x\";2;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty p is 0"
+formula = "=GAMMAINV(A1;2;1)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "bool p is 1"
+cells = { A1 = true }
+formula = "=GAMMAINV(A1;2;1)"
+expect = "Err:502"

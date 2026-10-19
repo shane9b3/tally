@@ -1,0 +1,59 @@
+# MINVERSE conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "2x2"
+formula = "=MINVERSE({4;7|2;6})"
+expect = [[0.6, -0.7], [-0.2, 0.4]]
+tol = 1e-12
+
+[[case]]
+name = "identity"
+formula = "=MINVERSE({1;0|0;1})"
+expect = [[1, 0], [0, 1]]
+
+[[case]]
+name = "1x1"
+formula = "=MINVERSE({4})"
+expect = [[0.25]]
+
+[[case]]
+name = "3x3"
+formula = "=MINVERSE({2;0;0|0;4;0|0;0;5})"
+expect = [[0.5, 0, 0], [0, 0.25, 0], [0, 0, 0.2]]
+tol = 1e-12
+
+[[case]]
+name = "needs pivoting"
+formula = "=MINVERSE({0;1|1;0})"
+expect = [[0, 1], [1, 0]]
+
+[[case]]
+name = "singular"
+formula = "=MINVERSE({1;2|2;4})"
+expect = "Err:502"
+note = "AOO reports a singular matrix as an illegal argument; Excel gives #NUM!."
+
+[[case]]
+name = "not square"
+formula = "=MINVERSE({1;2;3})"
+expect = "#VALUE!"
+
+[[case]]
+name = "text"
+cells = { A1 = 1, B1 = 0, A2 = 0, B2 = "x" }
+formula = "=MINVERSE(A1:B2)"
+expect = "#VALUE!"
+
+[[case]]
+name = "range"
+cells = { A1 = 4, B1 = 7, A2 = 2, B2 = 6 }
+origin = "F1"
+formula = "=MINVERSE(A1:B2)"
+expect = [[0.6, -0.7], [-0.2, 0.4]]
+tol = 1e-12
+
+[[case]]
+name = "inverse times original"
+formula = "=MMULT(MINVERSE({4;7|2;6});{4;7|2;6})"
+expect = [[1, 0], [0, 1]]
+tol = 1e-12

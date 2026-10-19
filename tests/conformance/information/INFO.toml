@@ -1,0 +1,39 @@
+[[case]]
+formula = "=LEN(INFO(\"system\"))>3"
+expect = true
+
+[[case]]
+formula = "=INFO(\"SYSTEM\")=INFO(\"system\")"
+expect = true
+
+[[case]]
+formula = "=INFO(\"recalc\")"
+expect = "Automatic"
+
+[[case]]
+formula = "=INFO(\"release\")"
+expect = "4.1"
+
+[[case]]
+formula = "=INFO(\"numfile\")"
+expect = 1
+
+[[case]]
+formula = "=INFO(\"nope\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=INFO(\"directory\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=INFO(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=INFO()"
+expect = "Err:511"
+
+[[case]]
+formula = "=ISTEXT(INFO(\"osversion\"))"
+expect = true

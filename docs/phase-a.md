@@ -27,6 +27,36 @@ Gates passed at integration (macOS arm64):
 
 Still manual: the WP7/WP5 click-through scripts (docs/qa/phase-a-manual.md), opening a saved file in LibreOffice, and signed CI bundles. The WP5 check below now opens a saved copy of the built-in `invoices` template (there is no `templates/invoices.ods`).
 
+## v0.2 engine status (2026-10-19)
+
+Engine, API and ODS work for v0.2 is in (see docs/api.md for the shapes):
+named ranges (workbook/sheet scope, ODS `table:named-expressions`), array (CSE)
+formulas (ODS matrix spans), dynamic dependencies indexed for INDIRECT/OFFSET
+(`record_dynamic_dep`, `parse_reference_text` resolves names and sheet-qualified
+references), cut/move with `move_refs`, merges (ODS write with covered cells),
+freeze panes, sort with header detection, AutoFilter (ODS database ranges, filter-hidden
+rows distinct from user-hidden rows), hidden rows/columns, find & replace, per-edge
+borders (ODS `fo:border*`), paste special, fill series, hard recalc, and XLSX open/save
+through `tally-io-xlsx` in `IoCodec`. Pending outside the engine: registering the five
+new Tauri commands in `apps/desktop/src-tauri/src/lib.rs`, `TauriClient` methods for
+`EngineClientV2`, and the UI. `EvalContext::hidden_row(sheet, row)` now exists
+(default `false`); SUBTOTAL 101–111 skip rows it reports, so the engine only has to
+implement it. SUM includes filtered rows, as in AOO.
+
+## Function library status (2026-10-19)
+
+`crates/tally-functions` registers **407 functions**: all 405 of AOO 4.1
+(`docs/calc-functions.json`: 296 built-in, 101 Analysis add-in, 8 Date add-in) plus
+the extensions IFERROR and IFNA; NUMBERVALUE, unimplemented in AOO, is implemented
+as the 3-argument ODFF/Excel extension. Per-category table:
+`docs/functions/coverage.md` (`cargo xtask function-coverage --doc`). ODF/OOXML
+names follow the master list and AOO's add-in clash rule (overrides in
+`docs/functions/gen-master-list.py`). Gates: `cargo fmt`/`clippy -D warnings` clean
+for `tally-functions`, 312 crate tests, and 407 conformance files / 5003 cases
+passing. Stubs that need engine hooks: GETPIVOTDATA (`#REF!`, no pivot tables),
+MULTIPLE.OPERATIONS (`Err:504`), CURRENT (`#N/A`), and filtered-row exclusion for
+SUBTOTAL 1–11.
+
 ## Dropped or stubbed in Phase A (all return in v0.2)
 
 - Insert/delete rows/columns, cut-move reference adjustment (cut = copy then clear), merges, frozen panes, row resize (column resize stays), multi-range selection.

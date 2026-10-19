@@ -1,0 +1,55 @@
+[[case]]
+formula = "=XOR(TRUE;FALSE)"
+expect = true
+
+[[case]]
+formula = "=XOR(TRUE;TRUE)"
+expect = false
+
+[[case]]
+formula = "=XOR(TRUE;TRUE;TRUE)"
+expect = true
+
+[[case]]
+formula = "=XOR(1;0)"
+expect = true
+
+[[case]]
+cells = { A1 = 1, A2 = "text", A3 = true }
+formula = "=XOR(A1:A3)"
+expect = false
+note = "Text in references is skipped."
+
+[[case]]
+formula = "=XOR(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=XOR(\"TRUE\";FALSE)"
+expect = true
+
+[[case]]
+formula = "=XOR()"
+expect = "Err:511"
+
+[[case]]
+formula = "=XOR(B1:B3)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=XOR(0;0)"
+expect = false
+
+[[case]]
+formula = "=XOR(2;0)"
+expect = true
+
+[[case]]
+cells = { A1 = 1, A2 = "=1/0" }
+formula = "=XOR(A1:A2)"
+expect = "#DIV/0!"
+
+[[case]]
+cells = { A1 = true, B1 = true }
+formula = "=XOR(A1;B1)"
+expect = false

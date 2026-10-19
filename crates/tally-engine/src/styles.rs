@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tally_api::{
-    BorderLineDto, BorderStyleDto, BordersDto, DisplayDto, HAlign as ApiHAlign, StyleDto,
-    StylePatch, VAlign as ApiVAlign,
+    BorderEdgePatch, BorderLineDto, BorderStyleDto, BordersDto, BordersPatch, DisplayDto,
+    HAlign as ApiHAlign, StyleDto, StylePatch, VAlign as ApiVAlign,
 };
 use tally_model::{BorderLine, BorderStyle, DisplayData, HAlign, StyleData, VAlign};
 use tally_numfmt::{parse_format, FormatAst, SectionKind};
+use tally_types::CellRange;
 
 use crate::storage::StyleId;
 
@@ -157,6 +158,23 @@ impl StyleTable {
         self.intern(d)
     }
 
+    /// The style `id` with the given border edges replaced (`None` edges
+    /// are left unchanged; an edge with `line: None` removes the border).
+    pub fn with_borders(&mut self, id: StyleId, edges: [Option<&BorderEdgePatch>; 4]) -> StyleId {
+        let mut d = self.get(id).data.clone();
+        let [top, bottom, left, right] = edges;
+        let set = |slot: &mut Option<BorderLine>, e: Option<&BorderEdgePatch>| {
+            if let Some(e) = e {
+                *slot = e.line.as_ref().map(border_from_dto);
+            }
+        };
+        set(&mut d.borders.top, top);
+        set(&mut d.borders.bottom, bottom);
+        set(&mut d.borders.left, left);
+        set(&mut d.borders.right, right);
+        self.intern(d)
+    }
+
     /// The style `id` with number format `code`.
     pub fn with_format(&mut self, id: StyleId, code: &str) -> StyleId {
         let mut d = self.get(id).data.clone();
@@ -219,6 +237,71 @@ fn border_dto(b: &BorderLine) -> BorderLineDto {
     }
 }
 
+/// API border line → model border line.
+pub fn border_from_dto(b: &BorderLineDto) -> BorderLine {
+    BorderLine {
+        style: match b.style {
+            BorderStyleDto::Solid => BorderStyle::Solid,
+            BorderStyleDto::Dashed => BorderStyle::Dashed,
+            BorderStyleDto::Dotted => BorderStyle::Dotted,
+            BorderStyleDto::Double => BorderStyle::Double,
+        },
+        width_hmm: crate::units::px_to_hmm(b.width_px.max(0.0)).max(1),
+        color: b.color,
+    }
+}
+
+/// Splits `lo..=hi` into (first line, inner lines, last line) segments as
+/// `(lo, hi, is_first, is_last)`.
+fn segments(lo: u32, hi: u32) -> Vec<(u32, u32, bool, bool)> {
+    if lo == hi {
+        return vec![(lo, lo, true, true)];
+    }
+    let mut v = vec![(lo, lo, true, false)];
+    if hi - lo >= 2 {
+        v.push((lo + 1, hi - 1, false, false));
+    }
+    v.push((hi, hi, false, true));
+    v
+}
+
+/// Applies a border patch to `range`: outer edges on the cells along the
+/// range's sides, inner lines on the cells between (each cell stores its
+/// own four edges, as in AOO; neighbours outside the range are untouched).
+pub fn apply_borders(wb: &mut crate::workbook::Workbook, range: CellRange, b: &BordersPatch) {
+    for (r0, r1, rf, rl) in segments(range.r0, range.r1) {
+        for (c0, c1, cf, cl) in segments(range.c0, range.c1) {
+            let top = if rf {
+                b.top.as_ref()
+            } else {
+                b.inner_h.as_ref()
+            };
+            let bottom = if rl {
+                b.bottom.as_ref()
+            } else {
+                b.inner_h.as_ref()
+            };
+            let left = if cf {
+                b.left.as_ref()
+            } else {
+                b.inner_v.as_ref()
+            };
+            let right = if cl {
+                b.right.as_ref()
+            } else {
+                b.inner_v.as_ref()
+            };
+            if top.is_none() && bottom.is_none() && left.is_none() && right.is_none() {
+                continue;
+            }
+            let sub = CellRange::new(range.sheet, r0, c0, r1, c1);
+            crate::ops::map_styles(wb, sub, |t, old| {
+                t.with_borders(old, [top, bottom, left, right])
+            });
+        }
+    }
+}
+
 /// Applies the set fields of `p` to `d`.
 pub fn apply_patch(d: &mut StyleData, p: &StylePatch) {
     if let Some(v) = p.bold {
@@ -272,6 +355,61 @@ pub fn apply_patch(d: &mut StyleData, p: &StylePatch) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn border_patches_per_edge() {
+        let mut wb = crate::workbook::Workbook::new();
+        let line = BorderLineDto {
+            style: BorderStyleDto::Solid,
+            width_px: 1.0,
+            color: 0x0000_00ff,
+        };
+        let edge = |l: Option<BorderLineDto>| Some(BorderEdgePatch { line: l });
+        let patch = BordersPatch {
+            top: edge(Some(line.clone())),
+            bottom: edge(Some(line.clone())),
+            left: None,
+            right: None,
+            inner_h: edge(Some(BorderLineDto {
+                style: BorderStyleDto::Dotted,
+                ..line.clone()
+            })),
+            inner_v: None,
+        };
+        let range = CellRange::new(1, 0, 0, 2, 1);
+        apply_borders(&mut wb, range, &patch);
+        fn b(wb: &crate::workbook::Workbook, r: u32, c: u32) -> BordersDto {
+            wb.styles
+                .to_dto(wb.style_at(tally_types::CellAddr::new(1, r, c)))
+                .borders
+        }
+        assert_eq!(
+            b(&wb, 0, 0).top.map(|l| l.style),
+            Some(BorderStyleDto::Solid)
+        );
+        assert_eq!(
+            b(&wb, 0, 0).bottom.map(|l| l.style),
+            Some(BorderStyleDto::Dotted)
+        );
+        assert_eq!(
+            b(&wb, 1, 1).top.map(|l| l.style),
+            Some(BorderStyleDto::Dotted)
+        );
+        assert_eq!(
+            b(&wb, 2, 1).bottom.map(|l| l.style),
+            Some(BorderStyleDto::Solid)
+        );
+        assert!(b(&wb, 1, 0).left.is_none());
+        assert!(b(&wb, 3, 0).top.is_none(), "outside the range");
+        // Removing the top edge only.
+        let remove = BordersPatch {
+            top: edge(None),
+            ..BordersPatch::default()
+        };
+        apply_borders(&mut wb, range, &remove);
+        assert!(b(&wb, 0, 0).top.is_none());
+        assert!(b(&wb, 0, 0).bottom.is_some());
+    }
 
     #[test]
     fn dedupe_and_patch() {

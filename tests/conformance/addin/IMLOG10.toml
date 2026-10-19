@@ -1,0 +1,94 @@
+# IMLOG10 conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMREAL(IMLOG10(\"1+i\"))"
+expect = 0.15051499783199057
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG10(\"1+i\"))"
+expect = 0.3410940884604603
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMLOG10(\"3+4i\"))"
+expect = 0.6989700043360187
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG10(\"3+4i\"))"
+expect = 0.4027191962733731
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMLOG10(\"2-3j\"))"
+expect = 0.5569716761534184
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG10(\"2-3j\"))"
+expect = -0.42682189085546657
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMLOG10(\"-0.5+0.25i\"))"
+expect = -0.25257498915995297
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG10(\"-0.5+0.25i\"))"
+expect = 1.1630167557051545
+tol = 1.1630167557051544e-11
+
+[[case]]
+formula = "=IMREAL(IMLOG10(\"2\"))"
+expect = 0.30102999566398114
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG10(\"2\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMLOG10(\"-i\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG10(\"-i\"))"
+expect = -0.6821881769209206
+tol = 1e-11
+
+[[case]]
+formula = "=IMLOG10(\"100\")"
+expect = "2"
+
+[[case]]
+formula = "=IMLOG10(\"1000\")"
+expect = "3"
+
+[[case]]
+formula = "=IMLOG10(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMLOG10()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMLOG10(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=IMLOG10(\"0\")"
+expect = "Err:502"
+note = "AOO: IllegalArgumentException"
+
+[[case]]
+name = "number argument"
+formula = "=IMREAL(IMLOG10(2))"
+expect = 0.30102999566398114
+tol = 1e-11
+

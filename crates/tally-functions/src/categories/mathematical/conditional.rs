@@ -1,4 +1,4 @@
-//! SUMIF, SUMIFS, COUNTIF, COUNTBLANK, AVERAGEIF.
+//! SUMIF, SUMIFS, COUNTIF, COUNTIFS, COUNTBLANK, AVERAGEIF, AVERAGEIFS.
 //!
 //! Criteria ranges are visited sparsely (`skip_empty = true`), so whole
 //! column references cost what is filled. Empty cells are accounted for
@@ -32,6 +32,15 @@ const AVERAGEIF_PARAMS: &[Param] = &[
 ];
 const SUMIFS_PARAMS: &[Param] = &[
     Param::required("sum_range", ParamKind::Reference),
+    Param::repeat("range", ParamKind::Reference),
+    Param::repeat("criteria", ParamKind::Criteria),
+];
+const COUNTIFS_PARAMS: &[Param] = &[
+    Param::repeat("range", ParamKind::Reference),
+    Param::repeat("criteria", ParamKind::Criteria),
+];
+const AVERAGEIFS_PARAMS: &[Param] = &[
+    Param::required("average_range", ParamKind::Reference),
     Param::repeat("range", ParamKind::Reference),
     Param::repeat("criteria", ParamKind::Criteria),
 ];
@@ -70,6 +79,24 @@ pub const AVERAGEIF: FunctionDef = FunctionDef::new(
     averageif,
 )
 .help("Averages the arguments that meet the conditions.");
+
+/// `COUNTIFS(range; criteria; ...)`.
+pub const COUNTIFS: FunctionDef = FunctionDef::new(
+    "COUNTIFS",
+    Category::Mathematical,
+    COUNTIFS_PARAMS,
+    countifs,
+)
+.help("Counts the cells that meet multiple criteria in multiple ranges.");
+
+/// `AVERAGEIFS(average_range; range; criteria; ...)`.
+pub const AVERAGEIFS: FunctionDef = FunctionDef::new(
+    "AVERAGEIFS",
+    Category::Mathematical,
+    AVERAGEIFS_PARAMS,
+    averageifs,
+)
+.help("Averages the values of cells in a range that meet multiple criteria in multiple ranges.");
 
 /// Which cells of one criteria range satisfy its criterion, keyed by the
 /// offset from the range's top-left corner. Only non-empty cells are stored;
@@ -211,6 +238,79 @@ fn sumifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     })
 }
 
+/// Reads `(range; criteria)` pairs starting at argument `first`; every range
+/// must have `rows × cols` cells, else `#VALUE!`. An unpaired trailing
+/// argument is `Err:511`.
+fn criteria_pairs(
+    a: &mut Args,
+    first: usize,
+    rows: u32,
+    cols: u32,
+) -> Result<Vec<Matcher>, ErrorKind> {
+    let n = a.count();
+    if n <= first || !(n - first).is_multiple_of(2) {
+        return Err(ErrorKind::MissingVariable2);
+    }
+    let mut pairs = Vec::new();
+    for i in (first..n).step_by(2) {
+        let range = a.range(i)?;
+        let crit = a.criterion(i + 1)?;
+        if range.rows() != rows || range.cols() != cols {
+            return Err(ErrorKind::Value);
+        }
+        pairs.push((range, crit));
+    }
+    Ok(pairs
+        .iter()
+        .map(|(r, c)| Matcher::build(a.ctx(), r, c))
+        .collect())
+}
+
+fn countifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
+    let mut a = Args::new(ctx, args);
+    run(|| {
+        if a.count() < 2 || !a.count().is_multiple_of(2) {
+            return Err(ErrorKind::MissingVariable2);
+        }
+        let first = a.range(0)?;
+        let (rows, cols) = (first.rows(), first.cols());
+        let matchers = criteria_pairs(&mut a, 0, rows, cols)?;
+        // Positions that are non-empty in at least one criteria range are
+        // tested one by one; all the others are empty in every range and
+        // share one verdict.
+        let mut keys: Vec<(u32, u32)> = matchers
+            .iter()
+            .flat_map(|m| m.nonempty.keys().copied())
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        let mut hits = keys
+            .iter()
+            .filter(|k| matchers.iter().all(|m| m.test(**k)))
+            .count() as u64;
+        if matchers.iter().all(|m| m.empty_ok) {
+            hits += first.cell_count() - keys.len() as u64;
+        }
+        Ok(Value::Number(hits as f64))
+    })
+}
+
+fn averageifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
+    let mut a = Args::new(ctx, args);
+    run(|| {
+        if a.count() < 3 || a.count() % 2 != 1 {
+            return Err(ErrorKind::MissingVariable2);
+        }
+        let target = a.range(0)?;
+        let matchers = criteria_pairs(&mut a, 1, target.rows(), target.cols())?;
+        let acc = accumulate(a.ctx(), &target, &matchers)?;
+        if acc.count() == 0 {
+            return Err(ErrorKind::Div0);
+        }
+        Ok(Value::Number(acc.total() / acc.count() as f64))
+    })
+}
+
 /// Counts matching non-empty cells, plus all empty cells when the criterion
 /// matches blanks (`""`, `"="`, `"<>5"`, ...).
 fn countif(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
@@ -271,6 +371,8 @@ pub(super) fn register(r: &mut Registry) {
     r.register(COUNTIF);
     r.register(COUNTBLANK);
     r.register(AVERAGEIF);
+    r.register(COUNTIFS);
+    r.register(AVERAGEIFS);
 }
 
 #[cfg(test)]
@@ -405,6 +507,55 @@ mod tests {
         assert_eq!(
             call(&mut c, "COUNTBLANK", vec![EvalValue::number(1.0)]),
             err(ErrorKind::Value)
+        );
+    }
+
+    #[test]
+    fn countifs_averageifs() {
+        let mut c = grid();
+        let a = c.range(0, "A1:A6");
+        let b = c.range(0, "B1:B6");
+        assert_eq!(
+            call(
+                &mut c,
+                "COUNTIFS",
+                vec![a.clone(), t(">0"), b.clone(), t(">=30")]
+            ),
+            num(2.0)
+        );
+        assert_eq!(call(&mut c, "COUNTIFS", vec![a.clone(), t("")]), num(1.0));
+        assert_eq!(
+            call(
+                &mut c,
+                "COUNTIFS",
+                vec![a.clone(), t(""), b.clone(), t(">=50")]
+            ),
+            num(1.0)
+        );
+        let short = c.range(0, "A1:A5");
+        assert_eq!(
+            call(&mut c, "COUNTIFS", vec![a.clone(), t(">0"), short, t(">0")]),
+            err(ErrorKind::Value)
+        );
+        assert_eq!(
+            call(&mut c, "COUNTIFS", vec![a.clone()]),
+            err(ErrorKind::MissingVariable2)
+        );
+        assert_eq!(
+            call(&mut c, "COUNTIFS", vec![a.clone(), t(">0"), b.clone()]),
+            err(ErrorKind::MissingVariable2)
+        );
+        assert_eq!(
+            call(&mut c, "AVERAGEIFS", vec![b.clone(), a.clone(), t(">0")]),
+            num(100.0 / 3.0)
+        );
+        assert_eq!(
+            call(&mut c, "AVERAGEIFS", vec![b.clone(), a.clone(), t(">100")]),
+            err(ErrorKind::Div0)
+        );
+        assert_eq!(
+            call(&mut c, "AVERAGEIFS", vec![b.clone(), a]),
+            err(ErrorKind::MissingVariable2)
         );
     }
 }

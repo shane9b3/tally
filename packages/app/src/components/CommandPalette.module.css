@@ -6,7 +6,7 @@
   justify-content: center;
   align-items: flex-start;
   padding-top: 14vh;
-  background: rgba(17, 24, 39, 0.12);
+  background: var(--tally-scrim);
   animation: fade 120ms ease-out;
 }
 
@@ -23,8 +23,7 @@
   border: 1px solid var(--tally-border-subtle);
   border-radius: 14px;
   box-shadow:
-    0 24px 60px rgba(0, 0, 0, 0.18),
-    0 2px 8px rgba(0, 0, 0, 0.06);
+    var(--tally-shadow-palette);
   animation: rise 140ms ease-out;
 }
 
@@ -57,12 +56,12 @@
 }
 
 .input::placeholder {
-  color: #9ca3af;
+  color: var(--tally-text-disabled);
 }
 
 .esc {
   padding: 1px 6px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--tally-border-subtle);
   border-radius: 5px;
   color: var(--tally-text-muted);
   font: inherit;
@@ -110,7 +109,7 @@
 }
 
 .item[data-disabled="true"] {
-  color: #9ca3af;
+  color: var(--tally-text-disabled);
 }
 
 .title {
@@ -122,7 +121,7 @@
 }
 
 .reason {
-  color: #9ca3af;
+  color: var(--tally-text-disabled);
   font-size: 12px;
 }
 
@@ -189,7 +188,7 @@
 .fn {
   width: 96px;
   flex: none;
-  color: var(--tally-accent-hover);
+  color: var(--tally-accent-text);
 }
 
 .fnDesc {

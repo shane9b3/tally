@@ -1,0 +1,99 @@
+[[case]]
+name = "by name"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;"Weight";G1:G2)'
+expect = 14.142135623730951
+tol = 1e-9
+
+[[case]]
+name = "by index"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;5;G1:G2)'
+expect = 14.142135623730951
+tol = 1e-9
+
+[[case]]
+name = "and across columns"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;"Weight";H1:I2)'
+expect = 5.0
+tol = 1e-9
+
+[[case]]
+name = "or rows"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;"Distance";K1:K3)'
+expect = 4.109609335312651
+tol = 1e-9
+
+[[case]]
+name = "same column twice (or rows)"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;"Age";W1:W3)'
+expect = 2.9107081994288304
+tol = 1e-9
+
+[[case]]
+name = "case-insensitive field"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;"wEiGhT";G1:G2)'
+expect = 14.142135623730951
+tol = 1e-9
+
+[[case]]
+name = "field is header ref"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;D1;Q1:Q2)'
+expect = 0.0
+tol = 1e-9
+
+[[case]]
+name = "all rows header-only criteria"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;"Grade";M1:M1)'
+expect = 1.5
+tol = 1e-9
+
+[[case]]
+name = "unknown field"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;"Nope";G1:G2)'
+expect = "Err:502"
+
+[[case]]
+name = "index out of range"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;9;G1:G2)'
+expect = "Err:502"
+
+[[case]]
+name = "no matching record"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;"Weight";O1:O2)'
+expect = "#DIV/0!"
+
+[[case]]
+name = "unmatched criteria header ignored"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;"Weight";U1:U2)'
+expect = 32.49615361854384
+tol = 1e-9
+
+[[case]]
+name = "field zero rejected"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;0;G1:G2)'
+expect = "Err:502"
+
+[[case]]
+name = "error in field argument"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;1/0;G1:G2)'
+expect = "#DIV/0!"
+
+[[case]]
+name = "missing args"
+cells = { A1 = "Name", B1 = "Grade", C1 = "Age", D1 = "Distance", E1 = "Weight", A2 = "Frank", B2 = 1, C2 = 12, D2 = 4, E2 = 40, A3 = "Bernd", B3 = 2, C3 = 14, D3 = 5, E3 = 50, A4 = "Andrew", B4 = 2, C4 = 14, D4 = 6, E4 = 60, A5 = "Carl", B5 = 3, C5 = 15, D5 = 8, E5 = 80, A6 = "Dora", B6 = 3, C6 = 16, D6 = 9, E6 = 90, A7 = "Erik", B7 = 4, C7 = 17, D7 = 10, E7 = 100, A8 = "Fay", B8 = 4, C8 = 18, D8 = 10, E8 = 110, A9 = "Gus", B9 = 5, C9 = 19, D9 = 12, E9 = 120, A10 = "Hal", B10 = 5, C10 = 20, D10 = 13, E10 = 130, A11 = "Ivy", B11 = 6, C11 = 21, D11 = 14, E11 = 140, G1 = "Age", G2 = ">=17", H1 = "Age", H2 = ">=17", I1 = "Grade", I2 = "<5", K1 = "Name", K2 = "F*", K3 = "Ivy", M1 = "Name", O1 = "Age", O2 = ">100", Q1 = "Name", Q2 = "Carl", S1 = "Age", S2 = 14, U1 = "Bogus", U2 = "x", W1 = "Age", W2 = ">=17", W3 = "<13" }
+formula = '=DSTDEVP(A1:E11;"Weight")'
+expect = "Err:511"
+

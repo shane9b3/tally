@@ -1,0 +1,44 @@
+[[case]]
+formula = "=TIMEVALUE(\"12:00\")"
+expect = 0.5
+
+[[case]]
+formula = "=TIMEVALUE(\"00:00:30\")"
+expect = 0.00034722222222222224
+tol = 1e-12
+
+[[case]]
+formula = "=TIMEVALUE(\"2026-10-19 18:00\")"
+expect = 0.75
+
+[[case]]
+formula = "=TIMEVALUE(\"2026-10-19\")"
+expect = 0
+note = "A date has no time part."
+
+[[case]]
+formula = "=TIMEVALUE(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=TIMEVALUE(\"42\")"
+expect = "Err:502"
+note = "Not a time."
+
+[[case]]
+formula = "=TIMEVALUE(\"\")"
+expect = "Err:502"
+
+[[case]]
+cells = { A1 = { text = "12:00" } }
+formula = "=TIMEVALUE(A1)"
+expect = 0.5
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=TIMEVALUE(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=TIMEVALUE()"
+expect = "Err:511"

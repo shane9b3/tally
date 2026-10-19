@@ -1,0 +1,54 @@
+# ZGZ conformance vectors. Ported AOO 4.1 semantics (interpr2.cxx). Equivalent rate of return (Excel RRI).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel RRI reference"
+formula = "=ZGZ(96;10000;11000)"
+expect = 0.0009933073762913
+tol = 1e-15
+
+[[case]]
+formula = "=ZGZ(1;100;110)"
+expect = 0.1
+tol = 1e-15
+
+[[case]]
+formula = "=ZGZ(2;100;121)"
+expect = 0.1
+tol = 1e-15
+
+[[case]]
+name = "zero periods"
+formula = "=ZGZ(0;100;110)"
+expect = "#NUM!"
+
+[[case]]
+name = "zero pv"
+formula = "=ZGZ(1;0;110)"
+expect = "#NUM!"
+
+[[case]]
+name = "negative ratio with even root"
+formula = "=ZGZ(2;100;-121)"
+expect = "#NUM!"
+
+[[case]]
+name = "non-numeric text"
+formula = "=ZGZ(\"x\";100;121)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=ZGZ(A4;100;121)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=ZGZ(2;100)"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=ZGZ(2;100;121;1)"
+expect = "Err:504"

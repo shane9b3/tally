@@ -11,12 +11,12 @@
  * textarea. Every change goes through `invalidate()`, coalesced into one
  * requestAnimationFrame.
  */
-import type { CellPos, SheetLayout, StyleDto } from "@tally/bridge";
+import type { CellPos, CellView, RangeDto, SheetLayout, StyleDto } from "@tally/bridge";
 import { CellEditor } from "./editor";
 import { Geometry, HEADER_HEIGHT, MIN_ROW_HEADER_WIDTH } from "./geometry";
-import { Interaction, type InteractionHost } from "./interaction";
+import { Interaction, type InteractionHost, type ResizeGuide } from "./interaction";
 import { AxisModel, ScrollAxisMap, clamp } from "./layout";
-import { Renderer, headerFont, type FrameStats } from "./renderer";
+import { CELL_PADDING, Renderer, cellFont, headerFont, type FrameStats } from "./renderer";
 import { sameSelection, type Limits } from "./selection";
 import { TileTracker } from "./tiles";
 import { MAX_COLS, MAX_ROWS, type DirtySet, type GridProps, type Selection, type Viewport } from "./types";
@@ -67,8 +67,9 @@ export class Grid {
   private dirtyOverlay = true;
   private fontsReady = false;
   private destroyed = false;
-  private hoverGutter: number | null = null;
-  private resizeGuide: { c: number; x: number } | null = null;
+  private hoverGutter: { axis: "col" | "row"; index: number } | null = null;
+  private resizeGuide: ResizeGuide | null = null;
+  private fillPreview: RangeDto | null = null;
 
   /** Recent frame durations (ms between rAF callbacks while drawing). */
   private readonly frameTimes: number[] = [];
@@ -111,7 +112,8 @@ export class Grid {
     Object.assign(spacer.style, { width: "1px", height: "1px", pointerEvents: "none" });
     scroller.appendChild(spacer);
     this.editor = new CellEditor(doc);
-    root.append(main, overlay, scroller, this.editor.el);
+    root.append(main, overlay, scroller);
+    this.editor.mount(root);
     container.appendChild(root);
     this.root = root;
     this.scroller = scroller;
@@ -137,16 +139,27 @@ export class Grid {
       events: () => self.props,
       select: (sel, o) => self.applySelection(sel, o.emit, o.reveal),
       scrollBy: (dx, dy) => self.setContentOffset(self.contentX + dx, self.contentY + dy),
+      reveal: (cell) => self.scrollCellIntoView(cell),
       previewColWidth: (start, end, px) => {
         self.cols.setSize(start, end, px);
         self.relayout();
       },
-      setHoverGutter: (c) => {
-        if (c !== self.hoverGutter) {
-          self.hoverGutter = c;
+      previewRowHeight: (start, end, px) => {
+        self.rows.setSize(start, end, px);
+        self.relayout();
+      },
+      setHoverGutter: (g) => {
+        const cur = self.hoverGutter;
+        if (g?.axis !== cur?.axis || g?.index !== cur?.index) {
+          self.hoverGutter = g;
           self.invalidate("overlay");
         }
       },
+      setFillPreview: (range) => {
+        self.fillPreview = range;
+        self.invalidate("overlay");
+      },
+      pointMode: () => (self.props.pointMode ?? false) && self.editor.open,
       setResizeGuide: (g) => {
         self.resizeGuide = g;
         self.invalidate("overlay");
@@ -216,9 +229,43 @@ export class Grid {
     if ("edit" in partial && partial.edit !== prev.edit) {
       const opened = this.editor.sync(this.props.edit, prev.edit);
       if (opened && this.props.edit) this.scrollCellIntoView(this.props.edit.cell);
+      if (!this.props.edit) this.interaction.resetPoint();
       this.layoutEditor();
       this.invalidate("overlay");
     }
+    if ("pointMode" in partial && !partial.pointMode && prev.pointMode) this.interaction.resetPoint();
+    if ("refHighlights" in partial && partial.refHighlights !== prev.refHighlights) this.invalidate("overlay");
+    if ("editHighlights" in partial && partial.editHighlights !== prev.editHighlights) {
+      this.editor.setHighlights(this.props.editHighlights ?? []);
+    }
+  }
+
+  /**
+   * Width (CSS px at zoom 100%) that fits the widest text in column `c`:
+   * the visible cells the source has, plus `extra` cells (e.g. fetched
+   * further down the column). `null` if there is no text.
+   */
+  measureColumnWidth(c: number, extra: readonly CellView[] = []): number | null {
+    const theme = this.props.theme;
+    const source = this.props.source;
+    const vis = this.geo.visibleRange();
+    let best = 0;
+    const consider = (cell: CellView | undefined): void => {
+      if (!cell || cell.text === "") return;
+      const style = source.getStyle(cell.style);
+      const w = this.renderer.measurer.measure(cellFont(style, theme, 1), cell.text);
+      const chip = style?.display?.type === "chip" ? 16 + 8 : 0;
+      best = Math.max(best, w + chip);
+    };
+    for (let r = vis.r0; r <= vis.r1; r++) consider(source.getCell(r, c));
+    for (const cell of extra) if (cell.c === c) consider(cell);
+    if (best === 0) return null;
+    return Math.ceil(best + 2 * CELL_PADDING + 6);
+  }
+
+  /** The in-cell editor's client rect while it is open (popups anchor to it). */
+  editorRect(): DOMRect | null {
+    return this.editor.open ? this.editor.el.getBoundingClientRect() : null;
   }
 
   /** Shows a selection without emitting `onSelectionChange`. */
@@ -508,6 +555,8 @@ export class Grid {
         editing: this.editor.open,
         hoverGutter: this.hoverGutter,
         resizeGuide: this.resizeGuide,
+        fillPreview: this.fillPreview,
+        refHighlights: this.editor.open ? (this.props.refHighlights ?? []) : [],
       });
       this.layoutEditor();
     }

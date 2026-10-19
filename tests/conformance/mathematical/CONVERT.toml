@@ -1,0 +1,67 @@
+# CONVERT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=CONVERT(1;\"EUR\";\"DEM\")"
+expect = 1.95583
+
+[[case]]
+formula = "=CONVERT(1.95583;\"DEM\";\"EUR\")"
+expect = 1
+
+[[case]]
+formula = "=CONVERT(100;\"DEM\";\"FRF\")"
+expect = "#N/A"
+note = "AOO ScConvert: the configuration table only has EUR -> currency pairs (and their reciprocal); no triangulation. First draft expected 335.385..."
+
+[[case]]
+formula = "=CONVERT(1;\"EUR\";\"ITL\")"
+expect = 1936.27
+
+[[case]]
+formula = "=CONVERT(5;\"EUR\";\"EUR\")"
+expect = "#N/A"
+note = "No EUR -> EUR entry in the configuration table."
+
+[[case]]
+formula = "=CONVERT(0;\"EUR\";\"DEM\")"
+expect = 0
+
+[[case]]
+formula = "=CONVERT(1;\"eur\";\"DEM\")"
+expect = "#N/A"
+note = "Codes are case-sensitive (ScUnitConverterData::BuildIndexString); a pair not in the table is #N/A (ScConvert PushNA)."
+
+[[case]]
+formula = "=CONVERT(1;\"EUR\";\"XXX\")"
+expect = "#N/A"
+
+[[case]]
+formula = "=CONVERT(\"x\";\"EUR\";\"DEM\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty value"
+formula = "=CONVERT(A1;\"EUR\";\"DEM\")"
+expect = 0
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=CONVERT(A1;\"EUR\";\"DEM\")"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=CONVERT(1;\"EUR\")"
+expect = "Err:511"
+
+[[case]]
+formula = "=CONVERT(1;\"EUR\";\"DEM\";1)"
+expect = "Err:504"
+
+[[case]]
+formula = "=CONVERT(-2;\"EUR\";\"ATS\")"
+expect = -27.5206
+
+[[case]]
+name = "empty unit"
+formula = "=CONVERT(1;\"EUR\";\"\")"
+expect = "#N/A"

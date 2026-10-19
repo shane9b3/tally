@@ -1,0 +1,61 @@
+# CUMPRINC_ADD conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx). Registered under the programmatic ODF name; plain CUMPRINC means the built-in.
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=CUMPRINC_ADD(0.09/12;30*12;125000;13;24;0)"
+expect = -934.1071234
+tol = 1e-06
+
+[[case]]
+name = "advance"
+formula = "=CUMPRINC_ADD(0.09/12;30*12;125000;13;24;1)"
+expect = -927.153472378043
+tol = 1e-09
+
+[[case]]
+name = "first period"
+formula = "=CUMPRINC_ADD(0.09/12;360;125000;1;1;0)"
+expect = -68.2782711809768
+tol = 1e-09
+
+[[case]]
+name = "agrees with the built-in"
+formula = "=CUMPRINC_ADD(0.09/12;360;125000;13;24;0)-CUMPRINC(0.09/12;360;125000;13;24;0)"
+expect = 0
+tol = 1e-06
+
+[[case]]
+name = "type must be 0 or 1"
+formula = "=CUMPRINC_ADD(0.09/12;360;125000;13;24;2)"
+expect = "Err:502"
+
+[[case]]
+name = "rate must be positive"
+formula = "=CUMPRINC_ADD(0;360;125000;13;24;0)"
+expect = "Err:502"
+
+[[case]]
+name = "end before start"
+formula = "=CUMPRINC_ADD(0.01;360;125000;25;24;0)"
+expect = "Err:502"
+
+[[case]]
+name = "end beyond nper"
+formula = "=CUMPRINC_ADD(0.01;360;125000;1;361;0)"
+expect = "Err:502"
+
+[[case]]
+name = "pv must be positive"
+formula = "=CUMPRINC_ADD(0.01;360;0;1;12;0)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=CUMPRINC_ADD(\"x\";360;125000;1;12;0)"
+expect = "#VALUE!"
+
+[[case]]
+name = "too few arguments"
+formula = "=CUMPRINC_ADD(0.01;360;125000;1;12)"
+expect = "Err:511"

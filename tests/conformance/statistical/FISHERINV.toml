@@ -1,0 +1,56 @@
+# FISHERINV conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=FISHERINV(0)"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+formula = "=FISHERINV(0.9729550745276566)"
+expect = 0.75
+tol = 1e-12
+
+[[case]]
+formula = "=FISHERINV(1)"
+expect = 0.7615941559557649
+tol = 1e-12
+
+[[case]]
+formula = "=FISHERINV(-1)"
+expect = -0.7615941559557649
+tol = 1e-12
+
+[[case]]
+formula = "=FISHERINV(0.5)"
+expect = 0.46211715726000974
+tol = 1e-12
+
+[[case]]
+formula = "=FISHERINV(10)"
+expect = 0.9999999958776927
+tol = 1e-12
+
+[[case]]
+formula = "=FISHERINV(-30)"
+expect = -1.0
+tol = 1e-12
+
+[[case]]
+name = "empty cell is 0"
+formula = "=FISHERINV(A1)"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+formula = "=FISHERINV(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=NA()" }
+formula = "=FISHERINV(A1)"
+expect = "#N/A"
+
+[[case]]
+formula = "=FISHERINV()"
+expect = "Err:511"

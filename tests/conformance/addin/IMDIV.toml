@@ -1,0 +1,48 @@
+# IMDIV conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMDIV(\"-238+240i\";\"10+24i\")"
+expect = "5+12i"
+
+[[case]]
+formula = "=IMDIV(\"1\";\"1\")"
+expect = "1"
+
+[[case]]
+formula = "=IMDIV(\"6\";\"3\")"
+expect = "2"
+
+[[case]]
+formula = "=IMDIV(\"i\";\"i\")"
+expect = "1"
+
+[[case]]
+formula = "=IMDIV(\"1\";\"0\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMDIV(\"1\";\"i\")"
+expect = "-i"
+
+[[case]]
+formula = "=IMDIV(\"1+2i\";\"3+4j\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMDIV(\"x\";\"1\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMDIV(\"1\")"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMDIV(A1;\"1\")"
+expect = "#DIV/0!"
+
+[[case]]
+name = "numbers"
+formula = "=IMDIV(10;4)"
+expect = "2.5"
+

@@ -1,0 +1,53 @@
+# SLN conformance vectors. Ported AOO 4.1 semantics (interpr2.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=SLN(30000;7500;10)"
+expect = 2250
+
+[[case]]
+formula = "=SLN(10000;1000;3)"
+expect = 3000
+
+[[case]]
+name = "salvage above cost"
+formula = "=SLN(10000;12000;4)"
+expect = -500
+
+[[case]]
+name = "zero life"
+formula = "=SLN(10000;1000;0)"
+expect = "#NUM!"
+
+[[case]]
+name = "empty salvage"
+formula = "=SLN(10000;A5;4)"
+expect = 2500
+
+[[case]]
+name = "boolean life"
+cells = { A1 = true }
+formula = "=SLN(10000;1000;A1)"
+expect = 9000
+
+[[case]]
+name = "non-numeric text"
+formula = "=SLN(\"x\";1000;3)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=SLN(A4;1000;3)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=SLN(10000;1000)"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=SLN(10000;1000;3;1)"
+expect = "Err:504"

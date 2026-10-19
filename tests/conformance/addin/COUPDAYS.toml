@@ -1,0 +1,106 @@
+# COUPDAYS conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);2;1)"
+expect = 181
+
+[[case]]
+name = "ISO date text"
+formula = "=COUPDAYS(\"2007-01-25\";\"2008-11-15\";2;1)"
+expect = 181
+
+[[case]]
+name = "basis omitted (30/360)"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);2)"
+expect = 180
+
+[[case]]
+name = "annual"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);1;1)"
+expect = 365
+
+[[case]]
+name = "quarterly"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);4;3)"
+expect = 91.25
+tol = 1e-09
+
+[[case]]
+name = "end-of-month maturity, 30/360"
+formula = "=COUPDAYS(DATE(2008;2;29);DATE(2010;8;31);2;0)"
+expect = 180
+
+[[case]]
+name = "end-of-month maturity, actual"
+formula = "=COUPDAYS(DATE(2008;2;29);DATE(2010;8;31);2;1)"
+expect = 184
+
+[[case]]
+name = "basis 0"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);2;0)"
+expect = 180
+
+[[case]]
+name = "basis 1"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);2;1)"
+expect = 181
+
+[[case]]
+name = "basis 2"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);2;2)"
+expect = 180
+
+[[case]]
+name = "basis 3"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);2;3)"
+expect = 182.5
+tol = 1e-09
+
+[[case]]
+name = "basis 4"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);2;4)"
+expect = 180
+
+[[case]]
+name = "basis 5 is illegal"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);2;5)"
+expect = "Err:502"
+
+[[case]]
+name = "empty text basis takes the default"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);2;\"\")"
+expect = 180
+tol = 1e-09
+
+[[case]]
+name = "non-numeric text basis"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);2;\"x\")"
+expect = "Err:502"
+
+[[case]]
+name = "frequency must be 1, 2 or 4"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15);3;1)"
+expect = "Err:502"
+
+[[case]]
+name = "settlement after maturity"
+formula = "=COUPDAYS(DATE(2008;11;15);DATE(2007;1;25);2;1)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=COUPDAYS(\"x\";DATE(2008;11;15);2;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=COUPDAYS(A4;DATE(2008;11;15);2;1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=COUPDAYS(DATE(2007;1;25);DATE(2008;11;15))"
+expect = "Err:511"

@@ -5,10 +5,17 @@
 //! simply placed at the new address) and carries the styles. Only the last
 //! snapshot is kept.
 
-use tally_model::StyleData;
-use tally_types::{CellAddr, CellRange};
+use std::sync::Arc;
 
-use crate::storage::{ColumnStore, StyleId};
+use tally_api::{ApiError, PasteOperation, PasteOptions, PastePayload};
+use tally_model::{CellRangeLocal, StyleData};
+use tally_types::{CellAddr, CellRange, ErrorKind, SheetId, Value, MAX_COLS, MAX_ROWS};
+
+use crate::ops::{block_range, check_array_blocks, check_merges, write_inputs, MAX_OP_CELLS};
+use crate::storage::{CellContent, ColumnStore, StyleId};
+use crate::undo::{
+    capture_range, clear_range_content, clear_range_styles, sheet_meta, Change, Effects,
+};
 use crate::workbook::{Rng, SnapContent, Workbook};
 
 /// A copied block.
@@ -20,10 +27,28 @@ pub struct ClipSnapshot {
     pub rows: u32,
     /// Columns of the block.
     pub cols: u32,
-    /// Non-empty or styled cells: `(row offset, col offset, content, style index)`.
-    pub cells: Vec<(u32, u32, Option<SnapContent>, Option<usize>)>,
+    /// Non-empty or styled cells.
+    pub cells: Vec<ClipCell>,
     /// Styles referenced by `cells`.
     pub styles: Vec<StyleData>,
+    /// Merged areas inside the block, relative to its top-left.
+    pub merges: Vec<CellRangeLocal>,
+}
+
+/// One copied cell.
+#[derive(Clone, Debug)]
+pub struct ClipCell {
+    /// Row offset.
+    pub dr: u32,
+    /// Column offset.
+    pub dc: u32,
+    /// Content (formulas relative; array anchors whose block was copied
+    /// whole keep the block; other array cells become their values).
+    pub content: Option<SnapContent>,
+    /// Index into [`ClipSnapshot::styles`].
+    pub style: Option<usize>,
+    /// The value at copy time (for "values only").
+    pub value: Value,
 }
 
 /// Copies `range` of `wb`. Returns the snapshot and its TSV/HTML text.
@@ -53,7 +78,13 @@ pub fn copy_range(
             rows.dedup();
             for r in rows {
                 let addr = CellAddr::new(range.sheet, r, c);
-                let content = wb.snapshot_content(addr);
+                let value = wb.value(addr);
+                let content = match wb.array_at(addr) {
+                    Some((_, f)) if f.array_range().is_some_and(|b| !range.contains_range(&b)) => {
+                        (!value.is_empty()).then(|| SnapContent::Value(value.clone()))
+                    }
+                    _ => wb.snapshot_content(addr),
+                };
                 let st = col.styles.get(r);
                 let si = (st != StyleId::DEFAULT).then(|| {
                     if let Some((_, i)) = style_idx.iter().find(|(s, _)| *s == st) {
@@ -64,10 +95,34 @@ pub fn copy_range(
                         styles.len() - 1
                     }
                 });
-                cells.push((r - range.r0, c - range.c0, content, si));
+                cells.push(ClipCell {
+                    dr: r - range.r0,
+                    dc: c - range.c0,
+                    content,
+                    style: si,
+                    value,
+                });
             }
         }
     }
+    let merges = wb
+        .sheet(range.sheet)
+        .map(|s| {
+            s.meta
+                .merges
+                .iter()
+                .filter(|m| {
+                    range.r0 <= m.r0 && m.r1 <= range.r1 && range.c0 <= m.c0 && m.c1 <= range.c1
+                })
+                .map(|m| CellRangeLocal {
+                    r0: m.r0 - range.r0,
+                    c0: m.c0 - range.c0,
+                    r1: m.r1 - range.r0,
+                    c1: m.c1 - range.c0,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let tsv = render_tsv(wb, range);
     let html = render_html(wb, range, &token);
     (
@@ -77,6 +132,7 @@ pub fn copy_range(
             cols: range.cols(),
             cells,
             styles,
+            merges,
         },
         tsv,
         html,
@@ -142,6 +198,295 @@ fn render_html(wb: &Workbook, range: CellRange, token: &str) -> String {
     }
     out.push_str("</table>");
     out
+}
+
+/// Pastes `payload` at `target` (the top-left, or a multiple of the block
+/// size to tile) with `opts`. TSV supports `values_only` (`=…` stays text),
+/// `transpose` and `skip_empty`; internal payloads support every option.
+pub fn paste(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    target: CellRange,
+    payload: &PastePayload,
+    opts: &PasteOptions,
+    clip: Option<&ClipSnapshot>,
+    fx: &mut Effects,
+) -> Result<Vec<Change>, ApiError> {
+    match payload {
+        PastePayload::Tsv { text } => {
+            let mut rows = parse_tsv(text);
+            if rows.is_empty() {
+                return Ok(Vec::new());
+            }
+            if opts.transpose {
+                rows = transpose_rows(&rows);
+            }
+            let range = block_range(sheet, target.r0, target.c0, &rows)?;
+            check_array_blocks(wb, &[range])?;
+            let inv = capture_range(wb, range, true, true);
+            if opts.skip_empty {
+                for (dr, row) in rows.iter().enumerate() {
+                    for (dc, field) in row.iter().enumerate() {
+                        if field.is_empty() {
+                            continue;
+                        }
+                        write_inputs(
+                            wb,
+                            sheet,
+                            target.r0 + dr as u32,
+                            target.c0 + dc as u32,
+                            &[vec![field.clone()]],
+                            opts.values_only,
+                        );
+                    }
+                }
+            } else {
+                write_inputs(wb, sheet, target.r0, target.c0, &rows, opts.values_only);
+            }
+            Ok(vec![Change::Range(inv)])
+        }
+        PastePayload::Internal { token } => {
+            let clip = clip
+                .filter(|c| c.token == *token)
+                .ok_or_else(|| ApiError::not_found("the clipboard token is no longer valid"))?;
+            paste_internal(wb, sheet, target, clip, opts, fx)
+        }
+    }
+}
+
+fn transpose_rows(rows: &[Vec<String>]) -> Vec<Vec<String>> {
+    let w = rows.iter().map(Vec::len).max().unwrap_or(0);
+    (0..w)
+        .map(|c| {
+            rows.iter()
+                .map(|r| r.get(c).cloned().unwrap_or_default())
+                .collect()
+        })
+        .collect()
+}
+
+fn number_of(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => Some(*n),
+        Value::Bool(b) => Some(f64::from(u8::from(*b))),
+        Value::Empty => Some(0.0),
+        _ => None,
+    }
+}
+
+fn combine(op: PasteOperation, t: f64, s: f64) -> Value {
+    let r = match op {
+        PasteOperation::None => s,
+        PasteOperation::Add => t + s,
+        PasteOperation::Subtract => t - s,
+        PasteOperation::Multiply => t * s,
+        PasteOperation::Divide => {
+            if s == 0.0 {
+                return Value::Error(ErrorKind::Div0);
+            }
+            t / s
+        }
+    };
+    if r.is_finite() {
+        Value::Number(r)
+    } else {
+        Value::Error(ErrorKind::Num)
+    }
+}
+
+fn op_symbol(op: PasteOperation) -> &'static str {
+    match op {
+        PasteOperation::None => "",
+        PasteOperation::Add => "+",
+        PasteOperation::Subtract => "-",
+        PasteOperation::Multiply => "*",
+        PasteOperation::Divide => "/",
+    }
+}
+
+/// Internal paste: formulas re-anchored (the AST is relative), styles and
+/// merges carried, with the paste-special options.
+pub fn paste_internal(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    target: CellRange,
+    clip: &ClipSnapshot,
+    opts: &PasteOptions,
+    fx: &mut Effects,
+) -> Result<Vec<Change>, ApiError> {
+    let (crows, ccols) = (clip.rows.max(1), clip.cols.max(1));
+    let (rows, cols) = if opts.transpose {
+        (ccols, crows)
+    } else {
+        (crows, ccols)
+    };
+    let reps_r = if target.rows().is_multiple_of(rows) {
+        target.rows() / rows
+    } else {
+        1
+    };
+    let reps_c = if target.cols().is_multiple_of(cols) {
+        target.cols() / cols
+    } else {
+        1
+    };
+    let total = u64::from(rows) * u64::from(cols) * u64::from(reps_r) * u64::from(reps_c);
+    if total > MAX_OP_CELLS {
+        return Err(ApiError::invalid_argument("paste area is too large"));
+    }
+    let r1 =
+        (u64::from(target.r0) + u64::from(rows * reps_r) - 1).min(u64::from(MAX_ROWS - 1)) as u32;
+    let c1 =
+        (u64::from(target.c0) + u64::from(cols * reps_c) - 1).min(u64::from(MAX_COLS - 1)) as u32;
+    let area = CellRange::new(sheet, target.r0, target.c0, r1, c1);
+    let contents = !opts.formats_only;
+    let formats = !opts.values_only;
+    if contents {
+        check_array_blocks(wb, &[area])?;
+    }
+    // Merges are carried unless pasting values only.
+    let carry_merges = formats && (!clip.merges.is_empty() || area_has_merges(wb, &area));
+    if carry_merges {
+        check_merges(wb, &area)?;
+    }
+    let mut changes = Vec::new();
+    if carry_merges {
+        changes.extend(sheet_meta(wb, sheet));
+    }
+    changes.push(Change::Range(capture_range(wb, area, contents, formats)));
+    let place = |dr: u32, dc: u32| if opts.transpose { (dc, dr) } else { (dr, dc) };
+    // Target values before the paste (for arithmetic).
+    let arithmetic = opts.operation != PasteOperation::None && contents;
+    let mut writes: Vec<(CellAddr, &ClipCell)> = Vec::new();
+    for rr in 0..reps_r {
+        for rc in 0..reps_c {
+            for cell in &clip.cells {
+                let (dr, dc) = place(cell.dr, cell.dc);
+                let row = u64::from(target.r0) + u64::from(rr * rows + dr);
+                let col = u64::from(target.c0) + u64::from(rc * cols + dc);
+                if row > u64::from(r1) || col > u64::from(c1) {
+                    continue;
+                }
+                writes.push((CellAddr::new(sheet, row as u32, col as u32), cell));
+            }
+        }
+    }
+    if contents && !opts.skip_empty && !arithmetic {
+        clear_range_content(wb, area);
+    }
+    if formats && !opts.skip_empty {
+        clear_range_styles(wb, area);
+    }
+    if carry_merges {
+        if let Some(s) = wb.sheet_mut(sheet) {
+            s.meta.merges.retain(|m| {
+                !(area.r0 <= m.r0 && m.r1 <= area.r1 && area.c0 <= m.c0 && m.c1 <= area.c1)
+            });
+            for rr in 0..reps_r {
+                for rc in 0..reps_c {
+                    for m in &clip.merges {
+                        let (a0, b0) = place(m.r0, m.c0);
+                        let (a1, b1) = place(m.r1, m.c1);
+                        let n = CellRangeLocal {
+                            r0: target.r0 + rr * rows + a0,
+                            c0: target.c0 + rc * cols + b0,
+                            r1: target.r0 + rr * rows + a1,
+                            c1: target.c0 + rc * cols + b1,
+                        };
+                        if n.r1 <= area.r1 && n.c1 <= area.c1 {
+                            s.meta.merges.push(n);
+                        }
+                    }
+                }
+            }
+        }
+        fx.layout(sheet);
+    }
+    let style_ids: Vec<StyleId> = clip
+        .styles
+        .iter()
+        .map(|s| wb.styles.intern(s.clone()))
+        .collect();
+    for (addr, cell) in writes {
+        let source_empty = cell.value.is_empty() && cell.content.is_none();
+        if contents && !(opts.skip_empty && source_empty) {
+            if arithmetic {
+                paste_arithmetic(wb, addr, cell, opts.operation);
+            } else if opts.values_only || (opts.transpose && is_array(&cell.content)) {
+                // The area was cleared (or empty sources are skipped).
+                if !cell.value.is_empty() {
+                    wb.set_value(addr, cell.value.clone());
+                }
+            } else if let Some(content) = &cell.content {
+                wb.restore_content(addr, Some(content.clone()));
+            }
+        }
+        if formats {
+            if let Some(st) = cell.style.and_then(|i| style_ids.get(i)) {
+                if let Some(c) = wb.sheet_mut(sheet).and_then(|s| s.column_mut(addr.col)) {
+                    c.styles.set(addr.row, addr.row, *st);
+                }
+            }
+        }
+    }
+    wb.pending.ranges.push(area);
+    Ok(changes)
+}
+
+fn is_array(c: &Option<SnapContent>) -> bool {
+    matches!(c, Some(SnapContent::Formula { array: Some(_), .. }))
+}
+
+fn area_has_merges(wb: &Workbook, area: &CellRange) -> bool {
+    wb.sheet(area.sheet).is_some_and(|s| {
+        s.meta
+            .merges
+            .iter()
+            .any(|m| CellRange::new(area.sheet, m.r0, m.c0, m.r1, m.c1).intersects(area))
+    })
+}
+
+/// Combines a pasted cell with the target (Paste Special › Operations).
+/// Empty sources leave the target alone; a numeric source combines with a
+/// number (or empty) target, and with a formula target as
+/// `=(formula) op source`; text targets are kept; non-numeric sources
+/// replace the target.
+fn paste_arithmetic(wb: &mut Workbook, addr: CellAddr, cell: &ClipCell, op: PasteOperation) {
+    if cell.value.is_empty() {
+        return;
+    }
+    let Some(s) = number_of(&cell.value) else {
+        wb.set_value(addr, cell.value.clone());
+        return;
+    };
+    let is_formula = matches!(
+        wb.sheet(addr.sheet)
+            .and_then(|sh| sh.get(addr.row, addr.col)),
+        Some(CellContent::Formula(_))
+    );
+    if is_formula {
+        let Some((id, f)) = wb.formula_at(addr) else {
+            return;
+        };
+        if f.invalid_text.is_some() || f.array.is_some() {
+            return;
+        }
+        let Some(text) = wb.formula_text(id) else {
+            return;
+        };
+        let body = text.strip_prefix('=').unwrap_or(&text);
+        let num = tally_numfmt::general_string(s, None, &tally_numfmt::EN_US);
+        let new = format!("=({body}){}{num}", op_symbol(op));
+        if let Ok(nf) = wb.parse_formula(&new, addr) {
+            wb.set_formula(addr, Arc::new(nf), None);
+        }
+        return;
+    }
+    let t = wb.value(addr);
+    // Text targets are kept.
+    if let Some(tn) = number_of(&t) {
+        wb.set_value(addr, combine(op, tn, s));
+    }
 }
 
 /// Splits TSV text into rows of fields (`\r\n` or `\n`; a trailing newline

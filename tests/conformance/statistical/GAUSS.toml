@@ -1,0 +1,66 @@
+# GAUSS conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=GAUSS(0)"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+formula = "=GAUSS(1)"
+expect = 0.3413447460685429
+tol = 1e-15
+
+[[case]]
+formula = "=GAUSS(-1)"
+expect = -0.3413447460685429
+tol = 1e-15
+
+[[case]]
+formula = "=GAUSS(2)"
+expect = 0.4772498680518208
+tol = 1e-15
+
+[[case]]
+formula = "=GAUSS(0.5)"
+expect = 0.19146246127401306
+tol = 1e-15
+
+[[case]]
+formula = "=GAUSS(3.5)"
+expect = 0.49976737092096446
+tol = 1e-15
+
+[[case]]
+formula = "=GAUSS(5)"
+expect = 0.49999971334842813
+tol = 1e-15
+
+[[case]]
+formula = "=GAUSS(7)"
+expect = 0.4999999999987202
+tol = 1e-15
+
+[[case]]
+formula = "=GAUSS(-2)"
+expect = -0.4772498680518208
+tol = 1e-15
+
+[[case]]
+name = "saturates at 0.5"
+formula = "=GAUSS(40)"
+expect = 0.5
+tol = 1e-15
+
+[[case]]
+formula = "=GAUSS(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=GAUSS(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=GAUSS()"
+expect = "Err:511"

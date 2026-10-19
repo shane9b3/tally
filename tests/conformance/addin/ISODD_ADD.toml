@@ -1,0 +1,42 @@
+# ISODD_ADD conformance vectors. Analysis add-in ISODD; the plain name is the built-in. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=ISODD_ADD(4)"
+expect = false
+
+[[case]]
+formula = "=ISODD_ADD(3)"
+expect = true
+
+[[case]]
+formula = "=ISODD_ADD(0)"
+expect = false
+
+[[case]]
+formula = "=ISODD_ADD(-4)"
+expect = false
+
+[[case]]
+formula = "=ISODD_ADD(-3)"
+expect = true
+
+[[case]]
+name = "truncated"
+formula = "=ISODD_ADD(2.9)"
+expect = false
+
+[[case]]
+formula = "=ISODD_ADD(1000001)"
+expect = true
+
+[[case]]
+formula = "=ISODD_ADD(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=ISODD_ADD()"
+expect = "Err:511"
+
+[[case]]
+formula = "=ISODD_ADD(1;2)"
+expect = "Err:504"

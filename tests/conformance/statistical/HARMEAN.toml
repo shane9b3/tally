@@ -1,0 +1,53 @@
+# HARMEAN conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=HARMEAN(2;3;6)"
+expect = 3.0
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 4, A2 = 5, A3 = 8, A4 = 7 }
+formula = "=HARMEAN(A1:A4)"
+expect = 5.5721393034825875
+tol = 1e-12
+
+[[case]]
+formula = "=HARMEAN(5)"
+expect = 5.0
+tol = 1e-12
+
+[[case]]
+formula = "=HARMEAN(1;1)"
+expect = 1.0
+tol = 1e-12
+
+[[case]]
+name = "text skipped"
+cells = { A1 = 1, A2 = "x", A3 = 2 }
+formula = "=HARMEAN(A1:A3)"
+expect = 1.3333333333333333
+tol = 1e-12
+
+[[case]]
+formula = "=HARMEAN(0;4)"
+expect = "Err:502"
+
+[[case]]
+formula = "=HARMEAN(-2;4)"
+expect = "Err:502"
+
+[[case]]
+name = "no numbers"
+cells = { A1 = "x" }
+formula = "=HARMEAN(A1:A2)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = 3, A2 = "=NA()" }
+formula = "=HARMEAN(A1:A2)"
+expect = "#N/A"
+
+[[case]]
+formula = "=HARMEAN()"
+expect = "Err:511"

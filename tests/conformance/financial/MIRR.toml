@@ -1,0 +1,60 @@
+# MIRR conformance vectors. Ported AOO 4.1 semantics (interpr2.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+cells = { A1 = -120000, A2 = 39000, A3 = 30000, A4 = 21000, A5 = 37000, A6 = 46000 }
+formula = "=MIRR(A1:A6;0.1;0.12)"
+expect = 0.12609413
+tol = 1e-09
+
+[[case]]
+name = "Excel reference, 3 years"
+cells = { A1 = -120000, A2 = 39000, A3 = 30000, A4 = 21000 }
+formula = "=MIRR(A1:A4;0.1;0.12)"
+expect = -0.048044655
+tol = 1e-09
+
+[[case]]
+name = "Excel reference, 14%"
+cells = { A1 = -120000, A2 = 39000, A3 = 30000, A4 = 21000, A5 = 37000, A6 = 46000 }
+formula = "=MIRR(A1:A6;0.1;0.14)"
+expect = 0.134759111
+tol = 1e-09
+
+[[case]]
+name = "inline array"
+formula = "=MIRR({-100;50;60};0.1;0.1)"
+expect = 0.0723805294763609
+tol = 1e-09
+aoo_expect = "Err:504"
+note = "AOO 4.1 accepts only references; Tally follows Excel/LibreOffice."
+
+[[case]]
+name = "text skipped"
+cells = { A1 = -100, A2 = "x", A3 = 50, A4 = 60 }
+formula = "=MIRR(A1:A4;0.1;0.1)"
+expect = 0.0723805294763609
+tol = 1e-09
+
+[[case]]
+name = "no investment"
+cells = { A1 = 100, A2 = 110 }
+formula = "=MIRR(A1:A2;0.1;0.1)"
+expect = "#NUM!"
+
+[[case]]
+name = "scalar is not a reference"
+formula = "=MIRR(5;0.1;0.1)"
+expect = "Err:504"
+
+[[case]]
+name = "error in range"
+cells = { A1 = -1, A2 = "=1/0" }
+formula = "=MIRR(A1:A2;0.1;0.1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=MIRR(A1:A2;0.1)"
+expect = "Err:511"

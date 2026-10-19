@@ -1,0 +1,49 @@
+# IMPRODUCT conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMPRODUCT(\"i\";\"i\")"
+expect = "-1"
+
+[[case]]
+formula = "=IMPRODUCT(\"3+4i\";\"5-3i\")"
+expect = "27+11i"
+
+[[case]]
+formula = "=IMPRODUCT(\"2\";\"3\";\"4\")"
+expect = "24"
+
+[[case]]
+formula = "=IMPRODUCT(\"1+i\")"
+expect = "1+i"
+
+[[case]]
+formula = "=IMPRODUCT(\"2j\";\"3\")"
+expect = "6j"
+
+[[case]]
+formula = "=IMPRODUCT(\"1+2i\";\"3+4j\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMPRODUCT(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMPRODUCT(\"1+i\";\"1-i\")"
+expect = "2"
+
+[[case]]
+formula = "=IMPRODUCT()"
+expect = "Err:511"
+
+[[case]]
+name = "range with number and empty cell"
+cells = { A1 = "1+i", A2 = 2, A4 = "3-4i" }
+formula = "=IMPRODUCT(A1:A4)"
+expect = "14-2i"
+
+[[case]]
+name = "inline array"
+formula = "=IMPRODUCT({\"1+i\";\"1-i\"})"
+expect = "2"
+

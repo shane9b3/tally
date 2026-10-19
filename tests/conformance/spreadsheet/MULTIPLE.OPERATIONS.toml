@@ -1,0 +1,46 @@
+[[case]]
+cells = { A1 = "=B1*2", B1 = 1 }
+formula = "=MULTIPLE.OPERATIONS(A1;B1;5)"
+expect = "Err:504"
+note = "TODO: needs evaluator support for substituted re-evaluation."
+
+[[case]]
+cells = { A1 = "=B1*C1", B1 = 1, C1 = 1 }
+formula = "=MULTIPLE.OPERATIONS(A1;B1;5;C1;6)"
+expect = "Err:504"
+
+[[case]]
+cells = { A1 = "=B1", B1 = 1, B2 = 2 }
+formula = "=MULTIPLE.OPERATIONS(A1;B1;B2)"
+expect = "Err:504"
+
+[[case]]
+cells = { A1 = "=B1+C1", B1 = 1, C1 = 2 }
+formula = "=MULTIPLE.OPERATIONS(A1;B1;1;C1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=MULTIPLE.OPERATIONS(1;2;3)"
+expect = "Err:504"
+
+[[case]]
+cells = { A1 = 1 }
+formula = "=MULTIPLE.OPERATIONS(A1;B1;1/0)"
+expect = "Err:504"
+
+[[case]]
+cells = { A1 = "=B1*2", B1 = 1 }
+formula = "=IFERROR(MULTIPLE.OPERATIONS(A1;B1;5);\"n/a\")"
+expect = "n/a"
+
+[[case]]
+formula = "=MULTIPLE.OPERATIONS(A1;B1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=MULTIPLE.OPERATIONS(A1;B1;5;C1;6;D1)"
+expect = "Err:504"
+
+[[case]]
+formula = "=MULTIPLE.OPERATIONS()"
+expect = "Err:511"

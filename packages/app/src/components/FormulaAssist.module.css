@@ -1,0 +1,97 @@
+.popup,
+.tooltip {
+  position: fixed;
+  z-index: 40;
+  min-width: 240px;
+  max-width: 380px;
+  padding: 4px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-card);
+  background: var(--tally-bg);
+  box-shadow: var(--tally-shadow-pop);
+  font-size: 13px;
+  animation: pop 100ms ease-out;
+}
+
+.tooltip {
+  padding: 8px 12px;
+  pointer-events: none;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--tally-text);
+  cursor: default;
+}
+
+.active {
+  background: var(--tally-accent-subtle);
+  color: var(--tally-accent-text);
+}
+
+.name {
+  font-family: var(--tally-font-mono);
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+}
+
+.name b {
+  font-weight: 700;
+}
+
+.category {
+  color: var(--tally-text-muted);
+  font-size: 11.5px;
+}
+
+.detail {
+  margin-top: 4px;
+  padding: 8px 8px 4px;
+  border-top: 1px solid var(--tally-border-subtle);
+}
+
+.signature {
+  display: block;
+  color: var(--tally-text);
+  font-family: var(--tally-font-mono);
+  font-size: 12px;
+}
+
+.arg {
+  color: var(--tally-accent);
+  font-weight: 700;
+}
+
+.description {
+  margin-top: 3px;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.keys {
+  margin-top: 6px;
+  color: var(--tally-text-muted);
+  font-size: 11px;
+}
+
+.keys kbd {
+  padding: 0 4px;
+  border: 1px solid var(--tally-border);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 10.5px;
+}

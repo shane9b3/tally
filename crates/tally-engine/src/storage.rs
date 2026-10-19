@@ -30,6 +30,18 @@ pub enum CellContent {
     Value(Value),
     /// A formula cell.
     Formula(FormulaCellId),
+    /// A covered cell of an array formula block; the id is the anchor's.
+    ArrayPart(FormulaCellId),
+}
+
+impl CellContent {
+    /// The formula cell this content belongs to (itself or its array anchor).
+    pub fn formula_id(&self) -> Option<FormulaCellId> {
+        match self {
+            CellContent::Formula(id) | CellContent::ArrayPart(id) => Some(*id),
+            CellContent::Value(_) => None,
+        }
+    }
 }
 
 /// Direction along one column for [`ColumnStore::next_non_empty`].
@@ -406,6 +418,50 @@ impl DimRuns {
 }
 
 impl DimRuns {
+    /// Hides or shows `start..=end`, keeping each index's size
+    /// (`default_hmm` for indices without a run). Shown runs of the
+    /// default size are dropped.
+    pub fn set_hidden(&mut self, start: u32, end: u32, hidden: bool, default_hmm: u32) {
+        if start > end {
+            return;
+        }
+        let mut segs: Vec<(u32, u32, u32)> = Vec::new();
+        let mut cur = start;
+        let mut i = self.runs.partition_point(|r| r.end < start);
+        while cur <= end {
+            match self.runs.get(i) {
+                Some(r) if r.start <= cur => {
+                    let e = r.end.min(end);
+                    segs.push((cur, e, r.size_hmm));
+                    i += 1;
+                    if e == u32::MAX {
+                        break;
+                    }
+                    cur = e + 1;
+                }
+                Some(r) if r.start <= end => {
+                    segs.push((cur, r.start - 1, default_hmm));
+                    cur = r.start;
+                }
+                _ => {
+                    segs.push((cur, end, default_hmm));
+                    break;
+                }
+            }
+        }
+        for (a, b, size) in segs {
+            self.set(a, b, size, hidden);
+        }
+        if !hidden {
+            self.runs.retain(|r| r.hidden || r.size_hmm != default_hmm);
+        }
+    }
+
+    /// `true` if index `i` is hidden.
+    pub fn is_hidden(&self, i: u32) -> bool {
+        self.get(i).is_some_and(|r| r.hidden)
+    }
+
     /// Shifts runs for `count` indices inserted before `at` (`limit` is the
     /// axis length); inserted indices inside a run take its size.
     pub fn insert(&mut self, at: u32, count: u32, limit: u32) {
@@ -457,6 +513,87 @@ impl DimRuns {
     }
 }
 
+/// Sorted, non-overlapping inclusive spans of rows (filter-hidden rows).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Spans {
+    spans: Vec<(u32, u32)>,
+}
+
+impl Spans {
+    /// From a sorted list of row numbers.
+    pub fn from_sorted_rows(rows: impl IntoIterator<Item = u32>) -> Self {
+        let mut spans: Vec<(u32, u32)> = Vec::new();
+        for r in rows {
+            match spans.last_mut() {
+                Some(last) if last.1.checked_add(1) == Some(r) => last.1 = r,
+                Some(last) if last.1 >= r => {}
+                _ => spans.push((r, r)),
+            }
+        }
+        Self { spans }
+    }
+
+    /// From spans in any order (merged).
+    pub fn from_spans(mut v: Vec<(u32, u32)>) -> Self {
+        v.retain(|(a, b)| a <= b);
+        v.sort_unstable();
+        let mut spans: Vec<(u32, u32)> = Vec::with_capacity(v.len());
+        for (a, b) in v {
+            match spans.last_mut() {
+                Some(last) if last.1.saturating_add(1) >= a => last.1 = last.1.max(b),
+                _ => spans.push((a, b)),
+            }
+        }
+        Self { spans }
+    }
+
+    /// The spans.
+    pub fn spans(&self) -> &[(u32, u32)] {
+        &self.spans
+    }
+
+    /// `true` if `row` is in a span.
+    pub fn contains(&self, row: u32) -> bool {
+        let i = self.spans.partition_point(|s| s.1 < row);
+        self.spans.get(i).is_some_and(|s| s.0 <= row)
+    }
+
+    /// `true` if there are no spans.
+    pub fn is_empty(&self) -> bool {
+        self.spans.is_empty()
+    }
+}
+
+/// An AutoFilter column criterion (engine form of `tally_api::ColumnFilter`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnCriteria {
+    /// Formatted texts to keep (case-insensitive), `""` for empty cells.
+    pub values: Option<Vec<String>>,
+    /// A condition.
+    pub condition: Option<(tally_model::FilterOpData, String)>,
+}
+
+/// A sheet's AutoFilter.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutoFilter {
+    /// The area including its header row.
+    pub range: tally_model::CellRangeLocal,
+    /// Per absolute column.
+    pub columns: BTreeMap<u32, ColumnCriteria>,
+}
+
+/// Sheet state that is not cells: merges, frozen panes, the AutoFilter.
+/// Undo snapshots it whole ([`crate::undo::Change::SheetMeta`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SheetMeta {
+    /// Merged areas (non-overlapping, each larger than one cell).
+    pub merges: Vec<tally_model::CellRangeLocal>,
+    /// Frozen `(rows, cols)`; `None` when not frozen.
+    pub frozen: Option<(u32, u32)>,
+    /// The AutoFilter.
+    pub auto_filter: Option<AutoFilter>,
+}
+
 /// Shifts a set of row numbers for inserted rows (values pushed past `limit` are dropped).
 pub fn shift_set_insert(set: &mut BTreeSet<u32>, at: u32, count: u32, limit: u32) {
     let moved = set.split_off(&at);
@@ -505,6 +642,11 @@ pub struct Sheet {
     pub hidden: bool,
     /// Tab colour `0xRRGGBBAA`.
     pub tab_color: Option<u32>,
+    /// Merges, frozen panes and the AutoFilter.
+    pub meta: SheetMeta,
+    /// Rows hidden by the AutoFilter (derived from `meta.auto_filter` and
+    /// the cell values; recomputed by `Workbook::reapply_filter`).
+    pub filtered_rows: Spans,
 }
 
 impl Sheet {
@@ -518,7 +660,29 @@ impl Sheet {
             row_dims: DimRuns::default(),
             hidden: false,
             tab_color: None,
+            meta: SheetMeta::default(),
+            filtered_rows: Spans::default(),
         }
+    }
+
+    /// The merge whose area contains (`row`, `col`).
+    pub fn merge_at(&self, row: u32, col: u32) -> Option<tally_model::CellRangeLocal> {
+        self.meta
+            .merges
+            .iter()
+            .find(|m| m.r0 <= row && row <= m.r1 && m.c0 <= col && col <= m.c1)
+            .copied()
+    }
+
+    /// `true` if (`row`, `col`) is a covered (non-anchor) cell of a merge.
+    pub fn is_merge_covered(&self, row: u32, col: u32) -> bool {
+        self.merge_at(row, col)
+            .is_some_and(|m| (m.r0, m.c0) != (row, col))
+    }
+
+    /// `true` if `row` is hidden by the user or by the AutoFilter.
+    pub fn row_hidden(&self, row: u32) -> bool {
+        self.row_dims.is_hidden(row) || self.filtered_rows.contains(row)
     }
 
     /// The column, if it exists.
@@ -549,7 +713,7 @@ impl Sheet {
             return None;
         }
         let column = self.column_mut(col)?;
-        if matches!(content, CellContent::Formula(_)) {
+        if content.formula_id().is_some() {
             column.formula_rows.insert(row);
         } else {
             column.formula_rows.remove(&row);

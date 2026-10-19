@@ -1,0 +1,63 @@
+# COT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=COT(0.5)"
+expect = 1.830487721712452
+
+[[case]]
+name = "numeric text"
+formula = "=COT(\"0.5\")"
+expect = 1.830487721712452
+
+[[case]]
+name = "non-numeric text"
+formula = "=COT(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=COT(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=COT(A1)"
+expect = 0.6420926159343308
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=COT(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 0.5 }
+origin = "C2"
+formula = "=COT(A1:A2)"
+expect = 1.830487721712452
+
+[[case]]
+name = "no arguments"
+formula = "=COT()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=COT(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=COT(0)"
+expect = "#DIV/0!"
+note = "Division by exact zero; AOO 1/tan(0) is #DIV/0! (as in LibreOffice and Excel)."
+
+[[case]]
+formula = "=COT(PI()/4)"
+expect = 1
+tol = 1e-12
+
+[[case]]
+formula = "=COT(-1)"
+expect = -0.6420926159343308

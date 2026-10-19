@@ -288,7 +288,10 @@ pub struct FunctionDef {
     pub name: &'static str,
     /// Name stored in ODF (`"SUMIF"`, `"COM.MICROSOFT.IFERROR"`, `"ORG.OPENOFFICE.WEEKS"`).
     pub odf_name: &'static str,
-    /// Name stored in OOXML when it differs from `name` (`"_xlfn.IFS"`).
+    /// Name stored in OOXML when Excel spells it differently (`"_xlfn.IFS"`,
+    /// `"EFFECT"` for EFFECTIVE) or for Analysis add-ins (`"EDATE"`); `None`
+    /// means "same as `name`" or "Excel lacks it". The built-in table is in
+    /// `categories/ooxml.rs`.
     pub ooxml_name: Option<&'static str>,
     /// AOO category.
     pub category: Category,
@@ -516,6 +519,27 @@ impl Registry {
                 map.insert(key, id);
             }
         }
+    }
+
+    /// Sets (or replaces) the OOXML name of the function registered as
+    /// `name`; a clash is recorded in [`Registry::conflicts`] and an unknown
+    /// `name` is recorded as a conflict with itself (both are bugs the
+    /// registry tests catch).
+    pub(crate) fn set_ooxml_name(&mut self, name: &str, ooxml: &'static str) {
+        let Some(id) = self.lookup(name) else {
+            self.conflicts.push(NameConflict {
+                table: "ooxml",
+                name: name.to_ascii_uppercase(),
+                kept: FuncId(u32::MAX),
+                rejected: FuncId(u32::MAX),
+            });
+            return;
+        };
+        let def = &mut self.defs[id.0 as usize];
+        if let Some(old) = def.ooxml_name.replace(ooxml) {
+            self.by_ooxml.remove(&old.to_ascii_uppercase());
+        }
+        Self::insert(&mut self.by_ooxml, &mut self.conflicts, "ooxml", ooxml, id);
     }
 
     /// Name clashes seen during registration (should be empty).

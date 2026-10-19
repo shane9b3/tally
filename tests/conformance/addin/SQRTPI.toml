@@ -1,0 +1,41 @@
+# SQRTPI conformance vectors. Analysis add-in. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=SQRTPI(1)"
+expect = 1.7724538509055159
+tol = 1e-15
+
+[[case]]
+formula = "=SQRTPI(2)"
+expect = 2.5066282746310002
+tol = 1e-15
+
+[[case]]
+formula = "=SQRTPI(0)"
+expect = 0
+
+[[case]]
+formula = "=SQRTPI(1/PI())"
+expect = 1
+tol = 1e-15
+
+[[case]]
+formula = "=SQRTPI(100)"
+expect = 17.72453850905516
+tol = 1e-13
+
+[[case]]
+formula = "=SQRTPI(-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=SQRTPI(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=SQRTPI()"
+expect = "Err:511"
+
+[[case]]
+formula = "=SQRTPI(1;2)"
+expect = "Err:504"

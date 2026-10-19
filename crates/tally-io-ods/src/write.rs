@@ -9,14 +9,17 @@ use std::fmt::Write as _;
 use std::io::{Seek, Write};
 
 use tally_model::{
-    CellContentData, CellData, DimRun, HAlign, SheetData, StyleData, StyleRun, VAlign, WorkbookData,
+    AutoFilterData, CellContentData, CellData, CellRangeLocal, DimRun, FilterOpData, HAlign,
+    NameData, SheetData, StyleData, StyleRun, VAlign, WorkbookData,
 };
-use tally_types::{CriteriaMode, Value, MAX_ROWS};
+use tally_types::{col_to_letters, CriteriaMode, Value, MAX_COLS, MAX_ROWS};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::numfmt::code_to_xml;
-use crate::units::{color_hex, fmt_f64, general_display, hmm_to_cm, null_date_for};
+use crate::units::{
+    border_to_string, color_hex, fmt_f64, general_display, hmm_to_cm, null_date_for,
+};
 use crate::xml::{escape_attr, escape_text};
 use crate::{OdsError, WriteReport, DEFAULT_COL_WIDTH_HMM, DEFAULT_ROW_HEIGHT_HMM, MIMETYPE};
 
@@ -203,7 +206,6 @@ impl StylePlan {
             table_styles: Vec::new(),
         };
         let mut codes: HashMap<&str, Option<String>> = HashMap::new();
-        let mut warned_borders = false;
         let mut warned_display = false;
         let mut warned_indent = false;
         for (i, st) in data.styles.iter().enumerate() {
@@ -233,12 +235,6 @@ impl StylePlan {
                         .clone()
                 }
             };
-            if st.borders != Default::default() && !warned_borders {
-                warned_borders = true;
-                report
-                    .warnings
-                    .push("cell borders are not written in this version".into());
-            }
             if st.display.is_some() && !warned_display {
                 warned_display = true;
                 report
@@ -281,17 +277,6 @@ impl StylePlan {
                 let name = format!("ta{}", plan.table_styles.len() + 1);
                 plan.table_styles.push((key, name));
             }
-            if !sheet.merges.is_empty() {
-                report.warnings.push(format!(
-                    "merged cells on sheet {:?} are not written",
-                    sheet.name
-                ));
-            }
-        }
-        if !data.names.is_empty() {
-            report
-                .warnings
-                .push("named expressions are not written in this version".into());
         }
         plan
     }
@@ -362,6 +347,19 @@ fn cell_style_xml(out: &mut String, name: &str, st: &StyleData, data_style: Opti
     let mut cell_props = String::new();
     if let Some(fill) = st.fill {
         let _ = write!(cell_props, r#" fo:background-color="{}""#, color_hex(fill));
+    }
+    let b = &st.borders;
+    let sides = [&b.top, &b.bottom, &b.left, &b.right];
+    if sides.iter().all(|x| x.is_some() && **x == b.top) {
+        if let Some(l) = &b.top {
+            let _ = write!(cell_props, r#" fo:border="{}""#, border_to_string(l));
+        }
+    } else {
+        for (name, side) in ["top", "bottom", "left", "right"].iter().zip(sides) {
+            if let Some(l) = side {
+                let _ = write!(cell_props, r#" fo:border-{name}="{}""#, border_to_string(l));
+            }
+        }
     }
     if st.align.wrap {
         cell_props.push_str(r#" fo:wrap-option="wrap""#);
@@ -476,9 +474,12 @@ fn write_content<W: Write + Seek>(
     }
     s.push_str("</table:calculation-settings>");
 
-    for sheet in &data.sheets {
-        write_sheet(sheet, data, plan, &mut s, zip, report)?;
+    for (tab, sheet) in data.sheets.iter().enumerate() {
+        write_sheet(sheet, tab, data, plan, &mut s, zip, report)?;
     }
+    let global: Vec<&NameData> = data.names.iter().filter(|n| n.sheet.is_none()).collect();
+    write_named_expressions(&mut s, &global, data);
+    write_database_ranges(&mut s, data);
     s.push_str("</office:spreadsheet></office:body></office:document-content>");
     flush(&mut s, zip)
 }
@@ -496,8 +497,129 @@ fn run_at(runs: &[DimRun], i: u32) -> (Option<&DimRun>, Option<u32>) {
     (None, None)
 }
 
+/// Merges, anchors and matrix spans of one row, for writing its cells.
+struct RowCtx<'a> {
+    /// Covered column intervals (inclusive), sorted by start.
+    covered: Vec<(u32, u32)>,
+    /// Merge anchors in this row: (col, cols spanned, rows spanned).
+    anchors: Vec<(u32, u32, u32)>,
+    /// Array formula anchors of the sheet: (row, col) → (cols, rows).
+    matrix: &'a HashMap<(u32, u32), (u32, u32)>,
+    row: u32,
+}
+
+impl RowCtx<'_> {
+    fn is_plain(&self) -> bool {
+        self.covered.is_empty() && self.anchors.is_empty()
+    }
+
+    fn covered(&self, c: u32) -> bool {
+        self.covered.iter().any(|&(a, b)| a <= c && c <= b)
+    }
+
+    fn anchor(&self, c: u32) -> Option<(u32, u32)> {
+        self.anchors
+            .iter()
+            .find(|a| a.0 == c)
+            .map(|&(_, cs, rs)| (cs, rs))
+    }
+
+    /// The first column after `c` where the covered/anchor status changes.
+    fn next_boundary(&self, c: u32) -> u32 {
+        let mut next = u32::MAX;
+        for &(a, b) in &self.covered {
+            for x in [a, b.saturating_add(1)] {
+                if x > c {
+                    next = next.min(x);
+                }
+            }
+        }
+        for &(a, _, _) in &self.anchors {
+            for x in [a, a.saturating_add(1)] {
+                if x > c {
+                    next = next.min(x);
+                }
+            }
+        }
+        next
+    }
+
+    /// One past the last column that needs an element (covered or anchor).
+    fn end(&self) -> u32 {
+        let a = self.covered.iter().map(|&(_, b)| b.saturating_add(1));
+        let b = self.anchors.iter().map(|&(c, _, _)| c.saturating_add(1));
+        a.chain(b).max().unwrap_or(0)
+    }
+}
+
+/// Writes empty cells for columns `from..from+n` (styled with `style` if
+/// set), as covered cells where merges cover them and with spans at merge
+/// anchors.
+fn write_segmented(s: &mut String, ctx: &RowCtx<'_>, from: u32, n: u32, style: Option<u32>) {
+    let end = from.saturating_add(n);
+    let mut c = from;
+    while c < end {
+        let stop = ctx.next_boundary(c).min(end);
+        let k = stop - c;
+        let anchor = ctx.anchor(c);
+        let tag = if anchor.is_none() && ctx.covered(c) {
+            "table:covered-table-cell"
+        } else {
+            "table:table-cell"
+        };
+        let _ = write!(s, "<{tag}");
+        if let Some(st) = style {
+            let _ = write!(s, r#" table:style-name="ce{}""#, st + 1);
+        }
+        if let Some((cs, rs)) = anchor {
+            write_spans(s, cs, rs);
+        } else if k > 1 {
+            let _ = write!(s, r#" table:number-columns-repeated="{k}""#);
+        }
+        s.push_str("/>");
+        c = stop;
+    }
+}
+
+fn write_spans(s: &mut String, cs: u32, rs: u32) {
+    let _ = write!(
+        s,
+        r#" table:number-columns-spanned="{cs}" table:number-rows-spanned="{rs}""#
+    );
+}
+
+/// Sorted, merged inclusive spans.
+fn merge_spans(spans: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut v: Vec<(u32, u32)> = spans.iter().copied().filter(|(a, b)| a <= b).collect();
+    v.sort_unstable();
+    let mut out: Vec<(u32, u32)> = Vec::with_capacity(v.len());
+    for (a, b) in v {
+        if let Some(last) = out.last_mut() {
+            if a <= last.1.saturating_add(1) {
+                last.1 = last.1.max(b);
+                continue;
+            }
+        }
+        out.push((a, b));
+    }
+    out
+}
+
+/// A sheet name as written in ODF cell addresses (quoted when needed).
+pub(crate) fn odf_sheet_name(name: &str) -> String {
+    let plain = !name.is_empty()
+        && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+        && !name.starts_with(|c: char| c.is_ascii_digit());
+    if plain {
+        name.to_string()
+    } else {
+        format!("'{}'", name.replace('\'', "''"))
+    }
+}
+
 fn write_sheet<W: Write + Seek>(
     sheet: &SheetData,
+    tab: usize,
     data: &WorkbookData,
     plan: &StylePlan,
     s: &mut String,
@@ -515,6 +637,32 @@ fn write_sheet<W: Write + Seek>(
     cols.sort_by_key(|r| r.start);
     let mut rows = sheet.row_heights.clone();
     rows.sort_by_key(|r| r.start);
+
+    let mut merges: Vec<CellRangeLocal> = sheet
+        .merges
+        .iter()
+        .copied()
+        .filter(|m| {
+            m.r0 <= m.r1
+                && m.c0 <= m.c1
+                && m.r1 < MAX_ROWS
+                && m.c1 < MAX_COLS
+                && (m.r0 != m.r1 || m.c0 != m.c1)
+        })
+        .collect();
+    merges.sort_by_key(|m| (m.r0, m.c0));
+    let matrix: HashMap<(u32, u32), (u32, u32)> = sheet
+        .array_formulas
+        .iter()
+        .filter(|a| a.r0 <= a.r1 && a.c0 <= a.c1)
+        .map(|a| ((a.r0, a.c0), (a.c1 - a.c0 + 1, a.r1 - a.r0 + 1)))
+        .collect();
+    let filtered = merge_spans(
+        sheet
+            .auto_filter
+            .as_ref()
+            .map_or(&[][..], |f| f.filtered_rows.as_slice()),
+    );
 
     // Style runs: whole columns become the column's default cell style;
     // the others are written as (repeated) rows of styled empty cells.
@@ -540,6 +688,7 @@ fn write_sheet<W: Write + Seek>(
         .keys()
         .copied()
         .chain(vruns.iter().map(|r| r.col))
+        .chain(merges.iter().map(|m| m.c1))
         .max();
     let end_col = max_cell_col
         .max(max_run_col)
@@ -584,7 +733,12 @@ fn write_sheet<W: Write + Seek>(
     // Rows.
     let max_cell_row = cells.last().map(|c| c.row);
     let max_run_row = rows.iter().map(|r| r.end).max();
-    let max_style_row = vruns.iter().map(|r| r.end_row).max();
+    let max_style_row = vruns
+        .iter()
+        .map(|r| r.end_row)
+        .chain(merges.iter().map(|m| m.r1))
+        .chain(filtered.last().map(|f| f.1))
+        .max();
     let end_row = max_cell_row
         .max(max_run_row)
         .max(max_style_row)
@@ -592,8 +746,12 @@ fn write_sheet<W: Write + Seek>(
     let mut r = 0;
     let mut ci = 0;
     let mut vi = 0;
+    let mut mi = 0;
+    let mut fi = 0;
     // Style runs covering the current row, sorted by column.
     let mut active: Vec<StyleRun> = Vec::new();
+    // Merges covering the current row.
+    let mut active_m: Vec<CellRangeLocal> = Vec::new();
     while r < end_row {
         active.retain(|a| a.end_row >= r);
         while vi < vruns.len() && vruns[vi].start_row <= r {
@@ -604,6 +762,52 @@ fn write_sheet<W: Write + Seek>(
             }
             vi += 1;
         }
+        active_m.retain(|m| m.r1 >= r);
+        while mi < merges.len() && merges[mi].r0 <= r {
+            if merges[mi].r1 >= r {
+                active_m.push(merges[mi]);
+            }
+            mi += 1;
+        }
+        while fi < filtered.len() && filtered[fi].1 < r {
+            fi += 1;
+        }
+        let is_filtered = filtered.get(fi).is_some_and(|f| f.0 <= r);
+        let next_filter = match filtered.get(fi) {
+            Some(f) if f.0 <= r => f.1.saturating_add(1),
+            Some(f) => f.0,
+            None => u32::MAX,
+        };
+        // The next row where the set of covered cells changes.
+        let next_merge = active_m
+            .iter()
+            .map(|m| {
+                if m.r0 == r {
+                    r + 1
+                } else {
+                    m.r1.saturating_add(1)
+                }
+            })
+            .chain(merges.get(mi).map(|m| m.r0))
+            .min()
+            .unwrap_or(u32::MAX);
+        let mut ctx = RowCtx {
+            covered: Vec::new(),
+            anchors: Vec::new(),
+            matrix: &matrix,
+            row: r,
+        };
+        for m in &active_m {
+            if m.r0 == r {
+                ctx.anchors.push((m.c0, m.c1 - m.c0 + 1, m.r1 - m.r0 + 1));
+                if m.c1 > m.c0 {
+                    ctx.covered.push((m.c0 + 1, m.c1));
+                }
+            } else {
+                ctx.covered.push((m.c0, m.c1));
+            }
+        }
+        ctx.covered.sort_unstable();
         // The next row where the set of active runs changes.
         let next_style = active
             .iter()
@@ -621,8 +825,12 @@ fn write_sheet<W: Write + Seek>(
             r#"<table:table-row table:style-name="{}""#,
             plan.row_style(height)
         );
+        // A row hidden by the user stays "collapse" even when the filter
+        // also hides it, so it stays hidden when the filter is removed.
         if hidden {
             s.push_str(r#" table:visibility="collapse""#);
+        } else if is_filtered {
+            s.push_str(r#" table:visibility="filter""#);
         }
         let row_start = ci;
         while ci < cells.len() && cells[ci].row == r {
@@ -634,6 +842,8 @@ fn write_sheet<W: Write + Seek>(
             next_cell
                 .min(run_stop)
                 .min(next_style)
+                .min(next_merge)
+                .min(next_filter)
                 .min(end_row)
                 .max(r + 1)
                 - r
@@ -643,11 +853,11 @@ fn write_sheet<W: Write + Seek>(
         if n > 1 {
             let _ = write!(s, r#" table:number-rows-repeated="{n}""#);
         }
-        if row_cells.is_empty() && active.is_empty() {
+        if row_cells.is_empty() && active.is_empty() && ctx.is_plain() {
             s.push_str("><table:table-cell/></table:table-row>");
         } else {
             s.push('>');
-            write_row_cells(s, row_cells, &active, data, report);
+            write_row_cells(s, row_cells, &active, data, report, &ctx);
             s.push_str("</table:table-row>");
         }
         r += n;
@@ -655,36 +865,204 @@ fn write_sheet<W: Write + Seek>(
             flush(s, zip)?;
         }
     }
+    let local: Vec<&NameData> = data
+        .names
+        .iter()
+        .filter(|n| n.sheet == Some(tab as u32))
+        .collect();
+    write_named_expressions(s, &local, data);
     s.push_str("</table:table>");
     Ok(())
 }
 
+/// Writes `table:named-expressions` for `names` (nothing when empty).
+fn write_named_expressions(s: &mut String, names: &[&NameData], data: &WorkbookData) {
+    if names.is_empty() {
+        return;
+    }
+    let base = format!(
+        "${}.$A$1",
+        odf_sheet_name(data.sheets.first().map_or("Sheet1", |s| s.name.as_str()))
+    );
+    s.push_str("<table:named-expressions>");
+    for n in names {
+        let body = n.formula.strip_prefix("of:").unwrap_or(&n.formula);
+        let range = body
+            .strip_prefix("=[")
+            .and_then(|b| b.strip_suffix(']'))
+            .filter(|inner| !inner.contains(['[', ']']));
+        match range {
+            Some(inner) => {
+                s.push_str(r#"<table:named-range table:name=""#);
+                escape_attr(&n.name, s);
+                s.push_str(r#"" table:base-cell-address=""#);
+                escape_attr(&base, s);
+                s.push_str(r#"" table:cell-range-address=""#);
+                escape_attr(inner, s);
+                s.push_str(r#""/>"#);
+            }
+            None => {
+                s.push_str(r#"<table:named-expression table:name=""#);
+                escape_attr(&n.name, s);
+                s.push_str(r#"" table:base-cell-address=""#);
+                escape_attr(&base, s);
+                s.push_str(r#"" table:expression=""#);
+                let expr = if n.formula.starts_with("of:") || n.formula.starts_with("oooc:") {
+                    n.formula.clone()
+                } else {
+                    format!("of:{}", n.formula)
+                };
+                escape_attr(&expr, s);
+                s.push_str(r#""/>"#);
+            }
+        }
+    }
+    s.push_str("</table:named-expressions>");
+}
+
+fn filter_operator(op: FilterOpData) -> &'static str {
+    match op {
+        FilterOpData::Eq => "=",
+        FilterOpData::Ne => "!=",
+        FilterOpData::Gt => ">",
+        FilterOpData::Ge => ">=",
+        FilterOpData::Lt => "<",
+        FilterOpData::Le => "<=",
+        FilterOpData::Contains => "contains",
+        FilterOpData::BeginsWith => "begins",
+        FilterOpData::EndsWith => "ends",
+        FilterOpData::Empty => "empty",
+        FilterOpData::NotEmpty => "!empty",
+    }
+}
+
+fn write_condition(s: &mut String, field: u32, op: &str, value: &str) {
+    let ty = if value.trim().parse::<f64>().is_ok() {
+        "number"
+    } else {
+        "text"
+    };
+    let _ = write!(
+        s,
+        r#"<table:filter-condition table:field-number="{field}" table:value=""#
+    );
+    escape_attr(value, s);
+    let _ = write!(
+        s,
+        r#"" table:operator="{}" table:data-type="{ty}"/>"#,
+        escape_op(op)
+    );
+}
+
+fn escape_op(op: &str) -> String {
+    let mut out = String::new();
+    escape_attr(op, &mut out);
+    out
+}
+
+/// Writes `table:database-ranges` for the sheets' AutoFilters.
+fn write_database_ranges(s: &mut String, data: &WorkbookData) {
+    let filters: Vec<(usize, &SheetData, &AutoFilterData)> = data
+        .sheets
+        .iter()
+        .enumerate()
+        .filter_map(|(i, sh)| sh.auto_filter.as_ref().map(|f| (i, sh, f)))
+        .filter(|(_, _, f)| f.range.r0 <= f.range.r1 && f.range.c0 <= f.range.c1)
+        .collect();
+    if filters.is_empty() {
+        return;
+    }
+    s.push_str("<table:database-ranges>");
+    for (tab, sheet, f) in filters {
+        let name = odf_sheet_name(&sheet.name);
+        let a = |r: u32, c: u32| format!("{name}.{}{}", col_to_letters(c), r + 1);
+        let _ = write!(
+            s,
+            r#"<table:database-range table:name="__Anonymous_Sheet_DB__{tab}" table:target-range-address=""#
+        );
+        escape_attr(
+            &format!(
+                "{}:{}",
+                a(f.range.r0, f.range.c0),
+                a(f.range.r1, f.range.c1)
+            ),
+            s,
+        );
+        s.push_str(r#"" table:display-filter-buttons="true">"#);
+        let mut items: Vec<String> = Vec::new();
+        for col in &f.columns {
+            if col.col < f.range.c0 || col.col > f.range.c1 {
+                continue;
+            }
+            let field = col.col - f.range.c0;
+            if let Some(values) = &col.values {
+                let mut x = String::from("<table:filter-or>");
+                for v in values {
+                    if v.is_empty() {
+                        write_condition(&mut x, field, "empty", "");
+                    } else {
+                        write_condition(&mut x, field, "=", v);
+                    }
+                }
+                x.push_str("</table:filter-or>");
+                items.push(x);
+            }
+            if let Some(c) = &col.condition {
+                let mut x = String::new();
+                write_condition(&mut x, field, filter_operator(c.op), &c.value);
+                items.push(x);
+            }
+        }
+        if !items.is_empty() {
+            s.push_str("<table:filter>");
+            if items.len() == 1 {
+                s.push_str(&items[0]);
+            } else {
+                s.push_str("<table:filter-and>");
+                for it in &items {
+                    s.push_str(it);
+                }
+                s.push_str("</table:filter-and>");
+            }
+            s.push_str("</table:filter>");
+        }
+        s.push_str("</table:database-range>");
+    }
+    s.push_str("</table:database-ranges>");
+}
+
 /// Writes one row: its cells merged with styled empty cells for the style
-/// runs covering the row (`active`, sorted by column).
+/// runs covering the row (`active`, sorted by column), covered cells and
+/// merge anchors from `ctx`.
 fn write_row_cells(
     s: &mut String,
     row_cells: &[&CellData],
     active: &[StyleRun],
     data: &WorkbookData,
     report: &mut WriteReport,
+    ctx: &RowCtx<'_>,
 ) {
     let mut col = 0;
     let mut ai = 0;
     for cell in row_cells {
         while ai < active.len() && active[ai].col < cell.col {
-            col = write_styled_empty(s, col, &active[ai..], cell.col, &mut ai);
+            col = write_styled_empty(s, ctx, col, &active[ai..], cell.col, &mut ai);
         }
         if ai < active.len() && active[ai].col == cell.col {
             ai += 1;
         }
         if cell.col > col {
-            write_blank(s, cell.col - col);
+            write_segmented(s, ctx, col, cell.col - col, None);
         }
-        write_cell(s, cell, data, report);
+        write_cell(s, cell, data, report, ctx);
         col = cell.col.saturating_add(1);
     }
     while ai < active.len() {
-        col = write_styled_empty(s, col, &active[ai..], u32::MAX, &mut ai);
+        col = write_styled_empty(s, ctx, col, &active[ai..], u32::MAX, &mut ai);
+    }
+    let end = ctx.end();
+    if end > col {
+        write_segmented(s, ctx, col, end - col, None);
     }
 }
 
@@ -693,6 +1071,7 @@ fn write_row_cells(
 /// `limit`. Returns the next column and advances `ai`.
 fn write_styled_empty(
     s: &mut String,
+    ctx: &RowCtx<'_>,
     col: u32,
     runs: &[StyleRun],
     limit: u32,
@@ -700,7 +1079,7 @@ fn write_styled_empty(
 ) -> u32 {
     let first = runs[0];
     if first.col > col {
-        write_blank(s, first.col - col);
+        write_segmented(s, ctx, col, first.col - col, None);
     }
     let mut n = 1;
     while (n as usize) < runs.len()
@@ -710,36 +1089,32 @@ fn write_styled_empty(
     {
         n += 1;
     }
-    let _ = write!(
-        s,
-        r#"<table:table-cell table:style-name="ce{}""#,
-        first.style + 1
-    );
-    if n > 1 {
-        let _ = write!(s, r#" table:number-columns-repeated="{n}""#);
-    }
-    s.push_str("/>");
+    write_segmented(s, ctx, first.col, n, Some(first.style));
     *ai += n as usize;
     first.col + n
 }
 
-fn write_blank(s: &mut String, n: u32) {
-    if n == 1 {
-        s.push_str("<table:table-cell/>");
+fn write_cell(
+    s: &mut String,
+    cell: &CellData,
+    data: &WorkbookData,
+    report: &mut WriteReport,
+    ctx: &RowCtx<'_>,
+) {
+    let anchor = ctx.anchor(cell.col);
+    let tag = if anchor.is_none() && ctx.covered(cell.col) {
+        "table:covered-table-cell"
     } else {
-        let _ = write!(
-            s,
-            r#"<table:table-cell table:number-columns-repeated="{n}"/>"#
-        );
-    }
-}
-
-fn write_cell(s: &mut String, cell: &CellData, data: &WorkbookData, report: &mut WriteReport) {
-    s.push_str("<table:table-cell");
+        "table:table-cell"
+    };
+    let _ = write!(s, "<{tag}");
     if let Some(i) = cell.style {
         if (i as usize) < data.styles.len() {
             let _ = write!(s, r#" table:style-name="ce{}""#, i + 1);
         }
+    }
+    if let Some((cs, rs)) = anchor {
+        write_spans(s, cs, rs);
     }
     let (value, is_formula) = match &cell.content {
         CellContentData::Value(v) => (Some(v), false),
@@ -747,6 +1122,12 @@ fn write_cell(s: &mut String, cell: &CellData, data: &WorkbookData, report: &mut
             s.push_str(r#" table:formula=""#);
             escape_attr(text, s);
             s.push('"');
+            if let Some((cols, rows)) = ctx.matrix.get(&(ctx.row, cell.col)) {
+                let _ = write!(
+                    s,
+                    r#" table:number-matrix-columns-spanned="{cols}" table:number-matrix-rows-spanned="{rows}""#
+                );
+            }
             (cached.as_ref(), true)
         }
     };
@@ -769,7 +1150,7 @@ fn write_cell(s: &mut String, cell: &CellData, data: &WorkbookData, report: &mut
         Value::Number(n) => {
             let _ = write!(
                 s,
-                r#" office:value-type="float" office:value="{}" calcext:value-type="float"><text:p>{}</text:p></table:table-cell>"#,
+                r#" office:value-type="float" office:value="{}" calcext:value-type="float"><text:p>{}</text:p></{tag}>"#,
                 fmt_f64(*n),
                 general_display(*n)
             );
@@ -777,7 +1158,7 @@ fn write_cell(s: &mut String, cell: &CellData, data: &WorkbookData, report: &mut
         Value::Bool(b) => {
             let _ = write!(
                 s,
-                r#" office:value-type="boolean" office:boolean-value="{b}" calcext:value-type="boolean"><text:p>{}</text:p></table:table-cell>"#,
+                r#" office:value-type="boolean" office:boolean-value="{b}" calcext:value-type="boolean"><text:p>{}</text:p></{tag}>"#,
                 if *b { "TRUE" } else { "FALSE" }
             );
         }
@@ -790,14 +1171,14 @@ fn write_cell(s: &mut String, cell: &CellData, data: &WorkbookData, report: &mut
             }
             s.push_str(r#" calcext:value-type="string">"#);
             write_paragraphs(s, t);
-            s.push_str("</table:table-cell>");
+            let _ = write!(s, "</{tag}>");
         }
         Value::Error(e) => {
             s.push_str(
                 r#" office:value-type="string" office:string-value="" calcext:value-type="error">"#,
             );
             write_paragraphs(s, &e.display());
-            s.push_str("</table:table-cell>");
+            let _ = write!(s, "</{tag}>");
         }
     }
 }

@@ -4,12 +4,17 @@
  * typing and IME composition start there naturally (and the IME candidate
  * window appears next to the cell); when editing it becomes the visible
  * editor, styled like the cell, growing to the right as text is typed.
+ *
+ * Formula references are coloured with a "mirror": a div behind the
+ * textarea with the same box, font and text, whose spans carry the colours;
+ * while highlights are shown the textarea's own text is transparent (the
+ * caret and selection stay native).
  */
 import type { CellPos, StyleDto } from "@tally/bridge";
 import type { Theme } from "@tally/tokens";
 import type { Geometry } from "./geometry";
 import { CELL_PADDING, cellFont, fontPx, type TextMeasurer } from "./renderer";
-import type { EditState } from "./types";
+import type { EditState, TextHighlight } from "./types";
 
 /** "enter": started by typing (arrows commit); "edit": F2/double-click (arrows move the caret). */
 export type EditMode = "enter" | "edit";
@@ -23,6 +28,11 @@ export interface EditorStyleInfo {
 
 export class CellEditor {
   readonly el: HTMLTextAreaElement;
+  /** Coloured copy of the text, drawn behind the textarea. */
+  readonly mirror: HTMLDivElement;
+  private highlights: TextHighlight[] = [];
+  private mirrorKey = "";
+  private textColor = "";
   open = false;
   mode: EditMode = "enter";
   cell: CellPos | null = null;
@@ -53,7 +63,81 @@ export class CellEditor {
     s.padding = "0";
     s.background = "transparent";
     this.el = ta;
+    const m = doc.createElement("div");
+    m.setAttribute("aria-hidden", "true");
+    Object.assign(m.style, {
+      position: "absolute",
+      zIndex: "3",
+      overflow: "hidden",
+      whiteSpace: "pre",
+      boxSizing: "border-box",
+      pointerEvents: "none",
+      display: "none",
+    } satisfies Partial<CSSStyleDeclaration>);
+    this.mirror = m;
+    ta.style.zIndex = "4";
+    ta.addEventListener("scroll", () => this.syncScroll());
+    ta.addEventListener("input", () => this.renderMirror());
     this.setHidden();
+  }
+
+  /** Adds the mirror and the textarea to the grid root. */
+  mount(root: HTMLElement): void {
+    root.append(this.mirror, this.el);
+  }
+
+  /** Sets the coloured spans (formula references) of the editor text. */
+  setHighlights(spans: readonly TextHighlight[]): void {
+    this.highlights = [...spans].sort((a, b) => a.start - b.start);
+    this.lastBox = "";
+    this.renderMirror();
+  }
+
+  private get mirrored(): boolean {
+    return this.open && this.highlights.length > 0;
+  }
+
+  /** Rebuilds the mirror's text runs (cheap no-op when unchanged). */
+  private renderMirror(): void {
+    const m = this.mirror;
+    if (!this.mirrored) {
+      if (m.style.display !== "none") m.style.display = "none";
+      this.mirrorKey = "";
+      if (this.open) this.el.style.color = this.textColor;
+      return;
+    }
+    const text = this.el.value;
+    const key = `${text}\u0000${this.highlights.map((h) => `${h.start}:${h.end}:${h.color}`).join(",")}`;
+    if (key !== this.mirrorKey) {
+      this.mirrorKey = key;
+      const doc = m.ownerDocument;
+      m.textContent = "";
+      let at = 0;
+      for (const h of this.highlights) {
+        const s0 = Math.max(at, Math.min(text.length, h.start));
+        const s1 = Math.max(s0, Math.min(text.length, h.end));
+        if (s0 > at) m.append(doc.createTextNode(text.slice(at, s0)));
+        if (s1 > s0) {
+          const span = doc.createElement("span");
+          span.textContent = text.slice(s0, s1);
+          span.style.color = h.color;
+          m.append(span);
+        }
+        at = Math.max(at, s1);
+      }
+      if (at < text.length) m.append(doc.createTextNode(text.slice(at)));
+      // A trailing newline needs a character after it to take up a line.
+      if (text.endsWith("\n")) m.append(doc.createTextNode(" "));
+    }
+    m.style.display = "block";
+    this.el.style.color = "transparent";
+    this.syncScroll();
+  }
+
+  private syncScroll(): void {
+    if (!this.mirrored) return;
+    this.mirror.scrollLeft = this.el.scrollLeft;
+    this.mirror.scrollTop = this.el.scrollTop;
   }
 
   /** Remembers a text we emitted (so its echo is not written back). */
@@ -82,6 +166,7 @@ export class CellEditor {
     } catch {
       // Detached or not focusable; ignore.
     }
+    this.renderMirror();
   }
 
   begin(cell: CellPos, mode: EditMode): void {
@@ -113,6 +198,8 @@ export class CellEditor {
   }
 
   private setHidden(): void {
+    this.mirror.style.display = "none";
+    this.mirrorKey = "";
     const s = this.el.style;
     s.opacity = "0";
     s.pointerEvents = "none";
@@ -176,10 +263,24 @@ export class CellEditor {
     s.opacity = "1";
     s.pointerEvents = "auto";
     s.caretColor = info.theme.colors.accent;
-    s.color = info.theme.colors.text;
-    s.background = info.theme.colors.editorBg;
+    this.textColor = info.theme.colors.text;
     s.border = `${border}px solid ${info.theme.colors.selectionBorder}`;
     s.boxShadow = "0 2px 8px rgba(0, 0, 0, 0.12)";
+    // The mirror sits behind the textarea with the same box and paints the background.
+    const m = this.mirror.style;
+    m.left = s.left;
+    m.top = s.top;
+    m.width = s.width;
+    m.height = s.height;
+    m.font = font;
+    m.lineHeight = s.lineHeight;
+    m.textAlign = info.align;
+    m.padding = s.padding;
+    m.border = `${border}px solid transparent`;
+    m.color = info.theme.colors.text;
+    m.background = info.theme.colors.editorBg;
+    s.background = this.highlights.length > 0 ? "transparent" : info.theme.colors.editorBg;
+    this.renderMirror();
   }
 
   /** Applies an `edit` prop from the app. Returns true if the editor (re)opened. */
@@ -195,7 +296,11 @@ export class CellEditor {
       this.setValue(edit.text, edit.caret);
       return opened;
     }
-    if (!this.composing && edit.text !== this.el.value && !this.wasEmitted(edit.text)) {
+    const forced = (edit.seq ?? 0) !== (prev?.seq ?? 0);
+    if (forced && !this.composing) {
+      this.setValue(edit.text, edit.caret);
+      this.lastBox = "";
+    } else if (!this.composing && edit.text !== this.el.value && !this.wasEmitted(edit.text)) {
       this.setValue(edit.text, edit.caret);
       this.lastBox = "";
     }

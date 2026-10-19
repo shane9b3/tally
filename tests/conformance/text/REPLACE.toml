@@ -1,0 +1,47 @@
+[[case]]
+formula = "=REPLACE(\"abcdef\";2;3;\"X\")"
+expect = "aXef"
+
+[[case]]
+formula = "=REPLACE(\"abcdef\";1;0;\"X\")"
+expect = "Xabcdef"
+
+[[case]]
+formula = "=REPLACE(\"abc\";10;2;\"X\")"
+expect = "abcX"
+
+[[case]]
+formula = "=REPLACE(\"abc\";2;99;\"\")"
+expect = "a"
+
+[[case]]
+formula = "=REPLACE(\"héllo\";2;1;\"e\")"
+expect = "hello"
+
+[[case]]
+formula = "=REPLACE(\"abc\";0;1;\"X\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=REPLACE(\"abc\";1;-1;\"X\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=REPLACE(12345;2;2;\"x\")"
+expect = "1x45"
+
+[[case]]
+formula = "=REPLACE(\"abc\";1.9;1;\"X\")"
+expect = "Xbc"
+
+[[case]]
+formula = "=REPLACE(1/0;1;1;\"X\")"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=REPLACE(\"abc\";1;1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=REPLACE(\"abc\";1;1;5)"
+expect = "5bc"

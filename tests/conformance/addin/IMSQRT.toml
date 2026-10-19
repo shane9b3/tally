@@ -1,0 +1,93 @@
+# IMSQRT conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMREAL(IMSQRT(\"1+i\"))"
+expect = 1.09868411346781
+tol = 1.0986841134678099e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSQRT(\"1+i\"))"
+expect = 0.45508986056222733
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMSQRT(\"3+4i\"))"
+expect = 2.0
+tol = 2e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSQRT(\"3+4i\"))"
+expect = 1.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMSQRT(\"2-3j\"))"
+expect = 1.6741492280355401
+tol = 1.67414922803554e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSQRT(\"2-3j\"))"
+expect = -0.8959774761298381
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMSQRT(\"-0.5+0.25i\"))"
+expect = 0.17178037486125622
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSQRT(\"-0.5+0.25i\"))"
+expect = 0.7276733451126774
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMSQRT(\"2\"))"
+expect = 1.4142135623730951
+tol = 1.414213562373095e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSQRT(\"2\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMSQRT(\"-i\"))"
+expect = 0.7071067811865476
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSQRT(\"-i\"))"
+expect = -0.7071067811865475
+tol = 1e-11
+
+[[case]]
+formula = "=IMSQRT(\"-4\")"
+expect = "2i"
+
+[[case]]
+formula = "=IMSQRT(\"4\")"
+expect = "2"
+
+[[case]]
+formula = "=IMSQRT(\"1+j\")"
+expect = "1.09868411346781+0.455089860562227j"
+
+[[case]]
+formula = "=IMSQRT(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMSQRT()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMSQRT(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "number argument"
+formula = "=IMREAL(IMSQRT(2))"
+expect = 1.4142135623730951
+tol = 1e-11
+

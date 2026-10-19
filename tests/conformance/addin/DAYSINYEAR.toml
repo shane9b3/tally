@@ -1,0 +1,41 @@
+# DAYSINYEAR conformance vectors. Date add-in. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=DAYSINYEAR(DATE(2024;6;1))"
+expect = 366
+
+[[case]]
+formula = "=DAYSINYEAR(DATE(2025;6;1))"
+expect = 365
+
+[[case]]
+formula = "=DAYSINYEAR(DATE(2026;6;1))"
+expect = 365
+
+[[case]]
+formula = "=DAYSINYEAR(DATE(1900;6;1))"
+expect = 365
+
+[[case]]
+formula = "=DAYSINYEAR(DATE(2000;6;1))"
+expect = 366
+
+[[case]]
+formula = "=DAYSINYEAR(DATE(2100;6;1))"
+expect = 365
+
+[[case]]
+formula = "=DAYSINYEAR(DATE(1600;6;1))"
+expect = 366
+
+[[case]]
+formula = "=DAYSINYEAR(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=DAYSINYEAR()"
+expect = "Err:511"
+
+[[case]]
+formula = "=DAYSINYEAR(1;2)"
+expect = "Err:504"

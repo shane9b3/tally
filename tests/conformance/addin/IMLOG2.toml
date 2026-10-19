@@ -1,0 +1,94 @@
+# IMLOG2 conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMREAL(IMLOG2(\"1+i\"))"
+expect = 0.5
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG2(\"1+i\"))"
+expect = 1.1330900354567985
+tol = 1.1330900354567984e-11
+
+[[case]]
+formula = "=IMREAL(IMLOG2(\"3+4i\"))"
+expect = 2.321928094887362
+tol = 2.321928094887362e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG2(\"3+4i\"))"
+expect = 1.3378042124509761
+tol = 1.3378042124509761e-11
+
+[[case]]
+formula = "=IMREAL(IMLOG2(\"2-3j\"))"
+expect = 1.850219859070546
+tol = 1.850219859070546e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG2(\"2-3j\"))"
+expect = -1.417871630745722
+tol = 1.417871630745722e-11
+
+[[case]]
+formula = "=IMREAL(IMLOG2(\"-0.5+0.25i\"))"
+expect = -0.8390359525563189
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG2(\"-0.5+0.25i\"))"
+expect = 3.8634580356017056
+tol = 3.8634580356017057e-11
+
+[[case]]
+formula = "=IMREAL(IMLOG2(\"2\"))"
+expect = 1.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG2(\"2\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMLOG2(\"-i\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLOG2(\"-i\"))"
+expect = -2.266180070913597
+tol = 2.266180070913597e-11
+
+[[case]]
+formula = "=IMLOG2(\"8\")"
+expect = "3"
+
+[[case]]
+formula = "=IMLOG2(\"1\")"
+expect = "0"
+
+[[case]]
+formula = "=IMLOG2(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMLOG2()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMLOG2(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=IMLOG2(\"0\")"
+expect = "Err:502"
+note = "AOO: IllegalArgumentException"
+
+[[case]]
+name = "number argument"
+formula = "=IMREAL(IMLOG2(2))"
+expect = 1.0
+tol = 1e-11
+

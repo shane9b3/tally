@@ -13,6 +13,14 @@ export { detectSumRange, sumFormula, sumScanRanges, rangeAddress } from "./sumRa
 export { CURRENCY_FORMAT, EMPTY_PATCH, PERCENT_FORMAT, ZOOM_PRESETS } from "./formats";
 export { columnIndex, parseA1Range } from "./a1";
 export { useDocStore, reduceResult, type DocState } from "./stores/docStore";
-export { useSelectionStore, toSelectionDto, fromSelectionDto } from "./stores/selectionStore";
+export { useSelectionStore, toSelectionDto, fromSelectionDto, selectionRanges } from "./stores/selectionStore";
 export { useEditStore, type EditOrigin } from "./stores/editStore";
 export { useUiStore, type Toast } from "./stores/uiStore";
+export { WebMockClient } from "./dev/webMock";
+export { fillRange, planSeries } from "./fill";
+export { formulaHighlights, applyPoint, assistFor, signatureAt } from "./formulaEdit";
+export { analyzeGlance, currentRegion } from "./glance";
+export { formatNumberLite } from "./numfmtLite";
+export { chipColorsFor, hexToRgba, rgbaToHex } from "./palette";
+export { useFunctionsStore } from "./stores/functionsStore";
+export { nextThemePref, resolveTheme, type ThemePref, type ResolvedTheme } from "./theme/theme";

@@ -1,0 +1,66 @@
+# GAMMADIST conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "cdf"
+formula = "=GAMMADIST(2;2;1;TRUE)"
+expect = 0.5939941502901619
+tol = 6e-14
+
+[[case]]
+name = "pdf"
+formula = "=GAMMADIST(2;2;1;FALSE)"
+expect = 0.2706705664732254
+tol = 3e-14
+
+[[case]]
+name = "cumulative default"
+formula = "=GAMMADIST(2;2;1)"
+expect = 0.5939941502901619
+tol = 6e-14
+
+[[case]]
+name = "scale"
+formula = "=GAMMADIST(10;3;2;TRUE)"
+expect = 0.8753479805169189
+tol = 9e-14
+
+[[case]]
+name = "large shape"
+formula = "=GAMMADIST(105;100;1;TRUE)"
+expect = 0.7002453423911563
+tol = 7e-13
+
+[[case]]
+name = "x = 0"
+formula = "=GAMMADIST(0;2;1;TRUE)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "negative x density"
+formula = "=GAMMADIST(-1;2;1;FALSE)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "alpha zero"
+formula = "=GAMMADIST(2;0;1)"
+expect = "Err:502"
+
+[[case]]
+name = "beta zero"
+formula = "=GAMMADIST(2;2;0)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=GAMMADIST(\"x\";2;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cumulative is FALSE"
+formula = "=GAMMADIST(5;3;2;)"
+expect = 0.12825781034984188
+tol = 1e-14
+note = "AOO counts a written but empty argument, which reads as 0/FALSE (GetDouble on svMissing)."

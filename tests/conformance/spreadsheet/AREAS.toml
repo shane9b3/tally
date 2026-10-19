@@ -1,0 +1,41 @@
+[[case]]
+formula = "=AREAS(A1)"
+expect = 1
+
+[[case]]
+formula = "=AREAS(A1:C5)"
+expect = 1
+
+[[case]]
+formula = "=AREAS(A:A)"
+expect = 1
+
+[[case]]
+formula = "=AREAS(5)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=AREAS(\"A1\")"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=AREAS(A1)"
+expect = 1
+note = "Value of the cell is irrelevant."
+
+[[case]]
+formula = "=AREAS()"
+expect = "Err:511"
+
+[[case]]
+formula = "=AREAS(A1;B1)"
+expect = "Err:504"
+
+[[case]]
+formula = "=AREAS(OFFSET(A1;1;1;2;2))"
+expect = 1
+
+[[case]]
+formula = "=AREAS(INDIRECT(\"B2:C3\"))"
+expect = 1

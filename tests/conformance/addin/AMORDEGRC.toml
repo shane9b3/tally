@@ -1,0 +1,67 @@
+# AMORDEGRC conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=AMORDEGRC(2400;DATE(2008;8;19);DATE(2008;12;31);300;1;0.15;1)"
+expect = 776
+
+[[case]]
+name = "period 0"
+formula = "=AMORDEGRC(2400;DATE(2008;8;19);DATE(2008;12;31);300;0;0.15;1)"
+expect = 330
+
+[[case]]
+name = "period 3"
+formula = "=AMORDEGRC(2400;DATE(2008;8;19);DATE(2008;12;31);300;3;0.15;1)"
+expect = 303
+
+[[case]]
+name = "after the asset is written off"
+formula = "=AMORDEGRC(2400;DATE(2008;8;19);DATE(2008;12;31);300;7;0.15;1)"
+expect = 0
+
+[[case]]
+name = "basis 0"
+formula = "=AMORDEGRC(2400;DATE(2008;8;19);DATE(2008;12;31);300;1;0.15;0)"
+expect = 776
+
+[[case]]
+name = "basis 2 is not allowed"
+formula = "=AMORDEGRC(2400;DATE(2008;8;19);DATE(2008;12;31);300;1;0.15;2)"
+expect = "Err:502"
+
+[[case]]
+name = "basis 5 is illegal"
+formula = "=AMORDEGRC(2400;DATE(2008;8;19);DATE(2008;12;31);300;1;0.15;5)"
+expect = "Err:502"
+
+[[case]]
+name = "rate must be positive"
+formula = "=AMORDEGRC(2400;DATE(2008;8;19);DATE(2008;12;31);300;1;0;1)"
+expect = "Err:502"
+
+[[case]]
+name = "purchase after first period"
+formula = "=AMORDEGRC(2400;DATE(2009;8;19);DATE(2008;12;31);300;1;0.15;1)"
+expect = "Err:502"
+
+[[case]]
+name = "salvage above cost"
+formula = "=AMORDEGRC(2400;DATE(2008;8;19);DATE(2008;12;31);3000;1;0.15;1)"
+expect = "Err:502"
+
+[[case]]
+name = "basis omitted"
+formula = "=AMORDEGRC(2400;DATE(2008;8;19);DATE(2008;12;31);300;1;0.15)"
+expect = 776
+
+[[case]]
+name = "non-numeric text"
+formula = "=AMORDEGRC(\"x\";DATE(2008;8;19);DATE(2008;12;31);300;1;0.15)"
+expect = "#VALUE!"
+
+[[case]]
+name = "too few arguments"
+formula = "=AMORDEGRC(2400;DATE(2008;8;19);DATE(2008;12;31);300;1)"
+expect = "Err:511"

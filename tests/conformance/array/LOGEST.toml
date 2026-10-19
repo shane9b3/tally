@@ -1,0 +1,61 @@
+# LOGEST conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "y = 2 * 3^x"
+formula = "=LOGEST({6|18|54|162};{1|2|3|4})"
+expect = [[3, 2]]
+tol = 1e-9
+
+[[case]]
+name = "default x"
+formula = "=LOGEST({6|18|54|162})"
+expect = [[3, 2]]
+tol = 1e-9
+
+[[case]]
+name = "const FALSE: y = b * m^x with b = 1"
+formula = "=LOGEST({3|9|27};{1|2|3};FALSE)"
+expect = [[3, 1]]
+tol = 1e-9
+
+[[case]]
+name = "rows"
+formula = "=LOGEST({6;18;54;162};{1;2;3;4})"
+expect = [[3, 2]]
+tol = 1e-9
+
+[[case]]
+name = "stats are those of the ln regression"
+formula = "=INDEX(LOGEST({6|18|54|162};{1|2|3|4};TRUE;TRUE);5;2)"
+expect = 0
+tol = 1e-9
+
+[[case]]
+name = "stats df"
+formula = "=INDEX(LOGEST({6|20|50|170|440};{1|2|3|4|5};TRUE;TRUE);4;2)"
+expect = 3
+
+[[case]]
+name = "two regressors"
+cells = { A1 = 6, A2 = 12, A3 = 72, A4 = 144, A5 = 864, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5, C1 = 1, C2 = 1, C3 = 2, C4 = 2, C5 = 3 }
+origin = "F1"
+formula = "=LOGEST(A1:A5;B1:C5)"
+expect = [[3, 2, 1]]
+tol = 1e-8
+note = "y = 2^x1 * 3^x2 gives m2, m1, b reversed: 3, 2, 1."
+
+[[case]]
+name = "non-positive y"
+formula = "=LOGEST({1|-2|3};{1|2|3})"
+expect = "Err:502"
+
+[[case]]
+name = "text in y"
+cells = { A1 = 1, A2 = "x", A3 = 3 }
+formula = "=LOGEST(A1:A3)"
+expect = "Err:502"
+
+[[case]]
+name = "too few samples"
+formula = "=LOGEST({5};{1})"
+expect = "Err:502"

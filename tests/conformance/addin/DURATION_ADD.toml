@@ -1,0 +1,101 @@
+# DURATION_ADD conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx). The add-in DURATION (Macaulay); ODF/OOXML name DURATION.
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09;2;1)"
+expect = 5.993775
+tol = 1e-06
+
+[[case]]
+name = "basis omitted"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09;2)"
+expect = 5.99377495554519
+tol = 1e-09
+
+[[case]]
+name = "zero coupon"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0;0.09;1;1)"
+expect = 8
+
+[[case]]
+name = "negative coupon"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);-0.01;0.09;2)"
+expect = "Err:502"
+
+[[case]]
+name = "negative yield"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;-0.09;2)"
+expect = "Err:502"
+
+[[case]]
+name = "basis 0"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09;2;0)"
+expect = 5.99377495554519
+tol = 1e-09
+
+[[case]]
+name = "basis 1"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09;2;1)"
+expect = 5.99377495554519
+tol = 1e-09
+
+[[case]]
+name = "basis 2"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09;2;2)"
+expect = 6.11044162221185
+tol = 1e-09
+
+[[case]]
+name = "basis 3"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09;2;3)"
+expect = 5.99925440759998
+tol = 1e-09
+
+[[case]]
+name = "basis 4"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09;2;4)"
+expect = 5.99377495554519
+tol = 1e-09
+
+[[case]]
+name = "basis 5 is illegal"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09;2;5)"
+expect = "Err:502"
+
+[[case]]
+name = "empty text basis takes the default"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09;2;\"\")"
+expect = 5.99377495554519
+tol = 1e-09
+
+[[case]]
+name = "non-numeric text basis"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09;2;\"x\")"
+expect = "Err:502"
+
+[[case]]
+name = "frequency must be 1, 2 or 4"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09;3;1)"
+expect = "Err:502"
+
+[[case]]
+name = "settlement after maturity"
+formula = "=DURATION_ADD(DATE(2016;1;1);DATE(2008;1;1);0.08;0.09;2;1)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=DURATION_ADD(\"x\";DATE(2016;1;1);0.08;0.09;2;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=DURATION_ADD(A4;DATE(2016;1;1);0.08;0.09;2;1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=DURATION_ADD(DATE(2008;1;1);DATE(2016;1;1);0.08;0.09)"
+expect = "Err:511"

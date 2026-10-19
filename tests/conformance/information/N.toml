@@ -1,0 +1,56 @@
+[[case]]
+formula = "=N(5)"
+expect = 5
+
+[[case]]
+formula = "=N(\"x\")"
+expect = 0
+
+[[case]]
+formula = "=N(TRUE)"
+expect = 1
+
+[[case]]
+formula = "=N(FALSE)"
+expect = 0
+
+[[case]]
+cells = { A1 = 7 }
+formula = "=N(A1)"
+expect = 7
+
+[[case]]
+formula = "=N(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=N(B9)"
+expect = 0
+
+[[case]]
+formula = "=N(\"7\")"
+expect = 0
+
+[[case]]
+cells = { A1 = 1, A2 = 2 }
+origin = "C2"
+formula = "=N(A1:A2)"
+expect = 2
+
+[[case]]
+formula = "=N()"
+expect = "Err:511"
+
+[[case]]
+formula = "=N(-2.5)"
+expect = -2.5
+
+[[case]]
+cells = { A1 = true }
+formula = "=N(A1)"
+expect = 1
+
+[[case]]
+cells = { A1 = "text" }
+formula = "=N(A1)"
+expect = 0

@@ -1,0 +1,49 @@
+# WORKDAY conformance vectors. Analysis add-in; Saturday and Sunday are free. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=WORKDAY(DATE(2026;10;19);5)"
+expect = 46321
+
+[[case]]
+formula = "=WORKDAY(DATE(2026;10;19);0)"
+expect = 46314
+
+[[case]]
+formula = "=WORKDAY(DATE(2026;10;19);-1)"
+expect = 46311
+
+[[case]]
+formula = "=WORKDAY(DATE(2026;10;19);1;DATE(2026;10;20))"
+expect = 46316
+
+[[case]]
+name = "skips weekend"
+formula = "=WORKDAY(DATE(2026;10;16);1)"
+expect = 46314
+
+[[case]]
+name = "start on Saturday"
+formula = "=WORKDAY(DATE(2026;10;17);1)"
+expect = 46314
+
+[[case]]
+formula = "=WORKDAY(DATE(2026;10;19);-5)"
+expect = 46307
+
+[[case]]
+name = "holiday range"
+cells = { A1 = 46315, A2 = 46316 }
+formula = "=WORKDAY(DATE(2026;10;19);10;A1:A2)"
+expect = 46330
+
+[[case]]
+formula = "=WORKDAY(DATE(2026;10;19);260)"
+expect = 46678
+
+[[case]]
+formula = "=WORKDAY(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=WORKDAY(1)"
+expect = "Err:511"

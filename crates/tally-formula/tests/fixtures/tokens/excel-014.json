@@ -1,0 +1,72 @@
+{
+  "src": "=IF(A1>0,\"pos\",\"neg\")",
+  "dialect": "excel-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Func",
+      "text": "IF",
+      "start": 1,
+      "end": 3
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 3,
+      "end": 4
+    },
+    {
+      "kind": "CellRef",
+      "text": "A1",
+      "start": 4,
+      "end": 6
+    },
+    {
+      "kind": "Gt",
+      "text": ">",
+      "start": 6,
+      "end": 7
+    },
+    {
+      "kind": "Number",
+      "text": "0",
+      "start": 7,
+      "end": 8
+    },
+    {
+      "kind": "Comma",
+      "text": ",",
+      "start": 8,
+      "end": 9
+    },
+    {
+      "kind": "String",
+      "text": "\"pos\"",
+      "start": 9,
+      "end": 14
+    },
+    {
+      "kind": "Comma",
+      "text": ",",
+      "start": 14,
+      "end": 15
+    },
+    {
+      "kind": "String",
+      "text": "\"neg\"",
+      "start": 15,
+      "end": 20
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 20,
+      "end": 21
+    }
+  ]
+}

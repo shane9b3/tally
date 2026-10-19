@@ -1,0 +1,45 @@
+[[case]]
+formula = "=STYLE(\"Good\")"
+expect = 0
+note = "Style changes are a UI side effect; returns 0."
+
+[[case]]
+formula = "=STYLE(\"Good\";10;\"Default\")"
+expect = 0
+
+[[case]]
+formula = "=STYLE(\"Good\";0)"
+expect = 0
+
+[[case]]
+formula = "=STYLE(\"Nonexistent\")"
+expect = 0
+
+[[case]]
+formula = "=STYLE(\"\")"
+expect = 0
+
+[[case]]
+formula = "=STYLE(5)"
+expect = 0
+
+[[case]]
+cells = { A1 = 10 }
+formula = "=IF(A1>5;STYLE(\"Bad\");STYLE(\"Good\"))"
+expect = 0
+
+[[case]]
+formula = "=STYLE(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=STYLE()"
+expect = "Err:511"
+
+[[case]]
+formula = "=STYLE(\"a\";1;\"b\";2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=STYLE(\"a\";\"x\")"
+expect = "#VALUE!"

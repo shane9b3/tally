@@ -1,0 +1,58 @@
+# XNPV conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx). Values and dates: every cell of a range, row by row; text/empty cells are 0.
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+cells = { A1 = -10000, A2 = 2750, A3 = 4250, A4 = 3250, A5 = 2750, B1 = 39448, B2 = 39508, B3 = 39751, B4 = 39859, B5 = 39904 }
+formula = "=XNPV(0.09;A1:A5;B1:B5)"
+expect = 2086.647602
+tol = 1e-06
+
+[[case]]
+name = "inline arrays"
+formula = "=XNPV(0.09;{-10000;2750;4250;3250;2750};{39448;39508;39751;39859;39904})"
+expect = 2086.647602
+tol = 1e-06
+
+[[case]]
+name = "zero rate"
+cells = { A1 = -10000, A2 = 2750, A3 = 4250, A4 = 3250, A5 = 2750, B1 = 39448, B2 = 39508, B3 = 39751, B4 = 39859, B5 = 39904 }
+formula = "=XNPV(0;A1:A5;B1:B5)"
+expect = 3000
+tol = 1e-09
+
+[[case]]
+name = "different lengths"
+cells = { A1 = -10000, A2 = 2750, A3 = 4250, A4 = 3250, A5 = 2750, B1 = 39448, B2 = 39508, B3 = 39751, B4 = 39859, B5 = 39904 }
+formula = "=XNPV(0.09;A1:A5;B1:B4)"
+expect = "Err:502"
+
+[[case]]
+name = "a single value"
+cells = { A1 = -10000, A2 = 2750, A3 = 4250, A4 = 3250, A5 = 2750, B1 = 39448, B2 = 39508, B3 = 39751, B4 = 39859, B5 = 39904 }
+formula = "=XNPV(0.09;A1;B1)"
+expect = "Err:502"
+
+[[case]]
+name = "dates truncated"
+formula = "=XNPV(0.09;{-100;110};{39448.9;39813.9})"
+expect = 0.917431192660544
+tol = 1e-09
+
+[[case]]
+name = "error in range"
+cells = { A1 = -100, A2 = "=1/0", B1 = 39448, B2 = 39813 }
+formula = "=XNPV(0.09;A1:A2;B1:B2)"
+expect = "Err:504"
+
+[[case]]
+name = "non-numeric rate"
+cells = { A1 = -10000, A2 = 2750, A3 = 4250, A4 = 3250, A5 = 2750, B1 = 39448, B2 = 39508, B3 = 39751, B4 = 39859, B5 = 39904 }
+formula = "=XNPV(\"x\";A1:A5;B1:B5)"
+expect = "#VALUE!"
+
+[[case]]
+name = "too few arguments"
+cells = { A1 = -10000, A2 = 2750, A3 = 4250, A4 = 3250, A5 = 2750, B1 = 39448, B2 = 39508, B3 = 39751, B4 = 39859, B5 = 39904 }
+formula = "=XNPV(0.09;A1:A5)"
+expect = "Err:511"

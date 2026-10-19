@@ -16,7 +16,6 @@ const PARAMS: &[Param] = &[
 /// `IFERROR(value; value_if_error)`.
 pub const IFERROR: FunctionDef = FunctionDef::new("IFERROR", Category::Logical, PARAMS, iferror)
     .odf("COM.MICROSOFT.IFERROR")
-    .ooxml("_xlfn.IFERROR")
     .extension()
     .returns(ReturnKind::Any)
     .flags(FnFlags::LAZY_ARGS.union(FnFlags::RETURNS_REF))
@@ -25,7 +24,6 @@ pub const IFERROR: FunctionDef = FunctionDef::new("IFERROR", Category::Logical, 
 /// `IFNA(value; value_if_na)`.
 pub const IFNA: FunctionDef = FunctionDef::new("IFNA", Category::Logical, PARAMS, ifna)
     .odf("COM.MICROSOFT.IFNA")
-    .ooxml("_xlfn.IFNA")
     .extension()
     .returns(ReturnKind::Any)
     .flags(FnFlags::LAZY_ARGS.union(FnFlags::RETURNS_REF))

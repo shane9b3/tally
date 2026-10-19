@@ -1,0 +1,57 @@
+# NORMINV conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "upper"
+formula = "=NORMINV(0.975;10;2)"
+expect = 13.919927969080108
+tol = 1e-12
+
+[[case]]
+name = "median"
+formula = "=NORMINV(0.5;3;1)"
+expect = 3.0
+tol = 0
+
+[[case]]
+name = "lower tail"
+formula = "=NORMINV(0.001;0;1)"
+expect = -3.0902323061678136
+tol = 3e-13
+
+[[case]]
+name = "p = 0"
+formula = "=NORMINV(0;0;1)"
+expect = "#VALUE!"
+note = "AOO ScNormInv: p of exactly 0 or 1 is NoValue."
+
+[[case]]
+name = "p = 1"
+formula = "=NORMINV(1;0;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "p > 1"
+formula = "=NORMINV(1.5;0;1)"
+expect = "Err:502"
+
+[[case]]
+name = "stdev zero"
+formula = "=NORMINV(0.5;0;0)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=NORMINV(\"x\";0;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty p is 0"
+formula = "=NORMINV(A1;0;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "bool p is 1"
+cells = { A1 = true }
+formula = "=NORMINV(A1;0;1)"
+expect = "#VALUE!"

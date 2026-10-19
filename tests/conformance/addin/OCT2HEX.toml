@@ -1,0 +1,41 @@
+# OCT2HEX conformance vectors. Analysis add-in; 10-digit two's complement. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=OCT2HEX(\"377\")"
+expect = "FF"
+
+[[case]]
+formula = "=OCT2HEX(\"377\";4)"
+expect = "00FF"
+
+[[case]]
+formula = "=OCT2HEX(\"7777777777\")"
+expect = "FFFFFFFFFF"
+
+[[case]]
+formula = "=OCT2HEX(\"4000000000\")"
+expect = "FFE0000000"
+
+[[case]]
+formula = "=OCT2HEX(\"0\")"
+expect = "0"
+
+[[case]]
+formula = "=OCT2HEX(\"17\";4)"
+expect = "000F"
+
+[[case]]
+formula = "=OCT2HEX(\"377\";1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=OCT2HEX(\"9\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=OCT2HEX(\"377\";11)"
+expect = "Err:502"
+
+[[case]]
+formula = "=OCT2HEX()"
+expect = "Err:511"

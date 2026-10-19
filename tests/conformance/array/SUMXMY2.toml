@@ -1,0 +1,61 @@
+# SUMXMY2 conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=SUMXMY2({2;3;4};{1;2;5})"
+expect = 3
+
+[[case]]
+name = "ranges"
+cells = { A1 = 2, A2 = 3, A3 = 4, B1 = 1, B2 = 2, B3 = 5 }
+formula = "=SUMXMY2(A1:A3;B1:B3)"
+expect = 3
+
+[[case]]
+name = "single"
+formula = "=SUMXMY2(3;1)"
+expect = 4
+
+[[case]]
+name = "dimension mismatch"
+formula = "=SUMXMY2({1;2;3};{1;2})"
+expect = "#VALUE!"
+
+[[case]]
+name = "shape mismatch"
+formula = "=SUMXMY2({1;2};{1|2})"
+expect = "#VALUE!"
+
+[[case]]
+name = "text pair skipped"
+cells = { A1 = 3, A2 = "x", B1 = 1, B2 = 9 }
+formula = "=SUMXMY2(A1:A2;B1:B2)"
+expect = 4
+note = "AOO skips pairs containing text."
+
+[[case]]
+name = "empty pair skipped"
+cells = { A1 = 3, B1 = 1, B2 = 9 }
+formula = "=SUMXMY2(A1:A2;B1:B2)"
+expect = 4
+
+[[case]]
+name = "boolean counts as number"
+cells = { A1 = true, B1 = 2 }
+formula = "=SUMXMY2(A1;B1)"
+expect = 1
+
+[[case]]
+name = "error propagates"
+cells = { A1 = 1, A2 = "=1/0", B1 = 1, B2 = 1 }
+formula = "=SUMXMY2(A1:A2;B1:B2)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "negative numbers"
+formula = "=SUMXMY2({-2;-3};{1;1})"
+expect = 25
+
+[[case]]
+name = "too few args"
+formula = "=SUMXMY2({1})"
+expect = "Err:511"

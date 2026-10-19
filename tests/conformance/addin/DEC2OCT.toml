@@ -1,0 +1,45 @@
+# DEC2OCT conformance vectors. Analysis add-in; 10-digit two's complement. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=DEC2OCT(-1)"
+expect = "7777777777"
+
+[[case]]
+formula = "=DEC2OCT(8)"
+expect = "10"
+
+[[case]]
+formula = "=DEC2OCT(8;4)"
+expect = "0010"
+
+[[case]]
+formula = "=DEC2OCT(0)"
+expect = "0"
+
+[[case]]
+formula = "=DEC2OCT(536870911)"
+expect = "3777777777"
+
+[[case]]
+formula = "=DEC2OCT(-536870912)"
+expect = "4000000000"
+
+[[case]]
+formula = "=DEC2OCT(536870912)"
+expect = "Err:502"
+
+[[case]]
+formula = "=DEC2OCT(8;1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=DEC2OCT(8;0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=DEC2OCT(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=DEC2OCT()"
+expect = "Err:511"

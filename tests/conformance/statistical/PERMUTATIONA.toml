@@ -1,0 +1,49 @@
+# PERMUTATIONA conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=PERMUTATIONA(3;2)"
+expect = 9
+
+[[case]]
+formula = "=PERMUTATIONA(2;10)"
+expect = 1024
+
+[[case]]
+formula = "=PERMUTATIONA(5;0)"
+expect = 1
+
+[[case]]
+formula = "=PERMUTATIONA(0;0)"
+expect = 1
+note = "0^0 is 1 (LibreOffice, Excel)."
+
+[[case]]
+formula = "=PERMUTATIONA(0;3)"
+expect = 0
+
+[[case]]
+formula = "=PERMUTATIONA(1;5)"
+expect = 1
+
+[[case]]
+name = "arguments truncated"
+formula = "=PERMUTATIONA(3.9;2.9)"
+expect = 9
+
+[[case]]
+formula = "=PERMUTATIONA(-1;2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=PERMUTATIONA(2;-1)"
+expect = "Err:502"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=NA()" }
+formula = "=PERMUTATIONA(A1;2)"
+expect = "#N/A"
+
+[[case]]
+formula = "=PERMUTATIONA(5)"
+expect = "Err:511"

@@ -1,0 +1,78 @@
+# BESSELY conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=BESSELY(1;0)"
+expect = 0.088256964215677
+tol = 8.8256964215677e-12
+
+[[case]]
+formula = "=BESSELY(1;1)"
+expect = -0.7812128213002889
+tol = 7.812128213002889e-11
+
+[[case]]
+formula = "=BESSELY(2.5;3)"
+expect = -0.7560554967536707
+tol = 7.560554967536708e-11
+
+[[case]]
+formula = "=BESSELY(10;2)"
+expect = -0.005868082442208589
+tol = 5.868082442208589e-13
+
+[[case]]
+formula = "=BESSELY(30;5)"
+expect = 0.031627359289264446
+tol = 3.1627359289264446e-12
+
+[[case]]
+formula = "=BESSELY(0.5;0)"
+expect = -0.44451873350670656
+tol = 4.445187335067066e-11
+
+[[case]]
+formula = "=BESSELY(7;0)"
+expect = -0.02594974396720927
+tol = 2.594974396720927e-12
+
+[[case]]
+formula = "=BESSELY(0.1;7)"
+expect = -293476652667.3922
+tol = 29.347665266739224
+
+[[case]]
+formula = "=BESSELY(40;1)"
+expect = -0.0057935058215496296
+tol = 5.793505821549629e-13
+
+[[case]]
+formula = "=BESSELY(1;-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BESSELY(0;1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BESSELY(-1;1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BESSELY(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=BESSELY(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=BESSELY(A1;1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "order truncated"
+formula = "=BESSELY(1;2.9)"
+expect = -1.6506826068162548
+tol = 1.6506826068162547e-10
+

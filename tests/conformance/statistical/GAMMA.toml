@@ -1,0 +1,64 @@
+# GAMMA conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "integer"
+formula = "=GAMMA(5)"
+expect = 24.0
+tol = 0
+
+[[case]]
+name = "half"
+formula = "=GAMMA(0.5)"
+expect = 1.772453850905516
+tol = 2e-13
+
+[[case]]
+name = "negative non-integer"
+formula = "=GAMMA(-1.5)"
+expect = 2.363271801207355
+tol = 2e-14
+
+[[case]]
+name = "near overflow"
+formula = "=GAMMA(170.5)"
+expect = 5.56209241456e+305
+tol = 6e+292
+
+[[case]]
+name = "negative integer"
+formula = "=GAMMA(-2)"
+expect = "Err:502"
+
+[[case]]
+name = "zero"
+formula = "=GAMMA(0)"
+expect = "Err:502"
+
+[[case]]
+name = "overflow"
+formula = "=GAMMA(172)"
+expect = "#NUM!"
+
+[[case]]
+name = "text"
+formula = "=GAMMA(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "bool"
+cells = { A1 = true }
+formula = "=GAMMA(A1)"
+expect = 1.0
+tol = 1e-13
+
+[[case]]
+name = "empty cell is 0"
+formula = "=GAMMA(A1)"
+expect = "Err:502"
+
+[[case]]
+name = "tiny"
+formula = "=GAMMA(1E-10)"
+expect = 9999999999.422785
+tol = 1e-03

@@ -1,0 +1,41 @@
+# WEEKSINYEAR conformance vectors. Date add-in; ISO 8601 week count. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=WEEKSINYEAR(DATE(2026;6;1))"
+expect = 53
+
+[[case]]
+formula = "=WEEKSINYEAR(DATE(2025;6;1))"
+expect = 52
+
+[[case]]
+formula = "=WEEKSINYEAR(DATE(2020;6;1))"
+expect = 53
+
+[[case]]
+formula = "=WEEKSINYEAR(DATE(2015;6;1))"
+expect = 53
+
+[[case]]
+formula = "=WEEKSINYEAR(DATE(2024;6;1))"
+expect = 52
+
+[[case]]
+formula = "=WEEKSINYEAR(DATE(2021;6;1))"
+expect = 52
+
+[[case]]
+formula = "=WEEKSINYEAR(DATE(2004;6;1))"
+expect = 53
+
+[[case]]
+formula = "=WEEKSINYEAR(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=WEEKSINYEAR()"
+expect = "Err:511"
+
+[[case]]
+formula = "=WEEKSINYEAR(1;2)"
+expect = "Err:504"

@@ -1,0 +1,77 @@
+# PROB conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+cells = { A1 = 0, A2 = 1, A3 = 2, A4 = 3, B1 = 0.2, B2 = 0.3, B3 = 0.1, B4 = 0.4 }
+formula = "=PROB(A1:A4;B1:B4;1;2)"
+expect = 0.4
+tol = 1e-12
+
+[[case]]
+name = "no upper limit: exact match of the lower limit"
+cells = { A1 = 0, A2 = 1, A3 = 2, A4 = 3, B1 = 0.2, B2 = 0.3, B3 = 0.1, B4 = 0.4 }
+formula = "=PROB(A1:A4;B1:B4;3)"
+expect = 0.4
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 0, A2 = 1, A3 = 2, A4 = 3, B1 = 0.2, B2 = 0.3, B3 = 0.1, B4 = 0.4 }
+formula = "=PROB(A1:A4;B1:B4;0;3)"
+expect = 1.0
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 0, A2 = 1, A3 = 2, A4 = 3, B1 = 0.2, B2 = 0.3, B3 = 0.1, B4 = 0.4 }
+formula = "=PROB(A1:A4;B1:B4;-5;0)"
+expect = 0.2
+tol = 1e-12
+
+[[case]]
+name = "no values in the interval"
+cells = { A1 = 0, A2 = 1, A3 = 2, A4 = 3, B1 = 0.2, B2 = 0.3, B3 = 0.1, B4 = 0.4 }
+formula = "=PROB(A1:A4;B1:B4;1.5;1.9)"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+name = "limits swapped"
+cells = { A1 = 0, A2 = 1, A3 = 2, A4 = 3, B1 = 0.2, B2 = 0.3, B3 = 0.1, B4 = 0.4 }
+formula = "=PROB(A1:A4;B1:B4;2;1)"
+expect = 0.4
+tol = 1e-12
+note = "LibreOffice swaps the limits; Excel returns 0."
+
+[[case]]
+name = "different sizes"
+cells = { A1 = 0, A2 = 1, A3 = 2, A4 = 3, B1 = 0.2, B2 = 0.3, B3 = 0.1, B4 = 0.4 }
+formula = "=PROB(A1:A4;B1:B3;1;2)"
+expect = "#N/A"
+
+[[case]]
+name = "probabilities do not sum to 1"
+cells = { A1 = 0, A2 = 1, A3 = 2, A4 = 3, B1 = 0.5, B2 = 0.3, B3 = 0.1, B4 = 0.4 }
+formula = "=PROB(A1:A4;B1:B4;1;2)"
+expect = "#VALUE!"
+note = "AOO/LibreOffice: NoValue; Excel gives #NUM!."
+
+[[case]]
+name = "probability of 0 is rejected"
+cells = { A1 = 0, A2 = 1, A3 = 2, A4 = 3, B1 = 0, B2 = 0.3, B3 = 0.1, B4 = 0.6 }
+formula = "=PROB(A1:A4;B1:B4;1;2)"
+expect = "#VALUE!"
+
+[[case]]
+name = "inline arrays"
+formula = "=PROB({1;2;3};{0.25;0.25;0.5};2;3)"
+expect = 0.75
+tol = 1e-12
+
+[[case]]
+name = "text in data"
+cells = { A1 = 0, A2 = "x", A3 = 2, A4 = 3, B1 = 0.2, B2 = 0.3, B3 = 0.1, B4 = 0.4 }
+formula = "=PROB(A1:A4;B1:B4;1;2)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = 0, A2 = 1, A3 = 2, A4 = 3, B1 = 0.2, B2 = 0.3, B3 = 0.1, B4 = 0.4 }
+formula = "=PROB(A1:A4;B1:B4)"
+expect = "Err:511"

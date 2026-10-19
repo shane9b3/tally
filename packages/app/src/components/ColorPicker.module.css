@@ -1,0 +1,133 @@
+.card {
+  position: fixed;
+  z-index: 50;
+  width: 232px;
+  padding: 10px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-card);
+  background: var(--tally-bg);
+  box-shadow: var(--tally-shadow-pop);
+  animation: pop 120ms ease-out;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(2px) scale(0.98);
+  }
+}
+
+.title {
+  margin: 0 2px 8px;
+  color: var(--tally-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 5px;
+}
+
+.swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--tally-border);
+  border-radius: 6px;
+  cursor: default;
+  transition: transform 80ms ease;
+}
+
+.swatch:hover {
+  transform: scale(1.12);
+}
+
+.swatch[aria-pressed="true"] {
+  outline: 2px solid var(--tally-accent);
+  outline-offset: 1px;
+}
+
+.none {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 28px;
+  margin-bottom: 8px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: default;
+}
+
+.none:hover {
+  background: var(--tally-gray-100);
+}
+
+.noneSwatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--tally-border);
+  border-radius: 5px;
+  background: linear-gradient(135deg, transparent 45%, var(--tally-danger) 45%, var(--tally-danger) 55%, transparent 55%);
+}
+
+.custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--tally-border-subtle);
+}
+
+.preview {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border: 1px solid var(--tally-border);
+  border-radius: 6px;
+}
+
+.hex {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--tally-border);
+  border-radius: 6px;
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font: inherit;
+  font-family: var(--tally-font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.hex:focus {
+  border-color: var(--tally-accent);
+}
+
+.apply {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-accent);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.apply:disabled {
+  opacity: 0.4;
+}

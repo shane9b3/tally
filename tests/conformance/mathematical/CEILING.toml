@@ -1,0 +1,97 @@
+# CEILING conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=CEILING(2.5;1)"
+expect = 3
+
+[[case]]
+formula = "=CEILING(2.5;2)"
+expect = 4
+
+[[case]]
+formula = "=CEILING(1.23;0.1)"
+expect = 1.3
+
+[[case]]
+formula = "=CEILING(4.42;0.05)"
+expect = 4.45
+
+[[case]]
+formula = "=CEILING(-2.5;-1)"
+expect = -2
+note = "Mode 0: negative numbers round toward zero (AOO ScCeil)."
+
+[[case]]
+formula = "=CEILING(-2.5;-1;0)"
+expect = -2
+
+[[case]]
+formula = "=CEILING(-2.5;-1;1)"
+expect = -3
+note = "Non-zero mode: rounds by absolute value, away from zero."
+
+[[case]]
+formula = "=CEILING(-2.5;-1;TRUE)"
+expect = -3
+
+[[case]]
+formula = "=CEILING(2.5;1;1)"
+expect = 3
+note = "Mode has no effect on positive numbers."
+
+[[case]]
+formula = "=CEILING(-2.5;2)"
+expect = "Err:502"
+note = "Number and significance of opposite signs."
+
+[[case]]
+formula = "=CEILING(2.5;-2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=CEILING(7;0)"
+expect = 0
+note = "Significance 0 gives 0."
+
+[[case]]
+formula = "=CEILING(0;5)"
+expect = 0
+
+[[case]]
+name = "empty number"
+formula = "=CEILING(A1;1)"
+expect = 0
+
+[[case]]
+formula = "=CEILING(\"2.2\";1)"
+expect = 3
+
+[[case]]
+formula = "=CEILING(1.5;\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=CEILING(A1;1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=CEILING(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=CEILING(1;2;3;4)"
+expect = "Err:504"
+
+[[case]]
+formula = "=CEILING(-2.5;-1;\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=CEILING(6;3)"
+expect = 6
+
+[[case]]
+formula = "=CEILING(0.1+0.2;0.1)"
+expect = 0.30000000000000004
+note = "approxCeil: 0.30000000000000004/0.1 snaps to 3."

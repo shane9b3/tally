@@ -6,7 +6,9 @@
 import type { CellPos } from "@tally/bridge";
 import type { CellEditor } from "./editor";
 import type { Geometry, Hit } from "./geometry";
+import { fillTarget } from "./fillHandle";
 import {
+  addRange,
   applyEdge,
   cellSelection,
   edgeOrigin,
@@ -14,6 +16,7 @@ import {
   extentCorner,
   inRange,
   isWholeCols,
+  isWholeRows,
   moveBy,
   reduceKey,
   selectAll,
@@ -24,10 +27,22 @@ import {
   type Limits,
   type Mods,
 } from "./selection";
-import type { CommitMove, Dir, GridEvents, Selection } from "./types";
+import type { CommitMove, ContextArea, Dir, GridEvents, Selection } from "./types";
+import type { RangeDto } from "@tally/bridge";
 
 /** Minimum column width a drag can set (zoom 100%). */
 export const MIN_COL_WIDTH = 8;
+/** Minimum row height a drag can set (zoom 100%). */
+export const MIN_ROW_HEIGHT = 6;
+/** Half-size of the fill handle's hit square (screen px). */
+export const FILL_HANDLE_HIT = 5;
+
+/** A live resize guide: the axis, the index and the new far edge (screen px). */
+export interface ResizeGuide {
+  axis: "col" | "row";
+  index: number;
+  pos: number;
+}
 
 /** What the interaction layer needs from the grid. */
 export interface InteractionHost {
@@ -42,10 +57,18 @@ export interface InteractionHost {
   select(sel: Selection, opts: { emit: boolean; reveal?: CellPos }): void;
   /** Scrolls the content by (dx, dy) screen px. */
   scrollBy(dx: number, dy: number): void;
+  /** Scrolls the minimum amount that makes `cell` visible. */
+  reveal(cell: CellPos): void;
   /** Live column resize preview (CSS px at zoom 100%). */
   previewColWidth(start: number, end: number, px: number): void;
-  setHoverGutter(c: number | null): void;
-  setResizeGuide(guide: { c: number; x: number } | null): void;
+  /** Live row resize preview (CSS px at zoom 100%). */
+  previewRowHeight(start: number, end: number, px: number): void;
+  setHoverGutter(g: { axis: "col" | "row"; index: number } | null): void;
+  setResizeGuide(guide: ResizeGuide | null): void;
+  /** The fill-handle drag preview (the target range), or `null`. */
+  setFillPreview(range: RangeDto | null): void;
+  /** Whether point mode is on (the `pointMode` prop). */
+  pointMode(): boolean;
   invalidateOverlay(): void;
   /** Called when the editor opens/closes/grows. */
   editorChanged(): void;
@@ -55,7 +78,9 @@ type Drag =
   | { kind: "cells" }
   | { kind: "rows"; anchor: number }
   | { kind: "cols"; anchor: number }
-  | { kind: "resize"; c: number; start: number; end: number; startX: number; startW: number; px: number };
+  | { kind: "resize"; axis: "col" | "row"; i: number; start: number; end: number; startPos: number; startSize: number; px: number; px0: number }
+  | { kind: "fill"; source: RangeDto; target: RangeDto | null }
+  | { kind: "point" };
 
 const DIRS: Record<string, Dir> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
 
@@ -65,6 +90,10 @@ export class Interaction {
   private last = { x: 0, y: 0 };
   private autoScrollRaf = 0;
   private edgeSeq = 0;
+  /** Point mode: the reference being picked (null until the first pick). */
+  private pointSel: Selection | null = null;
+  /** Set by ⇧⌘V keydown; the following DOM `paste` is "values only". */
+  private plainPaste = false;
   private readonly disposers: (() => void)[] = [];
 
   constructor(private readonly host: InteractionHost) {
@@ -90,7 +119,16 @@ export class Interaction {
       host.editor.composing = false;
       this.emitChange();
     });
-    this.on(ta, "keyup", () => host.editor.resetIdleValue());
+    this.on(ta, "keyup", () => {
+      host.editor.resetIdleValue();
+      this.plainPaste = false;
+      this.emitCaret();
+    });
+    this.on(ta, "mouseup", () => {
+      // Clicking inside the editor text moves the caret: a new pick starts fresh.
+      this.pointSel = null;
+      this.emitCaret();
+    });
     this.on(root, "copy", (e) => this.onClipboard(e, "copy"));
     this.on(root, "cut", (e) => this.onClipboard(e, "cut"));
     this.on(root, "paste", (e) => this.onClipboard(e, "paste"));
@@ -131,6 +169,24 @@ export class Interaction {
   // Pointer
   // -------------------------------------------------------------------------
 
+  /** Forgets the point-mode reference (the next pick starts at the edited cell). */
+  resetPoint(): void {
+    this.pointSel = null;
+  }
+
+  /** Whether `p` is on the fill handle of the selection. */
+  private onFillHandle(p: { x: number; y: number }): boolean {
+    const host = this.host;
+    if (host.editor.open) return false;
+    const sel = host.selection();
+    if (sel.others && sel.others.length > 0) return false;
+    const geo = host.geometry();
+    const x = geo.colX(sel.range.c1 + 1);
+    const y = geo.rowY(sel.range.r1 + 1);
+    if (x < geo.headerW || y < geo.headerH || x > geo.width + 4 || y > geo.height + 4) return false;
+    return Math.abs(p.x - x) <= FILL_HANDLE_HIT && Math.abs(p.y - y) <= FILL_HANDLE_HIT;
+  }
+
   private onPointerDown(e: PointerEvent): void {
     if (this.onScrollbar(e)) return;
     const host = this.host;
@@ -140,17 +196,36 @@ export class Interaction {
     const lim = host.limits();
     const hit = geo.hit(p.x, p.y);
     const sel = host.selection();
+    const add = (e.metaKey || e.ctrlKey) && !e.shiftKey;
+
+    // Point mode: clicking cells picks references for the formula being edited.
+    if (e.button === 0 && host.editor.open && host.pointMode() && hit.area === "cell") {
+      const cell = { r: hit.r, c: hit.c };
+      const base = this.pointSel ?? cellSelection(host.editor.cell ?? sel.active);
+      this.pointSel = e.shiftKey && this.pointSel ? extendTo(base, cell) : cellSelection(cell);
+      host.events().onPointRange?.({ ...this.pointSel.range }, "start");
+      this.drag = { kind: "point" };
+      this.capture(e);
+      return;
+    }
+
     this.focus();
 
     if (e.button === 2) {
-      if (hit.area === "cell" && !inRange(sel.range, hit)) {
+      if (hit.area === "cell" && !inRange(sel.range, hit) && !(sel.others ?? []).some((r) => inRange(r, hit))) {
         this.commitIfEditing("none");
         host.select(cellSelection(hit), { emit: true });
       }
       return;
     }
     if (e.button !== 0) return;
-    if (hit.area !== "colGutter") this.commitIfEditing("none");
+
+    if (this.onFillHandle(p)) {
+      this.drag = { kind: "fill", source: { ...sel.range }, target: null };
+      this.capture(e);
+      return;
+    }
+    if (hit.area !== "colGutter" && hit.area !== "rowGutter") this.commitIfEditing("none");
 
     switch (hit.area) {
       case "corner":
@@ -161,34 +236,59 @@ export class Interaction {
         const start = whole ? sel.range.c0 : hit.c;
         const end = whole ? sel.range.c1 : hit.c;
         const startW = geo.colW(hit.c);
-        this.drag = { kind: "resize", c: hit.c, start, end, startX: p.x, startW, px: geo.cols.sizeOf(hit.c) };
-        host.setResizeGuide({ c: hit.c, x: geo.colX(hit.c) + startW });
+        const px = geo.cols.sizeOf(hit.c);
+        this.drag = { kind: "resize", axis: "col", i: hit.c, start, end, startPos: p.x, startSize: startW, px, px0: px };
+        host.setResizeGuide({ axis: "col", index: hit.c, pos: geo.colX(hit.c) + startW });
+        break;
+      }
+      case "rowGutter": {
+        const whole = isWholeRows(sel.range, lim) && hit.r >= sel.range.r0 && hit.r <= sel.range.r1;
+        const start = whole ? sel.range.r0 : hit.r;
+        const end = whole ? sel.range.r1 : hit.r;
+        const startH = geo.rowH(hit.r);
+        const px = geo.rows.sizeOf(hit.r);
+        this.drag = { kind: "resize", axis: "row", i: hit.r, start, end, startPos: p.y, startSize: startH, px, px0: px };
+        host.setResizeGuide({ axis: "row", index: hit.r, pos: geo.rowY(hit.r) + startH });
         break;
       }
       case "colHeader": {
-        const next =
-          e.shiftKey ? selectCols(sel.anchor.c, hit.c, lim, sel.anchor.c, sel.anchor.r) : selectCols(hit.c, hit.c, lim, hit.c, geo.rowAt(geo.headerH));
+        const activeRow = geo.rowAt(geo.headerH);
+        if (add) {
+          const cols = selectCols(hit.c, hit.c, lim, hit.c, activeRow);
+          host.select(addRange(sel, cols.active, cols.range), { emit: true });
+        } else {
+          const next = e.shiftKey ? selectCols(sel.anchor.c, hit.c, lim, sel.anchor.c, sel.anchor.r) : selectCols(hit.c, hit.c, lim, hit.c, activeRow);
+          host.select(e.shiftKey ? { ...next, active: sel.active, anchor: sel.anchor } : next, { emit: true });
+        }
         this.drag = { kind: "cols", anchor: e.shiftKey ? sel.anchor.c : hit.c };
-        host.select(e.shiftKey ? { ...next, active: sel.active, anchor: sel.anchor } : next, { emit: true });
         break;
       }
       case "rowHeader": {
-        const next =
-          e.shiftKey ? selectRows(sel.anchor.r, hit.r, lim, sel.anchor.r, sel.anchor.c) : selectRows(hit.r, hit.r, lim, hit.r, geo.colAt(geo.headerW));
+        const activeCol = geo.colAt(geo.headerW);
+        if (add) {
+          const rows = selectRows(hit.r, hit.r, lim, hit.r, activeCol);
+          host.select(addRange(sel, rows.active, rows.range), { emit: true });
+        } else {
+          const next = e.shiftKey ? selectRows(sel.anchor.r, hit.r, lim, sel.anchor.r, sel.anchor.c) : selectRows(hit.r, hit.r, lim, hit.r, activeCol);
+          host.select(e.shiftKey ? { ...next, active: sel.active, anchor: sel.anchor } : next, { emit: true });
+        }
         this.drag = { kind: "rows", anchor: e.shiftKey ? sel.anchor.r : hit.r };
-        host.select(e.shiftKey ? { ...next, active: sel.active, anchor: sel.anchor } : next, { emit: true });
         break;
       }
       case "cell": {
         const cell = { r: hit.r, c: hit.c };
-        host.select(e.shiftKey ? extendTo(sel, cell) : cellSelection(cell), { emit: true });
+        host.select(add ? addRange(sel, cell) : e.shiftKey ? extendTo(sel, cell) : cellSelection(cell), { emit: true });
         this.drag = { kind: "cells" };
         break;
       }
     }
+    this.capture(e);
+  }
+
+  private capture(e: PointerEvent): void {
     this.pointerId = e.pointerId;
     try {
-      host.scroller.setPointerCapture(e.pointerId);
+      this.host.scroller.setPointerCapture(e.pointerId);
     } catch {
       // Synthetic events in tests have no active pointer.
     }
@@ -200,18 +300,34 @@ export class Interaction {
     this.last = p;
     if (!this.drag) {
       const hit = host.geometry().hit(p.x, p.y);
-      const gutter = hit.area === "colGutter" ? hit.c : null;
+      const gutter =
+        hit.area === "colGutter" ? { axis: "col" as const, index: hit.c } : hit.area === "rowGutter" ? { axis: "row" as const, index: hit.r } : null;
       host.setHoverGutter(gutter);
-      host.scroller.style.cursor = gutter !== null ? "col-resize" : "default";
+      host.scroller.style.cursor = gutter
+        ? gutter.axis === "col"
+          ? "col-resize"
+          : "row-resize"
+        : this.onFillHandle(p)
+          ? "crosshair"
+          : host.editor.open && host.pointMode() && hit.area === "cell"
+            ? "cell"
+            : "default";
       return;
     }
     if (this.drag.kind === "resize") {
       const geo = host.geometry();
       const d = this.drag;
-      const w = Math.max(MIN_COL_WIDTH * geo.zoom, d.startW + (p.x - d.startX));
-      d.px = Math.round(w / geo.zoom);
-      host.previewColWidth(d.c, d.c, d.px);
-      host.setResizeGuide({ c: d.c, x: host.geometry().colX(d.c) + w });
+      if (d.axis === "col") {
+        const w = Math.max(MIN_COL_WIDTH * geo.zoom, d.startSize + (p.x - d.startPos));
+        d.px = Math.round(w / geo.zoom);
+        host.previewColWidth(d.i, d.i, d.px);
+        host.setResizeGuide({ axis: "col", index: d.i, pos: host.geometry().colX(d.i) + w });
+      } else {
+        const h = Math.max(MIN_ROW_HEIGHT * geo.zoom, d.startSize + (p.y - d.startPos));
+        d.px = Math.round(h / geo.zoom);
+        host.previewRowHeight(d.i, d.i, d.px);
+        host.setResizeGuide({ axis: "row", index: d.i, pos: host.geometry().rowY(d.i) + h });
+      }
       return;
     }
     this.dragTo(p);
@@ -227,8 +343,30 @@ export class Interaction {
     const y = Math.max(geo.headerH, Math.min(geo.height - 1, p.y));
     const drag = this.drag;
     if (!drag) return;
+    const cell = { r: geo.rowAt(y), c: geo.colAt(x) };
+    if (drag.kind === "fill") {
+      const t = fillTarget(drag.source, cell);
+      const target = t ? t.target : null;
+      const same = (a: RangeDto | null, b: RangeDto | null): boolean =>
+        a === b || (a !== null && b !== null && a.r0 === b.r0 && a.c0 === b.c0 && a.r1 === b.r1 && a.c1 === b.c1);
+      if (!same(target, drag.target)) {
+        drag.target = target;
+        host.setFillPreview(target);
+      }
+      return;
+    }
+    if (drag.kind === "point") {
+      const ps = this.pointSel;
+      if (!ps) return;
+      const next = extendTo(ps, cell);
+      if (next.range.r0 !== ps.range.r0 || next.range.r1 !== ps.range.r1 || next.range.c0 !== ps.range.c0 || next.range.c1 !== ps.range.c1) {
+        this.pointSel = next;
+        host.events().onPointRange?.({ ...next.range }, "move");
+      }
+      return;
+    }
     let next: Selection | null = null;
-    if (drag.kind === "cells") next = extendTo(sel, { r: geo.rowAt(y), c: geo.colAt(x) });
+    if (drag.kind === "cells") next = extendTo(sel, cell);
     else if (drag.kind === "cols") next = { ...selectCols(drag.anchor, geo.colAt(x), lim), active: sel.active, anchor: sel.anchor };
     else if (drag.kind === "rows") next = { ...selectRows(drag.anchor, geo.rowAt(y), lim), active: sel.active, anchor: sel.anchor };
     if (next) host.select(next, { emit: true });
@@ -275,19 +413,48 @@ export class Interaction {
     }
     if (drag?.kind === "resize") {
       host.setResizeGuide(null);
-      host.previewColWidth(drag.start, drag.end, drag.px);
-      host.events().onResize?.("col", drag.start, drag.end, drag.px);
+      const changed = drag.px !== drag.px0 || drag.start !== drag.end;
+      if (drag.axis === "col") host.previewColWidth(drag.start, drag.end, drag.px);
+      else host.previewRowHeight(drag.start, drag.end, drag.px);
+      if (changed) host.events().onResize?.(drag.axis, drag.start, drag.end, drag.px);
       const p = this.point(e);
       const hit = host.geometry().hit(p.x, p.y);
-      host.setHoverGutter(hit.area === "colGutter" ? hit.c : null);
+      host.setHoverGutter(
+        hit.area === "colGutter" ? { axis: "col", index: hit.c } : hit.area === "rowGutter" ? { axis: "row", index: hit.r } : null,
+      );
+    } else if (drag?.kind === "fill") {
+      host.setFillPreview(null);
+      if (drag.target) {
+        const target = drag.target;
+        host.select({ range: { ...target }, active: host.selection().active, anchor: { r: target.r0, c: target.c0 } }, { emit: true });
+        host.events().onFill?.({ ...drag.source }, { ...target });
+      }
+    } else if (drag?.kind === "point" && this.pointSel) {
+      host.events().onPointRange?.({ ...this.pointSel.range }, "end");
     }
   }
 
   private onDoubleClick(e: MouseEvent): void {
     if (this.onScrollbar(e)) return;
     const p = this.point(e);
-    const hit: Hit = this.host.geometry().hit(p.x, p.y);
+    const host = this.host;
+    const geo = host.geometry();
+    const hit: Hit = geo.hit(p.x, p.y);
+    const sel = host.selection();
+    if (this.onFillHandle(p)) {
+      e.preventDefault();
+      host.events().onFillHandleDoubleClick?.({ ...sel.range });
+      return;
+    }
+    if (hit.area === "colGutter") {
+      e.preventDefault();
+      const lim = host.limits();
+      const whole = isWholeCols(sel.range, lim) && hit.c >= sel.range.c0 && hit.c <= sel.range.c1;
+      host.events().onAutoFit?.("col", whole ? sel.range.c0 : hit.c, whole ? sel.range.c1 : hit.c);
+      return;
+    }
     if (hit.area !== "cell") return;
+    if (host.editor.open && host.pointMode()) return;
     e.preventDefault();
     this.startEdit("edit");
   }
@@ -295,17 +462,31 @@ export class Interaction {
   private onContextMenu(e: MouseEvent): void {
     if (this.onScrollbar(e)) return;
     e.preventDefault();
+    const host = this.host;
     const p = this.point(e);
-    const geo = this.host.geometry();
+    const geo = host.geometry();
+    const lim = host.limits();
     const hit = geo.hit(p.x, p.y);
-    const sel = this.host.selection();
+    const sel = host.selection();
     let cell: CellPos = sel.active;
+    let area: ContextArea = "cell";
     if (hit.area === "cell") {
       cell = { r: hit.r, c: hit.c };
-      if (!inRange(sel.range, cell)) this.host.select(cellSelection(cell), { emit: true });
-    } else if (hit.area === "colHeader") cell = { r: sel.active.r, c: hit.c };
-    else if (hit.area === "rowHeader") cell = { r: hit.r, c: sel.active.c };
-    this.host.events().onContextMenu?.(cell, e.clientX, e.clientY);
+      if (!inRange(sel.range, cell) && !(sel.others ?? []).some((r) => inRange(r, cell))) host.select(cellSelection(cell), { emit: true });
+    } else if (hit.area === "colHeader" || hit.area === "colGutter") {
+      area = "colHeader";
+      cell = { r: sel.active.r, c: hit.c };
+      if (!(isWholeCols(sel.range, lim) && hit.c >= sel.range.c0 && hit.c <= sel.range.c1)) {
+        host.select(selectCols(hit.c, hit.c, lim, hit.c, geo.rowAt(geo.headerH)), { emit: true });
+      }
+    } else if (hit.area === "rowHeader" || hit.area === "rowGutter") {
+      area = "rowHeader";
+      cell = { r: hit.r, c: sel.active.c };
+      if (!(isWholeRows(sel.range, lim) && hit.r >= sel.range.r0 && hit.r <= sel.range.r1)) {
+        host.select(selectRows(hit.r, hit.r, lim, hit.r, geo.colAt(geo.headerW)), { emit: true });
+      }
+    } else if (hit.area === "corner") area = "corner";
+    host.events().onContextMenu?.(cell, e.clientX, e.clientY, area);
   }
 
   // -------------------------------------------------------------------------
@@ -365,17 +546,31 @@ export class Interaction {
     if (this.host.editor.open) this.commit(move);
   }
 
+  private lastCaret = -1;
+
+  /** Reports caret moves (arrow keys in "edit" mode, clicks) without a text change. */
+  private emitCaret(): void {
+    const ed = this.host.editor;
+    if (!ed.open || ed.composing) return;
+    const caret = ed.caret;
+    if (caret === this.lastCaret) return;
+    this.lastCaret = caret;
+    this.host.events().onEditChange?.(ed.value, caret);
+  }
+
   private emitChange(): void {
     const ed = this.host.editor;
     if (!ed.open) return;
     const text = ed.value;
     ed.noteEmitted(text);
+    this.lastCaret = ed.caret;
     this.host.events().onEditChange?.(text, ed.caret);
     this.host.editorChanged();
   }
 
   private onInput(): void {
     const ed = this.host.editor;
+    this.pointSel = null;
     if (!ed.open) {
       const text = ed.value;
       if (text === "") return;
@@ -412,7 +607,10 @@ export class Interaction {
       ed.prepareClipboard();
       return;
     }
-    if (mods.mod && (e.key === "v" || e.key === "V")) return;
+    if (mods.mod && (e.key === "v" || e.key === "V")) {
+      this.plainPaste = mods.shift;
+      return;
+    }
 
     const sel = host.selection();
     const lim = host.limits();
@@ -457,7 +655,26 @@ export class Interaction {
   }
 
   private onEditingKey(e: KeyboardEvent, mods: Mods): void {
-    const ed = this.host.editor;
+    const host = this.host;
+    const ed = host.editor;
+    if (host.events().onEditorKeyDown?.(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    const dir = DIRS[e.key];
+    if (dir && ed.mode === "enter" && host.pointMode() && !mods.mod && !mods.alt) {
+      // Point mode: arrows move (Shift extends) the reference being picked.
+      e.preventDefault();
+      const lim = host.limits();
+      const base = this.pointSel ?? cellSelection(ed.cell ?? host.selection().active);
+      const [dr, dc] = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] }[dir] as [number, number];
+      const next = moveBy(base, dr, dc, mods.shift, lim);
+      this.pointSel = next;
+      host.events().onPointRange?.({ ...next.range }, "end");
+      host.reveal(extentCorner(next));
+      return;
+    }
     switch (e.key) {
       case "Enter":
         e.preventDefault();
@@ -501,7 +718,8 @@ export class Interaction {
     const data = e.clipboardData;
     if (kind === "copy") ev.onCopy?.(data);
     else if (kind === "cut") ev.onCut?.(data);
-    else ev.onPaste?.(data);
+    else ev.onPaste?.(data, { plain: this.plainPaste });
+    this.plainPaste = false;
     ed.resetIdleValue();
   }
 }

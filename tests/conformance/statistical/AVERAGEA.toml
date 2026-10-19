@@ -1,0 +1,57 @@
+# AVERAGEA conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "text in reference counts as 0, boolean as 1"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 5 }
+formula = "=AVERAGEA(A1:A4)"
+expect = 1.75
+tol = 1e-12
+
+[[case]]
+formula = "=AVERAGEA(1;2;3)"
+expect = 2.0
+tol = 1e-12
+
+[[case]]
+cells = { A1 = "a", A2 = "b", A3 = 3 }
+formula = "=AVERAGEA(A1:A3)"
+expect = 1.0
+tol = 1e-12
+
+[[case]]
+name = "empty range has no values"
+formula = "=AVERAGEA(A1:A3)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = 1, A2 = "=1/0", A3 = 3 }
+formula = "=AVERAGEA(A1:A3)"
+expect = "#DIV/0!"
+
+[[case]]
+cells = { A1 = 1, A2 = 0 }
+formula = "=AVERAGEA(A1:A2;10)"
+expect = 3.6666666666666665
+tol = 1e-12
+
+[[case]]
+name = "empty cell not counted"
+cells = { A1 = 1, A3 = 1, A4 = 4 }
+formula = "=AVERAGEA(A1:A4)"
+expect = 2.0
+tol = 1e-12
+
+[[case]]
+formula = "=AVERAGEA(\"4\";2)"
+expect = 3.0
+tol = 1e-12
+
+[[case]]
+name = "text direct argument"
+formula = "=AVERAGEA(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=AVERAGEA()"
+expect = "Err:511"

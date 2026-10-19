@@ -1,0 +1,60 @@
+# FREQUENCY conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=FREQUENCY({1;2;3;4;5};{2;4})"
+expect = [[2], [2], [1]]
+
+[[case]]
+name = "unsorted bins are sorted"
+formula = "=FREQUENCY({1;2;3;4;5};{4;2})"
+expect = [[2], [2], [1]]
+
+[[case]]
+name = "all above"
+formula = "=FREQUENCY({10;11};{2;4})"
+expect = [[0], [0], [2]]
+
+[[case]]
+name = "boundary belongs to the lower bin"
+formula = "=FREQUENCY({2;4};{2;4})"
+expect = [[1], [1], [0]]
+
+[[case]]
+name = "duplicate bins"
+formula = "=FREQUENCY({1;2;3};{2;2})"
+expect = [[2], [0], [1]]
+
+[[case]]
+name = "ranges with text skipped"
+cells = { A1 = 1, A2 = "x", A3 = 3, B1 = 2 }
+origin = "F1"
+formula = "=FREQUENCY(A1:A3;B1)"
+expect = [[1], [1]]
+
+[[case]]
+name = "empty data"
+cells = { B1 = 2 }
+origin = "F1"
+formula = "=FREQUENCY(A1:A3;B1)"
+expect = [[0], [0]]
+
+[[case]]
+name = "single bin"
+formula = "=FREQUENCY({1;2;3};{5})"
+expect = [[3], [0]]
+
+[[case]]
+name = "error in data"
+cells = { A1 = 1, A2 = "=1/0", B1 = 2 }
+formula = "=FREQUENCY(A1:A2;B1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "negative values"
+formula = "=FREQUENCY({-5;-1;0;1};{-1;0})"
+expect = [[2], [1], [1]]
+
+[[case]]
+name = "missing"
+formula = "=FREQUENCY({1})"
+expect = "Err:511"

@@ -1,0 +1,68 @@
+# COMPLEX conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=COMPLEX(3;4)"
+expect = "3+4i"
+
+[[case]]
+formula = "=COMPLEX(3;4;\"j\")"
+expect = "3+4j"
+
+[[case]]
+formula = "=COMPLEX(0;1)"
+expect = "i"
+
+[[case]]
+formula = "=COMPLEX(1;0)"
+expect = "1"
+
+[[case]]
+formula = "=COMPLEX(0;-1)"
+expect = "-i"
+
+[[case]]
+formula = "=COMPLEX(0;0)"
+expect = "0"
+
+[[case]]
+formula = "=COMPLEX(1;-2.5)"
+expect = "1-2.5i"
+
+[[case]]
+formula = "=COMPLEX(-1;-1)"
+expect = "-1-i"
+
+[[case]]
+formula = "=COMPLEX(2;3;\"i\")"
+expect = "2+3i"
+
+[[case]]
+formula = "=COMPLEX(0;2)"
+expect = "2i"
+
+[[case]]
+formula = "=COMPLEX(1;2;\"k\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=COMPLEX(1;2;\"\")"
+expect = "1+2i"
+note = "empty suffix means i"
+
+[[case]]
+formula = "=COMPLEX(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=COMPLEX(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=COMPLEX(1;2;\"i\";4)"
+expect = "Err:504"
+
+[[case]]
+cells = { A1 = 1.5, A2 = 2 }
+formula = "=COMPLEX(A1;A2)"
+expect = "1.5+2i"
+

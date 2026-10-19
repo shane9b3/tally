@@ -1,0 +1,49 @@
+# DEC2HEX conformance vectors. Analysis add-in; 10-digit two's complement. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=DEC2HEX(-1)"
+expect = "FFFFFFFFFF"
+
+[[case]]
+formula = "=DEC2HEX(255)"
+expect = "FF"
+
+[[case]]
+formula = "=DEC2HEX(255;4)"
+expect = "00FF"
+
+[[case]]
+formula = "=DEC2HEX(0)"
+expect = "0"
+
+[[case]]
+formula = "=DEC2HEX(549755813887)"
+expect = "7FFFFFFFFF"
+
+[[case]]
+formula = "=DEC2HEX(-549755813888)"
+expect = "8000000000"
+
+[[case]]
+formula = "=DEC2HEX(549755813888)"
+expect = "Err:502"
+
+[[case]]
+formula = "=DEC2HEX(255;1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=DEC2HEX(255;11)"
+expect = "Err:502"
+
+[[case]]
+formula = "=DEC2HEX(10.9)"
+expect = "A"
+
+[[case]]
+formula = "=DEC2HEX(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=DEC2HEX()"
+expect = "Err:511"

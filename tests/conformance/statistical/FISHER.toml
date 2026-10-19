@@ -1,0 +1,64 @@
+# FISHER conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=FISHER(0)"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+formula = "=FISHER(0.75)"
+expect = 0.9729550745276566
+tol = 1e-12
+
+[[case]]
+formula = "=FISHER(-0.75)"
+expect = -0.9729550745276566
+tol = 1e-12
+
+[[case]]
+formula = "=FISHER(0.5)"
+expect = 0.5493061443340549
+tol = 1e-12
+
+[[case]]
+formula = "=FISHER(0.999)"
+expect = 3.8002011672501994
+tol = 1e-11
+
+[[case]]
+formula = "=FISHER(1)"
+expect = "Err:502"
+note = "Outside (-1;1) is Err:502 (AOO); LibreOffice gives #NUM!."
+
+[[case]]
+formula = "=FISHER(-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=FISHER(2)"
+expect = "Err:502"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=FISHER(A1)"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+formula = "=FISHER(\"0.5\")"
+expect = 0.5493061443340549
+tol = 1e-12
+
+[[case]]
+formula = "=FISHER(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=FISHER(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=FISHER()"
+expect = "Err:511"

@@ -1,0 +1,53 @@
+# DOLLARFR conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=DOLLARFR(1.125;16)"
+expect = 1.02
+tol = 1e-12
+
+[[case]]
+name = "Excel reference 2"
+formula = "=DOLLARFR(1.125;32)"
+expect = 1.04
+tol = 1e-12
+
+[[case]]
+name = "negative"
+formula = "=DOLLARFR(-1.125;16)"
+expect = -1.02
+tol = 1e-12
+
+[[case]]
+name = "fraction 100"
+formula = "=DOLLARFR(1.5;100)"
+expect = 1.5
+tol = 1e-12
+
+[[case]]
+name = "round trip"
+formula = "=DOLLARFR(DOLLARDE(3.07;8);8)"
+expect = 3.07
+tol = 1e-12
+
+[[case]]
+name = "fraction must be positive"
+formula = "=DOLLARFR(1.125;-1)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=DOLLARFR(\"x\";16)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=DOLLARFR(A4;16)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=DOLLARFR(1.125)"
+expect = "Err:511"

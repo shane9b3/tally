@@ -1,0 +1,52 @@
+# WEIBULL conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "cdf"
+formula = "=WEIBULL(1;1;1;TRUE)"
+expect = 0.6321205588285577
+tol = 6e-14
+
+[[case]]
+name = "cdf 2/3/4"
+formula = "=WEIBULL(2;3;4;TRUE)"
+expect = 0.1175030974154046
+tol = 1e-14
+
+[[case]]
+name = "pdf 2/3/4"
+formula = "=WEIBULL(2;3;4;FALSE)"
+expect = 0.16546816923461163
+tol = 2e-14
+
+[[case]]
+name = "x = 0 cdf"
+formula = "=WEIBULL(0;1;1;1)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "x = 0 pdf"
+formula = "=WEIBULL(0;2;1;0)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "negative x"
+formula = "=WEIBULL(-1;1;1;1)"
+expect = "Err:502"
+
+[[case]]
+name = "alpha zero"
+formula = "=WEIBULL(1;0;1;1)"
+expect = "Err:502"
+
+[[case]]
+name = "beta zero"
+formula = "=WEIBULL(1;1;0;1)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=WEIBULL(\"x\";1;1;1)"
+expect = "#VALUE!"

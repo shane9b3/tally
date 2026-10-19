@@ -1,0 +1,42 @@
+# HEX2DEC conformance vectors. Analysis add-in; 10-digit two's complement. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=HEX2DEC(\"FF\")"
+expect = 255
+
+[[case]]
+formula = "=HEX2DEC(\"ff\")"
+expect = 255
+
+[[case]]
+formula = "=HEX2DEC(\"FFFFFFFFFF\")"
+expect = -1
+
+[[case]]
+formula = "=HEX2DEC(\"8000000000\")"
+expect = -549755813888
+
+[[case]]
+formula = "=HEX2DEC(\"7FFFFFFFFF\")"
+expect = 549755813887
+
+[[case]]
+formula = "=HEX2DEC(\"0\")"
+expect = 0
+
+[[case]]
+name = "number argument is read as text \"10\""
+formula = "=HEX2DEC(10)"
+expect = 16
+
+[[case]]
+formula = "=HEX2DEC(\"G\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=HEX2DEC(\"FFFFFFFFFFF\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=HEX2DEC()"
+expect = "Err:511"

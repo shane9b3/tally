@@ -54,7 +54,7 @@ impl Table {
     }
 
     /// The value at (row, col) offsets.
-    fn get(&self, ctx: &mut dyn EvalContext, row: u32, col: u32) -> Value {
+    pub(super) fn get(&self, ctx: &mut dyn EvalContext, row: u32, col: u32) -> Value {
         match self {
             Table::Range(r) => {
                 let addr = tally_types::CellAddr::new(r.sheet, r.r0 + row, r.c0 + col);

@@ -1,0 +1,69 @@
+# NPER conformance vectors. Ported AOO 4.1 semantics (interpr2.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=NPER(0.12/12;-100;-1000;10000;1)"
+expect = 59.6738656742
+tol = 1e-09
+
+[[case]]
+name = "Excel reference, arrears"
+formula = "=NPER(0.12/12;-100;-1000;10000)"
+expect = 60.0821228537617
+tol = 1e-09
+
+[[case]]
+name = "Excel reference, no fv"
+formula = "=NPER(0.12/12;-100;-1000)"
+expect = -9.57859403981306
+tol = 1e-09
+
+[[case]]
+name = "zero rate"
+formula = "=NPER(0;-100;1000)"
+expect = 10
+
+[[case]]
+name = "no solution (log of negative)"
+formula = "=NPER(0.1;-100;10000)"
+expect = "#NUM!"
+
+[[case]]
+name = "negative period count"
+formula = "=NPER(0.1;100;1000)"
+expect = -7.27254089734171
+tol = 1e-12
+
+[[case]]
+name = "boolean type"
+cells = { A1 = true }
+formula = "=NPER(0.01;-100;-1000;10000;A1)"
+expect = 59.6738656742946
+tol = 1e-09
+
+[[case]]
+name = "zero payment and rate"
+formula = "=NPER(0;0;1000)"
+expect = "#NUM!"
+
+[[case]]
+name = "non-numeric text"
+formula = "=NPER(\"x\";-100;1000)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=NPER(A4;-100;1000)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=NPER(0.01;-100)"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=NPER(0.01;-100;1000;1;1;1)"
+expect = "Err:504"

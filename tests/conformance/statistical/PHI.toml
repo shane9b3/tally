@@ -1,0 +1,57 @@
+# PHI conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=PHI(0)"
+expect = 0.3989422804014327
+tol = 1e-15
+
+[[case]]
+formula = "=PHI(1)"
+expect = 0.24197072451914337
+tol = 1e-15
+
+[[case]]
+formula = "=PHI(-1)"
+expect = 0.24197072451914337
+tol = 1e-15
+
+[[case]]
+formula = "=PHI(2)"
+expect = 0.05399096651318806
+tol = 1e-15
+
+[[case]]
+formula = "=PHI(0.5)"
+expect = 0.3520653267642995
+tol = 1e-15
+
+[[case]]
+formula = "=PHI(5)"
+expect = 1.4867195147342979e-06
+tol = 1e-15
+
+[[case]]
+name = "underflows to 0"
+formula = "=PHI(40)"
+expect = 0.0
+tol = 1e-15
+
+[[case]]
+name = "empty cell is 0"
+formula = "=PHI(A1)"
+expect = 0.3989422804014327
+tol = 1e-15
+
+[[case]]
+formula = "=PHI(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=NA()" }
+formula = "=PHI(A1)"
+expect = "#N/A"
+
+[[case]]
+formula = "=PHI()"
+expect = "Err:511"

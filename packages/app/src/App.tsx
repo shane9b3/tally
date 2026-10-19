@@ -15,7 +15,13 @@ import type { EngineClient, ShellClient } from "@tally/bridge";
 import { useEffect, useMemo, useState } from "react";
 import { buildCommands } from "./commands";
 import { CommandPalette } from "./components/CommandPalette";
+import { ContextMenu, openResizeDialog } from "./components/ContextMenu";
+import { Dialogs } from "./components/Dialogs";
+import { FormatBar } from "./components/FormatBar";
+import { FormulaAssist } from "./components/FormulaAssist";
 import { FormulaBar } from "./components/FormulaBar";
+import { GlancePanel } from "./components/GlancePanel";
+import { ShortcutsModal } from "./components/ShortcutsModal";
 import { GridHost } from "./components/GridHost";
 import { SheetTabs } from "./components/SheetTabs";
 import { Sidebar } from "./components/Sidebar";
@@ -55,12 +61,29 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
   const [renaming, setRenaming] = useState<number | null>(null);
   const [about, setAbout] = useState(false);
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
+  const glanceOpen = useUiStore((s) => s.glanceOpen);
+
+  // "Match system": follow prefers-color-scheme changes.
+  useEffect(() => {
+    if (typeof matchMedia !== "function") return undefined;
+    const mq = matchMedia("(prefers-color-scheme: dark)");
+    const on = () => useUiStore.getState().syncSystemTheme();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
 
   useEffect(() => {
     const offCommands = ctl.registry.registerAll(
       buildCommands(ctl, {
         renameActiveSheet: () => setRenaming(ctl.sheet),
         showAbout: () => setAbout(true),
+        customNumberFormat: () => {
+          void ctl.activeStyle().then(
+            (st) => useUiStore.getState().openDialog({ kind: "numberFormat", code: st?.numberFormat ?? "General" }),
+            () => useUiStore.getState().openDialog({ kind: "numberFormat", code: "General" }),
+          );
+        },
+        resize: (axis) => openResizeDialog(ctl, axis),
       }),
     );
     const detach = ctl.attach();
@@ -82,21 +105,29 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
         {sidebarOpen ? <Sidebar inset={trafficLights} /> : null}
         <main className={styles.main}>
           <Toolbar inset={trafficLights && !sidebarOpen} />
+          <FormatBar />
           <FormulaBar />
-          <GridHost />
+          <div className={styles.work}>
+            <GridHost />
+            {glanceOpen ? <GlancePanel /> : null}
+          </div>
           <footer className={styles.footer}>
             <SheetTabs renaming={renaming} setRenaming={setRenaming} />
             <StatusBar />
           </footer>
         </main>
         <CommandPalette />
+        <FormulaAssist />
+        <ContextMenu />
+        <Dialogs />
+        <ShortcutsModal />
         <Toasts />
         {about ? (
           <div className={styles.aboutOverlay} onMouseDown={() => setAbout(false)}>
             <div className={styles.about} role="dialog" aria-label="About Tally">
               <div className={styles.logo}>T</div>
               <div className={styles.aboutTitle}>Tally</div>
-              <div className={styles.aboutText}>Version 0.1.0 (Phase A)</div>
+              <div className={styles.aboutText}>Version 0.2.0 (preview)</div>
               <div className={styles.aboutText}>A modern, OpenOffice-compatible spreadsheet.</div>
             </div>
           </div>

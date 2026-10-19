@@ -1,0 +1,63 @@
+# PPMT conformance vectors. Ported AOO 4.1 semantics (interpr2.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=PPMT(0.1/12;1;2*12;2000)"
+expect = -75.6231860083
+tol = 1e-09
+
+[[case]]
+name = "Excel reference 2"
+formula = "=PPMT(0.08;10;10;200000)"
+expect = -27598.0534624214
+tol = 1e-08
+
+[[case]]
+name = "first period"
+formula = "=PPMT(0.1/12;1;36;8000)"
+expect = -191.470830884033
+tol = 1e-09
+
+[[case]]
+name = "principal + interest = payment"
+formula = "=PPMT(0.1/12;1;36;8000)+IPMT(0.1/12;1;36;8000)-PMT(0.1/12;36;8000)"
+expect = 0
+tol = 1e-09
+
+[[case]]
+name = "advance"
+formula = "=PPMT(0.1/12;1;36;8000;0;1)"
+expect = -256.004129802347
+tol = 1e-09
+
+[[case]]
+name = "period below 1"
+formula = "=PPMT(0.1/12;0;36;8000)"
+expect = "Err:502"
+
+[[case]]
+name = "period beyond nper"
+formula = "=PPMT(0.1/12;40;36;8000)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=PPMT(\"x\";1;36;8000)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=PPMT(A4;1;36;8000)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=PPMT(0.01;1;36)"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=PPMT(0.01;1;36;8000;1;1;1)"
+expect = "Err:504"

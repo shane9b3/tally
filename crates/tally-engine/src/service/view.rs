@@ -46,29 +46,89 @@ pub fn display_text(wb: &Workbook, addr: CellAddr) -> String {
     format_with(wb, &v, st).text
 }
 
+/// Pixel runs of one axis; `filtered` spans (rows hidden by the AutoFilter)
+/// are split out and reported as hidden with `filtered: true`.
+fn px_runs(d: &crate::storage::DimRuns, filtered: &[(u32, u32)]) -> Vec<DimRunPx> {
+    let mut out: Vec<DimRunPx> = Vec::new();
+    let mut push = |start: u32, end: u32, hmm: u32, hidden: bool, filt: bool| {
+        let hidden = hidden || filt;
+        let size = if hidden { 0.0 } else { hmm_to_px(hmm) };
+        if let Some(last) = out.last_mut() {
+            if last.end.checked_add(1) == Some(start)
+                && last.hidden == hidden
+                && last.size == size
+                && last.filtered.unwrap_or(false) == filt
+            {
+                last.end = end;
+                return;
+            }
+        }
+        out.push(DimRunPx {
+            start,
+            end,
+            size,
+            hidden,
+            filtered: filt.then_some(true),
+        });
+    };
+    if filtered.is_empty() {
+        for r in d.runs() {
+            push(r.start, r.end, r.size_hmm, r.hidden, false);
+        }
+        return out;
+    }
+    // Merge the explicit runs with the filtered spans: walk the boundaries.
+    let default_hmm = crate::units::px_to_hmm(DEFAULT_ROW_HEIGHT_PX);
+    let mut points: Vec<u32> = Vec::new();
+    for r in d.runs() {
+        points.push(r.start);
+        points.push(r.end.saturating_add(1));
+    }
+    for (a, b) in filtered {
+        points.push(*a);
+        points.push(b.saturating_add(1));
+    }
+    points.sort_unstable();
+    points.dedup();
+    for w in points.windows(2) {
+        let (a, b) = (w[0], w[1] - 1);
+        let run = d.get(a);
+        let filt = filtered.iter().any(|(x, y)| *x <= a && a <= *y);
+        match run {
+            Some(r) => push(a, b, r.size_hmm, r.hidden, filt),
+            None if filt => push(a, b, default_hmm, false, true),
+            None => {}
+        }
+    }
+    out
+}
+
 /// Sheet geometry.
 pub fn sheet_layout(wb: &Workbook, sheet: SheetId) -> Result<SheetLayout, ApiError> {
     let s = sheet_or_err(wb, sheet)?;
-    let runs = |d: &crate::storage::DimRuns| -> Vec<DimRunPx> {
-        d.runs()
-            .iter()
-            .map(|r| DimRunPx {
-                start: r.start,
-                end: r.end,
-                size: if r.hidden { 0.0 } else { hmm_to_px(r.size_hmm) },
-                hidden: r.hidden,
-            })
-            .collect()
-    };
     Ok(SheetLayout {
         sheet,
         used: s.used_range().map(|r| range_dto(&r)),
         default_col_width_px: DEFAULT_COL_WIDTH_PX,
         default_row_height_px: DEFAULT_ROW_HEIGHT_PX,
-        col_runs: runs(&s.col_dims),
-        row_runs: runs(&s.row_dims),
-        frozen: None,
-        merges: Vec::new(),
+        col_runs: px_runs(&s.col_dims, &[]),
+        row_runs: px_runs(&s.row_dims, s.filtered_rows.spans()),
+        frozen: s
+            .meta
+            .frozen
+            .filter(|(r, c)| *r > 0 || *c > 0)
+            .map(|(r, c)| CellPos { r, c }),
+        merges: s
+            .meta
+            .merges
+            .iter()
+            .map(|m| RangeDto {
+                r0: m.r0,
+                c0: m.c0,
+                r1: m.r1,
+                c1: m.c1,
+            })
+            .collect(),
     })
 }
 
@@ -84,9 +144,19 @@ fn view_of(
         Some(CellContent::Value(v)) => v.clone(),
         Some(CellContent::Formula(id)) => {
             flags |= cell_flags::FORMULA;
-            wb.formulas
-                .get(*id)
-                .map_or(Value::Empty, |f| f.cached.clone())
+            match wb.formulas.get(*id) {
+                Some(f) => {
+                    if f.array.is_some() {
+                        flags |= cell_flags::ARRAY;
+                    }
+                    f.cached.clone()
+                }
+                None => Value::Empty,
+            }
+        }
+        Some(CellContent::ArrayPart(_)) => {
+            flags |= cell_flags::FORMULA | cell_flags::ARRAY;
+            wb.value(addr)
         }
     };
     let st = wb.styles.get(style);
@@ -203,6 +273,10 @@ impl<'a> HeaderLabels<'a> {
             CellContent::Value(Value::Text(t)) => Some(Some(t.to_string())),
             CellContent::Formula(id) => match self.wb.formulas.get(*id).map(|f| &f.cached) {
                 Some(Value::Text(t)) => Some(Some(t.to_string())),
+                _ => Some(None),
+            },
+            CellContent::ArrayPart(_) => match self.wb.value(CellAddr::new(sheet.id, r, c)) {
+                Value::Text(t) => Some(Some(t.to_string())),
                 _ => Some(None),
             },
             CellContent::Value(_) => Some(None),
@@ -342,24 +416,37 @@ pub fn cell_edit_info(
     if r >= MAX_ROWS || c >= MAX_COLS {
         return Err(ApiError::invalid_argument("cell outside the grid"));
     }
-    let addr = CellAddr::new(sheet, r, c);
+    let plain = |input: String| CellEditInfo {
+        input,
+        hint: None,
+        array: None,
+        array_range: None,
+    };
     match s.get(r, c) {
-        None => Ok(CellEditInfo {
-            input: String::new(),
-            hint: None,
-        }),
-        Some(CellContent::Value(v)) => Ok(CellEditInfo {
-            input: edit_text(wb, v, wb.styles.get(s.style(r, c))),
-            hint: None,
-        }),
-        Some(CellContent::Formula(id)) => {
-            let input = wb.formula_text(*id).unwrap_or_default();
-            let hint = wb
-                .formulas
-                .get(*id)
-                .filter(|f| f.invalid_text.is_none())
-                .and_then(|f| explain(&f.formula, addr, &HeaderLabels::new(wb)));
-            Ok(CellEditInfo { input, hint })
+        None => Ok(plain(String::new())),
+        Some(CellContent::Value(v)) => Ok(plain(edit_text(wb, v, wb.styles.get(s.style(r, c))))),
+        Some(CellContent::Formula(id) | CellContent::ArrayPart(id)) => {
+            let Some(f) = wb.formulas.get(*id) else {
+                return Ok(plain(String::new()));
+            };
+            let text = wb.formula_text(*id).unwrap_or_default();
+            let hint = (f.invalid_text.is_none())
+                .then(|| explain(&f.formula, f.addr, &HeaderLabels::new(wb)))
+                .flatten();
+            match f.array_range() {
+                Some(b) => Ok(CellEditInfo {
+                    input: format!("{{{text}}}"),
+                    hint,
+                    array: Some(true),
+                    array_range: Some(range_dto(&b)),
+                }),
+                None => Ok(CellEditInfo {
+                    input: text,
+                    hint,
+                    array: None,
+                    array_range: None,
+                }),
+            }
         }
     }
 }
@@ -396,13 +483,14 @@ pub fn selection_stats(wb: &Workbook, sel: &SelectionDto) -> Result<SelectionSta
             let Some(col) = s.column(c) else {
                 continue;
             };
-            for (_, content) in col.cells.iter_range(r.r0, r.r1) {
+            for (row, content) in col.cells.iter_range(r.r0, r.r1) {
                 let v = match content {
                     CellContent::Value(v) => v.clone(),
                     CellContent::Formula(id) => wb
                         .formulas
                         .get(*id)
                         .map_or(Value::Empty, |f| f.cached.clone()),
+                    CellContent::ArrayPart(_) => wb.value(CellAddr::new(sel.sheet, row, c)),
                 };
                 count += 1;
                 // Booleans are the numbers 1 and 0 (AOO's storage model).
@@ -579,11 +667,30 @@ fn parse_local_range(sheet: SheetId, s: &str) -> Option<CellRange> {
     None
 }
 
-/// Name box text → selection.
+/// Name box text → selection: a reference (optionally sheet-qualified) or
+/// a named range (sheet-scoped names of the active sheet first).
 pub fn resolve_name_box(wb: &Workbook, text: &str) -> Result<SelectionDto, ApiError> {
     let t = text.trim();
     if t.is_empty() {
         return Err(ApiError::invalid_argument("empty reference"));
+    }
+    if let Some(id) = wb.names.visible(t, wb.active_sheet) {
+        let def = wb.names.get(id).and_then(|e| e.def.as_ref());
+        let range =
+            def.and_then(|_| wb.parse_reference_at(t, CellAddr::new(wb.active_sheet, 0, 0)));
+        return match range {
+            Some(range) => Ok(SelectionDto {
+                sheet: range.sheet,
+                ranges: vec![range_dto(&range)],
+                active: CellPos {
+                    r: range.r0,
+                    c: range.c0,
+                },
+            }),
+            None => Err(ApiError::not_found(format!(
+                "the name {t:?} does not refer to a cell range"
+            ))),
+        };
     }
     let (name, rest) =
         split_sheet(t).ok_or_else(|| ApiError::invalid_argument(format!("bad reference {t:?}")))?;

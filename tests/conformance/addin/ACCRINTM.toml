@@ -1,0 +1,92 @@
+# ACCRINTM conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0.1;1000;3)"
+expect = 20.54794521
+tol = 1e-08
+
+[[case]]
+name = "par and basis omitted"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0.1)"
+expect = 20.5555555555556
+tol = 1e-09
+
+[[case]]
+name = "numeric text par"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0.1;\"1000\")"
+expect = 20.5555555555556
+tol = 1e-09
+
+[[case]]
+name = "rate must be positive"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0;1000)"
+expect = "Err:502"
+
+[[case]]
+name = "basis 0"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0.1;1000;0)"
+expect = 20.5555555555556
+tol = 1e-09
+
+[[case]]
+name = "basis 1"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0.1;1000;1)"
+expect = 20.4918032786885
+tol = 1e-09
+
+[[case]]
+name = "basis 2"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0.1;1000;2)"
+expect = 20.8333333333333
+tol = 1e-09
+
+[[case]]
+name = "basis 3"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0.1;1000;3)"
+expect = 20.5479452054795
+tol = 1e-09
+
+[[case]]
+name = "basis 4"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0.1;1000;4)"
+expect = 20.5555555555556
+tol = 1e-09
+
+[[case]]
+name = "basis 5 is illegal"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0.1;1000;5)"
+expect = "Err:502"
+
+[[case]]
+name = "empty text basis takes the default"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0.1;1000;\"\")"
+expect = 20.5555555555556
+tol = 1e-09
+
+[[case]]
+name = "non-numeric text basis"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15);0.1;1000;\"x\")"
+expect = "Err:502"
+
+[[case]]
+name = "settlement after maturity"
+formula = "=ACCRINTM(DATE(2008;6;15);DATE(2008;4;1);0.1;1000;3)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=ACCRINTM(\"x\";DATE(2008;6;15);0.1;1000;3)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=ACCRINTM(A4;DATE(2008;6;15);0.1;1000;3)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=ACCRINTM(DATE(2008;4;1);DATE(2008;6;15))"
+expect = "Err:511"

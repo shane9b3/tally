@@ -1,0 +1,183 @@
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 42px;
+  flex: none;
+  padding: 0 14px;
+  background: var(--tally-bg);
+  border-bottom: 1px solid var(--tally-border-subtle);
+  overflow-x: auto;
+  scrollbar-width: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.bar::-webkit-scrollbar {
+  display: none;
+}
+
+/* A segmented pill holding related tools. */
+.group {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-surface);
+}
+
+.sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  flex: none;
+  background: var(--tally-border-subtle);
+}
+
+.tool {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 28px;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--tally-radius-pill);
+  background: transparent;
+  color: var(--tally-gray-700);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: default;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.tool svg {
+  flex: none;
+  color: var(--tally-gray-500);
+}
+
+.tool:hover {
+  background: var(--tally-hover);
+  color: var(--tally-text);
+}
+
+.tool:focus-visible,
+.dropdown:focus-visible {
+  outline: 2px solid var(--tally-accent);
+  outline-offset: 1px;
+}
+
+.on,
+.on:hover {
+  background: var(--tally-accent-subtle);
+  color: var(--tally-accent-text);
+}
+
+.on svg {
+  color: inherit;
+}
+
+/* A standalone pill (Colour by value). */
+.wide {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--tally-border-subtle);
+  background: var(--tally-bg);
+}
+
+.bold {
+  font-weight: 750;
+}
+
+.italic {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 14px;
+  font-style: italic;
+}
+
+.underline {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.strike {
+  text-decoration: line-through;
+}
+
+.glyph {
+  min-width: 10px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.colorTool {
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 2px;
+}
+
+.letterA {
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 14px;
+}
+
+.colorBar {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.emptyBar {
+  box-shadow: inset 0 0 0 1px var(--tally-border);
+}
+
+.colorTool svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dropdown {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px 0 12px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-bg);
+  color: var(--tally-gray-700);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.dropdown:hover {
+  background: var(--tally-hover);
+  color: var(--tally-text);
+}
+
+.dropdown svg {
+  color: var(--tally-gray-500);
+}
+
+.size {
+  min-width: 58px;
+  font-variant-numeric: tabular-nums;
+}
+
+.format {
+  min-width: 112px;
+}

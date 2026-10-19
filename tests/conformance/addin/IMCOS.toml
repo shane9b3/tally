@@ -1,0 +1,85 @@
+# IMCOS conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMREAL(IMCOS(\"1+i\"))"
+expect = 0.8337300251311491
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMCOS(\"1+i\"))"
+expect = -0.9888977057628651
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMCOS(\"3+4i\"))"
+expect = -27.034945603074224
+tol = 2.703494560307422e-10
+
+[[case]]
+formula = "=IMAGINARY(IMCOS(\"3+4i\"))"
+expect = -3.8511533348117775
+tol = 3.851153334811777e-11
+
+[[case]]
+formula = "=IMREAL(IMCOS(\"2-3j\"))"
+expect = -4.189625690968807
+tol = 4.189625690968807e-11
+
+[[case]]
+formula = "=IMAGINARY(IMCOS(\"2-3j\"))"
+expect = 9.109227893755337
+tol = 9.109227893755337e-11
+
+[[case]]
+formula = "=IMREAL(IMCOS(\"-0.5+0.25i\"))"
+expect = 0.9051501505596068
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMCOS(\"-0.5+0.25i\"))"
+expect = 0.12110879604381165
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMCOS(\"2\"))"
+expect = -0.4161468365471424
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMCOS(\"2\"))"
+expect = -0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMCOS(\"-i\"))"
+expect = 1.5430806348152437
+tol = 1.5430806348152438e-11
+
+[[case]]
+formula = "=IMAGINARY(IMCOS(\"-i\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMCOS(\"0\")"
+expect = "1"
+
+[[case]]
+formula = "=IMCOS(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMCOS()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMCOS(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "number argument"
+formula = "=IMREAL(IMCOS(2))"
+expect = -0.4161468365471424
+tol = 1e-11
+

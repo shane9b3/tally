@@ -12,6 +12,7 @@ mod financial;
 mod information;
 mod logical;
 mod mathematical;
+mod ooxml;
 mod spreadsheet;
 mod statistical;
 mod text;
@@ -29,4 +30,5 @@ pub(crate) fn register_all(r: &mut Registry) {
     spreadsheet::register(r);
     text::register(r);
     addin::register(r);
+    ooxml::apply(r);
 }

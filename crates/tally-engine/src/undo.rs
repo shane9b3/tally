@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tally_api::SelectionDto;
 use tally_types::{CellAddr, CellRange, SheetId, MAX_ROWS};
 
-use crate::storage::{CellContent, ColumnStore, DimRuns, Sheet, StyleId};
+use crate::storage::{CellContent, ColumnStore, DimRuns, Sheet, SheetMeta, StyleId};
 use crate::workbook::{SnapContent, Workbook};
 
 /// Undo stack depth (the OOo default).
@@ -83,6 +83,16 @@ pub enum Change {
     /// the records that use it also carry snapshots of the lost cells, the
     /// dimensions and the rewritten formulas, which undo restores afterwards.
     Structure(tally_formula::StructureChange),
+    /// Restore a sheet's merges, frozen panes and AutoFilter (the filtered
+    /// rows are recomputed).
+    SheetMeta {
+        /// Sheet.
+        sheet: SheetId,
+        /// The state.
+        meta: Box<SheetMeta>,
+    },
+    /// Restore the whole name table (dependents are refreshed).
+    Names(Box<crate::names::NameTable>),
 }
 
 /// Side effects the API reports besides changed cells.
@@ -92,6 +102,9 @@ pub struct Effects {
     pub layout_changed: Vec<SheetId>,
     /// Sheets were added, removed, renamed or moved.
     pub sheets_changed: bool,
+    /// Non-fatal problems of a successful op (e.g. replacements that would
+    /// not parse), reported as `OpError`s with the op's index.
+    pub warnings: Vec<tally_api::ApiError>,
 }
 
 impl Effects {
@@ -382,7 +395,36 @@ pub fn apply_change(wb: &mut Workbook, change: Change, fx: &mut Effects) -> Opti
             fx.sheets_changed = true;
             Some(Change::MoveSheet { id, to: from })
         }
+        Change::SheetMeta { sheet, meta } => {
+            let s = wb.sheet_mut(sheet)?;
+            let old = std::mem::replace(&mut s.meta, *meta);
+            wb.reapply_filter(sheet);
+            wb.pending.display_only.push(whole_sheet(sheet));
+            fx.layout(sheet);
+            Some(Change::SheetMeta {
+                sheet,
+                meta: Box::new(old),
+            })
+        }
+        Change::Names(table) => {
+            let old = std::mem::replace(&mut wb.names, *table);
+            wb.refresh_all_name_dependents();
+            Some(Change::Names(Box::new(old)))
+        }
     }
+}
+
+/// A snapshot of a sheet's meta state (for undo).
+pub fn sheet_meta(wb: &Workbook, sheet: SheetId) -> Option<Change> {
+    Some(Change::SheetMeta {
+        sheet,
+        meta: Box::new(wb.sheet(sheet)?.meta.clone()),
+    })
+}
+
+/// A snapshot of the name table (for undo).
+pub fn names_snapshot(wb: &Workbook) -> Change {
+    Change::Names(Box::new(wb.names.clone()))
 }
 
 /// `true` if the content of a cell is a formula (used by tests).

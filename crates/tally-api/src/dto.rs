@@ -105,6 +105,11 @@ pub struct DimRunPx {
     pub size: f32,
     /// Hidden rows/columns have size 0 on screen.
     pub hidden: bool,
+    /// `true` when the rows are hidden by an AutoFilter (as opposed to
+    /// hidden by the user). Absent or `null` means not filtered.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub filtered: Option<bool>,
 }
 
 /// An inclusive range on an implied sheet.
@@ -490,6 +495,267 @@ pub enum Op {
         /// What to paste.
         payload: PastePayload,
     },
+    /// Defines (or redefines) a named range or expression.
+    DefineName {
+        /// The name: `[A-Za-z_][A-Za-z0-9_.]*`, not a cell reference;
+        /// unique per scope, case-insensitively.
+        name: String,
+        /// Sheet scope, or `None` for the workbook.
+        scope: Option<SheetId>,
+        /// What it refers to, in CalcA1 syntax without `=`, e.g.
+        /// `$Sheet1.$A$1:$B$5` or `0.07`.
+        refers_to: String,
+    },
+    /// Deletes a name (formulas using it then show `#NAME?`).
+    DeleteName {
+        /// The name.
+        name: String,
+        /// Its scope.
+        scope: Option<SheetId>,
+    },
+    /// Enters an array (Ctrl+Shift+Enter) formula over `range`.
+    SetArrayFormula {
+        /// Sheet.
+        sheet: SheetId,
+        /// The block; the formula's result matrix is spread over it.
+        range: RangeDto,
+        /// The formula, starting with `=` (CalcA1).
+        input: String,
+    },
+    /// Cut and paste: moves `from` so its top-left lands at `to`, rewriting
+    /// references that point into the moved block.
+    MoveRange {
+        /// Sheet.
+        sheet: SheetId,
+        /// Source block.
+        from: RangeDto,
+        /// Destination top-left.
+        to: CellPos,
+    },
+    /// Merges `range`; only the top-left cell keeps its content (the UI
+    /// should warn when other cells are non-empty).
+    MergeCells {
+        /// Sheet.
+        sheet: SheetId,
+        /// Area to merge.
+        range: RangeDto,
+    },
+    /// Removes every merge intersecting `range`.
+    UnmergeCells {
+        /// Sheet.
+        sheet: SheetId,
+        /// Area.
+        range: RangeDto,
+    },
+    /// Freezes the top `rows` rows and left `cols` columns (`0, 0` unfreezes).
+    SetFrozen {
+        /// Sheet.
+        sheet: SheetId,
+        /// Frozen rows.
+        rows: u32,
+        /// Frozen columns.
+        cols: u32,
+    },
+    /// Sorts the rows of `range` (stable, multi-key).
+    SortRange {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area; with `has_header` its first row stays in place.
+        range: RangeDto,
+        /// Keys in priority order.
+        keys: Vec<SortKey>,
+        /// The first row holds column labels.
+        has_header: bool,
+        /// Compare text case-sensitively (lowercase first).
+        case_sensitive: bool,
+    },
+    /// Sets (or with `None` removes) the sheet's AutoFilter area.
+    SetAutoFilter {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area including its header row.
+        range: Option<RangeDto>,
+    },
+    /// Sets (or with `None` clears) the filter of one AutoFilter column.
+    SetColumnFilter {
+        /// Sheet.
+        sheet: SheetId,
+        /// Absolute column inside the AutoFilter area.
+        col: u32,
+        /// The filter.
+        filter: Option<ColumnFilter>,
+    },
+    /// Hides or shows rows (user-hidden, independent of filters).
+    SetRowsHidden {
+        /// Sheet.
+        sheet: SheetId,
+        /// First row.
+        start: u32,
+        /// Last row.
+        end: u32,
+        /// Hide (`true`) or show.
+        hidden: bool,
+    },
+    /// Hides or shows columns.
+    SetColsHidden {
+        /// Sheet.
+        sheet: SheetId,
+        /// First column.
+        start: u32,
+        /// Last column.
+        end: u32,
+        /// Hide (`true`) or show.
+        hidden: bool,
+    },
+    /// Replaces every match of `query` (in `sheet`, or every sheet).
+    ReplaceAll {
+        /// Sheet to search, or `None` for all sheets (`query.sheet` is ignored).
+        sheet: Option<SheetId>,
+        /// What to find.
+        query: FindQuery,
+        /// Replacement (regex mode: `$1`, `&` for the whole match).
+        replace: String,
+    },
+    /// Paste with options (values only, formats only, transpose, skip
+    /// empty cells, arithmetic with the target).
+    PasteSpecial {
+        /// Sheet.
+        sheet: SheetId,
+        /// Target range (its top-left is the paste position).
+        target: RangeDto,
+        /// What to paste.
+        payload: PastePayload,
+        /// How.
+        options: PasteOptions,
+    },
+    /// Fill handle / Fill Series: extends `source` over `target`.
+    FillRange {
+        /// Sheet.
+        sheet: SheetId,
+        /// The cells that define the series.
+        source: RangeDto,
+        /// The area to fill, including `source`; it extends `source` in
+        /// exactly one direction (down, up, right or left).
+        target: RangeDto,
+        /// Series type.
+        mode: FillMode,
+    },
+}
+
+/// One sort key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SortKey {
+    /// Absolute column.
+    pub col: u32,
+    /// Ascending (`true`) or descending.
+    pub ascending: bool,
+}
+
+/// The filter of one AutoFilter column; a row is shown when its cell
+/// passes every part that is set.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ColumnFilter {
+    /// Formatted texts to keep (`""` keeps empty cells).
+    pub values: Option<Vec<String>>,
+    /// A condition to match.
+    pub condition: Option<FilterCondition>,
+}
+
+/// A filter condition.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FilterCondition {
+    /// Comparison.
+    pub op: FilterOp,
+    /// Operand; numbers compare numerically, text case-insensitively.
+    pub value: String,
+}
+
+/// Filter comparisons.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FilterOp {
+    /// Equal.
+    Eq,
+    /// Not equal.
+    Ne,
+    /// Greater than.
+    Gt,
+    /// Greater or equal.
+    Ge,
+    /// Less than.
+    Lt,
+    /// Less or equal.
+    Le,
+    /// Contains the text.
+    Contains,
+    /// Starts with the text.
+    BeginsWith,
+    /// Ends with the text.
+    EndsWith,
+    /// The cell is empty.
+    Empty,
+    /// The cell is not empty.
+    NotEmpty,
+}
+
+/// Options of [`Op::PasteSpecial`].
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PasteOptions {
+    /// Paste values (formula results), not formulas or formats.
+    pub values_only: bool,
+    /// Paste formats only.
+    pub formats_only: bool,
+    /// Swap rows and columns.
+    pub transpose: bool,
+    /// Empty source cells leave the target unchanged.
+    pub skip_empty: bool,
+    /// Combine with the target's numbers (internal payloads only).
+    pub operation: PasteOperation,
+}
+
+/// Arithmetic for [`PasteOptions::operation`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PasteOperation {
+    /// Replace the target.
+    #[default]
+    None,
+    /// target + source.
+    Add,
+    /// target − source.
+    Subtract,
+    /// target × source.
+    Multiply,
+    /// target ÷ source.
+    Divide,
+}
+
+/// Series type of [`Op::FillRange`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FillMode {
+    /// Detect: numbers, dates, day/month names and numbered text form
+    /// series; other text and formulas are copied.
+    Auto,
+    /// Repeat the source.
+    Copy,
+    /// Linear series (step from the source, or 1).
+    LinearSeries,
+    /// Growth series (ratio from the source, or 1).
+    GrowthSeries,
+    /// Date series (step in days, or months when month-aligned).
+    Date,
 }
 
 /// What [`Op::Clear`] removes.
@@ -534,6 +800,40 @@ pub struct StylePatch {
     pub wrap: Option<bool>,
     /// Number format code.
     pub number_format: Option<String>,
+    /// Border edges to set or remove; edges left `None` are unchanged.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub borders: Option<BordersPatch>,
+}
+
+/// Border edits for [`StylePatch::borders`], relative to each target range:
+/// `top`/`bottom`/`left`/`right` apply to the outer edges of the range,
+/// `inner_h`/`inner_v` to the lines between its rows/columns.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BordersPatch {
+    /// Top edge of the range.
+    pub top: Option<BorderEdgePatch>,
+    /// Bottom edge of the range.
+    pub bottom: Option<BorderEdgePatch>,
+    /// Left edge of the range.
+    pub left: Option<BorderEdgePatch>,
+    /// Right edge of the range.
+    pub right: Option<BorderEdgePatch>,
+    /// Horizontal lines between the rows of the range.
+    pub inner_h: Option<BorderEdgePatch>,
+    /// Vertical lines between the columns of the range.
+    pub inner_v: Option<BorderEdgePatch>,
+}
+
+/// One border edge edit.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BorderEdgePatch {
+    /// The line to draw, or `None` to remove the border.
+    pub line: Option<BorderLineDto>,
 }
 
 /// Clipboard content for [`Op::Paste`].
@@ -689,6 +989,15 @@ pub struct CellEditInfo {
     pub input: String,
     /// Plain-English explanation of a formula, e.g. "A1 × B1".
     pub hint: Option<String>,
+    /// The cell is part of an array (Ctrl+Shift+Enter) formula block; `input`
+    /// is then shown as `{=…}` and edits must cover the whole block.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub array: Option<bool>,
+    /// For array cells: the whole block.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub array_range: Option<RangeDto>,
 }
 
 /// A spreadsheet function, for autocomplete and help.
@@ -750,6 +1059,109 @@ pub struct ClipboardOut {
     pub html: String,
     /// Token identifying the engine's internal snapshot.
     pub token: String,
+}
+
+/// A defined name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct NameInfo {
+    /// The name as defined.
+    pub name: String,
+    /// Sheet scope, or `None` for the workbook.
+    pub scope: Option<SheetId>,
+    /// What it refers to, in CalcA1 syntax without `=`.
+    pub refers_to: String,
+    /// Name of the scope sheet.
+    pub sheet_name: Option<String>,
+}
+
+/// The AutoFilter of a sheet.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AutoFilterInfo {
+    /// The area including its header row, or `None` without an AutoFilter.
+    pub range: Option<RangeDto>,
+    /// One entry per column of the area.
+    pub columns: Vec<FilterColumnInfo>,
+}
+
+/// One AutoFilter column.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FilterColumnInfo {
+    /// Absolute column.
+    pub col: u32,
+    /// Distinct formatted values of the data rows, sorted (numbers first,
+    /// then text case-insensitively; `""` for empty cells last), at most
+    /// 10,000.
+    pub unique: Vec<String>,
+    /// How many data rows hold each entry of `unique`.
+    pub counts: Vec<u32>,
+    /// The active filter.
+    pub active: Option<ColumnFilter>,
+}
+
+/// How [`FindQuery::text`] is interpreted.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FindMode {
+    /// Plain text.
+    #[default]
+    Literal,
+    /// `*` any run, `?` one character, `~` escapes.
+    Wildcards,
+    /// A regular expression (Rust `regex` syntax, size-limited).
+    Regex,
+}
+
+/// A find / replace query.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FindQuery {
+    /// What to look for.
+    pub text: String,
+    /// Sheet to search, or `None` for every sheet in tab order.
+    pub sheet: Option<SheetId>,
+    /// Search formula text (and constants as typed) instead of displayed values.
+    pub in_formulas: bool,
+    /// Case-sensitive.
+    pub match_case: bool,
+    /// The whole cell must match.
+    pub whole_cell: bool,
+    /// Pattern syntax.
+    pub mode: FindMode,
+    /// Hits after this cell (row-major, on `sheet` or the active sheet) come
+    /// first, wrapping around.
+    pub from: Option<CellPos>,
+}
+
+/// Find results.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FindResult {
+    /// Matching cells (at most 10,000).
+    pub hits: Vec<FindHit>,
+    /// More matches exist than were returned.
+    pub truncated: bool,
+}
+
+/// One matching cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FindHit {
+    /// Sheet.
+    pub sheet: SheetId,
+    /// Row.
+    pub r: u32,
+    /// Column.
+    pub c: u32,
 }
 
 /// File format for saving.
@@ -967,5 +1379,62 @@ mod tests {
         DocChangedEvent::export_all(&cfg).unwrap();
         MenuActionEvent::export_all(&cfg).unwrap();
         ApiError::export_all(&cfg).unwrap();
+        NameInfo::export_all(&cfg).unwrap();
+        AutoFilterInfo::export_all(&cfg).unwrap();
+        FindQuery::export_all(&cfg).unwrap();
+        FindResult::export_all(&cfg).unwrap();
+    }
+
+    #[test]
+    fn v02_shapes() {
+        let op = Op::SortRange {
+            sheet: 1,
+            range: RangeDto {
+                r0: 0,
+                c0: 0,
+                r1: 9,
+                c1: 2,
+            },
+            keys: vec![SortKey {
+                col: 1,
+                ascending: false,
+            }],
+            has_header: true,
+            case_sensitive: false,
+        };
+        let v = serde_json::to_value(&op).unwrap();
+        assert_eq!(v["type"], "sortRange");
+        assert_eq!(v["hasHeader"], true);
+        assert_eq!(v["keys"][0], json!({ "col": 1, "ascending": false }));
+        // New optional fields may be omitted by older clients.
+        let p: StylePatch = serde_json::from_value(json!({
+            "bold": null, "italic": null, "underline": null, "strike": null,
+            "fontFamily": null, "fontSizePt": null, "color": null, "fill": null,
+            "hAlign": null, "vAlign": null, "wrap": null, "numberFormat": null
+        }))
+        .unwrap();
+        assert_eq!(p.borders, None);
+        let fill: Op = serde_json::from_value(json!({
+            "type": "fillRange", "sheet": 1,
+            "source": { "r0": 0, "c0": 0, "r1": 0, "c1": 0 },
+            "target": { "r0": 0, "c0": 0, "r1": 5, "c1": 0 },
+            "mode": "auto"
+        }))
+        .unwrap();
+        assert!(matches!(
+            fill,
+            Op::FillRange {
+                mode: FillMode::Auto,
+                ..
+            }
+        ));
+        assert_eq!(
+            serde_json::to_value(FilterOp::BeginsWith).unwrap(),
+            json!("beginsWith")
+        );
+        assert_eq!(
+            serde_json::to_value(FindMode::Regex).unwrap(),
+            json!("regex")
+        );
     }
 }

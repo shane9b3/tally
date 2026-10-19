@@ -4,6 +4,11 @@
 //! argument separators and both `.` and `!` as sheet separators, whatever the
 //! dialect's own choice. Printing always uses the dialect's chosen
 //! separators exactly.
+//!
+//! [`Dialect::ExcelA1`] is the OOXML / Excel UI syntax (`Sheet1!A1`,
+//! `'My Sheet'!A1`, `Jan:Dec!B2`, `,` arguments, `{1,2;3,4}` arrays, space
+//! for intersection, `(A1,B1)` for union, `_xlfn.` / `_xlws.` function
+//! prefixes). R1C1 and structured (table) references are not supported.
 
 /// The argument separator a CalcA1 dialect prints.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -57,6 +62,16 @@ pub enum Dialect {
     /// ODF OpenFormula as stored in `.ods` files: `of:=SUM([.A1:.B2];3)`.
     /// Parsing also accepts the legacy OOo 2.x `oooc:=` prefix.
     OpenFormula,
+    /// Excel A1 syntax as stored in OOXML (`.xlsx`) cells and typed in
+    /// Excel: `=SUM(Sheet1!A1:B2,'My Sheet'!C1)`, arrays `{1,2;3,4}`
+    /// (`,` separates columns, `;` rows), intersection by a space between
+    /// references, union by `,` inside parentheses, 3D references
+    /// `Sheet1:Sheet3!A1`.
+    ///
+    /// Parsing strips the `_xlfn.` / `_xlws.` future-function prefixes when
+    /// the resolver knows the bare name; printing asks the resolver for the
+    /// OOXML spelling ([`crate::Resolver::function_name_in`]).
+    ExcelA1,
 }
 
 impl Dialect {
@@ -78,9 +93,19 @@ impl Dialect {
         Dialect::OpenFormula
     }
 
+    /// The Excel A1 (OOXML) dialect.
+    pub const fn excel_a1() -> Self {
+        Dialect::ExcelA1
+    }
+
     /// Returns `true` for [`Dialect::OpenFormula`].
     pub const fn is_open_formula(self) -> bool {
         matches!(self, Dialect::OpenFormula)
+    }
+
+    /// Returns `true` for [`Dialect::ExcelA1`].
+    pub const fn is_excel(self) -> bool {
+        matches!(self, Dialect::ExcelA1)
     }
 
     /// The argument separator this dialect prints.
@@ -88,13 +113,14 @@ impl Dialect {
         match self {
             Dialect::CalcA1 { arg_sep, .. } => arg_sep.as_char(),
             Dialect::OpenFormula => ';',
+            Dialect::ExcelA1 => ',',
         }
     }
 
     /// The prefix printed before the expression: `=` or `of:=`.
     pub const fn formula_prefix(self) -> &'static str {
         match self {
-            Dialect::CalcA1 { .. } => "=",
+            Dialect::CalcA1 { .. } | Dialect::ExcelA1 => "=",
             Dialect::OpenFormula => "of:=",
         }
     }

@@ -1,0 +1,65 @@
+# NPV conformance vectors. Ported AOO 4.1 semantics (interpr2.cxx). Values in references are read row by row (ScHorizontalValueIterator); text and empty cells are skipped.
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=NPV(0.1;-10000;3000;4200;6800)"
+expect = 1188.44341
+tol = 1e-05
+
+[[case]]
+name = "inline array"
+formula = "=NPV(0.1;{-10000;3000;4200;6800})"
+expect = 1188.44341
+tol = 1e-05
+aoo_expect = "Err:504"
+note = "AOO 4.1 rejects inline arrays here (Err:504); Tally follows Excel/LibreOffice."
+
+[[case]]
+name = "Excel reference with range"
+cells = { A1 = 8000, A2 = 9200, A3 = 10000, A4 = 12000, A5 = 14500, A6 = -40000 }
+formula = "=NPV(0.08;A1:A5)+A6"
+expect = 1922.06155493
+tol = 1e-06
+
+[[case]]
+name = "text and empty cells skipped"
+cells = { A1 = 100, A2 = "x", A4 = 200 }
+formula = "=NPV(0.1;A1:A4)"
+expect = 256.198347107438
+tol = 1e-09
+
+[[case]]
+name = "row-major order"
+cells = { A1 = 1, B1 = 2, A2 = 3, B2 = 4 }
+formula = "=NPV(0.1;A1:B2)"
+expect = 7.54798169523939
+tol = 1e-09
+
+[[case]]
+name = "booleans in references count"
+cells = { A1 = true, A2 = 1 }
+formula = "=NPV(0.1;A1:A2)"
+expect = 1.73553719008264
+tol = 1e-09
+
+[[case]]
+name = "zero rate"
+formula = "=NPV(0;1;2;3)"
+expect = 6
+
+[[case]]
+name = "error in range"
+cells = { A1 = 1, A2 = "=1/0" }
+formula = "=NPV(0.1;A1:A2)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "non-numeric rate"
+formula = "=NPV(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "too few arguments"
+formula = "=NPV(0.1)"
+expect = "Err:511"

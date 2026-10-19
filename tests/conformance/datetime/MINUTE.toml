@@ -1,0 +1,51 @@
+[[case]]
+formula = "=MINUTE(0.5)"
+expect = 0
+
+[[case]]
+formula = "=MINUTE(46314.75)"
+expect = 0
+
+[[case]]
+formula = "=MINUTE(TIME(14;30;15))"
+expect = 30
+
+[[case]]
+formula = "=MINUTE(46314+TIME(23;59;59))"
+expect = 59
+
+[[case]]
+formula = "=MINUTE(-0.25)"
+expect = 0
+note = "Negative serials use the fractional part."
+
+[[case]]
+formula = "=MINUTE(0.6041666655092592)"
+expect = 30
+note = "Rounded to the nearest second, no 59.999 artifact."
+
+[[case]]
+formula = "=MINUTE(0.99999999)"
+expect = 0
+note = "Rounds up to midnight, wraps to 0."
+
+[[case]]
+formula = "=MINUTE(A1)"
+expect = 0
+
+[[case]]
+formula = "=MINUTE(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=MINUTE(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=MINUTE(TRUE)"
+expect = 0
+
+[[case]]
+formula = "=MINUTE()"
+expect = "Err:511"

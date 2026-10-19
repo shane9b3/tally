@@ -1,0 +1,52 @@
+[[case]]
+formula = "=SHEET()"
+expect = 1
+
+[[case]]
+cells = { A1 = 1, "Sheet2.A1" = 2, "Sheet2.B2" = 3 }
+formula = "=SHEET(A1)"
+expect = 1
+
+[[case]]
+cells = { A1 = 1, "Sheet2.A1" = 2, "Sheet2.B2" = 3 }
+formula = "=SHEET(Sheet2.A1)"
+expect = 2
+
+[[case]]
+cells = { A1 = 1, "Sheet2.A1" = 2, "Sheet2.B2" = 3 }
+formula = "=SHEET(Sheet2.A1:B2)"
+expect = 2
+
+[[case]]
+cells = { A1 = 1, "Sheet2.A1" = 2, "Sheet2.B2" = 3 }
+formula = "=SHEET(\"Sheet2\")"
+expect = 2
+note = "Sheet name as text."
+
+[[case]]
+cells = { A1 = 1, "Sheet2.A1" = 2, "Sheet2.B2" = 3 }
+formula = "=SHEET(\"Sheet1\")"
+expect = 1
+
+[[case]]
+cells = { A1 = 1, "Sheet2.A1" = 2, "Sheet2.B2" = 3 }
+formula = "=SHEET(\"Nope\")"
+expect = "#N/A"
+
+[[case]]
+formula = "=SHEET(5)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=SHEET(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=SHEET(A1;B1)"
+expect = "Err:504"
+
+[[case]]
+cells = { A1 = 1, "Sheet2.A1" = 2, "Sheet2.B2" = 3 }
+origin = "C3"
+formula = "=SHEET(Sheet2.A1)"
+expect = 2

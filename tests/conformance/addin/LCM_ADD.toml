@@ -1,0 +1,49 @@
+# LCM_ADD conformance vectors. Analysis add-in LCM; the plain name LCM is the built-in Mathematical function. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=LCM_ADD(4;6;10)"
+expect = 60
+
+[[case]]
+formula = "=LCM_ADD(5)"
+expect = 5
+
+[[case]]
+formula = "=LCM_ADD(4;0)"
+expect = 0
+
+[[case]]
+formula = "=LCM_ADD(7;13)"
+expect = 91
+
+[[case]]
+formula = "=LCM_ADD(1;1)"
+expect = 1
+
+[[case]]
+name = "truncated"
+formula = "=LCM_ADD(4.9;6.1)"
+expect = 12
+
+[[case]]
+cells = { A1 = 4, A2 = 6, A3 = 10 }
+formula = "=LCM_ADD(A1:A3)"
+expect = 60
+
+[[case]]
+name = "2-D range"
+cells = { A1 = 2, B1 = 3, A2 = 4, B2 = 5 }
+formula = "=LCM_ADD(A1:B2)"
+expect = 60
+
+[[case]]
+formula = "=LCM_ADD(-2;4)"
+expect = "Err:502"
+
+[[case]]
+formula = "=LCM_ADD(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=LCM_ADD()"
+expect = "Err:511"

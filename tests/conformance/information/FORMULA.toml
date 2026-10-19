@@ -1,0 +1,42 @@
+[[case]]
+cells = { A1 = "=1+2", A2 = 5 }
+formula = "=FORMULA(A1)"
+expect = "=1+2"
+
+[[case]]
+cells = { A2 = 5 }
+formula = "=FORMULA(A2)"
+expect = "#N/A"
+
+[[case]]
+formula = "=FORMULA(B9)"
+expect = "#N/A"
+
+[[case]]
+cells = { A2 = 5 }
+formula = "=ISNA(FORMULA(A2))"
+expect = true
+
+[[case]]
+formula = "=FORMULA(1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=FORMULA()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1+2" }
+formula = "=LEN(FORMULA(A1))"
+expect = 4
+
+[[case]]
+cells = { A1 = "=1+2", A2 = 5 }
+formula = "=FORMULA(A1:A2)"
+expect = "=1+2"
+
+[[case]]
+cells = { A1 = { text = "=1+2" } }
+formula = "=FORMULA(A1)"
+expect = "#N/A"
+note = "Text that looks like a formula is not a formula."

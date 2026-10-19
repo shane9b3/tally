@@ -1,0 +1,42 @@
+# OCT2DEC conformance vectors. Analysis add-in; 10-digit two's complement. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=OCT2DEC(\"777\")"
+expect = 511
+
+[[case]]
+formula = "=OCT2DEC(\"7777777777\")"
+expect = -1
+
+[[case]]
+formula = "=OCT2DEC(\"4000000000\")"
+expect = -536870912
+
+[[case]]
+formula = "=OCT2DEC(\"3777777777\")"
+expect = 536870911
+
+[[case]]
+formula = "=OCT2DEC(\"0\")"
+expect = 0
+
+[[case]]
+formula = "=OCT2DEC(\"10\")"
+expect = 8
+
+[[case]]
+name = "number argument"
+formula = "=OCT2DEC(17)"
+expect = 15
+
+[[case]]
+formula = "=OCT2DEC(\"8\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=OCT2DEC(\"77777777777\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=OCT2DEC()"
+expect = "Err:511"

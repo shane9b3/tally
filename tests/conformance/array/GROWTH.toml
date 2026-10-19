@@ -1,0 +1,62 @@
+# GROWTH conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "extrapolate y = 2 * 3^x"
+formula = "=GROWTH({6|18|54|162};{1|2|3|4};{5|6})"
+expect = [[486], [1458]]
+tol = 1e-6
+
+[[case]]
+name = "new_x defaults to x"
+formula = "=GROWTH({6|18|54|162};{1|2|3|4})"
+expect = [[6], [18], [54], [162]]
+tol = 1e-9
+
+[[case]]
+name = "x defaults to 1..n"
+formula = "=GROWTH({6|18|54|162})"
+expect = [[6], [18], [54], [162]]
+tol = 1e-9
+
+[[case]]
+name = "result takes the shape of new_x (row)"
+formula = "=GROWTH({6|18|54|162};{1|2|3|4};{5;6})"
+expect = [[486, 1458]]
+tol = 1e-6
+
+[[case]]
+name = "const FALSE: b = 1"
+formula = "=GROWTH({3|9|27};{1|2|3};{4};FALSE)"
+expect = [[81]]
+tol = 1e-6
+
+[[case]]
+name = "row-oriented"
+formula = "=GROWTH({6;18;54;162};{1;2;3;4};{5;6})"
+expect = [[486, 1458]]
+tol = 1e-6
+
+[[case]]
+name = "two regressors"
+cells = { A1 = 6, A2 = 12, A3 = 72, A4 = 144, A5 = 864, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5, C1 = 1, C2 = 1, C3 = 2, C4 = 2, C5 = 3, E1 = 1, F1 = 4 }
+origin = "H1"
+formula = "=GROWTH(A1:A5;B1:C5;E1:F1)"
+expect = [[162]]
+tol = 1e-6
+note = "y = 2^x1 * 3^x2 at (1, 4) = 2 * 81."
+
+[[case]]
+name = "non-positive y"
+formula = "=GROWTH({1|0|3};{1|2|3})"
+expect = "Err:502"
+
+[[case]]
+name = "text in y"
+cells = { A1 = 1, A2 = "x", A3 = 3 }
+formula = "=GROWTH(A1:A3)"
+expect = "Err:502"
+
+[[case]]
+name = "shape mismatch"
+formula = "=GROWTH({1|2|3};{1|2})"
+expect = "Err:502"

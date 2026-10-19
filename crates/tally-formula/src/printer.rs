@@ -4,6 +4,12 @@
 //! round-trip numbers and references re-anchored to the given origin, e.g.
 //! `=SUM(A1:B2,3)` or `of:=SUM([.A1:.B2];3)`. References that resolve
 //! outside the grid, or to a deleted sheet, print as `#REF!`.
+//!
+//! [`Dialect::ExcelA1`] output is what Excel stores in OOXML cells (without
+//! the leading `=` there): `SUM(Sheet1!A1:B2,'My Sheet'!C1)`, arrays
+//! `{1,2;3,4}`, intersection as a space, union as `(A1,B1)`, 3D areas as
+//! `Sheet1:Sheet3!A1:B2`, no `$` before sheet names, and error literals
+//! Excel does not know (`Err:502`) as `#VALUE!`.
 
 use std::fmt::Write as _;
 
@@ -16,7 +22,7 @@ use crate::ast::{
 };
 use crate::dialect::{Dialect, SheetSep};
 use crate::lexer::{lex, TokenKind};
-use crate::refsyntax::push_sheet_name;
+use crate::refsyntax::{push_sheet_name, sheet_needs_quotes};
 use crate::Resolver;
 
 /// Prints a formula with its prefix (`=` or `of:=`) for a cell at `origin`.
@@ -74,10 +80,29 @@ pub(crate) fn fmt_num(x: f64) -> String {
 fn push_child<'e>(stack: &mut Vec<Work<'e>>, e: &'e Expr, parens: bool) {
     if parens {
         stack.push(Work::Char(')'));
-        stack.push(Work::Expr(e));
+        // Already parenthesized: an ExcelA1 union needs no more.
+        stack.push(Work::Bare(e));
         stack.push(Work::Char('('));
     } else {
         stack.push(Work::Expr(e));
+    }
+}
+
+/// ExcelA1: schedules an operand of a union printed inside its own
+/// parentheses. A left-nested union continues the same list (`(A1,B1,C1)`);
+/// anything binding looser than union (and a right-nested union) gets
+/// parentheses.
+fn push_union_child<'e>(stack: &mut Vec<Work<'e>>, x: &'e Expr, right: bool) {
+    let p = BinOp::Union.precedence();
+    if !right && matches!(x, Expr::Binary(BinOp::Union, _, _)) {
+        stack.push(Work::Bare(x));
+    } else {
+        let wrap = if right {
+            x.precedence() <= p
+        } else {
+            x.precedence() < p
+        };
+        push_child(stack, x, wrap);
     }
 }
 
@@ -91,17 +116,56 @@ struct Printer<'a> {
 /// A pending piece of output for the iterative printer.
 enum Work<'e> {
     Expr(&'e Expr),
+    /// ExcelA1: an expression whose union (if it is one) needs no extra
+    /// parentheses (it is directly inside `(...)` or another union).
+    Bare(&'e Expr),
     Char(char),
     Str(&'static str),
+}
+
+/// ExcelA1: does an unquoted sheet name read as an R1C1 reference
+/// (`R1C1`, `R2`, `C3`, `RC`)? Excel quotes those.
+fn looks_like_r1c1(name: &str) -> bool {
+    let u = name.to_ascii_uppercase();
+    let b = u.as_bytes();
+    let mut i = 0;
+    let digits = |i: &mut usize| {
+        while *i < b.len() && b[*i].is_ascii_digit() {
+            *i += 1;
+        }
+    };
+    let mut any = false;
+    if b.get(i) == Some(&b'R') {
+        i += 1;
+        digits(&mut i);
+        any = true;
+    }
+    if b.get(i) == Some(&b'C') {
+        i += 1;
+        digits(&mut i);
+        any = true;
+    }
+    any && i == b.len()
+}
+
+/// Excel's spelling of an error literal (`#VALUE!` for OOo-only codes).
+fn excel_error(k: tally_types::ErrorKind) -> std::borrow::Cow<'static, str> {
+    let d = k.display();
+    if d.starts_with('#') {
+        d
+    } else {
+        std::borrow::Cow::Borrowed("#VALUE!")
+    }
 }
 
 impl Printer<'_> {
     /// Prints `root` with an explicit work stack (no recursion), so trees of
     /// any depth are safe on small stacks.
     fn expr(&mut self, root: &Expr) {
+        let excel = self.dialect.is_excel();
         let mut stack: Vec<Work<'_>> = vec![Work::Expr(root)];
         while let Some(w) = stack.pop() {
-            let e = match w {
+            let (e, bare) = match w {
                 Work::Char(c) => {
                     self.out.push(c);
                     continue;
@@ -110,8 +174,16 @@ impl Printer<'_> {
                     self.out.push_str(s);
                     continue;
                 }
-                Work::Expr(e) => e,
+                Work::Expr(e) => (e, false),
+                Work::Bare(e) => (e, true),
             };
+            // ExcelA1 unions only parse inside parentheses: `SUM((A1,B1))`.
+            if excel && !bare && matches!(e, Expr::Binary(BinOp::Union, _, _)) {
+                stack.push(Work::Char(')'));
+                stack.push(Work::Bare(e));
+                stack.push(Work::Char('('));
+                continue;
+            }
             match e {
                 Expr::Num(x) => {
                     let s = fmt_num(*x);
@@ -128,11 +200,13 @@ impl Printer<'_> {
                         self.out.push_str("()");
                     }
                 }
+                Expr::Err(k) if excel => self.out.push_str(&excel_error(*k)),
                 Expr::Err(k) => self.out.push_str(&k.display()),
                 Expr::ArrayLit(a) => {
                     self.out.push('{');
                     stack.push(Work::Char('}'));
                     let cols = a.cols.max(1) as usize;
+                    let (col_sep, row_sep) = if excel { (',', ';') } else { (';', '|') };
                     for (i, item) in a.items.iter().enumerate().rev() {
                         match item {
                             // Plain constants inside arrays in every dialect.
@@ -141,7 +215,7 @@ impl Printer<'_> {
                             other => stack.push(Work::Expr(other)),
                         }
                         if i > 0 {
-                            stack.push(Work::Char(if i % cols == 0 { '|' } else { ';' }));
+                            stack.push(Work::Char(if i % cols == 0 { row_sep } else { col_sep }));
                         }
                     }
                 }
@@ -161,6 +235,7 @@ impl Printer<'_> {
                                 None => self.out.push_str("#NAME?"),
                             }
                         }
+                        FuncRef::Unknown(n) if excel => push_excel_unknown(&mut self.out, n),
                         FuncRef::Unknown(n) => self.out.push_str(n),
                     }
                     self.out.push('(');
@@ -180,20 +255,35 @@ impl Printer<'_> {
                     });
                     push_child(&mut stack, x, x.precedence() < PREFIX_PRECEDENCE);
                 }
+                Expr::Binary(BinOp::Union, l, r) if excel => {
+                    // Inside the union's own parentheses: `(A1,B1,C1)`.
+                    push_union_child(&mut stack, r, true);
+                    stack.push(Work::Char(','));
+                    push_union_child(&mut stack, l, false);
+                }
                 Expr::Binary(op, l, r) => {
                     let p = op.precedence();
                     // `Name!A1` would re-lex as a sheet qualifier.
-                    let guard_bang =
-                        *op == BinOp::Intersect && matches!(**l, Expr::Name(_) | Expr::Bool(_));
+                    let guard_bang = !excel
+                        && *op == BinOp::Intersect
+                        && matches!(**l, Expr::Name(_) | Expr::Bool(_));
                     push_child(&mut stack, r, r.precedence() <= p);
-                    stack.push(Work::Str(op.symbol()));
+                    stack.push(Work::Str(if excel && *op == BinOp::Intersect {
+                        " "
+                    } else {
+                        op.symbol()
+                    }));
                     push_child(&mut stack, l, l.precedence() < p || guard_bang);
                 }
                 Expr::Postfix(PostfixOp::Percent, x) => {
                     stack.push(Work::Char('%'));
                     push_child(&mut stack, x, x.precedence() < POSTFIX_PRECEDENCE);
                 }
-                Expr::Paren(x) => push_child(&mut stack, x, true),
+                Expr::Paren(x) => {
+                    stack.push(Work::Char(')'));
+                    stack.push(if excel { Work::Bare(x) } else { Work::Expr(x) });
+                    stack.push(Work::Char('('));
+                }
                 Expr::Missing => {}
             }
         }
@@ -221,6 +311,11 @@ impl Printer<'_> {
             SheetRef::Deleted => return None,
         };
         let mut out = String::new();
+        if self.dialect.is_excel() {
+            // Excel has no `$Sheet` marker.
+            push_excel_sheet_name(&mut out, &name);
+            return Some(out);
+        }
         if abs {
             out.push('$');
         }
@@ -228,12 +323,23 @@ impl Printer<'_> {
         Some(out)
     }
 
+    /// The bare (unquoted) name of a sheet, or `None` for a deleted or
+    /// unknown sheet (and for [`SheetRef::Current`]).
+    fn sheet_raw_name(&self, s: &SheetRef) -> Option<std::sync::Arc<str>> {
+        match s {
+            SheetRef::Id { id, .. } => self.resolver.sheet_name(*id),
+            SheetRef::Unresolved(n) => Some(n.clone()),
+            SheetRef::Current | SheetRef::Deleted => None,
+        }
+    }
+
     fn sheet_sep(&self) -> char {
         match self.dialect {
             Dialect::CalcA1 {
                 sheet_sep: SheetSep::Bang,
                 ..
-            } => '!',
+            }
+            | Dialect::ExcelA1 => '!',
             _ => '.',
         }
     }
@@ -286,6 +392,9 @@ impl Printer<'_> {
                 self.a1_sheet(&c.sheet, &mut out)?;
                 self.coords(c, &mut out)?;
             }
+            RefExpr::Area(a, b) if self.dialect.is_excel() => {
+                self.excel_area(a, b, &mut out)?;
+            }
             RefExpr::Area(a, b) => {
                 self.a1_sheet(&a.sheet, &mut out)?;
                 self.coords(a, &mut out)?;
@@ -308,6 +417,52 @@ impl Printer<'_> {
             RefExpr::Invalid => return None,
         }
         Some(out)
+    }
+
+    /// ExcelA1 area: `Sheet1!A1:B2`, or a 3D `Sheet1:Sheet3!A1:B2` when the
+    /// endpoints name different sheets.
+    fn excel_area(&self, a: &CellRefExpr, b: &CellRefExpr, out: &mut String) -> Option<()> {
+        let same_sheet = match (&a.sheet, &b.sheet) {
+            (_, SheetRef::Current) => true,
+            (SheetRef::Deleted, _) | (_, SheetRef::Deleted) => return None,
+            (x, y) => match (self.sheet_raw_name(x), self.sheet_raw_name(y)) {
+                (Some(n1), Some(n2)) => n1.eq_ignore_ascii_case(&n2),
+                (None, None) => true,
+                _ => false,
+            },
+        };
+        if same_sheet {
+            self.a1_sheet(&a.sheet, out)?;
+            self.coords(a, out)?;
+            out.push(':');
+            return self.coords(b, out);
+        }
+        // `A1:Sheet2!B2` (start on the formula's own sheet) has no Excel
+        // spelling without knowing that sheet's name.
+        let first = match &a.sheet {
+            SheetRef::Current => return None,
+            s => self.sheet_raw_name(s)?,
+        };
+        let last = self.sheet_raw_name(&b.sheet)?;
+        let quote = excel_needs_quotes(&first) || excel_needs_quotes(&last);
+        if quote {
+            out.push('\'');
+            out.push_str(&first.replace('\'', "''"));
+            out.push(':');
+            out.push_str(&last.replace('\'', "''"));
+            out.push('\'');
+        } else {
+            out.push_str(&first);
+            out.push(':');
+            out.push_str(&last);
+        }
+        out.push('!');
+        self.coords(a, out)?;
+        if a.row != b.row || a.col != b.col {
+            out.push(':');
+            self.coords(b, out)?;
+        }
+        Some(())
     }
 
     fn of_sheet(&self, s: &SheetRef, out: &mut String) -> Option<()> {
@@ -353,6 +508,44 @@ impl Printer<'_> {
         }
         out.push(']');
         Some(out)
+    }
+}
+
+/// An unknown function in ExcelA1: `_xlfn.` / `_xlws.` prefixes are
+/// written in lowercase, as Excel stores them.
+fn push_excel_unknown(out: &mut String, name: &str) {
+    let mut rest = name;
+    loop {
+        let has = |p: &str| {
+            rest.len() > p.len()
+                && rest.is_char_boundary(p.len())
+                && rest[..p.len()].eq_ignore_ascii_case(p)
+        };
+        if has("_xlfn.") {
+            out.push_str("_xlfn.");
+        } else if has("_xlws.") {
+            out.push_str("_xlws.");
+        } else {
+            break;
+        }
+        rest = &rest[6..];
+    }
+    out.push_str(rest);
+}
+
+/// Whether Excel needs a sheet name quoted.
+fn excel_needs_quotes(name: &str) -> bool {
+    sheet_needs_quotes(name) || looks_like_r1c1(name)
+}
+
+/// Appends a sheet name the way Excel writes it (quoted when needed).
+fn push_excel_sheet_name(out: &mut String, name: &str) {
+    if excel_needs_quotes(name) {
+        out.push('\'');
+        out.push_str(&name.replace('\'', "''"));
+        out.push('\'');
+    } else {
+        out.push_str(name);
     }
 }
 

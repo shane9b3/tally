@@ -1,0 +1,51 @@
+# NORMSINV conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "0.975"
+formula = "=NORMSINV(0.975)"
+expect = 1.9599639845400538
+tol = 2e-13
+
+[[case]]
+name = "median"
+formula = "=NORMSINV(0.5)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "extreme"
+formula = "=NORMSINV(1E-300)"
+expect = -37.0470962993612
+tol = 4e-12
+
+[[case]]
+name = "region boundary"
+formula = "=NORMSINV(0.075)"
+expect = -1.439531470938456
+tol = 1e-13
+
+[[case]]
+name = "p = 0"
+formula = "=NORMSINV(0)"
+expect = "#VALUE!"
+
+[[case]]
+name = "p = 1"
+formula = "=NORMSINV(1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "negative"
+formula = "=NORMSINV(-0.1)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=NORMSINV(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell"
+formula = "=NORMSINV(A1)"
+expect = "#VALUE!"

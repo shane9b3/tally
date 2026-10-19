@@ -1,0 +1,69 @@
+# LN conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=LN(2.5)"
+expect = 0.9162907318741551
+
+[[case]]
+name = "numeric text"
+formula = "=LN(\"2.5\")"
+expect = 0.9162907318741551
+
+[[case]]
+name = "non-numeric text"
+formula = "=LN(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=LN(A1)"
+expect = "Err:502"
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=LN(A1)"
+expect = 0
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=LN(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 2.5 }
+origin = "C2"
+formula = "=LN(A1:A2)"
+expect = 0.9162907318741551
+
+[[case]]
+name = "no arguments"
+formula = "=LN()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=LN(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=LN(0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=LN(-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=LN(1)"
+expect = 0
+
+[[case]]
+formula = "=LN(EXP(2))"
+expect = 2
+
+[[case]]
+formula = "=LN(1E-300)"
+expect = -690.7755278982137

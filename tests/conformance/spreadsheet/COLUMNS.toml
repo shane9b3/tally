@@ -1,0 +1,44 @@
+[[case]]
+formula = "=COLUMNS(A1:C5)"
+expect = 3
+
+[[case]]
+formula = "=COLUMNS(A1)"
+expect = 1
+
+[[case]]
+formula = "=COLUMNS(B2:F3)"
+expect = 5
+
+[[case]]
+formula = "=COLUMNS({1;2;3|4;5;6})"
+expect = 3
+
+[[case]]
+formula = "=COLUMNS({1|2})"
+expect = 1
+
+[[case]]
+formula = "=COLUMNS(5)"
+expect = 1
+
+[[case]]
+formula = "=COLUMNS(\"text\")"
+expect = 1
+
+[[case]]
+cells = { A2 = "=1/0" }
+formula = "=COLUMNS(A1:D1)"
+expect = 4
+
+[[case]]
+formula = "=COLUMNS()"
+expect = "Err:511"
+
+[[case]]
+formula = "=COLUMNS(OFFSET(A1;0;0;4;2))"
+expect = 2
+
+[[case]]
+formula = "=COLUMNS(1/0)"
+expect = "#DIV/0!"

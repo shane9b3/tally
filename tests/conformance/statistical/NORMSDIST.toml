@@ -1,0 +1,58 @@
+# NORMSDIST conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "1.96"
+formula = "=NORMSDIST(1.96)"
+expect = 0.9750021048517795
+tol = 1e-13
+
+[[case]]
+name = "zero"
+formula = "=NORMSDIST(0)"
+expect = 0.5
+tol = 5e-14
+
+[[case]]
+name = "lower tail"
+formula = "=NORMSDIST(-8)"
+expect = 6.220960574271784e-16
+tol = 6e-29
+
+[[case]]
+name = "saturates"
+formula = "=NORMSDIST(40)"
+expect = 1.0
+tol = 0
+
+[[case]]
+name = "text"
+formula = "=NORMSDIST(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell"
+formula = "=NORMSDIST(A1)"
+expect = 0.5
+tol = 5e-14
+
+[[case]]
+name = "bool"
+cells = { A1 = true }
+formula = "=NORMSDIST(A1)"
+expect = 0.8413447460685429
+tol = 8e-14
+
+[[case]]
+name = "error"
+cells = { A1 = "=1/0" }
+formula = "=NORMSDIST(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 1, A2 = 2 }
+origin = "C2"
+formula = "=NORMSDIST(A1:A2)"
+expect = 0.9772498680518208
+tol = 1e-13

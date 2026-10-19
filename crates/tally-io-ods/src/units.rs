@@ -154,6 +154,67 @@ pub(crate) fn length_to_hmm(s: &str) -> Option<u32> {
     (hmm.is_finite() && hmm >= 0.0 && hmm <= f64::from(u32::MAX)).then_some(hmm as u32)
 }
 
+/// An ODF border value (`0.74pt solid #000000`, tokens in any order) →
+/// `Some(None)` for `none`/`hidden`, `Some(Some(line))` for a line, `None`
+/// when unparsable.
+pub(crate) fn parse_border(s: &str) -> Option<Option<tally_model::BorderLine>> {
+    use tally_model::{BorderLine, BorderStyle};
+    let t = s.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("none") || t.eq_ignore_ascii_case("hidden") {
+        return Some(None);
+    }
+    let mut line = BorderLine {
+        style: BorderStyle::Solid,
+        width_hmm: 26,
+        color: 0x0000_00ff,
+    };
+    let mut any = false;
+    for tok in t.split_ascii_whitespace() {
+        let lower = tok.to_ascii_lowercase();
+        if let Some(c) = parse_color(tok) {
+            line.color = c;
+            any = true;
+        } else if let Some(w) = length_to_hmm(tok) {
+            line.width_hmm = w;
+            any = true;
+        } else {
+            line.style = match lower.as_str() {
+                "none" | "hidden" => return Some(None),
+                "solid" => BorderStyle::Solid,
+                "double" | "double-thin" => BorderStyle::Double,
+                "dotted" => BorderStyle::Dotted,
+                "dashed" | "fine-dashed" | "dash-dot" | "dash-dot-dot" | "dot-dash" => {
+                    BorderStyle::Dashed
+                }
+                "thin" | "medium" | "thick" => {
+                    line.width_hmm = match lower.as_str() {
+                        "thin" => 26,
+                        "medium" => 88,
+                        _ => 176,
+                    };
+                    line.style
+                }
+                _ => BorderStyle::Solid,
+            };
+            any = true;
+        }
+    }
+    any.then_some(Some(line))
+}
+
+/// A border line as an ODF border value, e.g. `0.74pt solid #000000`.
+pub(crate) fn border_to_string(b: &tally_model::BorderLine) -> String {
+    use tally_model::BorderStyle;
+    let pt = (f64::from(b.width_hmm) * 72.0 / 2540.0 * 100.0).round() / 100.0;
+    let style = match b.style {
+        BorderStyle::Solid => "solid",
+        BorderStyle::Dashed => "dashed",
+        BorderStyle::Dotted => "dotted",
+        BorderStyle::Double => "double",
+    };
+    format!("{pt}pt {style} {}", color_hex(b.color))
+}
+
 /// 1/100 mm → `cm` string with up to 3 decimals (exact for whole 1/100 mm).
 pub(crate) fn hmm_to_cm(hmm: u32) -> String {
     let whole = hmm / 1000;
@@ -284,5 +345,39 @@ mod tests {
         assert_eq!(general_display(3.0), "3");
         assert_eq!(general_display(-0.5), "-0.5");
         assert_eq!(general_display(1.5e300), "1.5E+300");
+    }
+}
+
+#[cfg(test)]
+mod border_tests {
+    use super::*;
+    use tally_model::{BorderLine, BorderStyle};
+
+    #[test]
+    fn border_strings_round_trip() {
+        let b = parse_border("0.74pt solid #000000").unwrap().unwrap();
+        assert_eq!(b.width_hmm, 26);
+        assert_eq!(b.style, BorderStyle::Solid);
+        assert_eq!(b.color, 0x0000_00ff);
+        assert_eq!(border_to_string(&b), "0.74pt solid #000000");
+        let b = parse_border("#ff0000 double 0.06cm").unwrap().unwrap();
+        assert_eq!(
+            (b.width_hmm, b.style, b.color),
+            (60, BorderStyle::Double, 0xff00_00ff)
+        );
+        assert_eq!(parse_border("none"), Some(None));
+        assert_eq!(parse_border("hidden"), Some(None));
+        assert_eq!(
+            parse_border("1pt dot-dash #00ff00").unwrap().unwrap().style,
+            BorderStyle::Dashed
+        );
+        for w in [2u32, 26, 53, 88, 176] {
+            let b = BorderLine {
+                style: BorderStyle::Dotted,
+                width_hmm: w,
+                color: 0x1234_56ff,
+            };
+            assert_eq!(parse_border(&border_to_string(&b)), Some(Some(b)));
+        }
     }
 }

@@ -1,0 +1,51 @@
+# TBILLYIELD conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=TBILLYIELD(DATE(2008;3;31);DATE(2008;6;1);98.45)"
+expect = 0.091417
+tol = 1e-07
+
+[[case]]
+name = "longer bill"
+formula = "=TBILLYIELD(DATE(2008;3;31);DATE(2008;12;31);97)"
+expect = 0.0410849469319434
+tol = 1e-09
+
+[[case]]
+name = "more than 360 days"
+formula = "=TBILLYIELD(DATE(2008;3;31);DATE(2009;4;1);97)"
+expect = "Err:502"
+
+[[case]]
+name = "price must be positive"
+formula = "=TBILLYIELD(DATE(2008;3;31);DATE(2008;6;1);0)"
+expect = "Err:502"
+
+[[case]]
+name = "settlement equals maturity"
+formula = "=TBILLYIELD(DATE(2008;3;31);DATE(2008;3;31);98)"
+expect = "Err:502"
+
+[[case]]
+name = "ISO date text"
+formula = "=TBILLYIELD(\"2008-03-31\";\"2008-06-01\";98.45)"
+expect = 0.091417
+tol = 1e-07
+
+[[case]]
+name = "non-numeric text"
+formula = "=TBILLYIELD(\"x\";DATE(2008;6;1);98)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=TBILLYIELD(A4;DATE(2008;6;1);98)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=TBILLYIELD(DATE(2008;3;31);DATE(2008;6;1))"
+expect = "Err:511"

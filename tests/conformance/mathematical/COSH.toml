@@ -1,0 +1,62 @@
+# COSH conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=COSH(0.5)"
+expect = 1.1276259652063807
+
+[[case]]
+name = "numeric text"
+formula = "=COSH(\"0.5\")"
+expect = 1.1276259652063807
+
+[[case]]
+name = "non-numeric text"
+formula = "=COSH(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=COSH(A1)"
+expect = 1
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=COSH(A1)"
+expect = 1.5430806348152437
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=COSH(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 0.5 }
+origin = "C2"
+formula = "=COSH(A1:A2)"
+expect = 1.1276259652063807
+
+[[case]]
+name = "no arguments"
+formula = "=COSH()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=COSH(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=COSH(0)"
+expect = 1
+
+[[case]]
+formula = "=COSH(1000)"
+expect = "#NUM!"
+note = "Overflow is #NUM!."
+
+[[case]]
+formula = "=COSH(-10)"
+expect = 11013.232920103323

@@ -1,0 +1,65 @@
+# IMREAL conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMREAL(\"3+4i\")"
+expect = 3.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMREAL(\"3+4j\")"
+expect = 3.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMREAL(\"i\")"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMREAL(\"-i\")"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMREAL(\"5\")"
+expect = 5.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMREAL(\"1e2+3.5e-1i\")"
+expect = 100.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMREAL(\"-2.5j\")"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMREAL(\"-2-i\")"
+expect = -2.0
+tol = 1e-12
+
+[[case]]
+formula = "=IMREAL(\"++i\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMREAL(\"3+4i\";1)"
+expect = "Err:504"
+
+[[case]]
+formula = "=IMREAL()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMREAL(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "number input"
+formula = "=IMREAL(7.5)"
+expect = 7.5
+tol = 0
+

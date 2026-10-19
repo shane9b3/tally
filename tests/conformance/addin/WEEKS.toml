@@ -1,0 +1,51 @@
+# WEEKS conformance vectors. Date add-in: type 0 interval, 1 calendar weeks. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=WEEKS(DATE(2026;1;1);DATE(2026;12;31);0)"
+expect = 52
+
+[[case]]
+formula = "=WEEKS(DATE(2026;1;1);DATE(2026;12;31);1)"
+expect = 52
+
+[[case]]
+name = "4 days"
+formula = "=WEEKS(DATE(2026;1;1);DATE(2026;1;5);0)"
+expect = 0
+
+[[case]]
+name = "Thursday to next Monday: next calendar week"
+formula = "=WEEKS(DATE(2026;1;1);DATE(2026;1;5);1)"
+expect = 1
+
+[[case]]
+formula = "=WEEKS(DATE(2026;1;5);DATE(2026;1;1);0)"
+expect = 0
+
+[[case]]
+formula = "=WEEKS(DATE(2026;1;5);DATE(2026;1;1);1)"
+expect = -1
+
+[[case]]
+formula = "=WEEKS(DATE(2026;1;1);DATE(2026;1;8);0)"
+expect = 1
+
+[[case]]
+formula = "=WEEKS(DATE(2026;1;1);DATE(2026;1;15);0)"
+expect = 2
+
+[[case]]
+formula = "=WEEKS(DATE(2026;1;1);DATE(2026;1;1);1)"
+expect = 0
+
+[[case]]
+formula = "=WEEKS(DATE(2026;1;1);DATE(2026;1;15);2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=WEEKS(\"x\";1;0)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=WEEKS(1;2)"
+expect = "Err:511"

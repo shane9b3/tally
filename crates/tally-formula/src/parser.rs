@@ -8,6 +8,14 @@
 //!
 //! Precedence, loosest to tightest: comparisons, `&`, `+ -`, `* /`, `^`
 //! (left-associative), prefix `- +`, postfix `%`, `~`, `!`, `:`.
+//!
+//! In [`Dialect::ExcelA1`] whitespace between two operands is the
+//! intersection operator (`A1:B2 B1:C2`), `,` directly inside parentheses
+//! is the union operator (`(A1,B1)`), arrays are `{1,2;3,4}`, 3D references
+//! `Sheet1:Sheet3!A1` are areas spanning sheets, and the `_xlfn.` / `_xlws.`
+//! future-function prefixes are stripped when the resolver knows the bare
+//! name (unknown functions keep a lowercase `_xlfn.` prefix so they print
+//! back unchanged).
 
 use std::fmt;
 use std::ops::Range;
@@ -20,7 +28,7 @@ use crate::ast::{
     SheetRef, UnOp, POSTFIX_PRECEDENCE, PREFIX_PRECEDENCE,
 };
 use crate::dialect::Dialect;
-use crate::lexer::{lex, TokenKind};
+use crate::lexer::{lex, scan_excel_3d, scan_excel_qualified, TokenKind};
 use crate::refsyntax::{parse_a1_ref, parse_of_ref, Part, RawEndpoint, RawRef, RawSheet};
 use crate::Resolver;
 
@@ -75,14 +83,29 @@ pub fn parse(
         });
     }
     let (tokens, of) = lex(src, dialect);
-    let toks: Vec<(TokenKind, Range<usize>)> = tokens
-        .into_iter()
-        .filter(|t| !t.kind.is_trivia())
-        .map(|t| (t.kind, t.span))
-        .collect();
+    let excel = dialect.is_excel() && !of;
+    let mut toks: Vec<(TokenKind, Range<usize>)> = Vec::with_capacity(tokens.len());
+    // ExcelA1 only: whether whitespace precedes each significant token.
+    let mut ws_before: Vec<bool> = Vec::new();
+    let mut saw_ws = false;
+    for t in tokens {
+        if t.kind == TokenKind::Whitespace {
+            saw_ws = true;
+            continue;
+        }
+        if t.kind.is_trivia() {
+            continue;
+        }
+        if excel {
+            ws_before.push(saw_ws);
+        }
+        saw_ws = false;
+        toks.push((t.kind, t.span));
+    }
     let mut p = Parser {
         src,
         toks,
+        ws_before,
         pos: 0,
         origin,
         resolver,
@@ -90,6 +113,7 @@ pub fn parse(
         frames: Vec::new(),
         nesting: 0,
         of,
+        excel,
     };
     let expr = p.run()?;
     Ok(Formula::new(expr))
@@ -126,6 +150,8 @@ enum Frame {
 struct Parser<'a> {
     src: &'a str,
     toks: Vec<(TokenKind, Range<usize>)>,
+    /// ExcelA1: whitespace precedes `toks[i]` (empty otherwise).
+    ws_before: Vec<bool>,
     pos: usize,
     origin: CellAddr,
     resolver: &'a dyn Resolver,
@@ -134,10 +160,47 @@ struct Parser<'a> {
     nesting: usize,
     /// OpenFormula syntax (`of:=` prefix or dialect).
     of: bool,
+    /// ExcelA1 syntax (dialect, without an `of:=` prefix).
+    excel: bool,
 }
 
 fn err<T>(kind: ErrorKind, span: Range<usize>) -> Result<T, ParseError> {
     Err(ParseError { kind, span })
+}
+
+/// Tokens that can start an operand of the ExcelA1 space (intersection)
+/// operator.
+fn starts_ref_operand(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::CellRef
+            | TokenKind::RangeRef
+            | TokenKind::Ident
+            | TokenKind::Func
+            | TokenKind::LParen
+            | TokenKind::Error
+    )
+}
+
+/// Splits an ExcelA1 future-function prefix: `_xlfn.IFS` → `IFS`,
+/// `_xlfn._xlws.SORT` → `SORT`. Returns `None` without a prefix.
+fn strip_xl_prefix(name: &str) -> Option<&str> {
+    let mut rest = name;
+    let mut stripped = false;
+    loop {
+        let lower_ok = |p: &str| {
+            rest.len() > p.len()
+                && rest.is_char_boundary(p.len())
+                && rest[..p.len()].eq_ignore_ascii_case(p)
+        };
+        if lower_ok("_xlfn.") || lower_ok("_xlws.") {
+            rest = &rest[6..];
+            stripped = true;
+        } else {
+            break;
+        }
+    }
+    stripped.then_some(rest)
 }
 
 fn bin_op(kind: TokenKind) -> Option<BinOp> {
@@ -246,6 +309,29 @@ impl Parser<'_> {
                         at_arg_start = false;
                     }
                 }
+            } else if self.excel
+                && starts_ref_operand(kind)
+                && self.ws_before.get(self.pos - 1).copied().unwrap_or(false)
+            {
+                // ExcelA1: `A1:B2 B1:C2` is an intersection. Push the
+                // operator, then re-read this token as its right operand.
+                let op = BinOp::Intersect;
+                self.reduce_while(|p| p >= op.precedence())?;
+                self.frames.push(Frame::Op {
+                    op: Pending::Bin(op),
+                    span,
+                });
+                self.pos -= 1;
+                expect_operand = true;
+            } else if self.excel && kind == TokenKind::Comma && self.innermost_is_paren() {
+                // ExcelA1: `(A1,B1)` is a union.
+                let op = BinOp::Union;
+                self.reduce_while(|p| p >= op.precedence())?;
+                self.frames.push(Frame::Op {
+                    op: Pending::Bin(op),
+                    span,
+                });
+                expect_operand = true;
             } else if let Some(op) = bin_op(kind) {
                 self.reduce_while(|p| p >= op.precedence())?;
                 self.frames.push(Frame::Op {
@@ -330,6 +416,17 @@ impl Parser<'_> {
         }
     }
 
+    /// `true` if the nearest enclosing paren/call frame is a parenthesis.
+    fn innermost_is_paren(&self) -> bool {
+        matches!(
+            self.frames
+                .iter()
+                .rev()
+                .find(|f| !matches!(f, Frame::Op { .. })),
+            Some(Frame::Paren { .. })
+        )
+    }
+
     fn push_nesting(&mut self, span: &Range<usize>) -> Result<(), ParseError> {
         self.nesting += 1;
         if self.nesting > MAX_NESTING {
@@ -358,10 +455,34 @@ impl Parser<'_> {
             _ => return err(ErrorKind::Bracket, span),
         }
         self.push_nesting(&span)?;
-        let name: Arc<str> = Arc::from(self.text(&span).to_ascii_uppercase());
-        let func = match self.resolver.function(&name) {
-            Some(id) => FuncRef::Known(id),
-            None => FuncRef::Unknown(name.clone()),
+        let text = self.text(&span);
+        let (name, func): (Arc<str>, FuncRef) = match strip_xl_prefix(text).filter(|_| self.excel) {
+            Some(bare) => {
+                let bare = bare.to_ascii_uppercase();
+                let full = text.to_ascii_uppercase();
+                let func = match self
+                    .resolver
+                    .function(&bare)
+                    .or_else(|| self.resolver.function(&full))
+                {
+                    Some(id) => FuncRef::Known(id),
+                    // Keep the prefix (lowercase, as Excel writes it) so an
+                    // unknown future function prints back unchanged.
+                    None => FuncRef::Unknown(Arc::from(format!(
+                        "{}{bare}",
+                        text[..text.len() - bare.len()].to_ascii_lowercase()
+                    ))),
+                };
+                (Arc::from(bare), func)
+            }
+            None => {
+                let name: Arc<str> = Arc::from(text.to_ascii_uppercase());
+                let func = match self.resolver.function(&name) {
+                    Some(id) => FuncRef::Known(id),
+                    None => FuncRef::Unknown(name.clone()),
+                };
+                (name, func)
+            }
         };
         self.frames.push(Frame::Call {
             func,
@@ -462,9 +583,36 @@ impl Parser<'_> {
         match kind {
             TokenKind::Number => self.number(text, span),
             TokenKind::String => Ok(Expr::Str(unescape_string(text).into())),
+            TokenKind::Error if self.excel && text.contains('!') && text.len() > 5 => {
+                // `Sheet1!#REF!`
+                match scan_excel_qualified(text, 0) {
+                    Some(q) if q.end == text.len() && q.part.is_none() => {
+                        Ok(Expr::Ref(RefExpr::Invalid))
+                    }
+                    _ => error_literal(text, span),
+                }
+            }
             TokenKind::Error => error_literal(text, span),
             TokenKind::Ident => Ok(self.ident(text)),
             TokenKind::CellRef | TokenKind::RangeRef => {
+                if self.excel {
+                    if let Some(r) = scan_excel_3d(text, 0).filter(|r| r.end == text.len()) {
+                        return self.excel_3d(r, span);
+                    }
+                    if let Some(q) = scan_excel_qualified(text, 0).filter(|q| q.end == text.len()) {
+                        if let Some(mut raw) = q.part {
+                            let sheet = RawSheet {
+                                name: q.sheet,
+                                abs: false,
+                                deleted: false,
+                            };
+                            raw.start.sheet = Some(sheet);
+                            return self
+                                .build_ref(raw, span)
+                                .map(|r| Expr::Ref(r.normalized(self.origin)));
+                        }
+                    }
+                }
                 let Some(raw) = parse_a1_ref(text) else {
                     return err(ErrorKind::InvalidChar, span.clone());
                 };
@@ -611,6 +759,36 @@ impl Parser<'_> {
         }
     }
 
+    /// Builds the area of an ExcelA1 3D reference `First:Last!A1[:B2]`.
+    fn excel_3d(&self, r: crate::lexer::Excel3d, span: &Range<usize>) -> Result<Expr, ParseError> {
+        let sheet = |name: String| {
+            Some(RawSheet {
+                name,
+                abs: false,
+                deleted: false,
+            })
+        };
+        let start_part = r.part.start.part;
+        let end_part = r.part.end.as_ref().and_then(|e| e.part).or(start_part);
+        let raw = RawRef {
+            start: RawEndpoint {
+                sheet: sheet(r.first),
+                part: start_part,
+            },
+            end: Some(RawEndpoint {
+                sheet: sheet(r.last),
+                part: end_part,
+            }),
+        };
+        match (start_part, end_part) {
+            (Some(Part::Cell { .. }), Some(Part::Cell { .. })) => self
+                .build_ref(raw, span)
+                .map(|x| Expr::Ref(x.normalized(self.origin))),
+            // Whole columns/rows across sheets have no AST form.
+            _ => err(ErrorKind::InvalidChar, span.clone()),
+        }
+    }
+
     /// `true` if the end endpoint has no sheet or names the start's sheet.
     fn same_sheet(&self, a: &RawEndpoint, b: &RawEndpoint) -> bool {
         match (&a.sheet, &b.sheet) {
@@ -686,6 +864,7 @@ impl Parser<'_> {
                     TokenKind::Semicolon | TokenKind::Pipe | TokenKind::RBrace => {
                         return err(ErrorKind::MissingVariable, span)
                     }
+                    TokenKind::Comma if self.excel => return err(ErrorKind::MissingVariable, span),
                     TokenKind::Invalid => return err(ErrorKind::InvalidChar, span),
                     _ => return err(ErrorKind::ParamList, span),
                 }
@@ -696,9 +875,16 @@ impl Parser<'_> {
                 return err(ErrorKind::Bracket, open);
             };
             self.pos += 1;
+            // CalcA1/OpenFormula: `;` columns, `|` rows. ExcelA1: `,` columns,
+            // `;` rows.
+            let (col_sep, row_sep) = if self.excel {
+                (TokenKind::Comma, TokenKind::Semicolon)
+            } else {
+                (TokenKind::Semicolon, TokenKind::Pipe)
+            };
             match kind {
-                TokenKind::Semicolon => {}
-                TokenKind::Pipe | TokenKind::RBrace => {
+                k if k == col_sep => {}
+                k if k == row_sep || k == TokenKind::RBrace => {
                     match cols {
                         None => cols = Some(row_len),
                         Some(c) if c == row_len => {}

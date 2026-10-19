@@ -1,0 +1,47 @@
+[[case]]
+formula = "=REPT(\"ab\";3)"
+expect = "ababab"
+
+[[case]]
+formula = "=REPT(\"ab\";0)"
+expect = ""
+
+[[case]]
+formula = "=REPT(\"ab\";-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=REPT(\"ab\";1E12)"
+expect = "Err:513"
+
+[[case]]
+formula = "=REPT(\"\";1E12)"
+expect = ""
+
+[[case]]
+formula = "=REPT(\"x\";4194305)"
+expect = "Err:513"
+
+[[case]]
+formula = "=REPT(\"-\";5)"
+expect = "-----"
+
+[[case]]
+formula = "=REPT(1;3)"
+expect = "111"
+
+[[case]]
+formula = "=REPT(\"a\";2.9)"
+expect = "aa"
+
+[[case]]
+formula = "=REPT(1/0;2)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=REPT(\"a\")"
+expect = "Err:511"
+
+[[case]]
+formula = "=REPT(\"a\";\"x\")"
+expect = "#VALUE!"

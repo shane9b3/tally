@@ -1,0 +1,131 @@
+# SUBTOTAL conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "SUM: text skipped, boolean counted"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(9;A1:A6)"
+expect = 16
+
+[[case]]
+name = "AVERAGE"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(1;A1:A6)"
+expect = 4
+
+[[case]]
+name = "COUNT"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(2;A1:A6)"
+expect = 4
+
+[[case]]
+name = "COUNTA"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(3;A1:A6)"
+expect = 5
+
+[[case]]
+name = "MAX"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(4;A1:A6)"
+expect = 10
+
+[[case]]
+name = "MIN"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(5;A1:A6)"
+expect = 1
+
+[[case]]
+name = "PRODUCT"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(6;A1:A6)"
+expect = 40
+
+[[case]]
+name = "STDEV"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(7;A1:A6)"
+expect = 4.242640687119285
+
+[[case]]
+name = "STDEVP"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(8;A1:A6)"
+expect = 3.6742346141747673
+
+[[case]]
+name = "VAR"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(10;A1:A6)"
+expect = 18
+
+[[case]]
+name = "VARP"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(11;A1:A6)"
+expect = 13.5
+
+[[case]]
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(109;A1:A6)"
+expect = 16
+note = "Hidden-row exclusion is not implemented: behaves like 9."
+
+[[case]]
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(12;A1:A6)"
+expect = "Err:502"
+
+[[case]]
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
+formula = "=SUBTOTAL(0;A1:A6)"
+expect = "Err:502"
+
+[[case]]
+name = "nested SUBTOTAL ignored"
+cells = { A1 = 1, A2 = 2, A3 = 3, A4 = "=SUBTOTAL(9;A1:A3)", A5 = 100 }
+formula = "=SUBTOTAL(9;A1:A5)"
+expect = 106
+note = "A4 is a SUBTOTAL formula and is skipped; without that it would be 112."
+
+[[case]]
+name = "COUNT ignores errors"
+cells = { A1 = 5, A2 = "=1/0", A3 = "x" }
+formula = "=SUBTOTAL(2;A1:A3)"
+expect = 1
+
+[[case]]
+name = "SUM propagates errors"
+cells = { A1 = 5, A2 = "=1/0" }
+formula = "=SUBTOTAL(9;A1:A3)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "AVERAGE of nothing"
+formula = "=SUBTOTAL(1;A1:A3)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "MAX of nothing"
+formula = "=SUBTOTAL(4;A1:A3)"
+expect = 0
+
+[[case]]
+name = "STDEV of one value"
+cells = { A1 = 5 }
+formula = "=SUBTOTAL(7;A1:A3)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "not a reference"
+formula = "=SUBTOTAL(9;5)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=SUBTOTAL(9)"
+expect = "Err:511"
+
+[[case]]
+formula = "=SUBTOTAL(1;A1;A2)"
+expect = "Err:504"

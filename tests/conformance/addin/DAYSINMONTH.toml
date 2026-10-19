@@ -1,0 +1,41 @@
+# DAYSINMONTH conformance vectors. Date add-in. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=DAYSINMONTH(DATE(2026;1;1))"
+expect = 31
+
+[[case]]
+formula = "=DAYSINMONTH(DATE(2026;2;1))"
+expect = 28
+
+[[case]]
+formula = "=DAYSINMONTH(DATE(2026;4;1))"
+expect = 30
+
+[[case]]
+formula = "=DAYSINMONTH(DATE(2026;6;1))"
+expect = 30
+
+[[case]]
+formula = "=DAYSINMONTH(DATE(2026;12;1))"
+expect = 31
+
+[[case]]
+formula = "=DAYSINMONTH(DATE(2024;2;10))"
+expect = 29
+
+[[case]]
+formula = "=DAYSINMONTH(DATE(1900;2;10))"
+expect = 28
+
+[[case]]
+formula = "=DAYSINMONTH(DATE(2000;2;29))"
+expect = 29
+
+[[case]]
+formula = "=DAYSINMONTH(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=DAYSINMONTH()"
+expect = "Err:511"

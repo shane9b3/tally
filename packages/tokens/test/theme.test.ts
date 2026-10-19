@@ -50,3 +50,35 @@ describe("readTheme", () => {
     expect(theme.colors.bg).toBe(DEFAULT_THEME.colors.bg);
   });
 });
+
+describe("dark theme", () => {
+  /** Declarations of a block starting at `marker` (up to its first closing brace). */
+  function block(marker: string): Map<string, string> {
+    const start = css.indexOf(marker);
+    const body = css.slice(start + marker.length, css.indexOf("}", start));
+    const vars = new Map<string, string>();
+    for (const m of body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) if (m[1] && m[2]) vars.set(m[1], m[2].trim());
+    return vars;
+  }
+
+  it("has no placeholders and covers every light variable", () => {
+    const dark = block('[data-theme="dark"] {');
+    expect(css).not.toMatch(/TODO/);
+    for (const name of lightVars().keys()) expect(dark.has(name), name).toBe(true);
+  });
+
+  it("is also the prefers-color-scheme default, with identical values", () => {
+    const dark = block('[data-theme="dark"] {');
+    const media = block(":root:not([data-theme]) {");
+    expect([...media.entries()]).toEqual([...dark.entries()]);
+  });
+
+  it("dark canvas colours differ from light where it matters", () => {
+    const dark = block('[data-theme="dark"] {');
+    const resolve = (v: string): string => v.replace(/var\((--[\w-]+)\)/g, (_, n: string) => resolve(dark.get(n) ?? ""));
+    const theme = readTheme({ getPropertyValue: (n) => resolve(dark.get(n) ?? "") });
+    expect(theme.colors.bg).toBe("#16181c");
+    expect(theme.colors.text).not.toBe(DEFAULT_THEME.colors.text);
+    expect(theme.colors.gridLine).not.toBe(DEFAULT_THEME.colors.gridLine);
+  });
+});

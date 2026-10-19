@@ -10,9 +10,9 @@ use std::path::Path;
 use tally_types::SheetId;
 
 use crate::dto::{
-    ApiError, ApplyResult, CellBlock, CellEditInfo, CellPos, ClipboardOut, Direction, DocId,
-    FileFormat, FunctionInfo, RangeDto, SelectionDto, SelectionStats, SheetLayout, StyleDto,
-    Suggestion, Transaction, WorkbookInfo,
+    ApiError, ApplyResult, AutoFilterInfo, CellBlock, CellEditInfo, CellPos, ClipboardOut,
+    Direction, DocId, FileFormat, FindQuery, FindResult, FunctionInfo, NameInfo, RangeDto,
+    SelectionDto, SelectionStats, SheetLayout, StyleDto, Suggestion, Transaction, WorkbookInfo,
 };
 
 /// Result type of every fallible [`DocumentService`] method.
@@ -88,6 +88,40 @@ pub trait DocumentService {
         query: &str,
         sel: &SelectionDto,
     ) -> Result<Vec<Suggestion>>;
+
+    // ----- v0.2 (default implementations report `unsupported`) -----------
+
+    /// Every defined name (workbook scope first, then by sheet), sorted by name.
+    fn names(&self, doc: DocId) -> Result<Vec<NameInfo>> {
+        let _ = doc;
+        Err(ApiError::unsupported("names are not supported"))
+    }
+
+    /// The sheet's AutoFilter with each column's distinct values.
+    fn filter_info(&self, doc: DocId, sheet: SheetId) -> Result<AutoFilterInfo> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("filters are not supported"))
+    }
+
+    /// Find (at most 10,000 hits).
+    fn find(&self, doc: DocId, query: &FindQuery) -> Result<FindResult> {
+        let _ = (doc, query);
+        Err(ApiError::unsupported("find is not supported"))
+    }
+
+    /// `true` if the first row of `range` looks like column labels (text
+    /// over a row that is not all text), as AOO's sort dialog guesses.
+    fn detect_header(&self, doc: DocId, sheet: SheetId, range: RangeDto) -> Result<bool> {
+        let _ = (doc, sheet, range);
+        Err(ApiError::unsupported("header detection is not supported"))
+    }
+
+    /// Hard recalculation (⇧⌘F9): rebuilds dependencies and recomputes
+    /// every formula; clears the "recalculation incomplete" state.
+    fn recalc_all(&mut self, doc: DocId) -> Result<ApplyResult> {
+        let _ = doc;
+        Err(ApiError::unsupported("recalc_all is not supported"))
+    }
 }
 
 #[cfg(test)]

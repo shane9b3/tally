@@ -1,0 +1,41 @@
+[[case]]
+formula = "=DDE(\"soffice\";\"file\";\"A1\")"
+expect = "#N/A"
+note = "DDE is disabled by policy."
+
+[[case]]
+formula = "=DDE(\"soffice\";\"file\";\"A1\";1)"
+expect = "#N/A"
+
+[[case]]
+formula = "=DDE(\"a\";\"b\";\"c\";2)"
+expect = "#N/A"
+
+[[case]]
+formula = "=DDE(1;2;3)"
+expect = "#N/A"
+
+[[case]]
+formula = "=DDE(\"\";\"\";\"\")"
+expect = "#N/A"
+
+[[case]]
+formula = "=ISNA(DDE(\"a\";\"b\";\"c\"))"
+expect = true
+
+[[case]]
+formula = "=DDE(\"a\";\"b\")"
+expect = "Err:511"
+
+[[case]]
+formula = "=DDE(\"a\";\"b\";\"c\";1;2)"
+expect = "Err:504"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=DDE(A1;\"b\";\"c\")"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=IFERROR(DDE(\"a\";\"b\";\"c\");\"fallback\")"
+expect = "fallback"

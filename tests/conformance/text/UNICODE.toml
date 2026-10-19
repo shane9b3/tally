@@ -1,0 +1,44 @@
+[[case]]
+formula = "=UNICODE(\"A\")"
+expect = 65
+
+[[case]]
+formula = "=UNICODE(\"€\")"
+expect = 8364
+
+[[case]]
+formula = "=UNICODE(\"😀\")"
+expect = 128512
+
+[[case]]
+formula = "=UNICODE(\"\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=UNICODE(\"abc\")"
+expect = 97
+
+[[case]]
+formula = "=UNICODE(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=UNICODE(5)"
+expect = 53
+
+[[case]]
+formula = "=UNICODE(TRUE)"
+expect = 84
+
+[[case]]
+cells = { A1 = "é" }
+formula = "=UNICODE(A1)"
+expect = 233
+
+[[case]]
+formula = "=UNICODE()"
+expect = "Err:511"
+
+[[case]]
+formula = "=UNICODE(\"日本\")"
+expect = 26085

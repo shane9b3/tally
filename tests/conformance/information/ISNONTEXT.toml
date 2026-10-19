@@ -1,0 +1,41 @@
+[[case]]
+formula = "=ISNONTEXT(\"a\")"
+expect = false
+
+[[case]]
+formula = "=ISNONTEXT(1)"
+expect = true
+
+[[case]]
+formula = "=ISNONTEXT(TRUE)"
+expect = true
+
+[[case]]
+formula = "=ISNONTEXT(A1)"
+expect = true
+
+[[case]]
+formula = "=ISNONTEXT(1/0)"
+expect = true
+
+[[case]]
+cells = { A1 = "txt" }
+formula = "=ISNONTEXT(A1)"
+expect = false
+
+[[case]]
+cells = { A1 = "=\"\"" }
+formula = "=ISNONTEXT(A1)"
+expect = false
+
+[[case]]
+formula = "=ISNONTEXT()"
+expect = "Err:511"
+
+[[case]]
+formula = "=ISNONTEXT(\"\")"
+expect = false
+
+[[case]]
+formula = "=ISNONTEXT(NA())"
+expect = true

@@ -1,0 +1,108 @@
+# IMPOWER conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMREAL(IMPOWER(\"2+3i\";3))"
+expect = -45.99999999999999
+tol = 4.6e-09
+
+[[case]]
+formula = "=IMAGINARY(IMPOWER(\"2+3i\";3))"
+expect = 9.000000000000007
+tol = 9.000000000000007e-10
+
+[[case]]
+formula = "=IMREAL(IMPOWER(\"1+i\";2))"
+expect = 1.2246467991473535e-16
+tol = 1e-10
+
+[[case]]
+formula = "=IMAGINARY(IMPOWER(\"1+i\";2))"
+expect = 2.0000000000000004
+tol = 2.0000000000000006e-10
+
+[[case]]
+formula = "=IMREAL(IMPOWER(\"1+i\";0.5))"
+expect = 1.0986841134678098
+tol = 1.0986841134678098e-10
+
+[[case]]
+formula = "=IMAGINARY(IMPOWER(\"1+i\";0.5))"
+expect = 0.45508986056222733
+tol = 1e-10
+
+[[case]]
+formula = "=IMREAL(IMPOWER(\"3+4i\";-1))"
+expect = 0.12
+tol = 1e-10
+
+[[case]]
+formula = "=IMAGINARY(IMPOWER(\"3+4i\";-1))"
+expect = -0.16
+tol = 1e-10
+
+[[case]]
+formula = "=IMREAL(IMPOWER(\"2\";10))"
+expect = 1024.0
+tol = 1.024e-07
+
+[[case]]
+formula = "=IMAGINARY(IMPOWER(\"2\";10))"
+expect = 0.0
+tol = 1e-10
+
+[[case]]
+formula = "=IMREAL(IMPOWER(\"i\";3))"
+expect = -1.8369701987210297e-16
+tol = 1e-10
+
+[[case]]
+formula = "=IMAGINARY(IMPOWER(\"i\";3))"
+expect = -1.0
+tol = 1e-10
+
+[[case]]
+formula = "=IMREAL(IMPOWER(\"-1+i\";1.5))"
+expect = -1.5537739740300376
+tol = 1.5537739740300377e-10
+
+[[case]]
+formula = "=IMAGINARY(IMPOWER(\"-1+i\";1.5))"
+expect = -0.6435942529055825
+tol = 1e-10
+
+[[case]]
+formula = "=IMREAL(IMPOWER(\"2+3j\";2))"
+expect = -4.999999999999999
+tol = 4.999999999999999e-10
+
+[[case]]
+formula = "=IMAGINARY(IMPOWER(\"2+3j\";2))"
+expect = 11.999999999999998
+tol = 1.1999999999999998e-09
+
+[[case]]
+formula = "=IMPOWER(\"2+3i\";3)"
+expect = "-46+9i"
+note = "Excel documentation example"
+
+[[case]]
+formula = "=IMPOWER(\"0\";2)"
+expect = "0"
+
+[[case]]
+formula = "=IMPOWER(\"0\";-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMPOWER(\"x\";2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMPOWER(\"1+i\")"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMPOWER(A1;2)"
+expect = "#DIV/0!"
+

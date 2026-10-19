@@ -1,0 +1,37 @@
+[[case]]
+formula = "=LENB(\"hello\")"
+expect = 5
+
+[[case]]
+formula = "=LENB(\"日本a\")"
+expect = 5
+note = "Wide characters count 2 (LibreOffice DBCS behaviour)."
+
+[[case]]
+formula = "=LENB(\"\")"
+expect = 0
+
+[[case]]
+formula = "=LENB(123)"
+expect = 3
+
+[[case]]
+formula = "=LENB(\"ｱ\")"
+expect = 1
+
+[[case]]
+formula = "=LENB(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+cells = { A1 = "Ａb" }
+formula = "=LENB(A1)"
+expect = 3
+
+[[case]]
+formula = "=LENB()"
+expect = "Err:511"
+
+[[case]]
+formula = "=LENB(\"é\")"
+expect = 1

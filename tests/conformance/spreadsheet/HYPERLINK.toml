@@ -1,0 +1,50 @@
+[[case]]
+formula = "=HYPERLINK(\"http://example.com\")"
+expect = "http://example.com"
+
+[[case]]
+formula = "=HYPERLINK(\"http://example.com\";\"Example\")"
+expect = "Example"
+
+[[case]]
+formula = "=HYPERLINK(\"http://example.com\";5)"
+expect = 5
+
+[[case]]
+formula = "=HYPERLINK(\"u\";TRUE)"
+expect = true
+
+[[case]]
+cells = { A1 = "u", B1 = "link" }
+formula = "=HYPERLINK(A1;B1)"
+expect = "link"
+
+[[case]]
+cells = { A1 = "http://x" }
+formula = "=HYPERLINK(A1)"
+expect = "http://x"
+
+[[case]]
+formula = "=HYPERLINK(\"u\";A9)"
+expect = ""
+note = "Empty cell text is an empty string."
+
+[[case]]
+formula = "=HYPERLINK(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=HYPERLINK(\"u\";1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=HYPERLINK()"
+expect = "Err:511"
+
+[[case]]
+formula = "=HYPERLINK(\"a\";\"b\";\"c\")"
+expect = "Err:504"
+
+[[case]]
+formula = "=HYPERLINK(12)"
+expect = "12"

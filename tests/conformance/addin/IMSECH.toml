@@ -1,0 +1,85 @@
+# IMSECH conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMREAL(IMSECH(\"1+i\"))"
+expect = 0.4983370305551868
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSECH(\"1+i\"))"
+expect = -0.591083841721045
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMSECH(\"3+4i\"))"
+expect = -0.06529402785794704
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSECH(\"3+4i\"))"
+expect = 0.07522496030277323
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMSECH(\"2-3j\"))"
+expect = -0.2635129751583893
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSECH(\"2-3j\"))"
+expect = 0.036211636558768516
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMSECH(\"-0.5+0.25i\"))"
+expect = 0.902703693945398
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSECH(\"-0.5+0.25i\"))"
+expect = 0.10651712464877593
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMSECH(\"2\"))"
+expect = 0.2658022288340797
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSECH(\"2\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMSECH(\"-i\"))"
+expect = 1.8508157176809255
+tol = 1.8508157176809253e-11
+
+[[case]]
+formula = "=IMAGINARY(IMSECH(\"-i\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMSECH(\"0\")"
+expect = "1"
+
+[[case]]
+formula = "=IMSECH(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMSECH()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMSECH(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "number argument"
+formula = "=IMREAL(IMSECH(2))"
+expect = 0.2658022288340797
+tol = 1e-11
+

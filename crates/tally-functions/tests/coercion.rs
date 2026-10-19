@@ -45,6 +45,15 @@ fn text_to_number_modes() {
     s.text_to_number = TextToNumber::ConvertLocale;
     assert_eq!(text_to_number("7", &s), Ok(7.0));
     assert_eq!(text_to_number("abc", &s), Err(ErrorKind::Value));
+    // en-US recognizer: thousands separators, currency, percent, US dates.
+    assert_eq!(text_to_number("1,000", &s), Ok(1000.0));
+    assert_eq!(text_to_number("$1,234.50", &s), Ok(1234.5));
+    assert_eq!(text_to_number("50%", &s), Ok(0.5));
+    assert_eq!(text_to_number("(12)", &s), Ok(-12.0));
+    assert_eq!(text_to_number("1/15/2024", &s), Ok(45_306.0));
+    assert_eq!(text_to_number("TRUE", &s), Ok(1.0));
+    assert_eq!(text_to_number("", &s), Err(ErrorKind::Value));
+    assert_eq!(text_to_number("1,00", &s), Err(ErrorKind::Value));
 }
 
 #[test]

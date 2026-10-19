@@ -1,0 +1,39 @@
+[[case]]
+formula = "=LEFTB(\"hello\";2)"
+expect = "he"
+
+[[case]]
+formula = "=LEFTB(\"hello\")"
+expect = "h"
+
+[[case]]
+formula = "=LEFTB(\"日本a\";4)"
+expect = "日本"
+
+[[case]]
+formula = "=LEFTB(\"日本a\";3)"
+expect = "日 "
+
+[[case]]
+formula = "=LEFTB(\"abc\";0)"
+expect = ""
+
+[[case]]
+formula = "=LEFTB(\"abc\";-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=LEFTB(\"abc\";10)"
+expect = "abc"
+
+[[case]]
+formula = "=LEFTB(12345;2)"
+expect = "12"
+
+[[case]]
+formula = "=LEFTB(1/0;1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=LEFTB()"
+expect = "Err:511"

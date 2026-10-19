@@ -1,0 +1,63 @@
+# ERF conformance vectors. Analysis add-in; relative accuracy about 1e-15. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=ERF(1)"
+expect = 0.8427007929497148
+tol = 1e-15
+
+[[case]]
+formula = "=ERF(0.5)"
+expect = 0.5204998778130465
+tol = 1e-15
+
+[[case]]
+formula = "=ERF(2)"
+expect = 0.9953222650189527
+tol = 1e-15
+
+[[case]]
+formula = "=ERF(0.1)"
+expect = 0.1124629160182849
+tol = 1e-15
+
+[[case]]
+formula = "=ERF(3)"
+expect = 0.9999779095030015
+tol = 1e-15
+
+[[case]]
+formula = "=ERF(-1)"
+expect = -0.8427007929497148
+tol = 1e-15
+
+[[case]]
+formula = "=ERF(0)"
+expect = 0
+
+[[case]]
+name = "two limits"
+formula = "=ERF(0;1)"
+expect = 0.8427007929497148
+tol = 1e-15
+
+[[case]]
+formula = "=ERF(1;2)"
+expect = 0.15262147206923793
+tol = 1e-15
+
+[[case]]
+formula = "=ERF(2;1)"
+expect = -0.15262147206923793
+tol = 1e-15
+
+[[case]]
+formula = "=ERF(10)"
+expect = 1
+
+[[case]]
+formula = "=ERF(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=ERF()"
+expect = "Err:511"

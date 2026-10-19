@@ -1,0 +1,94 @@
+# IMLN conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMREAL(IMLN(\"1+i\"))"
+expect = 0.34657359027997264
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLN(\"1+i\"))"
+expect = 0.7853981633974483
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMLN(\"3+4i\"))"
+expect = 1.6094379124341003
+tol = 1.6094379124341002e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLN(\"3+4i\"))"
+expect = 0.9272952180016122
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMLN(\"2-3j\"))"
+expect = 1.2824746787307684
+tol = 1.2824746787307683e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLN(\"2-3j\"))"
+expect = -0.982793723247329
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMLN(\"-0.5+0.25i\"))"
+expect = -0.5815754049028404
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLN(\"-0.5+0.25i\"))"
+expect = 2.677945044588987
+tol = 2.6779450445889867e-11
+
+[[case]]
+formula = "=IMREAL(IMLN(\"2\"))"
+expect = 0.6931471805599453
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLN(\"2\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMLN(\"-i\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMLN(\"-i\"))"
+expect = -1.5707963267948966
+tol = 1.5707963267948965e-11
+
+[[case]]
+formula = "=IMLN(\"1\")"
+expect = "0"
+
+[[case]]
+formula = "=IMLN(\"3+4i\")"
+expect = "1.6094379124341+0.927295218001612i"
+
+[[case]]
+formula = "=IMLN(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMLN()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMLN(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=IMLN(\"0\")"
+expect = "Err:502"
+note = "AOO: IllegalArgumentException"
+
+[[case]]
+name = "number argument"
+formula = "=IMREAL(IMLN(2))"
+expect = 0.6931471805599453
+tol = 1e-11
+

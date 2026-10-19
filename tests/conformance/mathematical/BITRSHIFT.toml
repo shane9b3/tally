@@ -1,0 +1,61 @@
+# BITRSHIFT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=BITRSHIFT(1;4)"
+expect = 0
+
+[[case]]
+formula = "=BITRSHIFT(16;4)"
+expect = 1
+
+[[case]]
+formula = "=BITRSHIFT(16;-4)"
+expect = 256
+note = "Negative shift reverses direction."
+
+[[case]]
+formula = "=BITRSHIFT(1;48)"
+expect = 0
+
+[[case]]
+formula = "=BITRSHIFT(1;47)"
+expect = 0
+
+[[case]]
+formula = "=BITRSHIFT(1;54)"
+expect = "Err:502"
+note = "|shift| above 53."
+
+[[case]]
+formula = "=BITRSHIFT(-1;1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BITRSHIFT(0;10)"
+expect = 0
+
+[[case]]
+formula = "=BITRSHIFT(5;0)"
+expect = 5
+
+[[case]]
+formula = "=BITRSHIFT(281474976710656;0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BITRSHIFT(5.9;1.9)"
+expect = 2
+note = "Truncated."
+
+[[case]]
+formula = "=BITRSHIFT(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=BITRSHIFT(A1;1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=BITRSHIFT(1)"
+expect = "Err:511"

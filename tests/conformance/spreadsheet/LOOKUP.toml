@@ -1,0 +1,82 @@
+[[case]]
+cells = { A1 = 1, A2 = 3, A3 = 5, A4 = 7, C1 = "a", C2 = "b", C3 = "c", C4 = "d" }
+formula = "=LOOKUP(4;A1:A4;C1:C4)"
+expect = "b"
+
+[[case]]
+cells = { A1 = 1, A2 = 3, A3 = 5, A4 = 7, C1 = "a", C2 = "b", C3 = "c", C4 = "d" }
+formula = "=LOOKUP(3;A1:A4;C1:C4)"
+expect = "b"
+
+[[case]]
+cells = { A1 = 1, A2 = 3, A3 = 5, A4 = 7, C1 = "a", C2 = "b", C3 = "c", C4 = "d" }
+formula = "=LOOKUP(100;A1:A4;C1:C4)"
+expect = "d"
+
+[[case]]
+cells = { A1 = 1, A2 = 3, A3 = 5, A4 = 7, C1 = "a", C2 = "b", C3 = "c", C4 = "d" }
+formula = "=LOOKUP(0;A1:A4;C1:C4)"
+expect = "#N/A"
+
+[[case]]
+cells = { A1 = 1, A2 = 3, A3 = 5, A4 = 7, C1 = "a", C2 = "b", C3 = "c", C4 = "d" }
+formula = "=LOOKUP(1;A1:A4;C1:C4)"
+expect = "a"
+
+[[case]]
+cells = { A1 = 1, A2 = 3, A3 = 5, A4 = 7, C1 = "a", C2 = "b", C3 = "c", C4 = "d" }
+formula = "=LOOKUP(6;A1:A4)"
+expect = 5
+note = "Without a result vector the search vector answers."
+
+[[case]]
+cells = { A1 = 1, A2 = 3, A3 = 5, A4 = 7, C1 = "a", C2 = "b", C3 = "c", C4 = "d" }
+formula = "=LOOKUP(2;A1:C4)"
+expect = "a"
+note = "Array form, tall: first column searched, last column returned."
+
+[[case]]
+cells = { A1 = 10, B1 = 20, C1 = 30, D1 = 40, A2 = "x", B2 = "y", C2 = "z", D2 = "w" }
+formula = "=LOOKUP(25;A1:D2)"
+expect = "y"
+note = "Array form, wide: first row searched, last row returned."
+
+[[case]]
+cells = { A1 = 10, B1 = 20, C1 = 30, D1 = 40, A2 = "x", B2 = "y", C2 = "z", D2 = "w" }
+formula = "=LOOKUP(20;A1:D1;A2:D2)"
+expect = "y"
+note = "Row vectors."
+
+[[case]]
+cells = { A1 = "a", A2 = "b", A3 = "c", B1 = 1, B2 = 2, B3 = 3 }
+formula = "=LOOKUP(\"b\";A1:A3;B1:B3)"
+expect = 2
+
+[[case]]
+cells = { A1 = "a", A2 = "b", A3 = "c", B1 = 1, B2 = 2, B3 = 3 }
+formula = "=LOOKUP(\"bb\";A1:A3;B1:B3)"
+expect = 2
+note = "Largest text <= key."
+
+[[case]]
+cells = { A1 = 1, A2 = 3, A3 = 5, B1 = 1, B2 = 2 }
+formula = "=LOOKUP(5;A1:A3;B1:B2)"
+expect = "#N/A"
+note = "Result vector shorter than search vector."
+
+[[case]]
+cells = { A1 = 1, A2 = 3, A3 = 5, A4 = 7, C1 = "a", C2 = "b", C3 = "c", C4 = "d" }
+formula = "=LOOKUP(1/0;A1:A4;C1:C4)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=LOOKUP(1)"
+expect = "Err:511"
+
+[[case]]
+formula = "=LOOKUP(3;{1;3;5};{\"a\";\"b\";\"c\"})"
+expect = "b"
+
+[[case]]
+formula = "=LOOKUP(4;{1;3;5})"
+expect = 3

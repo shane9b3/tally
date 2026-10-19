@@ -1,0 +1,55 @@
+# MODE conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=MODE(1;2;2;3;3;3)"
+expect = 3
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 2, A4 = 3, A5 = 4, A6 = 2, A7 = 9 }
+formula = "=MODE(A1:A7)"
+expect = 2
+
+[[case]]
+name = "tie: smallest value (AOO sorts first)"
+cells = { A1 = 3, A2 = 2, A3 = 2, A4 = 3 }
+formula = "=MODE(A1:A4)"
+expect = 2
+note = "Excel returns the first occurrence (3)."
+
+[[case]]
+formula = "=MODE(1;2;3)"
+expect = "#VALUE!"
+note = "No repeated value: NoValue (#VALUE!) per AOO; Excel gives #N/A."
+
+[[case]]
+name = "text skipped"
+cells = { A1 = 5, A2 = "x", A3 = 5 }
+formula = "=MODE(A1:A3)"
+expect = 5
+
+[[case]]
+name = "booleans count as numbers"
+cells = { A1 = true, A2 = 1, A3 = 0 }
+formula = "=MODE(A1:A3)"
+expect = 1
+
+[[case]]
+name = "empty"
+formula = "=MODE(A1:A3)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = 1, A2 = "=NA()", A3 = 1 }
+formula = "=MODE(A1:A3)"
+expect = "#N/A"
+
+[[case]]
+name = "several arguments"
+cells = { A1 = 1, A2 = 2 }
+formula = "=MODE(A1:A2;7;7)"
+expect = 7
+
+[[case]]
+formula = "=MODE()"
+expect = "Err:511"

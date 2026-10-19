@@ -1,0 +1,51 @@
+# IMCONJUGATE conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMCONJUGATE(\"3+4i\")"
+expect = "3-4i"
+
+[[case]]
+formula = "=IMCONJUGATE(\"3+4j\")"
+expect = "3-4j"
+
+[[case]]
+formula = "=IMCONJUGATE(\"3-4i\")"
+expect = "3+4i"
+
+[[case]]
+formula = "=IMCONJUGATE(\"i\")"
+expect = "-i"
+
+[[case]]
+formula = "=IMCONJUGATE(\"-i\")"
+expect = "i"
+
+[[case]]
+formula = "=IMCONJUGATE(\"5\")"
+expect = "5"
+
+[[case]]
+formula = "=IMCONJUGATE(\"2j\")"
+expect = "-2j"
+
+[[case]]
+formula = "=IMCONJUGATE(\"0\")"
+expect = "0"
+
+[[case]]
+formula = "=IMCONJUGATE(\"1.5+0.5i\")"
+expect = "1.5-0.5i"
+
+[[case]]
+formula = "=IMCONJUGATE(\"x\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMCONJUGATE()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMCONJUGATE(A1)"
+expect = "#DIV/0!"
+

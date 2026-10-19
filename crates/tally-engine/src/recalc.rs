@@ -20,6 +20,7 @@
 //!    cell on that cycle gets Err:522.
 
 use std::ops::ControlFlow;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use slotmap::SecondaryMap;
@@ -31,7 +32,7 @@ use tally_types::{
 };
 
 use crate::deps::{coalesce, DepIndex};
-use crate::eval::{cell_result, eval_expr};
+use crate::eval::{array_result, cell_result, eval_expr, eval_in_array_context};
 use crate::formula_cells::{CellState, FormulaCellId};
 use crate::storage::CellContent;
 use crate::workbook::Workbook;
@@ -133,27 +134,35 @@ pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
         }
     }
     let mut seed_cells: Vec<CellAddr> = pending.cells.clone();
-    seed_cells.extend(
-        dirty
-            .iter()
-            .filter_map(|id| wb.formulas.get(*id).map(|f| f.addr)),
-    );
-    let mut frontier = coalesce(&seed_cells, &pending.ranges);
+    let mut seed_ranges: Vec<CellRange> = pending.ranges.clone();
+    for id in &dirty {
+        if let Some(f) = wb.formulas.get(*id) {
+            match f.array_range() {
+                Some(b) => seed_ranges.push(b),
+                None => seed_cells.push(f.addr),
+            }
+        }
+    }
+    let mut frontier = coalesce(&seed_cells, &seed_ranges);
     let mut found: Vec<FormulaCellId> = Vec::new();
     while !frontier.is_empty() {
         found.clear();
         wb.deps.dependents_of(&frontier, &mut found);
         let mut next: Vec<CellAddr> = Vec::new();
+        let mut next_blocks: Vec<CellRange> = Vec::new();
         for id in found.drain(..) {
             if let Some(f) = wb.formulas.get_mut(id) {
                 if f.state == CellState::Clean {
                     f.state = CellState::Dirty;
                     dirty.push(id);
-                    next.push(f.addr);
+                    match f.array_range() {
+                        Some(b) => next_blocks.push(b),
+                        None => next.push(f.addr),
+                    }
                 }
             }
         }
-        frontier = coalesce(&next, &[]);
+        frontier = coalesce(&next, &next_blocks);
     }
     dirty.sort();
     dirty.dedup();
@@ -167,6 +176,7 @@ pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
     let mut report = RecalcReport::default();
     let now = now_serial(wb.settings.date_epoch);
     let mut recalculated: Vec<CellAddr> = Vec::with_capacity(dirty.len());
+    let mut recalculated_blocks: Vec<CellRange> = Vec::new();
     for scc in order {
         if report.incomplete || budget.exhausted(report.evaluated) {
             report.incomplete = true;
@@ -194,7 +204,10 @@ pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
             };
             // Duplicates (strict members, cells evaluated on demand) are
             // removed by `coalesce`.
-            recalculated.push(f.addr);
+            match f.array_range() {
+                Some(b) => recalculated_blocks.push(b),
+                None => recalculated.push(f.addr),
+            }
             if f.state != CellState::Dirty {
                 continue;
             }
@@ -208,6 +221,7 @@ pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
     cells.extend(recalculated);
     let mut ranges = pending.ranges;
     ranges.extend(pending.display_only);
+    ranges.extend(recalculated_blocks);
     report.changed = coalesce(&cells, &ranges);
     report
 }
@@ -248,13 +262,13 @@ fn dirty_formulas_in(wb: &Workbook, range: &CellRange, out: &mut Vec<FormulaCell
             continue;
         }
         for r in col.formula_rows.range(range.r0..=range.r1) {
-            if let Some(CellContent::Formula(id)) = col.cells_get(*r) {
+            if let Some(id) = col.cells_get(*r).and_then(CellContent::formula_id) {
                 if wb
                     .formulas
-                    .get(*id)
+                    .get(id)
                     .is_some_and(|f| f.state == CellState::Dirty)
                 {
-                    out.push(*id);
+                    out.push(id);
                 }
             }
         }
@@ -575,6 +589,12 @@ impl<'w> CalcCtx<'w> {
         f.state = CellState::Evaluating;
         let formula = f.formula.clone();
         let addr = f.addr;
+        let is_array = f.array.is_some();
+        let formula = if f.has_names {
+            Arc::new(crate::names::expand(&self.wb.names, &formula, addr.sheet).0)
+        } else {
+            formula
+        };
         let saved_origin = std::mem::replace(&mut self.origin, addr);
         let saved_dyn = std::mem::take(&mut self.dyn_deps);
         self.depth += 1;
@@ -583,15 +603,33 @@ impl<'w> CalcCtx<'w> {
             circular: false,
             deferred: false,
         });
-        let v = eval_expr(&formula.expr, self);
-        let mut value = cell_result(&v, self);
+        let (mut value, matrix) = if is_array {
+            let v = eval_in_array_context(&formula.expr, self);
+            match array_result(&v, self) {
+                Value::Array(m) => {
+                    let first = m
+                        .get(0, 0)
+                        .cloned()
+                        .unwrap_or(Value::Error(ErrorKind::Value));
+                    (normalize_cell_value(first), Some(m))
+                }
+                other => (normalize_cell_value(other), None),
+            }
+        } else {
+            let v = eval_expr(&formula.expr, self);
+            (cell_result(&v, self), None)
+        };
+        #[cfg(test)]
+        test_hook::on_evaluated(self, addr);
         let frame = self.eval_stack.pop();
         self.depth -= 1;
         self.origin = saved_origin;
         let dynamic = std::mem::replace(&mut self.dyn_deps, saved_dyn);
         let incomplete = frame.is_some_and(|f| f.deferred);
+        let mut matrix = matrix;
         if !incomplete && frame.is_some_and(|f| f.circular) {
             value = Value::Error(ErrorKind::Circular);
+            matrix = None;
             self.circular += 1;
         }
         let Some(wb) = self.wb_mut() else {
@@ -606,6 +644,9 @@ impl<'w> CalcCtx<'w> {
             return;
         }
         f.cached = value;
+        if f.array.is_some() {
+            f.array_result = matrix;
+        }
         f.state = CellState::Clean;
         if dynamic != f.dynamic_deps {
             f.dynamic_deps = dynamic;
@@ -676,7 +717,7 @@ impl<'w> CalcCtx<'w> {
                     self.wb
                         .formulas
                         .get(*x)
-                        .is_some_and(|f| range.contains(f.addr))
+                        .is_some_and(|f| f.extent().intersects(range))
                 })
                 .collect();
             for id in on_stack {
@@ -686,12 +727,58 @@ impl<'w> CalcCtx<'w> {
     }
 }
 
+/// A scalar result as a cell stores it (empty → 0, non-finite → `#NUM!`).
+fn normalize_cell_value(v: Value) -> Value {
+    match v {
+        Value::Empty => Value::Number(0.0),
+        Value::Number(n) if !n.is_finite() => Value::Error(ErrorKind::Num),
+        Value::Array(m) => m
+            .get(0, 0)
+            .cloned()
+            .unwrap_or(Value::Error(ErrorKind::Value)),
+        other => other,
+    }
+}
+
 impl Workbook {
+    /// Resolves reference text (INDIRECT/name box style) at `origin`: a
+    /// cell, an area, whole columns/rows, sheet-qualified (`Sheet2.A1`,
+    /// `$Sheet1.$A$1:$B$5`) or a named range. `None` for anything else or
+    /// a reference to a missing sheet.
+    pub fn parse_reference_at(&self, text: &str, origin: CellAddr) -> Option<CellRange> {
+        let t = text.trim();
+        if t.is_empty() || t.starts_with('=') {
+            return None;
+        }
+        let f = self.parse_formula(&format!("={t}"), origin).ok()?;
+        let f = if crate::names::has_names(&f.expr) {
+            crate::names::expand(&self.names, &f, origin.sheet).0
+        } else {
+            f
+        };
+        let mut e = &f.expr;
+        while let Expr::Paren(x) = e {
+            e = x;
+        }
+        match e {
+            Expr::Ref(r) => match r.resolve(origin) {
+                ResolvedRef::Range(cr) if self.sheet(cr.sheet).is_some() => Some(cr),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Evaluates formula `text` (CalcA1 en-US, with the leading `=`) as if it
     /// were entered at `addr`, without writing anything (⌘K previews).
     /// Precedents read their current values. `None` if `text` does not parse.
     pub fn eval_formula_text_at(&self, addr: CellAddr, text: &str) -> Option<Value> {
         let f = self.parse_formula(text, addr).ok()?;
+        let f = if crate::names::has_names(&f.expr) {
+            crate::names::expand(&self.names, &f, addr.sheet).0
+        } else {
+            f
+        };
         let mut ctx = CalcCtx::shared_at(self, addr);
         let v = eval_expr(&f.expr, &mut ctx);
         Some(cell_result(&v, &mut ctx))
@@ -729,6 +816,23 @@ impl EvalContext for CalcCtx<'_> {
                 let id = *id;
                 self.formula_value(id)
             }
+            Some(CellContent::ArrayPart(id)) => {
+                let id = *id;
+                match self.formula_value(id) {
+                    Value::Error(ErrorKind::Circular)
+                        if self
+                            .wb
+                            .formulas
+                            .get(id)
+                            .is_none_or(|f| f.state != CellState::Clean) =>
+                    {
+                        Value::Error(ErrorKind::Circular)
+                    }
+                    _ => self.wb.formulas.get(id).map_or(Value::Empty, |f| {
+                        f.array_value(addr.row - f.addr.row, addr.col - f.addr.col)
+                    }),
+                }
+            }
         }
     }
 
@@ -753,11 +857,19 @@ impl EvalContext for CalcCtx<'_> {
         let empty = Value::Empty;
         for c in range.c0..=c1 {
             let col = sheet.column(c);
-            let value_of = |content: &'_ CellContent| -> Option<Value> {
+            let value_of = |content: &'_ CellContent, r: u32| -> Option<Value> {
                 match content {
                     CellContent::Value(_) => None,
                     CellContent::Formula(id) => Some(match wb.formulas.get(*id) {
                         Some(fc) if fc.state == CellState::Clean => fc.cached.clone(),
+                        Some(_) => circular.clone(),
+                        None => Value::Empty,
+                    }),
+                    CellContent::ArrayPart(id) => Some(match wb.formulas.get(*id) {
+                        Some(fc) if fc.state == CellState::Clean => fc.array_value(
+                            r.saturating_sub(fc.addr.row),
+                            c.saturating_sub(fc.addr.col),
+                        ),
                         Some(_) => circular.clone(),
                         None => Value::Empty,
                     }),
@@ -772,7 +884,7 @@ impl EvalContext for CalcCtx<'_> {
                     let flow = match content {
                         CellContent::Value(v) => f(addr, v),
                         other => {
-                            let v = value_of(other).unwrap_or(Value::Empty);
+                            let v = value_of(other, r).unwrap_or(Value::Empty);
                             f(addr, &v)
                         }
                     };
@@ -795,7 +907,7 @@ impl EvalContext for CalcCtx<'_> {
                             match content {
                                 CellContent::Value(v) => f(addr, v),
                                 other => {
-                                    let v = value_of(other).unwrap_or(Value::Empty);
+                                    let v = value_of(other, r).unwrap_or(Value::Empty);
                                     f(addr, &v)
                                 }
                             }
@@ -819,15 +931,7 @@ impl EvalContext for CalcCtx<'_> {
         if !a1 {
             return None;
         }
-        let src = format!("={}", text.trim());
-        let f = self.wb.parse_formula(&src, self.origin).ok()?;
-        match &f.expr {
-            Expr::Ref(r) => match r.resolve(self.origin) {
-                ResolvedRef::Range(cr) if self.wb.sheet(cr.sheet).is_some() => Some(cr),
-                _ => None,
-            },
-            _ => None,
-        }
+        self.wb.parse_reference_at(text, self.origin)
     }
 
     fn record_dynamic_dep(&mut self, range: &CellRange) {
@@ -875,12 +979,157 @@ impl EvalContext for CalcCtx<'_> {
     }
 }
 
+/// A test-only hook that makes the evaluation of one chosen cell record a
+/// dynamic dependency, as INDIRECT/OFFSET will (they are not registered
+/// yet; the registry is global, so a test function cannot be added).
+#[cfg(test)]
+pub(crate) mod test_hook {
+    use std::cell::RefCell;
+
+    use super::*;
+
+    thread_local! {
+        static HOOK: RefCell<Option<(CellAddr, CellRange)>> = const { RefCell::new(None) };
+        static COUNT: RefCell<u32> = const { RefCell::new(0) };
+    }
+
+    /// While set, evaluating `cell` reads `range` and records it as a
+    /// dynamic dependency.
+    pub fn set(hook: Option<(CellAddr, CellRange)>) {
+        HOOK.with(|h| *h.borrow_mut() = hook);
+        COUNT.with(|c| *c.borrow_mut() = 0);
+    }
+
+    /// How often the hooked cell was evaluated since [`set`].
+    pub fn count() -> u32 {
+        COUNT.with(|c| *c.borrow())
+    }
+
+    pub(super) fn on_evaluated(ctx: &mut CalcCtx<'_>, addr: CellAddr) {
+        let Some((cell, range)) = HOOK.with(|h| *h.borrow()) else {
+            return;
+        };
+        if cell == addr {
+            COUNT.with(|c| *c.borrow_mut() += 1);
+            ctx.record_dynamic_dep(&range);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn a(s: &str) -> CellAddr {
         CellAddr::from_a1(1, s).unwrap()
+    }
+
+    #[test]
+    fn dynamic_dependencies_propagate_and_are_recollected() {
+        let mut wb = Workbook::new();
+        wb.set_input(a("A1"), "=1+1");
+        recalc(&mut wb);
+        // A1 "reads" B5:B6 dynamically from now on.
+        test_hook::set(Some((a("A1"), CellRange::from_a1(1, "B5:B6").unwrap())));
+        wb.set_input(a("A1"), "=1+2");
+        recalc(&mut wb);
+        assert_eq!(test_hook::count(), 1);
+        let (id, f) = wb.formula_at(a("A1")).unwrap();
+        assert_eq!(
+            f.dynamic_deps,
+            vec![CellRange::from_a1(1, "B5:B6").unwrap()]
+        );
+        assert!(wb
+            .deps
+            .registered_ranges(id)
+            .contains(&CellRange::from_a1(1, "B5:B6").unwrap()));
+        // Editing a cell of the dynamic range re-evaluates A1.
+        wb.set_input(a("B6"), "7");
+        let rep = recalc(&mut wb);
+        assert_eq!(test_hook::count(), 2);
+        assert!(rep.evaluated >= 1);
+        // The next evaluation records C1 instead: B5 no longer dirties A1.
+        test_hook::set(Some((a("A1"), CellRange::from_a1(1, "C1").unwrap())));
+        wb.set_input(a("B5"), "1");
+        recalc(&mut wb);
+        assert_eq!(test_hook::count(), 1, "still registered for B5 this once");
+        wb.set_input(a("B5"), "2");
+        recalc(&mut wb);
+        assert_eq!(test_hook::count(), 1, "B5 is no longer a dependency");
+        wb.set_input(a("C1"), "2");
+        recalc(&mut wb);
+        assert_eq!(test_hook::count(), 2);
+        test_hook::set(None);
+    }
+
+    #[test]
+    fn parse_reference_text_resolves_names_and_sheets() {
+        let mut wb = Workbook::new();
+        let s2 = wb.add_sheet(Some("Data"), None);
+        let def = wb.parse_name_expr("$Data.$A$1:$B$5", None).unwrap();
+        wb.names.define("Block", None, def);
+        let o = a("A1");
+        assert_eq!(
+            wb.parse_reference_at("Block", o),
+            Some(CellRange::new(s2, 0, 0, 4, 1))
+        );
+        assert_eq!(
+            wb.parse_reference_at("Data.B2", o),
+            Some(CellRange::new(s2, 1, 1, 1, 1))
+        );
+        assert_eq!(
+            wb.parse_reference_at("$Data.$A$1:$B$2", o),
+            Some(CellRange::new(s2, 0, 0, 1, 1))
+        );
+        assert_eq!(
+            wb.parse_reference_at("C3", o),
+            Some(CellRange::new(1, 2, 2, 2, 2))
+        );
+        assert_eq!(wb.parse_reference_at("Nope.A1", o), None);
+        assert_eq!(wb.parse_reference_at("1+2", o), None);
+        let ctx = CalcCtx::shared_at(&wb, o);
+        assert_eq!(
+            ctx.parse_reference_text("Block", true),
+            Some(CellRange::new(s2, 0, 0, 4, 1))
+        );
+    }
+
+    #[test]
+    fn array_formula_spreads_and_updates() {
+        let mut wb = Workbook::new();
+        for (i, v) in ["1", "2", "3"].iter().enumerate() {
+            wb.set_input(CellAddr::new(1, i as u32, 0), v);
+        }
+        let f = wb.parse_formula("=A1:A3*10", a("B1")).unwrap();
+        wb.set_array_formula(a("B1"), Arc::new(f), 4, 1);
+        wb.set_input(a("C1"), "=SUM(B1:B3)");
+        recalc(&mut wb);
+        assert_eq!(wb.value(a("B1")), Value::Number(10.0));
+        assert_eq!(wb.value(a("B3")), Value::Number(30.0));
+        assert_eq!(
+            wb.value(a("B4")),
+            Value::Error(ErrorKind::NA),
+            "outside the result"
+        );
+        assert_eq!(wb.value(a("C1")), Value::Number(60.0));
+        wb.set_input(a("A2"), "5");
+        recalc(&mut wb);
+        assert_eq!(wb.value(a("B2")), Value::Number(50.0));
+        assert_eq!(
+            wb.value(a("C1")),
+            Value::Number(90.0),
+            "dependents of covered cells"
+        );
+        // A scalar result fills the block.
+        let g = wb.parse_formula("=7", a("D1")).unwrap();
+        wb.set_array_formula(a("D1"), Arc::new(g), 2, 2);
+        recalc(&mut wb);
+        assert_eq!(wb.value(a("E2")), Value::Number(7.0));
+        // Clearing the anchor removes the block.
+        wb.clear_content(a("D1"));
+        recalc(&mut wb);
+        assert_eq!(wb.value(a("E2")), Value::Empty);
+        assert!(wb.sheet(1).unwrap().get(1, 4).is_none());
     }
 
     fn num(wb: &Workbook, s: &str) -> Value {

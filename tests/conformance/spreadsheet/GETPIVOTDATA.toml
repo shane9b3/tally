@@ -1,0 +1,41 @@
+[[case]]
+formula = "=GETPIVOTDATA(\"Sales\";A1:C5)"
+expect = "#REF!"
+note = "TODO: no pivot tables yet."
+
+[[case]]
+formula = "=GETPIVOTDATA(\"Sales\";A1:C5;\"Region\";\"North\")"
+expect = "#REF!"
+
+[[case]]
+formula = "=GETPIVOTDATA(\"Sales\";A1)"
+expect = "#REF!"
+
+[[case]]
+formula = "=GETPIVOTDATA(\"Sales\";A1:C5;\"R\";\"N\";\"Y\";2026)"
+expect = "#REF!"
+
+[[case]]
+formula = "=GETPIVOTDATA(\"\";A1:C5)"
+expect = "#REF!"
+
+[[case]]
+formula = "=IFERROR(GETPIVOTDATA(\"Sales\";A1:C5);\"none\")"
+expect = "none"
+
+[[case]]
+formula = "=ISERROR(GETPIVOTDATA(\"Sales\";A1:C5))"
+expect = true
+
+[[case]]
+formula = "=GETPIVOTDATA(\"Sales\")"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=GETPIVOTDATA(A1;B1:C2)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=GETPIVOTDATA(5;A1:C5)"
+expect = "#REF!"

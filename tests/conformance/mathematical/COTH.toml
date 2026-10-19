@@ -1,0 +1,61 @@
+# COTH conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=COTH(0.5)"
+expect = 2.163953413738653
+
+[[case]]
+name = "numeric text"
+formula = "=COTH(\"0.5\")"
+expect = 2.163953413738653
+
+[[case]]
+name = "non-numeric text"
+formula = "=COTH(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=COTH(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=COTH(A1)"
+expect = 1.3130352854993315
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=COTH(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 0.5 }
+origin = "C2"
+formula = "=COTH(A1:A2)"
+expect = 2.163953413738653
+
+[[case]]
+name = "no arguments"
+formula = "=COTH()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=COTH(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=COTH(0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=COTH(1)"
+expect = 1.3130352854993315
+
+[[case]]
+formula = "=COTH(-2)"
+expect = -1.0373147207275482

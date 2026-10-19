@@ -1,0 +1,48 @@
+[[case]]
+formula = "=DOLLAR(1234.567)"
+expect = "$1,234.57"
+
+[[case]]
+formula = "=DOLLAR(-1234.567)"
+expect = "-$1,234.57"
+note = "AOO en-US currency format; Excel would use parentheses."
+
+[[case]]
+formula = "=DOLLAR(1234.567;0)"
+expect = "$1,235"
+
+[[case]]
+formula = "=DOLLAR(1234.567;-2)"
+expect = "$1,200"
+
+[[case]]
+formula = "=DOLLAR(0)"
+expect = "$0.00"
+
+[[case]]
+formula = "=DOLLAR(0.5;1)"
+expect = "$0.5"
+
+[[case]]
+formula = "=DOLLAR(1000000)"
+expect = "$1,000,000.00"
+
+[[case]]
+formula = "=DOLLAR(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=DOLLAR(1;20)"
+expect = "Err:502"
+
+[[case]]
+formula = "=DOLLAR(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=DOLLAR()"
+expect = "Err:511"
+
+[[case]]
+formula = "=DOLLAR(A1)"
+expect = "$0.00"

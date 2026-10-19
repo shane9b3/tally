@@ -1,0 +1,112 @@
+# CONVERT_ADD conformance vectors. Analysis add-in CONVERT (the plain name is the built-in). Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"mi\";\"km\")"
+expect = 1.609344
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(100;\"C\";\"F\")"
+expect = 212
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(0;\"C\";\"K\")"
+expect = 273.15
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"lbm\";\"kg\")"
+expect = 0.45359237
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"hr\";\"mn\")"
+expect = 60
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"ft\";\"in\")"
+expect = 12
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"m2\";\"cm2\")"
+expect = 10000
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"l\";\"m3\")"
+expect = 0.001
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"gal\";\"l\")"
+expect = 3.785411784
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(36;\"km/h\";\"m/s\")"
+expect = 10
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"kibyte\";\"bit\")"
+expect = 8192
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"atm\";\"Pa\")"
+expect = 101325
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"HP\";\"W\")"
+expect = 745.69987158227
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"m^2\";\"ft^2\")"
+expect = 10.763910416709722
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(32;\"F\";\"C\")"
+expect = 0
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"ha\";\"m2\")"
+expect = 10000
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"J\";\"cal\")"
+expect = 0.23884589662749595
+tol = 1e-09
+
+[[case]]
+name = "incompatible"
+formula = "=CONVERT_ADD(1;\"m\";\"kg\")"
+expect = "Err:502"
+tol = 1e-09
+
+[[case]]
+name = "unknown unit"
+formula = "=CONVERT_ADD(1;\"xx\";\"m\")"
+expect = "Err:502"
+tol = 1e-09
+
+[[case]]
+name = "prefix not allowed"
+formula = "=CONVERT_ADD(1;\"kft\";\"m\")"
+expect = "Err:502"
+tol = 1e-09
+
+[[case]]
+formula = "=CONVERT_ADD(1;\"m\")"
+expect = "Err:511"
+
+[[case]]
+formula = "=CONVERT_ADD(\"x\";\"m\";\"km\")"
+expect = "#VALUE!"

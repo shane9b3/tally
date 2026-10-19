@@ -8,7 +8,10 @@
 use std::io::BufRead;
 use std::sync::Arc;
 
-use tally_model::{CellContentData, CellData, CellRangeLocal, DimRun, SheetData, StyleRun};
+use tally_model::{
+    AutoFilterData, CellContentData, CellData, CellRangeLocal, DimRun, FilterColumnData,
+    FilterConditionData, FilterOpData, NameData, SheetData, StyleRun,
+};
 use tally_types::{
     CalcSettings, CriteriaMode, DateEpoch, ErrorKind, IterSettings, Value, MAX_COLS, MAX_ROWS,
 };
@@ -26,6 +29,10 @@ pub(crate) const MAX_FORMULA_LEN: usize = 8192;
 /// Styled-but-empty runs larger than this (rows × columns) are kept as
 /// [`StyleRun`]s (one per column) instead of being materialized as cells.
 const MAX_STYLED_EMPTY_RUN: u64 = 4096;
+/// Maximum named expressions read from one document.
+pub(crate) const MAX_NAMES: usize = 100_000;
+/// Maximum length of a named expression's text.
+const MAX_NAME_EXPR_LEN: usize = 8192;
 
 /// What content.xml yields.
 #[derive(Debug, Default)]
@@ -33,6 +40,7 @@ pub(crate) struct Content {
     pub sheets: Vec<SheetData>,
     pub calc: Option<CalcSettings>,
     pub is_spreadsheet: bool,
+    pub names: Vec<NameData>,
 }
 
 struct CellParsed {
@@ -40,6 +48,8 @@ struct CellParsed {
     content: CellContentData,
     style: Option<String>,
     span: (u32, u32),
+    /// `table:number-matrix-columns/rows-spanned` of an array formula.
+    matrix: Option<(u32, u32)>,
 }
 
 struct Run {
@@ -57,6 +67,10 @@ struct Parser<'a> {
     text_bytes: u64,
     sheets: usize,
     epoch: DateEpoch,
+    names: Vec<NameData>,
+    /// Per sheet: rows read with `table:visibility="filter"` (as dimension
+    /// runs, hidden), resolved once the database ranges are known.
+    filter_rows: Vec<Vec<DimRun>>,
 }
 
 /// Bytes of text a cell's content carries (formula text plus text value).
@@ -87,6 +101,8 @@ pub(crate) fn parse_content<R: BufRead>(
         text_bytes: 0,
         sheets: 0,
         epoch: DateEpoch::default(),
+        names: Vec::new(),
+        filter_rows: Vec::new(),
     };
     loop {
         match xml.next()? {
@@ -108,12 +124,23 @@ pub(crate) fn parse_content<R: BufRead>(
                             limit: p.limits.max_sheets as u64,
                         });
                     }
+                    p.filter_rows.push(Vec::new());
                     let sheet = p.parse_table(xml, &e)?;
                     out.sheets.push(sheet);
                 }
+                "table:named-expressions" if out.is_spreadsheet => {
+                    p.parse_named_expressions(xml, None)?;
+                }
+                "table:database-ranges" if out.is_spreadsheet => {
+                    parse_database_ranges(xml, &mut out.sheets)?;
+                }
                 _ => xml.skip()?,
             },
-            Ev::Eof => return Ok(out),
+            Ev::Eof => {
+                attach_filter_rows(&mut out.sheets, std::mem::take(&mut p.filter_rows));
+                out.names = std::mem::take(&mut p.names);
+                return Ok(out);
+            }
             _ => {}
         }
     }
@@ -202,6 +229,10 @@ impl Parser<'_> {
                         }
                         self.parse_row(xml, &c, &mut row, &mut sheet, &col_defaults)?;
                     }
+                    "table:named-expressions" => {
+                        let tab = self.sheets.saturating_sub(1) as u32;
+                        self.parse_named_expressions(xml, Some(tab))?;
+                    }
                     "table:table-header-columns"
                     | "table:table-columns"
                     | "table:table-column-group"
@@ -272,7 +303,9 @@ impl Parser<'_> {
             .attr("table:style-name")
             .and_then(|n| self.styles.row_style(n))
             .and_then(|rs| if rs.optimal { None } else { rs.height_hmm });
-        let hidden = e.attr("table:visibility").is_some_and(|v| v != "visible");
+        let visibility = e.attr("table:visibility");
+        let filtered = visibility == Some("filter");
+        let hidden = !filtered && visibility.is_some_and(|v| v != "visible");
 
         let mut runs: Vec<Run> = Vec::new();
         let mut col: u32 = 0;
@@ -281,7 +314,13 @@ impl Parser<'_> {
             match xml.next()? {
                 Ev::Start(c) => match c.name.as_str() {
                     "table:table-cell" | "table:covered-table-cell" => {
-                        let cell = self.parse_cell(xml, &c)?;
+                        let mut cell = self.parse_cell(xml, &c)?;
+                        if c.name == "table:covered-table-cell" {
+                            // Content hidden under a merge is not kept.
+                            cell.content = CellContentData::Value(Value::Empty);
+                            cell.span = (1, 1);
+                            cell.matrix = None;
+                        }
                         let crep = cell.repeat;
                         if col < MAX_COLS {
                             let len = crep.min(MAX_COLS - col);
@@ -308,7 +347,12 @@ impl Parser<'_> {
         }
         let rep = rep.min(MAX_ROWS - *row);
         let last = *row + (rep - 1);
-        if height.is_some() || hidden {
+        if filtered {
+            let h = height.unwrap_or(crate::DEFAULT_ROW_HEIGHT_HMM);
+            if let Some(v) = self.filter_rows.last_mut() {
+                push_run(v, *row, last, h, true);
+            }
+        } else if height.is_some() || hidden {
             let h = height.unwrap_or(crate::DEFAULT_ROW_HEIGHT_HMM);
             push_run(&mut sheet.row_heights, *row, last, h, hidden);
         }
@@ -330,6 +374,23 @@ impl Parser<'_> {
                 }
                 let (cs, rs) = run.cell.span;
                 sheet.merges.push(CellRangeLocal {
+                    r0: *row,
+                    c0: run.col,
+                    r1: (*row).saturating_add(rs - 1).min(MAX_ROWS - 1),
+                    c1: run.col.saturating_add(cs - 1).min(MAX_COLS - 1),
+                });
+            }
+            if let (Some((cs, rs)), CellContentData::Formula { .. }, 1, 1) =
+                (run.cell.matrix, &run.cell.content, rep, run.len)
+            {
+                self.cells_total += 1;
+                if self.cells_total > self.limits.max_cells {
+                    return Err(OdsError::LimitExceeded {
+                        what: "materialized cells",
+                        limit: self.limits.max_cells,
+                    });
+                }
+                sheet.array_formulas.push(CellRangeLocal {
                     r0: *row,
                     c0: run.col,
                     r1: (*row).saturating_add(rs - 1).min(MAX_ROWS - 1),
@@ -421,6 +482,14 @@ impl Parser<'_> {
             parse_count(e, "table:number-columns-spanned", MAX_COLS),
             parse_count(e, "table:number-rows-spanned", MAX_ROWS),
         );
+        let matrix = (e.attr("table:number-matrix-columns-spanned").is_some()
+            || e.attr("table:number-matrix-rows-spanned").is_some())
+        .then(|| {
+            (
+                parse_count(e, "table:number-matrix-columns-spanned", MAX_COLS),
+                parse_count(e, "table:number-matrix-rows-spanned", MAX_ROWS),
+            )
+        });
         let mut paragraphs: Vec<String> = Vec::new();
         let mut budget = MAX_CELL_TEXT;
         let d = xml.depth();
@@ -523,6 +592,7 @@ impl Parser<'_> {
                 .filter(|n| *n != "Default")
                 .map(str::to_string),
             span,
+            matrix,
         })
     }
 }
@@ -654,5 +724,500 @@ fn parse_calc_settings<R: BufRead>(
             Ev::Eof => return Ok(c),
             _ => {}
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Named expressions, database ranges (AutoFilter)
+// ---------------------------------------------------------------------------
+
+impl Parser<'_> {
+    /// Parses `table:named-expressions`; `sheet` is the scope (tab index).
+    fn parse_named_expressions<R: BufRead>(
+        &mut self,
+        xml: &mut XmlReader<R>,
+        sheet: Option<u32>,
+    ) -> Result<(), OdsError> {
+        let d = xml.depth();
+        loop {
+            match xml.next()? {
+                Ev::Start(c) => {
+                    let formula = match c.name.as_str() {
+                        "table:named-range" => c
+                            .attr("table:cell-range-address")
+                            .and_then(range_address_formula),
+                        "table:named-expression" => c.attr("table:expression").map(|x| {
+                            let x = x.trim();
+                            if x.starts_with("of:") || x.starts_with("oooc:") {
+                                x.to_string()
+                            } else if x.starts_with('=') {
+                                format!("of:{x}")
+                            } else {
+                                format!("of:={x}")
+                            }
+                        }),
+                        _ => None,
+                    };
+                    let name = c.attr("table:name").map(str::trim).unwrap_or_default();
+                    if let Some(formula) = formula {
+                        if !name.is_empty() && formula.len() <= MAX_NAME_EXPR_LEN {
+                            if self.names.len() >= MAX_NAMES {
+                                return Err(OdsError::LimitExceeded {
+                                    what: "named expressions",
+                                    limit: MAX_NAMES as u64,
+                                });
+                            }
+                            self.names.push(NameData {
+                                name: name.to_string(),
+                                sheet,
+                                formula,
+                            });
+                        }
+                    }
+                    xml.skip()?;
+                }
+                Ev::End if xml.depth() < d => return Ok(()),
+                Ev::Eof => return Ok(()),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Splits `s` at `sep` outside single quotes.
+fn split_unquoted(s: &str, sep: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut quoted = false;
+    let mut start = 0;
+    for (i, ch) in s.char_indices() {
+        if ch == '\'' {
+            quoted = !quoted;
+        } else if ch == sep && !quoted {
+            out.push(&s[start..i]);
+            start = i + ch.len_utf8();
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// Splits `Sheet.A1` at its last unquoted `.` into (sheet, cell); the sheet
+/// is `None` for `.A1` or `A1`.
+fn split_sheet_cell(part: &str) -> (Option<&str>, &str) {
+    let mut quoted = false;
+    let mut dot = None;
+    for (i, ch) in part.char_indices() {
+        if ch == '\'' {
+            quoted = !quoted;
+        } else if ch == '.' && !quoted {
+            dot = Some(i);
+        }
+    }
+    match dot {
+        Some(0) => (None, &part[1..]),
+        Some(i) => (Some(&part[..i]), &part[i + 1..]),
+        None => (None, part),
+    }
+}
+
+/// The plain sheet name of a written sheet qualifier (`$'My ''x'''` → `My 'x'`).
+fn sheet_key(raw: &str) -> String {
+    let t = raw.trim().trim_start_matches('$');
+    match t.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')) {
+        Some(inner) => inner.replace("''", "'"),
+        None => t.to_string(),
+    }
+}
+
+/// A sheet qualifier for OpenFormula (`$` kept, quoted when needed).
+fn quote_sheet(raw: &str) -> String {
+    let t = raw.trim();
+    let (dollar, rest) = match t.strip_prefix('$') {
+        Some(r) => ("$", r),
+        None => ("", t),
+    };
+    if rest.starts_with('\'') {
+        return format!("{dollar}{rest}");
+    }
+    let plain = !rest.is_empty()
+        && rest.chars().all(|c| c.is_alphanumeric() || c == '_')
+        && !rest.starts_with(|c: char| c.is_ascii_digit());
+    if plain {
+        format!("{dollar}{rest}")
+    } else {
+        format!("{dollar}'{}'", rest.replace('\'', "''"))
+    }
+}
+
+/// One ODF cell-range-address (`$Sheet1.$A$1:.$B$5`) as an OpenFormula
+/// reference body (`$Sheet1.$A$1:.$B$5`).
+fn normalize_range(addr: &str) -> Option<String> {
+    let parts = split_unquoted(addr.trim(), ':');
+    if parts.is_empty() || parts.len() > 2 || parts.iter().any(|p| p.trim().is_empty()) {
+        return None;
+    }
+    let (s1, c1) = split_sheet_cell(parts[0].trim());
+    if c1.is_empty() {
+        return None;
+    }
+    let mut out = match s1 {
+        Some(s) => format!("{}.{c1}", quote_sheet(s)),
+        None => format!(".{c1}"),
+    };
+    if let Some(p2) = parts.get(1) {
+        let (s2, c2) = split_sheet_cell(p2.trim());
+        if c2.is_empty() {
+            return None;
+        }
+        match (s1, s2) {
+            (Some(a), Some(b)) if sheet_key(a) != sheet_key(b) => {
+                out.push_str(&format!(":{}.{c2}", quote_sheet(b)));
+            }
+            _ => out.push_str(&format!(":.{c2}")),
+        }
+    }
+    Some(out)
+}
+
+/// A `table:cell-range-address` (possibly a space-separated list) as an
+/// OpenFormula formula `of:=[…]` (a list becomes a `~` union).
+fn range_address_formula(addr: &str) -> Option<String> {
+    let mut quoted = false;
+    let mut parts: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for ch in addr.trim().chars() {
+        if ch == '\'' {
+            quoted = !quoted;
+        }
+        if ch == ' ' && !quoted {
+            if !cur.is_empty() {
+                parts.push(std::mem::take(&mut cur));
+            }
+        } else {
+            cur.push(ch);
+        }
+    }
+    if !cur.is_empty() {
+        parts.push(cur);
+    }
+    let refs: Vec<String> = parts
+        .iter()
+        .map(|p| normalize_range(p).map(|r| format!("[{r}]")))
+        .collect::<Option<_>>()?;
+    (!refs.is_empty()).then(|| format!("of:={}", refs.join("~")))
+}
+
+/// `A1` / `$A$1` → (row, col).
+fn parse_cell_ref(s: &str) -> Option<(u32, u32)> {
+    let t: String = s.chars().filter(|c| *c != '$').collect();
+    let split = t.find(|c: char| c.is_ascii_digit())?;
+    let (letters, digits) = t.split_at(split);
+    let col = tally_types::letters_to_col(letters)?;
+    let row: u32 = digits.parse().ok()?;
+    ((1..=MAX_ROWS).contains(&row) && col < MAX_COLS).then(|| (row - 1, col))
+}
+
+/// A filter tree node.
+enum FNode {
+    Cond {
+        field: u32,
+        op: String,
+        value: String,
+        set: Vec<String>,
+    },
+    And(Vec<FNode>),
+    Or(Vec<FNode>),
+}
+
+/// Most filter nodes read for one database range.
+const MAX_FILTER_NODES: usize = 4096;
+
+fn parse_fnode<R: BufRead>(
+    xml: &mut XmlReader<R>,
+    e: &Elem,
+    budget: &mut usize,
+) -> Result<Option<FNode>, OdsError> {
+    if *budget == 0 {
+        xml.skip()?;
+        return Ok(None);
+    }
+    *budget -= 1;
+    match e.name.as_str() {
+        "table:filter-condition" => {
+            let field = e
+                .attr("table:field-number")
+                .and_then(|v| v.trim().parse::<u32>().ok())
+                .filter(|f| *f < MAX_COLS);
+            let op = e.attr("table:operator").unwrap_or("=").to_string();
+            let value = e.attr("table:value").unwrap_or_default().to_string();
+            let mut set = Vec::new();
+            let d = xml.depth();
+            loop {
+                match xml.next()? {
+                    Ev::Start(c) => {
+                        if c.name == "table:filter-set-item" && set.len() < 10_000 {
+                            set.push(c.attr("table:value").unwrap_or_default().to_string());
+                        }
+                        xml.skip()?;
+                    }
+                    Ev::End if xml.depth() < d => break,
+                    Ev::Eof => break,
+                    _ => {}
+                }
+            }
+            Ok(field.map(|field| FNode::Cond {
+                field,
+                op,
+                value,
+                set,
+            }))
+        }
+        "table:filter-and" | "table:filter-or" | "table:filter" => {
+            let mut kids = Vec::new();
+            let d = xml.depth();
+            loop {
+                match xml.next()? {
+                    Ev::Start(c) => {
+                        if let Some(n) = parse_fnode(xml, &c, budget)? {
+                            kids.push(n);
+                        }
+                    }
+                    Ev::End if xml.depth() < d => break,
+                    Ev::Eof => break,
+                    _ => {}
+                }
+            }
+            Ok(Some(if e.name == "table:filter-or" {
+                FNode::Or(kids)
+            } else {
+                FNode::And(kids)
+            }))
+        }
+        _ => {
+            xml.skip()?;
+            Ok(None)
+        }
+    }
+}
+
+fn filter_op(op: &str) -> Option<FilterOpData> {
+    Some(match op {
+        "=" => FilterOpData::Eq,
+        "!=" => FilterOpData::Ne,
+        ">" => FilterOpData::Gt,
+        ">=" => FilterOpData::Ge,
+        "<" => FilterOpData::Lt,
+        "<=" => FilterOpData::Le,
+        "contains" => FilterOpData::Contains,
+        "begins" => FilterOpData::BeginsWith,
+        "ends" => FilterOpData::EndsWith,
+        "empty" => FilterOpData::Empty,
+        "!empty" => FilterOpData::NotEmpty,
+        _ => return None,
+    })
+}
+
+/// Adds the column filters expressed by one top-level item of a filter.
+fn filter_item(node: &FNode, c0: u32, out: &mut Vec<FilterColumnData>) {
+    let slot = |out: &mut Vec<FilterColumnData>, field: u32| -> usize {
+        let col = c0.saturating_add(field);
+        match out.iter().position(|c| c.col == col) {
+            Some(i) => i,
+            None => {
+                out.push(FilterColumnData {
+                    col,
+                    values: None,
+                    condition: None,
+                });
+                out.len() - 1
+            }
+        }
+    };
+    match node {
+        FNode::Cond {
+            field,
+            op,
+            value,
+            set,
+        } => {
+            if !set.is_empty() && op == "=" {
+                let i = slot(out, *field);
+                if out[i].values.is_none() {
+                    out[i].values = Some(set.clone());
+                }
+            } else if let Some(op) = filter_op(op) {
+                let i = slot(out, *field);
+                if out[i].condition.is_none() {
+                    out[i].condition = Some(FilterConditionData {
+                        op,
+                        value: value.clone(),
+                    });
+                }
+            }
+        }
+        FNode::And(kids) => {
+            for k in kids {
+                filter_item(k, c0, out);
+            }
+        }
+        FNode::Or(kids) => {
+            let mut field: Option<u32> = None;
+            let mut values = Vec::new();
+            for k in kids {
+                let FNode::Cond {
+                    field: f,
+                    op,
+                    value,
+                    set,
+                } = k
+                else {
+                    return;
+                };
+                if field.is_some_and(|x| x != *f) || !set.is_empty() {
+                    return;
+                }
+                field = Some(*f);
+                match op.as_str() {
+                    "=" => values.push(value.clone()),
+                    "empty" => values.push(String::new()),
+                    _ => return,
+                }
+            }
+            if let Some(f) = field {
+                let i = slot(out, f);
+                if out[i].values.is_none() {
+                    out[i].values = Some(values);
+                }
+            }
+        }
+    }
+}
+
+/// Parses `table:database-ranges`, attaching AutoFilters to `sheets`.
+fn parse_database_ranges<R: BufRead>(
+    xml: &mut XmlReader<R>,
+    sheets: &mut [SheetData],
+) -> Result<(), OdsError> {
+    let d = xml.depth();
+    loop {
+        match xml.next()? {
+            Ev::Start(c) if c.name == "table:database-range" => {
+                let buttons = c.attr("table:display-filter-buttons") == Some("true");
+                let target = c
+                    .attr("table:target-range-address")
+                    .map(str::to_string)
+                    .unwrap_or_default();
+                let mut tree: Option<FNode> = None;
+                let mut budget = MAX_FILTER_NODES;
+                let dd = xml.depth();
+                loop {
+                    match xml.next()? {
+                        Ev::Start(ch) => {
+                            if ch.name == "table:filter" {
+                                tree = parse_fnode(xml, &ch, &mut budget)?;
+                            } else {
+                                xml.skip()?;
+                            }
+                        }
+                        Ev::End if xml.depth() < dd => break,
+                        Ev::Eof => break,
+                        _ => {}
+                    }
+                }
+                if !buttons {
+                    continue;
+                }
+                let parts = split_unquoted(target.trim(), ':');
+                if parts.len() != 2 {
+                    continue;
+                }
+                let (s1, a) = split_sheet_cell(parts[0].trim());
+                let (s2, b) = split_sheet_cell(parts[1].trim());
+                let Some(s1) = s1.map(sheet_key) else {
+                    continue;
+                };
+                if s2.is_some_and(|s| sheet_key(s) != s1) {
+                    continue;
+                }
+                let (Some((r0, c0)), Some((r1, c1))) = (parse_cell_ref(a), parse_cell_ref(b))
+                else {
+                    continue;
+                };
+                let Some(sheet) = sheets.iter_mut().find(|s| s.name == s1) else {
+                    continue;
+                };
+                if sheet.auto_filter.is_some() {
+                    continue;
+                }
+                let range = CellRangeLocal {
+                    r0: r0.min(r1),
+                    c0: c0.min(c1),
+                    r1: r0.max(r1),
+                    c1: c0.max(c1),
+                };
+                let mut columns = Vec::new();
+                if let Some(t) = &tree {
+                    match t {
+                        FNode::Or(_) => filter_item(t, range.c0, &mut columns),
+                        other => filter_item(other, range.c0, &mut columns),
+                    }
+                }
+                columns.retain(|c| c.col <= range.c1);
+                columns.sort_by_key(|c| c.col);
+                sheet.auto_filter = Some(AutoFilterData {
+                    range,
+                    columns,
+                    filtered_rows: Vec::new(),
+                });
+            }
+            Ev::Start(_) => xml.skip()?,
+            Ev::End if xml.depth() < d => return Ok(()),
+            Ev::Eof => return Ok(()),
+            _ => {}
+        }
+    }
+}
+
+/// Sorts row runs and merges equal neighbours.
+fn normalize_runs(runs: &mut Vec<DimRun>) {
+    runs.sort_by_key(|r| r.start);
+    let old = std::mem::take(runs);
+    for r in old {
+        push_run(runs, r.start, r.end, r.size_hmm, r.hidden);
+    }
+}
+
+/// Resolves rows read with `table:visibility="filter"`: filter-hidden rows
+/// of a sheet with an AutoFilter, plain hidden rows otherwise.
+fn attach_filter_rows(sheets: &mut [SheetData], filter_rows: Vec<Vec<DimRun>>) {
+    for (sheet, runs) in sheets.iter_mut().zip(filter_rows) {
+        if runs.is_empty() {
+            continue;
+        }
+        match sheet.auto_filter.as_mut() {
+            Some(af) => {
+                let mut spans: Vec<(u32, u32)> = af.filtered_rows.clone();
+                for r in &runs {
+                    spans.push((r.start, r.end));
+                    if r.size_hmm != crate::DEFAULT_ROW_HEIGHT_HMM {
+                        sheet.row_heights.push(DimRun {
+                            hidden: false,
+                            ..r.clone()
+                        });
+                    }
+                }
+                spans.sort_unstable();
+                let mut merged: Vec<(u32, u32)> = Vec::new();
+                for (a, b) in spans {
+                    match merged.last_mut() {
+                        Some(last) if a <= last.1.saturating_add(1) => last.1 = last.1.max(b),
+                        _ => merged.push((a, b)),
+                    }
+                }
+                af.filtered_rows = merged;
+            }
+            None => sheet.row_heights.extend(runs),
+        }
+        normalize_runs(&mut sheet.row_heights);
     }
 }

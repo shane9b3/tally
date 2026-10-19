@@ -1,0 +1,100 @@
+# LOG conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=LOG(100.0)"
+expect = 2
+
+[[case]]
+name = "numeric text"
+formula = "=LOG(\"100.0\")"
+expect = 2
+
+[[case]]
+name = "non-numeric text"
+formula = "=LOG(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=LOG(A1)"
+expect = "Err:502"
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=LOG(A1)"
+expect = 0
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=LOG(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 100 }
+origin = "C2"
+formula = "=LOG(A1:A2)"
+expect = 2
+
+[[case]]
+name = "no arguments"
+formula = "=LOG()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=LOG(1;2;3)"
+expect = "Err:504"
+
+[[case]]
+formula = "=LOG(8;2)"
+expect = 3
+
+[[case]]
+formula = "=LOG(1000;10)"
+expect = 3
+
+[[case]]
+name = "empty base defaults to 10"
+formula = "=LOG(100;)"
+expect = 2
+
+[[case]]
+formula = "=LOG(0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=LOG(5;1)"
+expect = "Err:502"
+note = "Base 1 is an illegal argument."
+
+[[case]]
+formula = "=LOG(5;-2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=LOG(5;0)"
+expect = "Err:502"
+
+[[case]]
+formula = "=LOG(1;2)"
+expect = 0
+
+[[case]]
+name = "empty base cell is 0"
+formula = "=LOG(10;A1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=LOG(81;3)"
+expect = 4
+
+[[case]]
+formula = "=LOG(2;0.5)"
+expect = -1
+
+[[case]]
+formula = "=LOG(8;\"x\")"
+expect = "#VALUE!"

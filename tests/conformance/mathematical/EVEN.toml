@@ -1,0 +1,73 @@
+# EVEN conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=EVEN(1.5)"
+expect = 2
+
+[[case]]
+name = "numeric text"
+formula = "=EVEN(\"1.5\")"
+expect = 2
+
+[[case]]
+name = "non-numeric text"
+formula = "=EVEN(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=EVEN(A1)"
+expect = 0
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=EVEN(A1)"
+expect = 2
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=EVEN(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 1.5 }
+origin = "C2"
+formula = "=EVEN(A1:A2)"
+expect = 2
+
+[[case]]
+name = "no arguments"
+formula = "=EVEN()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=EVEN(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=EVEN(2)"
+expect = 2
+
+[[case]]
+formula = "=EVEN(-1)"
+expect = -2
+
+[[case]]
+formula = "=EVEN(-2.1)"
+expect = -4
+
+[[case]]
+formula = "=EVEN(0)"
+expect = 0
+
+[[case]]
+formula = "=EVEN(0.1)"
+expect = 2
+
+[[case]]
+formula = "=EVEN(3)"
+expect = 4

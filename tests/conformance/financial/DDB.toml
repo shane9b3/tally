@@ -1,0 +1,73 @@
+# DDB conformance vectors. Ported AOO 4.1 semantics (interpr2.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference, daily"
+formula = "=DDB(2400;300;10*365;1)"
+expect = 1.31506849315
+tol = 1e-10
+
+[[case]]
+name = "Excel reference, monthly"
+formula = "=DDB(2400;300;10*12;1;2)"
+expect = 40
+tol = 1e-12
+
+[[case]]
+name = "Excel reference, first year"
+formula = "=DDB(2400;300;10;1;2)"
+expect = 480
+tol = 1e-12
+
+[[case]]
+name = "Excel reference, factor 1.5"
+formula = "=DDB(2400;300;10;2;1.5)"
+expect = 306
+tol = 1e-12
+
+[[case]]
+name = "Excel reference, last year"
+formula = "=DDB(2400;300;10;10)"
+expect = 22.1225472
+tol = 1e-06
+
+[[case]]
+name = "rate capped at 100%"
+formula = "=DDB(2400;300;1;1;5)"
+expect = 2100
+
+[[case]]
+name = "period beyond life"
+formula = "=DDB(2400;300;10;11)"
+expect = "Err:502"
+
+[[case]]
+name = "factor must be positive"
+formula = "=DDB(2400;300;10;1;0)"
+expect = "Err:502"
+
+[[case]]
+name = "salvage above cost"
+formula = "=DDB(2400;3000;10;1)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=DDB(\"x\";300;10;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=DDB(A4;300;10;1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=DDB(2400;300;10)"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=DDB(2400;300;10;1;1;1)"
+expect = "Err:504"

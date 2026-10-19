@@ -6,7 +6,7 @@
   background: var(--tally-bg);
   border: 1px solid var(--tally-border-subtle);
   border-radius: var(--tally-radius-card);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--tally-shadow-pop);
   display: flex;
   flex-direction: column;
   animation: pop 120ms ease-out;
@@ -35,15 +35,26 @@
   cursor: default;
 }
 
-.item:hover:not(:disabled),
+.item:hover:not([aria-disabled="true"]),
 .item:focus-visible {
   background: var(--tally-gray-100);
   outline: none;
 }
 
-.item:disabled {
+.item[aria-disabled="true"] {
   color: var(--tally-text-muted);
   opacity: 0.6;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+}
+
+.separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--tally-border-subtle);
 }
 
 .check {
@@ -63,5 +74,5 @@
 }
 
 .danger {
-  color: #dc2626;
+  color: var(--tally-danger);
 }

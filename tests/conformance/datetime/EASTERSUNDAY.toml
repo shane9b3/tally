@@ -1,0 +1,57 @@
+[[case]]
+formula = "=EASTERSUNDAY(2026)"
+expect = 46117
+
+[[case]]
+formula = "=EASTERSUNDAY(2024)"
+expect = 45382
+
+[[case]]
+formula = "=EASTERSUNDAY(2000)"
+expect = 36639
+
+[[case]]
+formula = "=EASTERSUNDAY(1583)"
+expect = -115681
+
+[[case]]
+formula = "=EASTERSUNDAY(1900)"
+expect = 106
+
+[[case]]
+formula = "=EASTERSUNDAY(2038)"
+expect = 50520
+
+[[case]]
+formula = "=EASTERSUNDAY(2011)"
+expect = 40657
+
+[[case]]
+formula = "=EASTERSUNDAY(9956)>0"
+expect = true
+
+[[case]]
+formula = "=EASTERSUNDAY(1582)"
+expect = "Err:502"
+
+[[case]]
+formula = "=EASTERSUNDAY(9957)"
+expect = "Err:502"
+
+[[case]]
+formula = "=EASTERSUNDAY(2026.9)"
+expect = 46117
+note = "Year is truncated."
+
+[[case]]
+formula = "=EASTERSUNDAY(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=EASTERSUNDAY(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=EASTERSUNDAY()"
+expect = "Err:511"

@@ -41,7 +41,11 @@ import type { Suggestion } from "./generated/Suggestion";
 import type { Transaction } from "./generated/Transaction";
 import type { ValueKind } from "./generated/ValueKind";
 import type { WorkbookInfo } from "./generated/WorkbookInfo";
-import type { EngineClient, SheetId, Unsubscribe } from "./client";
+import type { AutoFilterInfo } from "./generated/AutoFilterInfo";
+import type { FindQuery } from "./generated/FindQuery";
+import type { FindResult } from "./generated/FindResult";
+import type { NameInfo } from "./generated/NameInfo";
+import type { EngineClientV2, SheetId, Unsubscribe } from "./client";
 import { mockTemplate } from "./mockTemplates";
 import { BUILTIN_TEMPLATES, type ShellClient, type TemplateInfo } from "./shell";
 
@@ -352,7 +356,7 @@ function hintFor(input: string): string | null {
 /** Currency format the mock applies to template money columns. */
 const MOCK_CURRENCY = "[$$-409]#,##0.00;[RED]-[$$-409]#,##0.00";
 
-export class MockClient implements EngineClient, ShellClient {
+export class MockClient implements EngineClientV2, ShellClient {
   private readonly docs = new Map<DocId, MockDoc>();
   private nextDocId = 1;
   private nextClipToken = 1;
@@ -572,6 +576,43 @@ export class MockClient implements EngineClient, ShellClient {
     return this.run(() => {
       this.doc(doc);
       return [];
+    });
+  }
+
+  // -- v0.2 stubs (the mock has no names, filters or search) -----------------
+
+  names(doc: DocId): Promise<NameInfo[]> {
+    return this.run(() => {
+      this.doc(doc);
+      return [];
+    });
+  }
+
+  filterInfo(doc: DocId, sheet: SheetId): Promise<AutoFilterInfo> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      return { range: null, columns: [] };
+    });
+  }
+
+  find(doc: DocId, _query: FindQuery): Promise<FindResult> {
+    return this.run(() => {
+      this.doc(doc);
+      return { hits: [], truncated: false };
+    });
+  }
+
+  detectHeader(doc: DocId, sheet: SheetId, _range: RangeDto): Promise<boolean> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      return false;
+    });
+  }
+
+  recalcAll(doc: DocId): Promise<ApplyResult> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      return this.result(d, new Touched(), [], null);
     });
   }
 
@@ -865,6 +906,21 @@ export class MockClient implements EngineClient, ShellClient {
       case "deleteRows":
       case "insertCols":
       case "deleteCols":
+      case "defineName":
+      case "deleteName":
+      case "setArrayFormula":
+      case "moveRange":
+      case "mergeCells":
+      case "unmergeCells":
+      case "setFrozen":
+      case "sortRange":
+      case "setAutoFilter":
+      case "setColumnFilter":
+      case "setRowsHidden":
+      case "setColsHidden":
+      case "replaceAll":
+      case "pasteSpecial":
+      case "fillRange":
         throw apiError("unsupported", `MockClient does not support ${op.type}`);
     }
   }

@@ -1,0 +1,85 @@
+# IMTAN conformance vectors. Ported from Apache OpenOffice analysishelper.cxx. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=IMREAL(IMTAN(\"1+i\"))"
+expect = 0.2717525853195118
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMTAN(\"1+i\"))"
+expect = 1.0839233273386943
+tol = 1.0839233273386942e-11
+
+[[case]]
+formula = "=IMREAL(IMTAN(\"3+4i\"))"
+expect = -0.0001873462046294784
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMTAN(\"3+4i\"))"
+expect = 0.999355987381473
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMTAN(\"2-3j\"))"
+expect = -0.003764025641504249
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMTAN(\"2-3j\"))"
+expect = -1.00323862735361
+tol = 1.00323862735361e-11
+
+[[case]]
+formula = "=IMREAL(IMTAN(\"-0.5+0.25i\"))"
+expect = -0.504500702698564
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMTAN(\"-0.5+0.25i\"))"
+expect = 0.31242069250258875
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMTAN(\"2\"))"
+expect = -2.185039863261519
+tol = 2.1850398632615187e-11
+
+[[case]]
+formula = "=IMAGINARY(IMTAN(\"2\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMREAL(IMTAN(\"-i\"))"
+expect = 0.0
+tol = 1e-11
+
+[[case]]
+formula = "=IMAGINARY(IMTAN(\"-i\"))"
+expect = -0.7615941559557649
+tol = 1e-11
+
+[[case]]
+formula = "=IMTAN(\"0\")"
+expect = "0"
+
+[[case]]
+formula = "=IMTAN(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=IMTAN()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=IMTAN(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "number argument"
+formula = "=IMREAL(IMTAN(2))"
+expect = -2.185039863261519
+tol = 1e-11
+

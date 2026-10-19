@@ -1,0 +1,41 @@
+# OCT2BIN conformance vectors. Analysis add-in; 10-digit two's complement. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=OCT2BIN(\"7777777777\")"
+expect = "1111111111"
+
+[[case]]
+formula = "=OCT2BIN(\"7\")"
+expect = "111"
+
+[[case]]
+formula = "=OCT2BIN(\"7\";6)"
+expect = "000111"
+
+[[case]]
+formula = "=OCT2BIN(\"777\")"
+expect = "111111111"
+
+[[case]]
+formula = "=OCT2BIN(\"1000\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=OCT2BIN(\"7777777000\")"
+expect = "1000000000"
+
+[[case]]
+formula = "=OCT2BIN(\"0\")"
+expect = "0"
+
+[[case]]
+formula = "=OCT2BIN(\"8\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=OCT2BIN(\"7\";2)"
+expect = "Err:502"
+
+[[case]]
+formula = "=OCT2BIN()"
+expect = "Err:511"

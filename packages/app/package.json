@@ -8,13 +8,16 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "sideEffects": ["*.css"],
+  "sideEffects": [
+    "*.css"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
   "dependencies": {
     "@tally/bridge": "workspace:*",
+    "@tally/formula-ts": "workspace:*",
     "@tally/grid": "workspace:*",
     "@tally/tokens": "workspace:*",
     "cmdk": "1.1.1",

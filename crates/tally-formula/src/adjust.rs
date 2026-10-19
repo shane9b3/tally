@@ -17,7 +17,7 @@
 //! - deleting a sheet turns references to it into [`SheetRef::Deleted`];
 //!   renaming is a no-op because references hold sheet ids.
 
-use tally_types::{CellAddr, SheetId, MAX_COLS, MAX_ROWS};
+use tally_types::{CellAddr, CellRange, SheetId, MAX_COLS, MAX_ROWS};
 
 use crate::ast::{CellRefExpr, Formula, RefCoord, RefExpr, SheetRef};
 
@@ -415,4 +415,296 @@ pub fn shifted_origin(origin: CellAddr, change: &StructureChange) -> CellAddr {
 pub fn relocate(f: &Formula, from: CellAddr, to: CellAddr) -> Formula {
     let _ = (from, to);
     f.clone()
+}
+
+// ---------------------------------------------------------------------------
+// Moves (cut and paste) and re-anchoring (sort)
+// ---------------------------------------------------------------------------
+
+/// A block of cells moved on one sheet (cut and paste): `from` (whose
+/// `sheet` is the sheet) goes to `from` shifted by (`dr`, `dc`).
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+pub struct BlockMove {
+    /// The source block.
+    pub from: CellRange,
+    /// Row offset of the destination.
+    pub dr: i64,
+    /// Column offset of the destination.
+    pub dc: i64,
+}
+
+impl BlockMove {
+    /// The destination block, if it fits on the grid.
+    pub fn to(&self) -> Option<CellRange> {
+        let sh = |v: u32, d: i64, limit: u32| -> Option<u32> {
+            let x = i64::from(v) + d;
+            (0..i64::from(limit)).contains(&x).then_some(x as u32)
+        };
+        Some(CellRange::new(
+            self.from.sheet,
+            sh(self.from.r0, self.dr, MAX_ROWS)?,
+            sh(self.from.c0, self.dc, MAX_COLS)?,
+            sh(self.from.r1, self.dr, MAX_ROWS)?,
+            sh(self.from.c1, self.dc, MAX_COLS)?,
+        ))
+    }
+}
+
+/// What happens to one resolved reference target.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Action {
+    /// Leave the AST as written (relative parts keep their offsets).
+    Literal,
+    /// Keep the absolute target (re-encode relative parts for the new origin).
+    Keep,
+    /// Move the target by (rows, cols).
+    Shift(i64, i64),
+    /// The target is gone: `#REF!`.
+    Invalid,
+}
+
+/// The resolved absolute target of a reference: `(sheet, r0, c0, r1, c1)`;
+/// `None` for whole rows/columns, 3-D spans and unresolvable references.
+fn target_of(r: &RefExpr, origin: CellAddr) -> Option<CellRange> {
+    let cell = |c: &CellRefExpr, sheet: SheetId| -> Option<(SheetId, u32, u32)> {
+        let s = sheet_id(&c.sheet, sheet)?;
+        Some((
+            s,
+            c.row.resolve(origin.row, MAX_ROWS)?,
+            c.col.resolve(origin.col, MAX_COLS)?,
+        ))
+    };
+    match r {
+        RefExpr::Cell(c) => {
+            let (s, row, col) = cell(c, origin.sheet)?;
+            Some(CellRange::new(s, row, col, row, col))
+        }
+        RefExpr::Area(a, b) => {
+            let (sa, ra, ca) = cell(a, origin.sheet)?;
+            let (sb, rb, cb) = cell(b, sa)?;
+            (sa == sb).then(|| CellRange::new(sa, ra.min(rb), ca.min(cb), ra.max(rb), ca.max(cb)))
+        }
+        _ => None,
+    }
+}
+
+fn recode_coord(
+    c: RefCoord,
+    origin_old: u32,
+    origin_new: u32,
+    limit: u32,
+    d: i64,
+) -> Option<RefCoord> {
+    let pos = i64::from(c.resolve(origin_old, limit)?) + d;
+    if !(0..i64::from(limit)).contains(&pos) {
+        return None;
+    }
+    Some(RefCoord::encode(pos as u32, c.abs, origin_new))
+}
+
+/// Applies `action` to `r` (a reference of a formula moving from `old` to `new`).
+fn apply_action(r: &RefExpr, old: CellAddr, new: CellAddr, action: Action) -> RefExpr {
+    let (dr, dc) = match action {
+        Action::Literal => return r.clone(),
+        Action::Invalid => return RefExpr::Invalid,
+        Action::Keep => (0, 0),
+        Action::Shift(dr, dc) => (dr, dc),
+    };
+    let rc = |c: &CellRefExpr| -> Option<CellRefExpr> {
+        Some(CellRefExpr {
+            sheet: c.sheet.clone(),
+            row: recode_coord(c.row, old.row, new.row, MAX_ROWS, dr)?,
+            col: recode_coord(c.col, old.col, new.col, MAX_COLS, dc)?,
+        })
+    };
+    let out = match r {
+        RefExpr::Invalid => Some(RefExpr::Invalid),
+        RefExpr::Cell(c) => rc(c).map(RefExpr::Cell),
+        RefExpr::Area(a, b) => match (rc(a), rc(b)) {
+            (Some(a), Some(b)) => Some(RefExpr::Area(a, b)),
+            _ => None,
+        },
+        RefExpr::Cols { sheet, start, end } => {
+            match (
+                recode_coord(*start, old.col, new.col, MAX_COLS, dc),
+                recode_coord(*end, old.col, new.col, MAX_COLS, dc),
+            ) {
+                (Some(start), Some(end)) => Some(RefExpr::Cols {
+                    sheet: sheet.clone(),
+                    start,
+                    end,
+                }),
+                _ => None,
+            }
+        }
+        RefExpr::Rows { sheet, start, end } => {
+            match (
+                recode_coord(*start, old.row, new.row, MAX_ROWS, dr),
+                recode_coord(*end, old.row, new.row, MAX_ROWS, dr),
+            ) {
+                (Some(start), Some(end)) => Some(RefExpr::Rows {
+                    sheet: sheet.clone(),
+                    start,
+                    end,
+                }),
+                _ => None,
+            }
+        }
+    };
+    out.unwrap_or(RefExpr::Invalid)
+}
+
+/// `true` if every coordinate of `r` resolves at `origin` (references
+/// already off the grid are left as written).
+fn fully_resolvable(r: &RefExpr, origin: CellAddr) -> bool {
+    let p = |c: RefCoord, o: u32, l: u32| c.resolve(o, l).is_some();
+    match r {
+        RefExpr::Invalid => false,
+        RefExpr::Cell(c) => p(c.row, origin.row, MAX_ROWS) && p(c.col, origin.col, MAX_COLS),
+        RefExpr::Area(a, b) => {
+            p(a.row, origin.row, MAX_ROWS)
+                && p(a.col, origin.col, MAX_COLS)
+                && p(b.row, origin.row, MAX_ROWS)
+                && p(b.col, origin.col, MAX_COLS)
+        }
+        RefExpr::Cols { start, end, .. } => {
+            p(*start, origin.col, MAX_COLS) && p(*end, origin.col, MAX_COLS)
+        }
+        RefExpr::Rows { start, end, .. } => {
+            p(*start, origin.row, MAX_ROWS) && p(*end, origin.row, MAX_ROWS)
+        }
+    }
+}
+
+fn remap(
+    f: &mut Formula,
+    old: CellAddr,
+    new: CellAddr,
+    mut decide: impl FnMut(Option<CellRange>) -> Action,
+) -> bool {
+    let mut changed = false;
+    f.expr.walk_refs_mut(|r| {
+        let action = if fully_resolvable(r, old) {
+            decide(target_of(r, old))
+        } else {
+            Action::Literal
+        };
+        let n = apply_action(r, old, new, action);
+        if n != *r {
+            *r = n;
+            changed = true;
+        }
+    });
+    changed
+}
+
+/// Rewrites the references of a formula for a block move (cut and paste,
+/// OpenOffice `URM_MOVE` semantics).
+///
+/// `old` is the formula's address before the move and `new` its address
+/// after (equal for formulas outside the moved block). For each cell or
+/// single-sheet area reference:
+/// - a target entirely inside the moved block follows it;
+/// - otherwise, a target entirely inside the destination (cells that the
+///   move overwrites) becomes `#REF!`;
+/// - otherwise the absolute target is kept (relative parts are re-encoded
+///   for `new`, so a moved formula still points at the same outside cells).
+///
+/// Whole rows/columns and 3-D spans keep their absolute targets. Returns
+/// `true` if the AST changed.
+pub fn move_refs(f: &mut Formula, old: CellAddr, new: CellAddr, mv: &BlockMove) -> bool {
+    let to = mv.to();
+    remap(f, old, new, |t| match t {
+        Some(t) if mv.from.contains_range(&t) => Action::Shift(mv.dr, mv.dc),
+        Some(t) if to.is_some_and(|d| d.contains_range(&t)) => Action::Invalid,
+        _ => Action::Keep,
+    })
+}
+
+/// Re-anchors a formula moving from `old` to `new` so that its references
+/// keep pointing at the same absolute cells, except references whose
+/// target lies entirely inside `literal` (e.g. the sorted range), which
+/// keep their relative offsets and so move with the formula. Returns
+/// `true` if the AST changed.
+pub fn reanchor(
+    f: &mut Formula,
+    old: CellAddr,
+    new: CellAddr,
+    literal: Option<&CellRange>,
+) -> bool {
+    remap(f, old, new, |t| match (t, literal) {
+        (Some(t), Some(l)) if l.contains_range(&t) => Action::Literal,
+        _ => Action::Keep,
+    })
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+    use crate::{parse, print, Dialect, SimpleResolver};
+
+    fn a(s: &str) -> CellAddr {
+        CellAddr::from_a1(0, s).unwrap()
+    }
+
+    fn moved(src: &str, old: &str, new: &str, from: &str, dr: i64, dc: i64) -> String {
+        let r = SimpleResolver::with_default_functions();
+        let mut f = parse(src, a(old), Dialect::calc_a1_en_us(), &r).unwrap();
+        let mv = BlockMove {
+            from: CellRange::from_a1(0, from).unwrap(),
+            dr,
+            dc,
+        };
+        move_refs(&mut f, a(old), a(new), &mv);
+        print(&f, a(new), Dialect::calc_a1_en_us(), &r)
+    }
+
+    #[test]
+    fn outside_formula_follows_moved_cells() {
+        // C1 refers to A1, which moves to E5.
+        assert_eq!(moved("=A1+B1", "C1", "C1", "A1:A2", 4, 4), "=E5+B1");
+        assert_eq!(
+            moved("=SUM(A1:A2)", "C1", "C1", "A1:A2", 4, 4),
+            "=SUM(E5:E6)"
+        );
+        // Partially inside: unchanged.
+        assert_eq!(
+            moved("=SUM(A1:A3)", "C1", "C1", "A1:A2", 4, 4),
+            "=SUM(A1:A3)"
+        );
+        assert_eq!(moved("=$A$1", "C1", "C1", "A1", 1, 0), "=$A$2");
+    }
+
+    #[test]
+    fn moved_formula_keeps_outside_targets() {
+        // A2 = B1 (outside) moves to D10: still B1; refs inside the block move.
+        assert_eq!(moved("=Z1+A1", "A2", "D11", "A1:A2", 9, 3), "=Z1+D10");
+    }
+
+    #[test]
+    fn references_to_overwritten_cells_become_ref_errors() {
+        assert_eq!(moved("=E5", "Z1", "Z1", "A1", 4, 4), "=#REF!");
+        assert_eq!(moved("=E5+1", "A1", "E5", "A1", 4, 4), "=#REF!+1");
+    }
+
+    #[test]
+    fn whole_columns_and_other_sheets_are_kept() {
+        assert_eq!(moved("=SUM(A:A)", "C1", "C1", "A1:A2", 4, 4), "=SUM(A:A)");
+        assert_eq!(moved("=SUM(B:B)", "A1", "B2", "A1", 1, 1), "=SUM(B:B)");
+    }
+
+    #[test]
+    fn reanchor_keeps_targets_except_literal() {
+        let r = SimpleResolver::with_default_functions();
+        let mut f = parse("=A2*$E$1+F9", a("C2"), Dialect::calc_a1_en_us(), &r).unwrap();
+        let lit = CellRange::from_a1(0, "A2:C5").unwrap();
+        reanchor(&mut f, a("C2"), a("C5"), Some(&lit));
+        assert_eq!(
+            print(&f, a("C5"), Dialect::calc_a1_en_us(), &r),
+            "=A5*$E$1+F9"
+        );
+        let mut g = parse("=A2", a("C2"), Dialect::calc_a1_en_us(), &r).unwrap();
+        reanchor(&mut g, a("C2"), a("C5"), None);
+        assert_eq!(print(&g, a("C5"), Dialect::calc_a1_en_us(), &r), "=A2");
+    }
 }

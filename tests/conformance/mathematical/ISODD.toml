@@ -1,0 +1,70 @@
+# ISODD conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=ISODD(3.0)"
+expect = true
+
+[[case]]
+name = "numeric text"
+formula = "=ISODD(\"3.0\")"
+expect = true
+
+[[case]]
+name = "non-numeric text"
+formula = "=ISODD(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=ISODD(A1)"
+expect = false
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=ISODD(A1)"
+expect = true
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=ISODD(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 3 }
+origin = "C2"
+formula = "=ISODD(A1:A2)"
+expect = true
+
+[[case]]
+name = "no arguments"
+formula = "=ISODD()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=ISODD(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=ISODD(2.9)"
+expect = false
+
+[[case]]
+formula = "=ISODD(-3)"
+expect = true
+
+[[case]]
+formula = "=ISODD(-2.5)"
+expect = false
+note = "Truncated toward zero: -2 is even."
+
+[[case]]
+formula = "=ISODD(0)"
+expect = false
+
+[[case]]
+formula = "=ISODD(\"4\")"
+expect = false

@@ -75,3 +75,63 @@ export const SparkIcon = () => (
     <path d="M8 2v3M8 11v3M2 8h3M11 8h3M4 4l1.8 1.8M10.2 10.2 12 12M12 4l-1.8 1.8M5.8 10.2 4 12" />
   </Svg>
 );
+
+export const AlignLeftIcon = () => (
+  <Svg>
+    <path d="M2.5 4h11M2.5 7h7M2.5 10h11M2.5 13h7" />
+  </Svg>
+);
+
+export const AlignCenterIcon = () => (
+  <Svg>
+    <path d="M2.5 4h11M4.5 7h7M2.5 10h11M4.5 13h7" />
+  </Svg>
+);
+
+export const AlignRightIcon = () => (
+  <Svg>
+    <path d="M2.5 4h11M6.5 7h7M2.5 10h11M6.5 13h7" />
+  </Svg>
+);
+
+export const WrapIcon = () => (
+  <Svg>
+    <path d="M2.5 4h11M2.5 8h9a2 2 0 0 1 0 4H8.5" />
+    <path d="m10 10.5-1.5 1.5 1.5 1.5M2.5 12h3" />
+  </Svg>
+);
+
+export const FillIcon = () => (
+  <Svg>
+    <path d="M7 2.5 12.5 8 8 12.5a1.4 1.4 0 0 1-2 0L2.5 9a1.4 1.4 0 0 1 0-2z" />
+    <path d="M3 8h9" />
+    <path d="M13.5 10.5s1 1.3 1 2a1 1 0 0 1-2 0c0-.7 1-2 1-2z" fill="currentColor" stroke="none" />
+  </Svg>
+);
+
+export const GlanceIcon = () => (
+  <Svg>
+    <rect x="2" y="2.5" width="12" height="11" rx="2" />
+    <path d="M10 2.5v11M11.8 5.5h0M11.8 8h0" />
+  </Svg>
+);
+
+export const ChipsIcon = () => (
+  <Svg>
+    <rect x="1.5" y="3" width="8" height="4" rx="2" />
+    <rect x="6.5" y="9" width="8" height="4" rx="2" />
+  </Svg>
+);
+
+export const KeyboardIcon = () => (
+  <Svg>
+    <rect x="1.5" y="4" width="13" height="8" rx="1.5" />
+    <path d="M4 6.5h0M6.5 6.5h0M9 6.5h0M11.5 6.5h0M5 9.5h6" />
+  </Svg>
+);
+
+export const MoonIcon = () => (
+  <Svg>
+    <path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z" />
+  </Svg>
+);

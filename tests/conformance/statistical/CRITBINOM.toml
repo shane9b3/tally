@@ -1,0 +1,57 @@
+# CRITBINOM conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "0.75"
+formula = "=CRITBINOM(10;0.5;0.75)"
+expect = 6.0
+tol = 0
+
+[[case]]
+name = "0.5"
+formula = "=CRITBINOM(10;0.5;0.5)"
+expect = 5.0
+tol = 0
+
+[[case]]
+name = "skewed"
+formula = "=CRITBINOM(100;0.1;0.01)"
+expect = 4.0
+tol = 0
+
+[[case]]
+name = "p = 0"
+formula = "=CRITBINOM(10;0;0.5)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "p = 1"
+formula = "=CRITBINOM(10;1;0.5)"
+expect = 10.0
+tol = 0
+
+[[case]]
+name = "alpha zero"
+formula = "=CRITBINOM(10;0.5;0)"
+expect = "Err:502"
+
+[[case]]
+name = "alpha one"
+formula = "=CRITBINOM(10;0.5;1)"
+expect = "Err:502"
+
+[[case]]
+name = "negative n"
+formula = "=CRITBINOM(-1;0.5;0.5)"
+expect = "Err:502"
+
+[[case]]
+name = "p > 1"
+formula = "=CRITBINOM(10;1.5;0.5)"
+expect = "Err:502"
+
+[[case]]
+name = "text"
+formula = "=CRITBINOM(\"x\";0.5;0.5)"
+expect = "#VALUE!"

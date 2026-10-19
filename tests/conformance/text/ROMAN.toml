@@ -1,0 +1,65 @@
+[[case]]
+formula = "=ROMAN(1994)"
+expect = "MCMXCIV"
+
+[[case]]
+formula = "=ROMAN(499;0)"
+expect = "CDXCIX"
+
+[[case]]
+formula = "=ROMAN(499;1)"
+expect = "LDVLIV"
+
+[[case]]
+formula = "=ROMAN(499;2)"
+expect = "XDIX"
+
+[[case]]
+formula = "=ROMAN(499;3)"
+expect = "VDIV"
+
+[[case]]
+formula = "=ROMAN(499;4)"
+expect = "ID"
+
+[[case]]
+formula = "=ROMAN(0)"
+expect = ""
+
+[[case]]
+formula = "=ROMAN(4000)"
+expect = "Err:502"
+
+[[case]]
+formula = "=ROMAN(-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=ROMAN(5;5)"
+expect = "Err:502"
+
+[[case]]
+formula = "=ROMAN(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = 2024 }
+formula = "=ROMAN(A1)"
+expect = "MMXXIV"
+
+[[case]]
+formula = "=ROMAN(2024.9)"
+expect = "MMXXIV"
+note = "Argument truncated."
+
+[[case]]
+formula = "=ROMAN(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=ROMAN()"
+expect = "Err:511"
+
+[[case]]
+formula = "=ROMAN(3999)"
+expect = "MMMCMXCIX"

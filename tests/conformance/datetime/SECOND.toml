@@ -1,0 +1,51 @@
+[[case]]
+formula = "=SECOND(0.5)"
+expect = 0
+
+[[case]]
+formula = "=SECOND(46314.75)"
+expect = 0
+
+[[case]]
+formula = "=SECOND(TIME(14;30;15))"
+expect = 15
+
+[[case]]
+formula = "=SECOND(46314+TIME(23;59;59))"
+expect = 59
+
+[[case]]
+formula = "=SECOND(-0.25)"
+expect = 0
+note = "Negative serials use the fractional part."
+
+[[case]]
+formula = "=SECOND(0.6041666655092592)"
+expect = 0
+note = "Rounded to the nearest second, no 59.999 artifact."
+
+[[case]]
+formula = "=SECOND(0.99999999)"
+expect = 0
+note = "Rounds up to midnight, wraps to 0."
+
+[[case]]
+formula = "=SECOND(A1)"
+expect = 0
+
+[[case]]
+formula = "=SECOND(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=SECOND(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=SECOND(TRUE)"
+expect = 0
+
+[[case]]
+formula = "=SECOND()"
+expect = "Err:511"

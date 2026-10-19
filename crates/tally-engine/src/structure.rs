@@ -5,9 +5,9 @@
 use std::sync::Arc;
 
 use tally_formula::{adjust_for_structure_change, shifted_origin, StructureChange};
+use tally_model::CellRangeLocal;
 use tally_types::{CellAddr, CellRange, SheetId, MAX_COLS, MAX_ROWS};
 
-use crate::deps::DepIndex;
 use crate::formula_cells::FormulaCellId;
 use crate::storage::{shift_set_delete, shift_set_insert, CellContent, Column, ColumnStore};
 use crate::workbook::{SnapContent, Workbook};
@@ -120,7 +120,7 @@ fn formula_ids(contents: impl IntoIterator<Item = (u32, CellContent)>) -> Vec<Fo
         .into_iter()
         .filter_map(|(_, c)| match c {
             CellContent::Formula(id) => Some(id),
-            CellContent::Value(_) => None,
+            CellContent::Value(_) | CellContent::ArrayPart(_) => None,
         })
         .collect()
 }
@@ -153,6 +153,7 @@ impl Workbook {
                     Some(SnapContent::Formula {
                         formula: fc.formula.clone(),
                         invalid_text: None,
+                        array: fc.array,
                     }),
                 ));
                 rewritten.push((id, Arc::new(f)));
@@ -215,7 +216,7 @@ impl Workbook {
             }
         }
         for id in gone {
-            self.deps.remove(id);
+            self.deps.forget(id);
             self.formulas.remove(id);
         }
         // 3. Move formula cells and install rewritten ASTs.
@@ -239,23 +240,142 @@ impl Workbook {
         touched.dedup();
         // 4. Re-register precedents and dirty.
         for id in touched {
-            let Some(fc) = self.formulas.get(id) else {
-                continue;
-            };
-            let p = self.precedents_of(&fc.formula, fc.addr);
-            let strict = self.strict_precedents_of(&fc.formula, fc.addr);
-            let vol = fc.volatile;
-            self.deps.remove(id);
-            self.deps.add(id, &p);
-            self.deps.set_volatile(id, vol);
             if let Some(fc) = self.formulas.get_mut(id) {
-                fc.precedents = p;
-                fc.strict_precedents = strict;
                 fc.dynamic_deps.clear();
             }
-            self.pending.dirty.push(id);
+            self.refresh_formula(id);
         }
         self.pending.ranges.push(sh.affected());
         old
+    }
+
+    /// Adjusts what is not cells for a row/column change: the sheet's
+    /// merges and AutoFilter (they grow, shrink or go away like area
+    /// references) and every name's references. Callers record
+    /// [`crate::undo::sheet_meta`] and [`crate::undo::names_snapshot`]
+    /// first; [`Self::structure_change`] (and so undo's
+    /// `Change::Structure`) leaves them alone.
+    pub fn adjust_meta_for_structure(&mut self, change: &StructureChange) {
+        if let Some(sh) = Shape::of(change) {
+            if let Some(sheet) = self.sheet_mut(sh.sheet) {
+                let span = |lo: u32, hi: u32| span_after(&sh, lo, hi);
+                let mut merges = Vec::with_capacity(sheet.meta.merges.len());
+                for m in &sheet.meta.merges {
+                    let n = if sh.rows {
+                        span(m.r0, m.r1).map(|(r0, r1)| CellRangeLocal { r0, r1, ..*m })
+                    } else {
+                        span(m.c0, m.c1).map(|(c0, c1)| CellRangeLocal { c0, c1, ..*m })
+                    };
+                    if let Some(n) = n.filter(|n| (n.r0, n.c0) != (n.r1, n.c1)) {
+                        merges.push(n);
+                    }
+                }
+                sheet.meta.merges = merges;
+                if let Some(af) = sheet.meta.auto_filter.take() {
+                    let r = af.range;
+                    let n = if sh.rows {
+                        span(r.r0, r.r1).map(|(r0, r1)| CellRangeLocal { r0, r1, ..r })
+                    } else {
+                        span(r.c0, r.c1).map(|(c0, c1)| CellRangeLocal { c0, c1, ..r })
+                    };
+                    sheet.meta.auto_filter = n.map(|range| {
+                        let columns = if sh.rows {
+                            af.columns
+                        } else {
+                            af.columns
+                                .into_iter()
+                                .filter_map(|(c, f)| point_after(&sh, c).map(|nc| (nc, f)))
+                                .collect()
+                        };
+                        crate::storage::AutoFilter { range, columns }
+                    });
+                }
+            }
+            let sheet = sh.sheet;
+            self.reapply_filter(sheet);
+        }
+        let mut renamed = false;
+        for def in self.names.defs_mut() {
+            let mut f = (*def.formula).clone();
+            if adjust_for_structure_change(&mut f, def.base, change) {
+                def.formula = Arc::new(f);
+                renamed = true;
+            }
+            def.base = shifted_origin(def.base, change);
+        }
+        if renamed {
+            self.refresh_all_name_dependents();
+        }
+    }
+}
+
+/// New position of index `p` after a row/column change, `None` if deleted.
+fn point_after(sh: &Shape, p: u32) -> Option<u32> {
+    if sh.insert {
+        if p >= sh.at {
+            let n = p.checked_add(sh.count)?;
+            (n < sh.limit()).then_some(n)
+        } else {
+            Some(p)
+        }
+    } else {
+        let end = sh.at.saturating_add(sh.count);
+        if p < sh.at {
+            Some(p)
+        } else if p < end {
+            None
+        } else {
+            Some(p - sh.count)
+        }
+    }
+}
+
+/// New span of `lo..=hi` after a row/column change (area semantics:
+/// inserting inside grows it, deleting part shrinks it, deleting all of it
+/// gives `None`).
+pub fn span_after(sh: &Shape, lo: u32, hi: u32) -> Option<(u32, u32)> {
+    let max = sh.limit() - 1;
+    if sh.insert {
+        if sh.at <= lo {
+            let nlo = lo.checked_add(sh.count)?;
+            if nlo > max {
+                return None;
+            }
+            Some((nlo, hi.saturating_add(sh.count).min(max)))
+        } else if sh.at <= hi {
+            Some((lo, hi.saturating_add(sh.count).min(max)))
+        } else {
+            Some((lo, hi))
+        }
+    } else {
+        let d1 = sh.at.saturating_add(sh.count - 1);
+        if d1 < lo {
+            Some((lo - sh.count, hi - sh.count))
+        } else if sh.at > hi {
+            Some((lo, hi))
+        } else if sh.at <= lo && d1 >= hi {
+            None
+        } else {
+            let nlo = lo.min(sh.at);
+            let nhi = if hi > d1 { hi - sh.count } else { sh.at - 1 };
+            Some((nlo, nhi))
+        }
+    }
+}
+
+/// `true` if the change would split the array block `b` (insert strictly
+/// inside it, or delete part of it).
+pub fn splits_block(sh: &Shape, b: &CellRange) -> bool {
+    if b.sheet != sh.sheet {
+        return false;
+    }
+    let (lo, hi) = if sh.rows { (b.r0, b.r1) } else { (b.c0, b.c1) };
+    if sh.insert {
+        sh.at > lo && sh.at <= hi
+    } else {
+        let d1 = sh.at.saturating_add(sh.count - 1);
+        let disjoint = d1 < lo || sh.at > hi;
+        let covers = sh.at <= lo && d1 >= hi;
+        !disjoint && !covers
     }
 }

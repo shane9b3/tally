@@ -1,0 +1,67 @@
+# STDEVP conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+cells = { A1 = 2, A2 = 4, A3 = 4, A4 = 4, A5 = 5, A6 = 5, A7 = 7, A8 = 9 }
+formula = "=STDEVP(A1:A8)"
+expect = 2.0
+tol = 1e-12
+
+[[case]]
+formula = "=STDEVP(1;3;7)"
+expect = 2.494438257849294
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 1, A2 = 3, A3 = 7 }
+formula = "=STDEVP(A1:A3)"
+expect = 2.494438257849294
+tol = 1e-12
+
+[[case]]
+name = "text skipped"
+cells = { A1 = 1, A2 = "x", A3 = 3, A4 = 7 }
+formula = "=STDEVP(A1:A4)"
+expect = 2.494438257849294
+tol = 1e-12
+
+[[case]]
+name = "boolean in reference counts as 1"
+cells = { A1 = 1, A2 = true, A3 = 3 }
+formula = "=STDEVP(A1:A3)"
+expect = 0.9428090415820634
+tol = 1e-12
+
+[[case]]
+name = "empty cell skipped"
+cells = { A1 = 1, A3 = 3 }
+formula = "=STDEVP(A1:A3)"
+expect = 1.0
+tol = 1e-12
+
+[[case]]
+name = "error propagates"
+cells = { A1 = 1, A2 = "=1/0", A3 = 3 }
+formula = "=STDEVP(A1:A3)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "large offset"
+formula = "=STDEVP(1e9+1;1e9+2;1e9+3)"
+expect = 0.816496580927726
+tol = 1e-06
+
+[[case]]
+formula = "=STDEVP()"
+expect = "Err:511"
+
+[[case]]
+name = "single value is allowed"
+formula = "=STDEVP(5)"
+expect = 0.0
+tol = 1e-12
+
+[[case]]
+name = "no values"
+formula = "=STDEVP(A1:A3)"
+expect = "#DIV/0!"
+note = "AOO gives #DIV/0! (LibreOffice too)."

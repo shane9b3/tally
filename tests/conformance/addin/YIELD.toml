@@ -1,0 +1,102 @@
+# YIELD conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx). Secant/bisection search (getYield_).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;95.04287;100;2;0)"
+expect = 0.065
+tol = 1e-06
+
+[[case]]
+name = "inverse of PRICE"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;PRICE(DATE(2008;2;15);DATE(2016;11;15);0.0575;0.08;100;2;1);100;2;1)"
+expect = 0.08
+tol = 1e-09
+
+[[case]]
+name = "at par"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;100;100;1)"
+expect = 0.0574554604331546
+tol = 1e-09
+
+[[case]]
+name = "price must be positive"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;0;100;2)"
+expect = "Err:502"
+
+[[case]]
+name = "negative coupon"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);-0.01;95;100;2)"
+expect = "Err:502"
+
+[[case]]
+name = "basis 0"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;95.04287;100;2;0)"
+expect = 0.0650000068807548
+tol = 1e-09
+
+[[case]]
+name = "basis 1"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;95.04287;100;2;1)"
+expect = 0.0650018206055469
+tol = 1e-09
+
+[[case]]
+name = "basis 2"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;95.04287;100;2;2)"
+expect = 0.0649500552855418
+tol = 1e-09
+
+[[case]]
+name = "basis 3"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;95.04287;100;2;3)"
+expect = 0.0650145923637548
+tol = 1e-09
+
+[[case]]
+name = "basis 4"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;95.04287;100;2;4)"
+expect = 0.0650000068807548
+tol = 1e-09
+
+[[case]]
+name = "basis 5 is illegal"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;95.04287;100;2;5)"
+expect = "Err:502"
+
+[[case]]
+name = "empty text basis takes the default"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;95.04287;100;2;\"\")"
+expect = 0.0650000068807548
+tol = 1e-09
+
+[[case]]
+name = "non-numeric text basis"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;95.04287;100;2;\"x\")"
+expect = "Err:502"
+
+[[case]]
+name = "frequency must be 1, 2 or 4"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;95.04287;100;3;0)"
+expect = "Err:502"
+
+[[case]]
+name = "settlement after maturity"
+formula = "=YIELD(DATE(2016;11;15);DATE(2008;2;15);0.0575;95.04287;100;2;0)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=YIELD(\"x\";DATE(2016;11;15);0.0575;95.04287;100;2;0)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=YIELD(A4;DATE(2016;11;15);0.0575;95.04287;100;2;0)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=YIELD(DATE(2008;2;15);DATE(2016;11;15);0.0575;95.04287;100)"
+expect = "Err:511"

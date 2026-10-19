@@ -65,6 +65,7 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
     let mut wb = WorkbookData {
         sheets: content.sheets,
         styles: styles.styles,
+        names: content.names,
         meta,
         ..WorkbookData::default()
     };

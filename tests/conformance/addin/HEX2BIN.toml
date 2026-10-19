@@ -1,0 +1,46 @@
+# HEX2BIN conformance vectors. Analysis add-in; 10-digit two's complement. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=HEX2BIN(\"FF\")"
+expect = "11111111"
+
+[[case]]
+formula = "=HEX2BIN(\"FF\";10)"
+expect = "0011111111"
+
+[[case]]
+formula = "=HEX2BIN(\"FFFFFFFFFF\")"
+expect = "1111111111"
+
+[[case]]
+formula = "=HEX2BIN(\"1FF\")"
+expect = "111111111"
+
+[[case]]
+formula = "=HEX2BIN(\"200\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=HEX2BIN(\"FFFFFFFE00\")"
+expect = "1000000000"
+
+[[case]]
+formula = "=HEX2BIN(\"FF\";5)"
+expect = "Err:502"
+
+[[case]]
+formula = "=HEX2BIN(\"G\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=HEX2BIN(\"0\")"
+expect = "0"
+
+[[case]]
+name = "lower case"
+formula = "=HEX2BIN(\"ff\")"
+expect = "11111111"
+
+[[case]]
+formula = "=HEX2BIN()"
+expect = "Err:511"

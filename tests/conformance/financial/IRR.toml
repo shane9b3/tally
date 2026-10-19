@@ -1,0 +1,60 @@
+# IRR conformance vectors. Ported AOO 4.1 semantics (interpr2.cxx). Newton, 20 iterations, epsilon 1e-7.
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+cells = { A1 = -70000, A2 = 12000, A3 = 15000, A4 = 18000, A5 = 21000, A6 = 26000 }
+formula = "=IRR(A1:A6)"
+expect = 0.0866309480365
+tol = 1e-10
+
+[[case]]
+name = "inline array"
+formula = "=IRR({-70000;12000;15000;18000;21000;26000})"
+expect = 0.0866309480365
+tol = 1e-10
+aoo_expect = "Err:504"
+note = "AOO 4.1 accepts only references (Err:504 for arrays); Tally follows Excel/LibreOffice."
+
+[[case]]
+name = "Excel reference, 4 years"
+cells = { A1 = -70000, A2 = 12000, A3 = 15000, A4 = 18000, A5 = 21000 }
+formula = "=IRR(A1:A5)"
+expect = -0.0212448482
+tol = 1e-09
+
+[[case]]
+name = "Excel reference with guess"
+cells = { A1 = -70000, A2 = 12000, A3 = 15000 }
+formula = "=IRR(A1:A3;-0.1)"
+expect = -0.443506941
+tol = 1e-08
+
+[[case]]
+name = "text and empty cells skipped"
+cells = { A1 = -100, A2 = "x", A4 = 110 }
+formula = "=IRR(A1:A4)"
+expect = 0.1
+tol = 1e-09
+
+[[case]]
+name = "no sign change"
+cells = { A1 = 100, A2 = 110 }
+formula = "=IRR(A1:A2)"
+expect = "Err:523"
+
+[[case]]
+name = "scalar is not a reference"
+formula = "=IRR(5)"
+expect = "Err:504"
+
+[[case]]
+name = "error in range"
+cells = { A1 = -1, A2 = "=1/0" }
+formula = "=IRR(A1:A2)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=IRR()"
+expect = "Err:511"

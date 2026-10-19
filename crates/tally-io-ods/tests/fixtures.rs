@@ -334,10 +334,7 @@ fn fixtures_round_trip_through_our_writer() {
         let mut buf = Cursor::new(Vec::new());
         write_ods(&wb, &mut buf).unwrap();
         let back = read_ods(Cursor::new(buf.into_inner()), &Limits::default()).unwrap();
-        // Merges are read-only in Phase A; the generator is rewritten.
-        for s in &mut wb.sheets {
-            s.merges.clear();
-        }
+        // The generator is rewritten.
         wb.meta.generator.clone_from(&back.meta.generator);
         assert_eq!(common::normalize(&back), common::normalize(&wb), "{f}");
     }

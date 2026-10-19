@@ -1,0 +1,42 @@
+# BIN2DEC conformance vectors. Analysis add-in; 10-digit two's complement. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=BIN2DEC(\"1111111111\")"
+expect = -1
+
+[[case]]
+formula = "=BIN2DEC(\"1000000000\")"
+expect = -512
+
+[[case]]
+formula = "=BIN2DEC(\"0111111111\")"
+expect = 511
+
+[[case]]
+formula = "=BIN2DEC(\"101\")"
+expect = 5
+
+[[case]]
+name = "number argument"
+formula = "=BIN2DEC(1010)"
+expect = 10
+
+[[case]]
+formula = "=BIN2DEC(\"0\")"
+expect = 0
+
+[[case]]
+formula = "=BIN2DEC(\"12\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=BIN2DEC(\"11111111111\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=BIN2DEC(\"abc\")"
+expect = "Err:502"
+
+[[case]]
+formula = "=BIN2DEC()"
+expect = "Err:511"

@@ -16,9 +16,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use tally_api::{
-    ApiError, ApplyResult, CellBlock, CellEditInfo, CellPos, ClipboardOut, Direction, DocId,
-    DocumentService, FunctionInfo, RangeDto, SelectionDto, SelectionStats, SheetLayout, StyleDto,
-    Suggestion, Transaction, WorkbookInfo,
+    ApiError, ApplyResult, AutoFilterInfo, CellBlock, CellEditInfo, CellPos, ClipboardOut,
+    Direction, DocId, DocumentService, FindQuery, FindResult, FunctionInfo, NameInfo, RangeDto,
+    SelectionDto, SelectionStats, SheetLayout, StyleDto, Suggestion, Transaction, WorkbookInfo,
 };
 use tally_types::SheetId;
 use tauri::{AppHandle, Manager, Runtime};
@@ -277,4 +277,50 @@ pub async fn recent_files(app: AppHandle) -> CmdResult<Vec<String>> {
 #[tauri::command]
 pub async fn list_templates() -> CmdResult<Vec<TemplateInfo>> {
     Ok(files::list_templates())
+}
+
+// ----- v0.2 (1:1 over the new DocumentService methods) ----------------------
+//
+// TODO(WP7): register these in `lib.rs`'s `generate_handler!` (the engine
+// agent may only edit this file); until then they are unused.
+
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn names(app: AppHandle, doc: DocId) -> CmdResult<Vec<NameInfo>> {
+    blocking(app, move |_, st| with_service(st, |s| s.names(doc))).await
+}
+
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn filter_info(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<AutoFilterInfo> {
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.filter_info(doc, sheet))
+    })
+    .await
+}
+
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn find(app: AppHandle, doc: DocId, query: FindQuery) -> CmdResult<FindResult> {
+    blocking(app, move |_, st| with_service(st, |s| s.find(doc, &query))).await
+}
+
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn detect_header(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    range: RangeDto,
+) -> CmdResult<bool> {
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.detect_header(doc, sheet, range))
+    })
+    .await
+}
+
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn recalc_all(app: AppHandle, doc: DocId) -> CmdResult<ApplyResult> {
+    blocking(app, move |_, st| with_service(st, |s| s.recalc_all(doc))).await
 }

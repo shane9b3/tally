@@ -1,6 +1,7 @@
 /**
  * Selection model and keyboard actions as pure functions (no DOM), so they
- * can be unit-tested. Phase A: a single range.
+ * can be unit-tested. A selection is one current range plus, for
+ * Cmd/Ctrl+click multi-selection, earlier ranges in `others`.
  */
 import type { CellPos, RangeDto } from "@tally/bridge";
 import type { Dir, Selection } from "./types";
@@ -49,8 +50,18 @@ export function sameRange(a: RangeDto, b: RangeDto): boolean {
   return a.r0 === b.r0 && a.c0 === b.c0 && a.r1 === b.r1 && a.c1 === b.c1;
 }
 
+function sameOthers(a: RangeDto[] | undefined, b: RangeDto[] | undefined): boolean {
+  const x = a ?? [];
+  const y = b ?? [];
+  return x.length === y.length && x.every((r, i) => {
+    const o = y[i];
+    return o !== undefined && sameRange(r, o);
+  });
+}
+
 export function sameSelection(a: Selection, b: Selection): boolean {
   return (
+    sameOthers(a.others, b.others) &&
     sameRange(a.range, b.range) &&
     a.active.r === b.active.r &&
     a.active.c === b.active.c &&
@@ -79,9 +90,29 @@ export function extentCorner(sel: Selection): CellPos {
   return { r: anchor.r === range.r0 ? range.r1 : range.r0, c: anchor.c === range.c0 ? range.c1 : range.c0 };
 }
 
-/** Extends the selection from its anchor to `cell` (Shift+click, drag). */
+/** Extends the current range from its anchor to `cell` (Shift+click, drag); earlier ranges stay. */
 export function extendTo(sel: Selection, cell: CellPos): Selection {
-  return { range: rangeOf(sel.anchor, cell), active: { ...sel.anchor }, anchor: { ...sel.anchor } };
+  const next: Selection = { range: rangeOf(sel.anchor, cell), active: { ...sel.anchor }, anchor: { ...sel.anchor } };
+  if (sel.others && sel.others.length > 0) next.others = sel.others.map((r) => ({ ...r }));
+  return next;
+}
+
+/** Every range of the selection, oldest first (the current range last). */
+export function allRanges(sel: Selection): RangeDto[] {
+  return [...(sel.others ?? []), sel.range];
+}
+
+/**
+ * Cmd/Ctrl+click: keeps the current ranges and starts a new one at `cell`
+ * (or at `range`, e.g. a header click).
+ */
+export function addRange(sel: Selection, cell: CellPos, range?: RangeDto): Selection {
+  return {
+    others: allRanges(sel).map((r) => ({ ...r })),
+    range: range ? { ...range } : { r0: cell.r, c0: cell.c, r1: cell.r, c1: cell.c },
+    active: { ...cell },
+    anchor: { ...cell },
+  };
 }
 
 /** Whole rows `r0..=r1` (header click); `active` defaults to the first cell. */

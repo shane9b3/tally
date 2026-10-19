@@ -157,6 +157,38 @@ impl Document {
         }
     }
 
+    /// Recalculates, then re-applies the AutoFilters whose area changed.
+    fn recalc_and_filter(&mut self, fx: &mut Effects) -> RecalcReport {
+        let report = recalc(&mut self.wb);
+        for s in self.wb.reapply_filters_touching(&report.changed) {
+            fx.layout(s);
+        }
+        report
+    }
+
+    /// Hard recalculation: rebuilds every formula's dependencies (dynamic
+    /// ones are collected again) and recomputes everything without a
+    /// budget. Clears [`Self::recalc_incomplete`].
+    pub fn recalc_all(&mut self) -> ApplyResult {
+        let ids: Vec<crate::formula_cells::FormulaCellId> = self.wb.formulas.keys().collect();
+        for id in ids {
+            if let Some(f) = self.wb.formulas.get_mut(id) {
+                f.dynamic_deps.clear();
+            }
+            self.wb.refresh_formula(id);
+        }
+        let report = hard_recalc_with(&mut self.wb, &RecalcBudget::unbounded());
+        self.recalc_incomplete = false;
+        let mut fx = Effects::default();
+        let sheets: Vec<SheetId> = self.wb.sheets.iter().map(|s| s.id).collect();
+        for s in sheets {
+            if self.wb.reapply_filter(s) {
+                fx.layout(s);
+            }
+        }
+        self.result(report, fx, Vec::new(), None)
+    }
+
     /// Applies a transaction as one undo step.
     pub fn apply(&mut self, tx: Transaction, clip: Option<&ClipSnapshot>) -> ApplyResult {
         let mut fx = Effects::default();
@@ -171,8 +203,15 @@ impl Document {
                     message: e.message,
                 }),
             }
+            for w in fx.warnings.drain(..) {
+                errors.push(OpError {
+                    op_index: i as u32,
+                    code: w.code,
+                    message: w.message,
+                });
+            }
         }
-        let report = recalc(&mut self.wb);
+        let report = self.recalc_and_filter(&mut fx);
         if !changes.is_empty() {
             self.undo.push(UndoRecord {
                 label: tx.label.clone(),
@@ -198,7 +237,7 @@ impl Document {
                 redo.push(inv);
             }
         }
-        let report = recalc(&mut self.wb);
+        let report = self.recalc_and_filter(&mut fx);
         let selection = rec.selection_before.clone();
         self.undo.push_redo(UndoRecord {
             label: rec.label,
@@ -223,7 +262,7 @@ impl Document {
                 undo.push(inv);
             }
         }
-        let report = recalc(&mut self.wb);
+        let report = self.recalc_and_filter(&mut fx);
         let selection = rec.selection_after.clone();
         self.undo.push_undo_keep_redo(UndoRecord {
             label: rec.label,

@@ -1,0 +1,59 @@
+# LOGNORMDIST conformance vectors. Schema: docs/contributing-functions.md.
+# Reference numbers computed independently with mpmath (50 digits).
+
+[[case]]
+name = "defaults"
+formula = "=LOGNORMDIST(1)"
+expect = 0.5
+tol = 5e-14
+
+[[case]]
+name = "cdf"
+formula = "=LOGNORMDIST(2;0;1)"
+expect = 0.7558914042144173
+tol = 8e-14
+
+[[case]]
+name = "pdf"
+formula = "=LOGNORMDIST(2;0;1;FALSE)"
+expect = 0.1568740192789811
+tol = 2e-14
+
+[[case]]
+name = "mean only"
+formula = "=LOGNORMDIST(2;1)"
+expect = 0.3794777011200849
+tol = 4e-14
+
+[[case]]
+name = "x = 0 cdf"
+formula = "=LOGNORMDIST(0;0;1)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "negative cdf"
+formula = "=LOGNORMDIST(-1;0;1;TRUE)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "x = 0 pdf"
+formula = "=LOGNORMDIST(0;0;1;FALSE)"
+expect = "Err:502"
+
+[[case]]
+name = "stdev zero"
+formula = "=LOGNORMDIST(2;0;0)"
+expect = "Err:502"
+
+[[case]]
+name = "empty stdev is 0"
+formula = "=LOGNORMDIST(2;;)"
+expect = "Err:502"
+note = "AOO counts a written but empty argument, which reads as 0/FALSE (GetDouble on svMissing)."
+
+[[case]]
+name = "text"
+formula = "=LOGNORMDIST(\"x\")"
+expect = "#VALUE!"

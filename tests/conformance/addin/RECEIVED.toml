@@ -1,0 +1,95 @@
+# RECEIVED conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000;0.0575;2)"
+expect = 1014584.65
+tol = 0.01
+
+[[case]]
+name = "basis omitted"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000;0.0575)"
+expect = 1014420.26586264
+tol = 1.01442026586264e-06
+
+[[case]]
+name = "discount must be positive"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000;0;2)"
+expect = "Err:502"
+
+[[case]]
+name = "no settlement/maturity order check (AOO)"
+formula = "=RECEIVED(DATE(2008;5;15);DATE(2008;2;15);1000000;0.0575;2)"
+expect = 985828.712261245
+tol = 9.85828712261245e-07
+note = "AOO getReceived does not test settlement < maturity."
+
+[[case]]
+name = "discount exceeds the term"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2028;5;15);1000000;0.0575;2)"
+expect = -5520414.03105232
+tol = 5.52041403105232e-06
+note = "1 - discount * years < 0: AOO returns the (negative) finite amount."
+
+[[case]]
+name = "basis 0"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000;0.0575;0)"
+expect = 1014420.26586264
+tol = 1.01442026586264e-06
+
+[[case]]
+name = "basis 1"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000;0.0575;1)"
+expect = 1014342.13261276
+tol = 1.0143421326127599e-06
+
+[[case]]
+name = "basis 2"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000;0.0575;2)"
+expect = 1014584.6544071
+tol = 1.0145846544071e-06
+
+[[case]]
+name = "basis 3"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000;0.0575;3)"
+expect = 1014381.99124574
+tol = 1.01438199124574e-06
+
+[[case]]
+name = "basis 4"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000;0.0575;4)"
+expect = 1014584.6544071
+tol = 1.0145846544071e-06
+
+[[case]]
+name = "basis 5 is illegal"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000;0.0575;5)"
+expect = "Err:502"
+
+[[case]]
+name = "empty text basis takes the default"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000;0.0575;\"\")"
+expect = 1014420.26586264
+tol = 1.01442026586264e-06
+
+[[case]]
+name = "non-numeric text basis"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000;0.0575;\"x\")"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=RECEIVED(\"x\";DATE(2008;5;15);1000000;0.0575;2)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=RECEIVED(A4;DATE(2008;5;15);1000000;0.0575;2)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=RECEIVED(DATE(2008;2;15);DATE(2008;5;15);1000000)"
+expect = "Err:511"

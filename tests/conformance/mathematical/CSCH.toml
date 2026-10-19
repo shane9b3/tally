@@ -1,0 +1,61 @@
+# CSCH conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=CSCH(0.5)"
+expect = 1.9190347513349437
+
+[[case]]
+name = "numeric text"
+formula = "=CSCH(\"0.5\")"
+expect = 1.9190347513349437
+
+[[case]]
+name = "non-numeric text"
+formula = "=CSCH(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=CSCH(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=CSCH(A1)"
+expect = 0.8509181282393216
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=CSCH(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 0.5 }
+origin = "C2"
+formula = "=CSCH(A1:A2)"
+expect = 1.9190347513349437
+
+[[case]]
+name = "no arguments"
+formula = "=CSCH()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=CSCH(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=CSCH(0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=CSCH(1)"
+expect = 0.8509181282393216
+
+[[case]]
+formula = "=CSCH(-2)"
+expect = -0.27572056477178325

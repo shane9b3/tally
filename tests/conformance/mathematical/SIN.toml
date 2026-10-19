@@ -1,0 +1,62 @@
+# SIN conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=SIN(0.5)"
+expect = 0.479425538604203
+
+[[case]]
+name = "numeric text"
+formula = "=SIN(\"0.5\")"
+expect = 0.479425538604203
+
+[[case]]
+name = "non-numeric text"
+formula = "=SIN(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=SIN(A1)"
+expect = 0
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=SIN(A1)"
+expect = 0.8414709848078965
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=SIN(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 0.5 }
+origin = "C2"
+formula = "=SIN(A1:A2)"
+expect = 0.479425538604203
+
+[[case]]
+name = "no arguments"
+formula = "=SIN()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=SIN(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=SIN(PI()/2)"
+expect = 1
+
+[[case]]
+formula = "=SIN(PI())"
+expect = 0
+tol = 1e-15
+
+[[case]]
+formula = "=SIN(-1)"
+expect = -0.8414709848078965

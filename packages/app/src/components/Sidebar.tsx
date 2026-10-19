@@ -1,4 +1,8 @@
-/** Left sidebar: new workbook, my workbooks (current + recent), templates, tip card. */
+/**
+ * Left sidebar: new workbook, the open workbook, "Open recent" (paths from
+ * `recentFiles`, with when each was last open here, kept per viewer in
+ * localStorage by path), templates, tip card.
+ */
 import { useEffect, useMemo, useState } from "react";
 import { cx, useController } from "../context";
 import { relativeTime } from "../hooks";
@@ -19,6 +23,17 @@ function dotFor(name: string): string {
 
 function baseName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
+}
+
+/** Display name of a recent file: its base name without the spreadsheet extension. */
+export function displayName(path: string): string {
+  return baseName(path).replace(/\.(ods|xlsx|csv)$/i, "");
+}
+
+/** The folder a recent file lives in (tooltip/secondary text). */
+function folderOf(path: string): string {
+  const parts = path.split(/[\\/]/);
+  return parts.length > 1 ? (parts[parts.length - 2] ?? "") : "";
 }
 
 /** Per-viewer convenience: when each recent file was last open here. */
@@ -90,20 +105,33 @@ export function Sidebar({ inset }: { inset: boolean }) {
               </button>
             </li>
           ) : null}
-          {others.map((p) => {
-            const t = seen[p];
-            return (
-              <li key={p}>
-                <button type="button" className={styles.row} title={p} onClick={() => void ctl.openRecent(p)}>
-                  <span className={styles.dot} style={{ background: dotFor(baseName(p)) }} />
-                  <span className={styles.rowTitle}>{baseName(p).replace(/\.(ods|csv)$/i, "")}</span>
-                  <span className={styles.meta}>{t ? relativeTime(t) : ""}</span>
-                </button>
-              </li>
-            );
-          })}
         </ul>
       </section>
+
+      {others.length > 0 ? (
+        <section className={styles.section} data-testid="open-recent">
+          <h3 className={styles.heading}>Open recent</h3>
+          <ul className={styles.list}>
+            {others.map((p) => {
+              const t = seen[p];
+              return (
+                <li key={p}>
+                  <button
+                    type="button"
+                    className={styles.row}
+                    title={folderOf(p) ? `${p}\n(in ${folderOf(p)})` : p}
+                    onClick={() => void ctl.openRecent(p)}
+                  >
+                    <span className={styles.dot} style={{ background: dotFor(baseName(p)) }} />
+                    <span className={styles.rowTitle}>{displayName(p)}</span>
+                    <span className={styles.meta}>{t ? relativeTime(t) : ""}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
 
       {templates.length > 0 ? (
         <section className={styles.section}>

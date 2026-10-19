@@ -5,10 +5,12 @@
 //! - `gen-bindings [--check]`: regenerate the ts-rs bindings into
 //!   `packages/bridge/src/generated`; with `--check`, fail if they differ
 //!   from the committed files.
-//! - `function-coverage [--batch N] [--check]`: compare the function registry
-//!   (listed by `tally-cli functions`) with `docs/functions/master-list.toml`
-//!   and print implemented/missing per category; `--check` fails when
-//!   anything in scope is missing.
+//! - `function-coverage [--batch N] [--check] [--json] [--doc]`: compare the
+//!   function registry (listed by `tally-cli functions`) with
+//!   `docs/functions/master-list.toml` and print implemented/total per
+//!   category and every missing name; `--json` prints the same report as
+//!   JSON, `--doc` (re)writes `docs/functions/coverage.md`, and `--check`
+//!   fails when anything in scope is missing.
 //!
 //! The argument parser and the master-list reader are hand-rolled on
 //! purpose: xtask has no dependencies (the registry is read through the CLI).
@@ -21,15 +23,26 @@ usage: cargo xtask <command> [options]
 
 commands:
   gen-bindings [--check]        regenerate TS bindings (--check: fail if stale)
-  function-coverage [--batch N] [--check]
+  function-coverage [--batch N] [--check] [--json] [--doc]
                                 report implemented vs AOO function list
+                                (--json: machine-readable; --doc: write
+                                docs/functions/coverage.md)
   help                          show this message";
+
+/// Options of `function-coverage`.
+#[derive(Debug, PartialEq, Default, Clone, Copy)]
+struct CoverageOpts {
+    batch: Option<u32>,
+    check: bool,
+    json: bool,
+    doc: bool,
+}
 
 /// A parsed command line.
 #[derive(Debug, PartialEq)]
 enum Task {
     GenBindings { check: bool },
-    FunctionCoverage { batch: Option<u32>, check: bool },
+    FunctionCoverage(CoverageOpts),
     Help,
 }
 
@@ -49,19 +62,23 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Task, String> {
             Ok(Task::GenBindings { check })
         }
         "function-coverage" => {
-            let mut batch = None;
-            let mut check = false;
+            let mut o = CoverageOpts::default();
             while let Some(a) = args.next() {
                 match a.as_str() {
                     "--batch" => {
                         let v = args.next().ok_or("--batch needs a value")?;
-                        batch = Some(v.parse().map_err(|_| format!("--batch: bad number {v}"))?);
+                        o.batch = Some(v.parse().map_err(|_| format!("--batch: bad number {v}"))?);
                     }
-                    "--check" => check = true,
+                    "--check" => o.check = true,
+                    "--json" => o.json = true,
+                    "--doc" => o.doc = true,
                     other => return Err(format!("function-coverage: unknown option {other}")),
                 }
             }
-            Ok(Task::FunctionCoverage { batch, check })
+            if o.doc && o.batch.is_some() {
+                return Err("function-coverage: --doc covers all functions, not a batch".to_owned());
+            }
+            Ok(Task::FunctionCoverage(o))
         }
         "help" | "-h" | "--help" => Ok(Task::Help),
         other => Err(format!("unknown command {other}")),
@@ -131,10 +148,15 @@ struct MasterEntry {
     name: String,
     category: String,
     batch: Option<u32>,
+    /// `source = "extension"`: not in the AOO 4.1 list (IFERROR, IFNA).
+    tally_only: bool,
+    /// `extension = true` (also NUMBERVALUE, listed but unimplemented by AOO).
+    extension: bool,
 }
 
 /// Reads the `[[function]]` tables of `docs/functions/master-list.toml`
-/// (flat `key = value` lines; only `name`, `category` and `batch` are used).
+/// (flat `key = value` lines; `name`, `category`, `batch`, `source` and
+/// `extension` are used).
 fn parse_master_list(text: &str) -> Vec<MasterEntry> {
     let mut out: Vec<MasterEntry> = Vec::new();
     let mut cur: Option<MasterEntry> = None;
@@ -148,6 +170,8 @@ fn parse_master_list(text: &str) -> Vec<MasterEntry> {
                 name: String::new(),
                 category: String::new(),
                 batch: None,
+                tally_only: false,
+                extension: false,
             });
             continue;
         }
@@ -160,6 +184,8 @@ fn parse_master_list(text: &str) -> Vec<MasterEntry> {
             "name" => e.name = unquoted,
             "category" => e.category = unquoted,
             "batch" => e.batch = v.parse().ok(),
+            "source" => e.tally_only = unquoted == "extension",
+            "extension" => e.extension = v == "true",
             _ => {}
         }
     }
@@ -179,37 +205,248 @@ fn parse_registry_listing(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Coverage report: per category `(implemented, total, missing names)`.
-fn coverage(
-    master: &[MasterEntry],
-    registered: &[String],
-    batch: Option<u32>,
-) -> Vec<(String, usize, usize, Vec<String>)> {
-    let mut cats: Vec<(String, usize, usize, Vec<String>)> = Vec::new();
+/// Coverage of one category.
+#[derive(Debug, Clone, PartialEq)]
+struct CategoryCoverage {
+    category: String,
+    implemented: usize,
+    total: usize,
+    /// Of `total`, functions that are not in AOO 4.1's list (IFERROR, IFNA).
+    tally_only: usize,
+    /// Every master-list name of the category, with whether it is registered.
+    functions: Vec<(String, bool)>,
+}
+
+impl CategoryCoverage {
+    fn missing(&self) -> Vec<&str> {
+        self.functions
+            .iter()
+            .filter(|f| !f.1)
+            .map(|f| f.0.as_str())
+            .collect()
+    }
+}
+
+/// The whole report.
+#[derive(Debug, Clone, PartialEq)]
+struct Report {
+    scope: String,
+    categories: Vec<CategoryCoverage>,
+    /// Registered names that are not in the master list.
+    unknown: Vec<String>,
+}
+
+impl Report {
+    fn implemented(&self) -> usize {
+        self.categories.iter().map(|c| c.implemented).sum()
+    }
+    fn total(&self) -> usize {
+        self.categories.iter().map(|c| c.total).sum()
+    }
+    fn tally_only(&self) -> usize {
+        self.categories.iter().map(|c| c.tally_only).sum()
+    }
+    fn missing(&self) -> Vec<&str> {
+        self.categories.iter().flat_map(|c| c.missing()).collect()
+    }
+}
+
+/// Coverage report, per category in master-list (AOO wizard) order.
+fn coverage(master: &[MasterEntry], registered: &[String], batch: Option<u32>) -> Report {
+    let mut cats: Vec<CategoryCoverage> = Vec::new();
     for e in master
         .iter()
         .filter(|e| batch.is_none() || e.batch == batch)
     {
-        let idx = match cats.iter().position(|c| c.0 == e.category) {
+        let idx = match cats.iter().position(|c| c.category == e.category) {
             Some(i) => i,
             None => {
-                cats.push((e.category.clone(), 0, 0, Vec::new()));
+                cats.push(CategoryCoverage {
+                    category: e.category.clone(),
+                    implemented: 0,
+                    total: 0,
+                    tally_only: 0,
+                    functions: Vec::new(),
+                });
                 cats.len() - 1
             }
         };
         let c = &mut cats[idx];
-        c.2 += 1;
-        if registered.contains(&e.name.to_ascii_uppercase()) {
-            c.1 += 1;
-        } else {
-            c.3.push(e.name.clone());
-        }
+        c.total += 1;
+        c.tally_only += usize::from(e.tally_only);
+        let done = registered.contains(&e.name.to_ascii_uppercase());
+        c.implemented += usize::from(done);
+        c.functions.push((e.name.clone(), done));
     }
-    cats.sort_by(|a, b| a.0.cmp(&b.0));
-    cats
+    let unknown = registered
+        .iter()
+        .filter(|n| !master.iter().any(|e| e.name.eq_ignore_ascii_case(n)))
+        .cloned()
+        .collect();
+    Report {
+        scope: batch.map_or_else(|| "all functions".to_owned(), |b| format!("batch {b}")),
+        categories: cats,
+        unknown,
+    }
 }
 
-fn function_coverage(batch: Option<u32>, check: bool) -> Result<(), String> {
+fn pct(done: usize, total: usize) -> f64 {
+    if total == 0 {
+        100.0
+    } else {
+        done as f64 * 100.0 / total as f64
+    }
+}
+
+/// The human-readable report.
+fn render_text(r: &Report) -> String {
+    let mut out = format!("function coverage ({}):\n", r.scope);
+    for c in &r.categories {
+        out.push_str(&format!(
+            "  {:<14} {:>3}/{:<3}\n",
+            c.category, c.implemented, c.total
+        ));
+    }
+    let (done, total) = (r.implemented(), r.total());
+    out.push_str(&format!(
+        "total: {done}/{total} ({:.1}%; {} AOO 4.1 + {} extensions)\n",
+        pct(done, total),
+        total - r.tally_only(),
+        r.tally_only()
+    ));
+    let missing = r.missing();
+    if missing.is_empty() {
+        out.push_str("missing: none\n");
+    } else {
+        out.push_str(&format!("missing ({}):\n", missing.len()));
+        for c in &r.categories {
+            let m = c.missing();
+            if !m.is_empty() {
+                out.push_str(&format!("  {}: {}\n", c.category, m.join(", ")));
+            }
+        }
+    }
+    if !r.unknown.is_empty() {
+        out.push_str(&format!(
+            "registered but not in the master list: {}\n",
+            r.unknown.join(", ")
+        ));
+    }
+    out
+}
+
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn json_list<'a>(items: impl IntoIterator<Item = &'a str>) -> String {
+    let v: Vec<String> = items.into_iter().map(json_str).collect();
+    format!("[{}]", v.join(", "))
+}
+
+/// The report as JSON (hand-rolled: xtask has no dependencies).
+fn render_json(r: &Report) -> String {
+    let cats: Vec<String> = r
+        .categories
+        .iter()
+        .map(|c| {
+            format!(
+                "    {{\"category\": {}, \"implemented\": {}, \"total\": {}, \"extensions\": {}, \"missing\": {}}}",
+                json_str(&c.category),
+                c.implemented,
+                c.total,
+                c.tally_only,
+                json_list(c.missing())
+            )
+        })
+        .collect();
+    format!(
+        "{{\n  \"scope\": {},\n  \"implemented\": {},\n  \"total\": {},\n  \"aoo_total\": {},\n  \"extensions\": {},\n  \"missing\": {},\n  \"unknown\": {},\n  \"categories\": [\n{}\n  ]\n}}\n",
+        json_str(&r.scope),
+        r.implemented(),
+        r.total(),
+        r.total() - r.tally_only(),
+        r.tally_only(),
+        json_list(r.missing()),
+        json_list(r.unknown.iter().map(String::as_str)),
+        cats.join(",\n")
+    )
+}
+
+/// `docs/functions/coverage.md`.
+fn render_doc(r: &Report, master: &[MasterEntry]) -> String {
+    let ext: Vec<&str> = master
+        .iter()
+        .filter(|e| e.extension)
+        .map(|e| e.name.as_str())
+        .collect();
+    let (done, total) = (r.implemented(), r.total());
+    let mut out = String::from(
+        "<!-- GENERATED by `cargo xtask function-coverage --doc` from\n     docs/functions/master-list.toml and the registry. Do not edit by hand. -->\n\n# Function coverage\n\n",
+    );
+    out.push_str(&format!(
+        "{done} of {total} functions implemented ({:.1}%): the {} functions of Apache OpenOffice 4.1 \
+         (docs/calc-functions.json) plus {} extensions that AOO lacks. Functions marked \
+         `extension = true` in the master list: {}.\n\n",
+        pct(done, total),
+        total - r.tally_only(),
+        r.tally_only(),
+        ext.join(", ")
+    ));
+    out.push_str("| Category | Implemented | Total | Missing |\n|---|---:|---:|---|\n");
+    for c in &r.categories {
+        let m = c.missing();
+        out.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            c.category,
+            c.implemented,
+            c.total,
+            if m.is_empty() {
+                "-".to_owned()
+            } else {
+                m.join(", ")
+            }
+        ));
+    }
+    out.push_str(&format!("| **Total** | **{done}** | **{total}** | |\n"));
+    for c in &r.categories {
+        out.push_str(&format!(
+            "\n## {} ({}/{})\n\n",
+            c.category, c.implemented, c.total
+        ));
+        let names: Vec<String> = c
+            .functions
+            .iter()
+            .map(|(n, ok)| {
+                let mark = if ext.contains(&n.as_str()) { "\\*" } else { "" };
+                if *ok {
+                    format!("{n}{mark}")
+                } else {
+                    format!("~~{n}~~{mark}")
+                }
+            })
+            .collect();
+        out.push_str(&names.join(", "));
+        out.push('\n');
+    }
+    out.push_str(
+        "\n\\* extension (not implemented by AOO 4.1). Struck-through names are missing.\n",
+    );
+    out
+}
+
+fn function_coverage(o: CoverageOpts) -> Result<(), String> {
     let root = workspace_root();
     let master_path = root.join("docs/functions/master-list.toml");
     let text = std::fs::read_to_string(&master_path)
@@ -228,56 +465,40 @@ fn function_coverage(batch: Option<u32>, check: bool) -> Result<(), String> {
         ));
     }
     let registered = parse_registry_listing(&String::from_utf8_lossy(&out.stdout));
-    let scope = batch.map_or_else(|| "all functions".to_owned(), |b| format!("batch {b}"));
-    let report = coverage(&master, &registered, batch);
-    let (mut done, mut total) = (0usize, 0usize);
-    println!("function coverage ({scope}):");
-    for (cat, d, t, missing) in &report {
-        done += d;
-        total += t;
-        println!("  {cat:<14} {d:>3}/{t:<3}");
-        if !missing.is_empty() && (batch.is_some() || missing.len() <= 12) {
-            println!("      missing: {}", missing.join(", "));
+    let report = coverage(&master, &registered, o.batch);
+    if o.json {
+        print!("{}", render_json(&report));
+    } else {
+        print!("{}", render_text(&report));
+        if let Some(b) = o.batch {
+            let mut names: Vec<&MasterEntry> =
+                master.iter().filter(|e| e.batch == Some(b)).collect();
+            names.sort_by(|a, b| a.name.cmp(&b.name));
+            let list: Vec<String> = names
+                .iter()
+                .map(|e| {
+                    let mark = if registered.contains(&e.name.to_ascii_uppercase()) {
+                        "+"
+                    } else {
+                        "-"
+                    };
+                    format!("{mark}{}", e.name)
+                })
+                .collect();
+            println!("  batch {b} ({}): {}", names.len(), list.join(" "));
         }
     }
-    if let Some(b) = batch {
-        let mut names: Vec<&MasterEntry> = master.iter().filter(|e| e.batch == Some(b)).collect();
-        names.sort_by(|a, b| a.name.cmp(&b.name));
-        let list: Vec<String> = names
-            .iter()
-            .map(|e| {
-                let mark = if registered.contains(&e.name.to_ascii_uppercase()) {
-                    "+"
-                } else {
-                    "-"
-                };
-                format!("{mark}{}", e.name)
-            })
-            .collect();
-        println!("  batch {b} ({}): {}", names.len(), list.join(" "));
+    if o.doc {
+        let path = root.join("docs/functions/coverage.md");
+        std::fs::write(&path, render_doc(&report, &master))
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        if !o.json {
+            println!("wrote {}", path.display());
+        }
     }
-    let pct = if total == 0 {
-        100.0
-    } else {
-        done as f64 * 100.0 / total as f64
-    };
-    println!("total: {done}/{total} ({pct:.1}%)");
-    let unknown: Vec<&String> = registered
-        .iter()
-        .filter(|n| !master.iter().any(|e| e.name.eq_ignore_ascii_case(n)))
-        .collect();
-    if !unknown.is_empty() {
-        println!(
-            "registered but not in the master list: {}",
-            unknown
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
-    if check && done < total {
-        return Err(format!("{} function(s) missing in {scope}", total - done));
+    let missing = report.total() - report.implemented();
+    if o.check && missing > 0 {
+        return Err(format!("{missing} function(s) missing in {}", report.scope));
     }
     Ok(())
 }
@@ -296,7 +517,7 @@ fn main() -> ExitCode {
             Ok(())
         }
         Task::GenBindings { check } => gen_bindings(check),
-        Task::FunctionCoverage { batch, check } => function_coverage(batch, check),
+        Task::FunctionCoverage(o) => function_coverage(o),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -327,18 +548,25 @@ mod tests {
         );
         assert_eq!(
             parse(&["function-coverage"]),
-            Ok(Task::FunctionCoverage {
-                batch: None,
-                check: false
-            })
+            Ok(Task::FunctionCoverage(CoverageOpts::default()))
         );
         assert_eq!(
             parse(&["function-coverage", "--batch", "0", "--check"]),
-            Ok(Task::FunctionCoverage {
+            Ok(Task::FunctionCoverage(CoverageOpts {
                 batch: Some(0),
-                check: true
-            })
+                check: true,
+                ..CoverageOpts::default()
+            }))
         );
+        assert_eq!(
+            parse(&["function-coverage", "--json", "--doc"]),
+            Ok(Task::FunctionCoverage(CoverageOpts {
+                json: true,
+                doc: true,
+                ..CoverageOpts::default()
+            }))
+        );
+        assert!(parse(&["function-coverage", "--doc", "--batch", "0"]).is_err());
         assert_eq!(parse(&["--help"]), Ok(Task::Help));
     }
 
@@ -359,20 +587,46 @@ batch = 0
 [[function]]
 name = "DSUM"
 category = "Database"
+source = "builtin"
+extension = false
+
+[[function]]
+name = "IFNA"
+category = "Logical"
+source = "extension"
+extension = true
 "#;
         let m = parse_master_list(text);
-        assert_eq!(m.len(), 3);
+        assert_eq!(m.len(), 4);
         assert_eq!(m[0].batch, Some(0));
         assert_eq!(m[2].batch, None);
-        let reg = parse_registry_listing("SUM\tMathematical\tSUM(number, ...)\n");
-        assert_eq!(reg, vec!["SUM".to_owned()]);
+        assert!(m[3].tally_only && m[3].extension && !m[0].extension);
+        let reg = parse_registry_listing("SUM\tMathematical\tSUM(number, ...)\nZZZ\tText\tZZZ()\n");
+        assert_eq!(reg, vec!["SUM".to_owned(), "ZZZ".to_owned()]);
         let all = coverage(&m, &reg, None);
-        assert_eq!(all.len(), 2);
-        assert_eq!(all[0].0, "Database");
-        assert_eq!((all[1].1, all[1].2), (1, 2));
-        assert_eq!(all[1].3, vec!["ABS".to_owned()]);
+        assert_eq!(all.categories.len(), 3);
+        assert_eq!(all.categories[0].category, "Mathematical");
+        let math = &all.categories[0];
+        assert_eq!((math.implemented, math.total), (1, 2));
+        assert_eq!(math.missing(), vec!["ABS"]);
+        assert_eq!(all.missing(), vec!["ABS", "DSUM", "IFNA"]);
+        assert_eq!(
+            (all.implemented(), all.total(), all.tally_only()),
+            (1, 4, 1)
+        );
+        assert_eq!(all.unknown, vec!["ZZZ".to_owned()]);
         let b0 = coverage(&m, &reg, Some(0));
-        assert_eq!(b0.len(), 1);
+        assert_eq!(b0.categories.len(), 1);
+        let text = render_text(&all);
+        assert!(text.contains("total: 1/4 (25.0%; 3 AOO 4.1 + 1 extensions)"));
+        assert!(text.contains("  Database: DSUM"));
+        let json = render_json(&all);
+        assert!(json.contains("\"missing\": [\"ABS\", \"DSUM\", \"IFNA\"]"));
+        assert!(json.contains("\"unknown\": [\"ZZZ\"]"));
+        let doc = render_doc(&all, &m);
+        assert!(doc.contains("| Mathematical | 1 | 2 | ABS |"));
+        assert!(doc.contains("~~IFNA~~\\*"));
+        assert_eq!(json_str("a\"b\\"), "\"a\\\"b\\\\\"");
     }
 
     #[test]

@@ -1,9 +1,13 @@
 //! ODS (OpenDocument Spreadsheet) import and export for Tally (WP5).
 //!
 //! [`read_ods`] converts an ODS package into [`tally_model::WorkbookData`];
-//! [`write_ods`] does the reverse. The Phase A subset is supported (values,
-//! formulas with cached results, cell styles incl. number formats, column
-//! widths, sheet names/order, active sheet); everything else is skipped.
+//! [`write_ods`] does the reverse. Supported: values, formulas with cached
+//! results, array formulas (`table:number-matrix-*-spanned`), cell styles
+//! incl. number formats and borders, column widths, row heights and
+//! visibility, merges (spans + `table:covered-table-cell`), frozen panes
+//! (settings.xml), named ranges and expressions, AutoFilters
+//! (`table:database-range` with `table:filter`, filter-hidden rows), sheet
+//! names/order and the active sheet; everything else is skipped.
 //!
 //! Reading untrusted files is hardened as described in `docs/security.md`:
 //! zip-bomb, ratio and entry-count limits enforced while streaming, DOCTYPE

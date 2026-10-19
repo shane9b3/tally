@@ -1,0 +1,61 @@
+# SECH conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=SECH(0.5)"
+expect = 0.886818883970074
+
+[[case]]
+name = "numeric text"
+formula = "=SECH(\"0.5\")"
+expect = 0.886818883970074
+
+[[case]]
+name = "non-numeric text"
+formula = "=SECH(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=SECH(A1)"
+expect = 1
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=SECH(A1)"
+expect = 0.6480542736638855
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=SECH(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 0.5 }
+origin = "C2"
+formula = "=SECH(A1:A2)"
+expect = 0.886818883970074
+
+[[case]]
+name = "no arguments"
+formula = "=SECH()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=SECH(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=SECH(0)"
+expect = 1
+
+[[case]]
+formula = "=SECH(1)"
+expect = 0.6480542736638855
+
+[[case]]
+formula = "=SECH(-3)"
+expect = 0.0993279274194332

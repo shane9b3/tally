@@ -1,0 +1,42 @@
+[[case]]
+cells = { A1 = "=1+1", A2 = 5, A3 = { text = "=x" }, A4 = "=A1" }
+formula = "=ISFORMULA(A1)"
+expect = true
+
+[[case]]
+cells = { A2 = 5 }
+formula = "=ISFORMULA(A2)"
+expect = false
+
+[[case]]
+cells = { A3 = { text = "=x" } }
+formula = "=ISFORMULA(A3)"
+expect = false
+
+[[case]]
+formula = "=ISFORMULA(B9)"
+expect = false
+
+[[case]]
+formula = "=ISFORMULA(1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=ISFORMULA()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = "=1+1", A2 = 5 }
+formula = "=ISFORMULA(A1:A2)"
+expect = true
+note = "First cell of the range."
+
+[[case]]
+cells = { A1 = 1, A4 = "=A1" }
+formula = "=ISFORMULA(A4)"
+expect = true
+
+[[case]]
+cells = { A1 = 1 }
+formula = "=ISFORMULA(A1)"
+expect = false

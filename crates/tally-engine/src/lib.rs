@@ -12,7 +12,12 @@
 //! - [`structure`]: inserting and deleting rows and columns;
 //! - [`convert`]: `Workbook::from_data` / `to_data` (the `tally-model` interchange);
 //! - [`ops`] and [`undo`]: transactions, inverse snapshots, the undo stack;
-//! - [`clipboard`]: internal copy snapshots, TSV/HTML export, paste;
+//! - [`clipboard`]: internal copy snapshots, TSV/HTML export, paste and
+//!   paste special;
+//! - [`names`]: named ranges and expressions (table, expansion, validation);
+//! - [`filter`]: AutoFilter criteria and filtered rows;
+//! - [`sort`], [`fill`], [`find`], [`moves`]: sort, fill series, find &
+//!   replace, cut/move;
 //! - [`document`]: one open document (workbook + undo + version);
 //! - [`service`]: `EngineService`, the `DocumentService` implementation.
 //!
@@ -26,10 +31,16 @@ pub mod convert;
 pub mod deps;
 pub mod document;
 pub mod eval;
+pub mod fill;
+pub mod filter;
+pub mod find;
 pub mod formula_cells;
+pub mod moves;
+pub mod names;
 pub mod ops;
 pub mod recalc;
 pub mod service;
+pub mod sort;
 pub mod storage;
 pub mod structure;
 pub mod styles;

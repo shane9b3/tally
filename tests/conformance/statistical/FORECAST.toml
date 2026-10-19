@@ -1,0 +1,67 @@
+# FORECAST conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+cells = { A1 = 2, A2 = 4, A3 = 5, A4 = 4, A5 = 5, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5 }
+formula = "=FORECAST(6;A1:A5;B1:B5)"
+expect = 5.8
+tol = 1e-12
+
+[[case]]
+name = "at the mean of x"
+cells = { A1 = 2, A2 = 4, A3 = 5, A4 = 4, A5 = 5, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5 }
+formula = "=FORECAST(3;A1:A5;B1:B5)"
+expect = 4.0
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 2, A2 = 4, A3 = 5, A4 = 4, A5 = 5, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5 }
+formula = "=FORECAST(0;A1:A5;B1:B5)"
+expect = 2.2
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 10, A2 = 20, A3 = 25, A4 = 40, A5 = 41, A6 = 60, B1 = 1, B2 = 2, B3 = 3, B4 = 5, B5 = 6, B6 = 9 }
+formula = "=FORECAST(7;A1:A6;B1:B6)"
+expect = 48.769230769230774
+tol = 1e-12
+
+[[case]]
+name = "pair with text skipped"
+cells = { A1 = 2, A2 = 4, A3 = 5, A4 = 4, A5 = 5, B1 = 1, B2 = 2, B3 = "x", B4 = 4, B5 = 5 }
+formula = "=FORECAST(4;A1:A5;B1:B5)"
+expect = 4.35
+tol = 1e-12
+
+[[case]]
+name = "inline arrays"
+formula = "=FORECAST(4;{2;4;6};{1;2;3})"
+expect = 8.0
+tol = 1e-12
+
+[[case]]
+name = "different sizes"
+cells = { A1 = 2, A2 = 4, A3 = 5, A4 = 4, A5 = 5, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5 }
+formula = "=FORECAST(6;A1:A5;B1:B4)"
+expect = "#N/A"
+
+[[case]]
+name = "zero variance of x"
+cells = { A1 = 1, A2 = 2, A3 = 3, B1 = 4, B2 = 4, B3 = 4 }
+formula = "=FORECAST(1;A1:A3;B1:B3)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "single pair"
+cells = { A1 = 1, B1 = 2 }
+formula = "=FORECAST(1;A1;B1)"
+expect = "#DIV/0!"
+
+[[case]]
+cells = { A1 = 2, A2 = 4, A3 = 5, A4 = 4, A5 = 5, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5 }
+formula = "=FORECAST(\"x\";A1:A5;B1:B5)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = 2, A2 = 4, A3 = 5, A4 = 4, A5 = 5, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5 }
+formula = "=FORECAST(1;A1:A5)"
+expect = "Err:511"

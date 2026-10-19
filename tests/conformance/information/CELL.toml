@@ -1,0 +1,78 @@
+[[case]]
+formula = "=CELL(\"row\")"
+expect = 100
+
+[[case]]
+formula = "=CELL(\"col\")"
+expect = 26
+
+[[case]]
+formula = "=CELL(\"address\")"
+expect = "$Z$100"
+
+[[case]]
+formula = "=CELL(\"row\";B3)"
+expect = 3
+
+[[case]]
+formula = "=CELL(\"col\";C5)"
+expect = 3
+
+[[case]]
+formula = "=CELL(\"address\";B3)"
+expect = "$B$3"
+
+[[case]]
+formula = "=CELL(\"sheet\")"
+expect = 1
+
+[[case]]
+cells = { A1 = 5, A2 = "txt", B3 = 1.5 }
+formula = "=CELL(\"contents\";A1)"
+expect = 5
+
+[[case]]
+cells = { A1 = 5, A2 = "txt", B3 = 1.5 }
+formula = "=CELL(\"type\";A1)"
+expect = "v"
+
+[[case]]
+cells = { A1 = 5, A2 = "txt", B3 = 1.5 }
+formula = "=CELL(\"type\";A2)"
+expect = "l"
+
+[[case]]
+formula = "=CELL(\"type\";C9)"
+expect = "b"
+
+[[case]]
+formula = "=CELL(\"bogus\";A1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=CELL(\"ROW\";B3)"
+expect = 3
+
+[[case]]
+cells = { A1 = 5, A2 = "txt", B3 = 1.5 }
+formula = "=CELL(\"format\";A1)"
+expect = "G"
+
+[[case]]
+cells = { A1 = 5, A2 = "txt", B3 = 1.5 }
+formula = "=CELL(\"prefix\";A2)"
+expect = "'"
+
+[[case]]
+cells = { A1 = 5, A2 = "txt", B3 = 1.5 }
+formula = "=CELL(\"contents\";A2)"
+expect = "txt"
+
+[[case]]
+formula = "=CELL()"
+expect = "Err:511"
+
+[[case]]
+formula = "=CELL(\"row\";A1:B2)"
+expect = 1
+note = "First cell of a range."

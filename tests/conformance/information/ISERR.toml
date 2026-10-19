@@ -1,0 +1,49 @@
+[[case]]
+cells = { A1 = 1, A2 = "=1/0", A3 = "=NA()", A4 = "x" }
+formula = "=ISERR(A2)"
+expect = true
+
+[[case]]
+cells = { A3 = "=NA()" }
+formula = "=ISERR(A3)"
+expect = false
+
+[[case]]
+cells = { A1 = 1 }
+formula = "=ISERR(A1)"
+expect = false
+
+[[case]]
+formula = "=ISERR(1/0)"
+expect = true
+
+[[case]]
+formula = "=ISERR(NA())"
+expect = false
+
+[[case]]
+cells = { A4 = "x" }
+formula = "=ISERR(A4)"
+expect = false
+
+[[case]]
+formula = "=ISERR(B9)"
+expect = false
+
+[[case]]
+formula = "=ISERR(SQRT(-1))"
+expect = true
+
+[[case]]
+formula = "=ISERR()"
+expect = "Err:511"
+
+[[case]]
+cells = { A1 = 1, A2 = "=1/0" }
+origin = "C2"
+formula = "=ISERR(A1:A2)"
+expect = true
+
+[[case]]
+formula = "=ISERR(\"#DIV/0!\")"
+expect = false

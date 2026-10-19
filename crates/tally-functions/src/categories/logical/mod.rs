@@ -7,6 +7,7 @@ mod constants;
 mod r#if;
 mod iferror;
 mod not;
+mod xor;
 
 /// Registers the Logical functions.
 pub fn register(r: &mut Registry) {
@@ -15,4 +16,5 @@ pub fn register(r: &mut Registry) {
     not::register(r);
     constants::register(r);
     iferror::register(r);
+    xor::register(r);
 }

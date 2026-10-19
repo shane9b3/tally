@@ -1,0 +1,70 @@
+# ISEVEN conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=ISEVEN(4.0)"
+expect = true
+
+[[case]]
+name = "numeric text"
+formula = "=ISEVEN(\"4.0\")"
+expect = true
+
+[[case]]
+name = "non-numeric text"
+formula = "=ISEVEN(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is 0"
+formula = "=ISEVEN(A1)"
+expect = true
+
+[[case]]
+name = "TRUE is 1"
+cells = { A1 = true }
+formula = "=ISEVEN(A1)"
+expect = false
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=ISEVEN(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = 99, A2 = 4 }
+origin = "C2"
+formula = "=ISEVEN(A1:A2)"
+expect = true
+
+[[case]]
+name = "no arguments"
+formula = "=ISEVEN()"
+expect = "Err:511"
+
+[[case]]
+name = "too many arguments"
+formula = "=ISEVEN(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=ISEVEN(2.9)"
+expect = true
+
+[[case]]
+formula = "=ISEVEN(-3)"
+expect = false
+
+[[case]]
+formula = "=ISEVEN(-2.5)"
+expect = true
+note = "Truncated toward zero: -2 is even."
+
+[[case]]
+formula = "=ISEVEN(0)"
+expect = true
+
+[[case]]
+formula = "=ISEVEN(\"4\")"
+expect = true

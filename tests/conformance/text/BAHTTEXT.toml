@@ -1,0 +1,55 @@
+[[case]]
+formula = "=BAHTTEXT(0)"
+expect = "ศูนย์บาทถ้วน"
+
+[[case]]
+formula = "=BAHTTEXT(1)"
+expect = "หนึ่งบาทถ้วน"
+
+[[case]]
+formula = "=BAHTTEXT(11)"
+expect = "สิบเอ็ดบาทถ้วน"
+
+[[case]]
+formula = "=BAHTTEXT(21)"
+expect = "ยี่สิบเอ็ดบาทถ้วน"
+
+[[case]]
+formula = "=BAHTTEXT(1234.56)"
+expect = "หนึ่งพันสองร้อยสามสิบสี่บาทห้าสิบหกสตางค์"
+
+[[case]]
+formula = "=BAHTTEXT(0.5)"
+expect = "ห้าสิบสตางค์"
+
+[[case]]
+formula = "=BAHTTEXT(-2)"
+expect = "ลบสองบาทถ้วน"
+
+[[case]]
+formula = "=BAHTTEXT(1000000)"
+expect = "หนึ่งล้านบาทถ้วน"
+
+[[case]]
+formula = "=BAHTTEXT(1000001)"
+expect = "หนึ่งล้านเอ็ดบาทถ้วน"
+
+[[case]]
+formula = "=BAHTTEXT(1E15)"
+expect = "Err:502"
+
+[[case]]
+formula = "=BAHTTEXT(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=BAHTTEXT(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=BAHTTEXT()"
+expect = "Err:511"
+
+[[case]]
+formula = "=BAHTTEXT(100)"
+expect = "หนึ่งร้อยบาทถ้วน"

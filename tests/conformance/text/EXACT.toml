@@ -1,0 +1,49 @@
+[[case]]
+formula = "=EXACT(\"a\";\"a\")"
+expect = true
+
+[[case]]
+formula = "=EXACT(\"a\";\"A\")"
+expect = false
+
+[[case]]
+formula = "=EXACT(\"\";\"\")"
+expect = true
+
+[[case]]
+formula = "=EXACT(1;\"1\")"
+expect = true
+
+[[case]]
+cells = { A1 = "abc", A2 = "abc" }
+formula = "=EXACT(A1;A2)"
+expect = true
+
+[[case]]
+formula = "=EXACT(TRUE;\"TRUE\")"
+expect = true
+
+[[case]]
+formula = "=EXACT(\"a\")"
+expect = "Err:511"
+
+[[case]]
+formula = "=EXACT(1/0;\"a\")"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=EXACT(\"abc\";\"abc \")"
+expect = false
+
+[[case]]
+formula = "=EXACT(A1;\"\")"
+expect = true
+
+[[case]]
+formula = "=EXACT(\"a\";\"b\";\"c\")"
+expect = "Err:504"
+
+[[case]]
+cells = { A1 = "abc", A2 = "ABC" }
+formula = "=EXACT(A1;A2)"
+expect = false

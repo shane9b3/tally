@@ -1,0 +1,91 @@
+# PRICEMAT conformance vectors. Ported AOO 4.1 Analysis add-in semantics (analysishelper.cxx, financial.cxx).
+# Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "Excel reference"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;4;13);DATE(2007;11;11);0.061;0.061;0)"
+expect = 99.98449888
+tol = 1e-06
+
+[[case]]
+name = "basis omitted"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;4;13);DATE(2007;11;11);0.061;0.061)"
+expect = 99.98449888
+tol = 1e-06
+
+[[case]]
+name = "negative rate"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;5;15);DATE(2007;11;11);-0.01;0.06)"
+expect = "Err:502"
+
+[[case]]
+name = "negative yield"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;5;15);DATE(2007;11;11);0.06;-0.01)"
+expect = "Err:502"
+
+[[case]]
+name = "basis 0"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;5;15);DATE(2007;11;11);0.061;0.05;0)"
+expect = 100.251941015089
+tol = 1e-09
+
+[[case]]
+name = "basis 1"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;5;15);DATE(2007;11;11);0.061;0.05;1)"
+expect = 100.251779712717
+tol = 1e-09
+
+[[case]]
+name = "basis 2"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;5;15);DATE(2007;11;11);0.061;0.05;2)"
+expect = 100.251522633745
+tol = 1e-09
+
+[[case]]
+name = "basis 3"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;5;15);DATE(2007;11;11);0.061;0.05;3)"
+expect = 100.248390457301
+tol = 1e-09
+
+[[case]]
+name = "basis 4"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;5;15);DATE(2007;11;11);0.061;0.05;4)"
+expect = 100.251941015089
+tol = 1e-09
+
+[[case]]
+name = "basis 5 is illegal"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;5;15);DATE(2007;11;11);0.061;0.05;5)"
+expect = "Err:502"
+
+[[case]]
+name = "empty text basis takes the default"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;5;15);DATE(2007;11;11);0.061;0.05;\"\")"
+expect = 100.251941015089
+tol = 1e-09
+
+[[case]]
+name = "non-numeric text basis"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;5;15);DATE(2007;11;11);0.061;0.05;\"x\")"
+expect = "Err:502"
+
+[[case]]
+name = "settlement after maturity"
+formula = "=PRICEMAT(DATE(2008;5;15);DATE(2008;2;15);DATE(2007;11;11);0.061;0.05;0)"
+expect = "Err:502"
+
+[[case]]
+name = "non-numeric text"
+formula = "=PRICEMAT(\"x\";DATE(2008;5;15);DATE(2007;11;11);0.061;0.05;0)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=PRICEMAT(A4;DATE(2008;5;15);DATE(2007;11;11);0.061;0.05;0)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = "=PRICEMAT(DATE(2008;2;15);DATE(2008;5;15);DATE(2007;11;11);0.061)"
+expect = "Err:511"

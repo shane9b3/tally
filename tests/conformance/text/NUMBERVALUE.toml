@@ -1,0 +1,86 @@
+[[case]]
+formula = "=NUMBERVALUE(\"1,234.5\";\".\")"
+expect = 1234.5
+
+[[case]]
+formula = "=NUMBERVALUE(\"1.234,5\";\",\")"
+expect = 1234.5
+
+[[case]]
+formula = "=NUMBERVALUE(\" 3 000 \";\".\")"
+expect = 3000
+
+[[case]]
+formula = "=NUMBERVALUE(\"50%\";\".\")"
+expect = 0.5
+
+[[case]]
+formula = "=NUMBERVALUE(\"5%%\";\".\")"
+expect = 0.0005
+
+[[case]]
+formula = "=NUMBERVALUE(\"\";\".\")"
+expect = 0
+
+[[case]]
+formula = "=NUMBERVALUE(\"1.2.3\";\".\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=NUMBERVALUE(\"abc\";\".\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=NUMBERVALUE(\"-1.5e2\";\".\")"
+expect = -150
+
+[[case]]
+formula = "=NUMBERVALUE(1/0;\".\")"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=NUMBERVALUE(\"1\";\".\";\",\")"
+expect = 1
+note = "Registered as the 3-argument ODFF/Excel extension (was Err:504 under AOO's 2-parameter declaration)."
+
+[[case]]
+formula = "=NUMBERVALUE(\"1\")"
+expect = 1
+note = "Both separators are optional in the extension (was Err:511)."
+
+[[case]]
+formula = "=NUMBERVALUE(\"1\";\".\";\",\";1)"
+expect = "Err:504"
+
+[[case]]
+formula = "=NUMBERVALUE()"
+expect = "Err:511"
+
+[[case]]
+formula = "=NUMBERVALUE(\"inf\";\".\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "separators default to en-US"
+formula = '=NUMBERVALUE("1,234.5")'
+expect = 1234.5
+
+[[case]]
+name = "explicit group separator"
+formula = '=NUMBERVALUE("1 234;5";";";" ")'
+expect = 1234.5
+
+[[case]]
+name = "only the first character of a separator counts"
+formula = "=NUMBERVALUE(\"1'234,5\";\",x\";\"'\")"
+expect = 1234.5
+
+[[case]]
+name = "empty separator argument"
+formula = '=NUMBERVALUE("1";"")'
+expect = "#VALUE!"
+
+[[case]]
+name = "group separator equal to decimal separator"
+formula = '=NUMBERVALUE("1,2";",";",")'
+expect = "#VALUE!"

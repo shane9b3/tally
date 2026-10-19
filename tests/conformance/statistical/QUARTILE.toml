@@ -1,0 +1,67 @@
+# QUARTILE conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+cells = { A1 = 3, A2 = 1, A3 = 4, A4 = 1, A5 = 5, A6 = 9, A7 = 2, A8 = 6, A9 = "text" }
+formula = "=QUARTILE(A1:A9;0)"
+expect = 1
+
+[[case]]
+cells = { A1 = 3, A2 = 1, A3 = 4, A4 = 1, A5 = 5, A6 = 9, A7 = 2, A8 = 6, A9 = "text" }
+formula = "=QUARTILE(A1:A9;1)"
+expect = 1.75
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 3, A2 = 1, A3 = 4, A4 = 1, A5 = 5, A6 = 9, A7 = 2, A8 = 6, A9 = "text" }
+formula = "=QUARTILE(A1:A9;2)"
+expect = 3.5
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 3, A2 = 1, A3 = 4, A4 = 1, A5 = 5, A6 = 9, A7 = 2, A8 = 6, A9 = "text" }
+formula = "=QUARTILE(A1:A9;3)"
+expect = 5.25
+tol = 1e-12
+
+[[case]]
+cells = { A1 = 3, A2 = 1, A3 = 4, A4 = 1, A5 = 5, A6 = 9, A7 = 2, A8 = 6, A9 = "text" }
+formula = "=QUARTILE(A1:A9;4)"
+expect = 9
+
+[[case]]
+cells = { A1 = 3, A2 = 1, A3 = 4, A4 = 1, A5 = 5, A6 = 9, A7 = 2, A8 = 6, A9 = "text" }
+formula = "=QUARTILE(A1:A9;5)"
+expect = "Err:502"
+
+[[case]]
+cells = { A1 = 3, A2 = 1, A3 = 4, A4 = 1, A5 = 5, A6 = 9, A7 = 2, A8 = 6, A9 = "text" }
+formula = "=QUARTILE(A1:A9;-1)"
+expect = "Err:502"
+
+[[case]]
+name = "type truncated"
+cells = { A1 = 3, A2 = 1, A3 = 4, A4 = 1, A5 = 5, A6 = 9, A7 = 2, A8 = 6, A9 = "text" }
+formula = "=QUARTILE(A1:A9;1.9)"
+expect = 1.75
+tol = 1e-12
+
+[[case]]
+formula = "=QUARTILE({1;2;3;4;5};1)"
+expect = 2.0
+tol = 1e-12
+
+[[case]]
+name = "empty data"
+formula = "=QUARTILE(B1:B3;1)"
+expect = "Err:502"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = 1, A2 = "=NA()" }
+formula = "=QUARTILE(A1:A3;1)"
+expect = "#N/A"
+
+[[case]]
+cells = { A1 = 3, A2 = 1, A3 = 4, A4 = 1, A5 = 5, A6 = 9, A7 = 2, A8 = 6, A9 = "text" }
+formula = "=QUARTILE(A1:A9)"
+expect = "Err:511"

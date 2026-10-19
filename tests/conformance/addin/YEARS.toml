@@ -1,0 +1,45 @@
+# YEARS conformance vectors. Date add-in: type 0 interval, 1 calendar years. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=YEARS(DATE(2020;6;15);DATE(2026;6;14);0)"
+expect = 5
+
+[[case]]
+formula = "=YEARS(DATE(2020;6;15);DATE(2026;6;14);1)"
+expect = 6
+
+[[case]]
+formula = "=YEARS(DATE(2020;6;15);DATE(2026;6;15);0)"
+expect = 6
+
+[[case]]
+formula = "=YEARS(DATE(2026;6;14);DATE(2020;6;15);0)"
+expect = -5
+
+[[case]]
+formula = "=YEARS(DATE(2026;6;14);DATE(2020;6;15);1)"
+expect = -6
+
+[[case]]
+formula = "=YEARS(DATE(2026;1;1);DATE(2026;12;31);0)"
+expect = 0
+
+[[case]]
+formula = "=YEARS(DATE(2026;1;1);DATE(2026;12;31);1)"
+expect = 0
+
+[[case]]
+formula = "=YEARS(DATE(2025;12;31);DATE(2026;1;1);1)"
+expect = 1
+
+[[case]]
+formula = "=YEARS(DATE(2020;6;15);DATE(2026;6;14);7)"
+expect = "Err:502"
+
+[[case]]
+formula = "=YEARS(\"x\";1;0)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=YEARS(1;2)"
+expect = "Err:511"

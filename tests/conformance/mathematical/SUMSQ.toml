@@ -1,0 +1,56 @@
+# SUMSQ conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=SUMSQ(3;4)"
+expect = 25
+
+[[case]]
+formula = "=SUMSQ(-3)"
+expect = 9
+
+[[case]]
+formula = "=SUMSQ(1.5)"
+expect = 2.25
+
+[[case]]
+formula = "=SUMSQ(\"3\")"
+expect = 9
+note = "Direct text is converted."
+
+[[case]]
+formula = "=SUMSQ(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=SUMSQ(TRUE;2)"
+expect = 5
+
+[[case]]
+name = "text skipped, boolean counted"
+cells = { A1 = 1, A2 = "x", A3 = 2, A4 = true, A5 = 3 }
+formula = "=SUMSQ(A1:A4)"
+expect = 6
+
+[[case]]
+name = "empty range"
+formula = "=SUMSQ(A1:A3)"
+expect = 0
+
+[[case]]
+cells = { A1 = 2, A2 = "=1/0" }
+formula = "=SUMSQ(A1:A2)"
+expect = "#DIV/0!"
+
+[[case]]
+cells = { A1 = 2 }
+formula = "=SUMSQ(1;A1:A2;3)"
+expect = 14
+
+[[case]]
+formula = "=SUMSQ()"
+expect = "Err:511"
+
+[[case]]
+formula = "=SUMSQ(1E+200)"
+expect = "#NUM!"
+note = "Overflow."

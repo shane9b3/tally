@@ -1,0 +1,46 @@
+# FACTDOUBLE conformance vectors. Analysis add-in. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=FACTDOUBLE(7)"
+expect = 105
+
+[[case]]
+formula = "=FACTDOUBLE(8)"
+expect = 384
+
+[[case]]
+formula = "=FACTDOUBLE(0)"
+expect = 1
+
+[[case]]
+formula = "=FACTDOUBLE(1)"
+expect = 1
+
+[[case]]
+formula = "=FACTDOUBLE(2)"
+expect = 2
+
+[[case]]
+name = "truncated"
+formula = "=FACTDOUBLE(6.9)"
+expect = 48
+
+[[case]]
+formula = "=FACTDOUBLE(20)"
+expect = 3715891200
+
+[[case]]
+formula = "=FACTDOUBLE(-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=FACTDOUBLE(400)"
+expect = "#NUM!"
+
+[[case]]
+formula = "=FACTDOUBLE(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=FACTDOUBLE()"
+expect = "Err:511"
