@@ -1,0 +1,20 @@
+{
+  "name": "@tally/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generated engine types, the EngineClient interface and an in-memory MockClient.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./mock": "./src/mock.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  }
+}

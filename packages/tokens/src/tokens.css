@@ -1,0 +1,137 @@
+/*
+ * Tally design tokens (docs/architecture-plan.md §4.6).
+ *
+ * Chrome components use these variables directly. The canvas grid cannot,
+ * so it reads them into a typed Theme with readTheme() from ./index.ts;
+ * every variable that readTheme() reads is marked "(theme)".
+ *
+ * Colours used by the canvas must be plain #rrggbb / rgb() / rgba() values.
+ */
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Neutral greys */
+  --tally-gray-0: #ffffff;
+  --tally-gray-50: #f9fafb;
+  --tally-gray-100: #f3f4f6;
+  --tally-gray-200: #e5e7eb;
+  --tally-gray-300: #d1d5db;
+  --tally-gray-500: #6b7280;
+  --tally-gray-700: #374151;
+  --tally-gray-900: #111827;
+
+  /* Accent */
+  --tally-accent: #2563eb; /* (theme) */
+  --tally-accent-hover: #1d4ed8;
+  --tally-accent-subtle: rgba(37, 99, 235, 0.1);
+
+  /* Surfaces and text */
+  --tally-bg: var(--tally-gray-0); /* (theme) */
+  --tally-surface: var(--tally-gray-50);
+  --tally-text: var(--tally-gray-900); /* (theme) */
+  --tally-text-muted: var(--tally-gray-500); /* (theme) */
+  --tally-border-subtle: rgba(0, 0, 0, 0.06);
+  --tally-border: rgba(0, 0, 0, 0.12);
+
+  /* Grid */
+  --tally-grid-line: #e6e8eb; /* (theme) */
+  --tally-header-bg: var(--tally-gray-50); /* (theme) */
+  --tally-header-text: var(--tally-gray-500); /* (theme) */
+  --tally-selection: rgba(37, 99, 235, 0.08); /* (theme) */
+  --tally-selection-border: var(--tally-accent); /* (theme) */
+
+  /* Status chips */
+  --tally-chip-green-bg: #dcfce7; /* (theme) */
+  --tally-chip-green-fg: #166534; /* (theme) */
+  --tally-chip-amber-bg: #fef3c7; /* (theme) */
+  --tally-chip-amber-fg: #92400e; /* (theme) */
+  --tally-chip-red-bg: #fee2e2; /* (theme) */
+  --tally-chip-red-fg: #991b1b; /* (theme) */
+
+  /* Typography */
+  --tally-font-family: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; /* (theme) */
+  --tally-font-size: 13px; /* (theme) */
+  --tally-font-size-sm: 12px;
+  --tally-font-size-lg: 15px;
+
+  /* Radii */
+  --tally-radius-sm: 4px; /* (theme) */
+  --tally-radius-md: 6px;
+  --tally-radius-card: 10px; /* (theme) */
+  --tally-radius-pill: 999px; /* (theme) */
+
+  /* Spacing scale (4 px base) */
+  --tally-space-1: 4px; /* (theme) */
+  --tally-space-2: 8px; /* (theme) */
+  --tally-space-3: 12px; /* (theme) */
+  --tally-space-4: 16px; /* (theme) */
+  --tally-space-6: 24px;
+  --tally-space-8: 32px;
+
+  /* Elevation */
+  --tally-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+/*
+ * Dark theme: same variable names. Phase A ships light only; values below
+ * are placeholders.
+ * TODO(v0.2): design the dark palette. Also add a
+ * `@media (prefers-color-scheme: dark)` default for `:root:not([data-theme])`.
+ */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --tally-gray-0: #111317; /* TODO */
+  --tally-gray-50: #181b20; /* TODO */
+  --tally-gray-100: #1f2329; /* TODO */
+  --tally-gray-200: #2a2f36; /* TODO */
+  --tally-gray-300: #3a4049; /* TODO */
+  --tally-gray-500: #9aa1ab; /* TODO */
+  --tally-gray-700: #cfd4da; /* TODO */
+  --tally-gray-900: #f3f4f6; /* TODO */
+
+  --tally-accent: #60a5fa; /* TODO */
+  --tally-accent-hover: #93c5fd; /* TODO */
+  --tally-accent-subtle: rgba(96, 165, 250, 0.16); /* TODO */
+
+  --tally-bg: var(--tally-gray-0);
+  --tally-surface: var(--tally-gray-50);
+  --tally-text: var(--tally-gray-900);
+  --tally-text-muted: var(--tally-gray-500);
+  --tally-border-subtle: rgba(255, 255, 255, 0.06); /* TODO */
+  --tally-border: rgba(255, 255, 255, 0.12); /* TODO */
+
+  --tally-grid-line: #262a30; /* TODO */
+  --tally-header-bg: var(--tally-gray-50);
+  --tally-header-text: var(--tally-gray-500);
+  --tally-selection: rgba(96, 165, 250, 0.14); /* TODO */
+  --tally-selection-border: var(--tally-accent);
+
+  --tally-chip-green-bg: #14532d; /* TODO */
+  --tally-chip-green-fg: #bbf7d0; /* TODO */
+  --tally-chip-amber-bg: #78350f; /* TODO */
+  --tally-chip-amber-fg: #fde68a; /* TODO */
+  --tally-chip-red-bg: #7f1d1d; /* TODO */
+  --tally-chip-red-fg: #fecaca; /* TODO */
+
+  --tally-font-family: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --tally-font-size: 13px;
+  --tally-font-size-sm: 12px;
+  --tally-font-size-lg: 15px;
+
+  --tally-radius-sm: 4px;
+  --tally-radius-md: 6px;
+  --tally-radius-card: 10px;
+  --tally-radius-pill: 999px;
+
+  --tally-space-1: 4px;
+  --tally-space-2: 8px;
+  --tally-space-3: 12px;
+  --tally-space-4: 16px;
+  --tally-space-6: 24px;
+  --tally-space-8: 32px;
+
+  --tally-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.4); /* TODO */
+}

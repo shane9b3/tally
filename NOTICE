@@ -1,0 +1,16 @@
+Tally
+Copyright 2026 Tally contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Portions of this product are ports of algorithms from Apache OpenOffice
+(https://www.openoffice.org/), which is licensed under the Apache License,
+Version 2.0. Apache OpenOffice is developed by The Apache Software
+Foundation (http://www.apache.org/). Ported code is marked with a comment
+naming the original source file.
+
+"Apache", "Apache OpenOffice" and "OpenOffice" are trademarks of The Apache
+Software Foundation. Tally is not affiliated with or endorsed by The Apache
+Software Foundation.
+
+No code from LibreOffice (MPL-2.0), IronCalc or formualizer is included.

@@ -1,0 +1,74 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tally-types",
+    "crates/tally-model",
+    "crates/tally-api",
+    "crates/tally-formula",
+    "crates/tally-numfmt",
+    "crates/tally-functions",
+    "crates/tally-engine",
+    "crates/tally-io-ods",
+    "crates/tally-io-csv",
+    "crates/tally-assist",
+    "crates/tally-cli",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+
+# Exact pins from docs/adr/0001-stack.md. Never `cargo add tauri` without a
+# version: the unpinned default resolves to the 3.0 alpha.
+[workspace.dependencies]
+# Internal crates
+tally-types = { path = "crates/tally-types", version = "0.1.0" }
+tally-model = { path = "crates/tally-model", version = "0.1.0" }
+tally-api = { path = "crates/tally-api", version = "0.1.0" }
+tally-formula = { path = "crates/tally-formula", version = "0.1.0" }
+tally-numfmt = { path = "crates/tally-numfmt", version = "0.1.0" }
+tally-functions = { path = "crates/tally-functions", version = "0.1.0" }
+tally-engine = { path = "crates/tally-engine", version = "0.1.0" }
+tally-io-ods = { path = "crates/tally-io-ods", version = "0.1.0" }
+tally-io-csv = { path = "crates/tally-io-csv", version = "0.1.0" }
+tally-assist = { path = "crates/tally-assist", version = "0.1.0" }
+
+# Desktop shell (used by apps/desktop/src-tauri from WP7 on)
+tauri = "=2.12.4"
+tauri-build = "=2.7.3"
+tauri-plugin-dialog = "=2.8.3"
+
+# Libraries
+serde = { version = "=1.0.229", features = ["derive", "rc"] }
+serde_json = "=1.0.154"
+ts-rs = "=12.0.1"
+quick-xml = "=0.42.0"
+zip = { version = "=9.0.5", default-features = false, features = ["deflate"] }
+csv = "=1.4.0"
+encoding_rs = "=0.8.42"
+chrono = { version = "=0.4.45", default-features = false, features = ["std", "clock"] }
+slotmap = "=1.1.1"
+smallvec = "=1.16.3"
+regex = "=1.13.1"
+thiserror = "=2.0.21"
+
+# Dev / test only
+proptest = "=1.12.0"
+insta = "=1.49.0"
+criterion = "=0.8.2"
+toml = "=1.1.8"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,20 @@
+[package]
+name = "tally-api"
+description = "Transport-agnostic API: DTOs (exported to TypeScript) and the DocumentService trait."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tally-types = { workspace = true, features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ts-rs.workspace = true
+# TODO(WP1): add `tally-engine` (and `tally-model`) when the DocumentService
+# implementation lands in this crate.
+
+[lints]
+workspace = true

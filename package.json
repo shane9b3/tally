@@ -1,0 +1,16 @@
+{
+  "name": "tally",
+  "private": true,
+  "description": "Tally: a modern, OpenOffice-compatible spreadsheet (Rust engine, Tauri 2, React).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@11.13.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r --if-present lint"
+  }
+}

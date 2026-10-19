@@ -1,0 +1,21 @@
+{
+  "name": "@tally/grid",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Canvas spreadsheet grid: rendering, virtualization, selection, editor host (WP6).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@tally/bridge": "workspace:*",
+    "@tally/tokens": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

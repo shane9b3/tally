@@ -1,0 +1,16 @@
+[package]
+name = "tally-assist"
+description = "Natural-language-to-formula rules and the AssistProvider trait."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tally-types.workspace = true
+tally-formula.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

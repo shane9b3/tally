@@ -1,0 +1,48 @@
+# cargo-deny configuration (https://embarkstudios.github.io/cargo-deny/).
+# Run with `cargo deny check`. CI runs it in the rust-check job.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# Permissive licences only. Anything not listed here is rejected, which
+# includes GPL-2.0, GPL-3.0, AGPL-3.0, LGPL-2.1 and LGPL-3.0.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    # "MPL-2.0" is deliberately absent. Add it here only when a transitive
+    # dependency needs it (expected with Tauri in WP7, e.g. `selectors` /
+    # `cssparser`), with a comment naming that dependency. Never copy MPL code.
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# Our own workspace crates are `publish = false`; skip them.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    # Pinned to 2.x; the 3.0 alpha must never sneak in.
+    { name = "tauri", version = ">=3.0.0-0" },
+    # Pinned to 1.x; not the 2.0 beta.
+    { name = "smallvec", version = ">=2.0.0-0" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,4 @@
+# CI installs this channel via rustup. Homebrew Rust on dev machines ignores it.
+[toolchain]
+channel = "1.94"
+components = ["rustfmt", "clippy"]

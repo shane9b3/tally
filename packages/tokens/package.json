@@ -1,0 +1,25 @@
+{
+  "name": "@tally/tokens",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Design tokens: CSS custom properties and a typed Theme reader for the canvas grid.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tokens.css": "./src/tokens.css",
+    "./fonts": "./src/fonts.ts"
+  },
+  "sideEffects": ["*.css", "./src/fonts.ts"],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "5.3.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  }
+}

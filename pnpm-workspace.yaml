@@ -1,0 +1,15 @@
+packages:
+  - packages/*
+  - apps/*
+
+# Exact versions only (also set in .npmrc for older tooling).
+saveExact: true
+
+# Keep a single, ADR-pinned Vite in the graph (vitest depends on it).
+overrides:
+  vite: 7.3.7
+
+# Dependencies allowed to run install scripts (pnpm blocks all others).
+# esbuild (via vitest/vite) verifies its platform binary in postinstall.
+allowBuilds:
+  esbuild: true

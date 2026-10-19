@@ -1,0 +1,22 @@
+{
+  "name": "@tally/app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "React chrome: toolbar, formula bar, name box, sheet tabs, status bar, palette, stores (WP7).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@tally/bridge": "workspace:*",
+    "@tally/grid": "workspace:*",
+    "@tally/tokens": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
