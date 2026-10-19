@@ -51,6 +51,13 @@ impl<'a> SheetView<'a> {
             .map(|r| range_dto(&r))
     }
 
+    /// Evaluates formula `text` (CalcA1 en-US, leading `=`) as if entered
+    /// at (`r`, `c`) without committing it; `None` if it does not parse.
+    pub fn eval_formula_at(&self, r: u32, c: u32, text: &str) -> Option<Value> {
+        self.wb
+            .eval_formula_text_at(CellAddr::new(self.sheet, r, c), text)
+    }
+
     /// The sheet name.
     pub fn name(&self) -> String {
         self.wb
@@ -69,6 +76,15 @@ pub struct AssistRequest<'a> {
     pub selection: &'a SelectionDto,
     /// The selection's sheet.
     pub sheet: SheetView<'a>,
+}
+
+impl AssistRequest<'_> {
+    /// Evaluates formula `text` at the active cell without committing it
+    /// (the ⌘K preview); `None` if it does not parse.
+    pub fn preview(&self, text: &str) -> Option<Value> {
+        let a = self.selection.active;
+        self.sheet.eval_formula_at(a.r, a.c, text)
+    }
 }
 
 /// An assist provider.

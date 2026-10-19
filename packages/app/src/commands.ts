@@ -3,14 +3,31 @@
  * Menu ids (apps/desktop/src-tauri/src/menu.rs) and assist action ids map
  * here one to one.
  */
+import { columnIndex, parseA1Range } from "./a1";
 import type { AppController } from "./controller";
 import { CURRENCY_FORMAT, PERCENT_FORMAT } from "./formats";
 import { shortcutFor } from "./keymap";
-import type { Command } from "./registry";
+import type { Command, CommandArgs } from "./registry";
+import type { RangeDto } from "@tally/bridge";
 import { useDocStore } from "./stores/docStore";
 import { useUiStore } from "./stores/uiStore";
 
 export const COMING_SOON = "Coming soon";
+export const FILTER_SOON = "Filtering is coming in v0.2";
+export const CHART_SOON = "Charts are coming in v0.2";
+
+/**
+ * Target of `format.currency` from assist args: `range` (e.g. `F2:F15`, the
+ * column body), else `column` (that column of the selected rows), else
+ * `null` (use the selection).
+ */
+export function currencyTarget(args: CommandArgs | undefined, selection: RangeDto): RangeDto | null {
+  if (!args) return null;
+  const range = args.range ? parseA1Range(args.range) : null;
+  if (range) return range;
+  const col = args.column ? columnIndex(args.column) : null;
+  return col === null ? null : { r0: selection.r0, c0: col, r1: selection.r1, c1: col };
+}
 
 /** Hooks the UI provides for commands that need a component (rename prompt, about). */
 export interface CommandUi {
@@ -40,8 +57,9 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
       title: "Format as currency",
       kind: "Format",
       keywords: ["dollar", "money", "$", "price"],
-      run: async () => {
-        await ctl.setNumberFormat(CURRENCY_FORMAT, "Currency");
+      run: async (args) => {
+        const target = currencyTarget(args, ctl.selection.range);
+        await (target ? ctl.setNumberFormatOn([target], CURRENCY_FORMAT, "Currency") : ctl.setNumberFormat(CURRENCY_FORMAT, "Currency"));
       },
     },
     {
@@ -58,6 +76,9 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "data.sort", title: "Sort", kind: "Sort", keywords: ["order"], ...soon, run: () => undefined },
     { id: "data.filter", title: "Filter", kind: "Filter", keywords: ["where", "only"], ...soon, run: () => undefined },
     { id: "insert.chart", title: "Chart", kind: "Chart", keywords: ["graph", "plot"], ...soon, run: () => undefined },
+    // Assist actions (run from ⌘K suggestions with args; hidden from the list).
+    { id: "filter.byColumn", title: "Filter by column", kind: "Filter", hidden: true, run: () => void useUiStore.getState().pushToast("info", FILTER_SOON) },
+    { id: "chart.byColumn", title: "Chart by column", kind: "Chart", hidden: true, run: () => void useUiStore.getState().pushToast("info", CHART_SOON) },
     // Sheets
     { id: "sheet.insert", title: "Insert sheet", kind: "Sheet", keywords: ["add", "new tab"], run: async () => void (await ctl.addSheet()) },
     { id: "sheet.rename", title: "Rename sheet", kind: "Sheet", keywords: ["tab name"], run: () => ui.renameActiveSheet() },

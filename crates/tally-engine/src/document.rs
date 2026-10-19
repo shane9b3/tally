@@ -53,6 +53,16 @@ impl Document {
         }
     }
 
+    /// Evaluates formula `text` at `addr` without committing it
+    /// (see [`Workbook::eval_formula_text_at`]).
+    pub fn eval_formula_text_at(
+        &self,
+        addr: tally_types::CellAddr,
+        text: &str,
+    ) -> Option<tally_types::Value> {
+        self.wb.eval_formula_text_at(addr, text)
+    }
+
     /// The API summary.
     pub fn info(&self) -> WorkbookInfo {
         WorkbookInfo {

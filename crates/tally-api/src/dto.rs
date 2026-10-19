@@ -715,6 +715,20 @@ pub struct Suggestion {
     pub confidence: f32,
     /// Command id to run instead of inserting a formula.
     pub action: Option<String>,
+    /// Arguments for `action`, e.g. `column` = `G`, `range` = `F2:F15`
+    /// (empty for formula suggestions).
+    pub action_args: Vec<ActionArg>,
+}
+
+/// One named argument of a [`Suggestion`] action.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ActionArg {
+    /// Argument name, e.g. "column".
+    pub key: String,
+    /// Argument value, e.g. "G".
+    pub value: String,
 }
 
 /// Result of `copy`.
@@ -808,6 +822,8 @@ impl ApiError {
     pub const UNSUPPORTED: &'static str = "unsupported";
     /// A bug.
     pub const INTERNAL: &'static str = "internal";
+    /// The user dismissed a native dialog (shell only; the UI ignores it).
+    pub const CANCELLED: &'static str = "cancelled";
 
     /// Creates an error.
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
@@ -936,6 +952,7 @@ mod tests {
         CellEditInfo::export_all(&cfg).unwrap();
         FunctionInfo::export_all(&cfg).unwrap();
         Suggestion::export_all(&cfg).unwrap();
+        ActionArg::export_all(&cfg).unwrap();
         ClipboardOut::export_all(&cfg).unwrap();
         FileFormat::export_all(&cfg).unwrap();
         Direction::export_all(&cfg).unwrap();

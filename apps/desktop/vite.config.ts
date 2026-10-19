@@ -6,12 +6,6 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
-  resolve: {
-    alias: {
-      // TODO(bridge): replace with a `./tauri` export in packages/bridge/package.json.
-      "@tally/bridge/tauri": decodeURIComponent(new URL("../../packages/bridge/src/tauri.ts", import.meta.url).pathname),
-    },
-  },
   server: { port: 5173, strictPort: true, host: "localhost" },
   preview: { port: 5173, strictPort: true },
   envPrefix: ["VITE_", "TAURI_ENV_"],

@@ -104,3 +104,18 @@ test("Σ Add up sums the numbers above", async ({ page }) => {
   await clickCell(page, 2, 0);
   await expect(page.getByTestId("formula-input")).toHaveValue("=SUM(A1:A2)");
 });
+
+test("a template opens by id (engine catalog names in the sidebar)", async ({ page }) => {
+  await page.goto("/?template=invoices");
+  await page.waitForFunction(() => window.__tally?.controller.grid != null);
+  await expect(page.getByRole("tab", { name: "Orders" })).toBeVisible();
+  await expect(page.getByText("Stock count")).toBeVisible();
+  const total = await page.evaluate(async () => {
+    const t = window.__tally;
+    const info = t?.controller.info;
+    if (!t || !info) return null;
+    const [block] = await t.client.cells(info.doc, info.activeSheet, [{ r0: 0, c0: 5, r1: 1, c1: 5 }]);
+    return block?.cells.map((c) => c.text) ?? null;
+  });
+  expect(total).toEqual(["Total", "54"]);
+});

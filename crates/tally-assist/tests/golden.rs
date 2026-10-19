@@ -295,6 +295,10 @@ fn action_titles_and_args() {
     assert_eq!(s[0].title, "Chart Total by Customer");
     let s = ask("format total as currency");
     assert_eq!(s[0].title, "Format Total as currency");
+    assert!(s[0].action_args.contains(&("column".into(), "F".into())));
+    assert!(s[0]
+        .action_args
+        .contains(&("range".into(), "F2:F15".into())));
 }
 
 #[test]

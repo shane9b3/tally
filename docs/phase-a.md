@@ -2,6 +2,31 @@
 
 Phase A is the minimal subset of v0.1 (see architecture-plan.md §6–7) that yields a running Tauri app with a live engine grid, formulas with the 68 batch-0 functions, undo/redo, number formats, ODS + CSV round trip, the mockup chrome, and the ⌘K rule-based assist.
 
+## Status (integration, 2026-10-19)
+
+All Phase A work packages are merged and wired together in the desktop app:
+
+- `apps/desktop/src-tauri` runs `tally_engine::EngineService::with_default_codec()` (ODS + CSV through `tally-io-ods`/`tally-io-csv`, `io` feature) instead of the WP7 stub, with `tally-assist`'s `RuleProvider` installed via `set_assist_provider` (`src/assist.rs` adapts the two `SheetView` traits).
+- ⌘K previews are computed by the engine without committing (`Workbook::eval_formula_text_at`, `AssistRequest::preview`).
+- Templates are built in code by the engine from an id (`invoices`, `budget`, `stock`); `wb_new(template)` passes the id through and `list_templates` returns the engine catalog. The bundled CSV template files are gone.
+- Suggestions carry `actionArgs`; the palette runs `format.currency` on the named column body; `filter.byColumn` / `chart.byColumn` show a "coming in v0.2" toast.
+- Shell methods live in `@tally/bridge`'s `ShellClient` (implemented by `TauriClient` and `MockClient`); `@tally/bridge/tauri` is a package export.
+
+Gates passed at integration (macOS arm64):
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all -- --check` | clean |
+| `cargo clippy --workspace --all-targets --features tally-engine/io -- -D warnings` | clean |
+| `cargo test --workspace --features tally-engine/io` | 453 passed, 0 failed, 5 ignored |
+| `pnpm -r typecheck` / `pnpm -r test` | clean / 102 passed (tokens 3, bridge 13, grid 58, app 28) |
+| `pnpm e2e` | 5 passed |
+| Command-layer end-to-end (`apps/desktop/src-tauri/src/tests.rs`) | invoices template → SUMIF → ⌘K formula + preview → ODS round trip → CSV with injection guard |
+| `pnpm tauri dev` | compiles, 1280×820 window on screen |
+| `pnpm tauri build` | `Tally.app` 9.1 MiB, unsigned `.dmg` 4.0 MiB |
+
+Still manual: the WP7/WP5 click-through scripts (docs/qa/phase-a-manual.md), opening a saved file in LibreOffice, and signed CI bundles. The WP5 check below now opens a saved copy of the built-in `invoices` template (there is no `templates/invoices.ods`).
+
 ## Dropped or stubbed in Phase A (all return in v0.2)
 
 - Insert/delete rows/columns, cut-move reference adjustment (cut = copy then clear), merges, frozen panes, row resize (column resize stays), multi-range selection.

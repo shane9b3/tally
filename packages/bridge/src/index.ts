@@ -1,11 +1,13 @@
 /**
  * @tally/bridge: types generated from crates/tally-api (ts-rs), the
- * EngineClient interface, helpers and the in-memory MockClient.
+ * EngineClient and ShellClient interfaces, helpers and the in-memory
+ * MockClient. `TauriClient` is a separate entry point (`@tally/bridge/tauri`).
  *
  * Regenerate the types with `cargo xtask gen-bindings`; never edit
  * src/generated/ by hand.
  */
 
+export type { ActionArg } from "./generated/ActionArg";
 export type { ApiError } from "./generated/ApiError";
 export type { ApplyResult } from "./generated/ApplyResult";
 export type { BorderLineDto } from "./generated/BorderLineDto";
@@ -47,3 +49,5 @@ export type { WorkbookInfo } from "./generated/WorkbookInfo";
 export { isApiError } from "./client";
 export type { EngineClient, SheetId, Unsubscribe } from "./client";
 export { MockClient, DEFAULT_COL_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX } from "./mock";
+export { BUILTIN_TEMPLATES, CANCELLED } from "./shell";
+export type { ShellClient, TemplateInfo } from "./shell";

@@ -246,14 +246,13 @@ JS cannot make the shell read an arbitrary path. `wb_open` canonicalizes the
 path (`std::fs::canonicalize`, resolving `..` and symlinks) and accepts it only if it is:
 
 1. a path the user picked in a native Open or Save dialog during this session (`AppState.allowed`), or
-2. in the persisted recent-files list (`<app_config_dir>/recent.json`, ≤ 10 entries, written only by the shell after a successful dialog open or save), or
-3. inside the bundled `templates/` resource directory.
+2. in the persisted recent-files list (`<app_config_dir>/recent.json`, ≤ 10 entries, written only by the shell after a successful dialog open or save).
 
 Anything else is rejected with `invalid_argument`. Save paths always come
 from the Save dialog (`TauriClient.save(doc, path, …)` ignores the JS path
 and shows the dialog when `path !== null`). `wb_new(template)` takes a
-template **id**, resolved by the shell against a fixed table to a file in
-`templates/`; unknown ids are `not_found`.
+template **id** that the engine builds in code (`invoices`, `budget`, `stock`);
+no file is read and unknown ids are `not_found`.
 
 Residual risk: `recent.json` lives in the user's config directory, so
 anything that can write there can add entries; that attacker already has
@@ -261,5 +260,5 @@ the user's file access.
 
 ### Tests
 
-- `cargo test -p tally-desktop`: stub service behaviour, menu ids.
+- `cargo test -p tally-desktop`: menu ids; command-layer end-to-end over the real engine (templates, assist, ODS/CSV round trip, allowlist rejection).
 - Manual: docs/qa/phase-a-manual.md §7.

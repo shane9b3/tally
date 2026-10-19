@@ -3,6 +3,9 @@
  * `menu-action` ids and assist `Suggestion.action` ids are command ids.
  */
 
+/** Named arguments for a command run (from an assist suggestion's `actionArgs`). */
+export type CommandArgs = Readonly<Record<string, string>>;
+
 export interface Command {
   id: string;
   title: string;
@@ -17,7 +20,8 @@ export interface Command {
   /** Disabled commands show but do nothing; `reason` explains. */
   enabled?: () => boolean;
   reason?: string;
-  run: () => void | Promise<void>;
+  /** `args` is set when an assist suggestion runs the command. */
+  run: (args?: CommandArgs) => void | Promise<void>;
 }
 
 export class CommandRegistry {
@@ -53,11 +57,11 @@ export class CommandRegistry {
     return [...this.commands.values()].filter((c) => !c.hidden);
   }
 
-  /** Runs a command; returns false if unknown or disabled. */
-  run(id: string): boolean {
+  /** Runs a command (with optional arguments); returns false if unknown or disabled. */
+  run(id: string, args?: CommandArgs): boolean {
     const c = this.commands.get(id);
     if (!c || !(c.enabled?.() ?? true)) return false;
-    void c.run();
+    void c.run(args);
     return true;
   }
 }

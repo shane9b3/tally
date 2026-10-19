@@ -18,6 +18,7 @@ use tauri::{AppHandle, Runtime, State};
 
 use crate::files::{self, TemplateInfo};
 use crate::state::{lock, AppState};
+use tally_api::FileFormat;
 
 /// Result of every command.
 pub type CmdResult<T> = Result<T, ApiError>;
@@ -45,43 +46,53 @@ pub fn track_path(state: &AppState, info: &WorkbookInfo) -> CmdResult<()> {
     Ok(())
 }
 
+/// Opens a path through the engine and remembers it for Save (no allowlist
+/// check; callers check first).
+pub fn open_path(state: &AppState, path: &std::path::Path) -> CmdResult<WorkbookInfo> {
+    let info = with_service(state, |s| s.open(path))?;
+    track_path(state, &info)?;
+    Ok(info)
+}
+
 /// Opens an allowlisted path and records it in the recent list.
 pub fn open_checked<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
     path: &std::path::Path,
 ) -> CmdResult<WorkbookInfo> {
-    let canon = files::check_open_allowed(app, state, path)?;
-    let info = with_service(state, |s| s.open(&canon))?;
+    let canon = files::check_open_allowed(state, path)?;
+    let info = open_path(state, &canon)?;
+    files::push_recent(app, state, &canon);
+    Ok(info)
+}
+
+/// `wb_new`: a blank workbook, or one built by the engine from a template
+/// id (`invoices`, `budget`, `stock`; unknown ids are `not_found`).
+pub fn new_workbook(state: &AppState, template: Option<&str>) -> CmdResult<WorkbookInfo> {
+    let info = with_service(state, |s| s.new_workbook(template))?;
     track_path(state, &info)?;
-    // Templates are opened as documents but never become "recent".
-    let is_template = files::templates_dir(app)
-        .and_then(|d| std::fs::canonicalize(d).ok())
-        .is_some_and(|d| canon.starts_with(d));
-    if !is_template {
-        files::push_recent(app, state, &canon);
-    }
+    Ok(info)
+}
+
+/// Saves `doc` to `path` (already chosen in a dialog or remembered) and
+/// remembers it for the next Save.
+pub fn save_to(
+    state: &AppState,
+    doc: DocId,
+    path: &std::path::Path,
+    format: FileFormat,
+) -> CmdResult<WorkbookInfo> {
+    let info = with_service(state, |s| s.save(doc, Some(path), format))?;
+    track_path(state, &info)?;
     Ok(info)
 }
 
 #[tauri::command]
 pub async fn wb_new(
-    app: AppHandle,
     state: State<'_, AppState>,
     template: Option<String>,
 ) -> CmdResult<WorkbookInfo> {
-    // A template id is resolved to the bundled file; the engine receives
-    // its absolute path (see docs/security.md, WP7 section).
-    let template_path = match template.as_deref() {
-        Some(id) => Some(files::template_path(&app, id)?),
-        None => None,
-    };
-    let arg = template_path
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned());
-    let info = with_service(&state, |s| s.new_workbook(arg.as_deref()))?;
-    track_path(&state, &info)?;
-    Ok(info)
+    new_workbook(&state, template.as_deref())
 }
 
 #[tauri::command]
@@ -217,6 +228,6 @@ pub async fn recent_files(state: State<'_, AppState>) -> CmdResult<Vec<String>> 
 }
 
 #[tauri::command]
-pub async fn list_templates(app: AppHandle) -> CmdResult<Vec<TemplateInfo>> {
-    Ok(files::list_templates(&app))
+pub async fn list_templates() -> CmdResult<Vec<TemplateInfo>> {
+    Ok(files::list_templates())
 }

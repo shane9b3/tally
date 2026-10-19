@@ -7,7 +7,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./mock": "./src/mock.ts"
+    "./mock": "./src/mock.ts",
+    "./tauri": "./src/tauri.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

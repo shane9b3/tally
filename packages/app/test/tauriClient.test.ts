@@ -1,6 +1,6 @@
 import type { Transaction } from "@tally/bridge";
 import { describe, expect, it, vi } from "vitest";
-import { COMMANDS, TauriClient, type InvokeArgs, type TauriEvent } from "../../bridge/src/tauri";
+import { COMMANDS, TauriClient, type InvokeArgs, type TauriEvent } from "@tally/bridge/tauri";
 
 function fake(result: unknown = null) {
   const calls: { cmd: string; args: InvokeArgs | undefined }[] = [];

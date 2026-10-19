@@ -694,7 +694,7 @@ pub fn suggest_rules(req: &AssistRequest, resolver: &SimpleResolver) -> Vec<Sugg
                 format!("Format {l} as currency"),
                 format!("Show {l} values as currency."),
                 if explicit { 0.9 } else { 0.55 },
-                vec![("column".into(), letter(&reg, t))],
+                currency_args(&reg, t),
             ));
         }
     }
@@ -731,7 +731,7 @@ pub fn suggest_rules(req: &AssistRequest, resolver: &SimpleResolver) -> Vec<Sugg
                         format!("Format {l} as currency"),
                         format!("Show {l} values as currency."),
                         0.3,
-                        vec![("column".into(), letter(&reg, t))],
+                        currency_args(&reg, t),
                     ));
                 }
             }
@@ -787,6 +787,15 @@ fn filter_draft(reg: &Region, c: &Cond, confidence: f32) -> Draft {
             ("value".into(), val),
         ],
     )
+}
+
+/// `column` letter plus the column's body `range` (e.g. `F2:F15`).
+fn currency_args(reg: &Region, idx: usize) -> Vec<(String, String)> {
+    let mut args = vec![("column".into(), letter(reg, idx))];
+    if let Some(r) = reg.body_a1(idx) {
+        args.push(("range".into(), r));
+    }
+    args
 }
 
 fn chart_draft(reg: &Region, value: usize, by: usize, confidence: f32) -> Draft {

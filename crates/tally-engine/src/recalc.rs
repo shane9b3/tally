@@ -260,24 +260,45 @@ fn topo_order(wb: &Workbook, dirty: &[FormulaCellId]) -> Vec<Scc> {
     out
 }
 
+/// How a [`CalcCtx`] holds the workbook: mutably (recalc, which caches
+/// results) or shared (previews, which never write).
+enum WbAccess<'w> {
+    Mut(&'w mut Workbook),
+    Shared(&'w Workbook),
+}
+
+impl std::ops::Deref for WbAccess<'_> {
+    type Target = Workbook;
+
+    fn deref(&self) -> &Workbook {
+        match self {
+            WbAccess::Mut(wb) => wb,
+            WbAccess::Shared(wb) => wb,
+        }
+    }
+}
+
 /// The engine's [`EvalContext`].
 pub struct CalcCtx<'w> {
-    wb: &'w mut Workbook,
+    wb: WbAccess<'w>,
     origin: CellAddr,
     now: f64,
     depth: u32,
     dyn_deps: Vec<CellRange>,
+    /// RAND source for shared (read-only) contexts.
+    local_rng: Option<crate::workbook::Rng>,
 }
 
 impl<'w> CalcCtx<'w> {
     /// A context over `wb` with the recalc's fixed `now`.
     pub fn new(wb: &'w mut Workbook, now: f64) -> Self {
         Self {
-            wb,
+            wb: WbAccess::Mut(wb),
             origin: CellAddr::new(0, 0, 0),
             now,
             depth: 0,
             dyn_deps: Vec::new(),
+            local_rng: None,
         }
     }
 
@@ -289,9 +310,29 @@ impl<'w> CalcCtx<'w> {
         c
     }
 
+    /// A read-only context at `origin`: formula cells read their cached
+    /// values (dirty ones are not recalculated) and nothing is written.
+    pub fn shared_at(wb: &'w Workbook, origin: CellAddr) -> Self {
+        Self {
+            now: now_serial(wb.settings.date_epoch),
+            wb: WbAccess::Shared(wb),
+            origin,
+            depth: 0,
+            dyn_deps: Vec::new(),
+            local_rng: Some(crate::workbook::Rng::from_time()),
+        }
+    }
+
+    fn wb_mut(&mut self) -> Option<&mut Workbook> {
+        match &mut self.wb {
+            WbAccess::Mut(wb) => Some(wb),
+            WbAccess::Shared(_) => None,
+        }
+    }
+
     /// Evaluates formula cell `id` and stores its result.
     pub fn evaluate(&mut self, id: FormulaCellId) {
-        let Some(f) = self.wb.formulas.get_mut(id) else {
+        let Some(f) = self.wb_mut().and_then(|wb| wb.formulas.get_mut(id)) else {
             return;
         };
         f.state = CellState::Evaluating;
@@ -305,7 +346,10 @@ impl<'w> CalcCtx<'w> {
         self.depth -= 1;
         self.origin = saved_origin;
         let dynamic = std::mem::replace(&mut self.dyn_deps, saved_dyn);
-        let Some(f) = self.wb.formulas.get_mut(id) else {
+        let Some(wb) = self.wb_mut() else {
+            return;
+        };
+        let Some(f) = wb.formulas.get_mut(id) else {
             return;
         };
         f.cached = value;
@@ -315,9 +359,9 @@ impl<'w> CalcCtx<'w> {
             let mut all = f.precedents.clone();
             all.extend(f.dynamic_deps.iter().copied());
             let vol = f.volatile;
-            self.wb.deps.remove(id);
-            self.wb.deps.add(id, &all);
-            self.wb.deps.set_volatile(id, vol);
+            wb.deps.remove(id);
+            wb.deps.add(id, &all);
+            wb.deps.set_volatile(id, vol);
         }
     }
 
@@ -343,10 +387,22 @@ impl<'w> CalcCtx<'w> {
 
     fn ensure_clean(&mut self, range: &CellRange) {
         let mut ids = Vec::new();
-        dirty_formulas_in(self.wb, range, &mut ids);
+        dirty_formulas_in(&self.wb, range, &mut ids);
         for id in ids {
             let _ = self.formula_value(id);
         }
+    }
+}
+
+impl Workbook {
+    /// Evaluates formula `text` (CalcA1 en-US, with the leading `=`) as if it
+    /// were entered at `addr`, without writing anything (⌘K previews).
+    /// Precedents read their current values. `None` if `text` does not parse.
+    pub fn eval_formula_text_at(&self, addr: CellAddr, text: &str) -> Option<Value> {
+        let f = self.parse_formula(text, addr).ok()?;
+        let mut ctx = CalcCtx::shared_at(self, addr);
+        let v = eval_expr(&f.expr, &mut ctx);
+        Some(cell_result(&v, &mut ctx))
     }
 }
 
@@ -493,7 +549,13 @@ impl EvalContext for CalcCtx<'_> {
     }
 
     fn rand(&mut self) -> f64 {
-        self.wb.rng.next_f64()
+        if let Some(rng) = self.local_rng.as_mut() {
+            return rng.next_f64();
+        }
+        match self.wb_mut() {
+            Some(wb) => wb.rng.next_f64(),
+            None => 0.5,
+        }
     }
 
     fn sheet_index(&self, id: SheetId) -> Option<u32> {
@@ -531,6 +593,24 @@ mod tests {
 
     fn num(wb: &Workbook, s: &str) -> Value {
         wb.value(a(s))
+    }
+
+    #[test]
+    fn eval_formula_text_at_does_not_commit() {
+        let mut wb = Workbook::new();
+        wb.set_input(a("A1"), "2");
+        wb.set_input(a("A2"), "3");
+        wb.set_input(a("B1"), "=A1*10");
+        recalc(&mut wb);
+        assert_eq!(
+            wb.eval_formula_text_at(a("C5"), "=SUM(A1:A2)+B1"),
+            Some(Value::Number(25.0))
+        );
+        assert_eq!(wb.value(a("C5")), Value::Empty);
+        assert!(wb.formula_at(a("C5")).is_none());
+        assert_eq!(wb.eval_formula_text_at(a("C5"), "=SUM("), None);
+        let r = wb.eval_formula_text_at(a("C5"), "=RAND()");
+        assert!(matches!(r, Some(Value::Number(x)) if (0.0..1.0).contains(&x)));
     }
 
     #[test]

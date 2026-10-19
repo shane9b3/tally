@@ -42,6 +42,8 @@ import type { Transaction } from "./generated/Transaction";
 import type { ValueKind } from "./generated/ValueKind";
 import type { WorkbookInfo } from "./generated/WorkbookInfo";
 import type { EngineClient, SheetId, Unsubscribe } from "./client";
+import { mockTemplate } from "./mockTemplates";
+import { BUILTIN_TEMPLATES, type ShellClient, type TemplateInfo } from "./shell";
 
 /** Grid limits, matching `tally_types::{MAX_ROWS, MAX_COLS}`. */
 export const MAX_ROWS = 1_048_576;
@@ -347,7 +349,10 @@ function hintFor(input: string): string | null {
 // ---------------------------------------------------------------------------
 
 /** In-memory {@link EngineClient}. Each instance is an isolated "engine". */
-export class MockClient implements EngineClient {
+/** Currency format the mock applies to template money columns. */
+const MOCK_CURRENCY = "[$$-409]#,##0.00;[RED]-[$$-409]#,##0.00";
+
+export class MockClient implements EngineClient, ShellClient {
   private readonly docs = new Map<DocId, MockDoc>();
   private nextDocId = 1;
   private nextClipToken = 1;
@@ -357,20 +362,39 @@ export class MockClient implements EngineClient {
 
   // -- documents ------------------------------------------------------------
 
-  newWorkbook(_template?: string | null): Promise<WorkbookInfo> {
+  newWorkbook(template?: string | null): Promise<WorkbookInfo> {
+    const tpl = template ? mockTemplate(template) : undefined;
+    if (template && !tpl) return Promise.reject(apiError("not_found", `no template "${template}"`));
     const id = this.nextDocId++;
     const doc: MockDoc = {
       id,
-      title: `Untitled ${id}`,
+      title: tpl ? tpl.title : `Untitled ${id}`,
       path: null,
       dirty: false,
       version: 0,
-      state: { sheets: [newSheet(1, "Sheet1")], activeSheet: 1, styles: [defaultStyle()], nextSheetId: 2 },
+      state: { sheets: [newSheet(1, tpl ? tpl.sheet : "Sheet1")], activeSheet: 1, styles: [defaultStyle()], nextSheetId: 2 },
       undo: [],
       redo: [],
     };
+    if (tpl) this.fillTemplate(doc, tpl.rows, tpl.currencyCols, tpl.widths);
     this.docs.set(id, doc);
     return Promise.resolve(this.info(doc));
+  }
+
+  /** Writes a template's cells and styles (not an undo step). */
+  private fillTemplate(d: MockDoc, rows: string[][], currencyCols: number[], widths: number[]): void {
+    const t = new Touched();
+    const width = Math.max(0, ...rows.map((r) => r.length));
+    const last = rows.length - 1;
+    this.applyOp(d, { type: "setRangeInputs", sheet: 1, r: 0, c: 0, rows }, t);
+    if (width > 0) {
+      this.applyOp(d, { type: "applyStyle", sheet: 1, ranges: [{ r0: 0, c0: 0, r1: 0, c1: width - 1 }], patch: { ...emptyPatch(), bold: true } }, t);
+    }
+    if (last >= 1 && currencyCols.length > 0) {
+      const ranges = currencyCols.map((c) => ({ r0: 1, c0: c, r1: last, c1: c }));
+      this.applyOp(d, { type: "setNumberFormat", sheet: 1, ranges, code: MOCK_CURRENCY }, t);
+    }
+    widths.forEach((px, c) => this.applyOp(d, { type: "setColWidth", sheet: 1, start: c, end: c, px }, t));
   }
 
   open(path: string): Promise<WorkbookInfo> {
@@ -394,6 +418,32 @@ export class MockClient implements EngineClient {
       this.doc(doc);
       this.docs.delete(doc);
     });
+  }
+
+  // -- shell (ShellClient) --------------------------------------------------
+
+  /** The browser has no native dialog. */
+  openDialog(): Promise<WorkbookInfo | null> {
+    return Promise.reject(apiError("unsupported", "Opening files needs the desktop app."));
+  }
+
+  /** "Saves" in memory under the document title with the format's extension. */
+  saveWithDialog(doc: DocId, saveAs: boolean, format: FileFormat | null): Promise<WorkbookInfo> {
+    const d = this.docs.get(doc);
+    if (!d) return Promise.reject(apiError("not_found", `no document ${doc}`));
+    const fmt = format ?? "ods";
+    if (d.path !== null && !saveAs && format === null) return this.save(doc, null, fmt);
+    const title = d.title;
+    const name = /\.[a-z]+$/i.test(title) ? title.replace(/\.[a-z]+$/i, `.${fmt}`) : `${title}.${fmt}`;
+    return this.save(doc, name, fmt);
+  }
+
+  recentFiles(): Promise<string[]> {
+    return Promise.resolve([]);
+  }
+
+  listTemplates(): Promise<TemplateInfo[]> {
+    return Promise.resolve(BUILTIN_TEMPLATES.map((t) => ({ ...t })));
   }
 
   // -- queries --------------------------------------------------------------

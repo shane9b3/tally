@@ -3544,6 +3544,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tally-api",
+ "tally-assist",
+ "tally-engine",
  "tally-types",
  "tauri",
  "tauri-build",

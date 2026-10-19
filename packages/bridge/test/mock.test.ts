@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isApiError, MockClient, type Op, type SelectionDto, type Transaction } from "../src/index";
+import { BUILTIN_TEMPLATES, isApiError, MockClient, type Op, type SelectionDto, type ShellClient, type Transaction } from "../src/index";
 
 const tx = (...ops: Op[]): Transaction => ({ ops, label: null, selectionBefore: null, selectionAfter: null });
 const set = (sheet: number, r: number, c: number, input: string): Op => ({ type: "setCellInput", sheet, r, c, input });
@@ -181,5 +181,34 @@ describe("MockClient", () => {
     off();
     client.emitMenuAction("edit.redo");
     expect(seen).toEqual(["edit.undo"]);
+  });
+
+  it("builds the engine's templates by id and implements ShellClient", async () => {
+    const client = new MockClient();
+    const shell: ShellClient = client;
+    expect((await shell.listTemplates()).map((t) => [t.id, t.title])).toEqual([
+      ["invoices", "Invoice tracker"],
+      ["budget", "Monthly budget"],
+      ["stock", "Stock count"],
+    ]);
+    expect(BUILTIN_TEMPLATES.map((t) => t.id)).toEqual(["invoices", "budget", "stock"]);
+    const inv = await client.newWorkbook("invoices");
+    expect(inv.title).toBe("Invoices");
+    expect(inv.sheets[0]?.name).toBe("Orders");
+    expect(inv.dirty).toBe(false);
+    expect(await text(client, inv.doc, inv.activeSheet, 0, 5)).toBe("Total");
+    expect(await text(client, inv.doc, inv.activeSheet, 1, 5)).toBe("54");
+    const [style] = await client.styles(inv.doc, [(await client.cells(inv.doc, inv.activeSheet, [{ r0: 0, c0: 0, r1: 0, c1: 0 }]))[0]?.cells[0]?.style ?? 0]);
+    expect(style?.bold).toBe(true);
+    const stock = await client.newWorkbook("stock");
+    expect(await text(client, stock.doc, stock.activeSheet, 3, 6)).toBe("Low");
+    const err: unknown = await client.newWorkbook("nope").catch((e: unknown) => e);
+    expect(isApiError(err) && err.code).toBe("not_found");
+    expect(await shell.recentFiles()).toEqual([]);
+    const openErr: unknown = await shell.openDialog().catch((e: unknown) => e);
+    expect(isApiError(openErr) && openErr.code).toBe("unsupported");
+    const saved = await shell.saveWithDialog(inv.doc, true, "csv");
+    expect(saved.title).toBe("Invoices.csv");
+    expect(saved.dirty).toBe(false);
   });
 });

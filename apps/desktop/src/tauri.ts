@@ -1,5 +1,5 @@
-/** Desktop-only wiring: TauriClient, the shell adapter and the window title. */
-import { useDocStore, type AppController, type ShellApi } from "@tally/app";
+/** Desktop-only wiring: TauriClient and the window title. */
+import { useDocStore, type AppController } from "@tally/app";
 import { TauriClient } from "@tally/bridge/tauri";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -11,18 +11,6 @@ export function isTauri(): boolean {
 
 export function makeTauriClient(): TauriClient {
   return new TauriClient({ invoke, listen });
-}
-
-export function createTauriShell(client: TauriClient): ShellApi {
-  return {
-    native: true,
-    openDialog: () => client.openDialog(),
-    openRecent: (path) => client.open(path),
-    save: (doc, saveAs, format) => client.saveWithDialog(doc, saveAs, format),
-    recentFiles: () => client.recentFiles(),
-    listTemplates: () => client.listTemplates(),
-    newFromTemplate: (id) => client.newWorkbook(id),
-  };
 }
 
 /** Mirrors the document title (and dirty state) into the native window title. */

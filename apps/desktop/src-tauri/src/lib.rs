@@ -1,16 +1,19 @@
 //! Tally desktop shell (WP7): the Tauri window, native menu, file dialogs,
-//! recent files, bundled templates and one command per `DocumentService`
-//! method (docs/api.md).
+//! recent files, templates and one command per `DocumentService` method
+//! (docs/api.md), over the real engine (`tally-engine` with ODS/CSV IO) and
+//! the rule-based ⌘K assist (`tally-assist`).
 
 #![forbid(unsafe_code)]
 
+mod assist;
 mod commands;
 mod dialogs;
 mod events;
 mod files;
 mod menu;
 mod state;
-mod stub;
+#[cfg(test)]
+mod tests;
 
 use tally_api::DocumentService;
 use tauri::Manager;
@@ -19,9 +22,8 @@ pub use state::AppState;
 
 /// Starts the app.
 pub fn run() {
-    // The engine. WP1 swap (one line; also add `tally-engine` to Cargo.toml):
-    // let service: Box<dyn DocumentService + Send> = Box::new(tally_engine::service::EngineService::new());
-    let service: Box<dyn DocumentService + Send> = Box::new(stub::StubService::new());
+    // The engine with ODS/CSV IO and the ⌘K rule provider installed.
+    let service: Box<dyn DocumentService + Send> = Box::new(assist::build_service());
 
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

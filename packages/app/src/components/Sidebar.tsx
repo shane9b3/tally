@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { cx, useController } from "../context";
 import { relativeTime } from "../hooks";
-import type { TemplateInfo } from "../shell";
+import type { TemplateInfo } from "@tally/bridge";
 import { useDocStore } from "../stores/docStore";
 import { PlusIcon } from "./icons";
 import styles from "./Sidebar.module.css";

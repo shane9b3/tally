@@ -1,7 +1,6 @@
 import type { ApplyResult, WorkbookInfo } from "@tally/bridge";
 import { beforeEach, describe, expect, it } from "vitest";
 import { clampZoom, nextZoom } from "../src/formats";
-import { parseCsv } from "../src/shell";
 import { NO_UNDO, reduceResult, useDocStore } from "../src/stores/docStore";
 import { useEditStore } from "../src/stores/editStore";
 import { fromSelectionDto, toSelectionDto } from "../src/stores/selectionStore";
@@ -115,12 +114,5 @@ describe("selection conversion and CSV", () => {
     const dto = toSelectionDto(sel, 3);
     expect(dto).toEqual({ sheet: 3, ranges: [{ r0: 0, c0: 0, r1: 0, c1: 2 }], active: { r: 0, c: 0 } });
     expect(fromSelectionDto(dto)).toEqual(sel);
-  });
-
-  it("parses quoted CSV", () => {
-    expect(parseCsv('a,"b,c","d""e"\r\n1,2,\n')).toEqual([
-      ["a", "b,c", 'd"e'],
-      ["1", "2", ""],
-    ]);
   });
 });

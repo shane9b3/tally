@@ -9,7 +9,7 @@ use tally_api::{ApiError, DocumentService};
 /// Everything the commands share. Lock order (when more than one is needed):
 /// `service`, then `paths`, then `recent`, then `allowed`.
 pub struct AppState {
-    /// The engine (a stub until WP1 lands; see `lib.rs`).
+    /// The engine (`tally_engine::EngineService`; see `lib.rs`).
     pub service: Mutex<Box<dyn DocumentService + Send>>,
     /// Recently opened or saved files, most recent first.
     pub recent: Mutex<Vec<String>>,

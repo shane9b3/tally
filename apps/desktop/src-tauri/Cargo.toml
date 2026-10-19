@@ -26,7 +26,8 @@ serde.workspace = true
 serde_json.workspace = true
 tally-api.workspace = true
 tally-types.workspace = true
-# TODO(WP1): add `tally-engine.workspace = true` when the engine lands (see src/lib.rs).
+tally-engine = { workspace = true, features = ["io"] }
+tally-assist.workspace = true
 
 [lints]
 workspace = true

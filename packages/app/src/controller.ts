@@ -4,6 +4,7 @@
  * flow back into the zustand stores and the grid's data source.
  */
 import {
+  CANCELLED,
   isApiError,
   type ApiError,
   type ApplyResult,
@@ -11,6 +12,7 @@ import {
   type CellView,
   type EngineClient,
   type FileFormat,
+  type ShellClient,
   type Op,
   type RangeDto,
   type StylePatch,
@@ -19,7 +21,7 @@ import {
 } from "@tally/bridge";
 import { cellSelection, EngineClientSource, type CommitMove, type Dir, type Grid as GridCore, type Selection } from "@tally/grid";
 import { CommandRegistry } from "./registry";
-import { EMPTY_PATCH, type ShellApi } from "./shell";
+import { EMPTY_PATCH } from "./formats";
 import { useDocStore } from "./stores/docStore";
 import { useEditStore } from "./stores/editStore";
 import { fromSelectionDto, toSelectionDto, useSelectionStore } from "./stores/selectionStore";
@@ -50,7 +52,7 @@ export class AppController {
 
   constructor(
     readonly client: EngineClient,
-    readonly shell: ShellApi,
+    readonly shell: ShellClient,
     readonly opts: ControllerOptions,
   ) {}
 
@@ -82,7 +84,7 @@ export class AppController {
 
   async start(template?: string | null): Promise<void> {
     try {
-      const info = template ? await this.shell.newFromTemplate(template) : await this.client.newWorkbook(null);
+      const info = await this.client.newWorkbook(template ?? null);
       this.load(info);
     } catch (e) {
       this.notifyError(e);
@@ -130,7 +132,7 @@ export class AppController {
 
   notifyError = (e: unknown): void => {
     const err = errorOf(e);
-    if (err.code === "cancelled") return;
+    if (err.code === CANCELLED) return;
     console.warn("tally:", err);
     useUiStore.getState().pushToast("error", err.message);
   };
@@ -232,7 +234,12 @@ export class AppController {
   }
 
   setNumberFormat(code: string, label: string): Promise<ApplyResult | null> {
-    return this.apply(label, [{ type: "setNumberFormat", sheet: this.sheet, ranges: [{ ...this.selection.range }], code }]);
+    return this.setNumberFormatOn([{ ...this.selection.range }], code, label);
+  }
+
+  /** Applies a number format to explicit ranges of the active sheet. */
+  setNumberFormatOn(ranges: RangeDto[], code: string, label: string): Promise<ApplyResult | null> {
+    return this.apply(label, [{ type: "setNumberFormat", sheet: this.sheet, ranges: ranges.map((r) => ({ ...r })), code }]);
   }
 
   /** Σ: `=SUM(<numeric block above, else to the left>)` in the active cell. */
@@ -458,7 +465,7 @@ export class AppController {
 
   newFromTemplate = async (id: string): Promise<void> => {
     try {
-      this.load(await this.shell.newFromTemplate(id));
+      this.load(await this.client.newWorkbook(id));
     } catch (e) {
       this.notifyError(e);
     }
@@ -475,7 +482,7 @@ export class AppController {
 
   openRecent = async (path: string): Promise<void> => {
     try {
-      this.load(await this.shell.openRecent(path));
+      this.load(await this.client.open(path));
     } catch (e) {
       this.notifyError(e);
     }
@@ -485,7 +492,7 @@ export class AppController {
     try {
       const info = this.info;
       if (!info) return;
-      const res = await this.shell.save(info.doc, saveAs, format, info.title);
+      const res = await this.shell.saveWithDialog(info.doc, saveAs, format);
       useDocStore.getState().setInfo(res);
       if (format === "csv") useUiStore.getState().pushToast("info", `Exported ${res.title}`);
     } catch (e) {

@@ -14,7 +14,8 @@ Types come from `crates/tally-api/src/dto.rs` and are generated into
 
 - Command names are `snake_case`; their JS arguments are `camelCase` (Tauri's default).
 - Errors reject the promise with `ApiError` `{ code: string, message: string }`.
-  Codes: `not_found`, `invalid_argument`, `io`, `bad_file`, `unsupported`, `internal`.
+  Codes: `not_found`, `invalid_argument`, `io`, `bad_file`, `unsupported`, `internal`,
+  and (shell only) `cancelled` when the user dismisses a native dialog (`ApiError::CANCELLED`, `CANCELLED` in TS; the UI ignores it).
 - `DocId` and `SheetId` are numbers. A `SheetId` is stable and is not the tab index.
 - Optional values are `T | null` in both directions.
 - Enums with data are discriminated unions on `type` (`{ type: "setCellInput", ... }`);
@@ -24,10 +25,10 @@ Types come from `crates/tally-api/src/dto.rs` and are generated into
 
 | Tauri command | Arguments | Returns | `DocumentService` method | `EngineClient` method |
 |---|---|---|---|---|
-| `wb_new` | `template?: string` | `WorkbookInfo` | `new_workbook(template)` | `newWorkbook(template?)` |
-| `wb_open_dialog` | none | `WorkbookInfo \| null` | shell only: native dialog, then `open(path)` | (WP7, Tauri-specific) |
+| `wb_new` | `template?: string` (id: `invoices`, `budget`, `stock`) | `WorkbookInfo` | `new_workbook(template)` (id passed through; the engine builds it) | `newWorkbook(template?)` |
+| `wb_open_dialog` | none | `WorkbookInfo \| null` | shell only: native dialog, then `open(path)` | `ShellClient.openDialog()` |
 | `wb_open` | `path: string` | `WorkbookInfo` | `open(path)` | `open(path)` |
-| `wb_save` | `doc, saveAs: boolean, format?: FileFormat` | `WorkbookInfo` | shell shows a dialog when `saveAs` or no path, then `save(doc, path, format)` | `save(doc, path \| null, format)` |
+| `wb_save` | `doc, saveAs: boolean, format?: FileFormat` | `WorkbookInfo` | shell shows a dialog when `saveAs` or no path, then `save(doc, path, format)` | `save(doc, path \| null, format)`; `ShellClient.saveWithDialog(doc, saveAs, format)` |
 | `wb_close` | `doc` | `void` | `close(doc)` | `close(doc)` |
 | `sheet_layout` | `doc, sheet` | `SheetLayout` | `sheet_layout(doc, sheet)` | `sheetLayout(doc, sheet)` |
 | `get_cells` | `doc, sheet, ranges: RangeDto[]` | `CellBlock[]` | `cells(doc, sheet, ranges)` | `cells(doc, sheet, ranges)` |
@@ -42,12 +43,27 @@ Types come from `crates/tally-api/src/dto.rs` and are generated into
 | `resolve_name_box` | `doc, text` | `SelectionDto` | `resolve_name_box(doc, text)` | `resolveNameBox(doc, text)` |
 | `list_functions` | none | `FunctionInfo[]` | `list_functions()` | `listFunctions()` |
 | `assist_suggest` | `doc, query, sel: SelectionDto` | `Suggestion[]` | `assist_suggest(doc, query, sel)` | `assistSuggest(doc, query, sel)` |
-| `recent_files` | none | `string[]` | shell only (app data) | (WP7, Tauri-specific) |
-| `list_templates` | none | (WP7 defines) | shell only (bundled resources) | (WP7, Tauri-specific) |
+| `recent_files` | none | `string[]` | shell only (app data) | `ShellClient.recentFiles()` |
+| `list_templates` | none | `TemplateInfo[]` (`{ id, title, description }`) | shell only (the engine's `templates::CATALOG`) | `ShellClient.listTemplates()` |
 
 `wb_open_dialog`, `recent_files`, `list_templates` and the dialog half of `wb_save`
-belong to the shell, not the engine, so they have no `DocumentService` method. WP7
-adds them to `TauriClient` (and optionally to `EngineClient` as an additive change).
+belong to the shell, not the engine, so they have no `DocumentService` method. They
+form the `ShellClient` interface (`packages/bridge/src/shell.ts`), implemented by
+`TauriClient` (`@tally/bridge/tauri`) and `MockClient` (in-memory: no Open dialog,
+"save" renames the document, the three templates are built in memory).
+
+## Suggestions
+
+`Suggestion` (⌘K) has `title`, `formula`, `explanation`, `preview` (computed by the
+engine at the active cell without committing), `confidence`, `action` and
+`actionArgs: ActionArg[]` (`{ key, value }`, empty for formula suggestions). Action ids
+and their args from the rule provider:
+
+| `action` | `actionArgs` | UI (Phase A) |
+|---|---|---|
+| `format.currency` | `column` (`F`), `range` (column body, `F2:F15`) | applies the currency format to `range` |
+| `filter.byColumn` | `column`, `op` (`=`, `<>`, `>` …), `value` | toast "Filtering is coming in v0.2" |
+| `chart.byColumn` | `value`, `by` (column letters) | toast "Charts are coming in v0.2" |
 
 ## Events
 

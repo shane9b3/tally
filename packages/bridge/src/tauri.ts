@@ -39,6 +39,9 @@ import type { Suggestion } from "./generated/Suggestion";
 import type { Transaction } from "./generated/Transaction";
 import type { WorkbookInfo } from "./generated/WorkbookInfo";
 import { isApiError, type EngineClient, type SheetId, type Unsubscribe } from "./client";
+import type { ShellClient, TemplateInfo } from "./shell";
+
+export { CANCELLED, type TemplateInfo } from "./shell";
 
 /** Arguments of a Tauri command (JSON-serializable, camelCase keys). */
 export type InvokeArgs = Record<string, unknown>;
@@ -59,16 +62,6 @@ export interface TauriTransport {
   invoke: InvokeFn;
   listen: ListenFn;
 }
-
-/** A bundled template (`list_templates`). */
-export interface TemplateInfo {
-  id: string;
-  title: string;
-  description: string;
-}
-
-/** Rejection code when the user dismisses a native dialog. */
-export const CANCELLED = "cancelled";
 
 /** Command names, exactly as in docs/api.md. */
 export const COMMANDS = {
@@ -105,7 +98,7 @@ export function toApiError(e: unknown): ApiError {
   return { code: "internal", message: String(e) };
 }
 
-export class TauriClient implements EngineClient {
+export class TauriClient implements EngineClient, ShellClient {
   constructor(private readonly tauri: TauriTransport) {}
 
   private call<T>(cmd: string, args?: InvokeArgs): Promise<T> {

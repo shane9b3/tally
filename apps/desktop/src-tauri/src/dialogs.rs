@@ -8,15 +8,12 @@ use tally_api::{ApiError, DocId, FileFormat, WorkbookInfo};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::commands::{open_checked, track_path, with_service, CmdResult};
+use crate::commands::{open_checked, save_to, CmdResult};
 use crate::files;
 use crate::state::{lock, AppState};
 
-/// Rejection code when the user dismisses a dialog (the UI ignores it).
-pub const CANCELLED: &str = "cancelled";
-
 fn cancelled() -> ApiError {
-    ApiError::new(CANCELLED, "cancelled")
+    ApiError::new(ApiError::CANCELLED, "cancelled")
 }
 
 fn join_err(e: impl std::fmt::Display) -> ApiError {
@@ -133,8 +130,7 @@ pub async fn wb_save(
         }
     };
     let fmt = format.unwrap_or_else(|| format_for(&target));
-    let info = with_service(&state, |s| s.save(doc, Some(&target), fmt))?;
-    track_path(&state, &info)?;
+    let info = save_to(&state, doc, &target, fmt)?;
     files::push_recent(&app, &state, &target);
     Ok(info)
 }

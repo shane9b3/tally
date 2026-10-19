@@ -4,6 +4,7 @@
  * function list.
  */
 import type { FunctionInfo, Suggestion } from "@tally/bridge";
+import type { CommandArgs } from "../registry";
 import { Command } from "cmdk";
 import { useEffect, useMemo, useState } from "react";
 import { useController } from "../context";
@@ -15,6 +16,11 @@ import { SparkIcon } from "./icons";
 import styles from "./CommandPalette.module.css";
 
 export const ASSIST_DEBOUNCE_MS = 120;
+
+/** A suggestion's `actionArgs` as command arguments. */
+export function argsOf(s: Suggestion): CommandArgs {
+  return Object.fromEntries(s.actionArgs.map((a) => [a.key, a.value]));
+}
 
 export function CommandPalette() {
   const open = useUiStore((s) => s.paletteOpen);
@@ -127,7 +133,7 @@ function PaletteCard() {
                   className={styles.item}
                   onSelect={() => {
                     close();
-                    if (s.action) ctl.registry.run(s.action);
+                    if (s.action) ctl.registry.run(s.action, argsOf(s));
                   }}
                 >
                   <span className={styles.title}>{s.title}</span>

@@ -1,5 +1,5 @@
-//! Bundled sample workbooks (`new_workbook(Some("invoices"))`, `"budget"`),
-//! built in code to match the owner's mockup.
+//! Bundled sample workbooks (`new_workbook(Some("invoices"))`, `"budget"`,
+//! `"stock"`), built in code to match the owner's mockup.
 
 use tally_api::StylePatch;
 use tally_numfmt::{builtin_format, QuickFormat, EN_US};
@@ -9,7 +9,37 @@ use crate::units::px_to_hmm;
 use crate::workbook::Workbook;
 
 /// Template ids accepted by `new_workbook`.
-pub const TEMPLATES: &[&str] = &["invoices", "budget"];
+pub const TEMPLATES: &[&str] = &["invoices", "budget", "stock"];
+
+/// A template's id and how the shell presents it.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct TemplateMeta {
+    /// Id passed to `new_workbook`.
+    pub id: &'static str,
+    /// Display name.
+    pub title: &'static str,
+    /// One-line description.
+    pub description: &'static str,
+}
+
+/// Every template, in display order (same ids as [`TEMPLATES`]).
+pub const CATALOG: &[TemplateMeta] = &[
+    TemplateMeta {
+        id: "invoices",
+        title: "Invoice tracker",
+        description: "Customers, amounts and payment status",
+    },
+    TemplateMeta {
+        id: "budget",
+        title: "Monthly budget",
+        description: "Planned versus actual spending",
+    },
+    TemplateMeta {
+        id: "stock",
+        title: "Stock count",
+        description: "Items on hand and reorder levels",
+    },
+];
 
 fn put(wb: &mut Workbook, sheet: SheetId, r: u32, c: u32, input: &str) {
     wb.set_input(CellAddr::new(sheet, r, c), input);
@@ -57,6 +87,7 @@ pub fn build(id: &str) -> Option<(Workbook, &'static str)> {
     match id.to_ascii_lowercase().as_str() {
         "invoices" => Some((invoices(), "Invoices")),
         "budget" => Some((budget(), "Budget")),
+        "stock" => Some((stock(), "Stock")),
         _ => None,
     }
 }
@@ -230,4 +261,88 @@ fn budget() -> Workbook {
     style_cells(&mut wb, s, total, 0, total, 4, &bold());
     widths(&mut wb, s, &[150.0, 100.0, 100.0, 100.0, 80.0]);
     wb
+}
+
+fn stock() -> Workbook {
+    let mut wb = Workbook::empty();
+    let s = wb.add_sheet(Some("Stock"), None);
+    let header = [
+        "Item",
+        "SKU",
+        "On hand",
+        "Reorder at",
+        "Unit cost",
+        "Value",
+        "Status",
+    ];
+    for (c, h) in header.iter().enumerate() {
+        put(&mut wb, s, 0, c as u32, h);
+    }
+    let rows: [(&str, &str, u32, u32, &str); 12] = [
+        ("Flour (kg)", "FL-025", 42, 20, "1.10"),
+        ("Sugar (kg)", "SU-010", 18, 15, "0.95"),
+        ("Coffee beans (kg)", "CB-001", 6, 10, "14.50"),
+        ("Milk (L)", "MK-001", 24, 30, "1.20"),
+        ("Eggs (dozen)", "EG-012", 15, 12, "3.40"),
+        ("Butter (kg)", "BT-005", 4, 8, "8.75"),
+        ("Paper cups", "PC-100", 600, 250, "0.08"),
+        ("Napkins", "NP-500", 1200, 500, "0.02"),
+        ("Paper bags", "PB-050", 140, 200, "0.12"),
+        ("Olive oil (L)", "OO-005", 9, 6, "7.80"),
+        ("Maple syrup (L)", "MS-001", 3, 5, "11.20"),
+        ("Labels", "LB-250", 900, 300, "0.03"),
+    ];
+    for (i, (item, sku, on_hand, reorder, cost)) in rows.iter().enumerate() {
+        let r = i as u32 + 1;
+        let n = r + 1;
+        put(&mut wb, s, r, 0, item);
+        put(&mut wb, s, r, 1, sku);
+        put(&mut wb, s, r, 2, &on_hand.to_string());
+        put(&mut wb, s, r, 3, &reorder.to_string());
+        put(&mut wb, s, r, 4, &format!("${cost}"));
+        put(&mut wb, s, r, 5, &format!("=C{n}*E{n}"));
+        put(&mut wb, s, r, 6, &format!("=IF(C{n}<D{n},\"Low\",\"OK\")"));
+    }
+    let last = rows.len() as u32;
+    let currency = StylePatch {
+        number_format: Some(builtin_format(QuickFormat::Currency, &EN_US)),
+        ..StylePatch::default()
+    };
+    style_cells(&mut wb, s, 1, 4, last, 5, &currency);
+    style_cells(&mut wb, s, 0, 0, 0, 6, &bold());
+    widths(&mut wb, s, &[160.0, 90.0, 80.0, 90.0, 90.0, 100.0, 70.0]);
+    wb
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tally_types::Value;
+
+    #[test]
+    fn catalog_matches_ids_and_builds() {
+        assert_eq!(
+            CATALOG.iter().map(|t| t.id).collect::<Vec<_>>(),
+            TEMPLATES.to_vec()
+        );
+        for id in TEMPLATES {
+            assert!(build(id).is_some(), "{id}");
+        }
+        assert!(build("nope").is_none());
+    }
+
+    #[test]
+    fn stock_values_and_status() {
+        let (mut wb, title) = build("stock").expect("stock");
+        assert_eq!(title, "Stock");
+        crate::recalc::hard_recalc(&mut wb);
+        let s = wb.active_sheet;
+        let v = |r: u32, c: u32| wb.value(CellAddr::new(s, r, c));
+        assert_eq!(v(0, 5), Value::text("Value"));
+        // Flour: 42 × 1.10, OK; coffee beans: 6 < 10, Low.
+        assert!(matches!(v(1, 5), Value::Number(x) if (x - 46.2).abs() < 1e-9));
+        assert_eq!(v(1, 6), Value::text("OK"));
+        assert_eq!(v(3, 6), Value::text("Low"));
+        assert_eq!(v(13, 0), Value::Empty);
+    }
 }

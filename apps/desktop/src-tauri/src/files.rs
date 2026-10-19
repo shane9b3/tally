@@ -1,16 +1,16 @@
-//! Recent files, bundled templates and the `open(path)` allowlist.
+//! Recent files, the template list and the `open(path)` allowlist.
 //!
 //! JS can never make the shell read an arbitrary path: `wb_open` accepts a
-//! path only if it is (a) in the recent-files list, (b) was returned by a
-//! native dialog this session, or (c) lies inside the bundled `templates/`
-//! directory. See docs/security.md (WP7 section).
+//! path only if it is (a) in the recent-files list or (b) was returned by a
+//! native dialog this session. Templates are built in code by the engine
+//! (`new_workbook(Some(id))`), so no template files are read. See
+//! docs/security.md (WP7 section).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tally_api::ApiError;
-use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::state::{lock, AppState};
@@ -19,7 +19,7 @@ use crate::state::{lock, AppState};
 pub const MAX_RECENT: usize = 10;
 const RECENT_FILE: &str = "recent.json";
 
-/// A bundled template, as returned by `list_templates`.
+/// A template, as returned by `list_templates`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TemplateInfo {
@@ -31,80 +31,20 @@ pub struct TemplateInfo {
     pub description: String,
 }
 
-/// (id, file, title, description). Phase A ships CSV; ODS once WP5 lands.
-const TEMPLATES: &[(&str, &str, &str, &str)] = &[
-    (
-        "invoices",
-        "invoices.csv",
-        "Invoice tracker",
-        "Customers, amounts and payment status",
-    ),
-    (
-        "budget",
-        "budget.csv",
-        "Monthly budget",
-        "Planned versus actual spending",
-    ),
-    (
-        "stock",
-        "stock.csv",
-        "Stock count",
-        "Items on hand and reorder levels",
-    ),
-];
-
 fn io_err(what: &str, e: &std::io::Error) -> ApiError {
     ApiError::new(ApiError::IO, format!("{what}: {e}"))
 }
 
-/// The bundled templates directory (resources in a bundle; the source
-/// directory in debug builds if resources were not copied).
-pub fn templates_dir<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    if let Ok(dir) = app.path().resolve("templates", BaseDirectory::Resource) {
-        if dir.is_dir() {
-            return Some(dir);
-        }
-    }
-    if cfg!(debug_assertions) {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
-        if dir.is_dir() {
-            return Some(dir);
-        }
-    }
-    None
-}
-
-/// Bundled templates whose file exists.
-pub fn list_templates<R: Runtime>(app: &AppHandle<R>) -> Vec<TemplateInfo> {
-    let Some(dir) = templates_dir(app) else {
-        return Vec::new();
-    };
-    TEMPLATES
+/// The engine's templates (ids passed to `wb_new`, with display names).
+pub fn list_templates() -> Vec<TemplateInfo> {
+    tally_engine::service::templates::CATALOG
         .iter()
-        .filter(|(_, file, _, _)| dir.join(file).is_file())
-        .map(|(id, _, title, description)| TemplateInfo {
-            id: (*id).to_owned(),
-            title: (*title).to_owned(),
-            description: (*description).to_owned(),
+        .map(|t| TemplateInfo {
+            id: t.id.to_owned(),
+            title: t.title.to_owned(),
+            description: t.description.to_owned(),
         })
         .collect()
-}
-
-/// Absolute path of a bundled template by id.
-pub fn template_path<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<PathBuf, ApiError> {
-    let (_, file, _, _) = TEMPLATES
-        .iter()
-        .find(|(tid, _, _, _)| *tid == id)
-        .ok_or_else(|| ApiError::not_found(format!("no template \"{id}\"")))?;
-    let dir = templates_dir(app).ok_or_else(|| ApiError::not_found("templates are not bundled"))?;
-    let path = dir.join(file);
-    if path.is_file() {
-        Ok(path)
-    } else {
-        Err(ApiError::not_found(format!(
-            "template file {file} is missing"
-        )))
-    }
 }
 
 fn recent_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
@@ -166,17 +106,8 @@ pub fn allow(state: &AppState, path: &Path) -> Result<(), ApiError> {
 }
 
 /// Checks the `open(path)` allowlist and returns the canonical path.
-pub fn check_open_allowed<R: Runtime>(
-    app: &AppHandle<R>,
-    state: &AppState,
-    path: &Path,
-) -> Result<PathBuf, ApiError> {
+pub fn check_open_allowed(state: &AppState, path: &Path) -> Result<PathBuf, ApiError> {
     let canon = fs::canonicalize(path).map_err(|e| io_err("opening the file", &e))?;
-    if let Some(dir) = templates_dir(app).and_then(|d| fs::canonicalize(d).ok()) {
-        if canon.starts_with(&dir) {
-            return Ok(canon);
-        }
-    }
     if lock(&state.allowed, "allowlist")?.contains(&canon) {
         return Ok(canon);
     }

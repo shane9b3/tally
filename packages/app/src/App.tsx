@@ -11,7 +11,7 @@
 import "@tally/tokens/fonts";
 import "@tally/tokens/tokens.css";
 import "./global.css";
-import type { EngineClient } from "@tally/bridge";
+import type { EngineClient, ShellClient } from "@tally/bridge";
 import { useEffect, useMemo, useState } from "react";
 import { buildCommands } from "./commands";
 import { CommandPalette } from "./components/CommandPalette";
@@ -24,7 +24,6 @@ import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
 import { ControllerContext } from "./context";
 import { AppController } from "./controller";
-import { createBrowserShell, type ShellApi } from "./shell";
 import { useUiStore } from "./stores/uiStore";
 import { useKeymap } from "./useKeymap";
 import styles from "./App.module.css";
@@ -37,9 +36,8 @@ export interface Platform {
 }
 
 export interface AppProps {
-  client: EngineClient;
-  /** File dialogs, recent files, templates. Defaults to an in-browser stand-in. */
-  shell?: ShellApi;
+  /** Engine and shell (`TauriClient` in the desktop app, `MockClient` in a browser). */
+  client: EngineClient & ShellClient;
   /** Open this template instead of a blank workbook on start. */
   initialTemplate?: string | null;
   platform?: Partial<Platform>;
@@ -47,12 +45,12 @@ export interface AppProps {
   onReady?: (ctl: AppController) => void;
 }
 
-export function App({ client, shell, initialTemplate, platform, onReady }: AppProps) {
+export function App({ client, initialTemplate, platform, onReady }: AppProps) {
   const trafficLights = platform?.trafficLights ?? false;
   const nativeMenu = platform?.nativeMenu ?? false;
   const ctl = useMemo(
-    () => new AppController(client, shell ?? createBrowserShell(client), { nativeMenu }),
-    [client, shell, nativeMenu],
+    () => new AppController(client, client, { nativeMenu }),
+    [client, nativeMenu],
   );
   const [renaming, setRenaming] = useState<number | null>(null);
   const [about, setAbout] = useState(false);

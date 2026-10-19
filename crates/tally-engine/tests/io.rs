@@ -15,9 +15,7 @@ fn repo(p: &str) -> std::path::PathBuf {
 #[test]
 fn csv_open_ods_round_trip() {
     let mut svc = EngineService::with_default_codec();
-    let info = svc
-        .open(&repo("apps/desktop/src-tauri/templates/invoices.csv"))
-        .unwrap();
+    let info = svc.open(&repo("tests/fixtures/csv/invoices.csv")).unwrap();
     let s = info.sheets[0].id;
     assert_eq!(info.sheets[0].name, "invoices");
     let wb = &svc.document(info.doc).unwrap().wb;

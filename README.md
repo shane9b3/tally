@@ -4,13 +4,14 @@ Tally is a modern, fast spreadsheet for macOS, Windows and Linux. It aims for
 OpenOffice Calc compatible behaviour (the same functions, `Err:5xx` codes and
 OpenDocument files) with a clean, modern interface. "Tally" is a placeholder name.
 
-Status: Phase A (first runnable build) in progress. See `docs/phase-a.md`.
+Status: Phase A (first runnable build) is integrated: the desktop app runs the
+real engine with ODS/CSV files and the ⌘K assist. See `docs/phase-a.md`.
 
 ## Stack
 
 - **Engine:** Rust (`crates/tally-*`): formula parser, function library, number
   formats, dependency graph and recalculation, ODS and CSV IO.
-- **Shell:** Tauri 2.12 (`apps/desktop`, arriving with WP7).
+- **Shell:** Tauri 2.12 (`apps/desktop`).
 - **UI:** React 19 + TypeScript, with a canvas grid we write ourselves (`packages/*`).
 - **Contracts:** Rust DTOs in `tally-api` exported to TypeScript with ts-rs.
 
@@ -22,15 +23,26 @@ Decisions and exact version pins: `docs/adr/0001-stack.md`.
 - Node 24 and pnpm (`corepack enable`). **Use pnpm, not npm.**
 - Linux only: `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf`
 
+## Quick start
+
+```sh
+pnpm install                 # JS dependencies (exact versions, lockfile committed)
+pnpm tauri dev               # build the Rust side and open the desktop app
+```
+
+`pnpm dev:web` serves the same UI in a browser against the in-memory
+`MockClient` (no engine). `pnpm tauri build` makes `target/release/bundle/macos/Tally.app`
+and a `.dmg` (unsigned).
+
 ## Build and test
 
 ```sh
 pnpm install                 # JS dependencies (exact versions, lockfile committed)
-cargo test --workspace       # Rust tests (also regenerates TS bindings)
+cargo test --workspace --features tally-engine/io   # Rust tests (also regenerates TS bindings)
 pnpm -r typecheck            # TypeScript
 pnpm -r test                 # vitest
 cargo xtask gen-bindings     # regenerate packages/bridge/src/generated explicitly
-pnpm tauri dev               # run the desktop app (available once WP7 lands)
+pnpm e2e                     # Playwright against the MockClient web build
 ```
 
 ## Repository layout
@@ -52,7 +64,7 @@ crates/
   tally-cli/        command-line eval/convert/recalc/diff                   (WP1)
 xtask/              cargo xtask gen-bindings | function-coverage
 packages/
-  bridge/           @tally/bridge: generated types, EngineClient, MockClient
+  bridge/           @tally/bridge: generated types, EngineClient, ShellClient, MockClient, TauriClient
   tokens/           @tally/tokens: CSS design tokens + typed Theme reader
   grid/             @tally/grid: canvas grid                                (WP6)
   app/              @tally/app: React chrome and stores                     (WP7)

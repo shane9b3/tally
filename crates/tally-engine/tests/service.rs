@@ -394,10 +394,37 @@ fn functions_and_assist_hook() {
             preview: None,
             confidence: 1.0,
             action: None,
+            action_args: Vec::new(),
         }]
     }));
     let out = f.svc.assist_suggest(f.doc, "total", &s).unwrap();
     assert_eq!(out[0].title, "total / Paid");
+}
+
+#[test]
+fn assist_preview_evaluates_without_committing() {
+    let mut f = Fixture::new();
+    f.set("A1", "4");
+    f.set("A2", "6");
+    f.svc.set_assist_provider(Box::new(|req| {
+        let v = req.preview("=SUM(A1:A2)*2");
+        vec![Suggestion {
+            title: String::new(),
+            formula: Some("=SUM(A1:A2)*2".into()),
+            explanation: String::new(),
+            preview: v.map(|v| format!("{v:?}")),
+            confidence: 1.0,
+            action: None,
+            action_args: Vec::new(),
+        }]
+    }));
+    let s = sel(f.sheet, "B3");
+    let out = f.svc.assist_suggest(f.doc, "x", &s).unwrap();
+    assert_eq!(
+        out[0].preview.as_deref(),
+        Some(format!("{:?}", Value::Number(20.0)).as_str())
+    );
+    assert_eq!(f.value("B3"), Value::Empty);
 }
 
 #[test]
