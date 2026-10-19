@@ -1,0 +1,26 @@
+---
+source: crates/tally-formula/tests/ast_snapshots.rs
+expression: "dump(WHITESPACE, calc())"
+---
+= 1 + 2 
+    (+ 1.0 2.0)
+=  SUM( A1 , B1 )
+    (call #0 (cell R[-2]C[-2]) (cell R[-2]C[-1]))
+=	A1
+*
+B1
+    (* (cell R[-2]C[-2]) (cell R[-2]C[-1]))
+= - 2 ^ 2
+    (^ (neg 2.0) 2.0)
+=A1 % 
+    (% (cell R[-2]C[-2]))
+=IF( A1 , , 1 )
+    (call #27 (cell R[-2]C[-2]) _ 1.0)
+=1 + 2
+    (+ 1.0 2.0)
+1+2
+    (+ 1.0 2.0)
+SUM(A1:B2)
+    (call #0 (area R[-2]C[-2] R[-1]C[-1]))
+ =1
+    ERROR Err:510 at 1..2

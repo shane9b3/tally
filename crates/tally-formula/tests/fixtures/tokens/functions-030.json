@@ -1,0 +1,60 @@
+{
+  "src": "=INDEX(A1:C3,2,2)",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Func",
+      "text": "INDEX",
+      "start": 1,
+      "end": 6
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 6,
+      "end": 7
+    },
+    {
+      "kind": "RangeRef",
+      "text": "A1:C3",
+      "start": 7,
+      "end": 12
+    },
+    {
+      "kind": "Comma",
+      "text": ",",
+      "start": 12,
+      "end": 13
+    },
+    {
+      "kind": "Number",
+      "text": "2",
+      "start": 13,
+      "end": 14
+    },
+    {
+      "kind": "Comma",
+      "text": ",",
+      "start": 14,
+      "end": 15
+    },
+    {
+      "kind": "Number",
+      "text": "2",
+      "start": 15,
+      "end": 16
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 16,
+      "end": 17
+    }
+  ]
+}

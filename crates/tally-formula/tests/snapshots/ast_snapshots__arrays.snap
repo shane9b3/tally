@@ -1,0 +1,40 @@
+---
+source: crates/tally-formula/tests/ast_snapshots.rs
+expression: "dump(ARRAYS, calc())"
+---
+={1}
+    {1x1 1.0}
+={1;2;3}
+    {1x3 1.0 2.0 3.0}
+={1|2|3}
+    {3x1 1.0 2.0 3.0}
+={1;2|3;4}
+    {2x2 1.0 2.0 3.0 4.0}
+={1;2;3|4;5;6}
+    {2x3 1.0 2.0 3.0 4.0 5.0 6.0}
+={-1;+2;--3}
+    {1x3 -1.0 2.0 3.0}
+={TRUE();FALSE()}
+    {1x2 TRUE FALSE}
+={"a";TRUE|#N/A;1.5}
+    {2x2 "a" TRUE #N/A 1.5}
+={"a""b"}
+    {1x1 "a\"b"}
+={1,2}
+    ERROR Err:504 at 3..4
+={1;2|3}
+    ERROR Err:504 at 7..8
+={1;;2}
+    ERROR Err:510 at 4..5
+={}
+    ERROR Err:510 at 2..3
+={1;A1}
+    ERROR Err:504 at 4..6
+={1+2}
+    ERROR Err:504 at 3..4
+={1;2
+    ERROR Err:508 at 1..2
+=SUM({1;2|3;4})*2
+    (* (call #0 {2x2 1.0 2.0 3.0 4.0}) 2.0)
+={#REF!}
+    {1x1 (ref #REF!)}

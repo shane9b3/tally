@@ -1,0 +1,24 @@
+{
+  "src": "  =1",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Whitespace",
+      "text": "  ",
+      "start": 0,
+      "end": 2
+    },
+    {
+      "kind": "Eq",
+      "text": "=",
+      "start": 2,
+      "end": 3
+    },
+    {
+      "kind": "Number",
+      "text": "1",
+      "start": 3,
+      "end": 4
+    }
+  ]
+}

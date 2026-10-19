@@ -1,0 +1,60 @@
+---
+source: crates/tally-formula/tests/ast_snapshots.rs
+expression: "dump(OPEN_FORMULA, Dialect::open_formula())"
+---
+of:=SUM([.A1:.B2])
+    (call #0 (area R[-2]C[-2] R[-1]C[-1]))
+of:=SUM([.A1:.B2];3)
+    (call #0 (area R[-2]C[-2] R[-1]C[-1]) 3.0)
+of:=[.A1]
+    (cell R[-2]C[-2])
+of:=[.$A$1]
+    (cell R1C1)
+of:=[$Sheet2.A1]
+    (cell $#1!R[-2]C[-2])
+of:=[Sheet2.A1]
+    (cell #1!R[-2]C[-2])
+of:=[$'My Sheet'.A1:.B2]
+    (area $#2!R[-2]C[-2] R[-1]C[-1])
+of:=['It''s'.A1]
+    (cell #3!R[-2]C[-2])
+of:=[.#REF!]
+    (ref #REF!)
+of:=[$#REF!.A1]
+    (cell #DELETED!R[-2]C[-2])
+of:=[.A:.A]
+    (cols C[-2] C[-2])
+of:=[.1:.3]
+    (rows R[-2] R[0])
+of:=[.A1:Sheet2.B2]
+    (area R[-2]C[-2] #1!R[-1]C[-1])
+of:=IF([.A1];;1)
+    (call #27 (cell R[-2]C[-2]) _ 1.0)
+of:=TRUE()
+    TRUE
+of:=FALSE()
+    FALSE
+of:={1;2|3;4}
+    {2x2 1.0 2.0 3.0 4.0}
+of:=[.A1]~[.B1]
+    (union (cell R[-2]C[-2]) (cell R[-2]C[-1]))
+of:=[.A1:.B2]![.B1:.C3]
+    (isect (area R[-2]C[-2] R[-1]C[-1]) (area R[-2]C[-1] R[0]C[0]))
+of:=COM.MICROSOFT.IFERROR(1/0;0)
+    (call COM.MICROSOFT.IFERROR? (/ 1.0 0.0) 0.0)
+oooc:=SUM([.A1:.A3])
+    (call #0 (area R[-2]C[-2] R[0]C[-2]))
+oooc:=[Sheet2.A1]+1
+    (+ (cell #1!R[-2]C[-2]) 1.0)
+of:=-2^2
+    (^ (neg 2.0) 2.0)
+of:="x"&[.A1]
+    (& "x" (cell R[-2]C[-2]))
+of:=[.A1
+    ERROR Err:501 at 4..8
+of:=A1
+    (name? A1)
+of:=MyRange
+    (name #0)
+of:=[.XFE1]
+    ERROR Err:501 at 4..11

@@ -1,0 +1,72 @@
+---
+source: crates/tally-formula/tests/ast_snapshots.rs
+expression: "dump(LITERALS, calc())"
+---
+=1
+    1.0
+=0
+    0.0
+=12345
+    12345.0
+=1.5
+    1.5
+=.5
+    0.5
+=1.
+    1.0
+=1E3
+    1000.0
+=1e-3
+    0.001
+=1.5E+20
+    1.5e20
+=0.1
+    0.1
+=007
+    7.0
+=""
+    ""
+="abc"
+    "abc"
+="a""b"
+    "a\"b"
+=""""
+    "\""
+="héllo wörld"
+    "héllo wörld"
+=TRUE
+    TRUE
+=false
+    FALSE
+=True
+    TRUE
+=#REF!
+    (ref #REF!)
+=#N/A
+    #N/A
+=#NAME?
+    #NAME?
+=#DIV/0!
+    #DIV/0!
+=#VALUE!
+    #VALUE!
+=#NUM!
+    #NUM!
+=#NULL!
+    #NULL!
+=#n/a
+    #N/A
+=Err:502
+    Err:502
+=Err:522
+    Err:522
+=Err:532
+    #DIV/0!
+=err:519
+    #VALUE!
+=10%
+    (% 10.0)
+=50%%
+    (% (% 50.0))
+=1E400
+    ERROR #NUM! at 1..6

@@ -1,0 +1,30 @@
+{
+  "src": "ERROR.TYPE(A1)",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Func",
+      "text": "ERROR.TYPE",
+      "start": 0,
+      "end": 10
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 10,
+      "end": 11
+    },
+    {
+      "kind": "CellRef",
+      "text": "A1",
+      "start": 11,
+      "end": 13
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 13,
+      "end": 14
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "src": "SUM(A1:B2)",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Func",
+      "text": "SUM",
+      "start": 0,
+      "end": 3
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 3,
+      "end": 4
+    },
+    {
+      "kind": "RangeRef",
+      "text": "A1:B2",
+      "start": 4,
+      "end": 9
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 9,
+      "end": 10
+    }
+  ]
+}

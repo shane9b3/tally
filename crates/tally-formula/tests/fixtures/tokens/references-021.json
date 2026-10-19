@@ -1,0 +1,18 @@
+{
+  "src": "=$Sheet2.$B$2",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "CellRef",
+      "text": "$Sheet2.$B$2",
+      "start": 1,
+      "end": 13
+    }
+  ]
+}

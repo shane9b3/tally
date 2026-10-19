@@ -1,0 +1,54 @@
+{
+  "src": "=A1+B1*C1^D1",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "CellRef",
+      "text": "A1",
+      "start": 1,
+      "end": 3
+    },
+    {
+      "kind": "Plus",
+      "text": "+",
+      "start": 3,
+      "end": 4
+    },
+    {
+      "kind": "CellRef",
+      "text": "B1",
+      "start": 4,
+      "end": 6
+    },
+    {
+      "kind": "Star",
+      "text": "*",
+      "start": 6,
+      "end": 7
+    },
+    {
+      "kind": "CellRef",
+      "text": "C1",
+      "start": 7,
+      "end": 9
+    },
+    {
+      "kind": "Caret",
+      "text": "^",
+      "start": 9,
+      "end": 10
+    },
+    {
+      "kind": "CellRef",
+      "text": "D1",
+      "start": 10,
+      "end": 12
+    }
+  ]
+}

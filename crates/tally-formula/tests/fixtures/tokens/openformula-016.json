@@ -1,0 +1,30 @@
+{
+  "src": "of:=FALSE()",
+  "dialect": "open-formula",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "of:=",
+      "start": 0,
+      "end": 4
+    },
+    {
+      "kind": "Func",
+      "text": "FALSE",
+      "start": 4,
+      "end": 9
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 9,
+      "end": 10
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 10,
+      "end": 11
+    }
+  ]
+}

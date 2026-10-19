@@ -1,0 +1,66 @@
+{
+  "src": "=MAX(A1:A10)-MIN(A1:A10)",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Func",
+      "text": "MAX",
+      "start": 1,
+      "end": 4
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 4,
+      "end": 5
+    },
+    {
+      "kind": "RangeRef",
+      "text": "A1:A10",
+      "start": 5,
+      "end": 11
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 11,
+      "end": 12
+    },
+    {
+      "kind": "Minus",
+      "text": "-",
+      "start": 12,
+      "end": 13
+    },
+    {
+      "kind": "Func",
+      "text": "MIN",
+      "start": 13,
+      "end": 16
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 16,
+      "end": 17
+    },
+    {
+      "kind": "RangeRef",
+      "text": "A1:A10",
+      "start": 17,
+      "end": 23
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 23,
+      "end": 24
+    }
+  ]
+}

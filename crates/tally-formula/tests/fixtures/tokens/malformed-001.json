@@ -1,0 +1,12 @@
+{
+  "src": "=",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    }
+  ]
+}

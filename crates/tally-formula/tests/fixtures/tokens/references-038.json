@@ -1,0 +1,18 @@
+{
+  "src": "=Data.A1:Data.B5",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "RangeRef",
+      "text": "Data.A1:Data.B5",
+      "start": 1,
+      "end": 16
+    }
+  ]
+}

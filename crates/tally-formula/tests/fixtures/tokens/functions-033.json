@@ -1,0 +1,60 @@
+{
+  "src": "=SUM(A1:A3)*2+B1",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Func",
+      "text": "SUM",
+      "start": 1,
+      "end": 4
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 4,
+      "end": 5
+    },
+    {
+      "kind": "RangeRef",
+      "text": "A1:A3",
+      "start": 5,
+      "end": 10
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 10,
+      "end": 11
+    },
+    {
+      "kind": "Star",
+      "text": "*",
+      "start": 11,
+      "end": 12
+    },
+    {
+      "kind": "Number",
+      "text": "2",
+      "start": 12,
+      "end": 13
+    },
+    {
+      "kind": "Plus",
+      "text": "+",
+      "start": 13,
+      "end": 14
+    },
+    {
+      "kind": "CellRef",
+      "text": "B1",
+      "start": 14,
+      "end": 16
+    }
+  ]
+}

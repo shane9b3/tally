@@ -1,0 +1,24 @@
+{
+  "src": "=#N/A!",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Error",
+      "text": "#N/A",
+      "start": 1,
+      "end": 5
+    },
+    {
+      "kind": "Bang",
+      "text": "!",
+      "start": 5,
+      "end": 6
+    }
+  ]
+}

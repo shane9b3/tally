@@ -1,0 +1,60 @@
+{
+  "src": "= - 2 ^ 2",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Whitespace",
+      "text": " ",
+      "start": 1,
+      "end": 2
+    },
+    {
+      "kind": "Minus",
+      "text": "-",
+      "start": 2,
+      "end": 3
+    },
+    {
+      "kind": "Whitespace",
+      "text": " ",
+      "start": 3,
+      "end": 4
+    },
+    {
+      "kind": "Number",
+      "text": "2",
+      "start": 4,
+      "end": 5
+    },
+    {
+      "kind": "Whitespace",
+      "text": " ",
+      "start": 5,
+      "end": 6
+    },
+    {
+      "kind": "Caret",
+      "text": "^",
+      "start": 6,
+      "end": 7
+    },
+    {
+      "kind": "Whitespace",
+      "text": " ",
+      "start": 7,
+      "end": 8
+    },
+    {
+      "kind": "Number",
+      "text": "2",
+      "start": 8,
+      "end": 9
+    }
+  ]
+}

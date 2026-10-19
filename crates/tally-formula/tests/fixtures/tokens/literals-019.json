@@ -1,0 +1,18 @@
+{
+  "src": "=True",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Ident",
+      "text": "True",
+      "start": 1,
+      "end": 5
+    }
+  ]
+}

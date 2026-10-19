@@ -1,0 +1,36 @@
+{
+  "src": "of:=-2^2",
+  "dialect": "open-formula",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "of:=",
+      "start": 0,
+      "end": 4
+    },
+    {
+      "kind": "Minus",
+      "text": "-",
+      "start": 4,
+      "end": 5
+    },
+    {
+      "kind": "Number",
+      "text": "2",
+      "start": 5,
+      "end": 6
+    },
+    {
+      "kind": "Caret",
+      "text": "^",
+      "start": 6,
+      "end": 7
+    },
+    {
+      "kind": "Number",
+      "text": "2",
+      "start": 7,
+      "end": 8
+    }
+  ]
+}

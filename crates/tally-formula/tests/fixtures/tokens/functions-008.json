@@ -1,0 +1,42 @@
+{
+  "src": "=IF(,,)",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Func",
+      "text": "IF",
+      "start": 1,
+      "end": 3
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 3,
+      "end": 4
+    },
+    {
+      "kind": "Comma",
+      "text": ",",
+      "start": 4,
+      "end": 5
+    },
+    {
+      "kind": "Comma",
+      "text": ",",
+      "start": 5,
+      "end": 6
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 6,
+      "end": 7
+    }
+  ]
+}

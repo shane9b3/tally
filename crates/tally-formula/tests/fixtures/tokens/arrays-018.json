@@ -1,0 +1,30 @@
+{
+  "src": "={#REF!}",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "LBrace",
+      "text": "{",
+      "start": 1,
+      "end": 2
+    },
+    {
+      "kind": "Error",
+      "text": "#REF!",
+      "start": 2,
+      "end": 7
+    },
+    {
+      "kind": "RBrace",
+      "text": "}",
+      "start": 7,
+      "end": 8
+    }
+  ]
+}

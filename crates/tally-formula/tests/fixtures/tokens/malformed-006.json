@@ -1,0 +1,48 @@
+{
+  "src": "=(1)(2)",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 1,
+      "end": 2
+    },
+    {
+      "kind": "Number",
+      "text": "1",
+      "start": 2,
+      "end": 3
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 3,
+      "end": 4
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 4,
+      "end": 5
+    },
+    {
+      "kind": "Number",
+      "text": "2",
+      "start": 5,
+      "end": 6
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 6,
+      "end": 7
+    }
+  ]
+}

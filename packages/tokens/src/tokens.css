@@ -36,11 +36,18 @@
   --tally-border: rgba(0, 0, 0, 0.12);
 
   /* Grid */
-  --tally-grid-line: #e6e8eb; /* (theme) */
+  /* Opaque equivalent of rgba(0, 0, 0, 0.07) on white, so crossings stay even. */
+  --tally-grid-line: #edeef1; /* (theme) */
   --tally-header-bg: var(--tally-gray-50); /* (theme) */
   --tally-header-text: var(--tally-gray-500); /* (theme) */
+  --tally-header-line: #e2e4e8; /* (theme) */
+  --tally-header-active-bg: #e8effd; /* (theme) */
+  --tally-header-active-text: var(--tally-accent-hover); /* (theme) */
   --tally-selection: rgba(37, 99, 235, 0.08); /* (theme) */
   --tally-selection-border: var(--tally-accent); /* (theme) */
+  --tally-fill-handle: var(--tally-accent); /* (theme) */
+  --tally-resize-guide: var(--tally-accent); /* (theme) */
+  --tally-editor-bg: var(--tally-gray-0); /* (theme) */
 
   /* Status chips */
   --tally-chip-green-bg: #dcfce7; /* (theme) */
@@ -53,6 +60,7 @@
   /* Typography */
   --tally-font-family: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; /* (theme) */
   --tally-font-size: 13px; /* (theme) */
+  --tally-font-size-header: 11px; /* (theme) */
   --tally-font-size-sm: 12px;
   --tally-font-size-lg: 15px;
 
@@ -106,8 +114,14 @@
   --tally-grid-line: #262a30; /* TODO */
   --tally-header-bg: var(--tally-gray-50);
   --tally-header-text: var(--tally-gray-500);
+  --tally-header-line: #30353c; /* TODO */
+  --tally-header-active-bg: #1e2a3d; /* TODO */
+  --tally-header-active-text: var(--tally-accent); /* TODO */
   --tally-selection: rgba(96, 165, 250, 0.14); /* TODO */
   --tally-selection-border: var(--tally-accent);
+  --tally-fill-handle: var(--tally-accent); /* TODO */
+  --tally-resize-guide: var(--tally-accent); /* TODO */
+  --tally-editor-bg: var(--tally-gray-50); /* TODO */
 
   --tally-chip-green-bg: #14532d; /* TODO */
   --tally-chip-green-fg: #bbf7d0; /* TODO */
@@ -118,6 +132,7 @@
 
   --tally-font-family: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --tally-font-size: 13px;
+  --tally-font-size-header: 11px;
   --tally-font-size-sm: 12px;
   --tally-font-size-lg: 15px;
 

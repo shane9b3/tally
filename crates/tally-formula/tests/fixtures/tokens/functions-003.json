@@ -1,0 +1,48 @@
+{
+  "src": "=sum(A1:B2,3)",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "=",
+      "start": 0,
+      "end": 1
+    },
+    {
+      "kind": "Func",
+      "text": "sum",
+      "start": 1,
+      "end": 4
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 4,
+      "end": 5
+    },
+    {
+      "kind": "RangeRef",
+      "text": "A1:B2",
+      "start": 5,
+      "end": 10
+    },
+    {
+      "kind": "Comma",
+      "text": ",",
+      "start": 10,
+      "end": 11
+    },
+    {
+      "kind": "Number",
+      "text": "3",
+      "start": 11,
+      "end": 12
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 12,
+      "end": 13
+    }
+  ]
+}

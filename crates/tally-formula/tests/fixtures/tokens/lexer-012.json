@@ -1,0 +1,30 @@
+{
+  "src": "LOG10(1)",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "Func",
+      "text": "LOG10",
+      "start": 0,
+      "end": 5
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 5,
+      "end": 6
+    },
+    {
+      "kind": "Number",
+      "text": "1",
+      "start": 6,
+      "end": 7
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 7,
+      "end": 8
+    }
+  ]
+}

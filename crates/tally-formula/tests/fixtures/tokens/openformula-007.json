@@ -1,0 +1,18 @@
+{
+  "src": "of:=[$'My Sheet'.A1:.B2]",
+  "dialect": "open-formula",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "of:=",
+      "start": 0,
+      "end": 4
+    },
+    {
+      "kind": "OfRef",
+      "text": "[$'My Sheet'.A1:.B2]",
+      "start": 4,
+      "end": 24
+    }
+  ]
+}

@@ -1,0 +1,525 @@
+/**
+ * `Grid`: the framework-agnostic spreadsheet grid.
+ *
+ *     const grid = new Grid(container, props);
+ *     grid.update({ selection });   // push prop changes
+ *     grid.destroy();
+ *
+ * DOM: a root div holding the main and overlay canvases (fixed to the
+ * viewport), a transparent native scroll container on top (a spacer gives
+ * it the content size, scaled past {@link MAX_SCROLL_EXTENT}) and the editor
+ * textarea. Every change goes through `invalidate()`, coalesced into one
+ * requestAnimationFrame.
+ */
+import type { CellPos, SheetLayout, StyleDto } from "@tally/bridge";
+import { CellEditor } from "./editor";
+import { Geometry, HEADER_HEIGHT, MIN_ROW_HEADER_WIDTH } from "./geometry";
+import { Interaction, type InteractionHost } from "./interaction";
+import { AxisModel, ScrollAxisMap, clamp } from "./layout";
+import { Renderer, headerFont, type FrameStats } from "./renderer";
+import { sameSelection, type Limits } from "./selection";
+import { TileTracker } from "./tiles";
+import { MAX_COLS, MAX_ROWS, type DirtySet, type GridProps, type Selection, type Viewport } from "./types";
+
+/** Font the grid waits for before its first paint. */
+const FONT_PROBE = '13px "Inter Variable"';
+const FONT_TIMEOUT_MS = 1500;
+
+export interface GridOptions {
+  rows?: number;
+  cols?: number;
+}
+
+export class Grid {
+  private props: GridProps;
+  private readonly root: HTMLDivElement;
+  private readonly scroller: HTMLDivElement;
+  private readonly spacer: HTMLDivElement;
+  private readonly renderer: Renderer;
+  private readonly editor: CellEditor;
+  private readonly interaction: Interaction;
+  private readonly tracker: TileTracker;
+  private readonly rowsCount: number;
+  private readonly colsCount: number;
+  private rows: AxisModel;
+  private cols: AxisModel;
+  private layout: SheetLayout | null = null;
+  private selection: Selection;
+  private unsubscribe: (() => void) | null = null;
+  private resizeObserver: ResizeObserver | null = null;
+
+  // Scroll state: exact content offsets in screen px (zoomed).
+  private contentX = 0;
+  private contentY = 0;
+  private mapX = new ScrollAxisMap(0, 0);
+  private mapY = new ScrollAxisMap(0, 0);
+  private expectedScroll: { left: number; top: number } | null = null;
+
+  private width = 0;
+  private height = 0;
+  private dpr = 1;
+  private headerW = MIN_ROW_HEADER_WIDTH;
+  private headerH = HEADER_HEIGHT;
+  private geo: Geometry;
+
+  private raf = 0;
+  private dirtyMain = true;
+  private dirtyOverlay = true;
+  private fontsReady = false;
+  private destroyed = false;
+  private hoverGutter: number | null = null;
+  private resizeGuide: { c: number; x: number } | null = null;
+
+  /** Recent frame durations (ms between rAF callbacks while drawing). */
+  private readonly frameTimes: number[] = [];
+  private lastFrameAt = 0;
+  private lastStats: FrameStats = { cells: 0, textDraws: 0, ms: 0 };
+
+  constructor(container: HTMLElement, props: GridProps, opts: GridOptions = {}) {
+    this.props = { ...props };
+    this.selection = props.selection;
+    this.rowsCount = opts.rows ?? MAX_ROWS;
+    this.colsCount = opts.cols ?? MAX_COLS;
+    const doc = container.ownerDocument;
+
+    const root = doc.createElement("div");
+    root.className = "tally-grid";
+    Object.assign(root.style, {
+      position: "relative",
+      width: "100%",
+      height: "100%",
+      overflow: "hidden",
+      userSelect: "none",
+      webkitUserSelect: "none",
+      background: props.theme.colors.bg,
+      contain: "strict",
+    } satisfies Partial<CSSStyleDeclaration>);
+    const main = doc.createElement("canvas");
+    const overlay = doc.createElement("canvas");
+    for (const c of [main, overlay]) Object.assign(c.style, { position: "absolute", left: "0", top: "0", pointerEvents: "none" });
+    main.style.zIndex = "0";
+    overlay.style.zIndex = "1";
+    const scroller = doc.createElement("div");
+    Object.assign(scroller.style, {
+      position: "absolute",
+      inset: "0",
+      overflow: "auto",
+      zIndex: "2",
+      overscrollBehavior: "none",
+    } satisfies Partial<CSSStyleDeclaration>);
+    const spacer = doc.createElement("div");
+    Object.assign(spacer.style, { width: "1px", height: "1px", pointerEvents: "none" });
+    scroller.appendChild(spacer);
+    this.editor = new CellEditor(doc);
+    root.append(main, overlay, scroller, this.editor.el);
+    container.appendChild(root);
+    this.root = root;
+    this.scroller = scroller;
+    this.spacer = spacer;
+
+    this.renderer = new Renderer(main, overlay, doc.createElement("canvas"));
+    this.rows = new AxisModel(this.rowsCount, 24);
+    this.cols = new AxisModel(this.colsCount, 100);
+    this.geo = this.makeGeometry();
+    this.tracker = new TileTracker({ ensureRanges: (r) => this.props.source.ensureRanges(r) }, this.rowsCount, this.colsCount);
+    this.tracker.reset(props.sheet);
+    this.attachSource();
+    this.reloadLayout(true);
+
+    const self = this;
+    const host: InteractionHost = {
+      root,
+      scroller,
+      editor: this.editor,
+      geometry: () => self.geo,
+      limits: () => self.limits(),
+      selection: () => self.selection,
+      events: () => self.props,
+      select: (sel, o) => self.applySelection(sel, o.emit, o.reveal),
+      scrollBy: (dx, dy) => self.setContentOffset(self.contentX + dx, self.contentY + dy),
+      previewColWidth: (start, end, px) => {
+        self.cols.setSize(start, end, px);
+        self.relayout();
+      },
+      setHoverGutter: (c) => {
+        if (c !== self.hoverGutter) {
+          self.hoverGutter = c;
+          self.invalidate("overlay");
+        }
+      },
+      setResizeGuide: (g) => {
+        self.resizeGuide = g;
+        self.invalidate("overlay");
+      },
+      invalidateOverlay: () => self.invalidate("overlay"),
+      editorChanged: () => {
+        // Show/grow the editor immediately, not a frame later.
+        self.layoutEditor();
+        self.invalidate("overlay");
+      },
+    };
+    this.interaction = new Interaction(host);
+
+    scroller.addEventListener("scroll", this.onScroll, { passive: true });
+    scroller.addEventListener("wheel", this.onWheel, { passive: false });
+    const win = doc.defaultView;
+    if (win && "ResizeObserver" in win) {
+      this.resizeObserver = new win.ResizeObserver(() => this.measure());
+      this.resizeObserver.observe(root);
+    }
+    this.measure();
+    if (props.edit) this.editor.sync(props.edit, null);
+    this.waitForFonts(doc);
+  }
+
+  // -------------------------------------------------------------------------
+  // Public API
+  // -------------------------------------------------------------------------
+
+  /** Pushes changed props. Only keys present in `partial` are considered. */
+  update(partial: Partial<GridProps>): void {
+    if (this.destroyed) return;
+    const prev = this.props;
+    this.props = { ...prev, ...partial };
+    let relayout = false;
+    if ("source" in partial && partial.source !== prev.source) {
+      this.attachSource();
+      this.tracker.reset(this.props.sheet);
+      relayout = true;
+      this.layout = null;
+    }
+    if ("sheet" in partial && partial.sheet !== prev.sheet) {
+      this.tracker.reset(this.props.sheet);
+      this.layout = null;
+      relayout = true;
+      this.contentX = 0;
+      this.contentY = 0;
+    }
+    if (("theme" in partial && partial.theme !== prev.theme) || ("zoom" in partial && partial.zoom !== prev.zoom)) {
+      this.renderer.clearCaches();
+      this.root.style.background = this.props.theme.colors.bg;
+      if (partial.zoom !== undefined && partial.zoom !== prev.zoom && prev.zoom > 0) {
+        const k = partial.zoom / prev.zoom;
+        this.contentX *= k;
+        this.contentY *= k;
+      }
+      relayout = true;
+    }
+    if (relayout) {
+      if (this.layout === null) this.reloadLayout(true);
+      else this.relayout();
+    }
+    if ("selection" in partial && partial.selection && !sameSelection(partial.selection, this.selection)) {
+      this.selection = partial.selection;
+      this.invalidate("overlay");
+    }
+    if ("edit" in partial && partial.edit !== prev.edit) {
+      const opened = this.editor.sync(this.props.edit, prev.edit);
+      if (opened && this.props.edit) this.scrollCellIntoView(this.props.edit.cell);
+      this.layoutEditor();
+      this.invalidate("overlay");
+    }
+  }
+
+  /** Shows a selection without emitting `onSelectionChange`. */
+  setSelection(sel: Selection, reveal = false): void {
+    this.applySelection(sel, false, reveal ? sel.active : undefined);
+  }
+
+  getSelection(): Selection {
+    return this.selection;
+  }
+
+  /** Scrolls so that `cell` is at the top-left of the viewport. */
+  scrollTo(cell: CellPos): void {
+    this.setContentOffset(this.cols.indexToPx(cell.c) * this.zoom, this.rows.indexToPx(cell.r) * this.zoom);
+  }
+
+  /** Scrolls the minimum amount that makes `cell` fully visible. */
+  scrollCellIntoView(cell: CellPos): void {
+    const next = this.geo.scrollToReveal(cell);
+    if (next) this.setContentOffset(next.x, next.y);
+  }
+
+  /** The visible cells and scroll offsets. */
+  getViewport(): Viewport {
+    const v = this.geo.visibleRange();
+    return { ...v, scrollX: this.contentX, scrollY: this.contentY, width: this.width, height: this.height };
+  }
+
+  /** Focuses the grid (its hidden textarea). */
+  focus(): void {
+    this.interaction.focus();
+  }
+
+  /** Schedules a repaint (coalesced into one animation frame). */
+  invalidate(what: "all" | "main" | "overlay" = "all"): void {
+    if (this.destroyed) return;
+    if (what !== "overlay") this.dirtyMain = true;
+    this.dirtyOverlay = true;
+    if (this.raf) return;
+    if (typeof requestAnimationFrame === "undefined") return;
+    this.raf = requestAnimationFrame((t) => this.frame(t));
+  }
+
+  /** Draws synchronously (tests, screenshots). */
+  flush(): void {
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    this.frame(typeof performance !== "undefined" ? performance.now() : 0, true);
+  }
+
+  /** Frame timing for the perf demo: durations between drawn frames, and the last frame's work. */
+  getStats(): { frameTimes: number[]; last: FrameStats; measureHits: number; measureMisses: number } {
+    return {
+      frameTimes: [...this.frameTimes],
+      last: this.lastStats,
+      measureHits: this.renderer.measurer.hits,
+      measureMisses: this.renderer.measurer.misses,
+    };
+  }
+
+  resetStats(): void {
+    this.frameTimes.length = 0;
+    this.lastFrameAt = 0;
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.unsubscribe?.();
+    this.resizeObserver?.disconnect();
+    this.interaction.destroy();
+    this.scroller.removeEventListener("scroll", this.onScroll);
+    this.scroller.removeEventListener("wheel", this.onWheel);
+    this.root.remove();
+  }
+
+  // -------------------------------------------------------------------------
+  // Internals
+  // -------------------------------------------------------------------------
+
+  private get zoom(): number {
+    return this.props.zoom > 0 ? this.props.zoom : 1;
+  }
+
+  private limits(): Limits {
+    return {
+      rows: this.rowsCount,
+      cols: this.colsCount,
+      pageRows: this.geo.pageRows(),
+      pageCols: this.geo.pageCols(),
+      used: this.layout?.used ?? null,
+    };
+  }
+
+  private attachSource(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = this.props.source.subscribe((dirty) => this.onSourceChange(dirty));
+  }
+
+  private onSourceChange(dirty: DirtySet): void {
+    this.tracker.invalidate(dirty);
+    if (dirty === "all") this.reloadLayout(false);
+    this.invalidate("main");
+  }
+
+  private reloadLayout(force: boolean): void {
+    const layout = this.props.source.getLayout(this.props.sheet);
+    if (!force && layout === this.layout) return;
+    this.layout = layout;
+    const axes = AxisModel.fromLayout(layout, this.rowsCount, this.colsCount);
+    this.rows = axes.rows;
+    this.cols = axes.cols;
+    this.relayout();
+  }
+
+  private waitForFonts(doc: Document): void {
+    const fonts = (doc as Document & { fonts?: FontFaceSet }).fonts;
+    if (!fonts || typeof fonts.load !== "function") {
+      this.fontsReady = true;
+      this.invalidate();
+      return;
+    }
+    let done = false;
+    const ready = (): void => {
+      if (done || this.destroyed) return;
+      done = true;
+      this.fontsReady = true;
+      this.renderer.clearCaches();
+      this.invalidate();
+    };
+    fonts.load(FONT_PROBE).then(ready, ready);
+    setTimeout(ready, FONT_TIMEOUT_MS);
+  }
+
+  /** Reads the container size and DPR. */
+  private measure(): void {
+    const w = this.scroller.clientWidth || this.root.clientWidth;
+    const h = this.scroller.clientHeight || this.root.clientHeight;
+    const dpr = this.root.ownerDocument.defaultView?.devicePixelRatio ?? 1;
+    if (w === this.width && h === this.height && dpr === this.dpr) return;
+    this.width = w;
+    this.height = h;
+    this.dpr = dpr;
+    this.renderer.resize(w, h, dpr);
+    this.relayout();
+  }
+
+  /** Recomputes header sizes, scroll maps and the spacer. */
+  private relayout(): void {
+    const zoom = this.zoom;
+    this.headerH = Math.round(HEADER_HEIGHT * zoom);
+    // Row header fits the widest row number currently visible (≥ 3 digits).
+    const lastRow = Math.min(this.rowsCount, this.rows.pxToIndex((this.contentY + this.height) / zoom) + 1);
+    const digits = Math.max(3, String(lastRow).length);
+    const digitW = this.renderer.measurer.measure(headerFont(this.props.theme, zoom, true), "0".repeat(digits));
+    this.headerW = Math.max(Math.round(MIN_ROW_HEADER_WIDTH * zoom), Math.ceil(digitW + 20 * zoom));
+
+    const cellsW = Math.max(0, this.width - this.headerW);
+    const cellsH = Math.max(0, this.height - this.headerH);
+    this.mapX = new ScrollAxisMap(this.cols.total() * zoom, cellsW);
+    this.mapY = new ScrollAxisMap(this.rows.total() * zoom, cellsH);
+    this.spacer.style.width = `${Math.ceil(this.headerW + this.mapX.extent)}px`;
+    this.spacer.style.height = `${Math.ceil(this.headerH + this.mapY.extent)}px`;
+    this.contentX = clamp(this.contentX, 0, this.mapX.maxContent);
+    this.contentY = clamp(this.contentY, 0, this.mapY.maxContent);
+    this.syncScrollPosition();
+    this.geo = this.makeGeometry();
+    this.invalidate("all");
+  }
+
+  private makeGeometry(): Geometry {
+    return new Geometry(
+      this.rows,
+      this.cols,
+      this.zoom,
+      this.headerW,
+      this.headerH,
+      Math.round(this.contentX * this.dpr) / this.dpr,
+      Math.round(this.contentY * this.dpr) / this.dpr,
+      this.width,
+      this.height,
+    );
+  }
+
+  /** Sets the exact content offset and derives the native scroll position. */
+  private setContentOffset(x: number, y: number): void {
+    const nx = clamp(x, 0, this.mapX.maxContent);
+    const ny = clamp(y, 0, this.mapY.maxContent);
+    if (nx === this.contentX && ny === this.contentY) return;
+    this.contentX = nx;
+    this.contentY = ny;
+    this.syncScrollPosition();
+    this.afterScroll();
+  }
+
+  private syncScrollPosition(): void {
+    const left = this.mapX.toScroll(this.contentX);
+    const top = this.mapY.toScroll(this.contentY);
+    this.expectedScroll = { left, top };
+    if (Math.abs(this.scroller.scrollLeft - left) >= 1) this.scroller.scrollLeft = left;
+    if (Math.abs(this.scroller.scrollTop - top) >= 1) this.scroller.scrollTop = top;
+  }
+
+  private afterScroll(): void {
+    const prevHeaderW = this.headerW;
+    this.geo = this.makeGeometry();
+    // Row numbers may need a wider header after a long jump.
+    const digits = Math.max(3, String(this.geo.visibleRange().r1 + 1).length);
+    const digitW = this.renderer.measurer.measure(headerFont(this.props.theme, this.zoom, true), "0".repeat(digits));
+    const want = Math.max(Math.round(MIN_ROW_HEADER_WIDTH * this.zoom), Math.ceil(digitW + 20 * this.zoom));
+    if (want !== prevHeaderW) this.relayout();
+    else this.invalidate("all");
+  }
+
+  private readonly onScroll = (): void => {
+    const left = this.scroller.scrollLeft;
+    const top = this.scroller.scrollTop;
+    const exp = this.expectedScroll;
+    // Positions we set ourselves keep the exact content offset; anything
+    // else (scrollbar drag, native wheel) is mapped back.
+    const x = exp && Math.abs(left - exp.left) < 1 ? this.contentX : this.mapX.toContent(left);
+    const y = exp && Math.abs(top - exp.top) < 1 ? this.contentY : this.mapY.toContent(top);
+    if (x === this.contentX && y === this.contentY) return;
+    this.contentX = x;
+    this.contentY = y;
+    this.expectedScroll = null;
+    this.afterScroll();
+  };
+
+  /**
+   * When an axis is scaled, wheel deltas are applied in content px (so the
+   * wheel speed stays 1:1); otherwise the browser scrolls natively.
+   */
+  private readonly onWheel = (e: WheelEvent): void => {
+    if (!this.mapX.scaled && !this.mapY.scaled) return;
+    if (e.ctrlKey) return; // pinch-zoom gesture: leave to the app
+    e.preventDefault();
+    const line = this.rows.defaultSize * this.zoom;
+    const unit = e.deltaMode === 1 ? line : e.deltaMode === 2 ? this.height : 1;
+    let dx = e.deltaX * unit;
+    let dy = e.deltaY * unit;
+    if (e.shiftKey && dx === 0) {
+      dx = dy;
+      dy = 0;
+    }
+    this.setContentOffset(this.contentX + dx, this.contentY + dy);
+  };
+
+  private applySelection(sel: Selection, emit: boolean, reveal?: CellPos): void {
+    const changed = !sameSelection(sel, this.selection);
+    this.selection = sel;
+    if (reveal) this.scrollCellIntoView(reveal);
+    if (changed) {
+      this.invalidate("overlay");
+      if (emit) this.props.onSelectionChange?.(sel);
+    }
+  }
+
+  private frame(t: number, sync = false): void {
+    this.raf = 0;
+    if (this.destroyed) return;
+    if (!this.fontsReady && !sync) return;
+    if (!sync && this.dirtyMain) {
+      // Only consecutive drawn frames count (an idle gap is not a slow frame).
+      const dt = t - this.lastFrameAt;
+      if (this.lastFrameAt > 0 && dt < 250) {
+        this.frameTimes.push(dt);
+        if (this.frameTimes.length > 2000) this.frameTimes.shift();
+      }
+      this.lastFrameAt = t;
+    }
+    const dpr = this.root.ownerDocument.defaultView?.devicePixelRatio ?? 1;
+    if (dpr !== this.dpr) this.measure();
+
+    const base = { geo: this.geo, source: this.props.source, theme: this.props.theme, dpr: this.dpr };
+    if (this.dirtyMain) {
+      this.dirtyMain = false;
+      this.lastStats = this.renderer.drawMain(base);
+      this.tracker.ensureVisible(this.geo.visibleRange());
+    }
+    if (this.dirtyOverlay) {
+      this.dirtyOverlay = false;
+      this.renderer.drawOverlay({
+        ...base,
+        selection: this.selection,
+        editing: this.editor.open,
+        hoverGutter: this.hoverGutter,
+        resizeGuide: this.resizeGuide,
+      });
+      this.layoutEditor();
+    }
+  }
+
+  private layoutEditor(): void {
+    const ed = this.editor;
+    const cell = ed.open && ed.cell ? ed.cell : this.selection.active;
+    const view = this.props.source.getCell(cell.r, cell.c);
+    const style: StyleDto | undefined = this.props.source.getStyle(view?.style ?? 0);
+    const h = style?.hAlign;
+    const align = h === "right" ? "right" : h === "center" ? "center" : "left";
+    ed.layout(this.geo, this.selection.active, { style, theme: this.props.theme, align }, this.renderer.measurer);
+  }
+}

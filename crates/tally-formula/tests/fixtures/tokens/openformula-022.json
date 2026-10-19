@@ -1,0 +1,30 @@
+{
+  "src": "oooc:=[Sheet2.A1]+1",
+  "dialect": "open-formula",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "oooc:=",
+      "start": 0,
+      "end": 6
+    },
+    {
+      "kind": "OfRef",
+      "text": "[Sheet2.A1]",
+      "start": 6,
+      "end": 17
+    },
+    {
+      "kind": "Plus",
+      "text": "+",
+      "start": 17,
+      "end": 18
+    },
+    {
+      "kind": "Number",
+      "text": "1",
+      "start": 18,
+      "end": 19
+    }
+  ]
+}

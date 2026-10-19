@@ -1,0 +1,76 @@
+---
+source: crates/tally-formula/tests/ast_snapshots.rs
+expression: "dump(MALFORMED, calc())"
+---
+=
+    ERROR Err:510 at 1..1
+=1+
+    ERROR Err:510 at 3..3
+=*2
+    ERROR Err:510 at 1..2
+=1 2
+    ERROR Err:509 at 3..4
+=A1 B1
+    ERROR Err:509 at 4..6
+=(1)(2)
+    ERROR Err:509 at 4..5
+=(1
+    ERROR Err:508 at 1..2
+=SUM(1
+    ERROR Err:508 at 1..4
+=SUM(1,
+    ERROR Err:508 at 1..4
+=1)
+    ERROR Err:508 at 2..3
+=())
+    ERROR Err:510 at 2..3
+=()
+    ERROR Err:510 at 2..3
+=1,2
+    ERROR Err:504 at 2..3
+=(1,2)
+    ERROR Err:504 at 3..4
+=1;2
+    ERROR Err:504 at 2..3
+=@
+    ERROR Err:501 at 1..2
+=A1#
+    ERROR Err:501 at 3..4
+="abc
+    ERROR Err:501 at 1..5
+=[.A1]
+    ERROR Err:501 at 1..2
+=$
+    ERROR Err:501 at 1..2
+=1++
+    ERROR Err:510 at 4..4
+=SUM(1 2)
+    ERROR Err:509 at 7..8
+=1}
+    ERROR Err:504 at 2..3
+=1|2
+    ERROR Err:504 at 2..3
+=+
+    ERROR Err:510 at 2..2
+=-
+    ERROR Err:510 at 2..2
+=IF(1+,2)
+    ERROR Err:510 at 6..7
+='abc'
+    ERROR Err:501 at 1..6
+=1:2:
+    ERROR Err:510 at 5..5
+=%
+    ERROR Err:510 at 1..2
+=1E
+    ERROR Err:509 at 2..3
+=#FOO!
+    ERROR Err:501 at 1..2
+=Err:999
+    ERROR Err:501 at 1..8
+=SUM(1;2
+    ERROR Err:508 at 1..4
+={1;2
+    ERROR Err:508 at 1..2
+=`
+    ERROR Err:501 at 1..2

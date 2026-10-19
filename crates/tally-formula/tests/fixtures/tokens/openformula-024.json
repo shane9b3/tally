@@ -1,0 +1,30 @@
+{
+  "src": "of:=\"x\"&[.A1]",
+  "dialect": "open-formula",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "of:=",
+      "start": 0,
+      "end": 4
+    },
+    {
+      "kind": "String",
+      "text": "\"x\"",
+      "start": 4,
+      "end": 7
+    },
+    {
+      "kind": "Amp",
+      "text": "&",
+      "start": 7,
+      "end": 8
+    },
+    {
+      "kind": "OfRef",
+      "text": "[.A1]",
+      "start": 8,
+      "end": 13
+    }
+  ]
+}

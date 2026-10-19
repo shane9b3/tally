@@ -19,6 +19,18 @@ export interface ThemeColors {
   textMuted: string;
   selection: string;
   selectionBorder: string;
+  /** Bottom/right edge of the header strips (slightly darker than gridLine). */
+  headerLine: string;
+  /** Header cell behind the active row/column. */
+  headerActiveBg: string;
+  /** Header label of the active row/column. */
+  headerActiveText: string;
+  /** The square at the bottom-right of the selection. */
+  fillHandle: string;
+  /** Column resize guide line and hovered resize gutter. */
+  resizeGuide: string;
+  /** Background of the in-cell editor. */
+  editorBg: string;
   accent: string;
   chipGreenBg: string;
   chipGreenFg: string;
@@ -34,8 +46,10 @@ export interface Theme {
   fonts: {
     /** CSS font-family list, e.g. `"Inter Variable", system-ui, sans-serif`. */
     family: string;
-    /** Base cell font size. */
+    /** Base cell font size (the size of a 10 pt cell at zoom 100%). */
     sizePx: number;
+    /** Column letters and row numbers. */
+    headerSizePx: number;
   };
   radii: { sm: number; card: number; pill: number };
   spacing: { s1: number; s2: number; s3: number; s4: number };
@@ -52,6 +66,12 @@ export const THEME_VARIABLES = {
     textMuted: "--tally-text-muted",
     selection: "--tally-selection",
     selectionBorder: "--tally-selection-border",
+    headerLine: "--tally-header-line",
+    headerActiveBg: "--tally-header-active-bg",
+    headerActiveText: "--tally-header-active-text",
+    fillHandle: "--tally-fill-handle",
+    resizeGuide: "--tally-resize-guide",
+    editorBg: "--tally-editor-bg",
     accent: "--tally-accent",
     chipGreenBg: "--tally-chip-green-bg",
     chipGreenFg: "--tally-chip-green-fg",
@@ -60,7 +80,7 @@ export const THEME_VARIABLES = {
     chipRedBg: "--tally-chip-red-bg",
     chipRedFg: "--tally-chip-red-fg",
   },
-  fonts: { family: "--tally-font-family", sizePx: "--tally-font-size" },
+  fonts: { family: "--tally-font-family", sizePx: "--tally-font-size", headerSizePx: "--tally-font-size-header" },
   radii: { sm: "--tally-radius-sm", card: "--tally-radius-card", pill: "--tally-radius-pill" },
   spacing: { s1: "--tally-space-1", s2: "--tally-space-2", s3: "--tally-space-3", s4: "--tally-space-4" },
 } as const satisfies {
@@ -74,13 +94,19 @@ export const THEME_VARIABLES = {
 export const DEFAULT_THEME: Theme = {
   colors: {
     bg: "#ffffff",
-    gridLine: "#e6e8eb",
+    gridLine: "#edeef1",
     headerBg: "#f9fafb",
     headerText: "#6b7280",
     text: "#111827",
     textMuted: "#6b7280",
     selection: "rgba(37, 99, 235, 0.08)",
     selectionBorder: "#2563eb",
+    headerLine: "#e2e4e8",
+    headerActiveBg: "#e8effd",
+    headerActiveText: "#1d4ed8",
+    fillHandle: "#2563eb",
+    resizeGuide: "#2563eb",
+    editorBg: "#ffffff",
     accent: "#2563eb",
     chipGreenBg: "#dcfce7",
     chipGreenFg: "#166534",
@@ -92,6 +118,7 @@ export const DEFAULT_THEME: Theme = {
   fonts: {
     family: '"Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif',
     sizePx: 13,
+    headerSizePx: 11,
   },
   radii: { sm: 4, card: 10, pill: 999 },
   spacing: { s1: 4, s2: 8, s3: 12, s4: 16 },
@@ -137,8 +164,12 @@ export function readTheme(source?: StyleSource): Theme {
     fonts: {
       family: readGroup(src, { family: THEME_VARIABLES.fonts.family }, { family: DEFAULT_THEME.fonts.family }, (s) => s)
         .family,
-      sizePx: readGroup(src, { sizePx: THEME_VARIABLES.fonts.sizePx }, { sizePx: DEFAULT_THEME.fonts.sizePx }, parsePx)
-        .sizePx,
+      ...readGroup(
+        src,
+        { sizePx: THEME_VARIABLES.fonts.sizePx, headerSizePx: THEME_VARIABLES.fonts.headerSizePx },
+        { sizePx: DEFAULT_THEME.fonts.sizePx, headerSizePx: DEFAULT_THEME.fonts.headerSizePx },
+        parsePx,
+      ),
     },
     radii: readGroup(src, THEME_VARIABLES.radii, DEFAULT_THEME.radii, parsePx),
     spacing: readGroup(src, THEME_VARIABLES.spacing, DEFAULT_THEME.spacing, parsePx),

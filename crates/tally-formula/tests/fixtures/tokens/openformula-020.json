@@ -1,0 +1,60 @@
+{
+  "src": "of:=COM.MICROSOFT.IFERROR(1/0;0)",
+  "dialect": "open-formula",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "of:=",
+      "start": 0,
+      "end": 4
+    },
+    {
+      "kind": "Func",
+      "text": "COM.MICROSOFT.IFERROR",
+      "start": 4,
+      "end": 25
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 25,
+      "end": 26
+    },
+    {
+      "kind": "Number",
+      "text": "1",
+      "start": 26,
+      "end": 27
+    },
+    {
+      "kind": "Slash",
+      "text": "/",
+      "start": 27,
+      "end": 28
+    },
+    {
+      "kind": "Number",
+      "text": "0",
+      "start": 28,
+      "end": 29
+    },
+    {
+      "kind": "Semicolon",
+      "text": ";",
+      "start": 29,
+      "end": 30
+    },
+    {
+      "kind": "Number",
+      "text": "0",
+      "start": 30,
+      "end": 31
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 31,
+      "end": 32
+    }
+  ]
+}

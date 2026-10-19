@@ -1,0 +1,18 @@
+{
+  "src": "of:=[.A1:Sheet2.B2]",
+  "dialect": "open-formula",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "of:=",
+      "start": 0,
+      "end": 4
+    },
+    {
+      "kind": "OfRef",
+      "text": "[.A1:Sheet2.B2]",
+      "start": 4,
+      "end": 19
+    }
+  ]
+}

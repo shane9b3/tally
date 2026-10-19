@@ -1,0 +1,12 @@
+{
+  "src": "$A$1:$B$2",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "RangeRef",
+      "text": "$A$1:$B$2",
+      "start": 0,
+      "end": 9
+    }
+  ]
+}

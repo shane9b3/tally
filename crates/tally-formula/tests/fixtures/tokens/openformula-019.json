@@ -1,0 +1,30 @@
+{
+  "src": "of:=[.A1:.B2]![.B1:.C3]",
+  "dialect": "open-formula",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "of:=",
+      "start": 0,
+      "end": 4
+    },
+    {
+      "kind": "OfRef",
+      "text": "[.A1:.B2]",
+      "start": 4,
+      "end": 13
+    },
+    {
+      "kind": "Bang",
+      "text": "!",
+      "start": 13,
+      "end": 14
+    },
+    {
+      "kind": "OfRef",
+      "text": "[.B1:.C3]",
+      "start": 14,
+      "end": 23
+    }
+  ]
+}

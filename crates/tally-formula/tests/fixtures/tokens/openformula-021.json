@@ -1,0 +1,36 @@
+{
+  "src": "oooc:=SUM([.A1:.A3])",
+  "dialect": "open-formula",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "oooc:=",
+      "start": 0,
+      "end": 6
+    },
+    {
+      "kind": "Func",
+      "text": "SUM",
+      "start": 6,
+      "end": 9
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 9,
+      "end": 10
+    },
+    {
+      "kind": "OfRef",
+      "text": "[.A1:.A3]",
+      "start": 10,
+      "end": 19
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 19,
+      "end": 20
+    }
+  ]
+}

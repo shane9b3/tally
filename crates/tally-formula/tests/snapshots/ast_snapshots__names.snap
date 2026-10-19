@@ -1,0 +1,28 @@
+---
+source: crates/tally-formula/tests/ast_snapshots.rs
+expression: "dump(NAMES, calc())"
+---
+=MyRange
+    (name #0)
+=myrange
+    (name #0)
+=Tax
+    (name #1)
+=MyRange*Tax
+    (* (name #0) (name #1))
+=SUM(MyRange)
+    (call #0 (name #0))
+=Unknown
+    (name? Unknown)
+=Foo_Bar
+    (name? Foo_Bar)
+=_x
+    (name? _x)
+=Sheet1.A
+    (name? Sheet1.A)
+=MyRange!A1
+    (cell ?MyRange!R[-2]C[-2])
+=(MyRange)!A1
+    (isect (paren (name #0)) (cell R[-2]C[-2]))
+=Größe
+    (name? Größe)

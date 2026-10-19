@@ -1,0 +1,12 @@
+{
+  "src": "'My Sheet'.A1",
+  "dialect": "calc-a1",
+  "tokens": [
+    {
+      "kind": "CellRef",
+      "text": "'My Sheet'.A1",
+      "start": 0,
+      "end": 13
+    }
+  ]
+}

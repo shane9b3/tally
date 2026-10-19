@@ -1,0 +1,54 @@
+{
+  "src": "of:=IF([.A1];;1)",
+  "dialect": "open-formula",
+  "tokens": [
+    {
+      "kind": "Prefix",
+      "text": "of:=",
+      "start": 0,
+      "end": 4
+    },
+    {
+      "kind": "Func",
+      "text": "IF",
+      "start": 4,
+      "end": 6
+    },
+    {
+      "kind": "LParen",
+      "text": "(",
+      "start": 6,
+      "end": 7
+    },
+    {
+      "kind": "OfRef",
+      "text": "[.A1]",
+      "start": 7,
+      "end": 12
+    },
+    {
+      "kind": "Semicolon",
+      "text": ";",
+      "start": 12,
+      "end": 13
+    },
+    {
+      "kind": "Semicolon",
+      "text": ";",
+      "start": 13,
+      "end": 14
+    },
+    {
+      "kind": "Number",
+      "text": "1",
+      "start": 14,
+      "end": 15
+    },
+    {
+      "kind": "RParen",
+      "text": ")",
+      "start": 15,
+      "end": 16
+    }
+  ]
+}
