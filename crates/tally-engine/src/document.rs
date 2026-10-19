@@ -54,7 +54,7 @@ impl Document {
     /// [`Self::recalc_incomplete`] is set and a warning is queued.
     pub fn with_budget(id: DocId, mut wb: Workbook, title: &str, budget: &RecalcBudget) -> Self {
         let report = hard_recalc_with(&mut wb, budget);
-        let mut warnings = Vec::new();
+        let mut warnings = std::mem::take(&mut wb.import_warnings);
         if report.incomplete {
             warnings.push(format!(
                 "Recalculation stopped after {} formulas to keep the file responsive; \
@@ -197,7 +197,23 @@ impl Document {
         let mut fx = Effects::default();
         let mut errors = Vec::new();
         let mut changes = Vec::new();
+        let mut spent: u64 = 0;
         for (i, op) in tx.ops.iter().enumerate() {
+            let cost = crate::ops::op_cost(&self.wb, op);
+            if spent.saturating_add(cost) > crate::ops::MAX_TX_CELLS {
+                let e = tally_api::ApiError::unsupported(format!(
+                    "the change is too large for one step (more than {} cells); \
+                     split it into smaller steps",
+                    crate::ops::MAX_TX_CELLS
+                ));
+                errors.push(OpError {
+                    op_index: i as u32,
+                    code: e.code,
+                    message: e.message,
+                });
+                continue;
+            }
+            spent += cost;
             match apply_op(&mut self.wb, op, clip, &mut fx) {
                 Ok(c) => changes.extend(c),
                 Err(e) => errors.push(OpError {

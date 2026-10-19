@@ -273,6 +273,7 @@ fn sample() -> WorkbookData {
             author: Some("Ana".into()),
             last_author: Some("Ben".into()),
         },
+        warnings: Vec::new(),
     }
 }
 

@@ -1,10 +1,13 @@
 //! The reverse dependency index: which formulas read a changed cell
 //! (plan §3.6, docs/phase-a.md "Dependency graph").
 //!
-//! Single-cell precedents go into a hash map; area precedents stay
-//! unexpanded as `(CellRange, FormulaCellId)` per sheet (a whole-column
-//! reference is one entry), removed in O(1) with a back-index and
-//! `swap_remove`.
+//! Single-cell precedents go into a hash map from the cell to its readers;
+//! area precedents stay unexpanded as `(CellRange, FormulaCellId)` per
+//! sheet (a whole-column reference is one entry). Both are removed in O(1)
+//! with a back-index (each formula records the list positions of its
+//! entries) and `swap_remove`, so a cell read by n formulas (200k cells
+//! `=A2*$B$1`) costs O(n) to build and O(1) per formula to change, not
+//! O(n²) (security review 2, HIGH-3).
 
 use std::collections::{HashMap, HashSet};
 
@@ -33,7 +36,9 @@ pub trait DepIndex {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Loc {
-    Single(CellAddr),
+    /// Position in `singles[addr]`.
+    Single(CellAddr, usize),
+    /// Position in `areas[sheet]`.
     Area(SheetId, usize),
 }
 
@@ -46,7 +51,7 @@ pub struct HashDepIndex {
     volatile: HashSet<FormulaCellId>,
     /// Name key (lowercase) → formulas using that name (directly or
     /// through other names).
-    names: HashMap<String, Vec<FormulaCellId>>,
+    names: HashMap<String, HashSet<FormulaCellId>>,
     /// Formula → the name keys it is registered under.
     name_back: SecondaryMap<FormulaCellId, Vec<String>>,
 }
@@ -88,7 +93,7 @@ impl HashDepIndex {
         uniq.sort();
         uniq.dedup();
         for k in &uniq {
-            self.names.entry(k.clone()).or_default().push(id);
+            self.names.entry(k.clone()).or_default().insert(id);
         }
         self.name_back.insert(id, uniq);
     }
@@ -98,7 +103,7 @@ impl HashDepIndex {
         if let Some(keys) = self.name_back.remove(id) {
             for k in keys {
                 if let Some(v) = self.names.get_mut(&k) {
-                    v.retain(|x| *x != id);
+                    v.remove(&id);
                     if v.is_empty() {
                         self.names.remove(&k);
                     }
@@ -109,7 +114,13 @@ impl HashDepIndex {
 
     /// The formulas using name `key` (lowercase).
     pub fn name_dependents(&self, key: &str) -> Vec<FormulaCellId> {
-        self.names.get(key).cloned().unwrap_or_default()
+        let mut v: Vec<FormulaCellId> = self
+            .names
+            .get(key)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+        v.sort_unstable();
+        v
     }
 
     /// Every formula registered under some name.
@@ -131,7 +142,7 @@ impl HashDepIndex {
         };
         locs.iter()
             .filter_map(|l| match l {
-                Loc::Single(a) => Some(CellRange::single(*a)),
+                Loc::Single(a, _) => Some(CellRange::single(*a)),
                 Loc::Area(sheet, i) => self.areas.get(sheet).and_then(|v| v.get(*i)).map(|e| e.0),
             })
             .collect()
@@ -141,13 +152,34 @@ impl HashDepIndex {
 impl DepIndex for HashDepIndex {
     fn add(&mut self, id: FormulaCellId, precedents: &[CellRange]) {
         let mut locs: SmallVec<[Loc; 4]> = self.back.remove(id).unwrap_or_default();
+        // Each cell is registered once per formula: deduplicate against this
+        // formula's own entries, never by scanning the cell's reader list.
+        // Small formulas (the common case) scan their own few entries.
+        let small = precedents.len() + locs.len() <= 16;
+        let mut have: HashSet<CellAddr> = if small {
+            HashSet::new()
+        } else {
+            locs.iter()
+                .filter_map(|l| match l {
+                    Loc::Single(a, _) => Some(*a),
+                    Loc::Area(..) => None,
+                })
+                .collect()
+        };
         for r in precedents {
             if r.is_single() {
                 let a = r.start();
-                let list = self.singles.entry(a).or_default();
-                if !list.contains(&id) {
+                let fresh = if small {
+                    !locs
+                        .iter()
+                        .any(|l| matches!(l, Loc::Single(x, _) if *x == a))
+                } else {
+                    have.insert(a)
+                };
+                if fresh {
+                    let list = self.singles.entry(a).or_default();
                     list.push(id);
-                    locs.push(Loc::Single(a));
+                    locs.push(Loc::Single(a, list.len() - 1));
                 }
             } else {
                 let v = self.areas.entry(r.sheet).or_default();
@@ -169,18 +201,34 @@ impl DepIndex for HashDepIndex {
         // never belongs to `id` itself.
         locs.sort_by(|a, b| match (a, b) {
             (Loc::Area(_, i), Loc::Area(_, j)) => j.cmp(i),
-            (Loc::Area(..), Loc::Single(_)) => std::cmp::Ordering::Less,
-            (Loc::Single(_), Loc::Area(..)) => std::cmp::Ordering::Greater,
+            (Loc::Area(..), Loc::Single(..)) => std::cmp::Ordering::Less,
+            (Loc::Single(..), Loc::Area(..)) => std::cmp::Ordering::Greater,
             _ => std::cmp::Ordering::Equal,
         });
         for loc in locs {
             match loc {
-                Loc::Single(a) => {
-                    if let Some(list) = self.singles.get_mut(&a) {
-                        list.retain(|x| *x != id);
-                        if list.is_empty() {
-                            self.singles.remove(&a);
+                Loc::Single(a, idx) => {
+                    let Some(list) = self.singles.get_mut(&a) else {
+                        continue;
+                    };
+                    if idx >= list.len() || list[idx] != id {
+                        continue;
+                    }
+                    let last = list.len() - 1;
+                    list.swap_remove(idx);
+                    if idx < last {
+                        let moved = list[idx];
+                        if let Some(ml) = self.back.get_mut(moved) {
+                            for l in ml.iter_mut() {
+                                if *l == Loc::Single(a, last) {
+                                    *l = Loc::Single(a, idx);
+                                    break;
+                                }
+                            }
                         }
+                    }
+                    if list.is_empty() {
+                        self.singles.remove(&a);
                     }
                 }
                 Loc::Area(sheet, idx) => {
@@ -356,6 +404,38 @@ mod tests {
         d.remove(id[2]);
         assert_eq!(d.area_count(0), 0);
         assert_eq!(d.single_count(), 0);
+    }
+
+    #[test]
+    fn many_readers_of_one_cell_stay_linear() {
+        // HIGH-3: 200k formulas reading one cell; removing them one by one
+        // in any order keeps the index consistent and is O(1) each.
+        let n = 200_000;
+        let id = ids(n);
+        let mut d = HashDepIndex::new();
+        let t = std::time::Instant::now();
+        for (i, x) in id.iter().enumerate() {
+            d.add(*x, &[r("B1"), r(&format!("A{}", i + 1)), r("B1")]);
+        }
+        let mut out = Vec::new();
+        d.dependents_of(&[r("B1")], &mut out);
+        assert_eq!(out.len(), n, "registered once per formula");
+        for x in id.iter().step_by(2) {
+            d.remove(*x);
+        }
+        out.clear();
+        d.dependents_of(&[r("B1")], &mut out);
+        assert_eq!(out.len(), n / 2);
+        out.sort();
+        let mut odd: Vec<FormulaCellId> = id.iter().skip(1).step_by(2).copied().collect();
+        odd.sort();
+        assert_eq!(out, odd);
+        for x in id.iter().skip(1).step_by(2) {
+            d.remove(*x);
+        }
+        assert_eq!(d.single_count(), 0);
+        let took = t.elapsed();
+        assert!(took < std::time::Duration::from_secs(5), "{took:?}");
     }
 
     #[test]

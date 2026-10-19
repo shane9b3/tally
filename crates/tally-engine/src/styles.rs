@@ -72,7 +72,10 @@ fn general() -> Arc<FormatAst> {
 /// Normalises a style so equal-looking styles dedupe (`General` → `None`).
 fn normalize(mut data: StyleData) -> StyleData {
     if let Some(code) = &data.number_format {
-        if code.is_empty() || code.eq_ignore_ascii_case("General") {
+        if code.is_empty()
+            || code.eq_ignore_ascii_case("General")
+            || code.chars().count() > tally_model::MAX_NUMBER_FORMAT_LEN
+        {
             data.number_format = None;
         }
     }

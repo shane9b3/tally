@@ -66,6 +66,8 @@ pub(crate) struct StyleTable {
     pub xf_date: Vec<bool>,
     /// `dxfs` (conditional formatting styles).
     pub dxfs: Vec<CfStyleData>,
+    /// What was dropped to stay within limits.
+    pub warnings: Vec<String>,
 }
 
 impl StyleTable {
@@ -87,6 +89,8 @@ struct Raw {
     xfs: Vec<RawXf>,
     dxfs: Vec<RawDxf>,
     indexed: Option<Vec<u32>>,
+    /// A number format was over-long and dropped.
+    long_fmt: bool,
 }
 
 fn too_many() -> XlsxError {
@@ -285,7 +289,12 @@ fn parse_raw<R: BufRead>(xr: &mut XmlReader<R>) -> Result<Raw, XlsxError> {
                             if raw.num_fmts.len() >= MAX_STYLE_ENTRIES {
                                 return Err(too_many());
                             }
-                            raw.num_fmts.insert(id, code.to_string());
+                            // Over-long codes read as General (review 2, HIGH-4).
+                            if code.chars().count() > tally_model::MAX_NUMBER_FORMAT_LEN {
+                                raw.long_fmt = true;
+                            } else {
+                                raw.num_fmts.insert(id, code.to_string());
+                            }
                         }
                     }
                     xr.skip()
@@ -390,7 +399,10 @@ fn parse_dxf<R: BufRead>(xr: &mut XmlReader<R>) -> Result<RawDxf, XlsxError> {
             Ok(())
         }
         "numFmt" => {
-            d.num_fmt = e.attr_local("formatCode").map(str::to_string);
+            d.num_fmt = e
+                .attr_local("formatCode")
+                .filter(|c| c.chars().count() <= tally_model::MAX_NUMBER_FORMAT_LEN)
+                .map(str::to_string);
             xr.skip()
         }
         _ => xr.skip(),
@@ -437,6 +449,11 @@ fn build(raw: &Raw) -> StyleTable {
     };
     let default_font = raw.fonts.first().cloned().unwrap_or_default();
     let mut table = StyleTable::default();
+    if raw.long_fmt {
+        table
+            .warnings
+            .push(tally_model::long_number_format_warning());
+    }
     let mut dedup: HashMap<String, u32> = HashMap::new();
     let mut fmt_cache: HashMap<u32, Option<String>> = HashMap::new();
     for xf in &raw.xfs {

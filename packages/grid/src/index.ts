@@ -29,6 +29,7 @@ export {
 } from "./selection";
 export { Geometry, HEADER_HEIGHT } from "./geometry";
 export { fillTarget, fillDirection, type FillDir } from "./fillHandle";
-export { wrapLines, luminance, textColor, cssColor } from "./renderer";
+export { wrapLines, luminance, textColor, cssColor, drawStyleId } from "./renderer";
+export { drawCfIcon, drawDataBar, iconCount, ICON_COLORS } from "./cfIcons";
 export { EngineClientSource, type EngineClientSourceOptions } from "./engineSource";
 export { SyntheticSource, type SyntheticOptions } from "./synthetic";

@@ -45,6 +45,29 @@ import {
   type Transaction,
 } from "@tally/bridge";
 import { emulateFill } from "./mockFill";
+import { applyCfPatch, evaluateFormat, type CfDecoration } from "./mockCf";
+import { applyV3Op, cellKey, DEFAULT_VALIDATION_MESSAGE, emptyV3, MOCK_LOCALES, passes, protectionRefusal, validationAt, type V3Ext } from "./mockV3";
+import { parseAbsoluteRef } from "../dataOps";
+import type {
+  CellBlock,
+  CfStyleDto,
+  ConditionalFormatDto,
+  DocPropertiesDto,
+  GoalSeekRequest,
+  GoalSeekResult,
+  LocaleInfo,
+  NoteDto,
+  PageSetupDto,
+  ProtectionInfo,
+  SheetRanges,
+  StyleDto,
+  ValidationDto,
+  ValidationInfo,
+} from "@tally/bridge";
+import { defaultPageSetup } from "../v03";
+
+/** Synthesized conditional-format style ids start here (as in the engine). */
+export const CF_STYLE_BASE = 0x4000_0000;
 
 type Structural = Extract<Op, { type: "insertRows" | "deleteRows" | "insertCols" | "deleteCols" }>;
 
@@ -66,6 +89,8 @@ interface SheetExt {
 interface DocExt {
   sheets: Record<number, SheetExt>;
   names: NameInfo[];
+  /** v0.3 side model (conditional formats, validations, notes, links, protection, page setup…). */
+  v3: V3Ext;
 }
 
 const emptySheet = (): SheetExt => ({ merges: [], frozen: null, hiddenRows: [], hiddenCols: [], filter: null, filteredRows: [], arrays: [] });
@@ -185,7 +210,7 @@ export class WebMockClient extends MockClient {
   private docExt(doc: DocId): DocExt {
     let d = this.ext.get(doc);
     if (!d) {
-      d = { sheets: {}, names: [] };
+      d = { sheets: {}, names: [], v3: emptyV3() };
       this.ext.set(doc, d);
     }
     return d;
@@ -302,7 +327,231 @@ export class WebMockClient extends MockClient {
   override async newWorkbook(template?: string | null) {
     const info = await super.newWorkbook(template);
     this.sheetOrder.set(info.doc, info.sheets.map((s) => s.id));
+    this.sheetNames.set(info.doc, new Map(info.sheets.map((s) => [s.name.toLowerCase(), s.id])));
     return info;
+  }
+
+  /** Sheet ids by lower-case name (list validation sources). */
+  private readonly sheetNames = new Map<DocId, Map<string, number>>();
+
+  // -- v0.3 queries (from the side model) ----------------------------------------
+
+  /** Every call of `setLocale`, `openUrl` and `goalSeek` (e2e hook). */
+  readonly recordedCalls: { type: string; [k: string]: unknown }[] = [];
+
+  override async conditionalFormats(doc: DocId, sheet: number): Promise<ConditionalFormatDto[]> {
+    await super.conditionalFormats(doc, sheet);
+    return structuredClone(this.docExt(doc).v3.cfs[sheet] ?? []);
+  }
+
+  override async validations(doc: DocId, sheet: number): Promise<ValidationDto[]> {
+    await super.validations(doc, sheet);
+    return structuredClone(this.docExt(doc).v3.validations[sheet] ?? []);
+  }
+
+  /** List items of a validation: inline, or read from its source range. */
+  private async listItemsOf(doc: DocId, v: ValidationDto): Promise<string[] | null> {
+    if (v.kind.type !== "list") return null;
+    if (v.kind.source.type === "values") return v.kind.source.items;
+    const ref = parseAbsoluteRef(v.kind.source.reference.replace(/^=/, ""));
+    if (!ref) return null;
+    const sheet = this.sheetNames.get(doc)?.get(ref.sheet.toLowerCase());
+    if (sheet === undefined) return null;
+    const [block] = await super.cells(doc, sheet, [ref.range]);
+    return (block?.cells ?? []).map((c) => c.text).filter((t) => t !== "").slice(0, 10_000);
+  }
+
+  override async validationAt(doc: DocId, sheet: number, r: number, c: number): Promise<ValidationInfo | null> {
+    await super.validationAt(doc, sheet, r, c);
+    const v = validationAt(this.docExt(doc).v3, sheet, r, c);
+    if (!v) return null;
+    return { id: v.id, listItems: (await this.listItemsOf(doc, v)) ?? [], showDropdown: v.showDropdown && v.kind.type === "list", inputHelp: v.inputHelp, error: v.error, kind: v.kind };
+  }
+
+  override async note(doc: DocId, sheet: number, r: number, c: number): Promise<NoteDto | null> {
+    await super.note(doc, sheet, r, c);
+    return this.docExt(doc).v3.notes[sheet]?.[cellKey(r, c)] ?? null;
+  }
+
+  override async notes(doc: DocId, sheet: number): Promise<NoteDto[]> {
+    await super.notes(doc, sheet);
+    return Object.values(this.docExt(doc).v3.notes[sheet] ?? {}).sort((a, b) => a.r - b.r || a.c - b.c);
+  }
+
+  override async protectionInfo(doc: DocId, sheet: number): Promise<ProtectionInfo> {
+    const base = await super.protectionInfo(doc, sheet);
+    const x = this.docExt(doc).v3;
+    const p = x.protection[sheet];
+    return {
+      sheetProtected: !!p,
+      sheetHasPassword: !!p?.password,
+      options: p?.options ?? base.options,
+      structureProtected: !!x.structure,
+      structureHasPassword: !!x.structure?.password,
+    };
+  }
+
+  override async pageSetup(doc: DocId, sheet: number): Promise<PageSetupDto> {
+    await super.pageSetup(doc, sheet);
+    return structuredClone(this.docExt(doc).v3.pages[sheet] ?? defaultPageSetup());
+  }
+
+  override async documentProperties(doc: DocId): Promise<DocPropertiesDto> {
+    await super.documentProperties(doc);
+    return { ...this.docExt(doc).v3.props };
+  }
+
+  /**
+   * Goal seek, emulated: assumes the formula is proportional to the
+   * variable (true for Total = Qty × Price) and scales the variable.
+   */
+  override async goalSeek(doc: DocId, req: GoalSeekRequest): Promise<GoalSeekResult> {
+    this.recordedCalls.push({ type: "goalSeek", req: structuredClone(req) });
+    const read = async (sheet: number, p: { r: number; c: number }) => {
+      const [b] = await super.cells(doc, sheet, [{ r0: p.r, c0: p.c, r1: p.r, c1: p.c }]);
+      const v = b?.cells[0];
+      return v && v.kind === "number" ? (v.num ?? Number(v.text.replace(/[^0-9.eE+-]/g, ""))) : null;
+    };
+    const f0 = await read(req.formulaSheet, req.formulaCell);
+    const v0 = await read(req.variableSheet, req.variableCell);
+    if (f0 === null || v0 === null || f0 === 0 || v0 === 0) return { found: false, value: v0 ?? 0, result: f0 ?? 0, iterations: 100 };
+    const value = (v0 * req.target) / f0;
+    return { found: true, value, result: req.target, iterations: 3 };
+  }
+
+  override async listLocales(): Promise<LocaleInfo[]> {
+    return MOCK_LOCALES.map((l) => ({ ...l }));
+  }
+
+  override async setLocale(doc: DocId, locale: string): Promise<ApplyResult> {
+    this.recordedCalls.push({ type: "setLocale", locale });
+    if (!MOCK_LOCALES.some((l) => l.tag === locale)) throw { code: "invalid_argument", message: `unknown locale "${locale}"` };
+    this.docExt(doc).v3.locale = locale;
+    // The mock does not reformat; report the used areas as changed so the grid refetches.
+    const res = await super.recalcAll(doc);
+    const changed: SheetRanges[] = [];
+    for (const sheet of this.sheetOrder.get(doc) ?? []) {
+      const used = (await super.sheetLayout(doc, sheet)).used;
+      if (used) changed.push({ sheet, ranges: [used] });
+    }
+    return { ...res, changed };
+  }
+
+  /** Records the URL instead of opening it (browser demo / e2e). */
+  async openUrl(url: string): Promise<void> {
+    this.recordedCalls.push({ type: "openUrl", url });
+  }
+
+  async userName(): Promise<string | null> {
+    return "Demo User";
+  }
+
+  // -- cells and styles with v0.3 decorations --------------------------------------
+
+  /** Synthesized cf styles: id → (base style id, patch). */
+  private readonly cfStyles: { base: number; patch: CfStyleDto }[] = [];
+  private readonly cfStyleIndex = new Map<string, number>();
+  private cfCache: { key: string; deco: Map<string, CfDecoration> } | null = null;
+
+  private cfStyleId(base: number, patch: CfStyleDto): number {
+    const k = `${base}|${JSON.stringify(patch)}`;
+    let i = this.cfStyleIndex.get(k);
+    if (i === undefined) {
+      i = this.cfStyles.length;
+      this.cfStyles.push({ base, patch });
+      this.cfStyleIndex.set(k, i);
+    }
+    return CF_STYLE_BASE + i;
+  }
+
+  private async cfDecorations(doc: DocId, sheet: number, version: number, cfs: ConditionalFormatDto[]): Promise<Map<string, CfDecoration>> {
+    const key = `${doc}:${sheet}:${version}:${JSON.stringify(cfs)}`;
+    if (this.cfCache?.key === key) return this.cfCache.deco;
+    const used = (await super.sheetLayout(doc, sheet)).used;
+    const deco = new Map<string, CfDecoration>();
+    if (used) {
+      for (const cf of cfs) {
+        const clipped = cf.ranges
+          .map((rg) => ({ r0: Math.max(rg.r0, used.r0), c0: Math.max(rg.c0, used.c0), r1: Math.min(rg.r1, used.r1), c1: Math.min(rg.c1, used.c1) }))
+          .filter((rg) => rg.r0 <= rg.r1 && rg.c0 <= rg.c1);
+        if (clipped.length === 0) continue;
+        const blocks = await super.cells(doc, sheet, clipped);
+        evaluateFormat(cf, blocks.flatMap((b) => b.cells), deco);
+      }
+    }
+    this.cfCache = { key, deco };
+    return deco;
+  }
+
+  override async cells(doc: DocId, sheet: number, ranges: RangeDto[]): Promise<CellBlock[]> {
+    const blocks = await super.cells(doc, sheet, ranges);
+    const x = this.ext.get(doc)?.v3;
+    if (!x) return blocks;
+    const cfs = x.cfs[sheet] ?? [];
+    const vals = (x.validations[sheet] ?? []).filter((v) => v.kind.type === "list" && v.showDropdown);
+    const notes = x.notes[sheet] ?? {};
+    const links = x.links[sheet] ?? {};
+    if (cfs.length === 0 && vals.length === 0 && Object.keys(notes).length === 0 && Object.keys(links).length === 0) return blocks;
+    const deco = cfs.length > 0 ? await this.cfDecorations(doc, sheet, blocks[0]?.version ?? 0, cfs) : new Map<string, CfDecoration>();
+    return blocks.map((block) => {
+      const byKey = new Map(block.cells.map((v) => [cellKey(v.r, v.c), { ...v }]));
+      const at = (r: number, c: number): CellView => {
+        const k = cellKey(r, c);
+        let v = byKey.get(k);
+        if (!v) {
+          v = { r, c, text: "", kind: "empty", num: null, style: 0, color: null, flags: 0 };
+          byKey.set(k, v);
+        }
+        return v;
+      };
+      const inBlock = (r: number, c: number) => r >= block.range.r0 && r <= block.range.r1 && c >= block.range.c0 && c <= block.range.c1;
+      for (const k of Object.keys(notes)) {
+        const [r, c] = k.split(",").map(Number) as [number, number];
+        if (inBlock(r, c)) at(r, c).flags |= 8;
+      }
+      for (const [k, url] of Object.entries(links)) {
+        const [r, c] = k.split(",").map(Number) as [number, number];
+        if (!inBlock(r, c)) continue;
+        const v = at(r, c);
+        v.flags |= 32;
+        v.link = url;
+      }
+      for (const v of vals) {
+        for (const rg of v.ranges) {
+          const r0 = Math.max(rg.r0, block.range.r0);
+          const r1 = Math.min(rg.r1, block.range.r1);
+          const c0 = Math.max(rg.c0, block.range.c0);
+          const c1 = Math.min(rg.c1, block.range.c1);
+          for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) at(r, c).flags |= 16;
+        }
+      }
+      for (const [k, d] of deco) {
+        const [r, c] = k.split(",").map(Number) as [number, number];
+        if (!inBlock(r, c)) continue;
+        const v = at(r, c);
+        if (d.patch) v.cfStyle = this.cfStyleId(v.style, d.patch);
+        if (d.bar) v.cfBar = d.bar;
+        if (d.icon) v.cfIcon = d.icon;
+        if (d.hideText) v.text = "";
+      }
+      const cells = [...byKey.values()].sort((a, b) => a.r - b.r || a.c - b.c);
+      return { ...block, cells };
+    });
+  }
+
+  override async styles(doc: DocId, ids: number[]): Promise<StyleDto[]> {
+    const plain = ids.filter((id) => id < CF_STYLE_BASE);
+    const synth = ids.filter((id) => id >= CF_STYLE_BASE);
+    const bases = [...new Set(synth.map((id) => this.cfStyles[id - CF_STYLE_BASE]?.base ?? 0))];
+    const all = await super.styles(doc, [...new Set([...plain, ...bases, 0])]);
+    const byId = new Map(all.map((s) => [s.id, s]));
+    const out = plain.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
+    for (const id of synth) {
+      const entry = this.cfStyles[id - CF_STYLE_BASE];
+      const base = byId.get(entry?.base ?? 0) ?? byId.get(0);
+      if (entry && base) out.push({ ...applyCfPatch(base, entry.patch), id });
+    }
+    return out;
   }
 
   override async copy(doc: DocId, sel: SelectionDto): Promise<ClipboardOut> {
@@ -335,24 +584,79 @@ export class WebMockClient extends MockClient {
 
   override async apply(doc: DocId, tx: Transaction): Promise<ApplyResult> {
     this.recorded.push(...tx.ops.map((op) => structuredClone(op)));
+    // v0.3 first: protection and validation checks, and side-model ops.
+    const before = JSON.stringify(this.docExt(doc));
+    const pre = await this.preV3(doc, tx.ops);
+    const res = await this.applyKept(doc, { ...tx, ops: pre.kept.map((k) => k.op) }, before, pre.index);
+    const errors = [...pre.errors, ...res.errors].sort((a, b) => a.opIndex - b.opIndex);
+    const changed: SheetRanges[] = [...res.changed];
+    for (const [sheet, ranges] of pre.touched) changed.push({ sheet, ranges });
+    const out: ApplyResult = { ...res, errors, changed, layoutChanged: [...new Set([...res.layoutChanged, ...pre.layout])] };
+    if (pre.warnings.length > 0) out.warnings = pre.warnings;
+    return out;
+  }
+
+  /**
+   * Splits a transaction into the ops the mock applies (`kept`, with their
+   * original index) and the v0.3 ones handled here: refusals (`protected`,
+   * `validation`), validation warnings and side-model changes.
+   */
+  private async preV3(doc: DocId, ops: readonly Op[]): Promise<{ kept: { op: Op; index: number }[]; errors: OpError[]; warnings: OpError[]; touched: Map<number, RangeDto[]>; layout: Set<number>; index: number[] }> {
+    const x = this.docExt(doc).v3;
+    const kept: { op: Op; index: number }[] = [];
+    const errors: OpError[] = [];
+    const warnings: OpError[] = [];
+    const touched = new Map<number, RangeDto[]>();
+    const layout = new Set<number>();
+    for (const [i, op] of ops.entries()) {
+      const refusal = protectionRefusal(x, op);
+      if (refusal) {
+        errors.push({ opIndex: i, code: "protected", message: refusal });
+        continue;
+      }
+      if (op.type === "setCellInput") {
+        const v = validationAt(x, op.sheet, op.r, op.c);
+        if (v?.error && !passes(v, op.input, await this.listItemsOf(doc, v))) {
+          const message = v.error.text || DEFAULT_VALIDATION_MESSAGE;
+          if (v.error.style === "stop") {
+            errors.push({ opIndex: i, code: "validation", message });
+            continue;
+          }
+          warnings.push({ opIndex: i, code: "validation", message });
+        }
+      }
+      const o = applyV3Op(x, op);
+      if (o.kind === "pass") kept.push({ op, index: i });
+      else if (o.kind === "error") errors.push({ opIndex: i, code: o.code, message: o.message });
+      else {
+        const sheet = "sheet" in op && typeof op.sheet === "number" ? op.sheet : this.firstSheet(doc);
+        if (o.touched.length > 0) touched.set(sheet, [...(touched.get(sheet) ?? []), ...o.touched]);
+        if (o.layout) layout.add(sheet);
+      }
+    }
+    return { kept, errors, warnings, touched, layout, index: kept.map((k) => k.index) };
+  }
+
+  /** The mock's own apply of the kept ops; OpError indices map back through `index`. */
+  private async applyKept(doc: DocId, tx: Transaction, before: string, index: number[]): Promise<ApplyResult> {
+    const mapErrors = (res: ApplyResult): ApplyResult => ({ ...res, errors: res.errors.map((e) => ({ ...e, opIndex: index[e.opIndex] ?? e.opIndex })) });
     if (tx.ops.some(isStructural)) {
       // One step per op (later ops see the shifted cells).
       let last: ApplyResult | null = null;
       for (const op of tx.ops) {
-        const before = JSON.stringify(this.docExt(doc));
+        const b = JSON.stringify(this.docExt(doc));
         const ops = isStructural(op) ? await this.rewrite(doc, op) : await this.rewriteV02(doc, op, [], new Set());
-        last = this.track(doc, await super.apply(doc, { ...tx, ops }), before);
+        last = this.track(doc, await super.apply(doc, { ...tx, ops }), b);
       }
-      return last as ApplyResult;
+      return mapErrors(last as ApplyResult);
     }
-    const before = JSON.stringify(this.docExt(doc));
     const errors: OpError[] = [];
     const layout = new Set<number>();
     const ops: Op[] = [];
     for (const [i, op] of tx.ops.entries()) {
       const errs: OpError[] = [];
       ops.push(...(await this.rewriteV02(doc, op, errs, layout)));
-      errors.push(...errs.map((e) => ({ ...e, opIndex: i })));
+      errors.push(...errs.map((e) => ({ ...e, opIndex: index[i] ?? i })));
     }
     const changedExt = JSON.stringify(this.docExt(doc)) !== before;
     // A side-model-only change still needs an undo step in the mock: a no-op style touch.
@@ -361,10 +665,10 @@ export class WebMockClient extends MockClient {
       ops.push({ type: "applyStyle", sheet, ranges: [{ r0: 0, c0: 0, r1: 0, c1: 0 }], patch: EMPTY_PATCH });
     }
     if (ops.length === 0) {
-      const res = await super.apply(doc, { ...tx, ops: [] });
+      const res = mapErrors(await super.apply(doc, { ...tx, ops: [] }));
       return this.track(doc, { ...res, errors: [...errors, ...res.errors] });
     }
-    const res = await super.apply(doc, { ...tx, ops });
+    const res = mapErrors(await super.apply(doc, { ...tx, ops }));
     await this.reapplyFilters(doc, layout);
     return this.track(doc, { ...res, errors: [...errors, ...res.errors], layoutChanged: [...new Set([...res.layoutChanged, ...layout])] }, before);
   }
@@ -409,7 +713,10 @@ export class WebMockClient extends MockClient {
    * side model as it was so undo can restore it.
    */
   private track(doc: DocId, res: ApplyResult, before?: string): ApplyResult {
-    if (res.info) this.sheetOrder.set(doc, res.info.sheets.map((s) => s.id));
+    if (res.info) {
+      this.sheetOrder.set(doc, res.info.sheets.map((s) => s.id));
+      this.sheetNames.set(doc, new Map(res.info.sheets.map((s) => [s.name.toLowerCase(), s.id])));
+    }
     const v0 = this.versions.get(doc) ?? 0;
     if (before !== undefined && res.version !== v0) this.pushUndo(doc, before);
     this.versions.set(doc, res.version);

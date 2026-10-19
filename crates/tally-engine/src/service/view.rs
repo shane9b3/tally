@@ -26,6 +26,24 @@ use crate::workbook::Workbook;
 /// Most cells one `cells()` call may cover.
 pub const MAX_CELLS_PER_CALL: u64 = 20_000;
 
+/// Longest display text `cells()` returns per cell, in characters; longer
+/// text ends in `…` (the grid cannot show more; the full value stays in the
+/// cell, the edit info and exports). Bounds every viewport call to
+/// 20,000 × 1,024 characters (security review 2, HIGH-4).
+pub const MAX_VIEW_TEXT: usize = 1024;
+
+/// `text` cut to [`MAX_VIEW_TEXT`] characters.
+pub fn cap_view_text(mut text: String) -> String {
+    if text.len() <= MAX_VIEW_TEXT {
+        return text;
+    }
+    if let Some((i, _)) = text.char_indices().nth(MAX_VIEW_TEXT - 1) {
+        text.truncate(i);
+        text.push('…');
+    }
+    text
+}
+
 fn sheet_or_err(wb: &Workbook, sheet: SheetId) -> Result<&Sheet, ApiError> {
     wb.sheet(sheet)
         .ok_or_else(|| ApiError::not_found(format!("no sheet {sheet}")))
@@ -175,7 +193,7 @@ fn view_of(
         (String::new(), None)
     } else {
         let f = format_with(wb, &v, st);
-        (f.text, f.color.map(|c| (c << 8) | 0xff))
+        (cap_view_text(f.text), f.color.map(|c| (c << 8) | 0xff))
     };
     let num = match &v {
         Value::Number(n) if st.is_general() => Some(*n),
@@ -318,7 +336,7 @@ fn decorate(wb: &Workbook, s: &Sheet, version: u64, req: &CellRange, views: &mut
                         None,
                         wb.settings.date_epoch,
                     );
-                    v.text = f.text;
+                    v.text = cap_view_text(f.text);
                     v.color = f.color.map(|c| (c << 8) | 0xff);
                     v.num = match val {
                         Value::Number(n) if entry.format.is_general() => Some(n),

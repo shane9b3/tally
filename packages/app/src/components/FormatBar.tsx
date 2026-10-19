@@ -1,7 +1,7 @@
 /**
  * The formatting strip under the toolbar: B I U S, font size, font and
- * fill colour, alignment, wrap, number format, $ / %, and "Colour by
- * value". Every toggle reflects the active cell's style; every action
+ * fill colour, alignment, wrap, number format, $ / %, "Highlight cells"
+ * (conditional formatting presets) and "Colour by value". Every toggle reflects the active cell's style; every action
  * applies to all selected ranges.
  */
 import type { HAlign } from "@tally/bridge";
@@ -13,7 +13,8 @@ import { rgbaToHex } from "../palette";
 import { useUiStore } from "../stores/uiStore";
 import { ColorPicker } from "./ColorPicker";
 import { BordersPicker } from "./BordersPicker";
-import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon, BordersIcon, ChevronIcon, ChipsIcon, FillIcon, MergeIcon, WrapIcon } from "./icons";
+import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon, BordersIcon, ChevronIcon, ChipsIcon, FillIcon, HighlightIcon, MergeIcon, WrapIcon } from "./icons";
+import { HIGHLIGHT_PRESETS } from "../v03";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useDocStore } from "../stores/docStore";
 import { Popover } from "./Popover";
@@ -50,7 +51,7 @@ function Tool({ command, label, children, active, wide }: ToolProps) {
   );
 }
 
-type Menu = { kind: "size" | "format" | "color" | "fill" | "borders"; x: number; y: number } | null;
+type Menu = { kind: "size" | "format" | "color" | "fill" | "borders" | "highlight"; x: number; y: number } | null;
 
 export function FormatBar() {
   const ctl = useController();
@@ -187,6 +188,20 @@ export function FormatBar() {
         </Tool>
       </div>
       <span className={styles.sep} />
+      <button
+        type="button"
+        className={cx(styles.tool, styles.wide)}
+        aria-label="Highlight cells"
+        aria-haspopup="menu"
+        title="Highlight cells: conditional formatting presets"
+        data-testid="highlight-cells"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={open("highlight")}
+      >
+        <HighlightIcon />
+        <span>Highlight</span>
+        <ChevronIcon />
+      </button>
       <Tool command="format.colorByValue" label="Colour by value: chip colours for each distinct value in the column" wide>
         <ChipsIcon />
         <span>Colour by value</span>
@@ -233,6 +248,32 @@ export function FormatBar() {
               separator: true,
               checked: !preset && style !== undefined,
               onSelect: () => useUiStore.getState().openDialog({ kind: "numberFormat", code: style?.numberFormat ?? "General" }),
+            },
+          ]}
+        />
+      ) : null}
+      {menu?.kind === "highlight" ? (
+        <Popover
+          label="Highlight cells"
+          testId="highlight-menu"
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={[
+            ...HIGHLIGHT_PRESETS.map((p) => ({
+              id: p.id,
+              label: p.label,
+              separator: p.separator ?? false,
+              onSelect: () => {
+                ctl.v3.highlight(p.id);
+                if (p.values === 0) done();
+              },
+            })),
+            {
+              id: "manage",
+              label: "Manage rules…",
+              separator: true,
+              onSelect: () => useUiStore.getState().openDialog({ kind: "cfManager" }),
             },
           ]}
         />

@@ -27,7 +27,7 @@ import {
   type Limits,
   type Mods,
 } from "./selection";
-import type { CommitMove, ContextArea, Dir, GridEvents, Selection } from "./types";
+import type { CellButtonKind, ClientRect, CommitMove, ContextArea, Dir, GridEvents, Selection } from "./types";
 import type { RangeDto } from "@tally/bridge";
 
 /** Minimum column width a drag can set (zoom 100%). */
@@ -74,6 +74,12 @@ export interface InteractionHost {
   filterButtonAt(x: number, y: number): { col: number; rect: { left: number; top: number; right: number; bottom: number } } | null;
   /** Called when the editor opens/closes/grows. */
   editorChanged(): void;
+  /** The validation ▾ / link ↗ under a canvas point. */
+  cellButtonAt(x: number, y: number): { kind: CellButtonKind; cell: CellPos; rect: ClientRect } | null;
+  /** The link of a cell (flag 32), or `null`. */
+  linkAt(r: number, c: number): string | null;
+  /** The cell under the pointer (note hover), or `null`. */
+  hoverCell(cell: CellPos | null): void;
 }
 
 type Drag =
@@ -107,6 +113,7 @@ export class Interaction {
     this.on(scroller, "pointercancel", (e) => this.onPointerUp(e));
     this.on(scroller, "pointerleave", () => {
       if (!this.drag) host.setHoverGutter(null);
+      host.hoverCell(null);
     });
     this.on(scroller, "mousedown", (e) => {
       // Keep focus in the textarea (and suppress text selection) unless on a scrollbar.
@@ -227,6 +234,22 @@ export class Interaction {
       this.capture(e);
       return;
     }
+    if (hit.area === "cell" && !host.editor.open) {
+      const cb = host.cellButtonAt(p.x, p.y);
+      if (cb) {
+        e.preventDefault();
+        host.select(cellSelection(cb.cell), { emit: true });
+        host.events().onCellButton?.(cb.kind, cb.cell, cb.rect);
+        return;
+      }
+      const url = add ? host.linkAt(hit.r, hit.c) : null;
+      if (url) {
+        // ⌘-click on a link opens it (a plain click only selects).
+        e.preventDefault();
+        host.events().onOpenLink?.({ r: hit.r, c: hit.c }, url);
+        return;
+      }
+    }
     const button = hit.area === "cell" && !host.editor.open ? host.filterButtonAt(p.x, p.y) : null;
     if (button) {
       // No compatibility mousedown: the popover that opens must not see this click as "outside".
@@ -312,7 +335,12 @@ export class Interaction {
       const gutter =
         hit.area === "colGutter" ? { axis: "col" as const, index: hit.c } : hit.area === "rowGutter" ? { axis: "row" as const, index: hit.r } : null;
       host.setHoverGutter(gutter);
-      host.scroller.style.cursor = gutter
+      host.hoverCell(hit.area === "cell" ? { r: hit.r, c: hit.c } : null);
+      if (host.scroller.style.cursor === "not-allowed") return; // a refused edit's feedback is showing
+      const overButton = hit.area === "cell" && !host.editor.open && host.cellButtonAt(p.x, p.y) !== null;
+      host.scroller.style.cursor = overButton
+        ? "pointer"
+        : gutter
         ? gutter.axis === "col"
           ? "col-resize"
           : "row-resize"

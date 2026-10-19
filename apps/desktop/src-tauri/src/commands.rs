@@ -17,13 +17,17 @@ use std::path::PathBuf;
 
 use tally_api::{
     ApiError, ApplyResult, AutoFilterInfo, CellBlock, CellEditInfo, CellPos, ClipboardOut,
-    Direction, DocId, DocumentService, FindQuery, FindResult, FunctionInfo, NameInfo, RangeDto,
-    SelectionDto, SelectionStats, SheetLayout, StyleDto, Suggestion, Transaction, WorkbookInfo,
+    ConditionalFormatDto, Direction, DocId, DocPropertiesDto, DocumentService, FindQuery,
+    FindResult, FunctionInfo, GoalSeekRequest, GoalSeekResult, LocaleInfo, NameInfo, NoteDto,
+    PageSetupDto, ProtectionInfo, RangeDto, SelectionDto, SelectionStats, SheetLayout, StyleDto,
+    Suggestion, Transaction, ValidationDto, ValidationInfo, WorkbookInfo,
 };
 use tally_types::SheetId;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::files::{self, TemplateInfo};
+use crate::limits;
+use crate::links;
 use crate::state::{lock, AppState};
 use tally_api::FileFormat;
 
@@ -129,11 +133,15 @@ pub fn save_to(
 
 #[tauri::command]
 pub async fn wb_new(app: AppHandle, template: Option<String>) -> CmdResult<WorkbookInfo> {
+    if let Some(t) = &template {
+        limits::text_max("the template id", t, limits::MAX_PATH)?;
+    }
     blocking(app, move |_, st| new_workbook(st, template.as_deref())).await
 }
 
 #[tauri::command]
 pub async fn wb_open(app: AppHandle, path: String) -> CmdResult<WorkbookInfo> {
+    limits::text_max("the path", &path, limits::MAX_PATH)?;
     blocking(app, move |app, st| {
         open_checked(app, st, std::path::Path::new(&path))
     })
@@ -165,6 +173,7 @@ pub async fn get_cells(
     sheet: SheetId,
     ranges: Vec<RangeDto>,
 ) -> CmdResult<Vec<CellBlock>> {
+    limits::ranges("get_cells", &ranges)?;
     blocking(app, move |_, st| {
         with_service(st, |s| s.cells(doc, sheet, &ranges))
     })
@@ -173,6 +182,9 @@ pub async fn get_cells(
 
 #[tauri::command]
 pub async fn get_styles(app: AppHandle, doc: DocId, ids: Vec<u32>) -> CmdResult<Vec<StyleDto>> {
+    if ids.len() > limits::MAX_STYLE_IDS {
+        return Err(ApiError::invalid_argument("too many style ids"));
+    }
     blocking(app, move |_, st| with_service(st, |s| s.styles(doc, &ids))).await
 }
 
@@ -184,6 +196,7 @@ pub async fn cell_edit_info(
     r: u32,
     c: u32,
 ) -> CmdResult<CellEditInfo> {
+    limits::pos("cell_edit_info", r, c)?;
     blocking(app, move |_, st| {
         with_service(st, |s| s.cell_edit_info(doc, sheet, r, c))
     })
@@ -192,6 +205,7 @@ pub async fn cell_edit_info(
 
 #[tauri::command]
 pub async fn apply(app: AppHandle, doc: DocId, tx: Transaction) -> CmdResult<ApplyResult> {
+    limits::transaction(&tx)?;
     blocking(app, move |_, st| with_service(st, |s| s.apply(doc, tx))).await
 }
 
@@ -211,6 +225,7 @@ pub async fn selection_stats(
     doc: DocId,
     sel: SelectionDto,
 ) -> CmdResult<SelectionStats> {
+    limits::selection("selection_stats", &sel)?;
     blocking(app, move |_, st| {
         with_service(st, |s| s.selection_stats(doc, &sel))
     })
@@ -223,6 +238,7 @@ pub async fn clipboard_copy(
     doc: DocId,
     sel: SelectionDto,
 ) -> CmdResult<ClipboardOut> {
+    limits::selection("clipboard_copy", &sel)?;
     blocking(app, move |_, st| with_service(st, |s| s.copy(doc, &sel))).await
 }
 
@@ -234,6 +250,7 @@ pub async fn navigate_edge(
     from: CellPos,
     dir: Direction,
 ) -> CmdResult<CellPos> {
+    limits::cell("navigate_edge", &from)?;
     blocking(app, move |_, st| {
         with_service(st, |s| s.navigate_edge(doc, sheet, from, dir))
     })
@@ -242,6 +259,7 @@ pub async fn navigate_edge(
 
 #[tauri::command]
 pub async fn resolve_name_box(app: AppHandle, doc: DocId, text: String) -> CmdResult<SelectionDto> {
+    limits::chars_max("the name box text", &text, limits::MAX_NAME_BOX_CHARS)?;
     blocking(app, move |_, st| {
         with_service(st, |s| s.resolve_name_box(doc, &text))
     })
@@ -263,6 +281,8 @@ pub async fn assist_suggest(
     query: String,
     sel: SelectionDto,
 ) -> CmdResult<Vec<Suggestion>> {
+    limits::text("the question", &query)?;
+    limits::selection("assist_suggest", &sel)?;
     blocking(app, move |_, st| {
         with_service(st, |s| s.assist_suggest(doc, &query, &sel))
     })
@@ -296,6 +316,7 @@ pub async fn filter_info(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResul
 
 #[tauri::command]
 pub async fn find(app: AppHandle, doc: DocId, query: FindQuery) -> CmdResult<FindResult> {
+    limits::find_query(&query)?;
     blocking(app, move |_, st| with_service(st, |s| s.find(doc, &query))).await
 }
 
@@ -306,6 +327,7 @@ pub async fn detect_header(
     sheet: SheetId,
     range: RangeDto,
 ) -> CmdResult<bool> {
+    limits::range("detect_header", &range)?;
     blocking(app, move |_, st| {
         with_service(st, |s| s.detect_header(doc, sheet, range))
     })
@@ -315,4 +337,153 @@ pub async fn detect_header(
 #[tauri::command]
 pub async fn recalc_all(app: AppHandle, doc: DocId) -> CmdResult<ApplyResult> {
     blocking(app, move |_, st| with_service(st, |s| s.recalc_all(doc))).await
+}
+
+// ----- v0.3 (1:1 over the new DocumentService methods) ----------------------
+
+#[tauri::command]
+pub async fn conditional_formats(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+) -> CmdResult<Vec<ConditionalFormatDto>> {
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.conditional_formats(doc, sheet))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn validations(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+) -> CmdResult<Vec<ValidationDto>> {
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.validations(doc, sheet))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn validation_at(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    r: u32,
+    c: u32,
+) -> CmdResult<Option<ValidationInfo>> {
+    limits::pos("validation_at", r, c)?;
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.validation_at(doc, sheet, r, c))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn note(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    r: u32,
+    c: u32,
+) -> CmdResult<Option<NoteDto>> {
+    limits::pos("note", r, c)?;
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.note(doc, sheet, r, c))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn notes(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<Vec<NoteDto>> {
+    blocking(app, move |_, st| with_service(st, |s| s.notes(doc, sheet))).await
+}
+
+#[tauri::command]
+pub async fn protection_info(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+) -> CmdResult<ProtectionInfo> {
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.protection_info(doc, sheet))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn page_setup(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<PageSetupDto> {
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.page_setup(doc, sheet))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn document_properties(app: AppHandle, doc: DocId) -> CmdResult<DocPropertiesDto> {
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.document_properties(doc))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn goal_seek(
+    app: AppHandle,
+    doc: DocId,
+    req: GoalSeekRequest,
+) -> CmdResult<GoalSeekResult> {
+    limits::goal_seek(&req)?;
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.goal_seek(doc, &req))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_locales(app: AppHandle) -> CmdResult<Vec<LocaleInfo>> {
+    blocking(app, move |_, st| with_service(st, |s| Ok(s.list_locales()))).await
+}
+
+#[tauri::command]
+pub async fn set_locale(app: AppHandle, doc: DocId, locale: String) -> CmdResult<ApplyResult> {
+    limits::text_max("the locale", &locale, limits::MAX_LOCALE)?;
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.set_locale(doc, &locale))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn resolve_name_box_in(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    text: String,
+) -> CmdResult<SelectionDto> {
+    limits::chars_max("the name box text", &text, limits::MAX_NAME_BOX_CHARS)?;
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.resolve_name_box_in(doc, sheet, &text))
+    })
+    .await
+}
+
+// ----- v0.3 shell commands ---------------------------------------------------
+
+/// `open_url`: opens an http(s) or mailto link with the OS default handler
+/// (see [`links::check_url`] for what is accepted).
+#[tauri::command]
+pub async fn open_url(app: AppHandle, url: String) -> CmdResult<()> {
+    let url = links::check_url(&url)?;
+    blocking(app, move |_, _| {
+        links::open_url_with(&url, links::launch_os)
+    })
+    .await
+}
+
+/// `user_name`: the OS account name (note authors), or `null`.
+#[tauri::command]
+pub async fn user_name() -> CmdResult<Option<String>> {
+    Ok(links::user_name())
 }

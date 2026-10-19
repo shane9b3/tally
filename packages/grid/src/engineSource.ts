@@ -227,6 +227,8 @@ export class EngineClientSource implements GridDataSource {
           for (const cell of block.cells) {
             cells.set((cell.r - tile.tr * TILE_ROWS) * TILE_COLS + (cell.c - tile.tc * TILE_COLS), cell);
             if (!this.styles.has(cell.style)) this.queueStyle(cell.style);
+            // Synthesized conditional-format styles (≥ 0x40000000) resolve like any other id.
+            if (cell.cfStyle != null && !this.styles.has(cell.cfStyle)) this.queueStyle(cell.cfStyle);
           }
           tile.cells = cells;
           tile.ready = true;

@@ -4,12 +4,16 @@
 //!   [`NameId`] is never reused: deleting a name leaves a tombstone, so
 //!   formulas that use it keep printing its text (and show `#NAME?`), and
 //!   defining it again revives the same id.
-//! - Formulas keep `Expr::Name` nodes. For evaluation and dependency
-//!   tracking the engine *expands* them: each name node is replaced by the
-//!   name's expression (in parentheses), recursively up to
-//!   [`MAX_NAME_DEPTH`]. A name's relative references are relative to the
-//!   cell using it (OpenOffice semantics); names entered through the API
-//!   are usually absolute (`$Sheet1.$A$1:$B$5`).
+//! - Formulas keep `Expr::Name` nodes and names are evaluated *by
+//!   reference*: the evaluator evaluates a name's own parsed expression
+//!   where it is used, once per cell evaluation (memoized, see
+//!   [`crate::eval::EvalEnv`]), with cycle detection and a nesting limit of
+//!   [`MAX_NAME_DEPTH`]. Nothing is inlined, so names that use other names
+//!   many times cannot blow up exponentially. Dependency analysis visits
+//!   each reachable definition once ([`collect_names`]). A name's relative
+//!   references are relative to the cell using it (OpenOffice semantics);
+//!   names entered through the API are usually absolute
+//!   (`$Sheet1.$A$1:$B$5`).
 //! - The dependency index maps each name key (lowercase text) to the
 //!   formulas using it, directly or through other names, so (re)defining or
 //!   deleting a name dirties exactly those formulas.
@@ -167,48 +171,121 @@ pub fn has_names(e: &Expr) -> bool {
     found
 }
 
-/// Replaces every name in `f` (a formula on `sheet`) by its expression.
-/// Returns the expanded formula and the keys of every name met (for the
-/// dependency index), including names used by names.
-pub fn expand(names: &NameTable, f: &Formula, sheet: SheetId) -> (Formula, Vec<String>) {
-    let mut expr = f.expr.clone();
-    let mut keys = Vec::new();
-    let mut stack: Vec<(&mut Expr, u32)> = vec![(&mut expr, 0)];
-    while let Some((node, depth)) = stack.pop() {
-        if let Expr::Name(n) = node {
-            let key = match n {
-                NameRef::Id(id) => names.get(*id).map(|e| name_key(&e.name)),
-                NameRef::Unresolved(t) => Some(name_key(t)),
-            };
-            keys.extend(key);
-            let repl = match names.resolve(n, sheet).and_then(|e| e.def.as_ref()) {
-                Some(def) if depth < MAX_NAME_DEPTH => {
-                    Expr::Paren(Box::new(def.formula.expr.clone()))
+/// The definitions of every name an expression reaches (directly or
+/// through names used by names), resolved for a formula on one sheet.
+///
+/// Names are evaluated *by reference* (see [`crate::eval::EvalEnv`]): each
+/// definition is kept once, however often it is used, so a chain of names
+/// that each use the previous one several times costs linear, not
+/// exponential, time and memory (security review 2, CRITICAL-1).
+#[derive(Clone, Debug, Default)]
+pub struct NameDefs {
+    by_id: HashMap<u32, Arc<Formula>>,
+    /// Unresolved name text (lowercase) → the id it resolves to.
+    by_text: HashMap<String, u32>,
+    /// Ids in discovery order.
+    order: Vec<u32>,
+}
+
+impl NameDefs {
+    /// `true` if no defined name is reachable.
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+
+    /// The id and definition of `n`, if it is defined.
+    pub fn resolve(&self, n: &NameRef) -> Option<(u32, &Arc<Formula>)> {
+        let id = match n {
+            NameRef::Id(id) => id.0,
+            NameRef::Unresolved(t) => match self.by_text.get(t.as_ref()) {
+                Some(id) => *id,
+                None => *self.by_text.get(&name_key(t))?,
+            },
+        };
+        self.by_id.get(&id).map(|f| (id, f))
+    }
+
+    /// Every reachable definition, in discovery order.
+    pub fn formulas(&self) -> impl Iterator<Item = &Arc<Formula>> {
+        self.order.iter().filter_map(|id| self.by_id.get(id))
+    }
+}
+
+/// Collects the names reachable from `e` (a formula on `sheet`): their
+/// definitions and the dependency keys of every name met, defined or not
+/// (so defining one later refreshes the formula). Each name is visited
+/// once, so the cost is linear in the total size of the distinct
+/// definitions.
+pub fn collect_names(names: &NameTable, e: &Expr, sheet: SheetId) -> (NameDefs, Vec<String>) {
+    let mut defs = NameDefs::default();
+    let mut keys: Vec<String> = Vec::new();
+    let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen_text: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut pending: Vec<Arc<Formula>> = Vec::new();
+    let mut visit = |x: &Expr, defs: &mut NameDefs, pending: &mut Vec<Arc<Formula>>| {
+        let Expr::Name(n) = x else {
+            return;
+        };
+        let (id, key) = match n {
+            NameRef::Id(id) => (Some(id.0), names.get(*id).map(|e| name_key(&e.name))),
+            NameRef::Unresolved(t) => {
+                let k = name_key(t);
+                if !seen_text.insert(k.clone()) {
+                    return;
                 }
-                _ => Expr::Err(ErrorKind::Name),
-            };
-            *node = repl;
-            stack.push((node, depth + 1));
-            continue;
-        }
-        match node {
-            Expr::ArrayLit(a) => stack.extend(a.items.iter_mut().map(|x| (x, depth))),
-            Expr::Call { args, .. } => stack.extend(args.iter_mut().map(|x| (x, depth))),
-            Expr::Unary(_, x) | Expr::Postfix(_, x) | Expr::Paren(x) => stack.push((x, depth)),
-            Expr::Binary(_, l, r) => {
-                stack.push((r, depth));
-                stack.push((l, depth));
+                let id = names.visible(t, sheet).map(|i| i.0);
+                if let Some(id) = id {
+                    defs.by_text.insert(k.clone(), id);
+                }
+                (id, Some(k))
             }
-            _ => {}
+        };
+        if let Some(k) = key {
+            if seen_keys.insert(k.clone()) {
+                keys.push(k);
+            }
+        }
+        let Some(id) = id else {
+            return;
+        };
+        if defs.by_id.contains_key(&id) {
+            return;
+        }
+        if let Some(def) = names.get(NameId(id)).and_then(|e| e.def.as_ref()) {
+            defs.by_id.insert(id, def.formula.clone());
+            defs.order.push(id);
+            pending.push(def.formula.clone());
+        }
+    };
+    e.walk(|x| visit(x, &mut defs, &mut pending));
+    while let Some(f) = pending.pop() {
+        f.expr.walk(|x| visit(x, &mut defs, &mut pending));
+    }
+    (defs, keys)
+}
+
+/// `e` with parentheses stripped and names followed (at most
+/// [`MAX_NAME_DEPTH`] of them): what a name box, INDIRECT or a validation
+/// list sees as a plain reference. A missing name gives `#NAME?`.
+pub fn resolve_chain<'a>(names: &'a NameTable, mut e: &'a Expr, sheet: SheetId) -> &'a Expr {
+    static NAME_ERR: Expr = Expr::Err(ErrorKind::Name);
+    let mut depth = 0;
+    loop {
+        match e {
+            Expr::Paren(x) => e = x,
+            Expr::Name(n) => {
+                if depth >= MAX_NAME_DEPTH {
+                    return &NAME_ERR;
+                }
+                depth += 1;
+                match names.resolve(n, sheet).and_then(|x| x.def.as_ref()) {
+                    Some(d) => e = &d.formula.expr,
+                    None => return &NAME_ERR,
+                }
+            }
+            other => return other,
         }
     }
-    (
-        Formula {
-            expr,
-            flags: f.flags,
-        },
-        keys,
-    )
 }
 
 /// Checks a name: `[A-Za-z_][A-Za-z0-9_.]*`, at most 255 characters, not a
@@ -344,12 +421,15 @@ impl Workbook {
             return;
         };
         let (formula, addr) = (fc.formula.clone(), fc.addr);
-        let (p, strict, keys, has_3d) = self.analyze(&formula, addr);
-        // Volatility may come from a name's expression.
-        let vol = if keys.is_empty() {
-            crate::workbook::is_volatile(&formula)
-        } else {
-            crate::workbook::is_volatile(&expand(&self.names, &formula, addr.sheet).0)
+        let crate::workbook::Analysis {
+            precedents: p,
+            strict,
+            keys,
+            has_3d,
+            volatile: vol,
+        } = self.analyze(&formula, addr);
+        let Some(fc) = self.formulas.get(id) else {
+            return;
         };
         let dynamic = fc.dynamic_deps.clone();
         self.deps.remove(id);
@@ -435,7 +515,7 @@ mod tests {
         recalc(&mut wb);
         assert_eq!(wb.value(a("B1")), Value::Number(2.5));
         let (_, f) = wb.formula_at(a("B1")).unwrap();
-        let (_, keys) = expand(&wb.names, &f.formula, 1);
+        let (_, keys) = collect_names(&wb.names, &f.formula.expr, 1);
         assert!(keys.contains(&"data".to_string()) && keys.contains(&"rate".to_string()));
         assert_eq!(
             wb.formula_text(wb.formula_at(a("B1")).unwrap().0).unwrap(),

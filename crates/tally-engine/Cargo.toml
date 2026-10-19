@@ -31,6 +31,8 @@ regex.workspace = true
 
 [dev-dependencies]
 tally-io-ods.workspace = true
+# Builds XLSX packages (shared formulas) in the security tests.
+zip.workspace = true
 tally-functions = { workspace = true, features = ["test-support"] }
 proptest.workspace = true
 criterion.workspace = true

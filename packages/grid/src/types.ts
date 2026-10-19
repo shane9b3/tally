@@ -76,6 +76,29 @@ export interface FilterButtons {
   active: number[];
 }
 
+/**
+ * Page-break lines ("View ▸ Page breaks"): automatic breaks (light dashed)
+ * and manual ones (bold dashed), above row `at` / left of column `at`.
+ */
+export interface PageBreaks {
+  rows: { at: number; manual: boolean }[];
+  cols: { at: number; manual: boolean }[];
+}
+
+/** A clickable decoration inside a cell: the validation ▾ or the link ↗. */
+export type CellButtonKind = "dropdown" | "link";
+
+/** Client rect (px) of something the grid drew, to anchor a popover. */
+export interface ClientRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/** CellView flags (docs/api.md): formula, error, array, note, list dropdown, link. */
+export const CELL_FLAGS = { formula: 1, error: 2, array: 4, note: 8, dropdown: 16, link: 32 } as const;
+
 /** What a data-source notification covers. */
 export type DirtySet = RangeDto[] | "all";
 
@@ -169,6 +192,18 @@ export interface GridEvents {
    * client rect (to anchor a popover).
    */
   onFilterButton(col: number, rect: { left: number; top: number; right: number; bottom: number }): void;
+  /**
+   * The validation ▾ of a list cell (flag 16) or the link ↗ of the active
+   * link cell (flag 32) was clicked. The cell is already selected.
+   */
+  onCellButton(kind: CellButtonKind, cell: CellPos, rect: ClientRect): void;
+  /** ⌘/Ctrl-click on a cell with a link (flag 32): open it (instead of adding a range). */
+  onOpenLink(cell: CellPos, url: string): void;
+  /**
+   * The pointer rests on a cell with a note (flag 8), or left it (`null`).
+   * `rect` is the cell's client rect.
+   */
+  onNoteHover(cell: CellPos | null, rect: ClientRect | null): void;
 }
 
 /** Everything the grid is configured with. */
@@ -198,6 +233,10 @@ export interface GridProps extends Partial<GridEvents> {
   clipRange?: RangeDto | null;
   /** AutoFilter header buttons, or `null` without an AutoFilter. */
   filterButtons?: FilterButtons | null;
+  /** Page-break lines to draw, or `null` (the "Page breaks" view is off). */
+  pageBreaks?: PageBreaks | null;
+  /** The print range, outlined (with the page breaks). */
+  printRange?: RangeDto | null;
 }
 
 /** The visible cells (inclusive), plus pixel offsets of the scroll position. */

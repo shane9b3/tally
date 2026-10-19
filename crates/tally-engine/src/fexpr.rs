@@ -15,7 +15,7 @@ use tally_formula::{
 };
 use tally_types::{CellAddr, ErrorKind, Value};
 
-use crate::eval::{cell_result, eval_expr};
+use crate::eval::{cell_result, eval_with, EvalEnv};
 use crate::recalc::CalcCtx;
 use crate::workbook::Workbook;
 
@@ -124,9 +124,12 @@ impl FExpr {
         print(&self.formula, at, Dialect::open_formula(), wb)
     }
 
-    fn expanded(&self, wb: &Workbook, at: CellAddr) -> Option<Formula> {
-        crate::names::has_names(&self.formula.expr)
-            .then(|| crate::names::expand(&wb.names, &self.formula, at.sheet).0)
+    fn env(&self, wb: &Workbook, at: CellAddr) -> EvalEnv {
+        if crate::names::has_names(&self.formula.expr) {
+            EvalEnv::new(crate::names::collect_names(&wb.names, &self.formula.expr, at.sheet).0)
+        } else {
+            EvalEnv::default()
+        }
     }
 
     /// Evaluates at `at` with the cached values of formula cells.
@@ -134,10 +137,9 @@ impl FExpr {
         if self.invalid.is_some() {
             return Value::Error(ErrorKind::Name);
         }
-        let exp = self.expanded(wb, at);
-        let f = exp.as_ref().unwrap_or(&self.formula);
+        let env = self.env(wb, at);
         let mut ctx = CalcCtx::shared_at(wb, at);
-        let v = eval_expr(&f.expr, &mut ctx);
+        let v = eval_with(&self.formula.expr, &mut ctx, false, &env);
         cell_result(&v, &mut ctx)
     }
 
@@ -146,10 +148,9 @@ impl FExpr {
         if self.invalid.is_some() {
             return Value::Error(ErrorKind::Name);
         }
-        let exp = self.expanded(wb, at);
-        let f = exp.unwrap_or_else(|| (*self.formula).clone());
+        let env = self.env(wb, at);
         let mut ctx = CalcCtx::at(wb, at);
-        let v = eval_expr(&f.expr, &mut ctx);
+        let v = eval_with(&self.formula.expr, &mut ctx, false, &env);
         cell_result(&v, &mut ctx)
     }
 

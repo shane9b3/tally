@@ -28,6 +28,52 @@ use crate::workbook::Workbook;
 /// Most cells one op may write (paste, range inputs).
 pub const MAX_OP_CELLS: u64 = 1_048_576;
 
+/// Most cells one transaction may touch, summed over its ops with
+/// [`op_cost`]; an op that would go past it fails (`unsupported`) and the
+/// rest of the transaction still applies (security review 2, MEDIUM-4:
+/// 64 × `SetArrayFormula` of 1M cells took 11 s and 1.7 GB in one apply).
+pub const MAX_TX_CELLS: u64 = 50_000_000;
+
+/// The cells an op touches, for [`MAX_TX_CELLS`]: the cells written or
+/// moved; for clears and sorts the used part of the range; for style ops
+/// one per column (styles are stored as column runs); Replace All counts
+/// its per-op maximum ([`crate::find::MAX_REPLACE`]).
+pub fn op_cost(wb: &Workbook, op: &Op) -> u64 {
+    let area = |r: &RangeDto| -> u64 {
+        if r.r1 < r.r0 || r.c1 < r.c0 {
+            return 0;
+        }
+        (u64::from(r.r1 - r.r0) + 1) * (u64::from(r.c1 - r.c0) + 1)
+    };
+    let used = |sheet: SheetId, r: &RangeDto| -> u64 {
+        if r.r1 < r.r0 || r.c1 < r.c0 {
+            return 0;
+        }
+        wb.sheet(sheet)
+            .and_then(|s| s.used_range())
+            .and_then(|u| u.intersect(&CellRange::new(sheet, r.r0, r.c0, r.r1, r.c1)))
+            .map_or(0, |x| x.cell_count())
+    };
+    let cols = |r: &RangeDto| u64::from(r.c1.saturating_sub(r.c0)) + 1;
+    let cost = match op {
+        Op::SetRangeInputs { rows, .. } => rows.iter().map(|r| r.len() as u64).sum(),
+        Op::Clear { sheet, ranges, .. } => ranges.iter().map(|r| used(*sheet, r)).sum(),
+        Op::ApplyStyle { ranges, .. } | Op::SetNumberFormat { ranges, .. } => {
+            ranges.iter().map(cols).sum()
+        }
+        Op::SetArrayFormula { range, .. } => area(range),
+        Op::MoveRange { from, .. } => area(from).saturating_mul(2),
+        Op::SortRange { sheet, range, .. } => used(*sheet, range),
+        Op::Paste { target, .. } | Op::PasteSpecial { target, .. } => {
+            area(target).min(MAX_OP_CELLS)
+        }
+        Op::FillRange { target, .. } => area(target),
+        Op::ReplaceAll { .. } => crate::find::MAX_REPLACE as u64,
+        _ => 1,
+    };
+    cost.max(1)
+}
+
 /// Error code: the op would change part of an array formula block.
 pub const ARRAY_BLOCK: &str = "array_block";
 /// Error code: the op would change part of a merged area.
@@ -233,6 +279,17 @@ pub fn block_range(
     let r1 = (u64::from(r) + h - 1).min(u64::from(MAX_ROWS - 1)) as u32;
     let c1 = (u64::from(c) + w - 1).min(u64::from(MAX_COLS - 1)) as u32;
     Ok(CellRange::new(sheet, r, c, r1, c1))
+}
+
+/// Refuses number format codes over [`tally_model::MAX_NUMBER_FORMAT_LEN`].
+fn check_format_len(code: &str) -> Result<(), ApiError> {
+    if code.chars().count() > tally_model::MAX_NUMBER_FORMAT_LEN {
+        return Err(ApiError::invalid_argument(format!(
+            "number format is longer than {} characters",
+            tally_model::MAX_NUMBER_FORMAT_LEN
+        )));
+    }
+    Ok(())
 }
 
 /// Validates a sheet name.
@@ -531,6 +588,7 @@ fn apply_op_inner(
         } => {
             check_sheet(wb, *sheet)?;
             if let Some(code) = &patch.number_format {
+                check_format_len(code)?;
                 parse_format(code)
                     .map_err(|e| ApiError::invalid_argument(format!("bad number format: {e}")))?;
             }
@@ -551,6 +609,7 @@ fn apply_op_inner(
             code,
         } => {
             check_sheet(wb, *sheet)?;
+            check_format_len(code)?;
             parse_format(code)
                 .map_err(|e| ApiError::invalid_argument(format!("bad number format: {e}")))?;
             let ranges = ranges_of(*sheet, ranges)?;
@@ -938,6 +997,9 @@ fn apply_op_inner(
         }
         Op::SetColumnFilter { sheet, col, filter } => {
             check_sheet(wb, *sheet)?;
+            if let Some(f) = filter {
+                crate::filter::check_filter_size(f)?;
+            }
             let meta = sheet_meta(wb, *sheet).ok_or_else(|| not_found_sheet(*sheet))?;
             let s = wb
                 .sheet_mut(*sheet)

@@ -24,7 +24,7 @@ fixtures, by `python3 -I tests/fixtures/ods/gen_fixtures.py`.
 | 5 | Active content (macros, external links, HYPERLINK) | WP1, WP3, WP7; WP5 for file side | File side done; rest pending |
 | 6 | Untrusted parsing happens in Rust only | WP5 (parsing), WP7 (IPC surface) | Parsing side done |
 | 7 | Tauri hardening | WP7 | Implemented (see the WP7 section) |
-| 8 | Engine DoS limits | WP1, WP2, WP3 | Implemented (text cap, linear wildcards, recalc watchdog, sheet cap) |
+| 8 | Engine DoS limits | WP1, WP2, WP3 | Implemented (text cap, linear wildcards, recalc watchdog, sheet cap, names by reference, per-formula and per-transaction work budgets) |
 | 9 | Fuzzing | later (Phase A drops fuzz targets) | Corpus and a mutation smoke test exist |
 
 Plus the CSV formula-injection guard (§5.3), which is described below.
@@ -34,6 +34,13 @@ are fixed; their regression tests generate the malicious inputs themselves
 (`crates/tally-io-ods/tests/hardening.rs`, `crates/tally-engine/tests/security.rs`,
 plus the CSV, functions and desktop tests named below), so nothing large is
 committed.
+
+The findings of the second review (`docs/reviews/security-review-2-2026-10-19.md`)
+are fixed too; see [Review 2 fixes](#review-2-fixes) for each finding, its fix
+and its tests (`crates/tally-engine/tests/security2.rs`,
+`crates/tally-io-ods/tests/security2.rs`, `crates/tally-io-xlsx/tests/security2.rs`).
+Timing tests that only hold in release builds are `#[ignore]`d; run them with
+`cargo test --release -p tally-engine --features io --test security2 -- --ignored`.
 
 ## 1. Zip bombs (WP5, `crates/tally-io-ods/src/archive.rs`)
 
@@ -117,6 +124,47 @@ Deviation from the plan: the plan says "store repeated content as runs (never
 materialize)". `tally_model::SheetData` has no run representation, so
 repeated content is materialized up to the caps above. Storing runs would need
 a model change (WP0 lead review) and engine support (WP1).
+
+Merges and array blocks (review 2, HIGH-1 and HIGH-2): each merge counts
+one cell against `max_cells`, and a sheet keeps at most 100,000 merges
+(`content::MAX_MERGES_PER_SHEET`; later ones are dropped with a warning in
+`WorkbookData.warnings`). An array formula block counts its whole area
+(rows × columns, clamped to the sheet), because the engine turns every
+covered cell into an array part: twenty `number-matrix-rows-spanned="1048576"`
+cells in a 1 KB file are `LimitExceeded { what: "materialized cells" }`.
+Number formats (HIGH-4): a data style whose code is longer than 4,096
+characters (`tally_model::MAX_NUMBER_FORMAT_LEN`, however many parts it
+has) reads as General, with a warning. Tests:
+`tally-io-ods::security2::merges_per_sheet_are_capped`,
+`tally-io-ods::security2::array_block_areas_count_against_the_cell_cap`,
+`tally-io-ods::security2::over_long_number_formats_become_general`.
+
+## 3b. XLSX reader (`crates/tally-io-xlsx`)
+
+`read_xlsx` is hardened like the ODS reader and shares its defaults
+(`tally_io_xlsx::Limits`): at most 10,000 zip entries (EOCD precheck before
+indexing), 512 MiB per worksheet or `sharedStrings.xml`, 64 MiB per other
+part, 2 GiB in total, a 200:1 compression ratio once an entry passes
+10 MiB, DOCTYPE rejected in every part, XML depth 256 and 256 attributes per
+element, 10,000,000 materialized cells, 1 GiB of materialized text (each
+cell's full text counts, even when cells share one shared string) and
+10,000 sheets. Nothing is extracted to disk; relationship targets that
+leave the package are ignored.
+
+| Control | Test |
+|---|---|
+| Zip bombs, lying headers, entry floods, total bytes | `tally-io-xlsx::malicious::zip_bomb_is_rejected_within_one_second`, `tally-io-xlsx::malicious::zip_bomb_hits_entry_cap_when_ratio_is_disabled`, `tally-io-xlsx::malicious::total_bytes_cap`, `tally-io-xlsx::malicious::lying_entry_count_is_rejected_before_indexing`, `tally-io-xlsx::malicious::too_many_real_entries` |
+| XML: DOCTYPE, depth, attributes, entities | `tally-io-xlsx::malicious::doctype_is_forbidden_in_every_part`, `tally-io-xlsx::malicious::deep_nesting_hits_depth_cap`, `tally-io-xlsx::malicious::attribute_flood_hits_cap`, `tally-io-xlsx::malicious::quick_xml_does_not_resolve_external_entities` |
+| Cell and text budgets, shared-string count | `tally-io-xlsx::malicious::cell_cap`, `tally-io-xlsx::malicious::text_budget_counts_every_shared_string_use`, `tally-io-xlsx::malicious::shared_string_count_is_capped`, `tally-io-xlsx::malicious::oversized_cell_text_is_rejected` |
+| Traversal and external targets | `tally-io-xlsx::malicious::traversal_and_external_targets_are_ignored` |
+| Merges count one cell each against `max_cells`, at most 100,000 per sheet (`sheet::MAX_MERGES_PER_SHEET`, warning past it) | `tally-io-xlsx::security2::merges_are_counted_and_capped` |
+| An array formula's `ref` area counts against `max_cells` | `tally-io-xlsx::security2::array_block_area_counts` |
+| `numFmt formatCode` (and `dxf` codes) over 4,096 characters read as General, with a warning | `tally-io-xlsx::security2::over_long_format_codes_become_general` |
+| Shared formulas: members are `CellContentData::SharedFormula` sharing the anchor's text (`Arc<str>`), counted once against `max_text_bytes`; the engine parses each group once | `tally-io-xlsx::security2::shared_formula_members_share_one_text`, `tally-engine::security2::files::shared_formulas_parse_once` |
+| `<col style>`: at most 16,384 `<col>` elements per sheet (warning past it); styles become one whole-column run per column, overlaps resolved last-wins in O(N + 16,384) | `tally-io-xlsx::security2::column_styles_are_one_run_per_column` |
+| `<f>` text over 8,192 characters (the parser's limit) is a limit error | `sheet::MAX_FORMULA_TEXT` |
+| Quoted sheet names containing `:` (`'a:b'!A1`) are not read as 3-D spans | `tally-io-xlsx::security2::quoted_sheet_names_with_colons` |
+| `calcPr iterateCount` clamped to 32,767 (ODS `table:steps` too) | `tally-io-xlsx::security2::iterate_count_is_clamped`, `tally-io-ods::security2::iteration_steps_are_clamped` |
 
 ## 4. Path traversal (WP5)
 
@@ -251,7 +299,15 @@ off in release builds are all owned by WP7 (`apps/desktop/**`).
 | Regex size limit through `RegexBuilder::size_limit`, with no fancy-regex in criteria. Owned by WP3. | `tally-functions::criteria` tests |
 | Text results are capped at 4 MiB (`tally_functions::MAX_TEXT_BYTES`): every function result passes through `sanitize`, the `&` operator checks before allocating, and SUBSTITUTE and CONCATENATE size their result first. Longer text is Err:513 (string overflow). | `tally-engine::security::nested_substitute_hits_string_cap` (9 nested SUBSTITUTEs: 2.2 GB before), `tally-engine::security::substitute_checks_size_before_allocating`, `tally-engine::security::concat_hits_string_cap` |
 | Wildcard criteria never backtrack: the pattern is split at `*` into pieces matched greedily (literal pieces by substring search, pieces with `?` by bit-parallel Shift-And). Worst case O(text × piece / 64). | `tally-functions::criteria::tests::glob_agrees_with_reference`, `tally-functions::criteria::wildcard_matching_is_linear`, `tally-engine::security::wildcard_countif_is_linear` (1 MB × 4,000-character pattern: 3.2 s before) |
-| Recalc watchdog on open: at most 50,000,000 formulas or 20 s (`RecalcBudget::on_open`). Past it, the remaining formulas keep the values cached in the file, are marked clean (so edits recalculate their dependents as usual), and `WorkbookInfo.warnings` carries a one-time message that the app shows as a toast. `apply` is not bounded yet. | `tally-engine::security::recalc_budget_stops_and_keeps_cached_values`, `tally-engine::security::files::heavy_open_stops_at_deadline_with_warning` |
+| Recalc watchdog on open: at most 50,000,000 formulas or 20 s (`RecalcBudget::on_open`). Past it, the remaining formulas keep the values cached in the file, are marked clean (so edits recalculate their dependents as usual), and `WorkbookInfo.warnings` carries a one-time message that the app shows as a toast. `apply` is bounded per transaction (below) and per formula (work budget), not by time. | `tally-engine::security::recalc_budget_stops_and_keeps_cached_values`, `tally-engine::security::files::heavy_open_stops_at_deadline_with_warning` |
+| Names are evaluated by reference, never inlined: each definition reachable from a formula is kept once (`names::collect_names`), evaluated where it is used (relative references stay relative to the using cell), memoized per cell evaluation (`eval::EvalEnv`), with cycle detection and at most 16 nested names (`#NAME?`). Dependency analysis visits each reachable definition once. A 1 KB file with 16 levels of fan-out 10 opens in milliseconds. | `tally-engine::security2::fan_out_names_open_in_linear_time`, `tally-engine::security2::fan_out_names_through_the_api`, `tally-engine::security2::names_by_reference_keep_semantics` |
+| Per-formula work budget: 50,000,000 element operations per cell evaluation (`eval::MAX_FORMULA_WORK`). Every evaluation step costs 1, an operator or call over arrays or ranges the cells it touches (the used part for functions that scan ranges), `MMULT` rows × inner × columns, `MINVERSE`/`MDETERM` n³, `MUNIT` n². A formula over budget is Err:512 ("formula overflow": too complex to evaluate), charged before the work runs. | `tally-engine::security2::matrix_work_budget_stops_huge_mmult` |
+| Dependency index: the readers of a cell are a list with a back-index (each formula records its list positions), so registering or removing one reader is O(1) however many formulas read the cell; name users are a hash set. | `tally-engine::deps::tests::many_readers_of_one_cell_stay_linear`, `tally-engine::security2::fan_in_is_linear`, `tally-engine::security2::indirect_fan_in_edit_is_linear` (release: `fan_in_200k_release_timing`, `indirect_fan_in_100k_release_timing`) |
+| Per-transaction budget: the ops of one `apply` may touch at most 50,000,000 cells (`ops::MAX_TX_CELLS`, summed with `ops::op_cost`: cells written or moved, the used part of cleared or sorted ranges, one per column for style ops, 1,048,576 per Replace All). An op past it fails with `unsupported`; the rest of the transaction applies. | `tally-engine::security2::transaction_cell_budget` |
+| Replace All: replacement and pattern at most 64 KiB (`find::MAX_PATTERN_BYTES`, checked before compiling), at most 1,048,576 cells per op and 10,000,000 per transaction (`find::MAX_REPLACE_TX`, the undo record holds every old cell), at most 32,767 characters per replaced cell (longer results leave the cell unchanged, with a warning) and 256 MiB of new text per op. | `tally-engine::security2::replace_all_limits`, `tally-engine::security2::huge_find_pattern_is_refused_early` |
+| Number formats at most 4,096 characters (`tally_model::MAX_NUMBER_FORMAT_LEN`): `SetNumberFormat`, `ApplyStyle` and conditional-format styles refuse longer codes, the style table turns longer codes from any source into General, and `cells()` returns at most 1,024 characters of display text per cell (`service::view::MAX_VIEW_TEXT`, ending in `…`; the value, edit text and exports are untouched). | `tally-engine::security2::files::long_number_formats_render_fast` (release: `long_number_formats_render_100ms_release`) |
+| AutoFilter value lists are matched through a hash set of lowercased values built once per application (`filter::Matcher`); a list holds at most 100,000 values and 16 MiB (`filter::MAX_FILTER_VALUES`). | `tally-engine::security2::filter_value_list_is_a_set` (release: `filter_100k_rows_10k_values_release_timing`) |
+| Loading: overlapping merges are dropped in O(n log n) (a row sweep, `convert::clean_merges`), at most 100,000 per sheet; array blocks cover at most 10,000,000 cells per workbook (`convert::MAX_ARRAY_CELLS`), checked before anything is materialized; imported sheet names are made valid (`convert::sanitize_sheet_name`: `[ ] * ? : / \` and control characters become `_`) while the file's formulas still resolve the original names. What loading drops or changes is shown once as a warning. | `tally-engine::convert::tests::clean_merges_is_n_log_n`, `tally-engine::convert::tests::clean_merges_drops_overlaps_and_invalid`, `tally-engine::convert::tests::array_budget_is_checked_before_materializing`, `tally-engine::security2::files::many_merges_open_fast`, `tally-engine::security2::imported_sheet_names_are_sanitized` (release: `engine_array_budget_release`) |
 | At most 10,000 sheets per workbook (`workbook::MAX_SHEETS`), and sheet names are made unique in amortized O(1) (`SheetNamer`), so loading is linear in the sheet count. Only the first unnamed sheet takes the file name. | `tally-engine::security::same_named_sheets_load_fast` (2,000 same-named sheets: 43 s before), `tally-engine::security::sheet_count_is_capped`, `tally-engine::security::files::same_named_sheets_open_fast` |
 | Maximum array size (2^21 elements per lifted range). | engine eval tests |
 
@@ -260,7 +316,44 @@ engine.
 
 Residual risk: the text cap applies per value, so an array formula over a
 whole column of 4 MiB strings can still build large arrays (bounded by the
-array cap × 4 MiB). A total budget per evaluation is future work.
+array cap × 4 MiB); the work budget counts cells, not bytes. The work budget
+is charged by the engine evaluator before each operator and call, so a
+single function call is bounded by its arguments' size, not interrupted
+while it runs (the lifted scalar calls inside `tally-functions` are capped
+at 2^21 cells each). Nothing interrupts evaluation by time, and there is no
+cancellation from the UI.
+
+The desktop shell runs every command under one service mutex
+(`apps/desktop/src-tauri/src/commands.rs` `with_service`), so a slow
+operation on one document blocks every other document until it finishes.
+The budgets above bound how long that can be; per-document locks (so other
+windows stay responsive) are planned for the shell.
+
+## Review 2 fixes
+
+From `docs/reviews/security-review-2-2026-10-19.md`. Timings are the
+review's generators (`p*.py`) on the same machine, release build, before
+(current HEAD before the fixes) and after.
+
+| Finding | Fix | Tests | Before → after |
+|---|---|---|---|
+| CRITICAL-1 names expand exponentially | Names evaluated by reference with a per-evaluation memo and cycle detection; analysis visits each definition once (§8) | `tally-engine::security2::fan_out_names_open_in_linear_time`, `fan_out_names_through_the_api`, `names_by_reference_keep_semantics` | fan 10 × 16, 1 cell: timeout > 30 s (1.8 GB) → 2 ms, 9 MB; fan 2 × 1000 cells: 16.3 s → 15 ms; API DefineName fan 10: killed at 6 GB → 0.3 ms |
+| HIGH-1 `clean_merges` O(n²) | Row sweep with an ordered map of active merges; 100k merges per sheet in both readers, counted against `max_cells` (XLSX too) | `tally-engine::convert::tests::clean_merges_is_n_log_n`, `tally-engine::security2::files::many_merges_open_fast`, `tally-io-ods::security2::merges_per_sheet_are_capped`, `tally-io-xlsx::security2::merges_are_counted_and_capped` | ODS 200k: 5.2 s → 0.1 s; XLSX 2M: timeout > 30 s → 0.49 s |
+| HIGH-2 array blocks unbudgeted | Readers count block areas against `max_cells`; the engine caps covered cells at 10M per workbook and checks overlap before materializing | `tally-io-ods::security2::array_block_areas_count_against_the_cell_cap`, `tally-io-xlsx::security2::array_block_area_counts`, `tally-engine::convert::tests::array_budget_is_checked_before_materializing` | 20 × 1M: 3.1 s, 1.8 GB → refused in 0.4 ms; 200 × 1M: timeout, 3.6 GB → refused in 0.6 ms |
+| HIGH-3 dependency index O(n²) | Reader lists with back-index positions and `swap_remove`; name users in a hash set | `tally-engine::deps::tests::many_readers_of_one_cell_stay_linear`, `tally-engine::security2::fan_in_is_linear`, `indirect_fan_in_edit_is_linear` | 200k fan-in: open 5.6 s + recalc_all 23.3 s → 0.32 s + 0.13 s; 100k INDIRECT: setup 7.5 s, edit 6.0 s → 0.3 s, 0.14 s |
+| HIGH-4 long number formats | 4,096-character cap in both readers (General + warning), in `SetNumberFormat`/`ApplyStyle`/CF styles and the style table; view text ≤ 1,024 characters per cell | `tally-io-ods::security2::over_long_number_formats_become_general`, `tally-io-xlsx::security2::over_long_format_codes_become_general`, `tally-engine::security2::files::long_number_formats_render_fast` | `cells(A1:T1000)`, 1 MB `0…` code: timeout > 30 s, 3.3 GB → 9 ms, 20 MB; quoted: timeout, 3.8 GB → 9 ms |
+| HIGH-5 AutoFilter O(rows × values) | Hash set of lowercased values per application; list size capped | `tally-engine::security2::filter_value_list_is_a_set` | 100k rows × 10k values: 11.7 s → 13 ms |
+| MEDIUM-1 shared formulas 450× | `CellContentData::SharedFormula` (one `Arc<str>` per group, counted once); the engine parses each group once and shares the AST; `<f>` text capped at 8,192 | `tally-io-xlsx::security2::shared_formula_members_share_one_text`, `tally-engine::security2::files::shared_formulas_parse_once` | 1M members (LEN 150): open 21.5 s / 4.4 GB (killed at 6 GB here) → open 5.8 s, 744 MB |
+| MEDIUM-2 `<col style>` amplification | One whole-column run per column, overlaps last-wins, ≤ 16,384 `<col>` elements | `tally-io-xlsx::security2::column_styles_are_one_run_per_column` | 10k elements: 6.6 s, 2.5 GB → 7 ms, 13 MB |
+| MEDIUM-3 single-formula cost | Per-formula work budget (Err:512) | `tally-engine::security2::matrix_work_budget_stops_huge_mmult` | 20 × MMULT(1448²): 46 s → refused before multiplying |
+| MEDIUM-4 per-transaction work | 50M-cell transaction budget; Replace All caps | `tally-engine::security2::transaction_cell_budget`, `replace_all_limits` | 64 × 1M SetArrayFormula: ops past 50M cells refused |
+| LOW-1 ODS writer merge lookups | Sorted, merged spans per row with binary searches | `tally-io-ods::security2::writer_merge_lookups_are_logarithmic` | — |
+| LOW-2 sheet names / `'a:b'!A1` | Imported names sanitized (originals resolve while loading); quote-aware placeholder for `:` in XLSX formula translation | `tally-engine::security2::imported_sheet_names_are_sanitized`, `tally-io-xlsx::security2::quoted_sheet_names_with_colons` | `='a:b'!A1`: `#VALUE!` → 100; `SUM('a:b'!A:A)`: Err:501 → 100 |
+| LOW-3 1 MB find pattern | Patterns and replacements over 64 KiB refused before compiling | `tally-engine::security2::huge_find_pattern_is_refused_early` | 640 MB peak → refused at once |
+| INFO iterateCount, sheet lookups | Clamped to 32,767; case-insensitive sheet lookup lowercases once | `tally-io-xlsx::security2::iterate_count_is_clamped`, `tally-io-ods::security2::iteration_steps_are_clamped` | — |
+
+Not covered here: the shell-side argument limits (`src/limits.rs`, owned by
+the shell) and per-document locks (planned, see §8).
 
 ## 9. Fuzzing: later
 
@@ -335,3 +428,27 @@ the user's file access.
 
 - `cargo test -p tally-desktop`: menu ids; command-layer end-to-end over the real engine (templates, assist, ODS/CSV round trip, allowlist rejection, panic and poison recovery).
 - Manual: docs/qa/phase-a-manual.md §7.
+
+### Hyperlinks
+
+Cells can carry links (`Op::SetLink`, `HYPERLINK()`); the engine refuses
+`javascript:`, `data:` and `vbscript:` targets when they are set. Opening a
+link is a separate shell command, `open_url(url)` (`src/links.rs`), which
+accepts only `http://host…`, `https://host…` and `mailto:address`, at most
+2048 bytes, with no whitespace, control characters, quotes, `\`, `<`, `>`
+or backticks; `file:` and every other scheme (including anything read from
+a file) is `invalid_argument`. The URL goes to the OS handler as a single
+argument: `open` on macOS and `xdg-open` on Linux (no shell parses it), and
+`cmd /C start "" <url>` on Windows with `^ & | < > % ( ) !` escaped. No
+opener plugin and no JS permission is involved. The UI opens a link only on
+⌘-click or a click on the active cell's ↗ (a plain click selects), and
+handles `#Sheet.A1` links itself by going to the cell. `user_name` returns
+the OS account name for new note authors (no other data). With v0.3 the
+shell registers 39 commands (docs/api.md); every command validates its
+arguments before the engine sees them (`src/limits.rs`: find/replace text
+and regular expressions, cell input and formulas ≤ 64 KiB, names ≤ 256
+characters, a TSV paste ≤ 64 MiB, ranges inside the sheet) and rejects
+violations with `invalid_argument`. Tests:
+`tally-desktop::links::tests`, `tally-desktop::limits::tests`,
+`tally-desktop::tests::open_url_rejects_script_and_file_links`,
+`tally-desktop::tests::oversized_arguments_are_rejected_before_the_engine`.

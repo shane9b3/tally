@@ -86,6 +86,8 @@ pub(crate) struct StyleSheet {
     pub master_pages: HashMap<String, crate::v03::MasterPage>,
     /// `fo:language`-`fo:country` of the default cell style.
     pub default_locale: Option<String>,
+    /// What was dropped to stay within limits.
+    pub warnings: Vec<String>,
 }
 
 /// A canonical key for a style. `StyleData` holds `f32` sizes, so it cannot
@@ -189,7 +191,10 @@ impl StyleSheet {
             }
             if let Some(ds) = raw.data_style.as_deref().and_then(|d| self.data_style(d)) {
                 let code = ds.to_code(|n| self.data_style(n));
-                if !code.is_empty() && code != "General" {
+                if !code.is_empty()
+                    && code != "General"
+                    && code.chars().count() <= tally_model::MAX_NUMBER_FORMAT_LEN
+                {
                     st.number_format = Some(code);
                 }
             }
@@ -322,7 +327,11 @@ impl StyleSheet {
             .as_deref()
             .and_then(|d| self.data_style(d))
             .map(|ds| ds.to_code(|n| self.data_style(n)))
-            .filter(|code| !code.is_empty() && code != "General");
+            .filter(|code| {
+                !code.is_empty()
+                    && code != "General"
+                    && code.chars().count() <= tally_model::MAX_NUMBER_FORMAT_LEN
+            });
         s
     }
 
@@ -371,7 +380,18 @@ impl StyleSheet {
                         self.parse_default_style(xml)?;
                     } else if let Some(kind) = Kind::from_element(&e.name) {
                         let name = e.attr("style:name").map(str::to_string);
-                        let ds = parse_data_style(xml, &e, kind)?;
+                        let mut ds = parse_data_style(xml, &e, kind)?;
+                        // Any number of parts is allowed by the schema; a
+                        // code past the limit becomes General (review 2,
+                        // HIGH-4). Map targets are checked on their own.
+                        if ds.to_code(|_| None).chars().count() > tally_model::MAX_NUMBER_FORMAT_LEN
+                        {
+                            ds = crate::numfmt::DataStyle::new(kind);
+                            let w = tally_model::long_number_format_warning();
+                            if !self.warnings.contains(&w) {
+                                self.warnings.push(w);
+                            }
+                        }
                         if let Some(name) = name {
                             self.scope_mut(origin).data.insert(name, ds);
                         }

@@ -11,7 +11,7 @@
 //! leaves the visible rows alone until the filter is refreshed.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use tally_api::{
     AutoFilterInfo, ColumnFilter, FilterColumnInfo, FilterCondition, FilterOp, RangeDto,
@@ -27,6 +27,12 @@ use crate::workbook::Workbook;
 
 /// Most distinct values listed per column by [`filter_info`].
 pub const MAX_UNIQUE: usize = 10_000;
+
+/// Most values one column's value list may hold (`Op::SetColumnFilter`).
+pub const MAX_FILTER_VALUES: usize = 100_000;
+
+/// Most bytes of value text in one column's value list.
+pub const MAX_FILTER_VALUE_BYTES: usize = 16 * 1024 * 1024;
 
 /// API → model operator.
 pub fn op_to_model(op: FilterOp) -> FilterOpData {
@@ -127,18 +133,59 @@ pub fn to_model(f: &AutoFilter, filtered: &Spans) -> AutoFilterData {
 
 /// `true` if a cell (its value and display text) passes `c`.
 pub fn passes(c: &ColumnCriteria, v: &Value, text: &str) -> bool {
-    if let Some(values) = &c.values {
-        let t = text.to_lowercase();
-        if !values.iter().any(|x| x.to_lowercase() == t) {
-            return false;
+    Matcher::new(c).passes(v, text)
+}
+
+/// Column criteria prepared once per filter application: the value list as
+/// a set of lowercased texts, so a row is one hash lookup instead of a
+/// lowercase-and-compare per listed value (security review 2, HIGH-5:
+/// 10,000 values × 100k rows took 12 s).
+pub struct Matcher<'a> {
+    values: Option<HashSet<String>>,
+    condition: Option<(FilterOpData, &'a str)>,
+}
+
+impl<'a> Matcher<'a> {
+    /// Prepares `c`.
+    pub fn new(c: &'a ColumnCriteria) -> Self {
+        Self {
+            values: c
+                .values
+                .as_ref()
+                .map(|v| v.iter().map(|x| x.to_lowercase()).collect()),
+            condition: c.condition.as_ref().map(|(op, o)| (*op, o.as_str())),
         }
     }
-    if let Some((op, operand)) = &c.condition {
-        if !condition(*op, operand, v, text) {
-            return false;
+
+    /// `true` if a cell (its value and display text) passes.
+    pub fn passes(&self, v: &Value, text: &str) -> bool {
+        if let Some(values) = &self.values {
+            if !values.contains(&text.to_lowercase()) {
+                return false;
+            }
+        }
+        if let Some((op, operand)) = self.condition {
+            if !condition(op, operand, v, text) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Checks the size of a column filter from the API.
+pub fn check_filter_size(f: &ColumnFilter) -> Result<(), tally_api::ApiError> {
+    if let Some(v) = &f.values {
+        let bytes: usize = v.iter().map(String::len).sum();
+        if v.len() > MAX_FILTER_VALUES || bytes > MAX_FILTER_VALUE_BYTES {
+            return Err(tally_api::ApiError::invalid_argument(format!(
+                "a column filter may list at most {MAX_FILTER_VALUES} values \
+                 ({} MiB of text)",
+                MAX_FILTER_VALUE_BYTES >> 20
+            )));
         }
     }
-    true
+    Ok(())
 }
 
 fn condition(op: FilterOpData, operand: &str, v: &Value, text: &str) -> bool {
@@ -202,13 +249,18 @@ impl Workbook {
             None => Spans::default(),
             Some(af) if af.columns.is_empty() => Spans::default(),
             Some(af) => {
+                let matchers: Vec<(u32, Matcher<'_>)> = af
+                    .columns
+                    .iter()
+                    .map(|(col, c)| (*col, Matcher::new(c)))
+                    .collect();
                 let mut hidden = Vec::new();
                 for r in af.range.r0.saturating_add(1)..=af.range.r1 {
-                    let keep = af.columns.iter().all(|(col, c)| {
+                    let keep = matchers.iter().all(|(col, m)| {
                         let addr = CellAddr::new(sheet, r, *col);
                         let v = self.value(addr);
                         let text = display_text(self, addr);
-                        passes(c, &v, &text)
+                        m.passes(&v, &text)
                     });
                     if !keep {
                         hidden.push(r);

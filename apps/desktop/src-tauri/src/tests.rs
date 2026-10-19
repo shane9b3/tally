@@ -547,3 +547,340 @@ fn v02_commands_answer() -> CmdResult<()> {
     assert!(fi.range.is_none());
     Ok(())
 }
+
+// ----- v0.3 over the real engine ------------------------------------------------
+
+fn tx_of(ops: Vec<Op>) -> Transaction {
+    Transaction {
+        ops,
+        label: Some("test".into()),
+        selection_before: None,
+        selection_after: None,
+    }
+}
+
+/// Applies without asserting success (validation / protection refusals).
+fn apply_any(st: &AppState, doc: DocId, ops: Vec<Op>) -> CmdResult<tally_api::ApplyResult> {
+    with_service(st, |s| s.apply(doc, tx_of(ops)))
+}
+
+#[test]
+fn conditional_format_style_shows_in_cells() -> CmdResult<()> {
+    use tally_api::{CfRuleDto, CfRuleKind, CfStyleDto, CmpOp};
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    let sheet = info.active_sheet;
+    let fill = 0xfee2_e2ff_u32;
+    let rule = CfRuleDto {
+        kind: CfRuleKind::CellValue {
+            op: CmpOp::Gt,
+            formulas: vec!["50".into()],
+        },
+        style: CfStyleDto {
+            fill: Some(fill),
+            bold: Some(true),
+            ..CfStyleDto::default()
+        },
+        stop_if_true: false,
+    };
+    apply_ok(
+        &st,
+        info.doc,
+        vec![Op::AddConditionalFormat {
+            sheet,
+            ranges: vec![range(1, 5, 14, 5)],
+            rules: vec![rule],
+        }],
+    )?;
+    let listed = with_service(&st, |s| s.conditional_formats(info.doc, sheet))?;
+    assert_eq!(listed.len(), 1);
+    let view = cells(&st, info.doc, sheet, range(1, 5, 14, 5))?;
+    let mut hits = 0;
+    for v in &view {
+        let big = number(v).is_some_and(|n| n > 50.0);
+        match v.cf_style {
+            Some(id) => {
+                assert!(big, "row {} has a cf style but is not > 50", v.r);
+                assert!(id >= 0x4000_0000);
+                let styles = with_service(&st, |s| s.styles(info.doc, &[id]))?;
+                assert_eq!(styles.first().and_then(|s| s.fill), Some(fill));
+                assert!(styles.first().is_some_and(|s| s.bold));
+                hits += 1;
+            }
+            None => assert!(!big, "row {} is > 50 without a cf style", v.r),
+        }
+    }
+    assert!(hits > 0);
+    Ok(())
+}
+
+#[test]
+fn validation_stop_rejects_input() -> CmdResult<()> {
+    use tally_api::{CmpOp, ValidationAlert, ValidationDto, ValidationErrorStyle, ValidationKind};
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    let sheet = info.active_sheet;
+    let validation = ValidationDto {
+        id: 0,
+        ranges: vec![range(1, 3, 14, 3)],
+        kind: ValidationKind::Whole {
+            op: CmpOp::Between,
+            formulas: vec!["1".into(), "10".into()],
+        },
+        allow_blank: true,
+        show_dropdown: false,
+        input_help: None,
+        error: Some(ValidationAlert {
+            style: ValidationErrorStyle::Stop,
+            title: "Quantity".into(),
+            text: "Enter 1 to 10.".into(),
+        }),
+    };
+    apply_ok(&st, info.doc, vec![Op::AddValidation { sheet, validation }])?;
+    let before = cells(&st, info.doc, sheet, range(1, 3, 1, 3))?;
+    let res = apply_any(
+        &st,
+        info.doc,
+        vec![Op::SetCellInput {
+            sheet,
+            r: 1,
+            c: 3,
+            input: "50".into(),
+        }],
+    )?;
+    let err = res.errors.first().expect("a validation error");
+    assert_eq!(err.code, "validation");
+    assert_eq!(err.message, "Enter 1 to 10.");
+    let after = cells(&st, info.doc, sheet, range(1, 3, 1, 3))?;
+    assert_eq!(
+        before.first().map(|v| &v.text),
+        after.first().map(|v| &v.text)
+    );
+    // A valid value goes through.
+    apply_ok(
+        &st,
+        info.doc,
+        vec![Op::SetCellInput {
+            sheet,
+            r: 1,
+            c: 3,
+            input: "7".into(),
+        }],
+    )?;
+    let at = with_service(&st, |s| s.validation_at(info.doc, sheet, 1, 3))?;
+    assert_eq!(
+        at.and_then(|v| v.error).map(|e| e.title),
+        Some("Quantity".into())
+    );
+    Ok(())
+}
+
+#[test]
+fn note_round_trips_through_ods() -> CmdResult<()> {
+    use tally_api::NoteDto;
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    let sheet = info.active_sheet;
+    let note = NoteDto {
+        r: 2,
+        c: 1,
+        text: "Call before shipping".into(),
+        author: Some("QA".into()),
+        created: None,
+        shown: false,
+    };
+    apply_ok(
+        &st,
+        info.doc,
+        vec![Op::SetNote {
+            sheet,
+            r: 2,
+            c: 1,
+            note,
+        }],
+    )?;
+    let flagged = cells(&st, info.doc, sheet, range(2, 1, 2, 1))?;
+    assert!(flagged.first().is_some_and(|v| v.flags & 8 != 0));
+    let path = temp_path("notes.ods");
+    save_to(&st, info.doc, &path, FileFormat::Ods)?;
+    let reopened = open_path(&st, &path)?;
+    let back = with_service(&st, |s| s.note(reopened.doc, reopened.active_sheet, 2, 1))?
+        .expect("the note survives the round trip");
+    assert_eq!(back.text, "Call before shipping");
+    assert_eq!(back.author.as_deref(), Some("QA"));
+    let _ = std::fs::remove_file(&path);
+    Ok(())
+}
+
+#[test]
+fn protected_sheet_rejects_an_edit() -> CmdResult<()> {
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    let sheet = info.active_sheet;
+    apply_ok(
+        &st,
+        info.doc,
+        vec![Op::ProtectSheet {
+            sheet,
+            password: Some("secret".into()),
+            options: None,
+        }],
+    )?;
+    let p = with_service(&st, |s| s.protection_info(info.doc, sheet))?;
+    assert!(p.sheet_protected && p.sheet_has_password);
+    let res = apply_any(
+        &st,
+        info.doc,
+        vec![Op::SetCellInput {
+            sheet,
+            r: 1,
+            c: 1,
+            input: "changed".into(),
+        }],
+    )?;
+    assert_eq!(
+        res.errors.first().map(|e| e.code.as_str()),
+        Some("protected")
+    );
+    // A wrong password keeps the protection; the right one lifts it.
+    let wrong = apply_any(
+        &st,
+        info.doc,
+        vec![Op::UnprotectSheet {
+            sheet,
+            password: Some("nope".into()),
+        }],
+    )?;
+    assert_eq!(
+        wrong.errors.first().map(|e| e.code.as_str()),
+        Some("protected")
+    );
+    apply_ok(
+        &st,
+        info.doc,
+        vec![Op::UnprotectSheet {
+            sheet,
+            password: Some("secret".into()),
+        }],
+    )?;
+    set(&st, &info, 1, 1, "changed")?;
+    Ok(())
+}
+
+#[test]
+fn goal_seek_sets_a_total_by_varying_qty() -> CmdResult<()> {
+    use tally_api::GoalSeekRequest;
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    let sheet = info.active_sheet;
+    let req = GoalSeekRequest {
+        formula_sheet: sheet,
+        formula_cell: CellPos { r: 1, c: 5 },
+        target: 100.0,
+        variable_sheet: sheet,
+        variable_cell: CellPos { r: 1, c: 3 },
+    };
+    let res = with_service(&st, |s| s.goal_seek(info.doc, &req))?;
+    assert!(res.found, "{res:?}");
+    assert!((res.result - 100.0).abs() < 1e-6, "{res:?}");
+    // Nothing changed until the value is applied.
+    set(&st, &info, 1, 3, &res.value.to_string())?;
+    let view = cells(&st, info.doc, sheet, range(1, 5, 1, 5))?;
+    let total = view.first().and_then(number).unwrap_or(f64::NAN);
+    assert!((total - 100.0).abs() < 0.01, "{total}");
+    Ok(())
+}
+
+#[test]
+fn open_url_rejects_script_and_file_links() {
+    let mut launched = Vec::new();
+    for url in [
+        "javascript:alert(1)",
+        "file:///etc/passwd",
+        "data:text/html,x",
+        "  ",
+    ] {
+        let e = crate::links::open_url_with(url, |u| {
+            launched.push(u.to_owned());
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(e.code, ApiError::INVALID_ARGUMENT, "{url}");
+    }
+    assert!(launched.is_empty());
+    assert!(crate::links::open_url_with("https://example.com/x", |u| {
+        launched.push(u.to_owned());
+        Ok(())
+    })
+    .is_ok());
+    assert_eq!(launched, vec!["https://example.com/x".to_owned()]);
+}
+
+#[test]
+fn oversized_arguments_are_rejected_before_the_engine() -> CmdResult<()> {
+    use crate::limits;
+    use tally_api::{FindMode, FindQuery, PastePayload};
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    let sheet = info.active_sheet;
+    let big_input = tx_of(vec![Op::SetCellInput {
+        sheet,
+        r: 0,
+        c: 0,
+        input: "x".repeat(limits::MAX_TEXT + 1),
+    }]);
+    assert_eq!(
+        limits::transaction(&big_input).map_err(|e| e.code),
+        Err(ApiError::INVALID_ARGUMENT.to_owned())
+    );
+    let query = |text: String, mode| FindQuery {
+        text,
+        sheet: None,
+        in_formulas: false,
+        match_case: false,
+        whole_cell: false,
+        mode,
+        from: None,
+    };
+    assert!(
+        limits::find_query(&query("a".repeat(limits::MAX_TEXT + 1), FindMode::Literal)).is_err()
+    );
+    assert!(limits::find_query(&query("(a)".repeat(30_000), FindMode::Regex)).is_err());
+    let long_name = tx_of(vec![Op::DefineName {
+        name: "N".repeat(limits::MAX_NAME_CHARS + 1),
+        scope: None,
+        refers_to: "1".into(),
+    }]);
+    assert!(limits::transaction(&long_name).is_err());
+    let rename = tx_of(vec![Op::RenameSheet {
+        sheet,
+        name: "S".repeat(limits::MAX_NAME_CHARS + 1),
+    }]);
+    assert!(limits::transaction(&rename).is_err());
+    let huge_paste = tx_of(vec![Op::Paste {
+        sheet,
+        target: range(0, 0, 0, 0),
+        payload: PastePayload::Tsv {
+            text: "1\t".repeat(limits::MAX_TSV / 2 + 1),
+        },
+    }]);
+    assert!(limits::transaction(&huge_paste).is_err());
+    let outside = tx_of(vec![Op::Clear {
+        sheet,
+        ranges: vec![range(0, 0, tally_types::MAX_ROWS, 0)],
+        what: tally_api::ClearWhat::Contents,
+    }]);
+    assert!(limits::transaction(&outside).is_err());
+    assert!(limits::ranges("get_cells", &[range(0, 0, 0, tally_types::MAX_COLS)]).is_err());
+    // Within the limits the same shapes pass and apply.
+    let ok = tx_of(vec![Op::SetCellInput {
+        sheet,
+        r: 20,
+        c: 0,
+        input: "x".repeat(1000),
+    }]);
+    limits::transaction(&ok)?;
+    let res = with_service(&st, |s| s.apply(info.doc, ok))?;
+    assert!(res.errors.is_empty());
+    Ok(())
+}

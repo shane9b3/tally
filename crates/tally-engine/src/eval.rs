@@ -28,7 +28,9 @@
 //! - A 3-D reference (`Sheet1.A1:Sheet3.A1`) evaluates to `#VALUE!` in
 //!   Phase A (`EvalValue` has no multi-sheet variant).
 
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tally_formula::{ArrayLit, BinOp, Expr, FuncRef, RefExpr, ResolvedRef, UnOp};
@@ -51,15 +53,118 @@ pub const MAX_EVAL_DEPTH: u32 = 40;
 /// Upper bound on the cells of a reference turned into a matrix (2^21).
 const MATRIX_LIMIT: u64 = 1 << 21;
 
+/// The work budget of one formula evaluation, in element operations: every
+/// evaluation step costs 1, an operator or function call over arrays or
+/// ranges costs the number of cells it touches, and the matrix functions
+/// their arithmetic (`MMULT` rows × inner × columns, `MINVERSE`/`MDETERM`
+/// n³). A formula that would exceed it gives Err:512 ("formula overflow":
+/// too complex to evaluate) without doing the work (security review 2,
+/// MEDIUM-3). A 1000-row `SUMPRODUCT` over 20 whole columns stays far
+/// below it; `MMULT` of two 1448² matrices (3·10⁹) does not.
+pub const MAX_FORMULA_WORK: u64 = 50_000_000;
+
+/// Per-evaluation state: the definitions of the names the formula uses,
+/// their memoized values, the names being evaluated (cycle detection) and
+/// the work budget.
+///
+/// A name is evaluated by reference: its own parsed expression is evaluated
+/// where it is used, at the using cell (so relative references in names
+/// keep OpenOffice semantics), once per (name, array context) per cell
+/// evaluation. One env covers exactly one cell evaluation, so a memoized
+/// value never outlives the state it was computed from.
+#[derive(Debug)]
+pub struct EvalEnv {
+    names: crate::names::NameDefs,
+    memo: RefCell<HashMap<(u32, bool), EvalValue>>,
+    active: RefCell<Vec<u32>>,
+    work: Cell<u64>,
+    limit: u64,
+}
+
+impl Default for EvalEnv {
+    fn default() -> Self {
+        Self::new(crate::names::NameDefs::default())
+    }
+}
+
+impl EvalEnv {
+    /// An env over the given name definitions with the default budget.
+    pub fn new(names: crate::names::NameDefs) -> Self {
+        Self {
+            names,
+            memo: RefCell::new(HashMap::new()),
+            active: RefCell::new(Vec::new()),
+            work: Cell::new(0),
+            limit: MAX_FORMULA_WORK,
+        }
+    }
+
+    /// The same with a different work budget (tests).
+    pub fn with_limit(mut self, limit: u64) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    /// Work spent so far.
+    pub fn work(&self) -> u64 {
+        self.work.get()
+    }
+
+    /// Charges `n` units of work; `false` once the budget is spent.
+    pub fn charge(&self, n: u64) -> bool {
+        let w = self.work.get().saturating_add(n);
+        self.work.set(w);
+        w <= self.limit
+    }
+
+    /// `true` once the budget is spent.
+    pub fn exhausted(&self) -> bool {
+        self.work.get() > self.limit
+    }
+
+    fn enter(&self, id: u32) -> bool {
+        let mut a = self.active.borrow_mut();
+        if a.len() >= crate::names::MAX_NAME_DEPTH as usize || a.contains(&id) {
+            return false;
+        }
+        a.push(id);
+        true
+    }
+
+    fn leave(&self, id: u32, array: bool, v: Option<&EvalValue>) {
+        let mut a = self.active.borrow_mut();
+        if let Some(p) = a.iter().rposition(|x| *x == id) {
+            a.truncate(p);
+        }
+        if let Some(v) = v {
+            self.memo.borrow_mut().insert((id, array), v.clone());
+        }
+    }
+
+    fn memoized(&self, id: u32, array: bool) -> Option<EvalValue> {
+        self.memo.borrow().get(&(id, array)).cloned()
+    }
+}
+
 /// Evaluates an expression as a cell formula (not in array context).
 pub fn eval_expr(e: &Expr, ctx: &mut dyn EvalContext) -> EvalValue {
-    eval_at_depth(e, ctx, false, 0)
+    eval_with(e, ctx, false, &EvalEnv::default())
 }
 
 /// Evaluates an expression in array context: references used as operands
 /// become matrices and operators apply elementwise.
 pub fn eval_in_array_context(e: &Expr, ctx: &mut dyn EvalContext) -> EvalValue {
-    eval_at_depth(e, ctx, true, 0)
+    eval_with(e, ctx, true, &EvalEnv::default())
+}
+
+/// Evaluates an expression with names and a work budget (`array` selects
+/// array context). Err:512 if the budget runs out.
+pub fn eval_with(e: &Expr, ctx: &mut dyn EvalContext, array: bool, env: &EvalEnv) -> EvalValue {
+    let v = eval_at_depth(e, ctx, array, 0, env);
+    if env.exhausted() {
+        return EvalValue::error(ErrorKind::FormulaOverflow);
+    }
+    v
 }
 
 /// Reduces an evaluation result to the value a cell stores: references by
@@ -106,6 +211,8 @@ enum Work<'e> {
         args: &'e [Expr],
         array: bool,
     },
+    /// A name's expression was evaluated (its value is on the stack).
+    NameDone(u32, bool),
 }
 
 fn pre_evaluated(def: &FunctionDef, i: usize, arg: &Expr) -> bool {
@@ -113,14 +220,23 @@ fn pre_evaluated(def: &FunctionDef, i: usize, arg: &Expr) -> bool {
 }
 
 /// The evaluator loop. `array` is the context of the root expression.
-pub fn eval_at_depth(root: &Expr, ctx: &mut dyn EvalContext, array: bool, depth: u32) -> EvalValue {
+pub fn eval_at_depth<'e>(
+    root: &'e Expr,
+    ctx: &mut dyn EvalContext,
+    array: bool,
+    depth: u32,
+    env: &'e EvalEnv,
+) -> EvalValue {
     if depth > MAX_EVAL_DEPTH {
         return EvalValue::error(ErrorKind::FormulaOverflow);
     }
     let reg = registry();
-    let mut work: Vec<Work<'_>> = vec![Work::Eval(root, array)];
+    let mut work: Vec<Work<'e>> = vec![Work::Eval(root, array)];
     let mut vals: Vec<EvalValue> = Vec::new();
     while let Some(w) = work.pop() {
+        if !env.charge(1) {
+            return EvalValue::error(ErrorKind::FormulaOverflow);
+        }
         match w {
             Work::Eval(e, arr) => match e {
                 Expr::Num(n) => vals.push(EvalValue::number(*n)),
@@ -129,7 +245,7 @@ pub fn eval_at_depth(root: &Expr, ctx: &mut dyn EvalContext, array: bool, depth:
                 Expr::Err(k) => vals.push(EvalValue::error(*k)),
                 Expr::Missing => vals.push(EvalValue::Missing),
                 Expr::Ref(r) => vals.push(resolve_ref(r, ctx.origin())),
-                Expr::Name(_) => vals.push(EvalValue::error(ErrorKind::Name)),
+                Expr::Name(n) => name_step(n, arr, env, &mut work, &mut vals),
                 Expr::Paren(x) => work.push(Work::Eval(x, arr)),
                 Expr::Unary(op, x) => {
                     work.push(Work::Unary(*op, arr));
@@ -162,14 +278,14 @@ pub fn eval_at_depth(root: &Expr, ctx: &mut dyn EvalContext, array: bool, depth:
                         vals.push(EvalValue::error(ErrorKind::Name));
                         continue;
                     };
-                    if let Some(flat) = flatten_unions(def, args) {
+                    if let Some(flat) = flatten_unions(def, args, env) {
                         // `SUM(A1~B2;C3)`: each area of a reference union is
                         // passed as its own argument of a sequence parameter.
                         let call = Expr::Call {
                             func: func.clone(),
                             args: flat,
                         };
-                        vals.push(eval_at_depth(&call, ctx, arr, depth + 1));
+                        vals.push(eval_at_depth(&call, ctx, arr, depth + 1, env));
                         continue;
                     }
                     if let Err(e) = check_arity(def, args.len()) {
@@ -196,12 +312,19 @@ pub fn eval_at_depth(root: &Expr, ctx: &mut dyn EvalContext, array: bool, depth:
                     }
                 }
             },
+            Work::NameDone(id, arr) => env.leave(id, arr, vals.last()),
             Work::Unary(op, arr) => {
                 let v = vals.pop().unwrap_or(EvalValue::Missing);
+                if !env.charge(value_cells(&v, arr)) {
+                    return EvalValue::error(ErrorKind::FormulaOverflow);
+                }
                 vals.push(apply_unary(op, v, arr, ctx));
             }
             Work::Percent(arr) => {
                 let v = vals.pop().unwrap_or(EvalValue::Missing);
+                if !env.charge(value_cells(&v, arr)) {
+                    return EvalValue::error(ErrorKind::FormulaOverflow);
+                }
                 vals.push(map_unary(
                     v,
                     arr,
@@ -215,9 +338,13 @@ pub fn eval_at_depth(root: &Expr, ctx: &mut dyn EvalContext, array: bool, depth:
             Work::Binary(op, arr) => {
                 let r = vals.pop().unwrap_or(EvalValue::Missing);
                 let l = vals.pop().unwrap_or(EvalValue::Missing);
+                if !env.charge(value_cells(&l, arr).max(value_cells(&r, arr))) {
+                    return EvalValue::error(ErrorKind::FormulaOverflow);
+                }
                 vals.push(apply_binary(op, l, r, arr, ctx));
             }
             Work::Array(a) => {
+                let _ = env.charge(a.items.len() as u64);
                 let n = a.items.len().min(vals.len());
                 let items = vals.split_off(vals.len() - n);
                 let data: Vec<Value> = items.iter().map(|v| scalar_value(v, ctx)).collect();
@@ -265,12 +392,16 @@ pub fn eval_at_depth(root: &Expr, ctx: &mut dyn EvalContext, array: bool, depth:
                         }
                     })
                     .collect();
+                if !env.charge(call_cost(def, &slots, ctx, array)) {
+                    return EvalValue::error(ErrorKind::FormulaOverflow);
+                }
                 let mut list = ExprArgs {
                     args,
                     slots,
                     def,
                     array,
                     depth,
+                    env,
                 };
                 let mut actx = ArrayCtx { inner: ctx, array };
                 vals.push(reg.eval_call(&mut actx, id, &mut list));
@@ -280,21 +411,30 @@ pub fn eval_at_depth(root: &Expr, ctx: &mut dyn EvalContext, array: bool, depth:
     vals.pop().unwrap_or(EvalValue::Missing)
 }
 
-/// The leaves of a reference union `a~b~c` (through parentheses).
-fn union_leaves<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+/// The leaves of a reference union `a~b~c` (through parentheses and names).
+fn union_leaves<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>, env: &'e EvalEnv, depth: u32) {
     match e {
-        Expr::Paren(x) if is_union(x) => union_leaves(x, out),
+        Expr::Paren(x) if is_union(x, env, depth) => union_leaves(x, out, env, depth),
+        Expr::Name(n) if is_union(e, env, depth) => {
+            if let Some((_, f)) = env.names.resolve(n) {
+                union_leaves(&f.expr, out, env, depth + 1);
+            }
+        }
         Expr::Binary(BinOp::Union, l, r) => {
-            union_leaves(l, out);
-            union_leaves(r, out);
+            union_leaves(l, out, env, depth);
+            union_leaves(r, out, env, depth);
         }
         other => out.push(other),
     }
 }
 
-fn is_union(e: &Expr) -> bool {
+fn is_union(e: &Expr, env: &EvalEnv, depth: u32) -> bool {
     match e {
-        Expr::Paren(x) => is_union(x),
+        Expr::Paren(x) => is_union(x, env, depth),
+        Expr::Name(n) if depth < crate::names::MAX_NAME_DEPTH => env
+            .names
+            .resolve(n)
+            .is_some_and(|(_, f)| is_union(&f.expr, env, depth + 1)),
         Expr::Binary(BinOp::Union, _, _) => true,
         _ => false,
     }
@@ -303,24 +443,25 @@ fn is_union(e: &Expr) -> bool {
 /// The arguments with every union argument of a sequence parameter split
 /// into its areas, or `None` when there is nothing to split (or the
 /// split would land an area on a non-sequence parameter).
-fn flatten_unions(def: &FunctionDef, args: &[Expr]) -> Option<Vec<Expr>> {
+#[inline(never)]
+fn flatten_unions(def: &FunctionDef, args: &[Expr], env: &EvalEnv) -> Option<Vec<Expr>> {
     let seq = |k: ParamKind| matches!(k, ParamKind::NumberSeq | ParamKind::ValueSeq);
     if !args
         .iter()
         .enumerate()
-        .any(|(i, a)| is_union(a) && seq(def.param_kind(i)))
+        .any(|(i, a)| is_union(a, env, 0) && seq(def.param_kind(i)))
     {
         return None;
     }
     let first = args
         .iter()
         .enumerate()
-        .position(|(i, a)| is_union(a) && seq(def.param_kind(i)))?;
+        .position(|(i, a)| is_union(a, env, 0) && seq(def.param_kind(i)))?;
     let mut out: Vec<Expr> = Vec::with_capacity(args.len() + 2);
     for (i, a) in args.iter().enumerate() {
-        if is_union(a) && seq(def.param_kind(i)) {
+        if is_union(a, env, 0) && seq(def.param_kind(i)) {
             let mut leaves = Vec::new();
-            union_leaves(a, &mut leaves);
+            union_leaves(a, &mut leaves, env, 0);
             out.extend(leaves.into_iter().cloned());
         } else {
             out.push(a.clone());
@@ -329,6 +470,102 @@ fn flatten_unions(def: &FunctionDef, args: &[Expr]) -> Option<Vec<Expr>> {
     // The shifted arguments must still meet sequence parameters.
     let ok = (first..out.len()).all(|j| seq(def.param_kind(j)));
     ok.then_some(out)
+}
+
+/// Evaluates a name by reference: its memoized value, or its expression
+/// pushed on the work stack (`#NAME?` if undefined, self-referential or
+/// nested deeper than [`crate::names::MAX_NAME_DEPTH`]).
+#[inline(never)]
+fn name_step<'e>(
+    n: &tally_formula::NameRef,
+    arr: bool,
+    env: &'e EvalEnv,
+    work: &mut Vec<Work<'e>>,
+    vals: &mut Vec<EvalValue>,
+) {
+    match env.names.resolve(n) {
+        None => vals.push(EvalValue::error(ErrorKind::Name)),
+        Some((id, f)) => {
+            if let Some(v) = env.memoized(id, arr) {
+                vals.push(v);
+            } else if env.enter(id) {
+                work.push(Work::NameDone(id, arr));
+                work.push(Work::Eval(&f.expr, arr));
+            } else {
+                vals.push(EvalValue::error(ErrorKind::Name));
+            }
+        }
+    }
+}
+
+/// Cells an operand stands for (what an elementwise operation touches).
+fn value_cells(v: &EvalValue, array: bool) -> u64 {
+    match v {
+        EvalValue::Array(m) | EvalValue::Scalar(Value::Array(m)) => {
+            u64::from(m.rows) * u64::from(m.cols)
+        }
+        EvalValue::Range(r) if array => r.cell_count(),
+        _ => 1,
+    }
+}
+
+/// The work a call is charged before it runs: the cells of its array and
+/// range arguments (the used part of ranges a function only scans), plus
+/// the arithmetic of the matrix functions.
+#[inline(never)]
+fn call_cost(
+    def: &FunctionDef,
+    slots: &[Option<EvalValue>],
+    ctx: &dyn EvalContext,
+    array: bool,
+) -> u64 {
+    let mut total: u64 = 1;
+    let mut dims: Vec<(u64, u64)> = Vec::new();
+    for (i, s) in slots.iter().enumerate() {
+        let Some(v) = s else {
+            continue;
+        };
+        let (cells, d) = match v {
+            EvalValue::Array(m) | EvalValue::Scalar(Value::Array(m)) => {
+                let d = (u64::from(m.rows), u64::from(m.cols));
+                (d.0 * d.1, d)
+            }
+            EvalValue::Range(r) if !r.is_single() => {
+                let d = (u64::from(r.rows()), u64::from(r.cols()));
+                let dense = array
+                    || def.param_forces_array(i)
+                    || matches!(def.param_kind(i), ParamKind::Array);
+                let cells = if dense {
+                    r.cell_count()
+                } else {
+                    ctx.used_bounds(r).map_or(0, |u| u.cell_count())
+                };
+                (cells, d)
+            }
+            _ => (1, (1, 1)),
+        };
+        total = total.saturating_add(cells);
+        dims.push(d);
+    }
+    let extra = match def.name {
+        "MMULT" if dims.len() >= 2 => dims[0]
+            .0
+            .saturating_mul(dims[0].1)
+            .saturating_mul(dims[1].1),
+        "MINVERSE" | "MDETERM" if !dims.is_empty() => {
+            let n = dims[0].0.max(dims[0].1);
+            n.saturating_mul(n).saturating_mul(n)
+        }
+        "MUNIT" => match slots.first() {
+            Some(Some(EvalValue::Scalar(Value::Number(n)))) if *n > 0.0 => {
+                let n = n.min(1e9) as u64;
+                n.saturating_mul(n)
+            }
+            _ => 0,
+        },
+        _ => 0,
+    };
+    total.saturating_add(extra)
 }
 
 /// Resolves a reference at `origin`.
@@ -347,6 +584,7 @@ struct ExprArgs<'e> {
     def: &'static FunctionDef,
     array: bool,
     depth: u32,
+    env: &'e EvalEnv,
 }
 
 impl ArgList for ExprArgs<'_> {
@@ -364,7 +602,7 @@ impl ArgList for ExprArgs<'_> {
             (_, None) | (_, Some(Expr::Missing)) => EvalValue::Missing,
             (_, Some(e)) => {
                 let arr = self.array || self.def.param_forces_array(i);
-                eval_at_depth(e, ctx, arr, self.depth + 1)
+                eval_at_depth(e, ctx, arr, self.depth + 1, self.env)
             }
         }
     }

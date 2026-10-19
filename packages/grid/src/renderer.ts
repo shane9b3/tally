@@ -9,13 +9,14 @@
  * DPR aware: the backing store is `css × devicePixelRatio`, lines are
  * snapped to device pixels. Text widths are cached per (font, text).
  */
-import type { BorderLineDto, BordersDto, CellView, RangeDto, StyleDto } from "@tally/bridge";
+import type { BorderLineDto, BordersDto, CellPos, CellView, RangeDto, StyleDto } from "@tally/bridge";
 import type { Theme } from "@tally/tokens";
 import { colToLetters } from "./colLetters";
 import { fitNumber, isGeneralNumberText } from "./fitNumber";
 import { snapFill, type Geometry, type Pane, type Rect } from "./geometry";
 import { Lru } from "./lru";
-import type { FilterButtons, GridDataSource, RefHighlight, Selection } from "./types";
+import { drawCfIcon, drawDataBar } from "./cfIcons";
+import { CELL_FLAGS, type FilterButtons, type GridDataSource, type PageBreaks, type RefHighlight, type Selection } from "./types";
 
 /** Horizontal text padding inside a cell at zoom 100%. */
 export const CELL_PADDING = 6;
@@ -124,6 +125,33 @@ export function filterButtonRect(geo: Geometry, r: number, c: number): Rect {
   return { x: geo.colRight(c) - s - 3 * geo.zoom, y: geo.rowY(r) + (h - s) / 2, w: s, h: s };
 }
 
+/** The style id to draw a cell with: the conditional-format style when one matches. */
+export function drawStyleId(cell: CellView | undefined): number {
+  return cell ? (cell.cfStyle ?? cell.style) : 0;
+}
+
+/** Side of a conditional-format icon in a row of height `h` (screen px). */
+export function cfIconSize(h: number, zoom: number): number {
+  return Math.max(6, Math.min(h - 6 * zoom, 14 * zoom));
+}
+
+/**
+ * The validation ▾ of a list cell (screen px): a small square at the right
+ * edge of the cell, vertically centred (the same place as a filter button).
+ */
+export function dropdownButtonRect(geo: Geometry, r: number, c: number): Rect {
+  return filterButtonRect(geo, r, c);
+}
+
+/**
+ * The ↗ of the active link cell (screen px): a small square at the right
+ * edge, left of a dropdown if the cell has both.
+ */
+export function linkButtonRect(geo: Geometry, r: number, c: number, withDropdown: boolean): Rect {
+  const b = filterButtonRect(geo, r, c);
+  return withDropdown ? { ...b, x: b.x - b.w - 2 * geo.zoom } : b;
+}
+
 function isEmptyCell(cell: CellView | undefined): boolean {
   return cell === undefined || cell.kind === "empty" || cell.text === "";
 }
@@ -135,6 +163,10 @@ export interface MainFrame {
   dpr: number;
   /** AutoFilter header buttons to draw. */
   filterButtons?: FilterButtons | null;
+  /** Page-break lines ("View ▸ Page breaks"). */
+  pageBreaks?: PageBreaks | null;
+  /** The print range outline. */
+  printRange?: RangeDto | null;
 }
 
 export interface OverlayFrame extends MainFrame {
@@ -153,6 +185,8 @@ export interface OverlayFrame extends MainFrame {
   arrayRange?: RangeDto | null;
   /** The copied/cut range (dashed outline). */
   clipRange?: RangeDto | null;
+  /** A cell whose edit was refused (protected): a lock badge. */
+  lockedCell?: CellPos | null;
 }
 
 /** Per-frame statistics, for the perf demo. */
@@ -305,7 +339,7 @@ export class Renderer {
         const cell = f.source.getCell(vis.r0 + i, vis.c0 + j);
         if (cell === undefined) continue;
         cells[i * nc + j] = cell;
-        styles[i * nc + j] = cell.style === 0 ? f.source.getStyle(0) : f.source.getStyle(cell.style);
+        styles[i * nc + j] = f.source.getStyle(drawStyleId(cell));
         count++;
       }
     }
@@ -327,6 +361,22 @@ export class Renderer {
         ctx.fillRect(x0, y0, snapFill(xs[j + 1] ?? 0, dpr) - x0, snapFill(ys[i + 1] ?? 0, dpr) - y0);
       }
     }
+
+    // 1b. Conditional-format data bars (over the fill, under the text).
+    for (let i = 0; i < nr; i++) {
+      for (let j = 0; j < nc; j++) {
+        const cell = cells[i * nc + j];
+        const bar = cell?.cfBar;
+        if (!bar) continue;
+        const y0 = ys[i] ?? 0;
+        const h = (ys[i + 1] ?? 0) - y0;
+        // An icon of the same cell sits left of the bar.
+        const iconSpace = cell.cfIcon ? cfIconSize(h, geo.zoom) + 3 * geo.zoom : 0;
+        const x0 = (xs[j] ?? 0) + iconSpace;
+        drawDataBar(ctx, bar, x0, y0, (xs[j + 1] ?? 0) - x0, h, geo.zoom);
+      }
+    }
+    this.curFill = "";
 
     // 2. Gridlines: one device-aligned 1 CSS px line on the right/bottom edge of each cell.
     const lw = Math.max(1, Math.round(dpr)) / dpr;
@@ -351,7 +401,7 @@ export class Renderer {
       const r = geo.rangeRect(m, false);
       if (r.w <= 0 || r.h <= 0) continue;
       const anchor = f.source.getCell(m.r0, m.c0);
-      const st = f.source.getStyle(anchor?.style ?? 0);
+      const st = f.source.getStyle(drawStyleId(anchor));
       const fill = st && st.fill !== null && (st.fill & 255) > 0 ? cssColor(st.fill) : theme.colors.bg;
       this.setFill(fill);
       const x0 = snapFill(r.x, dpr);
@@ -414,7 +464,7 @@ export class Renderer {
           if (drawn.has(m)) continue;
           drawn.add(m);
           const anchor = f.source.getCell(m.r0, m.c0);
-          const st = f.source.getStyle(anchor?.style ?? 0);
+          const st = f.source.getStyle(drawStyleId(anchor));
           if (st) this.drawBorders(st.borders, geo.colX(m.c0), geo.colRight(m.c1), geo.rowY(m.r0), geo.rowBottom(m.r1), dpr);
           continue;
         }
@@ -426,8 +476,45 @@ export class Renderer {
       }
     }
 
-    // 5. AutoFilter buttons in the header row of the filter area.
+    // 4b. Cell decorations: icon sets, note markers, list dropdowns.
     const fb = f.filterButtons;
+    for (let i = 0; i < nr; i++) {
+      const h = (ys[i + 1] ?? 0) - (ys[i] ?? 0);
+      if (h <= 0) continue;
+      for (let j = 0; j < nc; j++) {
+        const cell = cells[i * nc + j];
+        if (!cell || (cell.flags & (CELL_FLAGS.note | CELL_FLAGS.dropdown)) === 0 && !cell.cfIcon) continue;
+        const r = vis.r0 + i;
+        const c = vis.c0 + j;
+        const w = (xs[j + 1] ?? 0) - (xs[j] ?? 0);
+        if (w <= 0) continue;
+        if (cell.cfIcon) {
+          const size = cfIconSize(h, geo.zoom);
+          drawCfIcon(ctx, cell.cfIcon, (xs[j] ?? 0) + 3 * geo.zoom, (ys[i] ?? 0) + (h - size) / 2, size);
+        }
+        if (cell.flags & CELL_FLAGS.dropdown && !(fb && fb.row === r && c >= fb.c0 && c <= fb.c1)) {
+          this.drawDropdownButton(geo, r, c, theme, dpr);
+        }
+        if (cell.flags & CELL_FLAGS.note) {
+          const s = Math.min(7 * geo.zoom, w / 3, h / 3);
+          const xr = (xs[j + 1] ?? 0) - lw;
+          const yt = ys[i] ?? 0;
+          ctx.beginPath();
+          ctx.moveTo(xr - s, yt);
+          ctx.lineTo(xr, yt);
+          ctx.lineTo(xr, yt + s);
+          ctx.closePath();
+          ctx.fillStyle = theme.colors.noteMarker;
+          ctx.fill();
+        }
+      }
+    }
+    this.curFill = "";
+
+    // 4c. Page breaks and the print range ("View ▸ Page breaks").
+    if (f.pageBreaks || f.printRange) this.drawPageBreaks(f, pane, vis);
+
+    // 5. AutoFilter buttons in the header row of the filter area.
     if (fb && fb.row >= vis.r0 && fb.row <= vis.r1 && geo.rowH(fb.row) > 0) {
       for (let c = Math.max(fb.c0, vis.c0); c <= Math.min(fb.c1, vis.c1); c++) {
         if (geo.colW(c) <= 0) continue;
@@ -517,6 +604,74 @@ export class Renderer {
     this.curFill = "";
   }
 
+  /** The ▾ of a list-validation cell: a subtle chevron (the active cell gets a button in the overlay). */
+  private drawDropdownButton(geo: Geometry, r: number, c: number, theme: Theme, _dpr: number): void {
+    const ctx = this.main;
+    const b = dropdownButtonRect(geo, r, c);
+    if (b.w <= 4) return;
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2 + 0.5 * geo.zoom;
+    const s = Math.max(2.5, 3 * geo.zoom);
+    ctx.beginPath();
+    ctx.moveTo(cx - s, cy - s / 2);
+    ctx.lineTo(cx, cy + s / 2);
+    ctx.lineTo(cx + s, cy - s / 2);
+    ctx.lineWidth = Math.max(1.2, 1.4 * geo.zoom);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = theme.colors.headerText;
+    ctx.stroke();
+    ctx.restore();
+    this.curFill = "";
+  }
+
+  /** Dashed page-break lines (manual ones bolder) and the print range outline, clipped to the pane. */
+  private drawPageBreaks(f: MainFrame, pane: Pane, vis: RangeDto): void {
+    const ctx = this.main;
+    const { geo, theme } = f;
+    const top = pane.clip.y;
+    const left = pane.clip.x;
+    const bottom = pane.clip.y + pane.clip.h;
+    const right = pane.clip.x + pane.clip.w;
+    ctx.save();
+    ctx.strokeStyle = theme.colors.pageBreak;
+    const line = (manual: boolean): void => {
+      ctx.lineWidth = manual ? 2 : 1.25;
+      ctx.globalAlpha = manual ? 0.95 : 0.7;
+      ctx.setLineDash(manual ? [7, 3] : [4, 4]);
+    };
+    for (const b of f.pageBreaks?.rows ?? []) {
+      if (b.at <= vis.r0 || b.at > vis.r1 + 1) continue;
+      const y = Math.round(geo.rowY(b.at)) - 0.5;
+      line(b.manual);
+      ctx.beginPath();
+      ctx.moveTo(left, y);
+      ctx.lineTo(right, y);
+      ctx.stroke();
+    }
+    for (const b of f.pageBreaks?.cols ?? []) {
+      if (b.at <= vis.c0 || b.at > vis.c1 + 1) continue;
+      const x = Math.round(geo.colX(b.at)) - 0.5;
+      line(b.manual);
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, bottom);
+      ctx.stroke();
+    }
+    const pr = f.printRange;
+    if (pr && pr.r0 <= vis.r1 && pr.r1 >= vis.r0 && pr.c0 <= vis.c1 && pr.c1 >= vis.c0) {
+      const r = geo.rangeRect(pr, false);
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(Math.round(r.x) + 0.5, Math.round(r.y) + 0.5, Math.max(0, r.w - 2), Math.max(0, r.h - 2));
+    }
+    ctx.restore();
+    this.curFill = "";
+  }
+
   /** Draws one cell's text, overflowing into empty neighbours. Returns 1 if drawn. */
   private drawCellText(
     f: MainFrame,
@@ -536,12 +691,15 @@ export class Renderer {
     const ctx = this.main;
     const cw = box ? box.w : geo.colW(c);
     if (cw <= 0) return 0;
-    const style = styleArg ?? f.source.getStyle(cell.style);
+    const style = styleArg ?? f.source.getStyle(drawStyleId(cell));
     const zoom = geo.zoom;
     const font = cellFont(style, theme, zoom);
     const pad = CELL_PADDING * zoom;
-    const avail = Math.max(0, cw - 2 * pad);
+    // A conditional-format icon sits at the left; the text keeps clear of it.
+    const iconSpace = cell.cfIcon ? cfIconSize(h, zoom) + 4 * zoom : 0;
+    const avail = Math.max(0, cw - 2 * pad - iconSpace);
     const x = box ? box.x : geo.colX(c);
+    const isLink = (cell.flags & CELL_FLAGS.link) !== 0;
     const align = effectiveAlign(cell, style);
     const chip = style?.display?.type === "chip" ? style.display : null;
 
@@ -566,7 +724,7 @@ export class Renderer {
     // Horizontal span the text may occupy.
     let spanL = x;
     let spanR = x + cw;
-    const overflow = !box && cell.kind !== "number" && !chip && width > avail && !(style?.wrap ?? false);
+    const overflow = !box && cell.kind !== "number" && !chip && !iconSpace && width > avail && !(style?.wrap ?? false);
     if (overflow) {
       const need = width + 2 * pad;
       const maxC = Math.min(geo.cols.count - 1, bounds.cMax, vis.c1 + 1);
@@ -628,9 +786,9 @@ export class Renderer {
       return 1;
     }
 
-    if (align === "left") tx = x + pad;
+    if (align === "left") tx = x + pad + iconSpace;
     else if (align === "right") tx = x + cw - pad - width;
-    else tx = x + (cw - width) / 2;
+    else tx = x + iconSpace + (cw - iconSpace - width) / 2;
 
     // Vertical position (alphabetic baseline). In a default-height row all
     // three alignments centre the cap height; taller rows show the difference.
@@ -661,13 +819,13 @@ export class Renderer {
       ctx.clip();
     }
     this.setFont(font);
-    this.setFill(textColor(cell, style, theme));
+    this.setFill(isLink && cell.color === null && style?.color == null ? theme.colors.link : textColor(cell, style, theme));
     ctx.textBaseline = "alphabetic";
     ctx.fillText(text, tx, ty);
-    if (style?.underline || style?.strike) {
+    if (style?.underline || style?.strike || isLink) {
       const lh = Math.max(1, Math.round(fpx / 14));
-      if (style.underline) ctx.fillRect(tx, Math.round(ty + 2 * zoom), width, lh);
-      if (style.strike) ctx.fillRect(tx, Math.round(ty - capH * 0.45), width, lh);
+      if (style?.underline || isLink) ctx.fillRect(tx, Math.round(ty + 2 * zoom), width, lh);
+      if (style?.strike) ctx.fillRect(tx, Math.round(ty - capH * 0.45), width, lh);
     }
     if (clip) {
       ctx.restore();
@@ -832,6 +990,78 @@ export class Renderer {
   // Overlay layer
   // -------------------------------------------------------------------------
 
+  /** The ▾ of the active list cell: a caret on a rounded button. */
+  private drawDropdownActive(b: Rect, zoom: number, theme: Theme): void {
+    const ctx = this.overlay;
+    ctx.save();
+    ctx.beginPath();
+    roundRect(ctx, b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1, 3 * zoom);
+    ctx.fillStyle = theme.colors.bg;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = theme.colors.headerLine;
+    ctx.stroke();
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2 + 0.5 * zoom;
+    const s = Math.max(2.5, 3 * zoom);
+    ctx.beginPath();
+    ctx.moveTo(cx - s, cy - s / 2);
+    ctx.lineTo(cx, cy + s / 2);
+    ctx.lineTo(cx + s, cy - s / 2);
+    ctx.lineWidth = Math.max(1.3, 1.5 * zoom);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = theme.colors.text;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** The ↗ of the active link cell. */
+  private drawLinkButton(b: Rect, zoom: number, theme: Theme): void {
+    const ctx = this.overlay;
+    ctx.save();
+    ctx.beginPath();
+    roundRect(ctx, b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1, 3 * zoom);
+    ctx.fillStyle = theme.colors.accent;
+    ctx.fill();
+    // ↗: a diagonal with an arrow head.
+    const p = b.w * 0.3;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = Math.max(1.3, 1.5 * zoom);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(b.x + p, b.y + b.h - p);
+    ctx.lineTo(b.x + b.w - p, b.y + p);
+    ctx.moveTo(b.x + b.w - p - b.w * 0.28, b.y + p);
+    ctx.lineTo(b.x + b.w - p, b.y + p);
+    ctx.lineTo(b.x + b.w - p, b.y + p + b.h * 0.28);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** A padlock badge (a refused edit on a protected cell). */
+  private drawLockBadge(right: number, top: number, zoom: number, theme: Theme): void {
+    const ctx = this.overlay;
+    const s = 18 * zoom;
+    const x = right - s - 2 * zoom;
+    const y = top + 2 * zoom;
+    ctx.save();
+    ctx.beginPath();
+    roundRect(ctx, x, y, s, s, 4 * zoom);
+    ctx.fillStyle = theme.colors.noteMarker;
+    ctx.fill();
+    // Padlock: shackle and body.
+    ctx.strokeStyle = "#ffffff";
+    ctx.fillStyle = "#ffffff";
+    ctx.lineWidth = Math.max(1.2, 1.4 * zoom);
+    ctx.beginPath();
+    ctx.arc(x + s / 2, y + s * 0.42, s * 0.18, Math.PI, 0);
+    ctx.stroke();
+    ctx.fillRect(x + s * 0.27, y + s * 0.44, s * 0.46, s * 0.34);
+    ctx.restore();
+  }
+
   drawOverlay(f: OverlayFrame): void {
     const ctx = this.overlay;
     const { geo, theme, dpr, selection } = f;
@@ -981,6 +1211,25 @@ export class Renderer {
           ctx.fillRect(hx, hy, s, s);
         }
       }
+    }
+
+    const activeCell = f.source.getCell(selection.active.r, selection.active.c);
+    // The active list cell's ▾ as a button.
+    if (!f.editing && activeCell && activeCell.flags & CELL_FLAGS.dropdown) {
+      const db = dropdownButtonRect(geo, selection.active.r, selection.active.c);
+      if (db.w > 4) this.drawDropdownActive(db, geo.zoom, theme);
+    }
+
+    // The active cell's link ↗ (a click on it opens the link).
+    if (!f.editing && activeCell && activeCell.flags & CELL_FLAGS.link && activeCell.link) {
+      const lb = linkButtonRect(geo, selection.active.r, selection.active.c, (activeCell.flags & CELL_FLAGS.dropdown) !== 0);
+      if (lb.w > 4) this.drawLinkButton(lb, geo.zoom, theme);
+    }
+
+    // A refused edit on a protected cell: a lock badge at the cell's top-right.
+    if (f.lockedCell) {
+      const r = geo.rangeRect({ r0: f.lockedCell.r, c0: f.lockedCell.c, r1: f.lockedCell.r, c1: f.lockedCell.c });
+      if (r.w > 0 && r.h > 0) this.drawLockBadge(r.x + r.w, r.y, geo.zoom, theme);
     }
 
     // Copied / cut range: a dashed ("marching ants") outline.

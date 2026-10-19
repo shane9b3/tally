@@ -29,6 +29,17 @@ pub const MAX_HITS: usize = 10_000;
 pub const MAX_REPLACE: usize = 1_000_000;
 /// Compiled-regex size limit (bytes).
 pub const REGEX_SIZE_LIMIT: usize = 1 << 20;
+/// Longest find pattern or replacement accepted (bytes), checked before
+/// compiling (security review 2, LOW-3: a 1 MB pattern used 640 MB while
+/// the regex compiler rejected it).
+pub const MAX_PATTERN_BYTES: usize = 64 * 1024;
+/// Most cells the Replace All ops of one transaction rewrite together (the
+/// undo record holds every old cell).
+pub const MAX_REPLACE_TX: u64 = 10_000_000;
+/// Longest text a replacement may produce in one cell (Excel's cell limit).
+pub const MAX_REPLACED_CELL_CHARS: usize = 32_767;
+/// Most bytes of new text one Replace All may produce in total.
+pub const MAX_REPLACE_BYTES: usize = 256 * 1024 * 1024;
 
 fn wildcard_to_regex(p: &str) -> String {
     let mut out = String::with_capacity(p.len() * 2);
@@ -51,6 +62,12 @@ fn wildcard_to_regex(p: &str) -> String {
 pub fn build_regex(q: &FindQuery) -> Result<Regex, ApiError> {
     if q.text.is_empty() {
         return Err(ApiError::invalid_argument("nothing to find"));
+    }
+    if q.text.len() > MAX_PATTERN_BYTES {
+        return Err(ApiError::invalid_argument(format!(
+            "the search text is longer than {} KiB",
+            MAX_PATTERN_BYTES / 1024
+        )));
     }
     let p = match q.mode {
         FindMode::Literal => regex::escape(&q.text),
@@ -206,12 +223,27 @@ pub fn replace_all(
     fx: &mut Effects,
 ) -> Result<Vec<Change>, ApiError> {
     let re = build_regex(query)?;
+    if replace.len() > MAX_PATTERN_BYTES {
+        return Err(ApiError::invalid_argument(format!(
+            "the replacement is longer than {} KiB",
+            MAX_PATTERN_BYTES / 1024
+        )));
+    }
+    let done = u64::from(fx.replaced.unwrap_or(0));
+    let left = MAX_REPLACE_TX.saturating_sub(done).min(MAX_REPLACE as u64) as usize;
+    if left == 0 {
+        return Err(ApiError::unsupported(format!(
+            "one step may replace at most {MAX_REPLACE_TX} cells"
+        )));
+    }
     let rep = replacement(query.mode, replace);
     let sheets = sheets_for(wb, sheet);
-    let (hits, _) = scan(wb, &sheets, &re, query.in_formulas, MAX_REPLACE);
+    let (hits, _) = scan(wb, &sheets, &re, query.in_formulas, left);
     let mut changes = Vec::new();
     let mut failed = 0usize;
     let mut skipped_arrays = 0usize;
+    let mut too_long = 0usize;
+    let mut bytes = 0usize;
     for h in hits {
         let addr = CellAddr::new(h.sheet, h.r, h.c);
         let Some(content) = wb.sheet(h.sheet).and_then(|s| s.get(h.r, h.c)).cloned() else {
@@ -240,6 +272,20 @@ pub fn replace_all(
         if new_text == old_text {
             continue;
         }
+        if new_text.chars().count() > MAX_REPLACED_CELL_CHARS {
+            too_long += 1;
+            continue;
+        }
+        bytes += new_text.len();
+        if bytes > MAX_REPLACE_BYTES {
+            fx.warnings.push(ApiError::unsupported(format!(
+                "Replace All stopped after {} cells: the replacements would hold more \
+                 than {} MiB of text",
+                changes.len(),
+                MAX_REPLACE_BYTES >> 20
+            )));
+            break;
+        }
         if new_text.starts_with('=')
             && new_text.len() > 1
             && wb.parse_formula(&new_text, addr).is_err()
@@ -261,6 +307,12 @@ pub fn replace_all(
         fx.warnings.push(ApiError::invalid_argument(format!(
             "{} more replacements were not valid formulas",
             failed - 20
+        )));
+    }
+    if too_long > 0 {
+        fx.warnings.push(ApiError::invalid_argument(format!(
+            "{too_long} cells were left unchanged: the result would be longer than \
+             {MAX_REPLACED_CELL_CHARS} characters"
         )));
     }
     if skipped_arrays > 0 {

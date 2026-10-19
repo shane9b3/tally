@@ -812,32 +812,34 @@ impl RowCtx<'_> {
     }
 
     fn covered(&self, c: u32) -> bool {
-        self.covered.iter().any(|&(a, b)| a <= c && c <= b)
+        let i = self.covered.partition_point(|&(a, _)| a <= c);
+        i > 0 && self.covered[i - 1].1 >= c
     }
 
     fn anchor(&self, c: u32) -> Option<(u32, u32)> {
+        let i = self.anchors.partition_point(|a| a.0 < c);
         self.anchors
-            .iter()
-            .find(|a| a.0 == c)
+            .get(i)
+            .filter(|a| a.0 == c)
             .map(|&(_, cs, rs)| (cs, rs))
     }
 
     /// The first column after `c` where the covered/anchor status changes.
     fn next_boundary(&self, c: u32) -> u32 {
         let mut next = u32::MAX;
-        for &(a, b) in &self.covered {
-            for x in [a, b.saturating_add(1)] {
-                if x > c {
-                    next = next.min(x);
-                }
-            }
+        let i = self.covered.partition_point(|&(a, _)| a <= c);
+        if i > 0 && self.covered[i - 1].1 >= c {
+            next = next.min(self.covered[i - 1].1.saturating_add(1));
         }
-        for &(a, _, _) in &self.anchors {
-            for x in [a, a.saturating_add(1)] {
-                if x > c {
-                    next = next.min(x);
-                }
-            }
+        if let Some(&(a, _)) = self.covered.get(i) {
+            next = next.min(a);
+        }
+        let j = self.anchors.partition_point(|a| a.0 <= c);
+        if j > 0 && self.anchors[j - 1].0 == c {
+            next = next.min(c.saturating_add(1));
+        }
+        if let Some(&(a, _, _)) = self.anchors.get(j) {
+            next = next.min(a);
         }
         next
     }
@@ -1309,7 +1311,11 @@ fn write_sheet<W: Write + Seek>(
                 ctx.covered.push((m.c0, m.c1));
             }
         }
-        ctx.covered.sort_unstable();
+        // Sorted and disjoint, so the per-cell lookups are binary searches
+        // (review 2, LOW-1: linear scans made saving 8,000 merges per row
+        // quadratic).
+        ctx.covered = merge_spans(&ctx.covered);
+        ctx.anchors.sort_unstable();
         // The next row where the set of active runs changes.
         let next_style = active
             .iter()
@@ -1669,6 +1675,15 @@ fn write_cell(
                 );
             }
             (cached.as_ref(), true)
+        }
+        // Only readers produce shared members (the engine resolves them);
+        // without a formula printer here, keep the cached value.
+        CellContentData::SharedFormula { cached, .. } => {
+            let w = "shared formula members written as their cached values".to_string();
+            if !report.warnings.contains(&w) {
+                report.warnings.push(w);
+            }
+            (cached.as_ref(), false)
         }
     };
     let mut value = value.cloned().unwrap_or(Value::Empty);

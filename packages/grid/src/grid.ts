@@ -16,10 +16,10 @@ import { CellEditor } from "./editor";
 import { Geometry, HEADER_HEIGHT, MIN_ROW_HEADER_WIDTH, NO_FROZEN, type Frozen } from "./geometry";
 import { Interaction, type InteractionHost, type ResizeGuide } from "./interaction";
 import { AxisModel, ScrollAxisMap, clamp } from "./layout";
-import { CELL_PADDING, Renderer, cellFont, filterButtonRect, headerFont, type FrameStats } from "./renderer";
+import { CELL_PADDING, Renderer, cellFont, drawStyleId, dropdownButtonRect, filterButtonRect, headerFont, linkButtonRect, type FrameStats } from "./renderer";
 import { sameSelection, snapToMerges, type Limits } from "./selection";
 import { TileTracker } from "./tiles";
-import { MAX_COLS, MAX_ROWS, type DirtySet, type GridProps, type Selection, type Viewport } from "./types";
+import { CELL_FLAGS, MAX_COLS, MAX_ROWS, type CellButtonKind, type ClientRect, type DirtySet, type GridProps, type Selection, type Viewport } from "./types";
 
 /** Font the grid waits for before its first paint. */
 const FONT_PROBE = '13px "Inter Variable"';
@@ -70,6 +70,11 @@ export class Grid {
   private hoverGutter: { axis: "col" | "row"; index: number } | null = null;
   private resizeGuide: ResizeGuide | null = null;
   private fillPreview: RangeDto | null = null;
+  /** A cell whose edit was refused (lock badge), and its timer. */
+  private lockedCell: CellPos | null = null;
+  private lockedTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The note cell under the pointer (for `onNoteHover`). */
+  private hoverNote: CellPos | null = null;
 
   /** Recent frame durations (ms between rAF callbacks while drawing). */
   private readonly frameTimes: number[] = [];
@@ -166,6 +171,12 @@ export class Grid {
       },
       invalidateOverlay: () => self.invalidate("overlay"),
       filterButtonAt: (x, y) => self.filterButtonAt(x, y),
+      cellButtonAt: (x, y) => self.cellButtonAt(x, y),
+      linkAt: (r, c) => {
+        const v = self.props.source.getCell(r, c);
+        return v && v.flags & CELL_FLAGS.link && v.link ? v.link : null;
+      },
+      hoverCell: (cell) => self.setHoverCell(cell),
       editorChanged: () => {
         // Show/grow the editor immediately, not a frame later.
         self.layoutEditor();
@@ -239,6 +250,8 @@ export class Grid {
     if ("arrayRange" in partial && partial.arrayRange !== prev.arrayRange) this.invalidate("overlay");
     if ("clipRange" in partial && partial.clipRange !== prev.clipRange) this.invalidate("overlay");
     if ("filterButtons" in partial && partial.filterButtons !== prev.filterButtons) this.invalidate("main");
+    if ("pageBreaks" in partial && partial.pageBreaks !== prev.pageBreaks) this.invalidate("main");
+    if ("printRange" in partial && partial.printRange !== prev.printRange) this.invalidate("main");
     if ("editHighlights" in partial && partial.editHighlights !== prev.editHighlights) {
       this.editor.setHighlights(this.props.editHighlights ?? []);
     }
@@ -256,8 +269,8 @@ export class Grid {
     let best = 0;
     const consider = (cell: CellView | undefined): void => {
       if (!cell || cell.text === "") return;
-      const style = source.getStyle(cell.style);
-      const w = this.renderer.measurer.measure(cellFont(style, theme, 1), cell.text);
+      const style = source.getStyle(drawStyleId(cell));
+      const w = this.renderer.measurer.measure(cellFont(style, theme, 1), cell.text) + (cell.cfIcon ? 18 : 0);
       const chip = style?.display?.type === "chip" ? 16 + 8 : 0;
       best = Math.max(best, w + chip);
     };
@@ -270,6 +283,34 @@ export class Grid {
   /** The in-cell editor's client rect while it is open (popups anchor to it). */
   editorRect(): DOMRect | null {
     return this.editor.open ? this.editor.el.getBoundingClientRect() : null;
+  }
+
+  /**
+   * Feedback for an edit the engine refused because the cell is locked on
+   * a protected sheet: a lock badge on the cell and a "not allowed" cursor
+   * for a moment.
+   */
+  flashLocked(cell: CellPos, ms = 1600): void {
+    this.lockedCell = { ...cell };
+    this.scroller.style.cursor = "not-allowed";
+    this.root.dataset.locked = `${cell.r},${cell.c}`;
+    if (this.lockedTimer) clearTimeout(this.lockedTimer);
+    this.lockedTimer = setTimeout(() => {
+      this.lockedTimer = null;
+      this.lockedCell = null;
+      delete this.root.dataset.locked;
+      if (this.scroller.style.cursor === "not-allowed") this.scroller.style.cursor = "default";
+      this.invalidate("overlay");
+    }, ms);
+    this.invalidate("overlay");
+  }
+
+  /** Client rect of a cell (popover anchors), or `null` when it is off screen. */
+  cellClientRect(cell: CellPos): ClientRect | null {
+    const r = this.geo.rangeRect({ r0: cell.r, c0: cell.c, r1: cell.r, c1: cell.c });
+    if (r.w <= 0 || r.h <= 0) return null;
+    const o = this.root.getBoundingClientRect();
+    return { left: o.left + r.x, top: o.top + r.y, right: o.left + r.x + r.w, bottom: o.top + r.y + r.h };
   }
 
   /** Shows a selection without emitting `onSelectionChange`. */
@@ -340,6 +381,7 @@ export class Grid {
     if (this.destroyed) return;
     this.destroyed = true;
     if (this.raf) cancelAnimationFrame(this.raf);
+    if (this.lockedTimer) clearTimeout(this.lockedTimer);
     this.unsubscribe?.();
     this.resizeObserver?.disconnect();
     this.interaction.destroy();
@@ -480,6 +522,47 @@ export class Grid {
     return { col: c, rect: { left: o.left + b.x, top: o.top + b.y, right: o.left + b.x + b.w, bottom: o.top + b.y + b.h } };
   }
 
+  /**
+   * The cell decoration under (x, y) (canvas px): the validation ▾ of a
+   * list cell, or the ↗ of the active link cell.
+   */
+  private cellButtonAt(x: number, y: number): { kind: CellButtonKind; cell: CellPos; rect: ClientRect } | null {
+    const geo = this.geo;
+    if (x < geo.headerW || y < geo.headerH) return null;
+    const r = geo.rowAt(y);
+    const c = geo.colAt(x);
+    const v = this.props.source.getCell(r, c);
+    if (!v || (v.flags & (CELL_FLAGS.dropdown | CELL_FLAGS.link)) === 0) return null;
+    const fb = this.props.filterButtons;
+    const underFilter = !!fb && fb.row === r && c >= fb.c0 && c <= fb.c1;
+    const pad = 2;
+    const within = (b: { x: number; y: number; w: number; h: number }): boolean =>
+      b.w > 4 && x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad;
+    const o = this.root.getBoundingClientRect();
+    const client = (b: { x: number; y: number; w: number; h: number }): ClientRect => ({ left: o.left + b.x, top: o.top + b.y, right: o.left + b.x + b.w, bottom: o.top + b.y + b.h });
+    const dropdown = (v.flags & CELL_FLAGS.dropdown) !== 0 && !underFilter;
+    if (dropdown) {
+      const b = dropdownButtonRect(geo, r, c);
+      if (within(b)) return { kind: "dropdown", cell: { r, c }, rect: client(b) };
+    }
+    const a = this.selection.active;
+    if (v.flags & CELL_FLAGS.link && v.link && a.r === r && a.c === c && !this.editor.open) {
+      const b = linkButtonRect(geo, r, c, dropdown);
+      if (within(b)) return { kind: "link", cell: { r, c }, rect: client(b) };
+    }
+    return null;
+  }
+
+  /** Tracks the note cell under the pointer and reports changes (`onNoteHover`). */
+  private setHoverCell(cell: CellPos | null): void {
+    const v = cell ? this.props.source.getCell(cell.r, cell.c) : undefined;
+    const note = cell && v && v.flags & CELL_FLAGS.note ? cell : null;
+    const cur = this.hoverNote;
+    if (note?.r === cur?.r && note?.c === cur?.c) return;
+    this.hoverNote = note;
+    this.props.onNoteHover?.(note, note ? this.cellClientRect(note) : null);
+  }
+
   /** Sets the exact content offset and derives the native scroll position. */
   private setContentOffset(x: number, y: number): void {
     const nx = clamp(x, 0, this.mapX.maxContent);
@@ -579,7 +662,12 @@ export class Grid {
     const base = { geo: this.geo, source: this.props.source, theme: this.props.theme, dpr: this.dpr };
     if (this.dirtyMain) {
       this.dirtyMain = false;
-      this.lastStats = this.renderer.drawMain({ ...base, filterButtons: this.props.filterButtons ?? null });
+      this.lastStats = this.renderer.drawMain({
+        ...base,
+        filterButtons: this.props.filterButtons ?? null,
+        pageBreaks: this.props.pageBreaks ?? null,
+        printRange: this.props.printRange ?? null,
+      });
       const panes = this.geo.panes();
       // The scrolling pane first (it is the largest), then frozen ones.
       for (let i = panes.length - 1; i >= 0; i--) {
@@ -606,6 +694,7 @@ export class Grid {
         refHighlights: this.editor.open ? (this.props.refHighlights ?? []) : [],
         arrayRange: this.props.arrayRange ?? null,
         clipRange: this.editor.open ? null : (this.props.clipRange ?? null),
+        lockedCell: this.lockedCell,
       });
       this.layoutEditor();
     }

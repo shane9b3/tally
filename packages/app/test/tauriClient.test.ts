@@ -54,6 +54,21 @@ describe("TauriClient", () => {
     await client.find(1, query);
     await client.detectHeader(1, 2, { r0: 0, c0: 0, r1: 9, c1: 3 });
     await client.recalcAll(1);
+    const req = { formulaSheet: 2, formulaCell: { r: 1, c: 5 }, target: 100, variableSheet: 2, variableCell: { r: 1, c: 3 } };
+    await client.conditionalFormats(1, 2);
+    await client.validations(1, 2);
+    await client.validationAt(1, 2, 3, 4);
+    await client.note(1, 2, 3, 4);
+    await client.notes(1, 2);
+    await client.protectionInfo(1, 2);
+    await client.pageSetup(1, 2);
+    await client.documentProperties(1);
+    await client.goalSeek(1, req);
+    await client.listLocales();
+    await client.setLocale(1, "de-DE");
+    await client.resolveNameBoxIn(1, 2, "Totals");
+    await client.openUrl("https://example.com");
+    await client.userName();
     expect(calls).toEqual([
       { cmd: "wb_new", args: { template: null } },
       { cmd: "wb_open", args: { path: "/a.ods" } },
@@ -82,6 +97,20 @@ describe("TauriClient", () => {
       { cmd: "find", args: { doc: 1, query } },
       { cmd: "detect_header", args: { doc: 1, sheet: 2, range: { r0: 0, c0: 0, r1: 9, c1: 3 } } },
       { cmd: "recalc_all", args: { doc: 1 } },
+      { cmd: "conditional_formats", args: { doc: 1, sheet: 2 } },
+      { cmd: "validations", args: { doc: 1, sheet: 2 } },
+      { cmd: "validation_at", args: { doc: 1, sheet: 2, r: 3, c: 4 } },
+      { cmd: "note", args: { doc: 1, sheet: 2, r: 3, c: 4 } },
+      { cmd: "notes", args: { doc: 1, sheet: 2 } },
+      { cmd: "protection_info", args: { doc: 1, sheet: 2 } },
+      { cmd: "page_setup", args: { doc: 1, sheet: 2 } },
+      { cmd: "document_properties", args: { doc: 1 } },
+      { cmd: "goal_seek", args: { doc: 1, req } },
+      { cmd: "list_locales", args: undefined },
+      { cmd: "set_locale", args: { doc: 1, locale: "de-DE" } },
+      { cmd: "resolve_name_box_in", args: { doc: 1, sheet: 2, text: "Totals" } },
+      { cmd: "open_url", args: { url: "https://example.com" } },
+      { cmd: "user_name", args: undefined },
     ]);
     expect(new Set(calls.map((c) => c.cmd))).toEqual(new Set(Object.values(COMMANDS)));
   });

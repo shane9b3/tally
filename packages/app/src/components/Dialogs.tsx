@@ -14,6 +14,7 @@ import { useDocStore } from "../stores/docStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useUiStore, type DialogState } from "../stores/uiStore";
 import styles from "./Dialogs.module.css";
+import { V3Dialog, isV3Dialog } from "./V3Dialogs";
 
 export function Dialogs() {
   const dialog = useUiStore((s) => s.dialog);
@@ -22,6 +23,7 @@ export function Dialogs() {
 }
 
 function DialogFor({ dialog }: { dialog: DialogState }) {
+  if (isV3Dialog(dialog)) return <V3Dialog dialog={dialog} />;
   switch (dialog.kind) {
     case "resize":
       return <ResizeDialog d={dialog} />;
@@ -44,11 +46,11 @@ function DialogFor({ dialog }: { dialog: DialogState }) {
   }
 }
 
-function close(): void {
+export function close(): void {
   useUiStore.getState().openDialog(null);
 }
 
-interface ShellProps {
+export interface ShellProps {
   title: string;
   children: ReactNode;
   onSubmit: () => void;
@@ -62,9 +64,13 @@ interface ShellProps {
   /** Keep the dialog open after submitting. */
   keepOpen?: boolean;
   cancelLabel?: string;
+  /** Extra class on the card (larger dialogs). */
+  cardClass?: string;
+  /** Hide the primary button (dialogs with their own actions). */
+  noOk?: boolean;
 }
 
-function Shell({ title, children, onSubmit, ok = "Apply", valid = true, wide, danger, testId, extra, keepOpen, cancelLabel = "Cancel" }: ShellProps) {
+export function Shell({ title, children, onSubmit, ok = "Apply", valid = true, wide, danger, testId, extra, keepOpen, cancelLabel = "Cancel", cardClass, noOk }: ShellProps) {
   const ctl = useController();
   const cancel = () => {
     close();
@@ -73,7 +79,7 @@ function Shell({ title, children, onSubmit, ok = "Apply", valid = true, wide, da
   return (
     <div className={styles.overlay} onMouseDown={(e) => e.target === e.currentTarget && cancel()}>
       <form
-        className={wide ? `${styles.card} ${styles.wide}` : styles.card}
+        className={[styles.card, wide ? styles.wide : "", cardClass ?? ""].filter(Boolean).join(" ")}
         role="dialog"
         aria-label={title}
         data-testid={testId}
@@ -99,16 +105,18 @@ function Shell({ title, children, onSubmit, ok = "Apply", valid = true, wide, da
           <button type="button" className={styles.secondary} onClick={cancel} data-testid="dialog-cancel">
             {cancelLabel}
           </button>
-          <button type="submit" className={danger ? `${styles.primary} ${styles.dangerBtn}` : styles.primary} disabled={!valid} data-testid="dialog-ok">
-            {ok}
-          </button>
+          {noOk ? null : (
+            <button type="submit" className={danger ? `${styles.primary} ${styles.dangerBtn}` : styles.primary} disabled={!valid} data-testid="dialog-ok">
+              {ok}
+            </button>
+          )}
         </div>
       </form>
     </div>
   );
 }
 
-function useAutoFocus() {
+export function useAutoFocus() {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => {
     ref.current?.focus();

@@ -45,7 +45,13 @@ pub(crate) struct Content {
     pub structure_protection: Option<tally_model::SheetProtectionData>,
     /// Per sheet: what `read.rs` resolves against styles.xml.
     pub extras: Vec<SheetExtra>,
+    /// What was dropped to stay within limits.
+    pub warnings: Vec<String>,
 }
+
+/// Most merged areas read per sheet; later ones are dropped with a warning
+/// (security review 2, HIGH-1).
+pub const MAX_MERGES_PER_SHEET: usize = 100_000;
 
 /// Sheet state resolved after content.xml (page styles live in styles.xml).
 #[derive(Debug, Default)]
@@ -94,6 +100,8 @@ struct Parser<'a> {
     validations: std::collections::HashMap<String, tally_model::ValidationData>,
     /// Cells of each validation on the current sheet.
     val_rects: std::collections::HashMap<String, Vec<CellRangeLocal>>,
+    /// What was dropped to stay within limits (one entry per kind).
+    warnings: Vec<String>,
 }
 
 /// Bytes of text a cell's content carries (formula text plus text value).
@@ -107,6 +115,8 @@ fn content_bytes(c: &CellContentData) -> u64 {
         CellContentData::Formula { text, cached } => {
             text.len() as u64 + cached.as_ref().map_or(0, value_bytes)
         }
+        // The text is the anchor's and counted there.
+        CellContentData::SharedFormula { cached, .. } => cached.as_ref().map_or(0, value_bytes),
     }
 }
 
@@ -128,6 +138,7 @@ pub(crate) fn parse_content<R: BufRead>(
         filter_rows: Vec::new(),
         validations: std::collections::HashMap::new(),
         val_rects: std::collections::HashMap::new(),
+        warnings: Vec::new(),
     };
     loop {
         match xml.next()? {
@@ -172,6 +183,7 @@ pub(crate) fn parse_content<R: BufRead>(
             Ev::Eof => {
                 attach_filter_rows(&mut out.sheets, std::mem::take(&mut p.filter_rows));
                 out.names = std::mem::take(&mut p.names);
+                out.warnings = std::mem::take(&mut p.warnings);
                 return Ok(out);
             }
             _ => {}
@@ -347,6 +359,13 @@ impl Parser<'_> {
         Ok((sheet, extra))
     }
 
+    /// Records a warning once per distinct text.
+    fn warn(&mut self, w: String) {
+        if !self.warnings.contains(&w) {
+            self.warnings.push(w);
+        }
+    }
+
     /// Counts `n` style runs against the materialized-cell limit.
     fn count_runs(&mut self, n: u64) -> Result<(), OdsError> {
         self.cells_total = self.cells_total.saturating_add(n);
@@ -515,7 +534,15 @@ impl Parser<'_> {
         let mut per_row_bytes: u64 = 0;
         for run in runs {
             let non_empty = !matches!(run.cell.content, CellContentData::Value(Value::Empty));
-            if run.cell.span != (1, 1) && rep == 1 && run.len == 1 {
+            if run.cell.span != (1, 1)
+                && rep == 1
+                && run.len == 1
+                && sheet.merges.len() >= MAX_MERGES_PER_SHEET
+            {
+                self.warn(format!(
+                    "Only the first {MAX_MERGES_PER_SHEET} merged areas of a sheet are kept."
+                ));
+            } else if run.cell.span != (1, 1) && rep == 1 && run.len == 1 {
                 // Merges count against the cell cap like cells do.
                 self.cells_total += 1;
                 if self.cells_total > self.limits.max_cells {
@@ -535,7 +562,12 @@ impl Parser<'_> {
             if let (Some((cs, rs)), CellContentData::Formula { .. }, 1, 1) =
                 (run.cell.matrix, &run.cell.content, rep, run.len)
             {
-                self.cells_total += 1;
+                // Every covered cell becomes an array part in the engine,
+                // so the block's whole area counts (review 2, HIGH-2: 200
+                // blocks of 1M rows in a 1 KB file).
+                let rows = u64::from(rs.min(MAX_ROWS - (*row).min(MAX_ROWS - 1)));
+                let cols = u64::from(cs.min(MAX_COLS - run.col.min(MAX_COLS - 1)));
+                self.cells_total = self.cells_total.saturating_add(rows * cols);
                 if self.cells_total > self.limits.max_cells {
                     return Err(OdsError::LimitExceeded {
                         what: "materialized cells",
@@ -882,8 +914,10 @@ fn parse_calc_settings<R: BufRead>(
                             c.iterations = Some(IterSettings {
                                 steps: ch
                                     .attr("table:steps")
-                                    .and_then(|v| v.trim().parse().ok())
-                                    .unwrap_or(def.steps),
+                                    .and_then(|v| v.trim().parse::<u32>().ok())
+                                    .unwrap_or(def.steps)
+                                    // Excel's maximum (review 2 INFO).
+                                    .min(32_767),
                                 min_change: ch
                                     .attr("table:minimum-difference")
                                     .and_then(|v| v.trim().parse().ok())

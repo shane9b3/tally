@@ -73,10 +73,12 @@ form the `ShellClient` interface (`packages/bridge/src/shell.ts`), implemented b
 `EngineClientV3` (`packages/bridge/src/client.ts`) adds the queries below; the
 mutations are ops (next section). The `DocumentService` methods have default
 implementations that return `unsupported`; `EngineService` implements all of them and
-`MockClient` has in-memory stubs (stored, not evaluated). Suggested Tauri command
-names (the command table above is maintained with the shell):
+`MockClient` has in-memory stubs (stored, not evaluated). The commands are registered
+in `apps/desktop/src-tauri/src/lib.rs` and implemented by `TauriClient`
+(`COMMANDS.conditionalFormats` … `COMMANDS.resolveNameBoxIn`); the browser build's
+`WebMockClient` emulates them (`packages/app/src/dev/mockV3.ts`, `mockCf.ts`).
 
-| Suggested command | Arguments | Returns | `DocumentService` method | `EngineClientV3` method |
+| Tauri command | Arguments | Returns | `DocumentService` method | `EngineClientV3` method |
 |---|---|---|---|---|
 | `conditional_formats` | `doc, sheet` | `ConditionalFormatDto[]` (priority order) | `conditional_formats(doc, sheet)` | `conditionalFormats(doc, sheet)` |
 | `validations` | `doc, sheet` | `ValidationDto[]` | `validations(doc, sheet)` | `validations(doc, sheet)` |
@@ -89,7 +91,33 @@ names (the command table above is maintained with the shell):
 | `goal_seek` | `doc, req: GoalSeekRequest` | `GoalSeekResult` | `goal_seek(doc, &req)` | `goalSeek(doc, req)` |
 | `list_locales` | none | `LocaleInfo[]` | `list_locales()` | `listLocales()` |
 | `set_locale` | `doc, locale` | `ApplyResult` (every sheet's used area changed) | `set_locale(doc, locale)` | `setLocale(doc, locale)` |
-| `resolve_name_box_in` | `doc, sheet, text` | `SelectionDto` | `resolve_name_box_in(doc, sheet, text)` (names and unqualified refs relative to `sheet`, not the engine's active sheet) | `resolveNameBoxIn(doc, sheet, text)` |
+| `resolve_name_box_in` | `doc, sheet, text` | `SelectionDto` | `resolve_name_box_in(doc, sheet, text)` (names and unqualified refs relative to `sheet`, not the engine's active sheet; the name box uses it with the sheet the UI shows) | `resolveNameBoxIn(doc, sheet, text)` |
+
+v0.3 shell commands (no `DocumentService` method; `TauriClient.openUrl` / `userName`,
+optional in the UI's `LinkShell` interface, `packages/app/src/features.ts`):
+
+| Tauri command | Arguments | Returns | What it does |
+|---|---|---|---|
+| `open_url` | `url: string` | `void` | Opens an `http(s)://host…` or `mailto:` link (≤ 2048 bytes) with the OS handler; anything else (`file:`, `javascript:`, …) is `invalid_argument`. See docs/security.md, "Hyperlinks". |
+| `user_name` | none | `string \| null` | The OS account name (note authors). |
+
+### Argument limits
+
+Every command checks its arguments before the engine sees them
+(`apps/desktop/src-tauri/src/limits.rs`) and rejects violations with
+`invalid_argument` (the whole call; nothing is applied):
+
+| Argument | Limit |
+|---|---|
+| Find / replace text, regular expressions (`find`, `replaceAll`) | ≤ 64 KiB |
+| Cell input, formulas, every other string inside an op | ≤ 64 KiB |
+| Defined names, sheet names | ≤ 256 characters |
+| Name box text (`resolve_name_box`, `resolve_name_box_in`) | ≤ 1024 characters |
+| TSV paste payload (`paste`, `pasteSpecial`); all strings of one transaction | ≤ 64 MiB |
+| Ranges and cell positions (every `RangeDto`, `CellPos`, `{r, c}`) | `r0 ≤ r1 < 1,048,576`, `c0 ≤ c1 < 16,384` |
+| Row/column inserts and deletes | `at + count` inside the sheet |
+| Ranges per list; ops per transaction; style ids per `get_styles` | 10,000; 100,000; 65,536 |
+| `open_url` | ≤ 2048 bytes, `http`/`https`/`mailto` only |
 
 ## Ops (`Transaction.ops`)
 

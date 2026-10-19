@@ -38,6 +38,38 @@ const FILE: &[Entry] = &[
     Item("file.close", "Close", Some("CmdOrCtrl+W")),
 ];
 
+const INSERT: &[Entry] = &[
+    Item("insert.note", "Note", Some("Shift+F2")),
+    Item("insert.hyperlink", "Hyperlink…", Some("Alt+CmdOrCtrl+K")),
+    Sep,
+    Item("insert.pageBreak", "Page Break Above Row", None),
+    Item("insert.colPageBreak", "Page Break Left of Column", None),
+    Item(
+        "insert.removePageBreak",
+        "Remove Page Breaks at Cursor",
+        None,
+    ),
+];
+
+const LOCALES: &[Entry] = &[
+    Item("view.locale.enUS", "English (US)", None),
+    Item("view.locale.enGB", "English (UK)", None),
+    Item("view.locale.deDE", "Deutsch (Deutschland)", None),
+    Item("view.locale.frFR", "Français (France)", None),
+    Item("view.locale.esES", "Español (España)", None),
+    Item("view.locale.jaJP", "日本語 (日本)", None),
+];
+
+const TOOLS: &[Entry] = &[
+    Item("tools.protectSheet", "Protect Sheet…", None),
+    Item("tools.protectDocument", "Protect Document…", None),
+    Sep,
+    Item("tools.goalSeek", "Goal Seek…", None),
+    Sep,
+    Item("file.properties", "Document Properties…", None),
+    Item("file.pageSetup", "Page Setup…", None),
+];
+
 /// Custom Edit items after the native Cut/Copy/Paste.
 const EDIT_PASTE: &[Entry] = &[
     Item(
@@ -104,6 +136,10 @@ const FORMAT: &[Entry] = &[
     Item("format.merge", "Merge Cells", None),
     Item("format.unmerge", "Unmerge Cells", None),
     Sep,
+    Item("format.conditional", "Conditional Formatting…", None),
+    Item("data.validation", "Data Validation…", None),
+    Item("format.fitRows", "Fit Row Height to Contents", None),
+    Sep,
     Item("edit.clearFormats", "Clear Formats", None),
 ];
 
@@ -114,6 +150,7 @@ const DATA: &[Entry] = &[
     Sep,
     Item("data.filter", "AutoFilter", None),
     Item("data.clearFilters", "Clear Filters", None),
+    Item("data.refreshFilter", "Refresh Filter", None),
     Sep,
     Item("data.defineName", "Define Name…", Some("CmdOrCtrl+F3")),
     Item("data.manageNames", "Manage Names…", None),
@@ -134,6 +171,9 @@ const VIEW: &[Entry] = &[
     Item("view.freezeRows", "Freeze Rows Above Cursor", None),
     Item("view.freezeCols", "Freeze Columns Left of Cursor", None),
     Item("view.unfreeze", "Unfreeze Panes", None),
+    Sep,
+    Item("view.pageBreaks", "Page Breaks", None),
+    Sub("Locale", LOCALES),
     Sep,
     Item("sheet.hideRows", "Hide Rows", None),
     Item("sheet.showRows", "Show Rows", None),
@@ -176,7 +216,9 @@ fn collect(entries: &'static [Entry], out: &mut Vec<&'static str>) {
 /// Every id that emits `menu-action` (tests and docs).
 pub fn custom_ids() -> Vec<&'static str> {
     let mut out = vec!["edit.undo", "edit.redo"];
-    for group in [FILE, EDIT_PASTE, EDIT_TAIL, FORMAT, DATA, VIEW, SHEET, HELP] {
+    for group in [
+        FILE, EDIT_PASTE, EDIT_TAIL, INSERT, FORMAT, DATA, VIEW, SHEET, TOOLS, HELP,
+    ] {
         collect(group, &mut out);
     }
     out.sort_unstable();
@@ -252,10 +294,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     menu = menu
         .item(&submenu(app, "File", FILE)?)
         .item(&edit)
+        .item(&submenu(app, "Insert", INSERT)?)
         .item(&submenu(app, "Format", FORMAT)?)
         .item(&submenu(app, "Data", DATA)?)
         .item(&submenu(app, "View", VIEW)?)
-        .item(&submenu(app, "Sheet", SHEET)?);
+        .item(&submenu(app, "Sheet", SHEET)?)
+        .item(&submenu(app, "Tools", TOOLS)?);
     if cfg!(target_os = "macos") {
         let window = SubmenuBuilder::new(app, "Window")
             .minimize()
@@ -307,6 +351,18 @@ mod tests {
             "sheet.moveLeft",
             "help.shortcuts",
             "file.exportXlsx",
+            "format.conditional",
+            "data.validation",
+            "data.refreshFilter",
+            "insert.note",
+            "insert.hyperlink",
+            "tools.protectSheet",
+            "tools.protectDocument",
+            "tools.goalSeek",
+            "file.properties",
+            "file.pageSetup",
+            "view.locale.deDE",
+            "view.pageBreaks",
         ] {
             assert!(ids.contains(&id), "{id}");
         }
@@ -324,7 +380,9 @@ mod tests {
             }
         }
         let mut accels = vec!["CmdOrCtrl+Z", "Shift+CmdOrCtrl+Z"];
-        for group in [FILE, EDIT_PASTE, EDIT_TAIL, FORMAT, DATA, VIEW, SHEET, HELP] {
+        for group in [
+            FILE, EDIT_PASTE, EDIT_TAIL, INSERT, FORMAT, DATA, VIEW, SHEET, TOOLS, HELP,
+        ] {
             walk(group, &mut accels);
         }
         let n = accels.len();

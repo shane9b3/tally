@@ -162,6 +162,41 @@ pub fn read_xlsx(reader: impl Read + Seek, limits: &Limits) -> Result<WorkbookDa
     read::read(reader, limits)
 }
 
+/// Replaces every [`tally_model::CellContentData::SharedFormula`] member
+/// with a plain formula printed at its own cell (for consumers other than
+/// the engine, which resolves shared groups itself with one parse per
+/// group). Members whose group formula does not parse keep their cached
+/// value.
+pub fn expand_shared_formulas(wb: &mut WorkbookData) {
+    use tally_model::CellContentData;
+    let names: Vec<String> = wb.sheets.iter().map(|s| s.name.clone()).collect();
+    let r = formula::XlsxResolver::new(&names);
+    for (i, sheet) in wb.sheets.iter_mut().enumerate() {
+        let id = u32::try_from(i).unwrap_or(u32::MAX);
+        for c in &mut sheet.cells {
+            let CellContentData::SharedFormula {
+                text,
+                anchor_row,
+                anchor_col,
+                cached,
+            } = &c.content
+            else {
+                continue;
+            };
+            let at = tally_types::CellAddr::new(id, *anchor_row, *anchor_col);
+            let here = tally_types::CellAddr::new(id, c.row, c.col);
+            let f = tally_formula::parse(text, at, tally_formula::Dialect::open_formula(), &r);
+            c.content = match f {
+                Ok(f) => CellContentData::Formula {
+                    text: formula::print_of(&f, here, &r).into(),
+                    cached: cached.clone(),
+                },
+                Err(_) => CellContentData::Value(cached.clone().unwrap_or_default()),
+            };
+        }
+    }
+}
+
 /// Writes an XLSX package and reports what could not be written faithfully.
 pub fn write_xlsx(
     data: &WorkbookData,

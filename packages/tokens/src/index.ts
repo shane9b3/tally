@@ -41,6 +41,12 @@ export interface ThemeColors {
   chipAmberFg: string;
   chipRedBg: string;
   chipRedFg: string;
+  /** Hyperlink text. */
+  link: string;
+  /** The note indicator (a small triangle at a cell's top-right corner). */
+  noteMarker: string;
+  /** Page-break lines and the print range outline. */
+  pageBreak: string;
 }
 
 /** Typed snapshot of the design tokens. Lengths are CSS pixels. */
@@ -83,6 +89,9 @@ export const THEME_VARIABLES = {
     chipAmberFg: "--tally-chip-amber-fg",
     chipRedBg: "--tally-chip-red-bg",
     chipRedFg: "--tally-chip-red-fg",
+    link: "--tally-link",
+    noteMarker: "--tally-note-marker",
+    pageBreak: "--tally-page-break",
   },
   fonts: { family: "--tally-font-family", sizePx: "--tally-font-size", headerSizePx: "--tally-font-size-header" },
   radii: { sm: "--tally-radius-sm", card: "--tally-radius-card", pill: "--tally-radius-pill" },
@@ -119,6 +128,9 @@ export const DEFAULT_THEME: Theme = {
     chipAmberFg: "#92400e",
     chipRedBg: "#fee2e2",
     chipRedFg: "#991b1b",
+    link: "#1d4ed8",
+    noteMarker: "#dc2626",
+    pageBreak: "#2563eb",
   },
   fonts: {
     family: '"Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif',

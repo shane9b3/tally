@@ -18,9 +18,13 @@ pub fn read_fixture(rel: &str) -> Vec<u8> {
     std::fs::read(fixture(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
 }
 
+/// Reads a fixture, with shared-formula members printed at their own cells
+/// (see `tally_io_xlsx::expand_shared_formulas`).
 pub fn open(rel: &str) -> WorkbookData {
-    read_xlsx(Cursor::new(read_fixture(rel)), &Limits::default())
-        .unwrap_or_else(|e| panic!("{rel}: {e}"))
+    let mut wb = read_xlsx(Cursor::new(read_fixture(rel)), &Limits::default())
+        .unwrap_or_else(|e| panic!("{rel}: {e}"));
+    tally_io_xlsx::expand_shared_formulas(&mut wb);
+    wb
 }
 
 pub fn to_bytes(wb: &WorkbookData) -> Vec<u8> {

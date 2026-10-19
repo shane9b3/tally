@@ -66,6 +66,11 @@
   --tally-chip-red-bg: #fee2e2; /* (theme) */
   --tally-chip-red-fg: #991b1b; /* (theme) */
 
+  /* Grid decorations (v0.3) */
+  --tally-link: #1d4ed8; /* (theme) */
+  --tally-note-marker: #dc2626; /* (theme) */
+  --tally-page-break: #2563eb; /* (theme) */
+
   /* Typography */
   --tally-font-family: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; /* (theme) */
   --tally-font-size: 13px; /* (theme) */
@@ -156,6 +161,10 @@
   --tally-chip-red-bg: #3d1719;
   --tally-chip-red-fg: #fca5a5;
 
+  --tally-link: #93bbff;
+  --tally-note-marker: #f87171;
+  --tally-page-break: #60a5fa;
+
   /* Typography, radii and spacing are the same as light. */
   --tally-font-family: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --tally-font-size: 13px;
@@ -238,6 +247,10 @@
     --tally-chip-amber-fg: #fcd34d;
     --tally-chip-red-bg: #3d1719;
     --tally-chip-red-fg: #fca5a5;
+
+  --tally-link: #93bbff;
+  --tally-note-marker: #f87171;
+  --tally-page-break: #60a5fa;
 
     /* Typography, radii and spacing are the same as light. */
     --tally-font-family: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;

@@ -251,7 +251,8 @@ export function reduceKey(sel: Selection, key: string, mods: Mods, lim: Limits):
       return select(moveBy(sel, sign * Math.max(1, lim.pageRows), 0, shift, lim));
     }
     case "F2":
-      return { type: "startEdit" };
+      // ⇧F2 is the app's "Insert note".
+      return shift ? { type: "none" } : { type: "startEdit" };
     case "Delete":
     case "Backspace":
       return mod || alt ? { type: "none" } : { type: "delete" };

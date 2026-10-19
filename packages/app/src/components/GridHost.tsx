@@ -14,6 +14,7 @@ import { useDocStore } from "../stores/docStore";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useUiStore } from "../stores/uiStore";
+import { useV3Store } from "../stores/v3Store";
 import styles from "./GridHost.module.css";
 
 export function GridHost() {
@@ -41,6 +42,9 @@ export function GridHost() {
   const filterButtons = useMemo(() => filterButtonsFor(filter), [filter]);
   const clip = useDataStore((s) => s.clip);
   const clipRange = clip && clip.sheet === sheet ? clip.range : null;
+  const pageBreaksOn = useV3Store((s) => s.pageBreaksOn);
+  const pageBreaks = useV3Store((s) => s.pageBreaks);
+  const printRange = useV3Store((s) => s.pageSetup?.printRange ?? null);
 
   if (!source) return <div className={styles.host} data-testid="grid-loading" />;
   return (
@@ -61,6 +65,11 @@ export function GridHost() {
         clipRange={clipRange}
         filterButtons={filterButtons}
         onFilterButton={ctl.onFilterButton}
+        pageBreaks={pageBreaksOn ? pageBreaks : null}
+        printRange={pageBreaksOn ? printRange : null}
+        onCellButton={ctl.v3.onCellButton}
+        onOpenLink={ctl.v3.onOpenLink}
+        onNoteHover={ctl.v3.onNoteHover}
         onSelectionChange={ctl.onSelectionChange}
         onStartEdit={ctl.onGridStartEdit}
         onEditChange={ctl.onEditChange}

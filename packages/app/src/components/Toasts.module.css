@@ -72,3 +72,30 @@
 .close:hover {
   background: var(--tally-hover);
 }
+
+.warning .icon {
+  background: var(--tally-chip-amber-bg);
+  color: var(--tally-chip-amber-fg);
+}
+
+.action {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--tally-border);
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.action:hover {
+  background: var(--tally-hover);
+}
+
+.action:first-of-type {
+  border-color: var(--tally-accent);
+  background: var(--tally-accent);
+  color: #fff;
+}

@@ -465,6 +465,31 @@ impl SheetWriter<'_> {
                         .copied();
                     self.write_formula(ws, c, text, cached.as_ref(), array, report)?;
                 }
+                CellContentData::SharedFormula {
+                    text,
+                    anchor_row,
+                    anchor_col,
+                    cached,
+                } => {
+                    // Re-anchor the group's formula at this cell.
+                    let parsed_at = CellAddr::new(self.sheet_index, *anchor_row, *anchor_col);
+                    let printed_at = CellAddr::new(self.sheet_index, c.row, c.col);
+                    let moved =
+                        crate::formula::of_to_excel_at(text, parsed_at, printed_at, self.resolver)
+                            .and_then(|x| {
+                                let f = crate::formula::parse_excel(&x, printed_at, self.resolver)
+                                    .ok()?;
+                                Some(crate::formula::print_of(&f, printed_at, self.resolver))
+                            });
+                    match moved {
+                        Some(t) => self.write_formula(ws, c, &t, cached.as_ref(), None, report)?,
+                        None => {
+                            if let Some(v) = cached {
+                                self.write_value(ws, c, v, report)?;
+                            }
+                        }
+                    }
+                }
             }
         }
         self.write_links(ws, sheet, report)?;

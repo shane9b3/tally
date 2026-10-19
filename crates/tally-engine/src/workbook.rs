@@ -192,6 +192,13 @@ pub struct Workbook {
     pub structure_protection: Option<tally_model::SheetProtectionData>,
     /// Caches derived from the document (conditional formats).
     pub transient: crate::condfmt::Transient,
+    /// What loading dropped or changed to stay within limits (the
+    /// reader's warnings plus the engine's); [`crate::Document`] shows them
+    /// once when the file opens.
+    pub import_warnings: Vec<String>,
+    /// While loading: original (lowercase) names of sheets that were
+    /// renamed to valid names, so the file's formulas still resolve them.
+    pub(crate) load_aliases: HashMap<String, SheetId>,
 }
 
 impl Default for Workbook {
@@ -226,6 +233,8 @@ impl Workbook {
             locale: &EN_US,
             structure_protection: None,
             transient: crate::condfmt::Transient::default(),
+            import_warnings: Vec::new(),
+            load_aliases: HashMap::new(),
         }
     }
 
@@ -283,10 +292,14 @@ impl Workbook {
 
     /// Sheet id by (case-insensitive) name.
     pub fn sheet_by_name_ci(&self, name: &str) -> Option<SheetId> {
+        // The name is lowercased once, and a sheet name only when it is not
+        // ASCII (review 2 INFO: two allocations per sheet per lookup).
+        let lower = name.to_lowercase();
         self.sheets
             .iter()
             .find(|s| {
-                s.name.eq_ignore_ascii_case(name) || s.name.to_lowercase() == name.to_lowercase()
+                s.name.eq_ignore_ascii_case(name)
+                    || ((!s.name.is_ascii() || !name.is_ascii()) && s.name.to_lowercase() == lower)
             })
             .map(|s| s.id)
     }
@@ -391,9 +404,10 @@ impl Workbook {
             let Some(fc) = self.formulas.get(id) else {
                 continue;
             };
-            let p = self.precedents_of(&fc.formula, fc.addr);
+            let a = self.analyze(&fc.formula, fc.addr);
+            let p = a.precedents;
             if p != fc.precedents {
-                let strict = self.strict_precedents_of(&fc.formula, fc.addr);
+                let strict = a.strict;
                 let dynamic = fc.dynamic_deps.clone();
                 // (Names are unaffected by tab order.)
                 self.deps.remove(id);
@@ -648,56 +662,71 @@ impl Workbook {
     }
 
     /// The static precedents of `f` at `addr`, 3-D spans expanded by tab
-    /// order (names expanded).
+    /// order (including those of the names it uses).
     pub fn precedents_of(&self, f: &Formula, addr: CellAddr) -> Vec<CellRange> {
-        if crate::names::has_names(&f.expr) {
-            let (e, _) = crate::names::expand(&self.names, f, addr.sheet);
-            return self.expand_refs(e.static_precedents(addr));
-        }
-        self.expand_refs(f.static_precedents(addr))
+        self.analyze(f, addr).precedents
     }
 
     /// Everything the dependency index needs about `f` at `addr`:
-    /// precedents, strict precedents, name keys and whether it has 3-D refs.
-    pub fn analyze(
-        &self,
-        f: &Formula,
-        addr: CellAddr,
-    ) -> (Vec<CellRange>, Option<Vec<CellRange>>, Vec<String>, bool) {
-        let expanded;
-        let (g, keys) = if crate::names::has_names(&f.expr) {
-            let (e, keys) = crate::names::expand(&self.names, f, addr.sheet);
-            expanded = e;
-            (&expanded, keys)
+    /// precedents, strict precedents, name keys, whether it has 3-D refs
+    /// and whether it is volatile. Names are not inlined: every reachable
+    /// definition is visited once ([`crate::names::collect_names`]) and its
+    /// references are resolved at `addr`.
+    pub fn analyze(&self, f: &Formula, addr: CellAddr) -> Analysis {
+        let (defs, keys) = if crate::names::has_names(&f.expr) {
+            crate::names::collect_names(&self.names, &f.expr, addr.sheet)
         } else {
-            (f, Vec::new())
+            Default::default()
         };
-        let refs = g.static_precedents(addr);
+        let mut refs = f.static_precedents(addr);
+        let mut volatile = is_volatile(f);
+        for d in defs.formulas() {
+            refs.extend(d.static_precedents(addr));
+            volatile |= is_volatile(d);
+        }
         let has_3d = refs.iter().any(|r| matches!(r, ResolvedRef::Span3d { .. }));
-        (
-            self.expand_refs(refs),
-            self.strict_precedents_of_raw(g, addr),
+        Analysis {
+            precedents: self.expand_refs(refs),
+            strict: self.strict_precedents_with(&f.expr, addr, &defs),
             keys,
             has_3d,
-        )
+            volatile,
+        }
     }
 
     /// The precedents of `f` whose values are always read (see
     /// [`FormulaCell::strict_precedents`]); `None` when that is all of them.
     pub fn strict_precedents_of(&self, f: &Formula, addr: CellAddr) -> Option<Vec<CellRange>> {
-        if crate::names::has_names(&f.expr) {
-            let (e, _) = crate::names::expand(&self.names, f, addr.sheet);
-            return self.strict_precedents_of_raw(&e, addr);
-        }
-        self.strict_precedents_of_raw(f, addr)
+        self.analyze(f, addr).strict
     }
 
-    fn strict_precedents_of_raw(&self, f: &Formula, addr: CellAddr) -> Option<Vec<CellRange>> {
+    fn strict_precedents_with(
+        &self,
+        root: &Expr,
+        addr: CellAddr,
+        defs: &crate::names::NameDefs,
+    ) -> Option<Vec<CellRange>> {
         let reg = registry();
         let mut strict = Vec::new();
         let mut excluded = false;
+        // Each (name, inside a lazy argument) is walked once.
+        let mut seen: HashSet<(u32, bool)> = HashSet::new();
+        let plain = |a: &Expr| {
+            let mut e = a;
+            for _ in 0..=crate::names::MAX_NAME_DEPTH {
+                match e {
+                    Expr::Paren(x) => e = x,
+                    Expr::Name(n) => match defs.resolve(n) {
+                        Some((_, f)) => e = &f.expr,
+                        None => return false,
+                    },
+                    other => return is_plain_ref(other),
+                }
+            }
+            false
+        };
         // (node, inside a lazy argument)
-        let mut stack: Vec<(&Expr, bool)> = vec![(&f.expr, false)];
+        let mut stack: Vec<(&Expr, bool)> = vec![(root, false)];
         while let Some((e, lazy)) = stack.pop() {
             match e {
                 Expr::Ref(r) => {
@@ -705,6 +734,13 @@ impl Workbook {
                         excluded = true;
                     } else {
                         strict.push(r.resolve(addr));
+                    }
+                }
+                Expr::Name(n) => {
+                    if let Some((id, f)) = defs.resolve(n) {
+                        if seen.insert((id, lazy)) {
+                            stack.push((&f.expr, lazy));
+                        }
                     }
                 }
                 Expr::ArrayLit(a) => stack.extend(a.items.iter().rev().map(|x| (x, lazy))),
@@ -718,7 +754,7 @@ impl Workbook {
                         let address_only = def
                             .is_some_and(|d| d.flags.contains(FnFlags::REF_ADDRESS_ONLY))
                             && kind == Some(ParamKind::Reference)
-                            && is_plain_ref(a);
+                            && plain(a);
                         if address_only {
                             excluded = true;
                             continue;
@@ -772,13 +808,14 @@ impl Workbook {
         if self.sheet(addr.sheet).is_none() || addr.row >= MAX_ROWS || addr.col >= MAX_COLS {
             return;
         }
-        let (precedents, strict_precedents, name_keys, has_3d) = self.analyze(&formula, addr);
+        let Analysis {
+            precedents,
+            strict: strict_precedents,
+            keys: name_keys,
+            has_3d,
+            volatile,
+        } = self.analyze(&formula, addr);
         let has_names = !name_keys.is_empty();
-        let volatile = if has_names {
-            is_volatile(&crate::names::expand(&self.names, &formula, addr.sheet).0)
-        } else {
-            is_volatile(&formula)
-        };
         let vis_dep = is_visibility_dependent(&formula);
         let id = self.formulas.insert(FormulaCell {
             addr,
@@ -922,6 +959,21 @@ impl Workbook {
 }
 
 /// A reference argument, possibly in parentheses.
+/// What [`Workbook::analyze`] finds out about a formula.
+#[derive(Clone, Debug, Default)]
+pub struct Analysis {
+    /// Static precedents (3-D spans expanded, names included).
+    pub precedents: Vec<CellRange>,
+    /// The always-read subset, `None` when that is all of them.
+    pub strict: Option<Vec<CellRange>>,
+    /// Dependency keys of the names used (directly or through names).
+    pub keys: Vec<String>,
+    /// Contains a 3-D reference.
+    pub has_3d: bool,
+    /// Calls a volatile function (directly or through names).
+    pub volatile: bool,
+}
+
 fn is_plain_ref(e: &Expr) -> bool {
     match e {
         Expr::Ref(_) => true,
@@ -981,7 +1033,13 @@ pub struct OdfResolver<'a>(pub &'a Workbook);
 
 impl Resolver for OdfResolver<'_> {
     fn sheet_by_name(&self, name: &str) -> Option<SheetId> {
-        self.0.sheet_by_name(name)
+        self.0.sheet_by_name(name).or_else(|| {
+            if self.0.load_aliases.is_empty() {
+                None
+            } else {
+                self.0.load_aliases.get(&name.to_lowercase()).copied()
+            }
+        })
     }
 
     fn sheet_name(&self, id: SheetId) -> Option<Arc<str>> {

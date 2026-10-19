@@ -21,6 +21,19 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tally_types::{CalcSettings, Value};
 
+/// Longest number format code kept (characters). Readers replace longer
+/// codes with General and add a warning; the engine refuses longer codes
+/// in `SetNumberFormat` (security review 2, HIGH-4: a 1 MB code made every
+/// visible cell format to a 1 MB string). Excel's own limit is 255.
+pub const MAX_NUMBER_FORMAT_LEN: usize = 4096;
+
+/// The warning readers give when they drop an over-long number format.
+pub fn long_number_format_warning() -> String {
+    format!(
+        "Number formats longer than {MAX_NUMBER_FORMAT_LEN} characters were replaced by General."
+    )
+}
+
 /// A whole workbook.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct WorkbookData {
@@ -34,6 +47,10 @@ pub struct WorkbookData {
     pub settings: DocSettings,
     /// Document metadata.
     pub meta: DocMeta,
+    /// What a reader dropped or changed to keep the file within its limits
+    /// (shown to the user once when the file opens). Writers ignore it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// One sheet.
@@ -1049,6 +1066,25 @@ pub enum CellContentData {
         /// The cached result stored in the file, if any.
         cached: Option<Value>,
     },
+    /// A member of a shared formula group (XLSX `t="shared"`): the formula
+    /// of the group's anchor cell, moved to this cell (relative references
+    /// shift with it, as when the anchor is filled or copied here).
+    ///
+    /// Every member shares the anchor's `text` allocation, so a group of a
+    /// million cells costs one formula text, and the engine parses it once
+    /// (security review 2, MEDIUM-1). Only readers produce this variant;
+    /// the engine resolves it on load and never exports it.
+    SharedFormula {
+        /// The anchor's formula text (OpenFormula, as for
+        /// [`CellContentData::Formula`]), valid at (`anchor_row`, `anchor_col`).
+        text: Arc<str>,
+        /// The anchor cell's row (0-based, same sheet).
+        anchor_row: u32,
+        /// The anchor cell's column (0-based).
+        anchor_col: u32,
+        /// The cached result stored in the file, if any.
+        cached: Option<Value>,
+    },
 }
 
 impl Default for CellContentData {
@@ -1523,6 +1559,7 @@ mod tests {
                 author: Some("Ana".into()),
                 last_author: None,
             },
+            warnings: Vec::new(),
         }
     }
 

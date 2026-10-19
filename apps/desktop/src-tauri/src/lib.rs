@@ -10,6 +10,8 @@ mod commands;
 mod dialogs;
 mod events;
 mod files;
+mod limits;
+mod links;
 mod menu;
 mod state;
 #[cfg(test)]
@@ -62,6 +64,20 @@ pub fn run() {
             commands::find,
             commands::detect_header,
             commands::recalc_all,
+            commands::conditional_formats,
+            commands::validations,
+            commands::validation_at,
+            commands::note,
+            commands::notes,
+            commands::protection_info,
+            commands::page_setup,
+            commands::document_properties,
+            commands::goal_seek,
+            commands::list_locales,
+            commands::set_locale,
+            commands::resolve_name_box_in,
+            commands::open_url,
+            commands::user_name,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

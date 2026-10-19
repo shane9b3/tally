@@ -375,17 +375,7 @@ pub fn list_values(wb: &Workbook, src: &ListSrc, at: CellAddr) -> Vec<Value> {
     match src {
         ListSrc::Values(v) => v.iter().map(|s| Value::text(s.as_str())).collect(),
         ListSrc::Expr(f) => {
-            let expanded;
-            let formula = if crate::names::has_names(&f.formula.expr) {
-                expanded = crate::names::expand(&wb.names, &f.formula, at.sheet).0;
-                &expanded
-            } else {
-                &*f.formula
-            };
-            let mut e = &formula.expr;
-            while let Expr::Paren(x) = e {
-                e = x;
-            }
+            let e = crate::names::resolve_chain(&wb.names, &f.formula.expr, at.sheet);
             if let Expr::Ref(r) = e {
                 if let ResolvedRef::Range(cr) = r.resolve(at) {
                     return range_values(wb, &cr);

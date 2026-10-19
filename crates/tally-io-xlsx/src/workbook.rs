@@ -217,8 +217,10 @@ pub(crate) fn parse_workbook<R: BufRead>(
                     if e.attr_local("iterate").is_some_and(parse_bool) {
                         let count = e
                             .attr_local("iterateCount")
-                            .and_then(|v| v.trim().parse().ok())
-                            .unwrap_or(100);
+                            .and_then(|v| v.trim().parse::<u32>().ok())
+                            .unwrap_or(100)
+                            // Excel's maximum (review 2 INFO).
+                            .min(32_767);
                         let delta = e
                             .attr_local("iterateDelta")
                             .and_then(|v| v.trim().parse::<f64>().ok())

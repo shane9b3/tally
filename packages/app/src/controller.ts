@@ -11,7 +11,7 @@ import {
   type CellPos,
   type CellView,
   type ColumnFilter,
-  type EngineClientV2,
+  type EngineClientV3,
   type FileFormat,
   type FilterOp,
   type NameInfo,
@@ -26,6 +26,7 @@ import {
 } from "@tally/bridge";
 import {
   cellSelection,
+  drawStyleId,
   EngineClientSource,
   MAX_COLS,
   MAX_ROWS,
@@ -66,6 +67,8 @@ import { useFunctionsStore } from "./stores/functionsStore";
 import { fromSelectionDto, selectionRanges, toSelectionDto, useSelectionStore } from "./stores/selectionStore";
 import { toastWarnings, useUiStore } from "./stores/uiStore";
 import { detectSumRange, sumFormula, sumScanRanges } from "./sumRange";
+import { V3Features } from "./features";
+import { useV3Store } from "./stores/v3Store";
 
 export interface ControllerOptions {
   /** Inside Tauri: the native menu owns its accelerators. */
@@ -111,11 +114,16 @@ export class AppController {
   /** The last internal copy (context-menu paste when the system clipboard is unreadable). */
   private lastCopy: { token: string; tsv: string } | null = null;
 
+  /** v0.3 features (conditional formatting, validation, notes, links, protection, page setup…). */
+  readonly v3: V3Features;
+
   constructor(
-    readonly client: EngineClientV2,
+    readonly client: EngineClientV3,
     readonly shell: ShellClient,
     readonly opts: ControllerOptions,
-  ) {}
+  ) {
+    this.v3 = new V3Features(this);
+  }
 
   // -- lifecycle --------------------------------------------------------------
 
@@ -125,6 +133,7 @@ export class AppController {
       useSelectionStore.subscribe((s, prev) => {
         if (s.selection.active.r !== prev.selection.active.r || s.selection.active.c !== prev.selection.active.c) {
           void this.refreshActive();
+          void this.v3.showInputHelp({ ...s.selection.active });
         }
       }),
       this.client.onMenuAction((e) => {
@@ -171,10 +180,12 @@ export class AppController {
     useDocStore.getState().setActiveSheet(info.activeSheet);
     doc.setSource(source);
     useDataStore.getState().reset();
+    useV3Store.getState().reset();
     toastWarnings(info.warnings);
     void this.refreshActive();
     void this.refreshFilter();
     void this.refreshNames();
+    void this.v3.refreshSheet();
   }
 
   setGrid = (grid: GridCore | null): void => {
@@ -206,14 +217,19 @@ export class AppController {
     useUiStore.getState().pushToast("error", err.message);
   };
 
-  private requireDoc(): number {
+  requireDoc(): number {
     const info = this.info;
     if (!info) throw { code: "not_found", message: "No workbook is open." } satisfies ApiError;
     return info.doc;
   }
 
-  /** Feeds an engine result to the cache and stores. */
-  handleResult(res: ApplyResult): void {
+  /**
+   * Feeds an engine result to the cache and stores. With the `ops` that
+   * produced it, validation and protection refusals and validation warnings
+   * are reported as dialogs/toasts (`V3Features.reportProblems`); other
+   * errors show the first one as a toast.
+   */
+  handleResult(res: ApplyResult, ops: readonly Op[] | null = null): void {
     const before = this.sheet;
     useDocStore.getState().source?.applyResult(res);
     useDocStore.getState().applyResult(res);
@@ -224,8 +240,10 @@ export class AppController {
       useSelectionStore.getState().setSelection(sel);
       this.grid?.scrollCellIntoView(sel.active);
     }
-    const first = res.errors[0];
+    const handled = ops ? this.v3.reportProblems(res, ops) : new Set<number>();
+    const first = res.errors.find((_, i) => !handled.has(i));
     if (first) useUiStore.getState().pushToast("error", friendlyError(first.code, first.message));
+    this.v3.afterResult(res, ops);
     void this.refreshActive();
     const sheet = this.sheet;
     const filtered = useDataStore.getState().filter !== null;
@@ -247,7 +265,7 @@ export class AppController {
         selectionAfter: toSelectionDto(after ?? sel, this.sheet),
       };
       const res = await this.client.apply(doc, tx);
-      this.handleResult(res);
+      this.handleResult(res, ops);
       return res;
     } catch (e) {
       this.notifyError(e);
@@ -337,16 +355,19 @@ export class AppController {
   }
 
   /**
-   * "Colour by value": for the selected column of category text, gives each
-   * distinct value its own chip colours (fill + font) from the chip
-   * palette, one `applyStyle` per value. Emulates status chips until
-   * conditional formatting exists.
+   * "Colour by value": for the selected column of category text, one
+   * conditional format over the column body with a chip rule per distinct
+   * value (colours from the chip palette), so the chips follow edits.
    */
-  async colorByValue(): Promise<void> {
+  colorByValue(): Promise<void> {
+    return this.colorByValueOn(this.selection.range);
+  }
+
+  /** "Colour by value" over an explicit column range. */
+  async colorByValueOn(sel: RangeDto): Promise<void> {
     try {
       const doc = this.requireDoc();
       const sheet = this.sheet;
-      const sel = this.selection.range;
       const layout = await this.client.sheetLayout(doc, sheet);
       const used = layout.used;
       if (!used) return;
@@ -374,12 +395,11 @@ export class AppController {
         useUiStore.getState().pushToast("info", "Select a column of text values to colour.");
         return;
       }
-      const colors = chipColorsFor([...groups.keys()]);
-      const ops: Op[] = [...groups.entries()].map(([value, ranges]) => {
-        const chip = colors.get(value)!;
-        return { type: "applyStyle", sheet, ranges, patch: { ...EMPTY_PATCH, fill: chip.bg, color: chip.fg } };
-      });
-      await this.apply("Colour by value", ops);
+      const values = [...groups.keys()];
+      const colors = chipColorsFor(values);
+      const rows = [...groups.values()].flat();
+      const body = { r0: Math.min(...rows.map((g) => g.r0)), c0: c, r1: Math.max(...rows.map((g) => g.r1)), c1: c };
+      await this.v3.colorByValue(body, values, colors);
     } catch (e) {
       this.notifyError(e);
     }
@@ -468,7 +488,7 @@ export class AppController {
       ? null
       : arrayOp
         ? this.apply("Array formula", [arrayOp])
-        : this.apply("Typing", [{ type: "setCellInput", sheet, r: edit.cell.r, c: edit.cell.c, input: edit.text }]);
+        : this.apply("Typing", this.typingOps(sheet, edit.cell, edit.text));
     if (origin === "bar") {
       if (move !== "none") {
         const [dr, dc] = MOVES[move];
@@ -483,6 +503,19 @@ export class AppController {
     }
     await pending;
   };
+
+  /**
+   * The ops for typing `text` into `cell`: the input, plus `autoFitRows` for
+   * the row when the cell wraps or the text has line breaks (one undo step).
+   */
+  typingOps(sheet: number, cell: CellPos, text: string): Op[] {
+    const ops: Op[] = [{ type: "setCellInput", sheet, r: cell.r, c: cell.c, input: text }];
+    const source = useDocStore.getState().source;
+    const view = source?.getCell(cell.r, cell.c);
+    const wraps = source?.getStyle(drawStyleId(view))?.wrap ?? false;
+    if (wraps || text.includes("\n")) ops.push({ type: "autoFitRows", sheet, start: cell.r, end: cell.r });
+    return ops;
+  }
 
   onGridCommitEdit = (move: CommitMove): void => {
     void this.commitEdit(move);
@@ -712,7 +745,7 @@ export class AppController {
   /** Name box: `B12`, `A1:C5`, `Sheet2.A1`. */
   async goTo(text: string): Promise<boolean> {
     try {
-      const dto = await this.client.resolveNameBox(this.requireDoc(), text);
+      const dto = await this.client.resolveNameBoxIn(this.requireDoc(), this.sheet, text);
       if (dto.sheet !== this.sheet) this.showSheet(dto.sheet, false);
       const sel = fromSelectionDto(dto);
       useSelectionStore.getState().setSelection(sel);
@@ -871,8 +904,10 @@ export class AppController {
     doc.source?.setSheet(sheet);
     useSelectionStore.getState().reset();
     useDataStore.getState().setFilter(null);
+    useV3Store.getState().reset();
     void this.refreshActive();
     void this.refreshFilter();
+    void this.v3.refreshSheet();
     if (focus) this.focusGrid();
   }
 
@@ -1308,7 +1343,7 @@ export class AppController {
       const before = await this.client.find(doc, { ...query, inFormulas: true });
       const res = await this.apply("Replace all", [{ type: "replaceAll", sheet: options.allSheets ? null : this.sheet, query, replace }]);
       if (!res) return 0;
-      const n = Math.max(0, before.hits.length - res.errors.length);
+      const n = res.replaced ?? Math.max(0, before.hits.length - res.errors.length);
       const skipped = res.errors.length;
       useDataStore.getState().patchFind({ searched: null, hits: [], index: -1 });
       useUiStore

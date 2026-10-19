@@ -88,6 +88,11 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
         styles: styles.styles,
         names: content.names,
         meta,
+        warnings: {
+            let mut w = std::mem::take(&mut styles.warnings);
+            w.extend(content.warnings);
+            w
+        },
         ..WorkbookData::default()
     };
     wb.settings.locale = locale;

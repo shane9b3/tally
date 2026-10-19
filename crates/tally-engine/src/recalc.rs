@@ -20,6 +20,7 @@
 //!    cell on that cycle gets Err:522.
 
 use std::ops::ControlFlow;
+#[cfg(test)]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,7 +33,7 @@ use tally_types::{
 };
 
 use crate::deps::{coalesce, DepIndex};
-use crate::eval::{array_result, cell_result, eval_expr, eval_in_array_context};
+use crate::eval::{array_result, cell_result, eval_with, EvalEnv};
 use crate::formula_cells::{CellState, FormulaCellId};
 use crate::storage::CellContent;
 use crate::workbook::Workbook;
@@ -590,10 +591,10 @@ impl<'w> CalcCtx<'w> {
         let formula = f.formula.clone();
         let addr = f.addr;
         let is_array = f.array.is_some();
-        let formula = if f.has_names {
-            Arc::new(crate::names::expand(&self.wb.names, &formula, addr.sheet).0)
+        let env = if f.has_names {
+            EvalEnv::new(crate::names::collect_names(&self.wb.names, &formula.expr, addr.sheet).0)
         } else {
-            formula
+            EvalEnv::default()
         };
         let saved_origin = std::mem::replace(&mut self.origin, addr);
         let saved_dyn = std::mem::take(&mut self.dyn_deps);
@@ -604,7 +605,7 @@ impl<'w> CalcCtx<'w> {
             deferred: false,
         });
         let (mut value, matrix) = if is_array {
-            let v = eval_in_array_context(&formula.expr, self);
+            let v = eval_with(&formula.expr, self, true, &env);
             match array_result(&v, self) {
                 Value::Array(m) => {
                     let first = m
@@ -616,7 +617,7 @@ impl<'w> CalcCtx<'w> {
                 other => (normalize_cell_value(other), None),
             }
         } else {
-            let v = eval_expr(&formula.expr, self);
+            let v = eval_with(&formula.expr, self, false, &env);
             (cell_result(&v, self), None)
         };
         #[cfg(test)]
@@ -751,16 +752,7 @@ impl Workbook {
             return None;
         }
         let f = self.parse_formula(&format!("={t}"), origin).ok()?;
-        let f = if crate::names::has_names(&f.expr) {
-            crate::names::expand(&self.names, &f, origin.sheet).0
-        } else {
-            f
-        };
-        let mut e = &f.expr;
-        while let Expr::Paren(x) = e {
-            e = x;
-        }
-        match e {
+        match crate::names::resolve_chain(&self.names, &f.expr, origin.sheet) {
             Expr::Ref(r) => match r.resolve(origin) {
                 ResolvedRef::Range(cr) if self.sheet(cr.sheet).is_some() => Some(cr),
                 _ => None,
@@ -774,13 +766,9 @@ impl Workbook {
     /// Precedents read their current values. `None` if `text` does not parse.
     pub fn eval_formula_text_at(&self, addr: CellAddr, text: &str) -> Option<Value> {
         let f = self.parse_formula(text, addr).ok()?;
-        let f = if crate::names::has_names(&f.expr) {
-            crate::names::expand(&self.names, &f, addr.sheet).0
-        } else {
-            f
-        };
+        let env = EvalEnv::new(crate::names::collect_names(&self.names, &f.expr, addr.sheet).0);
         let mut ctx = CalcCtx::shared_at(self, addr);
-        let v = eval_expr(&f.expr, &mut ctx);
+        let v = eval_with(&f.expr, &mut ctx, false, &env);
         Some(cell_result(&v, &mut ctx))
     }
 }

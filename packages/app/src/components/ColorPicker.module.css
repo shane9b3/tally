@@ -1,6 +1,6 @@
 .card {
   position: fixed;
-  z-index: 50;
+  z-index: 70;
   width: 232px;
   padding: 10px;
   border: 1px solid var(--tally-border-subtle);

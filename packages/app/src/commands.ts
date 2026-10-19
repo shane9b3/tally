@@ -14,6 +14,8 @@ import { useEditStore } from "./stores/editStore";
 import { useUiStore } from "./stores/uiStore";
 import { useDataStore } from "./stores/dataStore";
 import { BORDER_PRESETS, borderLine } from "./dataOps";
+import { useV3Store } from "./stores/v3Store";
+import { HIGHLIGHT_PRESETS, UI_LOCALES } from "./v03";
 
 export const COMING_SOON = "Coming soon";
 export const FILTER_SOON = "Filtering is coming in v0.2";
@@ -215,6 +217,49 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "view.zoomOut", title: "Zoom out", kind: "View", ...sc("view.zoomOut"), run: () => useUiStore.getState().zoomBy(-1) },
     { id: "view.zoomReset", title: "Actual size", kind: "View", keywords: ["100%", "zoom"], ...sc("view.zoomReset"), run: () => useUiStore.getState().setZoom(1) },
     { id: "palette.toggle", title: "Command palette", kind: "View", hidden: true, ...sc("palette.toggle"), run: () => useUiStore.getState().setPalette(!useUiStore.getState().paletteOpen) },
+    // v0.3: conditional formatting, validation, notes, links
+    { id: "format.conditional", title: "Conditional formatting…", kind: "Format", keywords: ["highlight", "rules", "colour scale", "data bar", "icon set", "conditional"], run: () => useUiStore.getState().openDialog({ kind: "cfManager" }) },
+    ...HIGHLIGHT_PRESETS.map(
+      (p): Command => ({
+        id: `format.highlight.${p.id}`,
+        title: `Highlight cells: ${p.label.replace(/…$/, "").toLowerCase()}${p.values > 0 ? "…" : ""}`,
+        kind: "Format",
+        keywords: ["conditional formatting", "highlight", "rule"],
+        run: () => ctl.v3.highlight(p.id),
+      }),
+    ),
+    { id: "data.validation", title: "Data validation…", kind: "Data", keywords: ["dropdown", "list", "allowed values", "restrict", "validity"], run: () => ctl.v3.openValidation() },
+    { id: "insert.note", title: "Insert / edit note", kind: "Insert", keywords: ["comment", "annotation"], ...sc("insert.note"), ...notEditing, run: () => ctl.v3.editNote() },
+    { id: "insert.deleteNote", title: "Delete note", kind: "Insert", keywords: ["comment", "remove"], run: () => ctl.v3.deleteNote() },
+    { id: "insert.hyperlink", title: "Hyperlink…", kind: "Insert", keywords: ["link", "url", "web", "mail"], ...sc("insert.hyperlink"), ...notEditing, run: () => ctl.v3.openHyperlink() },
+    { id: "insert.removeHyperlink", title: "Remove hyperlink", kind: "Insert", keywords: ["link", "unlink"], run: () => ctl.v3.removeLink() },
+    { id: "insert.pageBreak", title: "Insert page break above row", kind: "Insert", keywords: ["print", "page"], run: () => ctl.v3.insertPageBreak("row") },
+    { id: "insert.colPageBreak", title: "Insert page break left of column", kind: "Insert", keywords: ["print", "page"], run: () => ctl.v3.insertPageBreak("col") },
+    { id: "insert.removePageBreak", title: "Remove page breaks at the cursor", kind: "Insert", keywords: ["print", "page"], run: () => ctl.v3.removePageBreaks() },
+    { id: "format.fitRows", title: "Fit row height to contents", kind: "Format", keywords: ["auto fit", "resize rows", "wrap"], run: () => ctl.v3.fitRows() },
+    { id: "data.refreshFilter", title: "Refresh filter", kind: "Filter", keywords: ["reapply", "autofilter", "update"], enabled: hasFilter, reason: "No AutoFilter on this sheet", run: () => ctl.v3.refreshFilter() },
+    // v0.3: tools, file, view
+    { id: "tools.protectSheet", title: "Protect / unprotect sheet…", kind: "Tools", keywords: ["lock", "password", "protection"], run: () => ctl.v3.protectSheetCommand() },
+    { id: "tools.protectDocument", title: "Protect / unprotect document…", kind: "Tools", keywords: ["structure", "lock", "password"], run: () => ctl.v3.protectDocumentCommand() },
+    { id: "tools.goalSeek", title: "Goal seek…", kind: "Tools", keywords: ["what if", "solve", "target"], run: () => ctl.v3.openGoalSeek() },
+    { id: "file.properties", title: "Document properties…", kind: "File", keywords: ["title", "author", "metadata", "info"], run: () => ctl.v3.openProperties() },
+    { id: "file.pageSetup", title: "Page setup…", kind: "File", keywords: ["print", "paper", "margins", "orientation", "header", "footer"], run: () => ctl.v3.openPageSetup() },
+    {
+      id: "view.pageBreaks",
+      title: "Show / hide page breaks",
+      kind: "View",
+      keywords: ["print", "page", "preview"],
+      run: () => ctl.v3.setPageBreaksOn(!useV3Store.getState().pageBreaksOn),
+    },
+    ...UI_LOCALES.map(
+      (l): Command => ({
+        id: l.command,
+        title: `Locale: ${l.label}`,
+        kind: "View",
+        keywords: ["language", "region", "number format", l.tag],
+        run: () => ctl.v3.setLocale(l.tag),
+      }),
+    ),
     // Help
     { id: "help.shortcuts", title: "Keyboard shortcuts", kind: "Help", keywords: ["keys", "hotkeys", "cheat sheet"], ...sc("help.shortcuts"), run: () => useUiStore.getState().setShortcuts(!useUiStore.getState().shortcutsOpen) },
     { id: "help.about", title: "About Tally", kind: "Help", run: () => ui.showAbout() },

@@ -123,6 +123,14 @@ export const ChipsIcon = () => (
   </Svg>
 );
 
+export const HighlightIcon = () => (
+  <Svg>
+    <rect x="1.5" y="2.5" width="13" height="11" rx="2" />
+    <path d="M1.5 6.5h13M1.5 10h13M6 2.5v11" />
+    <rect x="6.6" y="7.1" width="7.3" height="2.3" fill="currentColor" stroke="none" opacity="0.55" />
+  </Svg>
+);
+
 export const KeyboardIcon = () => (
   <Svg>
     <rect x="1.5" y="4" width="13" height="8" rx="1.5" />

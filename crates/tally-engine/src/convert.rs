@@ -25,6 +25,13 @@ use crate::workbook::{Pending, SheetNamer, Workbook, MAX_SHEETS};
 /// instead of styled empty cells.
 const LONG_STYLE_RUN: u32 = 10_000;
 
+/// Most merged areas kept per sheet (the readers cap at the same number).
+pub const MAX_MERGES_PER_SHEET: usize = 100_000;
+
+/// Most cells covered by array formula blocks in one loaded workbook (the
+/// readers count block areas against their `max_cells`, 10M by default).
+pub const MAX_ARRAY_CELLS: u64 = 10_000_000;
+
 impl Workbook {
     /// Builds a workbook from interchange data. Values are taken as they are.
     pub fn from_data(data: &WorkbookData) -> Workbook {
@@ -45,6 +52,7 @@ impl Workbook {
     /// an untrusted source would otherwise run its formulas on open).
     pub fn from_data_opts(data: &WorkbookData, recognize: bool, formulas: bool) -> Workbook {
         let mut wb = Workbook::empty();
+        wb.import_warnings = data.warnings.clone();
         wb.settings = data.settings.calc_settings.clone();
         wb.meta = data.meta.clone();
         if let Some(l) = data
@@ -62,13 +70,22 @@ impl Workbook {
         // All names are made unique in one pass and the sheet index is built
         // once, so loading is linear in the number of sheets.
         let mut namer = SheetNamer::default();
+        let mut renamed = false;
         for (tab, sd) in sheet_data.iter().enumerate() {
-            let name = if sd.name.trim().is_empty() {
+            // Names from files follow the same rules as names typed in
+            // the app (review 2, LOW-2); formulas in the file still find
+            // the sheet under its original name while loading.
+            let clean = sanitize_sheet_name(&sd.name);
+            let name = if clean.trim().is_empty() {
                 namer.claim_numbered(tab as u64 + 1)
             } else {
-                namer.claim(&sd.name)
+                namer.claim(&clean)
             };
             let id = wb.alloc_sheet_id();
+            if clean != sd.name && !sd.name.trim().is_empty() {
+                renamed = true;
+                wb.load_aliases.entry(sd.name.to_lowercase()).or_insert(id);
+            }
             let mut s = Sheet::new(id, &name);
             s.hidden = sd.hidden;
             s.tab_color = sd.tab_color;
@@ -86,9 +103,12 @@ impl Workbook {
         }
         // Names before formulas, so formulas resolve them while parsing.
         load_names(&mut wb, &data.names, &ids);
+        let mut merges_capped = false;
         for (sd, &sheet) in sheet_data.iter().zip(&ids) {
             if let Some(s) = wb.sheet_mut(sheet) {
                 s.meta.merges = clean_merges(&sd.merges);
+                merges_capped |= sd.merges.len() > MAX_MERGES_PER_SHEET
+                    && s.meta.merges.len() == MAX_MERGES_PER_SHEET;
                 s.meta.frozen = sd
                     .frozen
                     .filter(|(r, c)| (*r > 0 || *c > 0) && *r < MAX_ROWS && *c < MAX_COLS);
@@ -107,6 +127,13 @@ impl Workbook {
                 }
             }
         }
+        if merges_capped {
+            let w =
+                format!("Only the first {MAX_MERGES_PER_SHEET} merged areas of a sheet are kept.");
+            if !wb.import_warnings.contains(&w) {
+                wb.import_warnings.push(w);
+            }
+        }
         // v0.3 sheet state (after the names, so rule formulas resolve them).
         for (sd, &sheet) in sheet_data.iter().zip(&ids) {
             load_v03(&mut wb, sheet, sd);
@@ -116,7 +143,12 @@ impl Workbook {
             .iter()
             .map(|s| wb.styles.intern(s.clone()))
             .collect();
+        // Cells covered by array blocks so far (all sheets).
+        let mut array_cells: u64 = 0;
+        // Parsed shared-formula groups: (text allocation, anchor) → AST.
+        let mut shared: HashMap<(usize, u32, u32), Option<Arc<Formula>>> = HashMap::new();
         for (sd, &sheet) in sheet_data.iter().zip(&ids) {
+            shared.clear();
             // Runs first: a cell's own style wins over a run covering it.
             for run in &sd.style_runs {
                 let Some(st) = style_ids.get(run.style as usize) else {
@@ -171,10 +203,63 @@ impl Workbook {
                             }
                         }
                     }
+                    CellContentData::SharedFormula {
+                        text,
+                        anchor_row,
+                        anchor_col,
+                        cached,
+                    } => {
+                        // One parse per group: the AST stores relative
+                        // references as offsets, so the anchor's AST is the
+                        // member's formula as is (review 2, MEDIUM-1).
+                        let key = (
+                            Arc::as_ptr(text) as *const u8 as usize,
+                            *anchor_row,
+                            *anchor_col,
+                        );
+                        let f = shared
+                            .entry(key)
+                            .or_insert_with(|| {
+                                let at = CellAddr::new(sheet, *anchor_row, *anchor_col);
+                                parse(
+                                    text,
+                                    at,
+                                    Dialect::open_formula(),
+                                    &crate::workbook::OdfResolver(&wb),
+                                )
+                                .ok()
+                                .map(Arc::new)
+                            })
+                            .clone();
+                        match f {
+                            Some(f) => {
+                                wb.set_formula(addr, f, None);
+                                if let (Some(c), Some((id, _))) = (cached, wb.formula_at(addr)) {
+                                    if let Some(fc) = wb.formulas.get_mut(id) {
+                                        fc.cached = c.clone();
+                                    }
+                                }
+                            }
+                            // The group's formula does not parse: keep the value.
+                            None => {
+                                if let Some(c) = cached {
+                                    wb.set_value(addr, c.clone());
+                                }
+                            }
+                        }
+                    }
                 }
             }
             for block in &sd.array_formulas {
-                load_array(&mut wb, sheet, block);
+                if !load_array(&mut wb, sheet, block, &mut array_cells) {
+                    let w = format!(
+                        "Array formulas covering more than {MAX_ARRAY_CELLS} cells in total were \
+                         loaded as plain values."
+                    );
+                    if !wb.import_warnings.contains(&w) {
+                        wb.import_warnings.push(w);
+                    }
+                }
             }
         }
         let active = ids
@@ -183,6 +268,14 @@ impl Workbook {
             .copied()
             .unwrap_or(1);
         wb.active_sheet = active;
+        wb.load_aliases.clear();
+        if renamed {
+            wb.import_warnings.push(
+                "Sheet names with characters that are not allowed ([ ] * ? : / \\ or control \
+                 characters) were changed."
+                    .into(),
+            );
+        }
         wb.pending = Pending::default();
         wb.dirty_all();
         wb
@@ -368,8 +461,27 @@ impl Workbook {
                 structure_protection: self.structure_protection.clone(),
             },
             meta: self.meta.clone(),
+            warnings: Vec::new(),
         }
     }
+}
+
+/// A sheet name from a file made valid: control characters and
+/// `[ ] * ? : / \` become `_`, leading and trailing `'` are dropped, and
+/// the name is cut to 255 characters (see `ops::check_sheet_name`).
+pub fn sanitize_sheet_name(name: &str) -> String {
+    let mapped: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '[' | ']' | '*' | '?' | ':' | '/' | '\\') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .take(255)
+        .collect();
+    mapped.trim_matches('\'').to_string()
 }
 
 /// Loads conditional formats, validations, notes, links, protection, page
@@ -490,52 +602,99 @@ fn load_names(wb: &mut Workbook, names: &[NameData], ids: &[tally_types::SheetId
     }
 }
 
-/// Valid, non-overlapping merges of more than one cell.
+/// Valid, non-overlapping merges of more than one cell, at most
+/// [`MAX_MERGES_PER_SHEET`]. Of overlapping merges the one with the
+/// smaller (top row, left column) wins.
+///
+/// O(n log n): a sweep over rows keeps the accepted merges that span the
+/// current row in a map ordered by first column (they are disjoint there),
+/// so each candidate checks one neighbour (security review 2, HIGH-1; the
+/// pairwise check took 128 s for 1M merges).
 fn clean_merges(merges: &[CellRangeLocal]) -> Vec<CellRangeLocal> {
+    use std::cmp::Reverse;
+    use std::collections::{BTreeMap, BinaryHeap};
+    let mut cand: Vec<(usize, CellRangeLocal)> = merges
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, m)| {
+            m.r0 <= m.r1
+                && m.c0 <= m.c1
+                && m.r1 < MAX_ROWS
+                && m.c1 < MAX_COLS
+                && (m.r0, m.c0) != (m.r1, m.c1)
+        })
+        .collect();
+    cand.sort_by_key(|(i, m)| (m.r0, m.c0, *i));
+    // c0 → (c1, r1) of the accepted merges spanning the sweep row.
+    let mut active: BTreeMap<u32, (u32, u32)> = BTreeMap::new();
+    let mut expiry: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::new();
     let mut out: Vec<CellRangeLocal> = Vec::new();
-    for m in merges.iter().take(1_000_000) {
-        let ok = m.r0 <= m.r1
-            && m.c0 <= m.c1
-            && m.r1 < MAX_ROWS
-            && m.c1 < MAX_COLS
-            && (m.r0, m.c0) != (m.r1, m.c1);
-        let overlaps =
-            |o: &CellRangeLocal| m.r0 <= o.r1 && o.r0 <= m.r1 && m.c0 <= o.c1 && o.c0 <= m.c1;
-        if ok && !out.iter().any(overlaps) {
-            out.push(*m);
+    for (_, m) in cand {
+        if out.len() >= MAX_MERGES_PER_SHEET {
+            break;
         }
+        while let Some(Reverse((r1, c0))) = expiry.peek().copied() {
+            if r1 >= m.r0 {
+                break;
+            }
+            expiry.pop();
+            active.remove(&c0);
+        }
+        let overlaps = active
+            .range(..=m.c1)
+            .next_back()
+            .is_some_and(|(_, (c1, _))| *c1 >= m.c0);
+        if overlaps {
+            continue;
+        }
+        active.insert(m.c0, (m.c1, m.r1));
+        expiry.push(Reverse((m.r1, m.c0)));
+        out.push(m);
     }
+    out.sort_by_key(|m| (m.r0, m.c0));
     out
 }
 
 /// Turns the formula at a block's anchor into an array formula, keeping the
-/// covered cells' values from the file as the cached result.
-fn load_array(wb: &mut Workbook, sheet: tally_types::SheetId, b: &CellRangeLocal) {
+/// covered cells' values from the file as the cached result. Blocks that
+/// overlap an existing block, or would take the workbook past
+/// [`MAX_ARRAY_CELLS`] covered cells, are skipped (the anchor keeps its
+/// cached value) before anything is materialized. `false` if the block was
+/// skipped for the budget.
+fn load_array(
+    wb: &mut Workbook,
+    sheet: tally_types::SheetId,
+    b: &CellRangeLocal,
+    used: &mut u64,
+) -> bool {
     if b.r0 > b.r1 || b.c0 > b.c1 || b.r1 >= MAX_ROWS || b.c1 >= MAX_COLS {
-        return;
+        return true;
     }
     let (rows, cols) = (b.r1 - b.r0 + 1, b.c1 - b.c0 + 1);
-    if u64::from(rows) * u64::from(cols) > crate::ops::MAX_OP_CELLS {
-        return;
+    let area = u64::from(rows) * u64::from(cols);
+    if area > crate::ops::MAX_OP_CELLS || used.saturating_add(area) > MAX_ARRAY_CELLS {
+        return false;
     }
     let anchor = CellAddr::new(sheet, b.r0, b.c0);
     let Some((_, fc)) = wb.formula_at(anchor) else {
-        return;
+        return true;
     };
     if fc.invalid_text.is_some() || fc.array.is_some() {
-        return;
+        return true;
     }
+    // Other blocks overlapping this one: it is dropped.
+    for other in wb.array_blocks_in(&tally_types::CellRange::new(sheet, b.r0, b.c0, b.r1, b.c1)) {
+        if other.start() != anchor {
+            return true;
+        }
+    }
+    *used += area;
     let formula = fc.formula.clone();
     let mut m = Matrix::new_filled(rows, cols, Value::Empty);
     for r in 0..rows {
         for c in 0..cols {
             m.set(r, c, wb.value(CellAddr::new(sheet, b.r0 + r, b.c0 + c)));
-        }
-    }
-    // Other blocks overlapping this one are dropped first.
-    for other in wb.array_blocks_in(&tally_types::CellRange::new(sheet, b.r0, b.c0, b.r1, b.c1)) {
-        if other.start() != anchor {
-            return;
         }
     }
     wb.set_array_formula(anchor, formula, rows, cols);
@@ -545,6 +704,7 @@ fn load_array(wb: &mut Workbook, sheet: tally_types::SheetId, b: &CellRangeLocal
             fc.array_result = Some(Arc::new(m));
         }
     }
+    true
 }
 
 #[cfg(test)]
@@ -552,6 +712,72 @@ mod tests {
     use super::*;
     use crate::recalc::recalc;
     use tally_model::FontData;
+
+    fn m(r0: u32, c0: u32, r1: u32, c1: u32) -> CellRangeLocal {
+        CellRangeLocal { r0, c0, r1, c1 }
+    }
+
+    #[test]
+    fn clean_merges_drops_overlaps_and_invalid() {
+        let out = clean_merges(&[
+            m(0, 0, 1, 1),
+            m(1, 1, 2, 2), // overlaps the first at B2
+            m(0, 2, 0, 3),
+            m(5, 5, 5, 5), // one cell
+            m(3, 0, 10, 0),
+            m(10, 0, 11, 1), // overlaps A4:A11 at A11
+            m(4, 1, 9, 3),   // next to A4:A11, overlaps nothing
+            m(2, 3, 3, 3),   // below C1:D1
+            m(1, 0, 0, 0),   // r0 > r1
+        ]);
+        assert_eq!(
+            out,
+            vec![
+                m(0, 0, 1, 1),
+                m(0, 2, 0, 3),
+                m(2, 3, 3, 3),
+                m(3, 0, 10, 0),
+                m(4, 1, 9, 3)
+            ]
+        );
+        // A tall merge blocks later ones it spans.
+        let out = clean_merges(&[m(0, 5, 1_000_000, 5), m(500_000, 4, 500_000, 6)]);
+        assert_eq!(out, vec![m(0, 5, 1_000_000, 5)]);
+    }
+
+    /// HIGH-2: a block that would pass the workbook-wide budget is skipped
+    /// before anything is materialized; the anchor keeps its value.
+    #[test]
+    fn array_budget_is_checked_before_materializing() {
+        let mut wb = Workbook::new();
+        let s = wb.sheets[0].id;
+        wb.set_input(CellAddr::new(s, 0, 0), "=ROW()");
+        let block = m(0, 0, 9, 0);
+        let mut used = MAX_ARRAY_CELLS - 5;
+        assert!(!load_array(&mut wb, s, &block, &mut used));
+        assert_eq!(used, MAX_ARRAY_CELLS - 5);
+        let (_, f) = wb.formula_at(CellAddr::new(s, 0, 0)).unwrap();
+        assert!(f.array.is_none() && f.array_result.is_none());
+        let mut used = 0;
+        assert!(load_array(&mut wb, s, &block, &mut used));
+        assert_eq!(used, 10);
+        let (_, f) = wb.formula_at(CellAddr::new(s, 0, 0)).unwrap();
+        assert_eq!(f.array, Some((10, 1)));
+    }
+
+    /// HIGH-1: 1M merges (one per row) took 128 s; now sorting dominates.
+    #[test]
+    fn clean_merges_is_n_log_n() {
+        let many: Vec<CellRangeLocal> = (0..1_000_000u32).map(|r| m(r, 0, r, 1)).collect();
+        let t = std::time::Instant::now();
+        let out = clean_merges(&many);
+        assert_eq!(out.len(), MAX_MERGES_PER_SHEET);
+        // 200k overlapping copies of one merge collapse to one.
+        let same: Vec<CellRangeLocal> = (0..200_000).map(|_| m(0, 0, 3, 3)).collect();
+        assert_eq!(clean_merges(&same).len(), 1);
+        let took = t.elapsed();
+        assert!(took < std::time::Duration::from_secs(3), "{took:?}");
+    }
 
     #[test]
     fn round_trip_values_formulas_styles() {

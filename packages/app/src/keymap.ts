@@ -63,6 +63,8 @@ export const GRID_KEYS: readonly { keys: string; action: string; group: string }
   { group: "Find", keys: "⌘G / ↩ / ⇧↩", action: "Next / previous match (in the find bar)" },
   { group: "Formulas", keys: "Arrows after = + ( ,", action: "Point at a reference" },
   { group: "Formulas", keys: "Tab / Enter", action: "Accept a function suggestion" },
+  { group: "Cells", keys: "⌘ + click a link", action: "Open the link (a plain click selects)" },
+  { group: "Cells", keys: "Click ▾ in a cell", action: "Choose from the validation list" },
 ];
 
 export const BINDINGS: readonly Binding[] = [
@@ -104,6 +106,8 @@ export const BINDINGS: readonly Binding[] = [
   { key: "Escape", mod: false, shift: false, command: "edit.cancelClip", label: "Esc" },
   { key: "PageDown", mod: true, shift: false, command: "sheet.next", label: "⌃PgDn" },
   { key: "PageUp", mod: true, shift: false, command: "sheet.prev", label: "⌃PgUp" },
+  { key: "F2", mod: false, shift: true, command: "insert.note", menu: true, label: "⇧F2" },
+  { key: "k", code: "KeyK", mod: true, shift: false, alt: true, command: "insert.hyperlink", menu: true, label: "⌥⌘K" },
 ];
 
 export interface KeyContext {

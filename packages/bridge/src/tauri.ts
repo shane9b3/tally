@@ -1,12 +1,13 @@
 /**
- * `TauriClient`: the {@link EngineClientV2} used inside the desktop app. Each
+ * `TauriClient`: the {@link EngineClientV3} used inside the desktop app. Each
  * method invokes the Tauri command of the same name in docs/api.md (camelCase
  * JS arguments; Tauri maps them to the snake_case Rust parameters) and
  * rejects with an {@link ApiError} `{ code, message }` on failure.
  *
  * It also implements the shell-only commands (`wb_open_dialog`, the dialog
- * half of `wb_save`, `recent_files`, `list_templates`), which have no
- * `DocumentService` method.
+ * half of `wb_save`, `recent_files`, `list_templates`) and the v0.3 shell
+ * commands `open_url` (http/https/mailto only, validated again in Rust)
+ * and `user_name`, which have no `DocumentService` method.
  *
  * The Tauri transport is injected (`invoke` from `@tauri-apps/api/core`,
  * `listen` from `@tauri-apps/api/event`) so this package keeps no runtime
@@ -42,7 +43,17 @@ import type { StyleDto } from "./generated/StyleDto";
 import type { Suggestion } from "./generated/Suggestion";
 import type { Transaction } from "./generated/Transaction";
 import type { WorkbookInfo } from "./generated/WorkbookInfo";
-import { isApiError, type EngineClientV2, type SheetId, type Unsubscribe } from "./client";
+import type { ConditionalFormatDto } from "./generated/ConditionalFormatDto";
+import type { DocPropertiesDto } from "./generated/DocPropertiesDto";
+import type { GoalSeekRequest } from "./generated/GoalSeekRequest";
+import type { GoalSeekResult } from "./generated/GoalSeekResult";
+import type { LocaleInfo } from "./generated/LocaleInfo";
+import type { NoteDto } from "./generated/NoteDto";
+import type { PageSetupDto } from "./generated/PageSetupDto";
+import type { ProtectionInfo } from "./generated/ProtectionInfo";
+import type { ValidationDto } from "./generated/ValidationDto";
+import type { ValidationInfo } from "./generated/ValidationInfo";
+import { isApiError, type EngineClientV3, type SheetId, type Unsubscribe } from "./client";
 import type { ShellClient, TemplateInfo } from "./shell";
 
 export { CANCELLED, type TemplateInfo } from "./shell";
@@ -94,6 +105,20 @@ export const COMMANDS = {
   find: "find",
   detectHeader: "detect_header",
   recalcAll: "recalc_all",
+  conditionalFormats: "conditional_formats",
+  validations: "validations",
+  validationAt: "validation_at",
+  note: "note",
+  notes: "notes",
+  protectionInfo: "protection_info",
+  pageSetup: "page_setup",
+  documentProperties: "document_properties",
+  goalSeek: "goal_seek",
+  listLocales: "list_locales",
+  setLocale: "set_locale",
+  resolveNameBoxIn: "resolve_name_box_in",
+  openUrl: "open_url",
+  userName: "user_name",
 } as const;
 
 /** Event names, exactly as in docs/api.md. */
@@ -107,7 +132,7 @@ export function toApiError(e: unknown): ApiError {
   return { code: "internal", message: String(e) };
 }
 
-export class TauriClient implements EngineClientV2, ShellClient {
+export class TauriClient implements EngineClientV3, ShellClient {
   constructor(private readonly tauri: TauriTransport) {}
 
   private call<T>(cmd: string, args?: InvokeArgs): Promise<T> {
@@ -253,6 +278,68 @@ export class TauriClient implements EngineClientV2, ShellClient {
 
   recalcAll(doc: DocId): Promise<ApplyResult> {
     return this.call(COMMANDS.recalcAll, { doc });
+  }
+
+  // -- v0.3 -------------------------------------------------------------------
+
+  conditionalFormats(doc: DocId, sheet: SheetId): Promise<ConditionalFormatDto[]> {
+    return this.call(COMMANDS.conditionalFormats, { doc, sheet });
+  }
+
+  validations(doc: DocId, sheet: SheetId): Promise<ValidationDto[]> {
+    return this.call(COMMANDS.validations, { doc, sheet });
+  }
+
+  validationAt(doc: DocId, sheet: SheetId, r: number, c: number): Promise<ValidationInfo | null> {
+    return this.call(COMMANDS.validationAt, { doc, sheet, r, c });
+  }
+
+  note(doc: DocId, sheet: SheetId, r: number, c: number): Promise<NoteDto | null> {
+    return this.call(COMMANDS.note, { doc, sheet, r, c });
+  }
+
+  notes(doc: DocId, sheet: SheetId): Promise<NoteDto[]> {
+    return this.call(COMMANDS.notes, { doc, sheet });
+  }
+
+  protectionInfo(doc: DocId, sheet: SheetId): Promise<ProtectionInfo> {
+    return this.call(COMMANDS.protectionInfo, { doc, sheet });
+  }
+
+  pageSetup(doc: DocId, sheet: SheetId): Promise<PageSetupDto> {
+    return this.call(COMMANDS.pageSetup, { doc, sheet });
+  }
+
+  documentProperties(doc: DocId): Promise<DocPropertiesDto> {
+    return this.call(COMMANDS.documentProperties, { doc });
+  }
+
+  goalSeek(doc: DocId, req: GoalSeekRequest): Promise<GoalSeekResult> {
+    return this.call(COMMANDS.goalSeek, { doc, req });
+  }
+
+  listLocales(): Promise<LocaleInfo[]> {
+    return this.call(COMMANDS.listLocales);
+  }
+
+  setLocale(doc: DocId, locale: string): Promise<ApplyResult> {
+    return this.call(COMMANDS.setLocale, { doc, locale });
+  }
+
+  resolveNameBoxIn(doc: DocId, sheet: SheetId, text: string): Promise<SelectionDto> {
+    return this.call(COMMANDS.resolveNameBoxIn, { doc, sheet, text });
+  }
+
+  // -- v0.3 shell ----------------------------------------------------------------
+
+  /** Opens an http(s)/mailto link with the OS handler (anything else is rejected in Rust). */
+  openUrl(url: string): Promise<void> {
+    return this.call(COMMANDS.openUrl, { url });
+  }
+
+  /** The OS account name (note authors), or `null`. */
+  userName(): Promise<string | null> {
+    return this.call(COMMANDS.userName);
   }
 
   // -- events -----------------------------------------------------------------

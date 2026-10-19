@@ -1,5 +1,6 @@
 /** UI-only state: sidebar, panels, palette, theme, zoom, toasts, menus. Never undoable. */
-import type { CellPos, NameInfo, RangeDto, SortKey } from "@tally/bridge";
+import type { CellPos, DocPropertiesDto, NameInfo, PageSetupDto, RangeDto, SortKey, ValidationDto } from "@tally/bridge";
+import type { HighlightPreset } from "../v03";
 import type { ContextArea } from "@tally/grid";
 import { create } from "zustand";
 import { clampZoom, nextZoom } from "../formats";
@@ -14,10 +15,18 @@ import {
   type ThemePref,
 } from "../theme/theme";
 
+/** A button on a toast (e.g. "Keep" / "Undo" after a validation warning). */
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
 export interface Toast {
   id: number;
-  kind: "error" | "info";
+  kind: "error" | "info" | "warning";
   message: string;
+  /** Buttons; the toast stays until one is chosen or it is dismissed. */
+  actions?: ToastAction[];
 }
 
 /** An open right-click menu. */
@@ -38,7 +47,19 @@ export type DialogState =
   | { kind: "pasteSpecial" }
   | { kind: "defineName"; name: string; refersTo: string; scope: number | null; replacing: NameInfo | null }
   | { kind: "manageNames" }
-  | { kind: "confirm"; title: string; message: string; ok: string; danger?: boolean; onConfirm: () => void };
+  | { kind: "confirm"; title: string; message: string; ok: string; danger?: boolean; onConfirm: () => void }
+  // v0.3
+  | { kind: "cfManager" }
+  | { kind: "cfPreset"; preset: HighlightPreset; ranges: RangeDto[] }
+  | { kind: "validation"; validation: ValidationDto; existing: boolean }
+  | { kind: "validationAlert"; title: string; message: string; cell: CellPos | null; retry: string | null }
+  | { kind: "hyperlink"; cell: CellPos; url: string; text: string; hasText: boolean }
+  | { kind: "protectSheet" }
+  | { kind: "unprotectSheet" }
+  | { kind: "protectDocument"; protected: boolean; hasPassword: boolean }
+  | { kind: "goalSeek"; formulaCell: string; target: string; variableCell: string }
+  | { kind: "properties"; props: DocPropertiesDto }
+  | { kind: "pageSetup"; setup: PageSetupDto };
 
 /** The AutoFilter popover of one column, anchored at client coordinates. */
 export interface FilterPopoverState {
@@ -75,7 +96,7 @@ export interface UiState {
   syncSystemTheme(): void;
   setZoom(z: number): void;
   zoomBy(dir: 1 | -1): void;
-  pushToast(kind: Toast["kind"], message: string): number;
+  pushToast(kind: Toast["kind"], message: string, actions?: ToastAction[]): number;
   dismissToast(id: number): void;
   openContextMenu(m: ContextMenuState | null): void;
   openDialog(d: DialogState | null): void;
@@ -126,12 +147,13 @@ export const useUiStore = create<UiState>()((set, get) => ({
   },
   setZoom: (z) => set({ zoom: clampZoom(z) }),
   zoomBy: (dir) => set((s) => ({ zoom: nextZoom(s.zoom, dir) })),
-  pushToast: (kind, message) => {
+  pushToast: (kind, message, actions) => {
     const id = nextToast++;
     set((s) => {
       // Collapse repeats of the same message.
       const rest = s.toasts.filter((t) => t.message !== message);
-      return { toasts: [...rest, { id, kind, message }].slice(-MAX_TOASTS) };
+      const toast: Toast = actions && actions.length > 0 ? { id, kind, message, actions } : { id, kind, message };
+      return { toasts: [...rest, toast].slice(-MAX_TOASTS) };
     });
     return id;
   },

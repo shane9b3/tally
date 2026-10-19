@@ -43,12 +43,91 @@ impl XlsxResolver {
     }
 }
 
-impl Resolver for XlsxResolver {
-    fn sheet_by_name(&self, name: &str) -> Option<SheetId> {
+/// Marks a sheet placeholder written by [`protect_colon_sheets`]
+/// (a private-use character, never in a real formula).
+const SHEET_PLACEHOLDER: char = '\u{E000}';
+
+impl XlsxResolver {
+    fn index_of(&self, name: &str) -> Option<usize> {
+        if let Some(i) = name.strip_prefix(SHEET_PLACEHOLDER) {
+            return i.parse::<usize>().ok().filter(|i| *i < self.lookup.len());
+        }
         self.lookup
             .iter()
             .position(|n| n.eq_ignore_ascii_case(name))
-            .and_then(|i| SheetId::try_from(i).ok())
+    }
+}
+
+/// Quoted sheet names that contain `:` and name an existing sheet
+/// (`'a:b'!A1`) are replaced by a placeholder before the ExcelA1 parser
+/// sees them, which would read them as a 3-D span `a` to `b` (review 2,
+/// LOW-2). Quote-aware: string literals and `''` escapes are honoured; a
+/// quoted span that is not a sheet name (`'Jan:Mar'!A1` over sheets Jan
+/// and Mar) is left alone.
+fn protect_colon_sheets<'t>(text: &'t str, r: &XlsxResolver) -> std::borrow::Cow<'t, str> {
+    if !text.contains('\'') || !r.lookup.iter().any(|n| n.contains(':')) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.char_indices().peekable();
+    let mut in_string = false;
+    while let Some((_, c)) = chars.next() {
+        if in_string {
+            out.push(c);
+            if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                out.push(c);
+            }
+            '\'' => {
+                let mut name = String::new();
+                let mut closed = false;
+                while let Some((_, d)) = chars.next() {
+                    if d == '\'' {
+                        if chars.peek().is_some_and(|(_, n)| *n == '\'') {
+                            chars.next();
+                            name.push('\'');
+                            continue;
+                        }
+                        closed = true;
+                        break;
+                    }
+                    name.push(d);
+                }
+                let bang = chars.peek().is_some_and(|(_, n)| *n == '!');
+                let idx = (closed && bang && name.contains(':'))
+                    .then(|| r.lookup.iter().position(|n| n.eq_ignore_ascii_case(&name)))
+                    .flatten();
+                match idx {
+                    Some(i) => {
+                        out.push('\'');
+                        out.push(SHEET_PLACEHOLDER);
+                        out.push_str(&i.to_string());
+                        out.push('\'');
+                    }
+                    None => {
+                        out.push('\'');
+                        out.push_str(&name.replace('\'', "''"));
+                        if closed {
+                            out.push('\'');
+                        }
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+impl Resolver for XlsxResolver {
+    fn sheet_by_name(&self, name: &str) -> Option<SheetId> {
+        self.index_of(name).and_then(|i| SheetId::try_from(i).ok())
     }
 
     fn sheet_name(&self, id: SheetId) -> Option<Arc<str>> {
@@ -211,9 +290,10 @@ pub(crate) fn parse_excel(
     origin: CellAddr,
     r: &XlsxResolver,
 ) -> Result<Formula, ParseError> {
+    let text = protect_colon_sheets(text, r);
     let mut src = String::with_capacity(text.len() + 1);
     src.push('=');
-    src.push_str(text);
+    src.push_str(&text);
     let mut f = parse(
         &src,
         origin,

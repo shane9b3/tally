@@ -82,7 +82,7 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
         })?
         .unwrap_or_default();
     let styles_path = rel_target("styles", "styles.xml");
-    let styles: StyleTable = pkg
+    let mut styles: StyleTable = pkg
         .with_entry(&styles_path, other, |r| {
             parse_styles(&mut XmlReader::new(r, xl))
         })?
@@ -90,7 +90,10 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
 
     let names: Vec<String> = info.sheets.iter().map(|s| s.name.clone()).collect();
     let resolver = XlsxResolver::new(&names);
-    let mut budget = Budget::default();
+    let mut budget = Budget {
+        warnings: std::mem::take(&mut styles.warnings),
+        ..Budget::default()
+    };
     let mut sheets = Vec::with_capacity(info.sheets.len());
     for (i, entry) in info.sheets.iter().enumerate() {
         let sheet_id = u32::try_from(i).unwrap_or(u32::MAX);
@@ -175,6 +178,7 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
     let mut wb = WorkbookData {
         sheets,
         styles: styles.styles,
+        warnings: std::mem::take(&mut budget.warnings),
         ..WorkbookData::default()
     };
     wb.names = defined_names(&info.names, &resolver, &mut wb.sheets);

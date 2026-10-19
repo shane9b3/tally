@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use std::io::BufRead;
 use std::sync::Arc;
 
-use tally_formula::Formula;
 use tally_model::{CellContentData, CellData, CellRangeLocal, DimRun, SheetData, StyleRun};
 use tally_types::{parse_a1, CellAddr, ErrorKind, SheetId, Value, MAX_COLS, MAX_ROWS};
 
@@ -30,18 +29,47 @@ use crate::units::{col_width_to_px, parse_bool, pt_to_hmm, px_to_hmm};
 use crate::xml::{Elem, Ev, XmlReader};
 use crate::{Limits, XlsxError, DEFAULT_ROW_HEIGHT_HMM};
 
-/// Longest formula text accepted (the formula parser's own limit is 8192
-/// characters; longer `<f>` text is kept as-is and fails to parse).
-const MAX_FORMULA_TEXT: usize = 64 * 1024;
+/// Longest formula text accepted: the formula parser's own limit (longer
+/// `<f>` text fails with a limit error instead of being kept).
+const MAX_FORMULA_TEXT: usize = 8192;
+
+/// Most merged areas read per sheet; later ones are dropped with a warning
+/// (security review 2, HIGH-1).
+pub const MAX_MERGES_PER_SHEET: usize = 100_000;
+
+/// Most `<col>` elements read per sheet (a sheet has 16,384 columns, so a
+/// valid file never needs more; review 2, MEDIUM-2).
+const MAX_COL_ELEMENTS: usize = MAX_COLS as usize;
 
 /// Budgets shared by all sheets of one workbook.
 #[derive(Debug, Default)]
 pub(crate) struct Budget {
     pub cells: u64,
     pub text_bytes: u64,
+    /// What was dropped to stay within limits (one entry per kind).
+    pub warnings: Vec<String>,
 }
 
 impl Budget {
+    pub(crate) fn warn(&mut self, w: String) {
+        if !self.warnings.contains(&w) {
+            self.warnings.push(w);
+        }
+    }
+
+    /// Counts `n` cells (merges, array block areas, style runs) against
+    /// [`Limits::max_cells`].
+    fn add_cells(&mut self, n: u64, limits: &Limits) -> Result<(), XlsxError> {
+        self.cells = self.cells.saturating_add(n);
+        if self.cells > limits.max_cells {
+            return Err(XlsxError::LimitExceeded {
+                what: "materialized cells",
+                limit: limits.max_cells,
+            });
+        }
+        Ok(())
+    }
+
     fn add_cell(&mut self, text_len: usize, limits: &Limits) -> Result<(), XlsxError> {
         self.cells += 1;
         if self.cells > limits.max_cells {
@@ -73,9 +101,18 @@ pub(crate) struct SheetCtx<'a> {
 
 /// A shared formula group (`t="shared" si="N"`).
 enum Shared {
-    Parsed(Formula),
+    /// The anchor's model text (shared by every member) and position.
+    Parsed { text: Arc<str>, row: u32, col: u32 },
     /// The anchor text did not parse; members keep their cached values.
     Failed,
+}
+
+/// The formula of one `<c>`.
+enum FText {
+    /// Its own text.
+    Own(String),
+    /// A shared group's anchor text, valid at (`row`, `col`).
+    Shared { text: Arc<str>, row: u32, col: u32 },
 }
 
 /// What a worksheet holds besides [`SheetData`] that the reader resolves
@@ -103,6 +140,9 @@ struct State<'a, 'b> {
     next_col: u32,
     sorted: bool,
     last_pos: Option<(u32, u32)>,
+    /// `<col>` entries with a style: (first, last, style), in file order.
+    col_styles: Vec<(u32, u32, u32)>,
+    col_elements: usize,
 }
 
 /// Parses one worksheet part.
@@ -123,6 +163,8 @@ pub(crate) fn parse_sheet<R: BufRead>(
         next_col: 0,
         sorted: true,
         last_pos: None,
+        col_styles: Vec::new(),
+        col_elements: 0,
     };
     loop {
         match xr.next()? {
@@ -194,7 +236,16 @@ pub(crate) fn parse_sheet<R: BufRead>(
                 "mergeCell" => {
                     if let Some(r) = e.attr_local("ref").and_then(parse_range) {
                         if r.r0 != r.r1 || r.c0 != r.c1 {
-                            st.out.merges.push(r);
+                            if st.out.merges.len() >= MAX_MERGES_PER_SHEET {
+                                st.budget.warn(format!(
+                                    "Only the first {MAX_MERGES_PER_SHEET} merged areas of a \
+                                     sheet are kept."
+                                ));
+                            } else {
+                                // Merges count against the cell cap.
+                                st.budget.add_cells(1, ctx.limits)?;
+                                st.out.merges.push(r);
+                            }
                         }
                     }
                     xr.skip()?;
@@ -205,6 +256,9 @@ pub(crate) fn parse_sheet<R: BufRead>(
             _ => {}
         }
     }
+    let runs = column_style_runs(&st.col_styles);
+    st.budget.add_cells(runs.len() as u64, ctx.limits)?;
+    st.out.style_runs.extend(runs);
     let mut out = st.out;
     if !st.sorted {
         // Stable: of two cells at one position the later one wins below.
@@ -216,6 +270,53 @@ pub(crate) fn parse_sheet<R: BufRead>(
     out.col_breaks.sort_unstable();
     out.col_breaks.dedup();
     Ok((out, st.extras))
+}
+
+/// One whole-column style run per styled column. Overlapping `<col>`
+/// entries resolve last-wins in one pass from the end with a "next
+/// unpainted column" union-find, so N overlapping entries cost
+/// O(N + 16,384) and at most 16,384 runs (review 2, MEDIUM-2: 10,000
+/// `<col min="1" max="16384">` made 164M runs, 5.8 s and 3.5 GB).
+fn column_style_runs(entries: &[(u32, u32, u32)]) -> Vec<StyleRun> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let n = MAX_COLS as usize;
+    let mut style: Vec<Option<u32>> = vec![None; n];
+    // next[i]: the first unpainted column ≥ i (n when none).
+    let mut next: Vec<u32> = (0..=MAX_COLS).collect();
+    fn find(next: &mut [u32], mut i: u32) -> u32 {
+        let mut root = i;
+        while next[root as usize] != root {
+            root = next[root as usize];
+        }
+        while next[i as usize] != root {
+            let up = next[i as usize];
+            next[i as usize] = root;
+            i = up;
+        }
+        root
+    }
+    for &(c0, c1, st) in entries.iter().rev() {
+        let mut c = find(&mut next, c0);
+        while c <= c1 && (c as usize) < n {
+            style[c as usize] = Some(st);
+            next[c as usize] = c + 1;
+            c = find(&mut next, c + 1);
+        }
+    }
+    style
+        .iter()
+        .enumerate()
+        .filter_map(|(c, s)| {
+            s.map(|style| StyleRun {
+                col: c as u32,
+                start_row: 0,
+                end_row: MAX_ROWS - 1,
+                style,
+            })
+        })
+        .collect()
 }
 
 /// Keeps the last of consecutive cells at the same position.
@@ -335,6 +436,13 @@ impl State<'_, '_> {
         let (Some(min), Some(max)) = (attr_u32(e, "min"), attr_u32(e, "max")) else {
             return;
         };
+        self.col_elements += 1;
+        if self.col_elements > MAX_COL_ELEMENTS {
+            self.budget.warn(format!(
+                "Only the first {MAX_COL_ELEMENTS} column definitions of a sheet are read."
+            ));
+            return;
+        }
         if min == 0 || min > max || min > MAX_COLS {
             return;
         }
@@ -351,14 +459,7 @@ impl State<'_, '_> {
             push_run(&mut self.out.col_widths, c0, c1, hmm, hidden);
         }
         if let Some(style) = attr_u32(e, "style").and_then(|s| self.ctx.styles.style_of(s)) {
-            for col in c0..=c1 {
-                self.out.style_runs.push(StyleRun {
-                    col,
-                    start_row: 0,
-                    end_row: MAX_ROWS - 1,
-                    style,
-                });
-            }
+            self.col_styles.push((c0, c1, style));
         }
     }
 
@@ -472,13 +573,35 @@ impl State<'_, '_> {
             }),
         };
         let content = match formula {
-            Some(text) => {
+            Some(FText::Own(text)) => {
                 text_len += text.len();
                 CellContentData::Formula {
                     text: Arc::from(text),
                     cached: value,
                 }
             }
+            // The anchor: the group's text is counted once, here.
+            Some(FText::Shared {
+                text,
+                row: r0,
+                col: c0,
+            }) if (r0, c0) == (row, col) => {
+                text_len += text.len();
+                CellContentData::Formula {
+                    text,
+                    cached: value,
+                }
+            }
+            Some(FText::Shared {
+                text,
+                row: r0,
+                col: c0,
+            }) => CellContentData::SharedFormula {
+                text,
+                anchor_row: r0,
+                anchor_col: c0,
+                cached: value,
+            },
             None => match value {
                 Some(v) => CellContentData::Value(v),
                 None if style.is_some() => CellContentData::Value(Value::Empty),
@@ -500,30 +623,38 @@ impl State<'_, '_> {
     }
 
     /// The model formula text of a cell, if it has one.
-    fn formula(&mut self, raw: &RawCell, origin: CellAddr) -> Result<Option<String>, XlsxError> {
+    fn formula(&mut self, raw: &RawCell, origin: CellAddr) -> Result<Option<FText>, XlsxError> {
         let ftype = raw.f_type.as_deref().unwrap_or("normal");
         let text = raw.f_text.as_deref().unwrap_or("");
         match ftype {
             "shared" => {
                 let Some(si) = raw.f_si else {
-                    return Ok(self.plain(text, origin));
+                    return Ok(self.plain(text, origin).map(FText::Own));
                 };
                 if !text.trim().is_empty() {
                     // The group's anchor (it carries `ref` and the text).
                     let entry = match parse_excel(text, origin, self.ctx.resolver) {
-                        Ok(f) => Shared::Parsed(f),
+                        Ok(f) => Shared::Parsed {
+                            text: Arc::from(print_of(&f, origin, self.ctx.resolver)),
+                            row: origin.row,
+                            col: origin.col,
+                        },
                         Err(_) => Shared::Failed,
                     };
                     let failed = matches!(entry, Shared::Failed);
                     self.shared.insert(si, entry);
                     if failed {
-                        return Ok(Some(format!("of:={text}")));
+                        return Ok(Some(FText::Own(format!("of:={text}"))));
                     }
                 }
                 Ok(match self.shared.get(&si) {
-                    // Same AST, printed at this cell: relative references
-                    // move with it.
-                    Some(Shared::Parsed(f)) => Some(print_of(f, origin, self.ctx.resolver)),
+                    // The anchor's formula, moved to this cell by the
+                    // engine (one shared text, one parse per group).
+                    Some(Shared::Parsed { text, row, col }) => Some(FText::Shared {
+                        text: text.clone(),
+                        row: *row,
+                        col: *col,
+                    }),
                     // A member before its anchor, or a failed anchor: keep
                     // the cached value only.
                     _ => None,
@@ -534,15 +665,19 @@ impl State<'_, '_> {
                 if f.is_some() {
                     if let Some(r) = raw.f_ref.as_deref().and_then(parse_range) {
                         if r.r0 == origin.row && r.c0 == origin.col {
+                            // Every covered cell becomes an array part in
+                            // the engine (review 2, HIGH-2).
+                            let area = (u64::from(r.r1 - r.r0) + 1) * (u64::from(r.c1 - r.c0) + 1);
+                            self.budget.add_cells(area, self.ctx.limits)?;
                             self.out.array_formulas.push(r);
                         }
                     }
                 }
-                Ok(f)
+                Ok(f.map(FText::Own))
             }
             // What-if data tables: keep the values Excel computed.
             "dataTable" => Ok(None),
-            _ => Ok(self.plain(text, origin)),
+            _ => Ok(self.plain(text, origin).map(FText::Own)),
         }
     }
 

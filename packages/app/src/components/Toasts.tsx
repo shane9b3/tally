@@ -6,15 +6,38 @@ import styles from "./Toasts.module.css";
 
 export const TOAST_MS = 5000;
 
+/** Toasts with buttons stay this long (they wait for a choice). */
+export const ACTION_TOAST_MS = 15000;
+
 function ToastView({ toast }: { toast: Toast }) {
+  const actions = toast.actions ?? [];
   useEffect(() => {
-    const t = setTimeout(() => useUiStore.getState().dismissToast(toast.id), TOAST_MS);
+    const t = setTimeout(() => useUiStore.getState().dismissToast(toast.id), actions.length > 0 ? ACTION_TOAST_MS : TOAST_MS);
     return () => clearTimeout(t);
-  }, [toast.id]);
+  }, [toast.id, actions.length]);
+  const alert = toast.kind === "error" || toast.kind === "warning";
   return (
-    <div className={cx(styles.toast, toast.kind === "error" && styles.error)} role={toast.kind === "error" ? "alert" : "status"}>
-      <span className={styles.icon}>{toast.kind === "error" ? "!" : "✓"}</span>
+    <div
+      className={cx(styles.toast, toast.kind === "error" && styles.error, toast.kind === "warning" && styles.warning)}
+      role={alert ? "alert" : "status"}
+      data-testid={`toast-${toast.kind}`}
+    >
+      <span className={styles.icon}>{toast.kind === "info" ? "✓" : "!"}</span>
       <span className={styles.message}>{toast.message}</span>
+      {actions.map((a) => (
+        <button
+          key={a.label}
+          type="button"
+          className={styles.action}
+          data-testid={`toast-action-${a.label.toLowerCase()}`}
+          onClick={() => {
+            useUiStore.getState().dismissToast(toast.id);
+            a.run();
+          }}
+        >
+          {a.label}
+        </button>
+      ))}
       <button type="button" className={styles.close} aria-label="Dismiss" onClick={() => useUiStore.getState().dismissToast(toast.id)}>
         ×
       </button>

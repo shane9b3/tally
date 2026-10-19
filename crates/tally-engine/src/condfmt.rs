@@ -300,6 +300,12 @@ pub fn icon_set_from_api(s: IconSetKind) -> IconSetData {
 
 fn style_from_api(s: &CfStyleDto) -> Result<CfStyleData, ApiError> {
     if let Some(code) = &s.number_format {
+        if code.chars().count() > tally_model::MAX_NUMBER_FORMAT_LEN {
+            return Err(ApiError::invalid_argument(format!(
+                "number format is longer than {} characters",
+                tally_model::MAX_NUMBER_FORMAT_LEN
+            )));
+        }
         parse_format(code)
             .map_err(|e| ApiError::invalid_argument(format!("bad number format: {e}")))?;
     }
