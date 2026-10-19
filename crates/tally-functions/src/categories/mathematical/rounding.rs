@@ -107,10 +107,11 @@ pub const ROUNDDOWN: FunctionDef = FunctionDef::new(
 
 const TRUNC_PARAMS: &[Param] = &[
     Param::required("number", ParamKind::Number),
-    Param::required("count", ParamKind::Integer),
+    Param::optional("count", ParamKind::Integer),
 ];
 
-/// `TRUNC(number; count)`; the master list declares `count` as required.
+/// `TRUNC(number; [count])`: toward zero. `count` defaults to 0, as in
+/// ODFF 1.2 and Excel (AOO's wizard lists it as required).
 pub const TRUNC: FunctionDef =
     FunctionDef::new("TRUNC", Category::Mathematical, TRUNC_PARAMS, rounddown)
         .help("Truncates the decimal places of a number.");

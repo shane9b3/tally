@@ -59,3 +59,38 @@ expect = "#N/A"
 [[case]]
 formula = "=MOD(5)"
 expect = "Err:511"
+
+# Correctness review H3: integral operands use fmod, exact past 15 digits.
+[[case]]
+formula = "=MOD(999999999999999;2)"
+expect = 1
+
+[[case]]
+formula = "=MOD(1234567890123456;10)"
+expect = 6
+
+[[case]]
+formula = "=MOD(1E16;7)"
+expect = 4
+
+[[case]]
+formula = "=MOD(1E20;3)"
+expect = 1
+
+[[case]]
+formula = "=MOD(-7;3)"
+expect = 2
+
+[[case]]
+formula = "=MOD(7;-3)"
+expect = -2
+
+[[case]]
+name = "zero remainder with negative divisor"
+formula = "=MOD(6;-3)"
+expect = 0
+
+[[case]]
+name = "negative zero is not produced"
+formula = "=MOD(-6;3)&\"\""
+expect = "0"

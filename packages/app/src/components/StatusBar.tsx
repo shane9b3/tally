@@ -39,11 +39,14 @@ export function StatusBar() {
   }, [ctl, doc, sheet, selection, rev]);
 
   const sum = stats?.sum ?? null;
+  // With an error in the selection the engine sends no sum, only the
+  // error's text in formattedSum (AOO shows the error).
+  const sumText = stats?.formattedSum ?? (sum !== null ? String(sum) : null);
   return (
     <div className={styles.status} data-testid="status-bar">
-      {sum !== null ? (
+      {sumText !== null ? (
         <span className={styles.stat} data-testid="stat-sum">
-          Sum <b>{stats?.formattedSum ?? String(sum)}</b>
+          Sum <b>{sumText}</b>
         </span>
       ) : null}
       {stats && stats.count > 0 ? (

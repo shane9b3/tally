@@ -75,7 +75,8 @@ pub struct CalcSettings {
     pub text_to_number: TextToNumber,
     /// How criteria strings match.
     pub criteria_mode: CriteriaMode,
-    /// Whether text comparisons are case-sensitive (default `false`).
+    /// Whether text comparisons are case-sensitive (default `false`; AOO's
+    /// default is `true`, a deliberate deviation, see docs/adr/0001-stack.md).
     pub case_sensitive: bool,
     /// Whether `=` and `<>` criteria must match whole cells (default `true`).
     pub whole_cell_match: bool,

@@ -93,7 +93,8 @@ fn insert_rows() {
         // At the last row: grows.
         ("=SUM(A1:A5)", "Z20", ins_rows(4, 2), "=SUM(A1:A7)"),
         // Reversed endpoints keep orientation.
-        ("=SUM(A10:A1)", "Z20", ins_rows(4, 2), "=SUM(A12:A1)"),
+        // Reversed areas print normalised (correctness review).
+        ("=SUM(A10:A1)", "Z20", ins_rows(4, 2), "=SUM(A1:A12)"),
         // Formula above the insertion: its own cell does not move.
         ("=A10", "B1", ins_rows(4, 2), "=A12"),
         // Formula below the insertion moves too; ref above stays.

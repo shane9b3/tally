@@ -35,6 +35,8 @@ fn value(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         Value::Number(n) => Ok(Value::Number(n)),
         Value::Bool(b) => Ok(Value::Number(if b { 1.0 } else { 0.0 })),
         Value::Empty => Ok(Value::Number(0.0)),
+        // AOO pushes an illegal argument (Err:502) for empty text.
+        Value::Text(s) if s.trim().is_empty() => Err(ErrorKind::InvalidArgument),
         Value::Text(s) => {
             let epoch = a.ctx().settings().date_epoch;
             text_to_value(&s, epoch)
@@ -79,7 +81,10 @@ mod tests {
         assert_eq!(v(EvalValue::Missing), Value::Number(0.0));
         let bad = Value::Error(ErrorKind::Value);
         assert_eq!(v(EvalValue::text("abc")), bad);
-        assert_eq!(v(EvalValue::text("")), bad);
+        assert_eq!(
+            v(EvalValue::text("")),
+            Value::Error(ErrorKind::InvalidArgument)
+        );
         assert_eq!(v(EvalValue::text("TRUE")), bad);
         assert_eq!(
             v(EvalValue::error(ErrorKind::Div0)),

@@ -496,3 +496,72 @@ fn one_million_cells_write_and_read() {
     );
     assert_eq!(back.sheets[0].cells.len(), 1_000_000);
 }
+
+/// Correctness review H4: style runs (a long run over empty cells and a
+/// whole-column style) are written and read back as runs.
+#[test]
+fn style_runs_round_trip() {
+    let bold = StyleData {
+        font: FontData {
+            bold: true,
+            ..FontData::default()
+        },
+        ..StyleData::default()
+    };
+    let italic = StyleData {
+        font: FontData {
+            italic: true,
+            ..FontData::default()
+        },
+        ..StyleData::default()
+    };
+    let last = tally_types::MAX_ROWS - 1;
+    let runs = vec![
+        StyleRun {
+            col: 0,
+            start_row: 0,
+            end_row: last,
+            style: 0,
+        },
+        StyleRun {
+            col: 2,
+            start_row: 99,
+            end_row: 20_099,
+            style: 1,
+        },
+        StyleRun {
+            col: 3,
+            start_row: 99,
+            end_row: 20_099,
+            style: 1,
+        },
+    ];
+    let wb = WorkbookData {
+        sheets: vec![SheetData {
+            name: "S".into(),
+            cells: vec![v(0, 1, Value::Number(1.0), None)],
+            style_runs: runs.clone(),
+            ..SheetData::default()
+        }],
+        styles: vec![bold, italic],
+        ..WorkbookData::default()
+    };
+    let bytes = write_to_vec(&wb);
+    let mut content = String::new();
+    zip::ZipArchive::new(Cursor::new(bytes.clone()))
+        .unwrap()
+        .by_name("content.xml")
+        .unwrap()
+        .read_to_string(&mut content)
+        .unwrap();
+    assert!(
+        content.contains(r#"table:default-cell-style-name="ce1""#),
+        "whole column written as a column default style"
+    );
+    let back = read_ods(Cursor::new(bytes), &Limits::default()).unwrap();
+    let sheet = &back.sheets[0];
+    assert_eq!(sheet.cells, wb.sheets[0].cells);
+    assert_eq!(sheet.style_runs, runs);
+    assert!(back.styles[sheet.style_runs[0].style as usize].font.bold);
+    assert!(back.styles[sheet.style_runs[1].style as usize].font.italic);
+}

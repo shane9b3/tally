@@ -37,19 +37,21 @@ fn proper(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     run(|| {
         let s = a.text(0)?;
         let mut out = String::with_capacity(s.len());
-        let mut prev_letter = false;
+        // AOO `ScProper`: a letter is capitalised only when the previous
+        // character is not a letter or digit (`isLetterNumeric`), so
+        // "3rd" stays "3rd".
+        let mut prev_alnum = false;
         for ch in s.chars() {
             if ch.is_alphabetic() {
-                if prev_letter {
+                if prev_alnum {
                     out.extend(ch.to_lowercase());
                 } else {
                     out.extend(ch.to_uppercase());
                 }
-                prev_letter = true;
             } else {
                 out.push(ch);
-                prev_letter = false;
             }
+            prev_alnum = ch.is_alphanumeric();
         }
         Ok(Value::text(out))
     })
@@ -88,7 +90,10 @@ mod tests {
         let p = |s| t("PROPER", EvalValue::text(s));
         assert_eq!(p("hello wORLD"), Value::text("Hello World"));
         assert_eq!(p("o'neil-smith"), Value::text("O'Neil-Smith"));
-        assert_eq!(p("2nd place"), Value::text("2Nd Place"));
+        assert_eq!(p("2nd place"), Value::text("2nd Place"));
+        assert_eq!(p("3rd"), Value::text("3rd"));
+        assert_eq!(p("o'neil"), Value::text("O'Neil"));
+        assert_eq!(p("a1b c"), Value::text("A1b C"));
         assert_eq!(p(""), Value::text(""));
         assert_eq!(p("élan vital"), Value::text("Élan Vital"));
     }

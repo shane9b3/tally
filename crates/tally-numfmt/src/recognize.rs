@@ -15,7 +15,8 @@
 //!   `2026-10-19`, `19 Oct 2026`, `19-Oct-26`, `Oct 19, 2026`,
 //!   `October 19 2026`, `Oct 2026`;
 //! - times `14:30`, `14:30:15`, `2:30 PM`, `2:30:15.5 pm`; hours of 24 or
-//!   more without AM/PM are durations (`[HH]:MM`);
+//!   more without AM/PM are durations (`[HH]:MM`), and so are negative
+//!   times (`-6:00:00` → −0.25 with `[HH]:MM:SS`);
 //! - date followed by time;
 //! - anything else is text (the original input, untrimmed).
 
@@ -583,6 +584,23 @@ fn split_date_time(t: &str) -> (Option<&str>, Option<&str>) {
 }
 
 fn try_datetime(t: &str, locale: &Locale, ctx: &RecognizeContext) -> Option<(f64, String)> {
+    // A negative time is a negative duration (`-6:00`, `-36:00:00`), shown
+    // with elapsed hours. Dates and AM/PM times cannot be negative.
+    if let Some(body) = t.strip_prefix('-') {
+        if !body.contains(':') || body.contains([' ', '\t', '-', '+']) {
+            return None;
+        }
+        let tp = parse_time(body, locale)?;
+        if tp.format.ends_with("AM/PM") {
+            return None;
+        }
+        let format = if tp.duration {
+            tp.format
+        } else {
+            tp.format.replacen("HH", "[HH]", 1)
+        };
+        return Some((-tp.value, format));
+    }
     let (date, time) = split_date_time(t);
     let date = match date {
         Some(ds) => Some(parse_date(ds, locale, ctx)?),

@@ -23,7 +23,7 @@ expression: "dump(REFERENCES, calc())"
 =$A$1:$B$2
     (area R1C1 R2C2)
 =B2:A1
-    (area R[-1]C[-1] R[-2]C[-2])
+    (area R[-2]C[-2] R[-1]C[-1])
 =A1 : B2
     (area R[-2]C[-2] R[-1]C[-1])
 =A:A
@@ -31,13 +31,13 @@ expression: "dump(REFERENCES, calc())"
 =$A:$C
     (cols C1 C3)
 =B:A
-    (cols C[-1] C[-2])
+    (cols C[-2] C[-1])
 =1:1
     (rows R[-2] R[-2])
 =$1:$3
     (rows R1 R3)
 =10:2
-    (rows R[7] R[-1])
+    (rows R[-1] R[7])
 =Sheet1.A1
     (cell #0!R[-2]C[-2])
 =Sheet2.B2

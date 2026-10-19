@@ -9,7 +9,7 @@ use tally_formula::{
     parse, print, Dialect, Expr, Formula, FuncId as AstFuncId, FuncRef, NameId, ResolvedRef,
     Resolver,
 };
-use tally_functions::{registry, FnFlags, FuncId};
+use tally_functions::{registry, FnFlags, FuncId, ParamKind};
 use tally_model::DocMeta;
 use tally_numfmt::{recognize_input_with, RecognizeContext, EN_US};
 use tally_types::{CalcSettings, CellAddr, CellRange, SheetId, Value, MAX_COLS, MAX_ROWS};
@@ -343,6 +343,7 @@ impl Workbook {
             };
             let p = self.precedents_of(&fc.formula, fc.addr);
             if p != fc.precedents {
+                let strict = self.strict_precedents_of(&fc.formula, fc.addr);
                 let dynamic = fc.dynamic_deps.clone();
                 self.deps.remove(id);
                 let mut all = p.clone();
@@ -352,6 +353,7 @@ impl Workbook {
                 self.deps.set_volatile(id, vol);
                 if let Some(fc) = self.formulas.get_mut(id) {
                     fc.precedents = p;
+                    fc.strict_precedents = strict;
                 }
             }
         }
@@ -449,8 +451,59 @@ impl Workbook {
 
     /// The static precedents of `f` at `addr`, 3-D spans expanded by tab order.
     pub fn precedents_of(&self, f: &Formula, addr: CellAddr) -> Vec<CellRange> {
+        self.expand_refs(f.static_precedents(addr))
+    }
+
+    /// The precedents of `f` whose values are always read (see
+    /// [`FormulaCell::strict_precedents`]); `None` when that is all of them.
+    pub fn strict_precedents_of(&self, f: &Formula, addr: CellAddr) -> Option<Vec<CellRange>> {
+        let reg = registry();
+        let mut strict = Vec::new();
+        let mut excluded = false;
+        // (node, inside a lazy argument)
+        let mut stack: Vec<(&Expr, bool)> = vec![(&f.expr, false)];
+        while let Some((e, lazy)) = stack.pop() {
+            match e {
+                Expr::Ref(r) => {
+                    if lazy {
+                        excluded = true;
+                    } else {
+                        strict.push(r.resolve(addr));
+                    }
+                }
+                Expr::ArrayLit(a) => stack.extend(a.items.iter().rev().map(|x| (x, lazy))),
+                Expr::Call { func, args } => {
+                    let def = match func {
+                        FuncRef::Known(id) => reg.get(FuncId(id.0)),
+                        FuncRef::Unknown(_) => None,
+                    };
+                    for (i, a) in args.iter().enumerate().rev() {
+                        let kind = def.map(|d| d.param_kind(i));
+                        let address_only = def
+                            .is_some_and(|d| d.flags.contains(FnFlags::REF_ADDRESS_ONLY))
+                            && kind == Some(ParamKind::Reference)
+                            && is_plain_ref(a);
+                        if address_only {
+                            excluded = true;
+                            continue;
+                        }
+                        stack.push((a, lazy || kind == Some(ParamKind::Lazy)));
+                    }
+                }
+                Expr::Unary(_, x) | Expr::Postfix(_, x) | Expr::Paren(x) => stack.push((x, lazy)),
+                Expr::Binary(_, l, r) => {
+                    stack.push((r, lazy));
+                    stack.push((l, lazy));
+                }
+                _ => {}
+            }
+        }
+        excluded.then(|| self.expand_refs(strict))
+    }
+
+    fn expand_refs(&self, refs: Vec<ResolvedRef>) -> Vec<CellRange> {
         let mut out = Vec::new();
-        for r in f.static_precedents(addr) {
+        for r in refs {
             match r {
                 ResolvedRef::Range(cr) => out.push(cr),
                 ResolvedRef::Span3d { first, last, area } => {
@@ -485,6 +538,7 @@ impl Workbook {
         }
         let volatile = is_volatile(&formula);
         let precedents = self.precedents_of(&formula, addr);
+        let strict_precedents = self.strict_precedents_of(&formula, addr);
         let has_3d = formula
             .static_precedents(addr)
             .iter()
@@ -497,6 +551,7 @@ impl Workbook {
             volatile,
             invalid_text,
             precedents: precedents.clone(),
+            strict_precedents,
             dynamic_deps: Vec::new(),
             has_3d,
         });
@@ -542,6 +597,13 @@ impl Workbook {
             self.set_value(addr, Value::text(input));
             return;
         }
+        let style = self.style_at(addr);
+        // A Text-formatted (`@`) cell keeps its input as typed, formulas
+        // included (AOO).
+        if self.styles.get(style).is_text_format() {
+            self.set_value(addr, Value::text(input));
+            return;
+        }
         if input.starts_with('=') && input.len() > 1 {
             match self.parse_formula(input, addr) {
                 Ok(f) => self.set_formula(addr, Arc::new(f), None),
@@ -551,11 +613,6 @@ impl Workbook {
                     Some(input.into()),
                 ),
             }
-            return;
-        }
-        let style = self.style_at(addr);
-        if self.styles.get(style).is_text_format() {
-            self.set_value(addr, Value::text(input));
             return;
         }
         let ctx = RecognizeContext::now(self.settings.date_epoch);
@@ -596,6 +653,15 @@ impl Workbook {
     /// Number of non-empty cells in the workbook.
     pub fn cell_count(&self) -> usize {
         self.sheets.iter().map(Sheet::cell_count).sum()
+    }
+}
+
+/// A reference argument, possibly in parentheses.
+fn is_plain_ref(e: &Expr) -> bool {
+    match e {
+        Expr::Ref(_) => true,
+        Expr::Paren(x) => is_plain_ref(x),
+        _ => false,
     }
 }
 

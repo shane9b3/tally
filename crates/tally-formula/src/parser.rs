@@ -13,7 +13,7 @@ use std::fmt;
 use std::ops::Range;
 use std::sync::Arc;
 
-use tally_types::{CellAddr, ErrorKind};
+use tally_types::{CellAddr, ErrorKind, MAX_COLS, MAX_ROWS};
 
 use crate::ast::{
     ArrayLit, BinOp, CellRefExpr, Expr, Formula, FuncRef, NameRef, PostfixOp, RefCoord, RefExpr,
@@ -74,7 +74,7 @@ pub fn parse(
             span: 0..src.len(),
         });
     }
-    let (tokens, _of) = lex(src, dialect);
+    let (tokens, of) = lex(src, dialect);
     let toks: Vec<(TokenKind, Range<usize>)> = tokens
         .into_iter()
         .filter(|t| !t.kind.is_trivia())
@@ -89,6 +89,7 @@ pub fn parse(
         operands: Vec::new(),
         frames: Vec::new(),
         nesting: 0,
+        of,
     };
     let expr = p.run()?;
     Ok(Formula::new(expr))
@@ -131,6 +132,8 @@ struct Parser<'a> {
     operands: Vec<Operand>,
     frames: Vec<Frame>,
     nesting: usize,
+    /// OpenFormula syntax (`of:=` prefix or dialect).
+    of: bool,
 }
 
 fn err<T>(kind: ErrorKind, span: Range<usize>) -> Result<T, ParseError> {
@@ -445,7 +448,7 @@ impl Parser<'_> {
                             BinOp::Range,
                             Expr::Ref(RefExpr::Cell(a)),
                             Expr::Ref(RefExpr::Cell(c)),
-                        ) => Expr::Ref(RefExpr::Area(a, c)),
+                        ) => Expr::Ref(RefExpr::Area(a, c).normalized(self.origin)),
                         (b, le, re) => Expr::Binary(b, Box::new(le), Box::new(re)),
                     };
                     self.push_operand(expr, depth, &span)?;
@@ -465,7 +468,8 @@ impl Parser<'_> {
                 let Some(raw) = parse_a1_ref(text) else {
                     return err(ErrorKind::InvalidChar, span.clone());
                 };
-                self.build_ref(raw, span).map(Expr::Ref)
+                self.build_ref(raw, span)
+                    .map(|r| Expr::Ref(r.normalized(self.origin)))
             }
             TokenKind::OfRef => {
                 let inner = text
@@ -475,7 +479,8 @@ impl Parser<'_> {
                 let Some(raw) = parse_of_ref(inner) else {
                     return err(ErrorKind::InvalidChar, span.clone());
                 };
-                self.build_ref(raw, span).map(Expr::Ref)
+                self.build_ref(raw, span)
+                    .map(|r| Expr::Ref(r.normalized(self.origin)))
             }
             TokenKind::RBrace | TokenKind::Pipe => err(ErrorKind::ParamList, span.clone()),
             _ => err(ErrorKind::MissingVariable, span.clone()),
@@ -560,10 +565,32 @@ impl Parser<'_> {
                         abs_col: ac2,
                     },
                 )),
-            ) => Ok(RefExpr::Area(
-                self.cell(&raw.start, row, col, abs_row, abs_col),
-                self.cell(ep, r2, c2, ar2, ac2),
-            )),
+            ) => {
+                // Tally writes whole columns/rows to ODS as `[.A$1:.A$1048576]`
+                // and `[.$A1:.$XFD1]` (AOO 4.1 has no `[.A:.A]`); read them
+                // back as whole columns/rows.
+                if self.of && self.same_sheet(&raw.start, ep) {
+                    let sheet = self.sheet(&raw.start.sheet);
+                    if abs_row && ar2 && row == 0 && r2 == MAX_ROWS - 1 {
+                        return Ok(RefExpr::Cols {
+                            sheet,
+                            start: RefCoord::encode(col, abs_col, self.origin.col),
+                            end: RefCoord::encode(c2, ac2, self.origin.col),
+                        });
+                    }
+                    if abs_col && ac2 && col == 0 && c2 == MAX_COLS - 1 {
+                        return Ok(RefExpr::Rows {
+                            sheet,
+                            start: RefCoord::encode(row, abs_row, self.origin.row),
+                            end: RefCoord::encode(r2, ar2, self.origin.row),
+                        });
+                    }
+                }
+                Ok(RefExpr::Area(
+                    self.cell(&raw.start, row, col, abs_row, abs_col),
+                    self.cell(ep, r2, c2, ar2, ac2),
+                ))
+            }
             (Part::Col { col, abs }, Some((ep, Part::Col { col: c2, abs: a2 }))) => {
                 self.check_same_sheet(&raw.start, ep, span)?;
                 Ok(RefExpr::Cols {
@@ -581,6 +608,15 @@ impl Parser<'_> {
                 })
             }
             _ => err(ErrorKind::InvalidChar, span.clone()),
+        }
+    }
+
+    /// `true` if the end endpoint has no sheet or names the start's sheet.
+    fn same_sheet(&self, a: &RawEndpoint, b: &RawEndpoint) -> bool {
+        match (&a.sheet, &b.sheet) {
+            (_, None) => true,
+            (Some(x), Some(y)) => x.name.eq_ignore_ascii_case(&y.name),
+            (None, Some(_)) => false,
         }
     }
 

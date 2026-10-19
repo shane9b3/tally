@@ -4,14 +4,14 @@
 //! `content.xml`, `styles.xml`, `meta.xml`, `settings.xml`. Entry names are
 //! fixed constants (§5.4 requirement 4).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::io::{Seek, Write};
 
 use tally_model::{
-    CellContentData, CellData, DimRun, HAlign, SheetData, StyleData, VAlign, WorkbookData,
+    CellContentData, CellData, DimRun, HAlign, SheetData, StyleData, StyleRun, VAlign, WorkbookData,
 };
-use tally_types::{CriteriaMode, Value};
+use tally_types::{CriteriaMode, Value, MAX_ROWS};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -516,11 +516,34 @@ fn write_sheet<W: Write + Seek>(
     let mut rows = sheet.row_heights.clone();
     rows.sort_by_key(|r| r.start);
 
+    // Style runs: whole columns become the column's default cell style;
+    // the others are written as (repeated) rows of styled empty cells.
+    let valid_style = |i: u32| (i as usize) < data.styles.len();
+    let mut col_default: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut vruns: Vec<StyleRun> = Vec::new();
+    for run in &sheet.style_runs {
+        if !valid_style(run.style) || run.start_row > run.end_row || run.end_row >= MAX_ROWS {
+            continue;
+        }
+        if run.start_row == 0 && run.end_row == MAX_ROWS - 1 {
+            col_default.insert(run.col, run.style);
+        } else {
+            vruns.push(*run);
+        }
+    }
+    vruns.sort_by_key(|r| (r.start_row, r.col));
+
     // Columns.
     let max_cell_col = cells.iter().map(|c| c.col).max();
     let max_run_col = cols.iter().map(|r| r.end).max();
+    let max_style_col = col_default
+        .keys()
+        .copied()
+        .chain(vruns.iter().map(|r| r.col))
+        .max();
     let end_col = max_cell_col
         .max(max_run_col)
+        .max(max_style_col)
         .map_or(1, |c| c.saturating_add(1));
     let mut c = 0;
     while c < end_col {
@@ -533,7 +556,11 @@ fn write_sheet<W: Write + Seek>(
                 next.unwrap_or(end_col).min(end_col),
             ),
         };
-        let n = stop.saturating_sub(c).max(1);
+        let default = col_default.get(&c).copied();
+        let mut n = 1;
+        while c + n < stop && col_default.get(&(c + n)).copied() == default {
+            n += 1;
+        }
         let _ = write!(
             s,
             r#"<table:table-column table:style-name="{}""#,
@@ -545,19 +572,45 @@ fn write_sheet<W: Write + Seek>(
         if n > 1 {
             let _ = write!(s, r#" table:number-columns-repeated="{n}""#);
         }
-        s.push_str(r#" table:default-cell-style-name="Default"/>"#);
+        match default {
+            Some(i) => {
+                let _ = write!(s, r#" table:default-cell-style-name="ce{}"/>"#, i + 1);
+            }
+            None => s.push_str(r#" table:default-cell-style-name="Default"/>"#),
+        }
         c += n;
     }
 
     // Rows.
     let max_cell_row = cells.last().map(|c| c.row);
     let max_run_row = rows.iter().map(|r| r.end).max();
+    let max_style_row = vruns.iter().map(|r| r.end_row).max();
     let end_row = max_cell_row
         .max(max_run_row)
+        .max(max_style_row)
         .map_or(1, |r| r.saturating_add(1));
     let mut r = 0;
     let mut ci = 0;
+    let mut vi = 0;
+    // Style runs covering the current row, sorted by column.
+    let mut active: Vec<StyleRun> = Vec::new();
     while r < end_row {
+        active.retain(|a| a.end_row >= r);
+        while vi < vruns.len() && vruns[vi].start_row <= r {
+            let run = vruns[vi];
+            if run.end_row >= r {
+                let at = active.partition_point(|a| a.col < run.col);
+                active.insert(at, run);
+            }
+            vi += 1;
+        }
+        // The next row where the set of active runs changes.
+        let next_style = active
+            .iter()
+            .map(|a| a.end_row.saturating_add(1))
+            .chain(vruns.get(vi).map(|v| v.start_row))
+            .min()
+            .unwrap_or(u32::MAX);
         let (run, next) = run_at(&rows, r);
         let (height, hidden, run_stop) = match run {
             Some(x) => (x.size_hmm, x.hidden, x.end.saturating_add(1)),
@@ -571,36 +624,103 @@ fn write_sheet<W: Write + Seek>(
         if hidden {
             s.push_str(r#" table:visibility="collapse""#);
         }
-        if ci < cells.len() && cells[ci].row == r {
-            s.push('>');
-            let mut col = 0;
-            while ci < cells.len() && cells[ci].row == r {
-                let cell = cells[ci];
-                if cell.col > col {
-                    write_blank(s, cell.col - col);
-                }
-                write_cell(s, cell, data, report);
-                col = cell.col.saturating_add(1);
-                ci += 1;
-            }
-            s.push_str("</table:table-row>");
-            r += 1;
-        } else {
-            let next_cell = cells.get(ci).map_or(end_row, |c| c.row);
-            let stop = next_cell.min(run_stop).min(end_row).max(r + 1);
-            let n = stop - r;
-            if n > 1 {
-                let _ = write!(s, r#" table:number-rows-repeated="{n}""#);
-            }
-            s.push_str("><table:table-cell/></table:table-row>");
-            r = stop;
+        let row_start = ci;
+        while ci < cells.len() && cells[ci].row == r {
+            ci += 1;
         }
+        let row_cells = &cells[row_start..ci];
+        let n = if row_cells.is_empty() {
+            let next_cell = cells.get(ci).map_or(end_row, |c| c.row);
+            next_cell
+                .min(run_stop)
+                .min(next_style)
+                .min(end_row)
+                .max(r + 1)
+                - r
+        } else {
+            1
+        };
+        if n > 1 {
+            let _ = write!(s, r#" table:number-rows-repeated="{n}""#);
+        }
+        if row_cells.is_empty() && active.is_empty() {
+            s.push_str("><table:table-cell/></table:table-row>");
+        } else {
+            s.push('>');
+            write_row_cells(s, row_cells, &active, data, report);
+            s.push_str("</table:table-row>");
+        }
+        r += n;
         if s.len() >= FLUSH_AT {
             flush(s, zip)?;
         }
     }
     s.push_str("</table:table>");
     Ok(())
+}
+
+/// Writes one row: its cells merged with styled empty cells for the style
+/// runs covering the row (`active`, sorted by column).
+fn write_row_cells(
+    s: &mut String,
+    row_cells: &[&CellData],
+    active: &[StyleRun],
+    data: &WorkbookData,
+    report: &mut WriteReport,
+) {
+    let mut col = 0;
+    let mut ai = 0;
+    for cell in row_cells {
+        while ai < active.len() && active[ai].col < cell.col {
+            col = write_styled_empty(s, col, &active[ai..], cell.col, &mut ai);
+        }
+        if ai < active.len() && active[ai].col == cell.col {
+            ai += 1;
+        }
+        if cell.col > col {
+            write_blank(s, cell.col - col);
+        }
+        write_cell(s, cell, data, report);
+        col = cell.col.saturating_add(1);
+    }
+    while ai < active.len() {
+        col = write_styled_empty(s, col, &active[ai..], u32::MAX, &mut ai);
+    }
+}
+
+/// Writes the styled empty cell for `runs[0]` (after any blanks from `col`),
+/// grouping following runs of the same style in adjacent columns below
+/// `limit`. Returns the next column and advances `ai`.
+fn write_styled_empty(
+    s: &mut String,
+    col: u32,
+    runs: &[StyleRun],
+    limit: u32,
+    ai: &mut usize,
+) -> u32 {
+    let first = runs[0];
+    if first.col > col {
+        write_blank(s, first.col - col);
+    }
+    let mut n = 1;
+    while (n as usize) < runs.len()
+        && runs[n as usize].col == first.col + n
+        && runs[n as usize].col < limit
+        && runs[n as usize].style == first.style
+    {
+        n += 1;
+    }
+    let _ = write!(
+        s,
+        r#"<table:table-cell table:style-name="ce{}""#,
+        first.style + 1
+    );
+    if n > 1 {
+        let _ = write!(s, r#" table:number-columns-repeated="{n}""#);
+    }
+    s.push_str("/>");
+    *ai += n as usize;
+    first.col + n
 }
 
 fn write_blank(s: &mut String, n: u32) {

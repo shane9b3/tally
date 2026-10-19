@@ -9,12 +9,12 @@ const PARAMS: &[Param] = &[Param::optional("reference", ParamKind::Reference)];
 
 /// `ROW([reference])`.
 pub const ROW: FunctionDef = FunctionDef::new("ROW", Category::Spreadsheet, PARAMS, row)
-    .flags(FnFlags::NEEDS_ORIGIN)
+    .flags(FnFlags::NEEDS_ORIGIN.union(FnFlags::REF_ADDRESS_ONLY))
     .help("Returns the row number of a reference.");
 
 /// `COLUMN([reference])`.
 pub const COLUMN: FunctionDef = FunctionDef::new("COLUMN", Category::Spreadsheet, PARAMS, column)
-    .flags(FnFlags::NEEDS_ORIGIN)
+    .flags(FnFlags::NEEDS_ORIGIN.union(FnFlags::REF_ADDRESS_ONLY))
     .help("Returns the column number of a reference.");
 
 // TODO: in array context a multi-row/column reference should yield an array

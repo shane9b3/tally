@@ -35,6 +35,9 @@ Still manual: the WP7/WP5 click-through scripts (docs/qa/phase-a-manual.md), ope
 - Dark theme (tokens structured for it), ARIA mirror, status chips, "At a glance" panel.
 - XLSX, HTML clipboard (internal + TSV only), fuzz targets (limits and malicious corpus tests stay).
 - ODS subset: values, formulas + cached values, bold/italic, number format, column widths, sheet names/order, active sheet. Files are always recalculated on load; warn when saving files from other apps.
+  - Formatting of blank areas is kept: long style runs are saved as repeated rows of styled empty cells, and a formatted whole column as the column's `table:default-cell-style-name` (both read back as `SheetData::style_runs`).
+  - Whole-column/row references are saved as full areas with absolute rows (`[.A$1:.A$1048576]`, `[.$A2:.$XFD3]`) because AOO 4.1 cannot read `[.A:.A]`; both forms load as whole columns/rows.
+  - A formula that does not parse is saved as a text cell holding what was typed (no `table:formula`), so other applications show the text. It reloads as text.
 - en-US only. Formats: General, 0, 0.00, #,##0, #,##0.00, 0%, 0.00%, $#,##0.00 with [RED] negative section, 0.00E+00, @, MM/DD/YYYY, YYYY-MM-DD, DD MMM YYYY, HH:MM, HH:MM:SS, AM/PM; up to 4 sections with conditions and colours; General shrinks to fit or shows ###.
 
 ## Kept

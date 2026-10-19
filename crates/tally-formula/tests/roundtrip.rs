@@ -48,13 +48,10 @@ const CANONICAL: &[&str] = &[
     "=$XFD$1048576",
     "=A1:B2",
     "=$A$1:$B$2",
-    "=B2:A1",
     "=A:A",
     "=$A:$C",
-    "=B:A",
     "=1:1",
     "=$1:$3",
-    "=10:2",
     "=Sheet1.A1",
     "=Sheet2.B2",
     "=$Sheet2.$B$2",
@@ -236,7 +233,11 @@ fn open_formula_output_examples() {
         ("=Sheet2.A1:B2", "of:=[Sheet2.A1:.B2]"),
         ("=$'My Sheet'.A1:B2", "of:=[$'My Sheet'.A1:.B2]"),
         ("=#REF!", "of:=[.#REF!]"),
-        ("=A:A", "of:=[.A:.A]"),
+        // AOO 4.1 has no `[.A:.A]` (correctness review M8).
+        ("=A:A", "of:=[.A$1:.A$1048576]"),
+        ("=$B:C", "of:=[.$B$1:.C$1048576]"),
+        ("=Sheet2.A:B", "of:=[Sheet2.A$1:.B$1048576]"),
+        ("=2:3", "of:=[.$A2:.$XFD3]"),
         ("=TRUE", "of:=TRUE()"),
         ("={1;2|3;4}", "of:={1;2|3;4}"),
     ];
@@ -356,5 +357,44 @@ fn numbers_print_shortest() {
         assert_eq!(s, want, "{src}");
         // The printed form reparses to the same number.
         assert_eq!(p(&s), p(src));
+    }
+}
+
+/// Reversed ranges are put in order (rows and columns independently, each
+/// coordinate keeping its `$`), in every dialect (correctness review).
+#[test]
+fn reversed_ranges_print_normalised() {
+    let cases = [
+        ("=B2:A1", "=A1:B2", "of:=[.A1:.B2]"),
+        ("=$B2:A$1", "=A$1:$B2", "of:=[.A$1:.$B2]"),
+        ("=A2:B1", "=A1:B2", "of:=[.A1:.B2]"),
+        ("=B:A", "=A:B", "of:=[.A$1:.B$1048576]"),
+        ("=3:2", "=2:3", "of:=[.$A2:.$XFD3]"),
+        ("=Sheet2.B2:A1", "=Sheet2.A1:B2", "of:=[Sheet2.A1:.B2]"),
+    ];
+    for (src, ui, of) in cases {
+        let f = p_at(src, "C3");
+        assert_eq!(pr(&f, "C3"), ui, "{src}");
+        assert_eq!(pr_of(&f, "C3"), of, "{src}");
+    }
+}
+
+/// Whole columns/rows written as full areas, and the `[.A:.A]` form, read
+/// back as whole columns/rows.
+#[test]
+fn open_formula_whole_columns_read_back() {
+    let r = resolver();
+    for (of, ui) in [
+        ("of:=SUM([.A$1:.A$1048576])", "=SUM(A:A)"),
+        ("of:=SUM([.A:.A])", "=SUM(A:A)"),
+        ("of:=[Sheet2.A$1:.B$1048576]", "=Sheet2.A:B"),
+        ("of:=[$Sheet2.$A$1:$Sheet2.$B$1048576]", "=$Sheet2.$A:$B"),
+        ("of:=[.$A2:.$XFD3]", "=2:3"),
+        // Relative rows are an ordinary area.
+        ("of:=[.A1:.A1048576]", "=A1:A1048576"),
+    ] {
+        let f = parse(of, a1("A1"), Dialect::open_formula(), &r)
+            .unwrap_or_else(|e| panic!("{of}: {e}"));
+        assert_eq!(pr(&f, "A1"), ui, "{of}");
     }
 }

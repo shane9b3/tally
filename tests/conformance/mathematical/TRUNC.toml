@@ -41,10 +41,14 @@ formula = "=TRUNC(A1;0)"
 expect = 0
 
 [[case]]
-name = "count is required in the AOO master list"
+name = "count is optional"
 formula = "=TRUNC(2.9)"
-expect = "Err:511"
-note = "AOO registers TRUNC(number; count) with both parameters required."
+expect = 2
+note = "ODFF 1.2 and Excel make count optional (default 0); AOO's wizard lists it as required (correctness review)."
+
+[[case]]
+formula = "=TRUNC(-2.9)"
+expect = -2
 
 [[case]]
 formula = "=TRUNC(1;2;3)"

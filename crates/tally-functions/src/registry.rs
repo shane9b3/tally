@@ -255,6 +255,10 @@ impl FnFlags {
     pub const NEEDS_ORIGIN: FnFlags = FnFlags(1 << 3);
     /// Evaluates all of its arguments in array context (SUMPRODUCT).
     pub const FORCE_ARRAY: FnFlags = FnFlags(1 << 4);
+    /// Its [`ParamKind::Reference`] arguments are used for their address
+    /// only, never their values (ROW, COLUMN), so a reference to the
+    /// formula's own cell is not circular.
+    pub const REF_ADDRESS_ONLY: FnFlags = FnFlags(1 << 5);
 
     /// `true` if every flag in `other` is set.
     pub const fn contains(self, other: FnFlags) -> bool {

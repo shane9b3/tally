@@ -19,8 +19,8 @@ pub const MATCH: FunctionDef = FunctionDef::new("MATCH", Category::Spreadsheet, 
 
 /// Type 1 (default): largest value `<=` the key in ascending data; 0:
 /// exact (wildcards per settings); -1: smallest value `>=` in descending
-/// data. Only one-dimensional ranges and arrays are searched (`#N/A`
-/// otherwise); not found is `#N/A`.
+/// data. Only one-dimensional ranges and arrays are searched (Err:504
+/// otherwise, AOO's `PushIllegalParameter`); not found is `#N/A`.
 fn match_fn(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
@@ -28,7 +28,7 @@ fn match_fn(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         let table = Table::from_eval(a.any(1))?;
         let kind = a.num_opt(2, 1.0)?;
         if table.rows() != 1 && table.cols() != 1 {
-            return Err(ErrorKind::NA);
+            return Err(ErrorKind::ParamList);
         }
         let mode = if kind > 0.0 {
             Mode::Ascending
@@ -125,7 +125,7 @@ mod tests {
         let r = c.range(0, "A1:C3");
         assert_eq!(
             call(&mut c, "MATCH", vec![n(1.0), r, n(0.0)]),
-            Value::Error(ErrorKind::NA)
+            Value::Error(ErrorKind::ParamList)
         );
         let r = c.range(0, "A1:A4");
         assert_eq!(

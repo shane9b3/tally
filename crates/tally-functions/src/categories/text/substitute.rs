@@ -47,9 +47,9 @@ fn substitute(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
                 }
                 Ok(Value::text(text.replace(&*from, &to)))
             }
-            Some(n) => match text.match_indices(&*from).nth(n - 1) {
+            Some(n) => match nth_overlapping(&text, &from, n) {
                 None => Ok(Value::Text(text)),
-                Some((i, _)) => {
+                Some(i) => {
                     check_text_len((text.len() - from.len()).saturating_add(to.len()))?;
                     let mut out = String::with_capacity(text.len() + to.len());
                     out.push_str(&text[..i]);
@@ -60,6 +60,24 @@ fn substitute(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
             },
         }
     })
+}
+
+/// Byte offset of the `n`th (1-based) occurrence of `from` in `text`,
+/// counting overlapping occurrences: after a match that is not the `n`th,
+/// the search resumes one character later, as in AOO's `ScSubstitute`
+/// (`nPos++`). `SUBSTITUTE("aaaa";"aa";"b";2)` is therefore `"aba"`.
+fn nth_overlapping(text: &str, from: &str, n: usize) -> Option<usize> {
+    let mut pos = 0;
+    let mut count = 0;
+    while let Some(off) = text.get(pos..)?.find(from) {
+        let i = pos + off;
+        count += 1;
+        if count == n {
+            return Some(i);
+        }
+        pos = i + text[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    None
 }
 
 pub(super) fn register(r: &mut Registry) {
@@ -93,6 +111,24 @@ mod tests {
         assert_eq!(t(vec![s("Abc"), s("a"), s("x")]), Value::text("Abc"));
         assert_eq!(t(vec![s("abc"), s(""), s("x")]), Value::text("abc"));
         assert_eq!(t(vec![s("aaa"), s("aa"), s("b")]), Value::text("ba"));
+        // The nth occurrence counts overlapping matches (AOO).
+        let n = EvalValue::number;
+        assert_eq!(
+            t(vec![s("aaaa"), s("aa"), s("b"), n(2.0)]),
+            Value::text("aba")
+        );
+        assert_eq!(
+            t(vec![s("aaaa"), s("aa"), s("b"), n(3.0)]),
+            Value::text("aab")
+        );
+        assert_eq!(
+            t(vec![s("aaaa"), s("aa"), s("b"), n(4.0)]),
+            Value::text("aaaa")
+        );
+        assert_eq!(
+            t(vec![s("ééé"), s("éé"), s("x"), n(2.0)]),
+            Value::text("éx")
+        );
         assert_eq!(t(vec![s("héé"), s("é"), s("e")]), Value::text("hee"));
         assert_eq!(t(vec![s("abc"), s("b"), s("")]), Value::text("ac"));
     }

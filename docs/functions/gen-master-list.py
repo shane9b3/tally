@@ -28,6 +28,13 @@ EXTENSIONS = [
 ]
 BATCH0_COUNT = 68
 
+# Lead-approved arity corrections to the AOO wizard data.
+# TRUNC: AOO's wizard lists `count` as required, but ODFF 1.2 and Excel make
+# it optional (default 0); correctness review 2026-10-19.
+ARITY_OVERRIDES = {
+    "TRUNC": {"minArgs": 1},
+}
+
 
 def toml_str(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -68,6 +75,7 @@ def main():
         "",
     ]
     for f in all_funcs:
+        f = {**f, **ARITY_OVERRIDES.get(f["name"], {})}
         out.append("[[function]]")
         out.append(f"name = {toml_str(f['name'])}")
         out.append(f"category = {toml_str(f['category'])}")

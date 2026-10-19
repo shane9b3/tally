@@ -8,9 +8,11 @@
 //!
 //! - An operator prefix (`=`, `<>`, `<`, `<=`, `>`, `>=`) is stripped; no
 //!   prefix means "equal" (a *bare* criterion).
-//! - The remaining text becomes the operand: a number if
-//!   [`crate::coerce::parse_unambiguous`] accepts it (so `">2024-01-01"`
-//!   works), a boolean for `TRUE`/`FALSE`, an error for `#N/A`-style names,
+//! - The remaining text becomes the operand: a number if the en-US input
+//!   recognizer ([`tally_numfmt::recognize_input_with`], today's date for
+//!   year-less dates) or [`crate::coerce::parse_unambiguous`] accepts it (so
+//!   `">10/1/2026"`, `">1,000"`, `">50%"`, `">$5"` and `">2024-01-01"`
+//!   work, as in AOO), a boolean for `TRUE`/`FALSE`, an error for `#N/A`-style names,
 //!   otherwise text.
 //! - A number operand matches numbers (by [`approx_equal`]), booleans (as
 //!   1/0, following AOO's storage model) and, for `=`, text that parses as
@@ -26,13 +28,17 @@
 //! - Empty operands: a bare `""` matches empty cells and empty text, `"="`
 //!   matches only empty cells, `"<>"` matches every non-empty cell.
 //! - Case sensitivity follows `settings.case_sensitive` (default `false` in
-//!   [`CalcSettings`], matching AOO's default for criteria).
+//!   [`CalcSettings`], as in Excel and LibreOffice's UI; AOO's document
+//!   default is case-sensitive, a deliberate deviation recorded in
+//!   docs/adr/0001-stack.md).
 //! - A non-text criterion value: a number or boolean is a bare equality; an
 //!   empty cell behaves like the number 0 (AOO); an error matches cells with
 //!   the same error (callers usually propagate it first).
 
 use regex::{Regex, RegexBuilder};
 use tally_types::{approx_equal, CalcSettings, CriteriaMode, DateEpoch, ErrorKind, Value};
+
+use tally_numfmt::{recognize_input_with, RecognizeContext, EN_US};
 
 use crate::coerce::{parse_unambiguous, top_left};
 
@@ -372,6 +378,17 @@ fn cmp_numbers(a: f64, b: f64) -> std::cmp::Ordering {
     }
 }
 
+/// The numeric value of a criterion operand: the en-US input recognizer
+/// first (so `"10/1/2026"`, `"1,000"`, `"50%"` and `"$5"` are numbers, as
+/// AOO's `IsNumberFormat` makes them), then the unambiguous parser.
+fn criterion_number(rest: &str, epoch: DateEpoch) -> Option<f64> {
+    let ctx = RecognizeContext::now(epoch);
+    match recognize_input_with(rest, &EN_US, &ctx).value {
+        Value::Number(n) => Some(n),
+        _ => parse_unambiguous(rest, epoch),
+    }
+}
+
 impl Criterion {
     /// Parses a criterion from a cell or argument value (see the module docs).
     pub fn parse(value: &Value, settings: &CalcSettings) -> Criterion {
@@ -393,7 +410,7 @@ impl Criterion {
                         },
                         _ => Operand::Text(TextPattern::new("", settings, true)),
                     }
-                } else if let Some(n) = parse_unambiguous(rest, epoch) {
+                } else if let Some(n) = criterion_number(rest, epoch) {
                     Operand::Number(n)
                 } else if rest.eq_ignore_ascii_case("TRUE") {
                     Operand::Bool(true)

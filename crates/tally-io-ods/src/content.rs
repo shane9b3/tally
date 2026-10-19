@@ -8,7 +8,7 @@
 use std::io::BufRead;
 use std::sync::Arc;
 
-use tally_model::{CellContentData, CellData, CellRangeLocal, DimRun, SheetData};
+use tally_model::{CellContentData, CellData, CellRangeLocal, DimRun, SheetData, StyleRun};
 use tally_types::{
     CalcSettings, CriteriaMode, DateEpoch, ErrorKind, IterSettings, Value, MAX_COLS, MAX_ROWS,
 };
@@ -23,8 +23,8 @@ const MAX_CELL_TEXT: usize = 16 * 1024 * 1024;
 /// Maximum length of a `table:formula` attribute in characters (the engine's
 /// parser limit; a longer formula could never be parsed anyway).
 pub(crate) const MAX_FORMULA_LEN: usize = 8192;
-/// Styled-but-empty runs larger than this (rows × columns) are dropped: they
-/// are formatting of blank areas, which the Phase A model does not keep.
+/// Styled-but-empty runs larger than this (rows × columns) are kept as
+/// [`StyleRun`]s (one per column) instead of being materialized as cells.
 const MAX_STYLED_EMPTY_RUN: u64 = 4096;
 
 /// What content.xml yields.
@@ -162,6 +162,7 @@ impl Parser<'_> {
         }
         let mut col: u32 = 0;
         let mut col_defaults: Vec<(u32, u32, String)> = Vec::new();
+        let mut col_runs_done = false;
         let mut row: u32 = 0;
         let d = xml.depth();
         loop {
@@ -192,6 +193,13 @@ impl Parser<'_> {
                         xml.skip()?;
                     }
                     "table:table-row" => {
+                        if !col_runs_done {
+                            // A column default cell style formats the whole
+                            // column, empty cells included. Emitted before
+                            // the row runs, which override it.
+                            col_runs_done = true;
+                            self.push_column_defaults(&mut sheet, &col_defaults)?;
+                        }
                         self.parse_row(xml, &c, &mut row, &mut sheet, &col_defaults)?;
                     }
                     "table:table-header-columns"
@@ -207,7 +215,44 @@ impl Parser<'_> {
                 _ => {}
             }
         }
+        if !col_runs_done {
+            self.push_column_defaults(&mut sheet, &col_defaults)?;
+        }
         Ok(sheet)
+    }
+
+    /// Counts `n` style runs against the materialized-cell limit.
+    fn count_runs(&mut self, n: u64) -> Result<(), OdsError> {
+        self.cells_total = self.cells_total.saturating_add(n);
+        if self.cells_total > self.limits.max_cells {
+            return Err(OdsError::LimitExceeded {
+                what: "materialized cells",
+                limit: self.limits.max_cells,
+            });
+        }
+        Ok(())
+    }
+
+    fn push_column_defaults(
+        &mut self,
+        sheet: &mut SheetData,
+        col_defaults: &[(u32, u32, String)],
+    ) -> Result<(), OdsError> {
+        for (c0, c1, name) in col_defaults {
+            let Some(style) = self.styles.resolve(name) else {
+                continue;
+            };
+            self.count_runs(u64::from(c1 - c0) + 1)?;
+            for col in *c0..=*c1 {
+                sheet.style_runs.push(StyleRun {
+                    col,
+                    start_row: 0,
+                    end_row: MAX_ROWS - 1,
+                    style,
+                });
+            }
+        }
+        Ok(())
     }
 
     fn parse_row<R: BufRead>(
@@ -304,10 +349,23 @@ impl Parser<'_> {
                 }
             });
             let style = name.and_then(|n| self.styles.resolve(&n));
-            if !non_empty
-                && (style.is_none() || u64::from(run.len) * u64::from(rep) > MAX_STYLED_EMPTY_RUN)
-            {
-                continue;
+            if !non_empty {
+                let Some(st) = style else {
+                    continue;
+                };
+                if u64::from(run.len) * u64::from(rep) > MAX_STYLED_EMPTY_RUN {
+                    // Formatting of a large blank area: keep it as runs.
+                    self.count_runs(u64::from(run.len))?;
+                    for col in run.col..run.col + run.len {
+                        sheet.style_runs.push(StyleRun {
+                            col,
+                            start_row: *row,
+                            end_row: last,
+                            style: st,
+                        });
+                    }
+                    continue;
+                }
             }
             per_row += u64::from(run.len);
             per_row_bytes = per_row_bytes.saturating_add(

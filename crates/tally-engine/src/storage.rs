@@ -280,13 +280,19 @@ impl StyleRuns {
         }
     }
 
-    /// Shifts runs for inserted rows (rows inserted inside a run take its style).
+    /// Shifts runs for inserted rows. Inserted rows take the style of the
+    /// row above them, as in AOO (`ScAttrArray::InsertRow`): rows inserted
+    /// inside a run or directly below one extend it.
     pub fn insert_rows(&mut self, at: u32, count: u32) {
         let old = std::mem::take(&mut self.runs);
         let max = MAX_ROWS - 1;
         for (s, (e, id)) in old {
             if e < at {
-                self.set(s, e, id);
+                if at > 0 && e == at - 1 {
+                    self.set(s, e.saturating_add(count).min(max), id);
+                } else {
+                    self.set(s, e, id);
+                }
             } else if s >= at {
                 let ns = u64::from(s) + u64::from(count);
                 if ns <= u64::from(max) {

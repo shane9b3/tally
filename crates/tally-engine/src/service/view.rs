@@ -13,7 +13,9 @@ use tally_numfmt::{
     format_value_with, general_string, parse_format, recognize_input_with, Formatted,
     RecognizeContext, SectionKind, EN_US,
 };
-use tally_types::{letters_to_col, CellAddr, CellRange, SheetId, Value, MAX_COLS, MAX_ROWS};
+use tally_types::{
+    letters_to_col, CellAddr, CellRange, ErrorKind, SheetId, Value, MAX_COLS, MAX_ROWS,
+};
 
 use crate::document::range_dto;
 use crate::storage::{CellContent, ColumnStore, Dir, Sheet, StyleId};
@@ -279,16 +281,27 @@ fn edit_text(wb: &Workbook, v: &Value, st: &StyleEntry) -> String {
         Value::Number(n) => {
             let fmt = &st.format;
             if fmt.is_date() {
-                let code = match fmt.sections.first().map(|s| &s.kind) {
+                // Whole milliseconds of the time part; a non-zero remainder
+                // mod 1000 means fractional seconds, which must survive
+                // re-entry.
+                let ms = (n.abs() * 86_400_000.0).round();
+                let frac_secs = ms % 1000.0 != 0.0;
+                let code: String = match fmt.sections.first().map(|s| &s.kind) {
                     Some(SectionKind::Date(d))
                         if d.has_date && (d.has_time || n.fract() != 0.0) =>
                     {
-                        "MM/DD/YYYY HH:MM:SS"
+                        format!("MM/DD/YYYY HH:MM:SS{}", if frac_secs { ".000" } else { "" })
                     }
-                    Some(SectionKind::Date(d)) if !d.has_date => "HH:MM:SS",
-                    _ => "MM/DD/YYYY",
+                    Some(SectionKind::Date(d)) if !d.has_date => {
+                        // AOO's GetInputLineString: durations (below 0 or a
+                        // day or more) edit as elapsed hours so the days
+                        // are kept.
+                        let hours = if *n < 0.0 || *n >= 1.0 { "[HH]" } else { "HH" };
+                        format!("{hours}:MM:SS{}", if frac_secs { ".000" } else { "" })
+                    }
+                    _ => "MM/DD/YYYY".to_owned(),
                 };
-                if let Ok(ast) = parse_format(code) {
+                if let Ok(ast) = parse_format(&code) {
                     return format_value_with(v, &ast, &EN_US, None, wb.settings.date_epoch).text;
                 }
             }
@@ -358,6 +371,9 @@ pub fn selection_stats(wb: &Workbook, sel: &SelectionDto) -> Result<SelectionSta
     let mut nums = ApproxSum::new();
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
+    // The first error in the selection: AOO's status bar then shows the
+    // error instead of the sum.
+    let mut error: Option<ErrorKind> = None;
     let ranges: Vec<RangeDto> = if sel.ranges.is_empty() {
         vec![RangeDto {
             r0: sel.active.r,
@@ -389,15 +405,31 @@ pub fn selection_stats(wb: &Workbook, sel: &SelectionDto) -> Result<SelectionSta
                         .map_or(Value::Empty, |f| f.cached.clone()),
                 };
                 count += 1;
-                if let Value::Number(n) = v {
-                    nums.add(n);
-                    min = min.min(n);
-                    max = max.max(n);
-                }
+                // Booleans are the numbers 1 and 0 (AOO's storage model).
+                let n = match v {
+                    Value::Number(n) => n,
+                    Value::Bool(b) => f64::from(u8::from(b)),
+                    Value::Error(e) => {
+                        error.get_or_insert(e);
+                        continue;
+                    }
+                    _ => continue,
+                };
+                nums.add(n);
+                min = min.min(n);
+                max = max.max(n);
             }
         }
     }
     let n = nums.count();
+    if let Some(e) = error {
+        return Ok(SelectionStats {
+            count,
+            count_numbers: n,
+            formatted_sum: Some(e.display().into_owned()),
+            ..SelectionStats::default()
+        });
+    }
     if n == 0 {
         return Ok(SelectionStats {
             count,

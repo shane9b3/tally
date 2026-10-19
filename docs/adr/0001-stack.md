@@ -23,6 +23,15 @@ Status: accepted, 2026-10-19
 - **Toolchain:** stable versions only, exact pins, committed `Cargo.lock` and `pnpm-lock.yaml`. Workspace `rust-version = "1.90"` (Tauri 2.12 requirement). Never bare `cargo add tauri` (pulls the 3.0 alpha).
 - **Security posture:** untrusted file parsing happens only in Rust with size/depth/ratio limits; the webview never receives raw file bytes; no fs/shell plugins exposed to JS; strict CSP; devtools off in release. See docs/architecture-plan.md §5.4.
 
+## Deliberate deviations
+
+Places where Tally knowingly differs from AOO 4.1 (correctness review, 2026-10-19). Each is a decision, not a bug; revisit only with a new ADR.
+
+- **Elementwise operations on arrays of different sizes** (`{1;2;3}*{1;2}`, `SUMPRODUCT(A1:A3*B1:B2)`): the result takes the larger extent, positions missing in the smaller operand are `#N/A`, and a single row or column is replicated. This follows Excel and LibreOffice. AOO 4.1 (`lcl_GetMinExtent`) takes the smaller extent.
+- **Text ordering** (`<`, `>`, sorting, criteria such as `">b"`): case-folded Unicode code-point order, not locale collation. `"é"<"f"` is FALSE where AOO's collator gives TRUE. Accented and non-Latin text may order differently.
+- **Case sensitivity default:** `CalcSettings::case_sensitive` defaults to `false` (`="A"="a"` is TRUE, and criteria ignore case), matching Excel and LibreOffice's UI default. AOO's document default is case-sensitive. ODS files that set `table:case-sensitive` keep their setting.
+- **LEN, MID, LEFT and friends** count Unicode scalar values, not UTF-16 code units: `LEN("😀")` is 1 where AOO gives 2.
+
 ## Pinned versions (Phase A)
 
 package.json (`.npmrc` has `save-exact=true`): typescript 5.9.3, vite 7.3.7, @vitejs/plugin-react 5.1.4, react 19.3.1, react-dom 19.3.1, @types/react 19.3.0, @types/react-dom 19.3.0, zustand 5.0.15, cmdk 1.1.1, @fontsource-variable/inter 5.3.0, @tauri-apps/api 2.12.4, @tauri-apps/cli 2.12.3, vitest 3.2.7, @playwright/test 1.64.1.

@@ -41,6 +41,11 @@ pub struct FormulaCell {
     pub invalid_text: Option<Arc<str>>,
     /// Static precedents resolved at `addr` (3-D spans expanded by tab order).
     pub precedents: Vec<CellRange>,
+    /// The precedents whose values are always read, for cycle detection:
+    /// `precedents` without the references inside lazily evaluated
+    /// arguments (IF/IFERROR/IFNA branches) and the address-only arguments
+    /// of ROW and COLUMN. `None` when that is all of `precedents`.
+    pub strict_precedents: Option<Vec<CellRange>>,
     /// References recorded during the last evaluation (INDIRECT, OFFSET).
     pub dynamic_deps: Vec<CellRange>,
     /// Has a 3-D reference, whose precedents depend on the tab order.

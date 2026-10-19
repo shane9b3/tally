@@ -398,8 +398,10 @@ fn operand(v: EvalValue, array: bool, ctx: &mut dyn EvalContext) -> Operand {
     }
 }
 
-/// OOo matrix element pick: a single row or column is replicated,
-/// positions outside a larger result are `#N/A`.
+/// Matrix element pick: a single row or column is replicated, positions
+/// outside a larger result are `#N/A` (the result takes the larger
+/// extent). This is the Excel/LibreOffice rule, a deliberate deviation from
+/// AOO 4.1, which takes the smaller extent (see docs/adr/0001-stack.md).
 fn pick(m: &Matrix, r: u32, c: u32) -> Value {
     let rr = if m.rows == 1 { 0 } else { r };
     let cc = if m.cols == 1 { 0 } else { c };

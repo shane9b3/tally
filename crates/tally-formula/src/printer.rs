@@ -201,6 +201,8 @@ impl Printer<'_> {
 
     fn reference(&mut self, r: &RefExpr) {
         let of = self.dialect.is_open_formula();
+        // Reversed ranges print in order (AOO), in every dialect.
+        let r = &r.clone().normalized(self.origin);
         let text = if of { self.of_ref(r) } else { self.a1_ref(r) };
         match text {
             Some(t) => self.out.push_str(&t),
@@ -328,16 +330,23 @@ impl Printer<'_> {
                 self.of_sheet(&b.sheet, &mut out)?;
                 self.coords(b, &mut out)?;
             }
+            // AOO 4.1 has no whole-column/row references (`[.A:.A]`), so
+            // they are written as the full area with absolute rows (or
+            // columns), which the OpenFormula parser reads back as whole
+            // columns (rows).
             RefExpr::Cols { sheet, start, end } => {
                 self.of_sheet(sheet, &mut out)?;
                 self.col(*start, &mut out)?;
-                out.push_str(":.");
+                out.push_str("$1:.");
                 self.col(*end, &mut out)?;
+                let _ = write!(out, "${MAX_ROWS}");
             }
             RefExpr::Rows { sheet, start, end } => {
                 self.of_sheet(sheet, &mut out)?;
+                out.push_str("$A");
                 self.row(*start, &mut out)?;
-                out.push_str(":.");
+                out.push_str(":.$");
+                out.push_str(&col_to_letters(MAX_COLS - 1));
                 self.row(*end, &mut out)?;
             }
             RefExpr::Invalid => return None,

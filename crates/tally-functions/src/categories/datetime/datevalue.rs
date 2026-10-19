@@ -37,7 +37,9 @@ fn datevalue(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
             if is_date {
                 Ok(Value::Number(n.floor()))
             } else {
-                Err(ErrorKind::Value)
+                // A number or time that is not a date: AOO's
+                // PushIllegalArgument (Err:502).
+                Err(ErrorKind::InvalidArgument)
             }
         }
         _ => Err(ErrorKind::Value),
@@ -71,8 +73,10 @@ mod tests {
     fn rejects() {
         let bad = Value::Error(ErrorKind::Value);
         assert_eq!(dv(EvalValue::text("abc")), bad);
-        assert_eq!(dv(EvalValue::text("14:30")), bad);
-        assert_eq!(dv(EvalValue::text("42")), bad);
+        // Recognized, but not a date: Err:502 (AOO).
+        let illegal = Value::Error(ErrorKind::InvalidArgument);
+        assert_eq!(dv(EvalValue::text("14:30")), illegal);
+        assert_eq!(dv(EvalValue::text("42")), illegal);
         assert_eq!(dv(EvalValue::text("")), bad);
         assert_eq!(dv(EvalValue::number(46314.0)), bad);
         assert_eq!(dv(EvalValue::bool(true)), bad);

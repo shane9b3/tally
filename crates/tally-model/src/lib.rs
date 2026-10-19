@@ -55,6 +55,31 @@ pub struct SheetData {
     pub tab_color: Option<u32>,
     /// Whether the sheet is hidden.
     pub hidden: bool,
+    /// Long vertical style runs over empty cells (formatting of blank areas
+    /// such as a formatted whole column), kept as runs instead of styled
+    /// empty [`cells`](Self::cells). A cell listed in `cells` uses its own
+    /// style; positions without a cell take the run's style. Runs apply in
+    /// order, so a later run overrides an earlier one where they overlap
+    /// (the ODS reader lists column default styles first); the engine
+    /// writes them sorted by column, then start row, without overlaps.
+    #[serde(default)]
+    pub style_runs: Vec<StyleRun>,
+}
+
+/// A vertical run of one style in one column, rows `start_row..=end_row`.
+///
+/// A run with `start_row == 0` and `end_row == MAX_ROWS - 1` is a whole
+/// column style (ODS: the column's `table:default-cell-style-name`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StyleRun {
+    /// 0-based column.
+    pub col: u32,
+    /// First row (0-based).
+    pub start_row: u32,
+    /// Last row (inclusive).
+    pub end_row: u32,
+    /// Index into [`WorkbookData::styles`].
+    pub style: u32,
 }
 
 /// One cell.
@@ -380,6 +405,12 @@ mod tests {
                 frozen: Some((1, 0)),
                 tab_color: Some(0x3366_ccff),
                 hidden: false,
+                style_runs: vec![StyleRun {
+                    col: 4,
+                    start_row: 10,
+                    end_row: 20_000,
+                    style: 0,
+                }],
             };
         WorkbookData {
             sheets: vec![

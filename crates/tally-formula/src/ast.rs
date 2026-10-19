@@ -107,7 +107,8 @@ pub struct CellRefExpr {
 pub enum RefExpr {
     /// `A1`.
     Cell(CellRefExpr),
-    /// `A1:B2`. Endpoints are kept as written (not normalised).
+    /// `A1:B2`. The parser puts reversed endpoints in order
+    /// ([`RefExpr::normalized`]).
     Area(CellRefExpr, CellRefExpr),
     /// Whole columns `A:C`.
     Cols {
@@ -174,7 +175,49 @@ impl CellRefExpr {
     }
 }
 
+/// `(a, b)` in ascending order of their positions for `origin` (when both
+/// resolve); each coordinate keeps its own `$`.
+fn ordered(a: RefCoord, b: RefCoord, origin: u32, limit: u32) -> (RefCoord, RefCoord) {
+    match (a.resolve(origin, limit), b.resolve(origin, limit)) {
+        (Some(x), Some(y)) if x > y => (b, a),
+        _ => (a, b),
+    }
+}
+
 impl RefExpr {
+    /// The reference with reversed endpoints put in order for a formula at
+    /// `origin`, rows and columns independently (`B2:A1` → `A1:B2`,
+    /// `$B2:A$1` → `A$1:$B2`), as AOO normalises them.
+    pub fn normalized(self, origin: CellAddr) -> RefExpr {
+        match self {
+            RefExpr::Area(a, b) => {
+                let (r0, r1) = ordered(a.row, b.row, origin.row, MAX_ROWS);
+                let (c0, c1) = ordered(a.col, b.col, origin.col, MAX_COLS);
+                RefExpr::Area(
+                    CellRefExpr {
+                        sheet: a.sheet,
+                        row: r0,
+                        col: c0,
+                    },
+                    CellRefExpr {
+                        sheet: b.sheet,
+                        row: r1,
+                        col: c1,
+                    },
+                )
+            }
+            RefExpr::Cols { sheet, start, end } => {
+                let (start, end) = ordered(start, end, origin.col, MAX_COLS);
+                RefExpr::Cols { sheet, start, end }
+            }
+            RefExpr::Rows { sheet, start, end } => {
+                let (start, end) = ordered(start, end, origin.row, MAX_ROWS);
+                RefExpr::Rows { sheet, start, end }
+            }
+            other => other,
+        }
+    }
+
     /// Resolves the reference for a formula at `origin`.
     pub fn resolve(&self, origin: CellAddr) -> ResolvedRef {
         self.try_resolve(origin).unwrap_or(ResolvedRef::Invalid)

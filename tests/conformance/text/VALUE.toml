@@ -54,7 +54,8 @@ expect = "#VALUE!"
 [[case]]
 name = "empty text"
 formula = '=VALUE("")'
-expect = "#VALUE!"
+expect = "Err:502"
+note = "AOO ScValue pushes an illegal argument for empty text."
 
 [[case]]
 name = "error propagates"

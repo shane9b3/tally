@@ -39,6 +39,13 @@ expect = "ac"
 name = "non-overlapping"
 formula = '=SUBSTITUTE("aaa";"aa";"b")'
 expect = "ba"
+note = "Replacing every occurrence resumes after the replacement."
+
+[[case]]
+name = "occurrence counts overlapping matches"
+formula = '=SUBSTITUTE("aaaa";"aa";"b";2)'
+expect = "aba"
+note = "AOO ScSubstitute: after a match that is not the requested one the search resumes one character later (nPos++), after a replacement it resumes after the new text, so occurrences overlap."
 
 [[case]]
 name = "number text"

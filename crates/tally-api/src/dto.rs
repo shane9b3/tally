@@ -659,12 +659,13 @@ pub struct SelectionDto {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct SelectionStats {
-    /// Sum of numbers, or `None` if there are none.
+    /// Sum of numbers (booleans count as 1 and 0), or `None` if there are
+    /// none or the selection contains an error.
     pub sum: Option<f64>,
     /// Non-empty cells.
     #[ts(type = "number")]
     pub count: u64,
-    /// Numeric cells.
+    /// Numeric cells (booleans included).
     #[ts(type = "number")]
     pub count_numbers: u64,
     /// Average of numbers.
@@ -673,7 +674,9 @@ pub struct SelectionStats {
     pub min: Option<f64>,
     /// Maximum number.
     pub max: Option<f64>,
-    /// `sum` formatted with the active cell's number format.
+    /// `sum` formatted with the active cell's number format; when the
+    /// selection contains an error, that error's text (and `sum`,
+    /// `average`, `min` and `max` are `None`), as AOO's status bar shows.
     pub formatted_sum: Option<String>,
 }
 

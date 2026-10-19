@@ -80,3 +80,90 @@ fn templates_save_as_ods() {
     assert_eq!(t1, t2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Correctness review H4: long style runs and whole-column styles survive
+/// an ODS save and reload.
+#[test]
+fn long_style_runs_survive_ods() {
+    use tally_api::{Op, RangeDto, StylePatch, Transaction};
+    use tally_engine::storage::StyleId;
+    use tally_types::MAX_ROWS;
+    let mut svc = EngineService::with_default_codec();
+    let info = svc.new_workbook(None).unwrap();
+    let s = info.sheets[0].id;
+    let style = |range: RangeDto, patch: StylePatch| Op::ApplyStyle {
+        sheet: s,
+        ranges: vec![range],
+        patch,
+    };
+    let italic = StylePatch {
+        italic: Some(true),
+        ..StylePatch::default()
+    };
+    let bold = StylePatch {
+        bold: Some(true),
+        ..StylePatch::default()
+    };
+    let ops = vec![
+        style(
+            RangeDto {
+                r0: 99,
+                c0: 2,
+                r1: 20_099,
+                c1: 2,
+            },
+            italic,
+        ),
+        style(
+            RangeDto {
+                r0: 0,
+                c0: 0,
+                r1: MAX_ROWS - 1,
+                c1: 0,
+            },
+            bold,
+        ),
+        Op::SetCellInput {
+            sheet: s,
+            r: 0,
+            c: 1,
+            input: "x".into(),
+        },
+    ];
+    svc.apply(
+        info.doc,
+        Transaction {
+            ops,
+            label: None,
+            selection_before: None,
+            selection_after: None,
+        },
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!("tally-engine-runs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("runs.ods");
+    svc.save(info.doc, Some(&p), FileFormat::Ods).unwrap();
+    let back = svc.open(&p).unwrap();
+    let before = svc.document(info.doc).unwrap().wb.to_data();
+    let wb = &svc.document(back.doc).unwrap().wb;
+    let s2 = back.sheets[0].id;
+    let st = |r: u32, c: u32| wb.style_at(CellAddr::new(s2, r, c));
+    let it = st(5000, 2);
+    assert_ne!(it, StyleId::DEFAULT);
+    assert!(wb.styles.get(it).data.font.italic);
+    for r in [99, 20_099] {
+        assert_eq!(st(r, 2), it, "row {r}");
+    }
+    assert_eq!(st(98, 2), StyleId::DEFAULT);
+    assert_eq!(st(20_100, 2), StyleId::DEFAULT);
+    let b = st(MAX_ROWS - 1, 0);
+    assert!(wb.styles.get(b).data.font.bold);
+    assert_eq!(st(0, 0), b);
+    assert_eq!(st(500_000, 0), b);
+    assert_eq!(st(0, 1), StyleId::DEFAULT);
+    let after = wb.to_data();
+    assert_eq!(after.sheets[0].style_runs, before.sheets[0].style_runs);
+    assert_eq!(after.sheets[0].cells, before.sheets[0].cells);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -59,8 +59,11 @@ fn sign(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     })
 }
 
-/// Result takes the sign of the divisor. After AOO `ScInterpreter::ScMod`
-/// (`a - b * approxFloor(a / b)`), Apache-2.0. A zero divisor is `#DIV/0!`.
+/// Result takes the sign of the divisor. After AOO `ScInterpreter::ScMod`,
+/// Apache-2.0: integral operands use the exact `fmod` (sign adjusted to
+/// the divisor), so quotients beyond 15 digits stay exact
+/// (`MOD(1E20;3)` is 1); otherwise `a - b * approxFloor(a / b)` with the
+/// residue snapped. A zero divisor is `#DIV/0!`.
 fn modulo(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
@@ -68,6 +71,17 @@ fn modulo(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         let y = a.num(1)?;
         if y == 0.0 {
             return Err(ErrorKind::Div0);
+        }
+        if x == x.trunc() && y == y.trunc() {
+            let r = x % y;
+            let r = if r == 0.0 {
+                0.0 // no negative zero
+            } else if (r < 0.0) != (y < 0.0) {
+                r + y
+            } else {
+                r
+            };
+            return Ok(Value::Number(r));
         }
         let r = x - y * approx_floor(x / y);
         // Snap residue like approxSub: a tiny remainder relative to the

@@ -5,7 +5,8 @@
  */
 export type SelectionStats = { 
 /**
- * Sum of numbers, or `None` if there are none.
+ * Sum of numbers (booleans count as 1 and 0), or `None` if there are
+ * none or the selection contains an error.
  */
 sum: number | null, 
 /**
@@ -13,7 +14,7 @@ sum: number | null,
  */
 count: number, 
 /**
- * Numeric cells.
+ * Numeric cells (booleans included).
  */
 countNumbers: number, 
 /**
@@ -29,6 +30,8 @@ min: number | null,
  */
 max: number | null, 
 /**
- * `sum` formatted with the active cell's number format.
+ * `sum` formatted with the active cell's number format; when the
+ * selection contains an error, that error's text (and `sum`,
+ * `average`, `min` and `max` are `None`), as AOO's status bar shows.
  */
 formattedSum: string | null, };

@@ -9,12 +9,18 @@ expect = "Hello World"
 name = "apostrophe and hyphen"
 formula = "=PROPER(\"o'neil-smith\")"
 expect = "O'Neil-Smith"
-note = "Any non-letter starts a new word."
+note = "Any character that is not a letter or digit starts a new word."
 
 [[case]]
 name = "digit then letter"
 formula = '=PROPER("2nd place")'
-expect = "2Nd Place"
+expect = "2nd Place"
+note = "AOO ScProper capitalises only after a non-alphanumeric character (isLetterNumeric)."
+
+[[case]]
+name = "ordinal"
+formula = '=PROPER("3rd")'
+expect = "3rd"
 
 [[case]]
 name = "empty"

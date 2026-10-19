@@ -77,7 +77,8 @@ expect = 2
 name = "two-dimensional range"
 cells = { A1 = 1, B2 = 2 }
 formula = "=MATCH(1;A1:B2;0)"
-expect = "#N/A"
+expect = "Err:504"
+note = "AOO ScMatch calls PushIllegalParameter() for a 2-D range (correctness review M8)."
 
 [[case]]
 name = "error lookup"

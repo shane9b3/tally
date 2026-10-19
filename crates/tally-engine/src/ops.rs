@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tally_api::{ApiError, ClearWhat, Op, PastePayload, RangeDto};
-use tally_formula::{adjust_for_structure_change, StructureChange};
+use tally_formula::{adjust_for_structure_change, RefExpr, SheetRef, StructureChange};
 use tally_numfmt::parse_format;
 use tally_types::{CellAddr, CellRange, SheetId, MAX_COLS, MAX_ROWS};
 
@@ -22,6 +22,69 @@ use crate::workbook::{SnapContent, Workbook};
 
 /// Most cells one op may write (paste, range inputs).
 pub const MAX_OP_CELLS: u64 = 1_048_576;
+
+/// Calls `f` on every sheet qualifier of `r`.
+fn sheet_refs_mut(r: &mut RefExpr, f: &mut impl FnMut(&mut SheetRef)) {
+    match r {
+        RefExpr::Cell(c) => f(&mut c.sheet),
+        RefExpr::Area(a, b) => {
+            f(&mut a.sheet);
+            f(&mut b.sheet);
+        }
+        RefExpr::Cols { sheet, .. } | RefExpr::Rows { sheet, .. } => f(sheet),
+        RefExpr::Invalid => {}
+    }
+}
+
+/// Points references to an unknown sheet named like sheet `id` (added or
+/// renamed just now) at that sheet, as reloading the file would. Returns
+/// the change that restores the old formulas.
+fn resolve_sheet_refs(wb: &mut Workbook, id: SheetId) -> Change {
+    let Some(name) = wb.sheet(id).map(|s| s.name.to_string()) else {
+        return Change::Cells(Vec::new());
+    };
+    let name = name.to_lowercase();
+    let matches = |s: &SheetRef| matches!(s, SheetRef::Unresolved(n) if n.to_lowercase() == name);
+    let mut targets: Vec<CellAddr> = Vec::new();
+    for (_, f) in &wb.formulas {
+        let mut hit = false;
+        f.formula.expr.walk_refs(|r| {
+            hit |= match r {
+                RefExpr::Cell(c) => matches(&c.sheet),
+                RefExpr::Area(a, b) => matches(&a.sheet) || matches(&b.sheet),
+                RefExpr::Cols { sheet, .. } | RefExpr::Rows { sheet, .. } => matches(sheet),
+                RefExpr::Invalid => false,
+            };
+        });
+        if hit {
+            targets.push(f.addr);
+        }
+    }
+    let mut old_cells = Vec::with_capacity(targets.len());
+    for addr in targets {
+        let Some((_, f)) = wb.formula_at(addr) else {
+            continue;
+        };
+        let mut nf = (*f.formula).clone();
+        let invalid = f.invalid_text.clone();
+        nf.expr.walk_refs_mut(|r| {
+            sheet_refs_mut(r, &mut |s| {
+                if matches(s) {
+                    *s = SheetRef::Id { id, abs: false };
+                }
+            });
+        });
+        old_cells.push((addr, wb.snapshot_content(addr)));
+        wb.restore_content(
+            addr,
+            Some(SnapContent::Formula {
+                formula: Arc::new(nf),
+                invalid_text: invalid,
+            }),
+        );
+    }
+    Change::Cells(old_cells)
+}
 
 /// Characters not allowed in sheet names (as in LibreOffice).
 const BAD_SHEET_CHARS: &[char] = &['[', ']', '*', '?', ':', '/', '\\'];
@@ -287,7 +350,9 @@ pub fn apply_op(
             let id = wb.add_sheet(name.as_deref(), index.map(|i| i as usize));
             wb.refresh_all_precedents();
             fx.sheets_changed = true;
-            Ok(vec![Change::RemoveSheet { id }])
+            // Undo restores the formulas first, then removes the sheet.
+            let resolved = resolve_sheet_refs(wb, id);
+            Ok(vec![Change::RemoveSheet { id }, resolved])
         }
         Op::RenameSheet { sheet, name } => {
             check_sheet(wb, *sheet)?;
@@ -305,7 +370,9 @@ pub fn apply_op(
                 },
                 fx,
             );
-            Ok(inv.into_iter().collect())
+            let mut out: Vec<Change> = inv.into_iter().collect();
+            out.push(resolve_sheet_refs(wb, *sheet));
+            Ok(out)
         }
         Op::DeleteSheet { sheet } => {
             check_sheet(wb, *sheet)?;

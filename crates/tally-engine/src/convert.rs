@@ -2,22 +2,26 @@
 //! interchange ([`WorkbookData`]) used by the file readers and writers.
 //!
 //! Formulas are exchanged as OpenFormula text (`of:=SUM([.A1:.A3])`) with
-//! their cached values. Styled empty cells are written only inside the used
-//! area (plus short runs), so a bold whole column does not become a million
-//! cells.
+//! their cached values. Short style runs over empty cells are written as
+//! styled empty cells; runs of [`LONG_STYLE_RUN`] rows or more are kept as
+//! [`StyleRun`]s, so a bold whole column does not become a million cells
+//! and no formatting is lost.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use tally_formula::{parse, print, Dialect, Expr, Formula};
-use tally_model::{CellContentData, CellData, DocSettings, SheetData, StyleData, WorkbookData};
+use tally_model::{
+    CellContentData, CellData, DocSettings, SheetData, StyleData, StyleRun, WorkbookData,
+};
 use tally_types::{CellAddr, Value, MAX_ROWS};
 
 use crate::formula_cells::CellState;
 use crate::storage::{CellContent, ColumnStore, DimRuns, Sheet, StyleId};
 use crate::workbook::{Pending, SheetNamer, Workbook, MAX_SHEETS};
 
-/// Style runs longer than this are clipped to the used area when exported.
+/// Style runs of at least this many rows are exported as [`StyleRun`]s
+/// instead of styled empty cells.
 const LONG_STYLE_RUN: u32 = 10_000;
 
 impl Workbook {
@@ -76,6 +80,18 @@ impl Workbook {
             .map(|s| wb.styles.intern(s.clone()))
             .collect();
         for (sd, &sheet) in sheet_data.iter().zip(&ids) {
+            // Runs first: a cell's own style wins over a run covering it.
+            for run in &sd.style_runs {
+                let Some(st) = style_ids.get(run.style as usize) else {
+                    continue;
+                };
+                if run.start_row > run.end_row || run.end_row >= MAX_ROWS {
+                    continue;
+                }
+                if let Some(col) = wb.sheet_mut(sheet).and_then(|s| s.column_mut(run.col)) {
+                    col.styles.set(run.start_row, run.end_row, *st);
+                }
+            }
             for cell in &sd.cells {
                 let addr = CellAddr::new(sheet, cell.row, cell.col);
                 if !addr.is_valid() {
@@ -134,8 +150,8 @@ impl Workbook {
         let mut style_map: HashMap<StyleId, u32> = HashMap::new();
         let mut sheets = Vec::with_capacity(self.sheets.len());
         for sheet in &self.sheets {
-            let used = sheet.used_range();
             let mut cells: Vec<CellData> = Vec::new();
+            let mut style_runs: Vec<StyleRun> = Vec::new();
             for (ci, col) in sheet.columns.iter().enumerate() {
                 let c = ci as u32;
                 for (r, content) in col.cells.iter_range(0, MAX_ROWS - 1) {
@@ -143,11 +159,14 @@ impl Workbook {
                     let content = match content {
                         CellContent::Value(v) => CellContentData::Value(v.clone()),
                         CellContent::Formula(id) => match self.formulas.get(*id) {
+                            // A formula that does not parse is saved as a
+                            // text cell holding what was typed, so other
+                            // applications show the text (it reloads as text).
+                            Some(f) if f.invalid_text.is_some() => CellContentData::Value(
+                                Value::Text(f.invalid_text.clone().unwrap_or_default()),
+                            ),
                             Some(f) => {
-                                let text = match &f.invalid_text {
-                                    Some(raw) => format!("of:{raw}"),
-                                    None => print(&f.formula, addr, Dialect::open_formula(), self),
-                                };
+                                let text = print(&f.formula, addr, Dialect::open_formula(), self);
                                 let cached =
                                     (f.state == CellState::Clean).then(|| f.cached.clone());
                                 CellContentData::Formula {
@@ -167,14 +186,15 @@ impl Workbook {
                     });
                 }
                 for (s, e, st) in col.styles.runs_in(0, MAX_ROWS - 1) {
-                    let e = if e - s >= LONG_STYLE_RUN {
-                        match used {
-                            Some(u) => e.min(u.r1.max(s)),
-                            None => s,
-                        }
-                    } else {
-                        e
-                    };
+                    if e - s >= LONG_STYLE_RUN - 1 {
+                        style_runs.push(StyleRun {
+                            col: c,
+                            start_row: s,
+                            end_row: e,
+                            style: st.0,
+                        });
+                        continue;
+                    }
                     for r in s..=e {
                         if col.cells.get(r).is_none() {
                             cells.push(CellData {
@@ -188,16 +208,20 @@ impl Workbook {
                 }
             }
             cells.sort_by_key(|c| (c.row, c.col));
+            let mut index_of = |id: StyleId| {
+                let next = styles.len() as u32;
+                *style_map.entry(id).or_insert_with(|| {
+                    styles.push(self.styles.get(id).data.clone());
+                    next
+                })
+            };
             for cell in &mut cells {
                 if let Some(raw) = cell.style {
-                    let id = StyleId(raw);
-                    let next = styles.len() as u32;
-                    let idx = *style_map.entry(id).or_insert_with(|| {
-                        styles.push(self.styles.get(id).data.clone());
-                        next
-                    });
-                    cell.style = Some(idx);
+                    cell.style = Some(index_of(StyleId(raw)));
                 }
+            }
+            for run in &mut style_runs {
+                run.style = index_of(StyleId(run.style));
             }
             sheets.push(SheetData {
                 name: sheet.name.to_string(),
@@ -208,6 +232,7 @@ impl Workbook {
                 frozen: None,
                 tab_color: sheet.tab_color,
                 hidden: sheet.hidden,
+                style_runs,
             });
         }
         WorkbookData {

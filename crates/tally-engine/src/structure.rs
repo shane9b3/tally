@@ -243,12 +243,14 @@ impl Workbook {
                 continue;
             };
             let p = self.precedents_of(&fc.formula, fc.addr);
+            let strict = self.strict_precedents_of(&fc.formula, fc.addr);
             let vol = fc.volatile;
             self.deps.remove(id);
             self.deps.add(id, &p);
             self.deps.set_volatile(id, vol);
             if let Some(fc) = self.formulas.get_mut(id) {
                 fc.precedents = p;
+                fc.strict_precedents = strict;
                 fc.dynamic_deps.clear();
             }
             self.pending.dirty.push(id);

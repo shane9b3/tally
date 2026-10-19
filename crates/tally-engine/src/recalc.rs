@@ -7,11 +7,17 @@
 //! 3. Ordering: an iterative Tarjan over the dirty subgraph, whose edges are
 //!    the static precedents (plus recorded dynamic ones) that are dirty
 //!    formula cells. Strongly connected components come out precedents
-//!    first; every member of a cycle gets Err:522 (iterations are off in
-//!    Phase A).
+//!    first. Members on a cycle of *strict* precedents (references whose
+//!    values are always read: not inside IF/IFERROR/IFNA branches, not the
+//!    address-only arguments of ROW/COLUMN) get Err:522 without evaluation
+//!    (iterations are off in Phase A).
 //! 4. Evaluation in that order with [`CalcCtx`]. A dirty precedent met
-//!    during evaluation (only possible through dynamic references) is
-//!    evaluated on demand, bounded by [`MAX_ON_DEMAND_DEPTH`].
+//!    during evaluation (through a lazy branch or a dynamic reference) is
+//!    evaluated on demand, nested at most [`MAX_ON_DEMAND_DEPTH`] deep and
+//!    deferred to an explicit work stack beyond that. Reading a
+//!    cell that is being evaluated is a cycle that is actually followed
+//!    (AOO detects circularity at interpretation time the same way): every
+//!    cell on that cycle gets Err:522.
 
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
@@ -30,7 +36,9 @@ use crate::formula_cells::{CellState, FormulaCellId};
 use crate::storage::CellContent;
 use crate::workbook::Workbook;
 
-/// Nesting limit for on-demand evaluation of dirty precedents.
+/// Nesting limit for on-demand evaluation of dirty precedents. Deeper
+/// precedents are deferred and evaluated from an explicit work stack (see
+/// [`CalcCtx::evaluate`]), so chains of any length work on a small stack.
 pub const MAX_ON_DEMAND_DEPTH: u32 = 16;
 
 /// What a recalc did.
@@ -172,27 +180,27 @@ pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
             }
             continue;
         }
-        if scc.cyclic {
-            for id in &scc.members {
-                if let Some(f) = wb.formulas.get_mut(*id) {
-                    f.cached = Value::Error(ErrorKind::Circular);
-                    f.state = CellState::Clean;
-                    recalculated.push(f.addr);
-                    report.circular += 1;
-                }
+        for id in &scc.strict {
+            if let Some(f) = wb.formulas.get_mut(*id) {
+                f.cached = Value::Error(ErrorKind::Circular);
+                f.state = CellState::Clean;
+                recalculated.push(f.addr);
+                report.circular += 1;
             }
-            continue;
         }
         for id in scc.members {
             let Some(f) = wb.formulas.get(id) else {
                 continue;
             };
+            // Duplicates (strict members, cells evaluated on demand) are
+            // removed by `coalesce`.
             recalculated.push(f.addr);
             if f.state != CellState::Dirty {
                 continue;
             }
             let mut ctx = CalcCtx::new(wb, now);
             ctx.evaluate(id);
+            report.circular += ctx.circular;
             report.evaluated += 1;
         }
     }
@@ -219,7 +227,8 @@ pub fn hard_recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcRepor
 #[derive(Debug)]
 struct Scc {
     members: Vec<FormulaCellId>,
-    cyclic: bool,
+    /// Members on a cycle of strict precedents: Err:522 without evaluation.
+    strict: Vec<FormulaCellId>,
 }
 
 /// The dirty formula cells inside `range`.
@@ -252,38 +261,95 @@ fn dirty_formulas_in(wb: &Workbook, range: &CellRange, out: &mut Vec<FormulaCell
     }
 }
 
-/// Iterative Tarjan over the dirty subgraph; SCCs come out precedents first.
+/// The dirty formulas in `ranges`, as indices into `local`.
+fn dirty_successors(
+    wb: &Workbook,
+    ranges: &mut dyn Iterator<Item = &CellRange>,
+    local: &SecondaryMap<FormulaCellId, usize>,
+    scratch: &mut Vec<FormulaCellId>,
+) -> Vec<usize> {
+    scratch.clear();
+    for r in ranges {
+        dirty_formulas_in(wb, r, scratch);
+    }
+    let mut s: Vec<usize> = scratch
+        .iter()
+        .filter_map(|id| local.get(*id).copied())
+        .collect();
+    s.sort_unstable();
+    s.dedup();
+    s
+}
+
+/// Orders the dirty subgraph into SCCs, precedents first.
+///
+/// The ordering uses every precedent (static, conditional and dynamic). A
+/// component is then *statically* circular only for the members on a cycle
+/// of strict precedents (references whose values are always read); the
+/// other members of a cyclic component are evaluated, and a cycle that is
+/// actually followed is caught when a cell re-enters evaluation.
 fn topo_order(wb: &Workbook, dirty: &[FormulaCellId]) -> Vec<Scc> {
-    const UNSEEN: usize = usize::MAX;
-    let n = dirty.len();
     let mut local: SecondaryMap<FormulaCellId, usize> = SecondaryMap::new();
     for (i, id) in dirty.iter().enumerate() {
         local.insert(*id, i);
     }
+    let mut scratch: Vec<FormulaCellId> = Vec::new();
+    let sccs = tarjan(dirty.len(), |v| {
+        let Some(f) = wb.formulas.get(dirty[v]) else {
+            return Vec::new();
+        };
+        let mut it = f.precedents.iter().chain(f.dynamic_deps.iter());
+        dirty_successors(wb, &mut it, &local, &mut scratch)
+    });
+    let mut out = Vec::with_capacity(sccs.len());
+    for (members, cyclic) in sccs {
+        let members: Vec<FormulaCellId> = members.into_iter().map(|i| dirty[i]).collect();
+        let strict = if cyclic {
+            strict_cycle_members(wb, &members, &mut scratch)
+        } else {
+            Vec::new()
+        };
+        out.push(Scc { members, strict });
+    }
+    out
+}
+
+/// The members of `scc` that lie on a cycle of strict precedents.
+fn strict_cycle_members(
+    wb: &Workbook,
+    scc: &[FormulaCellId],
+    scratch: &mut Vec<FormulaCellId>,
+) -> Vec<FormulaCellId> {
+    let mut local: SecondaryMap<FormulaCellId, usize> = SecondaryMap::new();
+    for (i, id) in scc.iter().enumerate() {
+        local.insert(*id, i);
+    }
+    let mut out = Vec::new();
+    for (members, cyclic) in tarjan(scc.len(), |v| {
+        let Some(f) = wb.formulas.get(scc[v]) else {
+            return Vec::new();
+        };
+        let strict = f.strict_precedents.as_ref().unwrap_or(&f.precedents);
+        dirty_successors(wb, &mut strict.iter(), &local, scratch)
+    }) {
+        if cyclic {
+            out.extend(members.into_iter().map(|i| scc[i]));
+        }
+    }
+    out
+}
+
+/// Iterative Tarjan over nodes `0..n`; components come out successors
+/// first, each with whether it is cyclic (several members or a self-edge).
+fn tarjan(n: usize, mut edges: impl FnMut(usize) -> Vec<usize>) -> Vec<(Vec<usize>, bool)> {
+    const UNSEEN: usize = usize::MAX;
     let mut index = vec![UNSEEN; n];
     let mut low = vec![0usize; n];
     let mut on_stack = vec![false; n];
     let mut succ: Vec<Option<Vec<usize>>> = vec![None; n];
     let mut stack: Vec<usize> = Vec::new();
-    let mut out: Vec<Scc> = Vec::new();
+    let mut out: Vec<(Vec<usize>, bool)> = Vec::new();
     let mut counter = 0usize;
-    let mut scratch: Vec<FormulaCellId> = Vec::new();
-
-    let edges = |v: usize, scratch: &mut Vec<FormulaCellId>| -> Vec<usize> {
-        scratch.clear();
-        if let Some(f) = wb.formulas.get(dirty[v]) {
-            for r in f.precedents.iter().chain(f.dynamic_deps.iter()) {
-                dirty_formulas_in(wb, r, scratch);
-            }
-        }
-        let mut s: Vec<usize> = scratch
-            .iter()
-            .filter_map(|id| local.get(*id).copied())
-            .collect();
-        s.sort_unstable();
-        s.dedup();
-        s
-    };
 
     for start in 0..n {
         if index[start] != UNSEEN {
@@ -295,7 +361,7 @@ fn topo_order(wb: &Workbook, dirty: &[FormulaCellId]) -> Vec<Scc> {
         counter += 1;
         stack.push(start);
         on_stack[start] = true;
-        succ[start] = Some(edges(start, &mut scratch));
+        succ[start] = Some(edges(start));
         call.push((start, 0));
         while let Some(&(v, pos)) = call.last() {
             let next = succ[v].as_ref().and_then(|s| s.get(pos).copied());
@@ -309,7 +375,7 @@ fn topo_order(wb: &Workbook, dirty: &[FormulaCellId]) -> Vec<Scc> {
                     counter += 1;
                     stack.push(w);
                     on_stack[w] = true;
-                    succ[w] = Some(edges(w, &mut scratch));
+                    succ[w] = Some(edges(w));
                     call.push((w, 0));
                 } else if on_stack[w] {
                     low[v] = low[v].min(index[w]);
@@ -324,7 +390,7 @@ fn topo_order(wb: &Workbook, dirty: &[FormulaCellId]) -> Vec<Scc> {
                 let mut members = Vec::new();
                 while let Some(w) = stack.pop() {
                     on_stack[w] = false;
-                    members.push(dirty[w]);
+                    members.push(w);
                     if w == v {
                         break;
                     }
@@ -333,7 +399,7 @@ fn topo_order(wb: &Workbook, dirty: &[FormulaCellId]) -> Vec<Scc> {
                     || succ[v]
                         .as_ref()
                         .is_some_and(|s| s.binary_search(&v).is_ok());
-                out.push(Scc { members, cyclic });
+                out.push((members, cyclic));
             }
         }
     }
@@ -358,6 +424,16 @@ impl std::ops::Deref for WbAccess<'_> {
     }
 }
 
+/// A cell being evaluated by a [`CalcCtx`].
+#[derive(Copy, Clone, Debug)]
+struct Frame {
+    id: FormulaCellId,
+    /// A cycle through this cell was followed: its result is Err:522.
+    circular: bool,
+    /// A precedent was deferred: the result is discarded.
+    deferred: bool,
+}
+
 /// The engine's [`EvalContext`].
 pub struct CalcCtx<'w> {
     wb: WbAccess<'w>,
@@ -367,6 +443,12 @@ pub struct CalcCtx<'w> {
     dyn_deps: Vec<CellRange>,
     /// RAND source for shared (read-only) contexts.
     local_rng: Option<crate::workbook::Rng>,
+    /// Cells being evaluated, outermost first.
+    eval_stack: Vec<Frame>,
+    /// Dirty precedents deferred in the current attempt (too deep to nest).
+    deferred: Vec<FormulaCellId>,
+    /// Cells given Err:522 because a cycle through them was followed.
+    pub circular: usize,
 }
 
 impl<'w> CalcCtx<'w> {
@@ -379,6 +461,9 @@ impl<'w> CalcCtx<'w> {
             depth: 0,
             dyn_deps: Vec::new(),
             local_rng: None,
+            eval_stack: Vec::new(),
+            deferred: Vec::new(),
+            circular: 0,
         }
     }
 
@@ -400,6 +485,9 @@ impl<'w> CalcCtx<'w> {
             depth: 0,
             dyn_deps: Vec::new(),
             local_rng: Some(crate::workbook::Rng::from_time()),
+            eval_stack: Vec::new(),
+            deferred: Vec::new(),
+            circular: 0,
         }
     }
 
@@ -411,7 +499,76 @@ impl<'w> CalcCtx<'w> {
     }
 
     /// Evaluates formula cell `id` and stores its result.
+    ///
+    /// Dirty precedents met on the way are evaluated on demand, nested at
+    /// most [`MAX_ON_DEMAND_DEPTH`] deep. A precedent past that depth is
+    /// deferred: the attempt is discarded (every cell on the evaluation
+    /// stack stays dirty), the deferred cell is evaluated first, and the
+    /// attempt is repeated. This explicit work stack keeps the Rust stack
+    /// bounded however long the chain (AOO's recursion helper does the
+    /// same). A deferred cell that is already on the work stack is a cycle.
     pub fn evaluate(&mut self, id: FormulaCellId) {
+        if self.wb_mut().is_none() {
+            return;
+        }
+        let mut work: Vec<FormulaCellId> = vec![id];
+        while let Some(&top) = work.last() {
+            if !self.is_dirty(top) {
+                work.pop();
+                continue;
+            }
+            self.deferred.clear();
+            self.evaluate_once(top);
+            let deferred = std::mem::take(&mut self.deferred);
+            if !self.is_dirty(top) {
+                work.pop();
+                continue;
+            }
+            let mut pushed = false;
+            for d in deferred {
+                if !self.is_dirty(d) {
+                    continue;
+                }
+                if let Some(p) = work.iter().position(|x| *x == d) {
+                    // The deferred cell is waiting for this one: a cycle.
+                    let cycle: Vec<FormulaCellId> = work.drain(p..).collect();
+                    for c in cycle {
+                        self.set_circular(c);
+                    }
+                    pushed = true;
+                    break;
+                }
+                if !work.contains(&d) {
+                    work.push(d);
+                    pushed = true;
+                }
+            }
+            if !pushed {
+                // No progress is possible (should not happen): give up on it.
+                self.set_circular(top);
+                work.pop();
+            }
+        }
+    }
+
+    fn is_dirty(&self, id: FormulaCellId) -> bool {
+        self.wb
+            .formulas
+            .get(id)
+            .is_some_and(|f| f.state == CellState::Dirty)
+    }
+
+    fn set_circular(&mut self, id: FormulaCellId) {
+        if let Some(f) = self.wb_mut().and_then(|wb| wb.formulas.get_mut(id)) {
+            f.cached = Value::Error(ErrorKind::Circular);
+            f.state = CellState::Clean;
+            self.circular += 1;
+        }
+    }
+
+    /// One evaluation attempt of `id`. Leaves the cell dirty if a precedent
+    /// was deferred (see [`Self::evaluate`]).
+    fn evaluate_once(&mut self, id: FormulaCellId) {
         let Some(f) = self.wb_mut().and_then(|wb| wb.formulas.get_mut(id)) else {
             return;
         };
@@ -421,17 +578,33 @@ impl<'w> CalcCtx<'w> {
         let saved_origin = std::mem::replace(&mut self.origin, addr);
         let saved_dyn = std::mem::take(&mut self.dyn_deps);
         self.depth += 1;
+        self.eval_stack.push(Frame {
+            id,
+            circular: false,
+            deferred: false,
+        });
         let v = eval_expr(&formula.expr, self);
-        let value = cell_result(&v, self);
+        let mut value = cell_result(&v, self);
+        let frame = self.eval_stack.pop();
         self.depth -= 1;
         self.origin = saved_origin;
         let dynamic = std::mem::replace(&mut self.dyn_deps, saved_dyn);
+        let incomplete = frame.is_some_and(|f| f.deferred);
+        if !incomplete && frame.is_some_and(|f| f.circular) {
+            value = Value::Error(ErrorKind::Circular);
+            self.circular += 1;
+        }
         let Some(wb) = self.wb_mut() else {
             return;
         };
         let Some(f) = wb.formulas.get_mut(id) else {
             return;
         };
+        if incomplete {
+            // A precedent was deferred: the result is not final.
+            f.state = CellState::Dirty;
+            return;
+        }
         f.cached = value;
         f.state = CellState::Clean;
         if dynamic != f.dynamic_deps {
@@ -451,16 +624,38 @@ impl<'w> CalcCtx<'w> {
         };
         match f.state {
             CellState::Clean => f.cached.clone(),
-            CellState::Evaluating => Value::Error(ErrorKind::Circular),
+            CellState::Evaluating => {
+                self.cycle_followed(id);
+                Value::Error(ErrorKind::Circular)
+            }
             CellState::Dirty => {
-                if self.depth > MAX_ON_DEMAND_DEPTH {
+                if self.depth >= MAX_ON_DEMAND_DEPTH {
+                    // Too deep to nest: defer it; this attempt is discarded.
+                    if !self.deferred.contains(&id) {
+                        self.deferred.push(id);
+                    }
+                    for fr in &mut self.eval_stack {
+                        fr.deferred = true;
+                    }
                     return Value::Error(ErrorKind::Circular);
                 }
-                self.evaluate(id);
+                self.evaluate_once(id);
                 self.wb
                     .formulas
                     .get(id)
-                    .map_or(Value::Empty, |f| f.cached.clone())
+                    .map_or(Value::Empty, |f| match f.state {
+                        CellState::Clean => f.cached.clone(),
+                        _ => Value::Error(ErrorKind::Circular),
+                    })
+            }
+        }
+    }
+
+    /// Marks every cell on the evaluation stack from `id` up as circular.
+    fn cycle_followed(&mut self, id: FormulaCellId) {
+        if let Some(p) = self.eval_stack.iter().rposition(|f| f.id == id) {
+            for f in &mut self.eval_stack[p..] {
+                f.circular = true;
             }
         }
     }
@@ -470,6 +665,23 @@ impl<'w> CalcCtx<'w> {
         dirty_formulas_in(&self.wb, range, &mut ids);
         for id in ids {
             let _ = self.formula_value(id);
+        }
+        // Cells of the range still being evaluated are on a followed cycle.
+        if !self.eval_stack.is_empty() {
+            let on_stack: Vec<FormulaCellId> = self
+                .eval_stack
+                .iter()
+                .map(|f| f.id)
+                .filter(|x| {
+                    self.wb
+                        .formulas
+                        .get(*x)
+                        .is_some_and(|f| range.contains(f.addr))
+                })
+                .collect();
+            for id in on_stack {
+                self.cycle_followed(id);
+            }
         }
     }
 }
