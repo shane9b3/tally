@@ -1,0 +1,71 @@
+# SUM conformance vectors. Schema: docs/contributing-functions.md.
+# Common grid: A1=1, A2="x", A3=TRUE, A4=#DIV/0!, A5 empty, A6=2.5.
+
+[[case]]
+name = "direct numbers"
+formula = "=SUM(1;2;3.5)"
+expect = 6.5
+
+[[case]]
+name = "text skipped, bool counted in references"
+cells = { A1 = 1, A2 = "x", A3 = true }
+formula = "=SUM(A1:A3)"
+expect = 2
+note = "AOO stores booleans as numbers, so TRUE in a cell counts as 1 (Excel would give 1)."
+lo_expect = 2
+
+[[case]]
+name = "error in range propagates"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0" }
+formula = "=SUM(A1:A4)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "empty cells"
+cells = { A6 = 2.5 }
+formula = "=SUM(A1:A5)"
+expect = 0
+
+[[case]]
+name = "numeric text inside a reference is skipped"
+cells = { B1 = "3", B2 = 4 }
+formula = "=SUM(B1:B2)"
+expect = 4
+
+[[case]]
+name = "direct text and bool are coerced"
+formula = "=SUM(\"3\";TRUE)"
+expect = 4
+
+[[case]]
+name = "direct non-numeric text"
+formula = "=SUM(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "missing argument counts as zero"
+formula = "=SUM(1;;2)"
+expect = 3
+
+[[case]]
+name = "approxAdd cancels binary residue"
+formula = "=SUM(0.1;0.2;-0.3)"
+expect = 0
+tol = 0
+
+[[case]]
+name = "inline array: only numbers and bools"
+formula = "=SUM({1;\"9\";TRUE})"
+expect = 2
+
+[[case]]
+name = "text conversion off"
+formula = "=SUM(\"3\")"
+expect = "#VALUE!"
+settings = { text_to_number = "generate_error" }
+
+[[case]]
+name = "multiple areas"
+cells = { A1 = 1, C1 = 10, C2 = 20 }
+formula = "=SUM(A1;C1:C2;5)"
+expect = 36

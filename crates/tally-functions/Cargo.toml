@@ -7,16 +7,26 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Exposes `mock::{MockEvalContext, MockArgs}` so other crates' tests (and this
+# crate's integration tests) can drive functions without an engine.
+test-support = []
+
 [dependencies]
 tally-types.workspace = true
-tally-numfmt.workspace = true
+# TODO(WP4): depend on tally-numfmt again once it lands (TEXT/VALUE/DATEVALUE,
+# General formatting and locale-aware text-to-number). Removed for WP3 core so
+# this crate does not build against a moving skeleton.
 regex.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+# Self dev-dependency: turns on `test-support` for the integration tests.
+tally-functions = { workspace = true, features = ["test-support"] }
 serde.workspace = true
 toml.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true

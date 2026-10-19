@@ -1,0 +1,51 @@
+# COUNT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "numbers and bools in a reference"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 2.5 }
+formula = "=COUNT(A1:A6)"
+expect = 3
+note = "Booleans are numbers in AOO; errors are not counted."
+
+[[case]]
+name = "FALSE counts, text number does not"
+cells = { B1 = "3", B2 = false }
+formula = "=COUNT(B1:B2)"
+expect = 1
+
+[[case]]
+name = "empty"
+formula = "=COUNT(A5)"
+expect = 0
+
+[[case]]
+name = "direct arguments"
+formula = "=COUNT(1;\"x\";\"2\";TRUE)"
+expect = 3
+
+[[case]]
+name = "direct error is ignored"
+formula = "=COUNT(1/0;1)"
+expect = 1
+
+[[case]]
+name = "ISO date text"
+formula = "=COUNT(\"2024-01-15\")"
+expect = 1
+
+[[case]]
+name = "missing argument counts"
+formula = "=COUNT(1;)"
+expect = 2
+note = "Excel-compatible; confirm against AOO with the oracle."
+
+[[case]]
+name = "inline array"
+formula = "=COUNT({1;\"2\";3})"
+expect = 2
+
+[[case]]
+name = "several references"
+cells = { A1 = 1, C1 = 2, C2 = "y", C3 = 3 }
+formula = "=COUNT(A1;C1:C3)"
+expect = 3

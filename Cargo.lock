@@ -1020,10 +1020,11 @@ dependencies = [
 name = "tally-functions"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "regex",
  "serde",
  "smallvec",
- "tally-numfmt",
+ "tally-functions",
  "tally-types",
  "thiserror",
  "toml",

@@ -1,0 +1,72 @@
+# ROUND conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "binary representation corrected (2.675)"
+formula = "=ROUND(2.675;2)"
+expect = 2.68
+tol = 0
+
+[[case]]
+name = "binary representation corrected (1.005)"
+formula = "=ROUND(1.005;2)"
+expect = 1.01
+tol = 0
+
+[[case]]
+name = "half away from zero, negative"
+formula = "=ROUND(-2.5;0)"
+expect = -3
+
+[[case]]
+name = "count defaults to 0"
+formula = "=ROUND(2.5)"
+expect = 3
+
+[[case]]
+name = "negative count rounds to hundreds"
+formula = "=ROUND(1234.567;-2)"
+expect = 1200
+
+[[case]]
+name = "count is floored (approxFloor)"
+formula = "=ROUND(1234.567;1.9)"
+expect = 1234.6
+
+[[case]]
+name = "count out of range"
+formula = "=ROUND(1;21)"
+expect = "Err:502"
+note = "AOO ScInterpreter::RoundNumber rejects |count| > 20; Excel returns 1."
+
+[[case]]
+name = "text number converts"
+formula = "=ROUND(\"2.45\";1)"
+expect = 2.5
+
+[[case]]
+name = "non-numeric text"
+formula = "=ROUND(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell is zero"
+formula = "=ROUND(A5;0)"
+expect = 0
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=ROUND(A4;0)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection with the formula row"
+cells = { A1 = 1.25, A2 = 2.75, A3 = 3.5 }
+origin = "C2"
+formula = "=ROUND(A1:A3)"
+expect = 3
+
+[[case]]
+name = "too many arguments"
+formula = "=ROUND(1;2;3)"
+expect = "Err:504"

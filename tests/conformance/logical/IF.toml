@@ -1,0 +1,75 @@
+# IF conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "true branch"
+formula = "=IF(TRUE;1;2)"
+expect = 1
+
+[[case]]
+name = "false branch"
+formula = "=IF(FALSE;1;2)"
+expect = 2
+
+[[case]]
+name = "then absent"
+formula = "=IF(1=1)"
+expect = true
+
+[[case]]
+name = "else absent"
+formula = "=IF(1=2;1)"
+expect = false
+
+[[case]]
+name = "then explicitly empty"
+formula = "=IF(TRUE;;2)"
+expect = 0
+note = "Excel gives 0; confirm against AOO with the oracle."
+
+[[case]]
+name = "unevaluated branch error does not leak"
+formula = "=IF(TRUE;\"ok\";1/0)"
+expect = "ok"
+
+[[case]]
+name = "chosen branch error"
+formula = "=IF(FALSE;1;1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "numeric condition"
+formula = "=IF(-3;\"y\";\"n\")"
+expect = "y"
+
+[[case]]
+name = "text TRUE condition"
+formula = "=IF(\"true\";1;2)"
+expect = 1
+
+[[case]]
+name = "non-boolean text condition"
+formula = "=IF(\"abc\";1;2)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error condition"
+formula = "=IF(1/0;1;2)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "empty cell condition is FALSE"
+formula = "=IF(A5;1;2)"
+expect = 2
+
+[[case]]
+name = "condition range uses implicit intersection"
+cells = { A1 = 0, A2 = 0, A3 = true }
+origin = "D3"
+formula = "=IF(A1:A3;\"y\";\"n\")"
+expect = "y"
+
+[[case]]
+name = "reference result passes through to SUM"
+cells = { A1 = 1, A2 = 2, A3 = 3 }
+formula = "=SUM(IF(TRUE;A1:A3;0))"
+expect = 6

@@ -1,0 +1,67 @@
+# CONCATENATE conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "texts"
+formula = "=CONCATENATE(\"a\";\"b\";\"c\")"
+expect = "abc"
+
+[[case]]
+name = "number in General format"
+formula = "=CONCATENATE(\"n=\";1.5)"
+expect = "n=1.5"
+
+[[case]]
+name = "15 significant digits"
+formula = "=CONCATENATE(0.1+0.2)"
+expect = "0.3"
+
+[[case]]
+name = "booleans"
+formula = "=CONCATENATE(TRUE;FALSE)"
+expect = "TRUEFALSE"
+
+[[case]]
+name = "missing argument"
+formula = "=CONCATENATE(\"a\";;\"b\")"
+expect = "ab"
+
+[[case]]
+name = "empty cell"
+formula = "=CONCATENATE(A5;\"!\")"
+expect = "!"
+
+[[case]]
+name = "cells"
+cells = { A1 = 1, A3 = true }
+formula = "=CONCATENATE(A1;A3)"
+expect = "1TRUE"
+
+[[case]]
+name = "error cell propagates"
+cells = { A4 = "=1/0" }
+formula = "=CONCATENATE(\"x\";A4)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "large number uses scientific notation"
+formula = "=CONCATENATE(1E+20)"
+expect = "1E+20"
+
+[[case]]
+name = "range is intersected"
+cells = { A1 = 1, A6 = 2.5 }
+origin = "C6"
+formula = "=CONCATENATE(A1:A6)"
+expect = "2.5"
+
+[[case]]
+name = "range outside the formula row"
+cells = { A1 = 1, A6 = 2.5 }
+origin = "C9"
+formula = "=CONCATENATE(A1:A6)"
+expect = "#VALUE!"
+
+[[case]]
+name = "literal text that looks like an error"
+formula = "=CONCATENATE(\"#N/A\")"
+expect = { text = "#N/A" }

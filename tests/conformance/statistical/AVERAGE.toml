@@ -1,0 +1,61 @@
+# AVERAGE conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "direct numbers"
+formula = "=AVERAGE(1;2;6)"
+expect = 3
+
+[[case]]
+name = "bool in reference counts, text skipped"
+cells = { A1 = 1, A2 = "x", A3 = true }
+formula = "=AVERAGE(A1:A3)"
+expect = 1
+
+[[case]]
+name = "no numbers"
+formula = "=AVERAGE(A1:A5)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "text only"
+cells = { A2 = "x" }
+formula = "=AVERAGE(A2)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "error cell propagates"
+cells = { A1 = 1, A4 = "=1/0" }
+formula = "=AVERAGE(A1:A4)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "empty cells ignored"
+cells = { A6 = 2.5 }
+formula = "=AVERAGE(A5:A6;0.5)"
+expect = 1.5
+
+[[case]]
+name = "direct numeric text"
+formula = "=AVERAGE(\"4\";2)"
+expect = 3
+
+[[case]]
+name = "direct non-numeric text"
+formula = "=AVERAGE(\"four\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "missing argument counts as zero"
+formula = "=AVERAGE(1;)"
+expect = 0.5
+note = "Excel-compatible; confirm against AOO with the oracle."
+
+[[case]]
+name = "direct bools"
+formula = "=AVERAGE(TRUE;FALSE)"
+expect = 0.5
+
+[[case]]
+name = "fraction"
+formula = "=AVERAGE(1;2)"
+expect = 1.5
