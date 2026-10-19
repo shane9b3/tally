@@ -5,9 +5,10 @@ formula = "=ACOS(0.5)"
 expect = 1.0471975511965976
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=ACOS(\"0.5\")"
-expect = 1.0471975511965976
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -63,3 +64,9 @@ expect = 0
 [[case]]
 formula = "=ACOS(-1.0000001)"
 expect = "Err:502"
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=ACOS(\"0.5\")"
+expect = 1.0471975511965976
+settings = { text_to_number = "convert_locale" }

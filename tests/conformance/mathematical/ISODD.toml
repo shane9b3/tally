@@ -5,9 +5,10 @@ formula = "=ISODD(3.0)"
 expect = true
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=ISODD(\"3.0\")"
-expect = true
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -68,3 +69,9 @@ expect = false
 [[case]]
 formula = "=ISODD(\"4\")"
 expect = false
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=ISODD(\"3.0\")"
+expect = true
+settings = { text_to_number = "convert_locale" }

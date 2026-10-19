@@ -41,6 +41,19 @@ pub(crate) struct Content {
     pub calc: Option<CalcSettings>,
     pub is_spreadsheet: bool,
     pub names: Vec<NameData>,
+    /// `table:structure-protected` on `office:spreadsheet`.
+    pub structure_protection: Option<tally_model::SheetProtectionData>,
+    /// Per sheet: what `read.rs` resolves against styles.xml.
+    pub extras: Vec<SheetExtra>,
+}
+
+/// Sheet state resolved after content.xml (page styles live in styles.xml).
+#[derive(Debug, Default)]
+pub(crate) struct SheetExtra {
+    pub master_page: Option<String>,
+    pub print_range: Option<CellRangeLocal>,
+    pub repeat_rows: Option<(u32, u32)>,
+    pub repeat_cols: Option<(u32, u32)>,
 }
 
 struct CellParsed {
@@ -50,6 +63,12 @@ struct CellParsed {
     span: (u32, u32),
     /// `table:number-matrix-columns/rows-spanned` of an array formula.
     matrix: Option<(u32, u32)>,
+    /// `table:content-validation-name`.
+    validation: Option<String>,
+    /// `office:annotation`.
+    note: Option<tally_model::NoteData>,
+    /// The first `text:a` target.
+    link: Option<String>,
 }
 
 struct Run {
@@ -71,6 +90,10 @@ struct Parser<'a> {
     /// Per sheet: rows read with `table:visibility="filter"` (as dimension
     /// runs, hidden), resolved once the database ranges are known.
     filter_rows: Vec<Vec<DimRun>>,
+    /// `table:content-validations` by name.
+    validations: std::collections::HashMap<String, tally_model::ValidationData>,
+    /// Cells of each validation on the current sheet.
+    val_rects: std::collections::HashMap<String, Vec<CellRangeLocal>>,
 }
 
 /// Bytes of text a cell's content carries (formula text plus text value).
@@ -103,6 +126,8 @@ pub(crate) fn parse_content<R: BufRead>(
         epoch: DateEpoch::default(),
         names: Vec::new(),
         filter_rows: Vec::new(),
+        validations: std::collections::HashMap::new(),
+        val_rects: std::collections::HashMap::new(),
     };
     loop {
         match xml.next()? {
@@ -110,7 +135,14 @@ pub(crate) fn parse_content<R: BufRead>(
                 "office:document-content" | "office:body" => {}
                 "office:font-face-decls" => p.styles.parse_font_faces(xml)?,
                 "office:automatic-styles" => p.styles.parse_block(xml, Origin::Content)?,
-                "office:spreadsheet" => out.is_spreadsheet = true,
+                "office:spreadsheet" => {
+                    out.is_spreadsheet = true;
+                    out.structure_protection =
+                        crate::v03::parse_protection_attrs(&e, "table:structure-protected");
+                }
+                "table:content-validations" if out.is_spreadsheet => {
+                    p.validations = crate::v03::parse_validations(xml)?;
+                }
                 "table:calculation-settings" if out.is_spreadsheet => {
                     let calc = parse_calc_settings(xml, &e)?;
                     p.epoch = calc.date_epoch;
@@ -125,8 +157,9 @@ pub(crate) fn parse_content<R: BufRead>(
                         });
                     }
                     p.filter_rows.push(Vec::new());
-                    let sheet = p.parse_table(xml, &e)?;
+                    let (sheet, extra) = p.parse_table(xml, &e)?;
                     out.sheets.push(sheet);
+                    out.extras.push(extra);
                 }
                 "table:named-expressions" if out.is_spreadsheet => {
                     p.parse_named_expressions(xml, None)?;
@@ -175,18 +208,27 @@ impl Parser<'_> {
         &mut self,
         xml: &mut XmlReader<R>,
         e: &Elem,
-    ) -> Result<SheetData, OdsError> {
+    ) -> Result<(SheetData, SheetExtra), OdsError> {
         let mut sheet = SheetData {
             name: e.attr("table:name").unwrap_or_default().to_string(),
             ..SheetData::default()
         };
+        let mut extra = SheetExtra::default();
         if let Some(ts) = e
             .attr("table:style-name")
             .and_then(|n| self.styles.table_style(n))
         {
             sheet.hidden = ts.hidden;
             sheet.tab_color = ts.tab_color;
+            extra.master_page.clone_from(&ts.master_page);
         }
+        sheet.protection = crate::v03::parse_protection_attrs(e, "table:protected");
+        if let Some(pr) = e.attr("table:print-ranges") {
+            extra.print_range = crate::v03::parse_range_list(pr).first().copied();
+        }
+        self.val_rects.clear();
+        let mut header_rows: Option<(u32, u32)> = None;
+        let mut header_cols: Option<(u32, u32)> = None;
         let mut col: u32 = 0;
         let mut col_defaults: Vec<(u32, u32, String)> = Vec::new();
         let mut col_runs_done = false;
@@ -206,6 +248,13 @@ impl Parser<'_> {
                                 .and_then(|n| self.styles.column_width(n))
                                 .unwrap_or(DEFAULT_COL_WIDTH_HMM);
                             let hidden = c.attr("table:visibility").is_some_and(|v| v != "visible");
+                            if col > 0
+                                && c.attr("table:style-name")
+                                    .is_some_and(|n| self.styles.column_break(n))
+                                && sheet.col_breaks.len() < 10_000
+                            {
+                                sheet.col_breaks.push(col);
+                            }
                             if width != DEFAULT_COL_WIDTH_HMM || hidden {
                                 push_run(&mut sheet.col_widths, col, end, width, hidden);
                             }
@@ -233,15 +282,44 @@ impl Parser<'_> {
                         let tab = self.sheets.saturating_sub(1) as u32;
                         self.parse_named_expressions(xml, Some(tab))?;
                     }
-                    "table:table-header-columns"
-                    | "table:table-columns"
+                    "loext:table-protection" => {
+                        if let Some(p) = sheet.protection.as_mut() {
+                            crate::v03::parse_protection_options(&c, p);
+                        }
+                        xml.skip()?;
+                    }
+                    "calcext:conditional-formats" => {
+                        let styles = &*self.styles;
+                        sheet.conditional_formats =
+                            crate::v03::parse_cond_formats(xml, &mut |n| styles.cf_style(n))?;
+                    }
+                    "table:table-header-rows" => header_rows = Some((xml.depth(), row)),
+                    "table:table-header-columns" => header_cols = Some((xml.depth(), col)),
+                    "table:table-columns"
                     | "table:table-column-group"
-                    | "table:table-header-rows"
                     | "table:table-rows"
                     | "table:table-row-group" => {}
                     _ => xml.skip()?,
                 },
                 Ev::End if xml.depth() < d => break,
+                Ev::End => {
+                    if let Some((hd, start)) = header_rows {
+                        if xml.depth() < hd {
+                            if row > start {
+                                extra.repeat_rows = Some((start, row - 1));
+                            }
+                            header_rows = None;
+                        }
+                    }
+                    if let Some((hd, start)) = header_cols {
+                        if xml.depth() < hd {
+                            if col > start {
+                                extra.repeat_cols = Some((start, (col - 1).min(MAX_COLS - 1)));
+                            }
+                            header_cols = None;
+                        }
+                    }
+                }
                 Ev::Eof => break,
                 _ => {}
             }
@@ -249,7 +327,24 @@ impl Parser<'_> {
         if !col_runs_done {
             self.push_column_defaults(&mut sheet, &col_defaults)?;
         }
-        Ok(sheet)
+        // Cells name their validation; collect each one's ranges.
+        let mut names: Vec<String> = self.val_rects.keys().cloned().collect();
+        names.sort();
+        for name in names {
+            let (Some(v), Some(rects)) =
+                (self.validations.get(&name), self.val_rects.remove(&name))
+            else {
+                continue;
+            };
+            let mut v = v.clone();
+            v.ranges = crate::v03::merge_rects(rects);
+            sheet.validations.push(v);
+        }
+        sheet.notes.sort_by_key(|n| (n.row, n.col));
+        sheet.links.sort_by_key(|l| (l.row, l.col));
+        sheet.row_breaks.sort_unstable();
+        sheet.row_breaks.dedup();
+        Ok((sheet, extra))
     }
 
     /// Counts `n` style runs against the materialized-cell limit.
@@ -303,6 +398,15 @@ impl Parser<'_> {
             .attr("table:style-name")
             .and_then(|n| self.styles.row_style(n))
             .and_then(|rs| if rs.optimal { None } else { rs.height_hmm });
+        if *row > 0
+            && *row < MAX_ROWS
+            && sheet.row_breaks.len() < 10_000
+            && e.attr("table:style-name")
+                .and_then(|n| self.styles.row_style(n))
+                .is_some_and(|rs| rs.break_before)
+        {
+            sheet.row_breaks.push(*row);
+        }
         let visibility = e.attr("table:visibility");
         let filtered = visibility == Some("filter");
         let hidden = !filtered && visibility.is_some_and(|v| v != "visible");
@@ -327,7 +431,10 @@ impl Parser<'_> {
                             let keep =
                                 !matches!(cell.content, CellContentData::Value(Value::Empty))
                                     || cell.style.is_some()
-                                    || cell.span != (1, 1);
+                                    || cell.span != (1, 1)
+                                    || cell.validation.is_some()
+                                    || cell.note.is_some()
+                                    || cell.link.is_some();
                             if keep {
                                 runs.push(Run { col, len, cell });
                             }
@@ -357,6 +464,51 @@ impl Parser<'_> {
             push_run(&mut sheet.row_heights, *row, last, h, hidden);
         }
 
+        // Validations, notes and links of the runs.
+        let rep_end = (*row).saturating_add(rep - 1);
+        for run in &mut runs {
+            let c1 = run.col.saturating_add(run.len - 1);
+            if let Some(v) = run.cell.validation.take() {
+                let rects = self.val_rects.entry(v).or_default();
+                if rects.len() < 1_000_000 {
+                    rects.push(CellRangeLocal {
+                        r0: *row,
+                        c0: run.col,
+                        r1: rep_end,
+                        c1,
+                    });
+                }
+            }
+            let cells = u64::from(run.len) * u64::from(rep);
+            if cells <= 10_000 {
+                if let Some(n) = run.cell.note.take() {
+                    for r in *row..=rep_end {
+                        for c in run.col..=c1 {
+                            if sheet.notes.len() < crate::v03::MAX_ITEMS {
+                                sheet.notes.push(tally_model::NoteData {
+                                    row: r,
+                                    col: c,
+                                    ..n.clone()
+                                });
+                            }
+                        }
+                    }
+                }
+                if let Some(url) = run.cell.link.take() {
+                    for r in *row..=rep_end {
+                        for c in run.col..=c1 {
+                            if sheet.links.len() < crate::v03::MAX_ITEMS {
+                                sheet.links.push(tally_model::LinkData {
+                                    row: r,
+                                    col: c,
+                                    url: url.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Resolve styles and decide which runs materialize.
         let mut kept: Vec<(u32, u32, CellContentData, Option<u32>)> = Vec::new();
         let mut per_row: u64 = 0;
@@ -492,13 +644,17 @@ impl Parser<'_> {
         });
         let mut paragraphs: Vec<String> = Vec::new();
         let mut budget = MAX_CELL_TEXT;
+        let mut note = None;
+        let mut link: Option<String> = None;
         let d = xml.depth();
         loop {
             match xml.next()? {
                 Ev::Start(c) => {
                     if c.name == "text:p" {
-                        let p = parse_paragraph(xml, &mut budget)?;
+                        let p = parse_paragraph(xml, &mut budget, &mut link)?;
                         paragraphs.push(p);
+                    } else if c.name == "office:annotation" {
+                        note = Some(crate::v03::parse_annotation(xml, &c)?);
                     } else {
                         xml.skip()?;
                     }
@@ -507,6 +663,10 @@ impl Parser<'_> {
                 Ev::Eof => break,
                 _ => {}
             }
+        }
+        // A link on an otherwise empty cell (`<text:p><text:a …/></text:p>`).
+        if link.is_some() && paragraphs.iter().all(String::is_empty) {
+            paragraphs.clear();
         }
         let text = (!paragraphs.is_empty()).then(|| paragraphs.join("\n"));
         let formula: Option<Arc<str>> = match e.attr("table:formula") {
@@ -593,6 +753,12 @@ impl Parser<'_> {
                 .map(str::to_string),
             span,
             matrix,
+            validation: e
+                .attr("table:content-validation-name")
+                .filter(|n| !n.is_empty())
+                .map(str::to_string),
+            note,
+            link,
         })
     }
 }
@@ -604,6 +770,7 @@ impl Parser<'_> {
 fn parse_paragraph<R: BufRead>(
     xml: &mut XmlReader<R>,
     budget: &mut usize,
+    link: &mut Option<String>,
 ) -> Result<String, OdsError> {
     let mut out = String::new();
     let mut last_space = true;
@@ -662,6 +829,14 @@ fn parse_paragraph<R: BufRead>(
                 | "text:bookmark-start"
                 | "text:bookmark-end" => xml.skip()?,
                 n if n.starts_with("draw:") || n.starts_with("svg:") => xml.skip()?,
+                "text:a" => {
+                    if link.is_none() {
+                        *link = e
+                            .attr("xlink:href")
+                            .filter(|h| !h.is_empty() && h.len() <= 8192)
+                            .map(str::to_string);
+                    }
+                }
                 _ => {}
             },
             Ev::End if xml.depth() < d => return Ok(out),

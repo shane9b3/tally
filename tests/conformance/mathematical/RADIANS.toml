@@ -5,9 +5,10 @@ formula = "=RADIANS(90.0)"
 expect = 1.5707963267948966
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=RADIANS(\"90.0\")"
-expect = 1.5707963267948966
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -59,3 +60,9 @@ expect = -6.283185307179586
 [[case]]
 formula = "=RADIANS(0)"
 expect = 0
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=RADIANS(\"90.0\")"
+expect = 1.5707963267948966
+settings = { text_to_number = "convert_locale" }

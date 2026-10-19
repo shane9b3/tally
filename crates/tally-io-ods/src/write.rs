@@ -41,6 +41,8 @@ const NS: &str = concat!(
     r#" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0""#,
     r#" xmlns:tableooo="http://openoffice.org/2009/table""#,
     r#" xmlns:calcext="urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0""#,
+    r#" xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0""#,
+    r#" xmlns:tally="urn:tally:names:experimental:1.0""#,
 );
 
 const XML_DECL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>"#;
@@ -65,7 +67,7 @@ pub(crate) fn write<W: Write + Seek>(
     write_content(data, &plan, &mut zip, &mut report)?;
 
     zip.start_file("styles.xml", deflated)?;
-    zip.write_all(styles_xml().as_bytes())?;
+    zip.write_all(styles_xml(data, &plan).as_bytes())?;
 
     zip.start_file("meta.xml", deflated)?;
     zip.write_all(meta_xml(data).as_bytes())?;
@@ -95,19 +97,41 @@ fn manifest() -> String {
     s
 }
 
-fn styles_xml() -> String {
+fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
     let mut s = String::new();
     s.push_str(XML_DECL);
     let _ = write!(s, r#"<office:document-styles{NS} office:version="1.2">"#);
-    s.push_str(concat!(
-        "<office:styles>",
-        r#"<style:default-style style:family="table-cell"><style:paragraph-properties style:tab-stop-distance="1.25cm"/></style:default-style>"#,
-        r#"<style:style style:name="Default" style:family="table-cell"/>"#,
-        "</office:styles>",
-        r#"<office:automatic-styles><style:page-layout style:name="Mpm1"/></office:automatic-styles>"#,
-        r#"<office:master-styles><style:master-page style:name="Default" style:page-layout-name="Mpm1"/></office:master-styles>"#,
-        "</office:document-styles>",
-    ));
+    s.push_str("<office:styles>");
+    s.push_str(r#"<style:default-style style:family="table-cell"><style:paragraph-properties style:tab-stop-distance="1.25cm"/>"#);
+    if let Some(tag) = &data.settings.locale {
+        let mut parts = tag.splitn(2, '-');
+        let lang = parts.next().unwrap_or("en");
+        let country = parts.next();
+        s.push_str(r#"<style:text-properties fo:language=""#);
+        escape_attr(lang, &mut s);
+        s.push('"');
+        if let Some(c) = country {
+            s.push_str(r#" fo:country=""#);
+            escape_attr(c, &mut s);
+            s.push('"');
+        }
+        s.push_str("/>");
+    }
+    s.push_str("</style:default-style>");
+    s.push_str(r#"<style:style style:name="Default" style:family="table-cell"/>"#);
+    s.push_str(&plan.cf_data_xml);
+    for (st, name, ds) in &plan.cf_styles {
+        crate::v03::write_cf_style(&mut s, name, st, ds.as_deref());
+    }
+    s.push_str("</office:styles><office:automatic-styles>");
+    for (i, (p, _)) in plan.pages.iter().enumerate() {
+        crate::v03::write_page_layout(&mut s, &format!("Mpm{}", i + 1), p);
+    }
+    s.push_str("</office:automatic-styles><office:master-styles>");
+    for (i, (p, name)) in plan.pages.iter().enumerate() {
+        crate::v03::write_master_page(&mut s, name, &format!("Mpm{}", i + 1), p);
+    }
+    s.push_str("</office:master-styles></office:document-styles>");
     s
 }
 
@@ -119,8 +143,17 @@ fn meta_xml(data: &WorkbookData) -> String {
         r#"<office:document-meta{NS} office:version="1.2"><office:meta><meta:generator>Tally/0.1</meta:generator>"#
     );
     let m = &data.meta;
+    for k in &m.keywords {
+        s.push_str("<meta:keyword>");
+        escape_text(k, &mut s);
+        s.push_str("</meta:keyword>");
+    }
     for (tag, v) in [
         ("dc:title", &m.title),
+        ("dc:subject", &m.subject),
+        ("dc:description", &m.description),
+        ("meta:initial-creator", &m.author),
+        ("dc:creator", &m.last_author),
         ("meta:creation-date", &m.created),
         ("dc:date", &m.modified),
     ] {
@@ -184,15 +217,42 @@ fn settings_xml(data: &WorkbookData) -> String {
     s
 }
 
+/// The page-style part of a setup (what a master page holds).
+fn page_style_key(p: &tally_model::PageSetupData) -> tally_model::PageSetupData {
+    tally_model::PageSetupData {
+        print_range: None,
+        repeat_rows: None,
+        repeat_cols: None,
+        ..p.clone()
+    }
+}
+
+/// (hidden, tab colour, master page) of a table style.
+type TableKey = (bool, Option<u32>, String);
+
+/// An interval of one column: (first row, last row, style, validation).
+type ColInterval = (u32, u32, Option<u32>, Option<usize>);
+
 /// Names of the automatic styles we will emit.
 struct StylePlan {
     /// data.styles index → (cell style name, XML).
     cell_xml: String,
     data_xml: String,
     fonts: Vec<String>,
-    col_styles: Vec<(u32, String)>,
-    row_styles: Vec<(u32, String)>,
-    table_styles: Vec<((bool, Option<u32>), String)>,
+    /// (width, break before) → name.
+    col_styles: Vec<((u32, bool), String)>,
+    /// (height, break before) → name.
+    row_styles: Vec<((u32, bool), String)>,
+    /// (hidden, tab colour, master page) → name.
+    table_styles: Vec<(TableKey, String)>,
+    /// Conditional styles: (style, name, data style).
+    cf_styles: Vec<(tally_model::CfStyleData, String, Option<String>)>,
+    /// Data styles of the conditional styles (styles.xml).
+    cf_data_xml: String,
+    /// Page styles: (setup, master page name); the first is "Default".
+    pages: Vec<(tally_model::PageSetupData, String)>,
+    /// (tab, row, col) → derived cell style with `style:map`s.
+    derived: HashMap<(usize, u32, u32), String>,
 }
 
 impl StylePlan {
@@ -201,13 +261,18 @@ impl StylePlan {
             cell_xml: String::new(),
             data_xml: String::new(),
             fonts: Vec::new(),
-            col_styles: vec![(DEFAULT_COL_WIDTH_HMM, "co1".into())],
-            row_styles: vec![(DEFAULT_ROW_HEIGHT_HMM, "ro1".into())],
+            col_styles: vec![((DEFAULT_COL_WIDTH_HMM, false), "co1".into())],
+            row_styles: vec![((DEFAULT_ROW_HEIGHT_HMM, false), "ro1".into())],
             table_styles: Vec::new(),
+            cf_styles: Vec::new(),
+            cf_data_xml: String::new(),
+            pages: vec![(tally_model::PageSetupData::default(), "Default".into())],
+            derived: HashMap::new(),
         };
         let mut codes: HashMap<&str, Option<String>> = HashMap::new();
         let mut warned_display = false;
         let mut warned_indent = false;
+        let mut data_names: Vec<Option<String>> = Vec::with_capacity(data.styles.len());
         for (i, st) in data.styles.iter().enumerate() {
             let data_name = match st.number_format.as_deref() {
                 None => None,
@@ -258,72 +323,249 @@ impl StylePlan {
                 st,
                 data_name.as_deref(),
             );
+            data_names.push(data_name);
         }
+        let row_break = |sheet: &SheetData, r: u32| sheet.row_breaks.binary_search(&r).is_ok();
         for sheet in &data.sheets {
             for run in &sheet.col_widths {
-                if !plan.col_styles.iter().any(|(w, _)| *w == run.size_hmm) {
+                let key = (run.size_hmm, false);
+                if !plan.col_styles.iter().any(|(w, _)| *w == key) {
                     let name = format!("co{}", plan.col_styles.len() + 1);
-                    plan.col_styles.push((run.size_hmm, name));
+                    plan.col_styles.push((key, name));
+                }
+            }
+            for &c in &sheet.col_breaks {
+                let w = sheet
+                    .col_widths
+                    .iter()
+                    .find(|r| r.start <= c && c <= r.end)
+                    .map_or(DEFAULT_COL_WIDTH_HMM, |r| r.size_hmm);
+                if !plan.col_styles.iter().any(|(k, _)| *k == (w, true)) {
+                    let name = format!("co{}", plan.col_styles.len() + 1);
+                    plan.col_styles.push(((w, true), name));
                 }
             }
             for run in &sheet.row_heights {
-                if !plan.row_styles.iter().any(|(h, _)| *h == run.size_hmm) {
+                let key = (run.size_hmm, false);
+                if !plan.row_styles.iter().any(|(h, _)| *h == key) {
                     let name = format!("ro{}", plan.row_styles.len() + 1);
-                    plan.row_styles.push((run.size_hmm, name));
+                    plan.row_styles.push((key, name));
                 }
             }
-            let key = (sheet.hidden, sheet.tab_color);
+            for &r in &sheet.row_breaks {
+                debug_assert!(row_break(sheet, r));
+                let h = sheet
+                    .row_heights
+                    .iter()
+                    .find(|x| x.start <= r && r <= x.end)
+                    .map_or(DEFAULT_ROW_HEIGHT_HMM, |x| x.size_hmm);
+                if !plan.row_styles.iter().any(|(k, _)| *k == (h, true)) {
+                    let name = format!("ro{}", plan.row_styles.len() + 1);
+                    plan.row_styles.push(((h, true), name));
+                }
+            }
+            let master = plan.master_for(sheet);
+            let key = (sheet.hidden, sheet.tab_color, master);
             if !plan.table_styles.iter().any(|(k, _)| *k == key) {
                 let name = format!("ta{}", plan.table_styles.len() + 1);
                 plan.table_styles.push((key, name));
             }
+            for cf in &sheet.conditional_formats {
+                for rule in &cf.rules {
+                    plan.cf_style_name(&rule.style, report);
+                }
+            }
         }
+        plan.plan_derived(data, &data_names);
         plan
     }
 
-    fn col_style(&self, w: u32) -> &str {
+    /// The master page of a sheet (registering a new page style).
+    fn master_for(&mut self, sheet: &SheetData) -> String {
+        let key = sheet
+            .page_setup
+            .as_ref()
+            .map_or_else(tally_model::PageSetupData::default, page_style_key);
+        if let Some((_, n)) = self.pages.iter().find(|(p, _)| *p == key) {
+            return n.clone();
+        }
+        let name = format!("PageStyle_{}", self.pages.len());
+        self.pages.push((key, name.clone()));
+        name
+    }
+
+    /// The named style for a conditional style (registered on first use).
+    fn cf_style_name(&mut self, st: &tally_model::CfStyleData, report: &mut WriteReport) -> String {
+        if let Some((_, n, _)) = self.cf_styles.iter().find(|(x, _, _)| x == st) {
+            return n.clone();
+        }
+        let i = self.cf_styles.len() + 1;
+        let name = format!("Tally_CF_{i}");
+        let ds = st.number_format.as_deref().and_then(|code| {
+            let dn = format!("NCF{i}");
+            let mut xml = String::new();
+            match code_to_xml(code, &dn, &mut xml) {
+                Ok(()) => {
+                    self.cf_data_xml.push_str(&xml);
+                    Some(dn)
+                }
+                Err(why) => {
+                    report
+                        .warnings
+                        .push(format!("conditional number format {code:?} dropped: {why}"));
+                    None
+                }
+            }
+        });
+        self.cf_styles.push((st.clone(), name.clone(), ds));
+        name
+    }
+
+    fn cf_style_known(&self, st: &tally_model::CfStyleData) -> String {
+        self.cf_styles
+            .iter()
+            .find(|(x, _, _)| x == st)
+            .map_or_else(|| "Default".to_string(), |(_, n, _)| n.clone())
+    }
+
+    /// Derived cell styles carrying `style:map`s (OpenOffice's conditional
+    /// formatting) for the cells in conditional formats with value or
+    /// formula rules. Empty cells are not covered.
+    fn plan_derived(&mut self, data: &WorkbookData, data_names: &[Option<String>]) {
+        let mut by_key: HashMap<(Option<u32>, Vec<usize>), String> = HashMap::new();
+        for (tab, sheet) in data.sheets.iter().enumerate() {
+            let mappable: Vec<(usize, &tally_model::ConditionalFormatData)> = sheet
+                .conditional_formats
+                .iter()
+                .enumerate()
+                .filter(|(_, cf)| {
+                    cf.rules
+                        .iter()
+                        .any(|r| crate::v03::map_condition(&r.kind).is_some())
+                })
+                .collect();
+            if mappable.is_empty() {
+                continue;
+            }
+            for cell in &sheet.cells {
+                let ids: Vec<usize> = mappable
+                    .iter()
+                    .filter(|(_, cf)| {
+                        cf.ranges.iter().any(|r| {
+                            r.r0 <= cell.row
+                                && cell.row <= r.r1
+                                && r.c0 <= cell.col
+                                && cell.col <= r.c1
+                        })
+                    })
+                    .map(|(i, _)| *i)
+                    .collect();
+                if ids.is_empty() {
+                    continue;
+                }
+                let base = cell.style.filter(|i| (*i as usize) < data.styles.len());
+                let key = (
+                    base,
+                    ids.iter().map(|i| tab * 100_000 + i).collect::<Vec<_>>(),
+                );
+                let name = match by_key.get(&key) {
+                    Some(n) => n.clone(),
+                    None => {
+                        let name = format!("cm{}", by_key.len() + 1);
+                        let default = StyleData::default();
+                        let st = base.map_or(&default, |i| &data.styles[i as usize]);
+                        let ds = base.and_then(|i| data_names[i as usize].clone());
+                        let mut xml = String::new();
+                        cell_style_xml(&mut xml, &name, st, ds.as_deref());
+                        let close = "</style:style>";
+                        if xml.ends_with(close) {
+                            xml.truncate(xml.len() - close.len());
+                        }
+                        let sheet_name = odf_sheet_name(&sheet.name);
+                        for &i in &ids {
+                            let cf = &sheet.conditional_formats[i];
+                            for rule in &cf.rules {
+                                let Some(c) = crate::v03::map_condition(&rule.kind) else {
+                                    continue;
+                                };
+                                xml.push_str(r#"<style:map style:condition=""#);
+                                escape_attr(&c, &mut xml);
+                                let _ = write!(
+                                    xml,
+                                    r#"" style:apply-style-name="{}" style:base-cell-address=""#,
+                                    self.cf_style_known(&rule.style)
+                                );
+                                escape_attr(
+                                    &crate::v03::base_address(&sheet_name, cf.base.0, cf.base.1),
+                                    &mut xml,
+                                );
+                                xml.push_str("\"/>");
+                            }
+                        }
+                        xml.push_str(close);
+                        self.cell_xml.push_str(&xml);
+                        by_key.insert(key, name.clone());
+                        name
+                    }
+                };
+                self.derived.insert((tab, cell.row, cell.col), name);
+            }
+        }
+    }
+
+    fn col_style(&self, w: u32, brk: bool) -> &str {
         self.col_styles
             .iter()
-            .find(|(x, _)| *x == w)
+            .find(|(x, _)| *x == (w, brk))
             .map_or("co1", |(_, n)| n.as_str())
     }
 
-    fn row_style(&self, h: u32) -> &str {
+    fn row_style(&self, h: u32, brk: bool) -> &str {
         self.row_styles
             .iter()
-            .find(|(x, _)| *x == h)
+            .find(|(x, _)| *x == (h, brk))
             .map_or("ro1", |(_, n)| n.as_str())
     }
 
     fn table_style(&self, sheet: &SheetData) -> &str {
-        let key = (sheet.hidden, sheet.tab_color);
+        let master = sheet
+            .page_setup
+            .as_ref()
+            .map_or_else(tally_model::PageSetupData::default, page_style_key);
+        let master = self
+            .pages
+            .iter()
+            .find(|(p, _)| *p == master)
+            .map_or("Default", |(_, n)| n.as_str());
         self.table_styles
             .iter()
-            .find(|(k, _)| *k == key)
+            .find(|((h, t, m), _)| *h == sheet.hidden && *t == sheet.tab_color && m == master)
             .map_or("ta1", |(_, n)| n.as_str())
     }
 
     fn automatic_styles(&self, out: &mut String) {
         out.push_str(&self.data_xml);
-        for (w, name) in &self.col_styles {
+        for ((w, brk), name) in &self.col_styles {
             let _ = write!(
                 out,
-                r#"<style:style style:name="{name}" style:family="table-column"><style:table-column-properties fo:break-before="auto" style:column-width="{}"/></style:style>"#,
+                r#"<style:style style:name="{name}" style:family="table-column"><style:table-column-properties fo:break-before="{}" style:column-width="{}"/></style:style>"#,
+                if *brk { "page" } else { "auto" },
                 hmm_to_cm(*w)
             );
         }
-        for (h, name) in &self.row_styles {
+        for ((h, brk), name) in &self.row_styles {
             let optimal = if name == "ro1" { "true" } else { "false" };
             let _ = write!(
                 out,
-                r#"<style:style style:name="{name}" style:family="table-row"><style:table-row-properties style:row-height="{}" fo:break-before="auto" style:use-optimal-row-height="{optimal}"/></style:style>"#,
-                hmm_to_cm(*h)
+                r#"<style:style style:name="{name}" style:family="table-row"><style:table-row-properties style:row-height="{}" fo:break-before="{}" style:use-optimal-row-height="{optimal}"/></style:style>"#,
+                hmm_to_cm(*h),
+                if *brk { "page" } else { "auto" }
             );
         }
-        for ((hidden, tab), name) in &self.table_styles {
+        for ((hidden, tab, master), name) in &self.table_styles {
             let _ = write!(
                 out,
-                r#"<style:style style:name="{name}" style:family="table" style:master-page-name="Default"><style:table-properties table:display="{}" style:writing-mode="lr-tb""#,
+                r#"<style:style style:name="{name}" style:family="table" style:master-page-name="{master}"><style:table-properties table:display="{}" style:writing-mode="lr-tb""#,
                 !hidden
             );
             if let Some(c) = tab {
@@ -363,6 +605,19 @@ fn cell_style_xml(out: &mut String, name: &str, st: &StyleData, data_style: Opti
     }
     if st.align.wrap {
         cell_props.push_str(r#" fo:wrap-option="wrap""#);
+    }
+    if let Some(p) = st.protection {
+        let v = match (p.hidden, p.locked, p.hidden_formula) {
+            (true, _, _) => "hidden-and-protected",
+            (false, true, true) => "protected formula-hidden",
+            (false, true, false) => "protected",
+            (false, false, true) => "formula-hidden",
+            (false, false, false) => "none",
+        };
+        let _ = write!(cell_props, r#" style:cell-protect="{v}""#);
+        if p.hide_print {
+            cell_props.push_str(r#" style:print-content="false""#);
+        }
     }
     match st.align.v {
         VAlign::Bottom => {}
@@ -446,7 +701,11 @@ fn write_content<W: Write + Seek>(
     }
     s.push_str("</office:font-face-decls><office:automatic-styles>");
     plan.automatic_styles(&mut s);
-    s.push_str("</office:automatic-styles><office:body><office:spreadsheet>");
+    s.push_str("</office:automatic-styles><office:body><office:spreadsheet");
+    if let Some(p) = &data.settings.structure_protection {
+        crate::v03::write_protection_attrs(&mut s, "table:structure-protected", p);
+    }
+    s.push('>');
 
     let c = &data.settings.calc_settings;
     let (regex, wild) = match c.criteria_mode {
@@ -473,6 +732,12 @@ fn write_content<W: Write + Seek>(
         );
     }
     s.push_str("</table:calculation-settings>");
+    let vals: Vec<(String, &[tally_model::ValidationData])> = data
+        .sheets
+        .iter()
+        .map(|sh| (odf_sheet_name(&sh.name), sh.validations.as_slice()))
+        .collect();
+    crate::v03::write_validations(&mut s, &vals);
 
     for (tab, sheet) in data.sheets.iter().enumerate() {
         write_sheet(sheet, tab, data, plan, &mut s, zip, report)?;
@@ -497,6 +762,38 @@ fn run_at(runs: &[DimRun], i: u32) -> (Option<&DimRun>, Option<u32>) {
     (None, None)
 }
 
+/// Per-cell extras of a sheet: validations, notes, links, derived styles.
+struct Extras<'a> {
+    tab: usize,
+    /// (ranges, validation name).
+    vals: Vec<(&'a [CellRangeLocal], String)>,
+    notes: HashMap<(u32, u32), &'a tally_model::NoteData>,
+    links: HashMap<(u32, u32), &'a str>,
+    derived: &'a HashMap<(usize, u32, u32), String>,
+}
+
+impl Extras<'_> {
+    fn validation(&self, r: u32, c: u32) -> Option<&str> {
+        self.vals
+            .iter()
+            .find(|(rs, _)| {
+                rs.iter()
+                    .any(|x| x.r0 <= r && r <= x.r1 && x.c0 <= c && c <= x.c1)
+            })
+            .map(|(_, n)| n.as_str())
+    }
+}
+
+/// A vertical run of empty cells with a style and/or a validation.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct ERun {
+    col: u32,
+    start_row: u32,
+    end_row: u32,
+    style: Option<u32>,
+    val: Option<usize>,
+}
+
 /// Merges, anchors and matrix spans of one row, for writing its cells.
 struct RowCtx<'a> {
     /// Covered column intervals (inclusive), sorted by start.
@@ -506,6 +803,7 @@ struct RowCtx<'a> {
     /// Array formula anchors of the sheet: (row, col) → (cols, rows).
     matrix: &'a HashMap<(u32, u32), (u32, u32)>,
     row: u32,
+    extras: &'a Extras<'a>,
 }
 
 impl RowCtx<'_> {
@@ -552,10 +850,17 @@ impl RowCtx<'_> {
     }
 }
 
-/// Writes empty cells for columns `from..from+n` (styled with `style` if
-/// set), as covered cells where merges cover them and with spans at merge
-/// anchors.
-fn write_segmented(s: &mut String, ctx: &RowCtx<'_>, from: u32, n: u32, style: Option<u32>) {
+/// Writes empty cells for columns `from..from+n` (styled with `style` and
+/// validated by `val` if set), as covered cells where merges cover them
+/// and with spans at merge anchors.
+fn write_segmented(
+    s: &mut String,
+    ctx: &RowCtx<'_>,
+    from: u32,
+    n: u32,
+    style: Option<u32>,
+    val: Option<&str>,
+) {
     let end = from.saturating_add(n);
     let mut c = from;
     while c < end {
@@ -570,6 +875,9 @@ fn write_segmented(s: &mut String, ctx: &RowCtx<'_>, from: u32, n: u32, style: O
         let _ = write!(s, "<{tag}");
         if let Some(st) = style {
             let _ = write!(s, r#" table:style-name="ce{}""#, st + 1);
+        }
+        if let Some(v) = val {
+            let _ = write!(s, r#" table:content-validation-name="{v}""#);
         }
         if let Some((cs, rs)) = anchor {
             write_spans(s, cs, rs);
@@ -617,6 +925,94 @@ pub(crate) fn odf_sheet_name(name: &str) -> String {
     }
 }
 
+/// Splits style runs and validation rectangles into disjoint vertical
+/// runs per column (`col_default` columns keep their default style: their
+/// validation-only runs carry no style).
+fn empty_runs(sheet: &SheetData, vruns: &[StyleRun]) -> Vec<ERun> {
+    let mut cols: BTreeMap<u32, Vec<ColInterval>> = BTreeMap::new();
+    for r in vruns {
+        cols.entry(r.col)
+            .or_default()
+            .push((r.start_row, r.end_row, Some(r.style), None));
+    }
+    for (i, v) in sheet.validations.iter().enumerate() {
+        for rg in &v.ranges {
+            if rg.r1 >= MAX_ROWS || rg.c1 >= MAX_COLS || rg.r0 > rg.r1 || rg.c0 > rg.c1 {
+                continue;
+            }
+            for c in rg.c0..=rg.c1 {
+                cols.entry(c)
+                    .or_default()
+                    .push((rg.r0, rg.r1, None, Some(i)));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (col, ivs) in cols {
+        if ivs.iter().all(|x| x.3.is_none()) {
+            // Style runs only: they are already disjoint.
+            for (a, b, st, _) in ivs {
+                out.push(ERun {
+                    col,
+                    start_row: a,
+                    end_row: b,
+                    style: st,
+                    val: None,
+                });
+            }
+            continue;
+        }
+        let mut points: Vec<u32> = Vec::with_capacity(ivs.len() * 2);
+        for &(a, b, _, _) in &ivs {
+            points.push(a);
+            points.push(b.saturating_add(1));
+        }
+        points.sort_unstable();
+        points.dedup();
+        for w in points.windows(2) {
+            let (a, b) = (w[0], w[1] - 1);
+            // Later entries win (a later validation replaces an earlier one).
+            let style = ivs
+                .iter()
+                .rev()
+                .find(|x| x.2.is_some() && x.0 <= a && a <= x.1)
+                .and_then(|x| x.2);
+            let val = ivs
+                .iter()
+                .rev()
+                .find(|x| x.3.is_some() && x.0 <= a && a <= x.1)
+                .and_then(|x| x.3);
+            if style.is_none() && val.is_none() {
+                continue;
+            }
+            match out.last_mut() {
+                Some(ERun {
+                    col: c,
+                    end_row,
+                    style: s2,
+                    val: v2,
+                    ..
+                }) if *c == col
+                    && end_row.checked_add(1) == Some(a)
+                    && *s2 == style
+                    && *v2 == val =>
+                {
+                    *end_row = b;
+                }
+                _ => out.push(ERun {
+                    col,
+                    start_row: a,
+                    end_row: b,
+                    style,
+                    val,
+                }),
+            }
+        }
+    }
+    out.sort_by_key(|r| (r.start_row, r.col));
+    out
+}
+
 fn write_sheet<W: Write + Seek>(
     sheet: &SheetData,
     tab: usize,
@@ -626,13 +1022,81 @@ fn write_sheet<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     report: &mut WriteReport,
 ) -> Result<(), OdsError> {
+    let sheet_name = odf_sheet_name(&sheet.name);
     s.push_str(r#"<table:table table:name=""#);
     escape_attr(&sheet.name, s);
-    let _ = write!(s, r#"" table:style-name="{}">"#, plan.table_style(sheet));
+    let _ = write!(s, r#"" table:style-name="{}""#, plan.table_style(sheet));
+    if let Some(p) = &sheet.protection {
+        crate::v03::write_protection_attrs(s, "table:protected", p);
+    }
+    if let Some(r) = sheet.page_setup.as_ref().and_then(|p| p.print_range) {
+        s.push_str(r#" table:print-ranges=""#);
+        escape_attr(&crate::v03::range_list(&sheet_name, &[r]), s);
+        s.push('"');
+    }
+    s.push('>');
+    if let Some(p) = &sheet.protection {
+        crate::v03::write_protection_options(s, p);
+    }
+    let repeat_rows = sheet.page_setup.as_ref().and_then(|p| p.repeat_rows);
+    let repeat_cols = sheet.page_setup.as_ref().and_then(|p| p.repeat_cols);
+
+    let extras = Extras {
+        tab,
+        vals: sheet
+            .validations
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(i, v)| (v.ranges.as_slice(), crate::v03::validation_name(tab, i)))
+            .collect(),
+        notes: sheet.notes.iter().map(|n| ((n.row, n.col), n)).collect(),
+        links: sheet
+            .links
+            .iter()
+            .map(|l| ((l.row, l.col), l.url.as_str()))
+            .collect(),
+        derived: &plan.derived,
+    };
 
     let mut cells: Vec<&CellData> = sheet.cells.iter().collect();
     cells.sort_by_key(|c| (c.row, c.col));
     cells.dedup_by_key(|c| (c.row, c.col));
+    // Notes and links on cells that do not exist get an empty cell.
+    let style_at = |r: u32, c: u32| {
+        sheet
+            .style_runs
+            .iter()
+            .rev()
+            .find(|x| x.col == c && x.start_row <= r && r <= x.end_row)
+            .map(|x| x.style)
+    };
+    let mut synth: Vec<CellData> = Vec::new();
+    {
+        let have: std::collections::HashSet<(u32, u32)> =
+            cells.iter().map(|c| (c.row, c.col)).collect();
+        let mut extra_pos: Vec<(u32, u32)> = extras
+            .notes
+            .keys()
+            .chain(extras.links.keys())
+            .copied()
+            .filter(|p| !have.contains(p) && p.0 < MAX_ROWS && p.1 < MAX_COLS)
+            .collect();
+        extra_pos.sort_unstable();
+        extra_pos.dedup();
+        for (r, c) in extra_pos {
+            synth.push(CellData {
+                row: r,
+                col: c,
+                content: CellContentData::Value(Value::Empty),
+                style: style_at(r, c),
+            });
+        }
+    }
+    if !synth.is_empty() {
+        cells.extend(synth.iter());
+        cells.sort_by_key(|c| (c.row, c.col));
+    }
     let mut cols = sheet.col_widths.clone();
     cols.sort_by_key(|r| r.start);
     let mut rows = sheet.row_heights.clone();
@@ -668,7 +1132,7 @@ fn write_sheet<W: Write + Seek>(
     // the others are written as (repeated) rows of styled empty cells.
     let valid_style = |i: u32| (i as usize) < data.styles.len();
     let mut col_default: BTreeMap<u32, u32> = BTreeMap::new();
-    let mut vruns: Vec<StyleRun> = Vec::new();
+    let mut style_vruns: Vec<StyleRun> = Vec::new();
     for run in &sheet.style_runs {
         if !valid_style(run.style) || run.start_row > run.end_row || run.end_row >= MAX_ROWS {
             continue;
@@ -676,10 +1140,12 @@ fn write_sheet<W: Write + Seek>(
         if run.start_row == 0 && run.end_row == MAX_ROWS - 1 {
             col_default.insert(run.col, run.style);
         } else {
-            vruns.push(*run);
+            style_vruns.push(*run);
         }
     }
-    vruns.sort_by_key(|r| (r.start_row, r.col));
+    let vruns = empty_runs(sheet, &style_vruns);
+    let col_breaks: std::collections::BTreeSet<u32> = sheet.col_breaks.iter().copied().collect();
+    let row_breaks: std::collections::BTreeSet<u32> = sheet.row_breaks.iter().copied().collect();
 
     // Columns.
     let max_cell_col = cells.iter().map(|c| c.col).max();
@@ -689,15 +1155,23 @@ fn write_sheet<W: Write + Seek>(
         .copied()
         .chain(vruns.iter().map(|r| r.col))
         .chain(merges.iter().map(|m| m.c1))
+        .chain(col_breaks.iter().copied())
+        .chain(repeat_cols.map(|r| r.1))
         .max();
     let end_col = max_cell_col
         .max(max_run_col)
         .max(max_style_col)
-        .map_or(1, |c| c.saturating_add(1));
+        .map_or(1, |c| c.saturating_add(1))
+        .min(MAX_COLS);
     let mut c = 0;
     while c < end_col {
+        if let Some((a, _)) = repeat_cols {
+            if c == a {
+                s.push_str("<table:table-header-columns>");
+            }
+        }
         let (run, next) = run_at(&cols, c);
-        let (width, hidden, stop) = match run {
+        let (width, hidden, mut stop) = match run {
             Some(r) => (r.size_hmm, r.hidden, r.end.saturating_add(1).min(end_col)),
             None => (
                 DEFAULT_COL_WIDTH_HMM,
@@ -705,6 +1179,20 @@ fn write_sheet<W: Write + Seek>(
                 next.unwrap_or(end_col).min(end_col),
             ),
         };
+        let brk = col_breaks.contains(&c);
+        if brk {
+            stop = c + 1;
+        }
+        if let Some(&b) = col_breaks.range(c + 1..).next() {
+            stop = stop.min(b);
+        }
+        if let Some((a, b)) = repeat_cols {
+            for x in [a, b.saturating_add(1)] {
+                if x > c {
+                    stop = stop.min(x);
+                }
+            }
+        }
         let default = col_default.get(&c).copied();
         let mut n = 1;
         while c + n < stop && col_default.get(&(c + n)).copied() == default {
@@ -713,7 +1201,7 @@ fn write_sheet<W: Write + Seek>(
         let _ = write!(
             s,
             r#"<table:table-column table:style-name="{}""#,
-            plan.col_style(width)
+            plan.col_style(width, brk)
         );
         if hidden {
             s.push_str(r#" table:visibility="collapse""#);
@@ -728,6 +1216,11 @@ fn write_sheet<W: Write + Seek>(
             None => s.push_str(r#" table:default-cell-style-name="Default"/>"#),
         }
         c += n;
+        if let Some((_, b)) = repeat_cols {
+            if c == b.saturating_add(1) {
+                s.push_str("</table:table-header-columns>");
+            }
+        }
     }
 
     // Rows.
@@ -738,21 +1231,29 @@ fn write_sheet<W: Write + Seek>(
         .map(|r| r.end_row)
         .chain(merges.iter().map(|m| m.r1))
         .chain(filtered.last().map(|f| f.1))
+        .chain(row_breaks.iter().copied())
+        .chain(repeat_rows.map(|r| r.1))
         .max();
     let end_row = max_cell_row
         .max(max_run_row)
         .max(max_style_row)
-        .map_or(1, |r| r.saturating_add(1));
+        .map_or(1, |r| r.saturating_add(1))
+        .min(MAX_ROWS);
     let mut r = 0;
     let mut ci = 0;
     let mut vi = 0;
     let mut mi = 0;
     let mut fi = 0;
-    // Style runs covering the current row, sorted by column.
-    let mut active: Vec<StyleRun> = Vec::new();
+    // Runs covering the current row, sorted by column.
+    let mut active: Vec<ERun> = Vec::new();
     // Merges covering the current row.
     let mut active_m: Vec<CellRangeLocal> = Vec::new();
     while r < end_row {
+        if let Some((a, _)) = repeat_rows {
+            if r == a {
+                s.push_str("<table:table-header-rows>");
+            }
+        }
         active.retain(|a| a.end_row >= r);
         while vi < vruns.len() && vruns[vi].start_row <= r {
             let run = vruns[vi];
@@ -796,6 +1297,7 @@ fn write_sheet<W: Write + Seek>(
             anchors: Vec::new(),
             matrix: &matrix,
             row: r,
+            extras: &extras,
         };
         for m in &active_m {
             if m.r0 == r {
@@ -815,6 +1317,19 @@ fn write_sheet<W: Write + Seek>(
             .chain(vruns.get(vi).map(|v| v.start_row))
             .min()
             .unwrap_or(u32::MAX);
+        let brk = row_breaks.contains(&r);
+        let next_break = row_breaks
+            .range(r + 1..)
+            .next()
+            .copied()
+            .unwrap_or(u32::MAX);
+        let next_header = repeat_rows.map_or(u32::MAX, |(a, b)| {
+            [a, b.saturating_add(1)]
+                .into_iter()
+                .filter(|x| *x > r)
+                .min()
+                .unwrap_or(u32::MAX)
+        });
         let (run, next) = run_at(&rows, r);
         let (height, hidden, run_stop) = match run {
             Some(x) => (x.size_hmm, x.hidden, x.end.saturating_add(1)),
@@ -823,7 +1338,7 @@ fn write_sheet<W: Write + Seek>(
         let _ = write!(
             s,
             r#"<table:table-row table:style-name="{}""#,
-            plan.row_style(height)
+            plan.row_style(height, brk)
         );
         // A row hidden by the user stays "collapse" even when the filter
         // also hides it, so it stays hidden when the filter is removed.
@@ -837,13 +1352,15 @@ fn write_sheet<W: Write + Seek>(
             ci += 1;
         }
         let row_cells = &cells[row_start..ci];
-        let n = if row_cells.is_empty() {
+        let n = if row_cells.is_empty() && !brk {
             let next_cell = cells.get(ci).map_or(end_row, |c| c.row);
             next_cell
                 .min(run_stop)
                 .min(next_style)
                 .min(next_merge)
                 .min(next_filter)
+                .min(next_break)
+                .min(next_header)
                 .min(end_row)
                 .max(r + 1)
                 - r
@@ -861,6 +1378,11 @@ fn write_sheet<W: Write + Seek>(
             s.push_str("</table:table-row>");
         }
         r += n;
+        if let Some((_, b)) = repeat_rows {
+            if r == b.saturating_add(1) {
+                s.push_str("</table:table-header-rows>");
+            }
+        }
         if s.len() >= FLUSH_AT {
             flush(s, zip)?;
         }
@@ -871,6 +1393,9 @@ fn write_sheet<W: Write + Seek>(
         .filter(|n| n.sheet == Some(tab as u32))
         .collect();
     write_named_expressions(s, &local, data);
+    crate::v03::write_cond_formats(s, &sheet_name, &sheet.conditional_formats, &|st| {
+        plan.cf_style_known(st)
+    });
     s.push_str("</table:table>");
     Ok(())
 }
@@ -1032,12 +1557,12 @@ fn write_database_ranges(s: &mut String, data: &WorkbookData) {
 }
 
 /// Writes one row: its cells merged with styled empty cells for the style
-/// runs covering the row (`active`, sorted by column), covered cells and
-/// merge anchors from `ctx`.
+/// and validation runs covering the row (`active`, sorted by column),
+/// covered cells and merge anchors from `ctx`.
 fn write_row_cells(
     s: &mut String,
     row_cells: &[&CellData],
-    active: &[StyleRun],
+    active: &[ERun],
     data: &WorkbookData,
     report: &mut WriteReport,
     ctx: &RowCtx<'_>,
@@ -1052,7 +1577,7 @@ fn write_row_cells(
             ai += 1;
         }
         if cell.col > col {
-            write_segmented(s, ctx, col, cell.col - col, None);
+            write_segmented(s, ctx, col, cell.col - col, None, None);
         }
         write_cell(s, cell, data, report, ctx);
         col = cell.col.saturating_add(1);
@@ -1062,34 +1587,38 @@ fn write_row_cells(
     }
     let end = ctx.end();
     if end > col {
-        write_segmented(s, ctx, col, end - col, None);
+        write_segmented(s, ctx, col, end - col, None, None);
     }
 }
 
-/// Writes the styled empty cell for `runs[0]` (after any blanks from `col`),
-/// grouping following runs of the same style in adjacent columns below
-/// `limit`. Returns the next column and advances `ai`.
+/// Writes the empty cells of `runs[0]` (after any blanks from `col`),
+/// grouping following runs of the same style and validation in adjacent
+/// columns below `limit`. Returns the next column and advances `ai`.
 fn write_styled_empty(
     s: &mut String,
     ctx: &RowCtx<'_>,
     col: u32,
-    runs: &[StyleRun],
+    runs: &[ERun],
     limit: u32,
     ai: &mut usize,
 ) -> u32 {
     let first = runs[0];
     if first.col > col {
-        write_segmented(s, ctx, col, first.col - col, None);
+        write_segmented(s, ctx, col, first.col - col, None, None);
     }
     let mut n = 1;
     while (n as usize) < runs.len()
         && runs[n as usize].col == first.col + n
         && runs[n as usize].col < limit
         && runs[n as usize].style == first.style
+        && runs[n as usize].val == first.val
     {
         n += 1;
     }
-    write_segmented(s, ctx, first.col, n, Some(first.style));
+    let name = first
+        .val
+        .map(|i| crate::v03::validation_name(ctx.extras.tab, i));
+    write_segmented(s, ctx, first.col, n, first.style, name.as_deref());
     *ai += n as usize;
     first.col + n
 }
@@ -1101,6 +1630,7 @@ fn write_cell(
     report: &mut WriteReport,
     ctx: &RowCtx<'_>,
 ) {
+    let x = ctx.extras;
     let anchor = ctx.anchor(cell.col);
     let tag = if anchor.is_none() && ctx.covered(cell.col) {
         "table:covered-table-cell"
@@ -1108,10 +1638,20 @@ fn write_cell(
         "table:table-cell"
     };
     let _ = write!(s, "<{tag}");
-    if let Some(i) = cell.style {
-        if (i as usize) < data.styles.len() {
-            let _ = write!(s, r#" table:style-name="ce{}""#, i + 1);
+    match x.derived.get(&(x.tab, cell.row, cell.col)) {
+        Some(name) => {
+            let _ = write!(s, r#" table:style-name="{name}""#);
         }
+        None => {
+            if let Some(i) = cell.style {
+                if (i as usize) < data.styles.len() {
+                    let _ = write!(s, r#" table:style-name="ce{}""#, i + 1);
+                }
+            }
+        }
+    }
+    if let Some(v) = x.validation(cell.row, cell.col) {
+        let _ = write!(s, r#" table:content-validation-name="{v}""#);
     }
     if let Some((cs, rs)) = anchor {
         write_spans(s, cs, rs);
@@ -1145,22 +1685,23 @@ fn write_cell(
             value = Value::Error(tally_types::ErrorKind::Num);
         }
     }
-    match &value {
-        Value::Empty | Value::Array(_) => s.push_str("/>"),
+    // Attributes, then the paragraphs (wrapped in a link) after any note.
+    let text: Option<String> = match &value {
+        Value::Empty | Value::Array(_) => None,
         Value::Number(n) => {
             let _ = write!(
                 s,
-                r#" office:value-type="float" office:value="{}" calcext:value-type="float"><text:p>{}</text:p></{tag}>"#,
-                fmt_f64(*n),
-                general_display(*n)
+                r#" office:value-type="float" office:value="{}" calcext:value-type="float""#,
+                fmt_f64(*n)
             );
+            Some(general_display(*n))
         }
         Value::Bool(b) => {
             let _ = write!(
                 s,
-                r#" office:value-type="boolean" office:boolean-value="{b}" calcext:value-type="boolean"><text:p>{}</text:p></{tag}>"#,
-                if *b { "TRUE" } else { "FALSE" }
+                r#" office:value-type="boolean" office:boolean-value="{b}" calcext:value-type="boolean""#
             );
+            Some(if *b { "TRUE" } else { "FALSE" }.to_string())
         }
         Value::Text(t) => {
             s.push_str(r#" office:value-type="string""#);
@@ -1169,18 +1710,49 @@ fn write_cell(
                 escape_attr(t, s);
                 s.push('"');
             }
-            s.push_str(r#" calcext:value-type="string">"#);
-            write_paragraphs(s, t);
-            let _ = write!(s, "</{tag}>");
+            s.push_str(r#" calcext:value-type="string""#);
+            Some(t.to_string())
         }
         Value::Error(e) => {
             s.push_str(
-                r#" office:value-type="string" office:string-value="" calcext:value-type="error">"#,
+                r#" office:value-type="string" office:string-value="" calcext:value-type="error""#,
             );
-            write_paragraphs(s, &e.display());
-            let _ = write!(s, "</{tag}>");
+            Some(e.display().into_owned())
         }
+    };
+    let note = x.notes.get(&(cell.row, cell.col));
+    let link = x.links.get(&(cell.row, cell.col));
+    if text.is_none() && note.is_none() && link.is_none() {
+        s.push_str("/>");
+        return;
     }
+    s.push('>');
+    if let Some(n) = note {
+        crate::v03::write_annotation(s, n);
+    }
+    match (text, link) {
+        (Some(t), None) => write_paragraphs(s, &t),
+        (Some(t), Some(url)) => {
+            let mut inner = String::new();
+            write_paragraphs(&mut inner, &t);
+            // Wrap each paragraph's content in the link.
+            let mut href = String::new();
+            escape_attr(url, &mut href);
+            let open = format!(r#"<text:a xlink:href="{href}" xlink:type="simple">"#);
+            let wrapped = inner
+                .replace("<text:p/>", "<text:p></text:p>")
+                .replace("<text:p>", &format!("<text:p>{open}"))
+                .replace("</text:p>", "</text:a></text:p>");
+            s.push_str(&wrapped);
+        }
+        (None, Some(url)) => {
+            s.push_str(r#"<text:p><text:a xlink:href=""#);
+            escape_attr(url, s);
+            s.push_str(r#"" xlink:type="simple"/></text:p>"#);
+        }
+        (None, None) => {}
+    }
+    let _ = write!(s, "</{tag}>");
 }
 
 /// Text whose `text:p` form would not survive white-space collapsing exactly.

@@ -5,9 +5,10 @@ formula = "=CSC(0.5)"
 expect = 2.085829642933488
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=CSC(\"0.5\")"
-expect = 2.085829642933488
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -59,3 +60,9 @@ expect = 1
 [[case]]
 formula = "=CSC(-1)"
 expect = -1.1883951057781212
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=CSC(\"0.5\")"
+expect = 2.085829642933488
+settings = { text_to_number = "convert_locale" }

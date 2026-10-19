@@ -6,7 +6,7 @@
  * undoes typing, not the document), the span of the reference inserted by
  * point mode (so the next pick replaces it) and the autocomplete state.
  */
-import type { CellPos } from "@tally/bridge";
+import type { CellPos, RangeDto } from "@tally/bridge";
 import type { EditState } from "@tally/grid";
 import { create } from "zustand";
 
@@ -18,6 +18,8 @@ export interface ActiveInfo {
   cell: CellPos;
   input: string;
   hint: string | null;
+  /** The array-formula block containing the cell (its input is `{=…}`). */
+  arrayRange?: RangeDto | null;
 }
 
 interface Snapshot {

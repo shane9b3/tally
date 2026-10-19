@@ -3,6 +3,7 @@
 use tally_numfmt::date::{
     civil_from_days, days_from_civil, serial_from_ymd, unix_days_from_serial,
 };
+use tally_numfmt::Locale;
 use tally_types::{ErrorKind, Value};
 
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
@@ -88,7 +89,10 @@ fn days360(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
 
 const EASTER_PARAMS: &[Param] = &[Param::required("year", ParamKind::Integer)];
 
-/// `EASTERSUNDAY(year)`: Gregorian Easter, years 1583..=9956.
+/// `EASTERSUNDAY(year)`: Gregorian Easter, years 1583..=9956. Years 0..=99
+/// are expanded with the two-digit-year pivot first, as in DATE (AOO
+/// `interpr2.cxx` `ScEasterSunday`: `if ( nYear < 100 ) nYear =
+/// pFormatter->ExpandTwoDigitYear( nYear )`).
 pub const EASTERSUNDAY: FunctionDef =
     FunctionDef::new("EASTERSUNDAY", Category::DateTime, EASTER_PARAMS, easter)
         .returns(ReturnKind::Number)
@@ -97,7 +101,10 @@ pub const EASTERSUNDAY: FunctionDef =
 fn easter(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
-        let y = a.int(0)?;
+        let mut y = a.int(0)?;
+        if (0..100).contains(&y) {
+            y = i64::from(Locale::en_us().expand_two_digit_year(y as i32));
+        }
         if !(1583..=9956).contains(&y) {
             return Err(ErrorKind::InvalidArgument);
         }
@@ -124,32 +131,124 @@ const WEEKNUM_PARAMS: &[Param] = &[
     Param::required("mode", ParamKind::Integer),
 ];
 
-/// `WEEKNUM(date; mode)`: mode 1 weeks start on Sunday, mode 2 on Monday;
-/// week 1 is the week containing 1 January. Other modes are `Err:502`
-/// (ISO weeks are ISOWEEKNUM; WEEKNUM_ADD is the add-in variant).
+/// `WEEKNUM(date; mode)`: AOO's built-in calendar week (stored in ODF as
+/// `ISOWEEKNUM`). Port of `ScInterpreter::ScGetWeekOfYear`
+/// (sc/source/core/tool/interpr2.cxx): mode 1 starts weeks on Sunday, every
+/// other mode on Monday, and `Date::GetWeekOfYear` applies the default
+/// `nMinimumNumberOfDaysInWeek = 4`: week 1 is the first week with at least
+/// four days in the new year, so 1 January can be in week 52 or 53
+/// (`WEEKNUM(DATE(1995;1;1);2)` = 52, the AOO help example).
+///
+/// No OOXML name: Excel's WEEKNUM is "week 1 contains 1 January", which is
+/// WEEKNUM_ADD (it owns the plain OOXML name), and Excel's ISOWEEKNUM takes
+/// one argument. An XLSX export writes the canonical name `WEEKNUM`, which
+/// Excel reads with its own (different) semantics.
 pub const WEEKNUM: FunctionDef =
     FunctionDef::new("WEEKNUM", Category::DateTime, WEEKNUM_PARAMS, weeknum)
         .odf("ISOWEEKNUM")
         .returns(ReturnKind::Number)
-        .help("Calendar week of a date (week 1 contains 1 January).");
+        .help("Calendar week of a date (week 1 has at least four days of the new year).");
+
+/// AOO `DayOfWeek`: Monday = 0 … Sunday = 6.
+fn dow_monday0(unix_days: i64) -> i64 {
+    // 1970-01-01 was a Thursday (3).
+    (unix_days + 3).rem_euclid(7)
+}
+
+fn is_leap(y: i64) -> bool {
+    tally_numfmt::date::is_leap_year(y)
+}
+
+/// Port of tools `Date::GetWeekOfYear(eStartDay, 4)` (tools/source/datetime/
+/// tdate.cxx, the `nMinimumNumberOfDaysInWeek` 2..6 branch with 4).
+/// `start` is the AOO `DayOfWeek` the week starts on (MONDAY = 0, SUNDAY = 6).
+fn week_of_year(unix_days: i64, start: i64) -> i64 {
+    const MIN_DAYS: i64 = 4;
+    let (y, _, _) = civil_from_days(unix_days);
+    let jan1 = days_from_civil(y, 1, 1);
+    // Weekday of 1 January relative to the start day, and the 0-based day
+    // of the year.
+    let n1wday = (dow_monday0(jan1) + (7 - start)) % 7;
+    let day_of_year = unix_days - jan1;
+    let mut week = if n1wday < MIN_DAYS {
+        1
+    } else if n1wday == MIN_DAYS {
+        53
+    } else if n1wday == MIN_DAYS + 1 {
+        // The year after a leap year.
+        if is_leap(y - 1) {
+            53
+        } else {
+            52
+        }
+    } else {
+        52
+    };
+    if week == 1 || day_of_year + n1wday > 6 {
+        if week == 1 {
+            week += (day_of_year + n1wday) / 7;
+        } else {
+            week = (day_of_year + n1wday) / 7;
+        }
+        if week == 53 {
+            // The last day of this week: if it is in the next year, the
+            // week is week 1 there.
+            let end = unix_days + 6 - (dow_monday0(unix_days) + (7 - start)) % 7;
+            if end != unix_days {
+                return week_of_year(end, start);
+            }
+        }
+    }
+    week
+}
+
+/// AOO's mode rule: `nFlag == 1 ? SUNDAY : MONDAY`.
+fn aoo_week(ctx: &dyn EvalContext, serial: f64, mode: i64) -> Result<f64, ErrorKind> {
+    let epoch = ctx.settings().date_epoch;
+    let days = unix_days_from_serial(epoch, serial.floor()).ok_or(ErrorKind::InvalidArgument)?;
+    let start = if mode == 1 { 6 } else { 0 };
+    Ok(week_of_year(days, start) as f64)
+}
 
 fn weeknum(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
         let serial = a.num(0)?;
         let mode = a.int(1)?;
-        if mode != 1 && mode != 2 {
-            return Err(ErrorKind::InvalidArgument);
-        }
-        let epoch = a.ctx().settings().date_epoch;
-        let days = unix_days_from_serial(epoch, serial).ok_or(ErrorKind::InvalidArgument)?;
-        let (y, _, _) = civil_from_days(days);
-        let jan1 = days_from_civil(y, 1, 1);
-        // 1970-01-01 was a Thursday; Sunday = 0.
-        let dow_jan1 = (jan1 + 4).rem_euclid(7);
-        let start = if mode == 1 { 0 } else { 1 };
-        let offset = (dow_jan1 - start).rem_euclid(7);
-        Ok(Value::Number(((days - jan1 + offset) / 7 + 1) as f64))
+        aoo_week(a.ctx(), serial, mode).map(Value::Number)
+    })
+}
+
+const ISOWEEKNUM_PARAMS: &[Param] = &[
+    Param::required("number", ParamKind::Number),
+    Param::optional("mode", ParamKind::Integer),
+];
+
+/// `ISOWEEKNUM(date [; mode])` (extension; Excel 2013 `_xlfn.ISOWEEKNUM`):
+/// the ISO 8601 week, i.e. AOO's WEEKNUM with Monday start. The optional
+/// second argument exists only so that an ODF file's `ISOWEEKNUM(date; mode)`
+/// (AOO's stored name for the built-in WEEKNUM) still evaluates as AOO's
+/// WEEKNUM when it is resolved by its canonical name; LibreOffice reads a
+/// 2-argument ODFF ISOWEEKNUM as WEEKNUM in the same way (tdf#50950). Stored
+/// in ODF as `COM.MICROSOFT.ISOWEEKNUM` because plain `ISOWEEKNUM` is the
+/// built-in WEEKNUM's ODF name.
+pub const ISOWEEKNUM: FunctionDef = FunctionDef::new(
+    "ISOWEEKNUM",
+    Category::DateTime,
+    ISOWEEKNUM_PARAMS,
+    isoweeknum,
+)
+.odf("COM.MICROSOFT.ISOWEEKNUM")
+.extension()
+.returns(ReturnKind::Number)
+.help("ISO 8601 week number of a date (weeks start on Monday).");
+
+fn isoweeknum(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
+    let mut a = Args::new(ctx, args);
+    run(|| {
+        let serial = a.num(0)?;
+        let mode = if a.is_missing(1) { 2 } else { a.int(1)? };
+        aoo_week(a.ctx(), serial, mode).map(Value::Number)
     })
 }
 
@@ -158,6 +257,7 @@ pub(super) fn register(r: &mut Registry) {
     r.register(DAYS360);
     r.register(EASTERSUNDAY);
     r.register(WEEKNUM);
+    r.register(ISOWEEKNUM);
 }
 
 #[cfg(test)]
@@ -224,20 +324,60 @@ mod tests {
         assert_eq!(e(2000.0), Value::Number(ser(2000, 4, 23)));
         assert_eq!(e(1583.0), Value::Number(ser(1583, 4, 10)));
         assert_eq!(e(1582.0), Value::Error(ErrorKind::InvalidArgument));
+        // Two-digit years use the DATE pivot (review 2 Low).
+        assert_eq!(e(24.0), Value::Number(ser(2024, 3, 31)));
+        assert_eq!(e(99.0), Value::Number(ser(1999, 4, 4)));
+        assert_eq!(e(0.0), Value::Number(ser(2000, 4, 23)));
         assert_eq!(e(9957.0), Value::Error(ErrorKind::InvalidArgument));
     }
 
     #[test]
     fn weeknum() {
         let w = |s: f64, m: f64| f("WEEKNUM", vec![n(s), n(m)]);
-        assert_eq!(w(ser(2026, 10, 19), 1.0), Value::Number(43.0));
+        // AOO help example and the interpr2.cxx / tdate.cxx 4-day rule.
+        assert_eq!(w(ser(1995, 1, 1), 2.0), Value::Number(52.0));
+        assert_eq!(w(ser(1995, 1, 1), 1.0), Value::Number(1.0));
+        assert_eq!(w(ser(2021, 1, 1), 2.0), Value::Number(53.0));
+        assert_eq!(w(ser(2021, 1, 4), 2.0), Value::Number(1.0));
+        // 2026-01-01 is a Thursday: the Sunday-start week has three days.
+        assert_eq!(w(ser(2026, 1, 1), 1.0), Value::Number(53.0));
+        assert_eq!(w(ser(2026, 1, 1), 2.0), Value::Number(1.0));
+        assert_eq!(w(ser(2026, 1, 4), 1.0), Value::Number(1.0));
         assert_eq!(w(ser(2026, 10, 19), 2.0), Value::Number(43.0));
-        // 2026-01-01 is a Thursday.
-        assert_eq!(w(ser(2026, 1, 1), 1.0), Value::Number(1.0));
-        assert_eq!(w(ser(2026, 1, 4), 1.0), Value::Number(2.0));
-        assert_eq!(w(ser(2026, 1, 4), 2.0), Value::Number(1.0));
-        assert_eq!(w(ser(2026, 1, 5), 2.0), Value::Number(2.0));
-        assert_eq!(w(ser(2026, 12, 31), 1.0), Value::Number(53.0));
-        assert_eq!(w(1.0, 3.0), Value::Error(ErrorKind::InvalidArgument));
+        assert_eq!(w(ser(2026, 10, 19), 1.0), Value::Number(42.0));
+        // Week 53 that is really week 1 of the next year.
+        assert_eq!(w(ser(2024, 12, 30), 2.0), Value::Number(1.0));
+        assert_eq!(w(ser(2020, 12, 31), 2.0), Value::Number(53.0));
+        // Every mode other than 1 is Monday.
+        assert_eq!(w(ser(1995, 1, 1), 3.0), Value::Number(52.0));
+        assert_eq!(w(ser(1995, 1, 1), 0.0), Value::Number(52.0));
+    }
+
+    /// The port agrees with the plain ISO 8601 rule (Monday start) and its
+    /// Sunday-start analogue on every day of 1900..2100.
+    #[test]
+    fn weeknum_matches_four_day_rule() {
+        use tally_numfmt::date::{civil_from_days, days_from_civil};
+        for start in [0i64, 6] {
+            for d in days_from_civil(1900, 1, 1)..days_from_civil(2100, 12, 31) {
+                // The week's "fourth day" decides the year it belongs to.
+                let dow = (d + 3).rem_euclid(7);
+                let week_start = d - (dow + 7 - start) % 7;
+                let thursday = week_start + 3;
+                let (y, _, _) = civil_from_days(thursday);
+                let want = (thursday - days_from_civil(y, 1, 1)) / 7 + 1;
+                assert_eq!(super::week_of_year(d, start), want, "day {d} start {start}");
+            }
+        }
+    }
+
+    #[test]
+    fn isoweeknum() {
+        let w = |v: Vec<EvalValue>| f("ISOWEEKNUM", v);
+        assert_eq!(w(vec![n(ser(1995, 1, 1))]), Value::Number(52.0));
+        assert_eq!(w(vec![n(ser(2021, 1, 1))]), Value::Number(53.0));
+        assert_eq!(w(vec![n(ser(2026, 1, 1))]), Value::Number(1.0));
+        // ODF `ISOWEEKNUM(date; 1)` is AOO's WEEKNUM mode 1.
+        assert_eq!(w(vec![n(ser(2026, 1, 1)), n(1.0)]), Value::Number(53.0));
     }
 }

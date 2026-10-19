@@ -338,6 +338,10 @@ impl DocumentService for EngineService {
         };
         let mut data = d.wb.to_data();
         data.meta.generator = Some(format!("Tally/{}", env!("CARGO_PKG_VERSION")));
+        data.meta.modified = Some(crate::ops_v03::now_iso());
+        if data.meta.created.is_none() {
+            data.meta.created = data.meta.modified.clone();
+        }
         let csv_rows = if format == FileFormat::Csv {
             Some(Self::csv_rows(&d.wb)?)
         } else {
@@ -389,6 +393,8 @@ impl DocumentService for EngineService {
             .map(|id| {
                 if d.wb.styles.contains(*id) {
                     Ok(d.wb.styles.to_dto(StyleId(*id)))
+                } else if let Some(e) = d.wb.transient.style(*id) {
+                    Ok(crate::styles::style_dto(*id, &e.data, &e.format_code))
                 } else {
                     Err(ApiError::not_found(format!("no style {id}")))
                 }
@@ -462,6 +468,15 @@ impl DocumentService for EngineService {
 
     fn resolve_name_box(&self, doc: DocId, text: &str) -> Result<SelectionDto> {
         view::resolve_name_box(&self.document(doc)?.wb, text)
+    }
+
+    fn resolve_name_box_in(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        text: &str,
+    ) -> Result<SelectionDto> {
+        view::resolve_name_box_in(&self.document(doc)?.wb, sheet, text)
     }
 
     fn list_functions(&self) -> Vec<FunctionInfo> {
@@ -554,4 +569,121 @@ impl DocumentService for EngineService {
     fn recalc_all(&mut self, doc: DocId) -> Result<ApplyResult> {
         Ok(self.document_mut(doc)?.recalc_all())
     }
+
+    // ----- v0.3 -----------------------------------------------------------
+
+    fn conditional_formats(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+    ) -> Result<Vec<tally_api::ConditionalFormatDto>> {
+        let wb = &self.document(doc)?.wb;
+        let s = sheet_of(wb, sheet)?;
+        Ok(s.meta
+            .cond_formats
+            .iter()
+            .map(|cf| crate::condfmt::to_api(wb, sheet, cf))
+            .collect())
+    }
+
+    fn validations(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+    ) -> Result<Vec<tally_api::ValidationDto>> {
+        let wb = &self.document(doc)?.wb;
+        let s = sheet_of(wb, sheet)?;
+        Ok(s.meta
+            .validations
+            .iter()
+            .map(|v| crate::validation::to_api(wb, sheet, v))
+            .collect())
+    }
+
+    fn validation_at(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        r: u32,
+        c: u32,
+    ) -> Result<Option<tally_api::ValidationInfo>> {
+        let wb = &self.document(doc)?.wb;
+        sheet_of(wb, sheet)?;
+        Ok(crate::validation::info_at(wb, sheet, r, c))
+    }
+
+    fn note(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        r: u32,
+        c: u32,
+    ) -> Result<Option<tally_api::NoteDto>> {
+        let wb = &self.document(doc)?.wb;
+        let s = sheet_of(wb, sheet)?;
+        Ok(s.meta.notes.get(&(r, c)).map(|n| n.to_dto(r, c)))
+    }
+
+    fn notes(&self, doc: DocId, sheet: tally_types::SheetId) -> Result<Vec<tally_api::NoteDto>> {
+        let wb = &self.document(doc)?.wb;
+        let s = sheet_of(wb, sheet)?;
+        Ok(s.meta
+            .notes
+            .iter()
+            .map(|((r, c), n)| n.to_dto(*r, *c))
+            .collect())
+    }
+
+    fn protection_info(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+    ) -> Result<tally_api::ProtectionInfo> {
+        let wb = &self.document(doc)?.wb;
+        crate::protection::info(wb, sheet)
+            .ok_or_else(|| ApiError::not_found(format!("no sheet {sheet}")))
+    }
+
+    fn page_setup(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+    ) -> Result<tally_api::PageSetupDto> {
+        let wb = &self.document(doc)?.wb;
+        Ok(crate::pagesetup::to_api(&sheet_of(wb, sheet)?.meta))
+    }
+
+    fn document_properties(&self, doc: DocId) -> Result<tally_api::DocPropertiesDto> {
+        Ok(crate::pagesetup::props_to_api(&self.document(doc)?.wb.meta))
+    }
+
+    fn goal_seek(
+        &self,
+        doc: DocId,
+        req: &tally_api::GoalSeekRequest,
+    ) -> Result<tally_api::GoalSeekResult> {
+        crate::goalseek::goal_seek(&self.document(doc)?.wb, req)
+    }
+
+    fn list_locales(&self) -> Vec<tally_api::LocaleInfo> {
+        tally_numfmt::LOCALES
+            .iter()
+            .map(|l| tally_api::LocaleInfo {
+                tag: l.tag.to_string(),
+                decimal_sep: l.decimal_sep.to_string(),
+                group_sep: l.group_sep.to_string(),
+                list_sep: l.list_sep.to_string(),
+                currency_symbol: l.currency_symbol.to_string(),
+            })
+            .collect()
+    }
+
+    fn set_locale(&mut self, doc: DocId, locale: &str) -> Result<ApplyResult> {
+        self.document_mut(doc)?.set_locale(locale)
+    }
+}
+
+fn sheet_of(wb: &Workbook, sheet: tally_types::SheetId) -> Result<&crate::storage::Sheet> {
+    wb.sheet(sheet)
+        .ok_or_else(|| ApiError::not_found(format!("no sheet {sheet}")))
 }

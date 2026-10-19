@@ -6,8 +6,9 @@ mod common;
 use common::*;
 
 use tally_functions::coerce::{
-    self, intersect, number_seq, number_seq_with_text_as_zero, number_to_text, parse_unambiguous,
-    scalar_value, text_to_number, to_bool, to_integer, to_number, to_text, values_seq, SeqSource,
+    self, convert_string_to_value, intersect, number_seq, number_seq_with_text_as_zero,
+    number_to_text, parse_unambiguous, scalar_value, text_to_number, to_bool, to_integer,
+    to_number, to_text, values_seq, SeqSource,
 };
 use tally_types::{CalcSettings, CellAddr, CellRange, DateEpoch, TextToNumber};
 
@@ -23,7 +24,9 @@ fn to_number_scalars() {
     assert_eq!(to_number(&n(2.5), &mut c), Ok(2.5));
     assert_eq!(to_number(&b(true), &mut c), Ok(1.0));
     assert_eq!(to_number(&b(false), &mut c), Ok(0.0));
-    assert_eq!(to_number(&t("12.5"), &mut c), Ok(12.5));
+    // ConvertUnambiguous: integers only (AOO ConvertStringToValue).
+    assert_eq!(to_number(&t("12.5"), &mut c), Err(ErrorKind::Value));
+    assert_eq!(to_number(&t("12"), &mut c), Ok(12.0));
     assert_eq!(to_number(&t(" 3 "), &mut c), Ok(3.0));
     assert_eq!(to_number(&t("1e3"), &mut c), Ok(1000.0));
     assert_eq!(to_number(&t("abc"), &mut c), Err(ErrorKind::Value));
@@ -54,6 +57,67 @@ fn text_to_number_modes() {
     assert_eq!(text_to_number("TRUE", &s), Ok(1.0));
     assert_eq!(text_to_number("", &s), Err(ErrorKind::Value));
     assert_eq!(text_to_number("1,00", &s), Err(ErrorKind::Value));
+}
+
+/// AOO interpr4.cxx ConvertStringToValue (review 2 Low: `"1.5"+1` is #VALUE!).
+#[test]
+fn convert_string_to_value_is_aoo_strict() {
+    let p = |s| convert_string_to_value(s, DateEpoch::D1899);
+    assert_eq!(p("3"), Some(3.0));
+    assert_eq!(p(" 3  "), Some(3.0));
+    assert_eq!(p("-2E3"), Some(-2000.0));
+    assert_eq!(p("+7"), Some(7.0));
+    assert_eq!(p("1e+2"), Some(100.0));
+    for bad in [
+        "",
+        " ",
+        "1.5",
+        ".5",
+        "5.",
+        "-1.5",
+        "1e",
+        "1,000",
+        "$5",
+        "5%",
+        "TRUE",
+        "1 2",
+        "abc",
+        "-2024-01-15",
+        "2024-01",
+        "2024-01-15T",
+        "12:",
+        "12:30:",
+        "2024-01-15T24:00",
+        "12:60",
+        "2023-02-29",
+        "2024-001-15",
+        "1e3-01-01",
+    ] {
+        assert_eq!(p(bad), None, "{bad:?}");
+    }
+    assert_eq!(p("2024-01-15"), Some(45_306.0));
+    assert_eq!(p("2024-01-15T12:00"), Some(45_306.5));
+    assert_eq!(p("2024-01-15 06:00:00"), Some(45_306.25));
+    assert_eq!(p("2024-01-15 06:00:00,5"), Some(45_306.25 + 0.5 / 86_400.0));
+    assert_eq!(p("2024-01-00"), Some(45_292.0), "day 00 reads as 1 (AOO)");
+    assert_eq!(
+        p("2024-1-15"),
+        Some(45_306.0),
+        "one-digit units are allowed"
+    );
+    assert_eq!(p("12:00"), Some(0.5));
+    assert_eq!(p("36:00"), Some(1.5));
+    assert_eq!(p("12:00 "), Some(0.5));
+    assert_eq!(p("00:00:30.5"), Some(30.5 / 86_400.0));
+    assert_eq!(p("00:00:00.05"), Some(0.05 / 86_400.0));
+    assert_eq!(
+        convert_string_to_value("1904-01-02", DateEpoch::D1904),
+        Some(1.0)
+    );
+    let mut s = CalcSettings::default();
+    assert_eq!(text_to_number("1.5", &s), Err(ErrorKind::Value));
+    s.text_to_number = TextToNumber::ConvertLocale;
+    assert_eq!(text_to_number("1.5", &s), Ok(1.5));
 }
 
 #[test]

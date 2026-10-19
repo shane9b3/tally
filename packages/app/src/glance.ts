@@ -97,14 +97,42 @@ function fmt(v: number, code: string): string {
 }
 
 /**
+ * Whether the first row of `region` holds column labels. All-text rows
+ * are labels; a row that mixes text with numbers (years such as 2024 over
+ * numeric columns) is too when it has at least one text cell, its numbers
+ * are whole numbers, and the body below is consistently typed per column
+ * (at least 80% of each column's filled cells share one kind).
+ */
+export function detectHeaderRow(get: Lookup, region: RangeDto): boolean {
+  if (region.r1 <= region.r0) return false;
+  const head: CellView[] = [];
+  for (let c = region.c0; c <= region.c1; c++) {
+    const v = get(region.r0, c);
+    if (filled(v)) head.push(v);
+  }
+  if (head.length === 0 || !head.some((v) => v.kind === "text")) return false;
+  if (head.every((v) => v.kind === "text")) return true;
+  if (head.some((v) => v.kind !== "text" && (v.kind !== "number" || v.num === null || !Number.isInteger(v.num)))) return false;
+  for (let c = region.c0; c <= region.c1; c++) {
+    const kinds = new Map<string, number>();
+    let n = 0;
+    for (let r = region.r0 + 1; r <= region.r1; r++) {
+      const v = get(r, c);
+      if (!filled(v)) continue;
+      n++;
+      kinds.set(v.kind, (kinds.get(v.kind) ?? 0) + 1);
+    }
+    if (n >= 2 && Math.max(...kinds.values()) < 0.8 * n) return false;
+  }
+  return true;
+}
+
+/**
  * Analyses `region`. `formatOf(c)` is the number format of column `c`'s
  * body (e.g. of its first numeric cell).
  */
 export function analyzeGlance(get: Lookup, region: RangeDto, formatOf: (c: number) => string): GlanceResult {
-  const headerCells: (CellView | undefined)[] = [];
-  for (let c = region.c0; c <= region.c1; c++) headerCells.push(get(region.r0, c));
-  const headerVals = headerCells.filter(filled);
-  const hasHeader = region.r1 > region.r0 && headerVals.length > 0 && headerVals.every((v) => v.kind === "text");
+  const hasHeader = detectHeaderRow(get, region);
   const body0 = hasHeader ? region.r0 + 1 : region.r0;
   const rows = region.r1 - body0 + 1;
   const headerOf = (c: number): string => {

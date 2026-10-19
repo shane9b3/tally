@@ -45,9 +45,10 @@ expect = 0.0
 tol = 1e-12
 
 [[case]]
+name = "decimal text is #VALUE! by default"
 formula = "=FISHER(\"0.5\")"
-expect = 0.5493061443340549
-tol = 1e-12
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 formula = "=FISHER(\"x\")"
@@ -62,3 +63,10 @@ expect = "#DIV/0!"
 [[case]]
 formula = "=FISHER()"
 expect = "Err:511"
+
+[[case]]
+name = "decimal text with convert_locale"
+formula = "=FISHER(\"0.5\")"
+expect = 0.5493061443340549
+tol = 1e-12
+settings = { text_to_number = "convert_locale" }

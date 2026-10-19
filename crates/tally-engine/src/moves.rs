@@ -192,6 +192,9 @@ pub fn move_range(
         if !moved.is_empty() {
             sh.meta.merges.extend(moved);
         }
+        // Notes and hyperlinks move with their cells.
+        crate::annotations::move_block(&mut sh.meta.notes, &from, dr, dc);
+        crate::annotations::move_block(&mut sh.meta.links, &from, dr, dc);
     }
     fx.layout(sheet);
     Ok(vec![

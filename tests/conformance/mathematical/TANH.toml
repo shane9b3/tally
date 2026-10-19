@@ -5,9 +5,10 @@ formula = "=TANH(0.5)"
 expect = 0.46211715726000974
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=TANH(\"0.5\")"
-expect = 0.46211715726000974
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -59,3 +60,9 @@ expect = -1
 [[case]]
 formula = "=TANH(0)"
 expect = 0
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=TANH(\"0.5\")"
+expect = 0.46211715726000974
+settings = { text_to_number = "convert_locale" }

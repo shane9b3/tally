@@ -18,6 +18,10 @@
 //! - [`filter`]: AutoFilter criteria and filtered rows;
 //! - [`sort`], [`fill`], [`find`], [`moves`]: sort, fill series, find &
 //!   replace, cut/move;
+//! - v0.3: [`condfmt`] (conditional formatting), [`validation`],
+//!   [`annotations`] (notes, links), [`protection`], [`pagesetup`] (page
+//!   setup, document properties), [`autofit`] (row heights), [`goalseek`],
+//!   [`fexpr`] (rule formulas) and [`ops_v03`] (their ops);
 //! - [`document`]: one open document (workbook + undo + version);
 //! - [`service`]: `EngineService`, the `DocumentService` implementation.
 //!
@@ -26,18 +30,27 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod annotations;
+pub mod autofit;
 pub mod clipboard;
+pub mod condfmt;
 pub mod convert;
 pub mod deps;
 pub mod document;
 pub mod eval;
+pub mod fexpr;
 pub mod fill;
 pub mod filter;
 pub mod find;
 pub mod formula_cells;
+pub mod goalseek;
 pub mod moves;
 pub mod names;
 pub mod ops;
+pub mod ops_v03;
+pub mod pagesetup;
+pub mod protection;
+pub mod r1c1;
 pub mod recalc;
 pub mod service;
 pub mod sort;
@@ -46,6 +59,7 @@ pub mod structure;
 pub mod styles;
 pub mod undo;
 pub mod units;
+pub mod validation;
 pub mod workbook;
 
 pub use document::Document;

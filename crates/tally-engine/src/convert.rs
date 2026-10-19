@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use tally_formula::{parse, print, Dialect, Expr, Formula};
 use tally_model::{
-    CellContentData, CellData, CellRangeLocal, DocSettings, NameData, SheetData, StyleData,
-    StyleRun, WorkbookData,
+    CellContentData, CellData, CellRangeLocal, DocSettings, LinkData, NameData, PageSetupData,
+    SheetData, StyleData, StyleRun, WorkbookData,
 };
 use tally_types::{CellAddr, Matrix, Value, MAX_COLS, MAX_ROWS};
 
@@ -47,6 +47,15 @@ impl Workbook {
         let mut wb = Workbook::empty();
         wb.settings = data.settings.calc_settings.clone();
         wb.meta = data.meta.clone();
+        if let Some(l) = data
+            .settings
+            .locale
+            .as_deref()
+            .and_then(tally_numfmt::locale_by_tag)
+        {
+            wb.locale = l;
+        }
+        wb.structure_protection = data.settings.structure_protection.clone();
         // Readers cap the sheet count too; this is the engine's own limit.
         let sheet_data = &data.sheets[..data.sheets.len().min(MAX_SHEETS)];
         let mut ids = Vec::with_capacity(sheet_data.len());
@@ -98,6 +107,10 @@ impl Workbook {
                 }
             }
         }
+        // v0.3 sheet state (after the names, so rule formulas resolve them).
+        for (sd, &sheet) in sheet_data.iter().zip(&ids) {
+            load_v03(&mut wb, sheet, sd);
+        }
         let style_ids: Vec<StyleId> = data
             .styles
             .iter()
@@ -135,7 +148,12 @@ impl Workbook {
                     }
                     CellContentData::Value(v) => wb.set_value(addr, v.clone()),
                     CellContentData::Formula { text, cached } => {
-                        let f = parse(text, addr, Dialect::open_formula(), &wb);
+                        let f = parse(
+                            text,
+                            addr,
+                            Dialect::open_formula(),
+                            &crate::workbook::OdfResolver(&wb),
+                        );
                         match f {
                             Ok(f) => wb.set_formula(addr, Arc::new(f), None),
                             Err(e) => {
@@ -284,6 +302,39 @@ impl Workbook {
                     .auto_filter
                     .as_ref()
                     .map(|af| crate::filter::to_model(af, &sheet.filtered_rows)),
+                conditional_formats: sheet
+                    .meta
+                    .cond_formats
+                    .iter()
+                    .map(|cf| crate::condfmt::to_model(self, sheet.id, cf))
+                    .collect(),
+                validations: sheet
+                    .meta
+                    .validations
+                    .iter()
+                    .map(|v| crate::validation::to_model(self, sheet.id, v))
+                    .collect(),
+                notes: sheet
+                    .meta
+                    .notes
+                    .iter()
+                    .map(|((r, c), n)| n.to_model(*r, *c))
+                    .collect(),
+                links: sheet
+                    .meta
+                    .links
+                    .iter()
+                    .map(|((r, c), u)| LinkData {
+                        row: *r,
+                        col: *c,
+                        url: u.to_string(),
+                    })
+                    .collect(),
+                protection: sheet.meta.protection.clone(),
+                page_setup: (sheet.meta.page_setup != PageSetupData::default())
+                    .then(|| sheet.meta.page_setup.clone()),
+                row_breaks: sheet.meta.row_breaks.iter().copied().collect(),
+                col_breaks: sheet.meta.col_breaks.iter().copied().collect(),
             });
         }
         let mut names: Vec<NameData> = Vec::new();
@@ -312,10 +363,84 @@ impl Workbook {
             settings: DocSettings {
                 active_sheet: self.tab_of(self.active_sheet).unwrap_or(0) as u32,
                 calc_settings: self.settings.clone(),
+                locale: (self.locale.tag != tally_numfmt::EN_US.tag)
+                    .then(|| self.locale.tag.to_string()),
+                structure_protection: self.structure_protection.clone(),
             },
             meta: self.meta.clone(),
         }
     }
+}
+
+/// Loads conditional formats, validations, notes, links, protection, page
+/// setup and breaks of one sheet (invalid entries are skipped).
+fn load_v03(wb: &mut Workbook, sheet: tally_types::SheetId, sd: &SheetData) {
+    let mut next_id = 1u32;
+    let mut cfs = Vec::new();
+    for d in sd
+        .conditional_formats
+        .iter()
+        .take(crate::condfmt::MAX_CF_PER_SHEET)
+    {
+        if let Some(cf) = crate::condfmt::from_model(wb, sheet, next_id, d) {
+            next_id += 1;
+            cfs.push(cf);
+        }
+    }
+    let mut vals: Vec<crate::validation::Validation> = Vec::new();
+    for d in sd
+        .validations
+        .iter()
+        .take(crate::validation::MAX_VALIDATIONS)
+    {
+        if let Some(v) = crate::validation::from_model(wb, sheet, next_id, d) {
+            next_id += 1;
+            vals.push(v);
+        }
+    }
+    let Some(s) = wb.sheet_mut(sheet) else {
+        return;
+    };
+    s.meta.cond_formats = cfs;
+    s.meta.validations = vals;
+    s.meta.next_id = next_id;
+    let ok = |r: u32, c: u32| r < MAX_ROWS && c < MAX_COLS;
+    for n in sd.notes.iter().take(crate::ops_v03::MAX_NOTES) {
+        if ok(n.row, n.col) {
+            s.meta
+                .notes
+                .insert((n.row, n.col), crate::annotations::Note::from_model(n));
+        }
+    }
+    for l in sd.links.iter().take(crate::ops_v03::MAX_NOTES) {
+        if ok(l.row, l.col) && !l.url.is_empty() && l.url.len() <= crate::ops_v03::MAX_URL_LEN {
+            s.meta.links.insert((l.row, l.col), l.url.as_str().into());
+        }
+    }
+    s.meta.protection = sd.protection.clone();
+    if let Some(p) = &sd.page_setup {
+        let mut p = p.clone();
+        p.print_range = p
+            .print_range
+            .filter(|r| r.r0 <= r.r1 && r.c0 <= r.c1 && r.r1 < MAX_ROWS && r.c1 < MAX_COLS);
+        p.repeat_rows = p.repeat_rows.filter(|(a, b)| a <= b && *b < MAX_ROWS);
+        p.repeat_cols = p.repeat_cols.filter(|(a, b)| a <= b && *b < MAX_COLS);
+        s.meta.page_setup = p;
+    }
+    s.meta.row_breaks = sd
+        .row_breaks
+        .iter()
+        .copied()
+        .filter(|b| *b > 0 && *b < MAX_ROWS)
+        .take(10_000)
+        .collect();
+    s.meta.col_breaks = sd
+        .col_breaks
+        .iter()
+        .copied()
+        .filter(|b| *b > 0 && *b < MAX_COLS)
+        .take(10_000)
+        .collect();
 }
 
 /// Loads interchange names (invalid, duplicate or unparsable ones are skipped).
@@ -346,7 +471,12 @@ fn load_names(wb: &mut Workbook, names: &[NameData], ids: &[tally_types::SheetId
         } else {
             format!("of:={}", n.formula.trim_start_matches('='))
         };
-        let Ok(f) = parse(&text, base, Dialect::open_formula(), &*wb) else {
+        let Ok(f) = parse(
+            &text,
+            base,
+            Dialect::open_formula(),
+            &crate::workbook::OdfResolver(wb),
+        ) else {
             continue;
         };
         wb.names.define(

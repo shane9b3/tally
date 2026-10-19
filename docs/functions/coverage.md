@@ -3,12 +3,12 @@
 
 # Function coverage
 
-407 of 407 functions implemented (100.0%): the 405 functions of Apache OpenOffice 4.1 (docs/calc-functions.json) plus 2 extensions that AOO lacks. Functions marked `extension = true` in the master list: NUMBERVALUE, IFERROR, IFNA.
+408 of 408 functions implemented (100.0%): the 405 functions of Apache OpenOffice 4.1 (docs/calc-functions.json) plus 3 extensions that AOO lacks. Functions marked `extension = true` in the master list: NUMBERVALUE, IFERROR, IFNA, ISOWEEKNUM.
 
 | Category | Implemented | Total | Missing |
 |---|---:|---:|---|
 | Database | 12 | 12 | - |
-| Date&Time | 17 | 17 | - |
+| Date&Time | 18 | 18 | - |
 | Financial | 22 | 22 | - |
 | Information | 17 | 17 | - |
 | Logical | 9 | 9 | - |
@@ -18,15 +18,15 @@
 | Spreadsheet | 22 | 22 | - |
 | Text | 37 | 37 | - |
 | Add-in | 109 | 109 | - |
-| **Total** | **407** | **407** | |
+| **Total** | **408** | **408** | |
 
 ## Database (12/12)
 
 DCOUNT, DCOUNTA, DAVERAGE, DGET, DMAX, DMIN, DPRODUCT, DSTDEV, DSTDEVP, DSUM, DVAR, DVARP
 
-## Date&Time (17/17)
+## Date&Time (18/18)
 
-DATE, DATEVALUE, DAY, DAYS360, HOUR, MINUTE, MONTH, NOW, SECOND, TIME, TIMEVALUE, TODAY, WEEKDAY, YEAR, DAYS, WEEKNUM, EASTERSUNDAY
+DATE, DATEVALUE, DAY, DAYS360, HOUR, MINUTE, MONTH, NOW, SECOND, TIME, TIMEVALUE, TODAY, WEEKDAY, YEAR, DAYS, WEEKNUM, EASTERSUNDAY, ISOWEEKNUM\*
 
 ## Financial (22/22)
 

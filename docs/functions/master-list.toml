@@ -262,7 +262,6 @@ extension = false
 name = "WEEKNUM"
 category = "Date&Time"
 odf_name = "ISOWEEKNUM"
-ooxml_name = "_xlfn.ISOWEEKNUM"
 min_args = 2
 max_args = 2
 source = "builtin"
@@ -3875,3 +3874,14 @@ max_args = 2
 source = "extension"
 batch = 0
 extension = true
+
+[[function]]
+name = "ISOWEEKNUM"
+category = "Date&Time"
+odf_name = "COM.MICROSOFT.ISOWEEKNUM"
+ooxml_name = "_xlfn.ISOWEEKNUM"
+min_args = 1
+max_args = 2
+source = "extension"
+extension = true
+note = "Excel ISOWEEKNUM; ODF ISOWEEKNUM is the built-in WEEKNUM"

@@ -5,9 +5,10 @@ formula = "=ODD(1.5)"
 expect = 3
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=ODD(\"1.5\")"
-expect = 3
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -72,3 +73,9 @@ expect = -3
 [[case]]
 formula = "=ODD(-0.5)"
 expect = -1
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=ODD(\"1.5\")"
+expect = 3
+settings = { text_to_number = "convert_locale" }

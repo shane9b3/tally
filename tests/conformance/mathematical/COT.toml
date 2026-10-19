@@ -5,9 +5,10 @@ formula = "=COT(0.5)"
 expect = 1.830487721712452
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=COT(\"0.5\")"
-expect = 1.830487721712452
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -61,3 +62,9 @@ tol = 1e-12
 [[case]]
 formula = "=COT(-1)"
 expect = -0.6420926159343308
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=COT(\"0.5\")"
+expect = 1.830487721712452
+settings = { text_to_number = "convert_locale" }

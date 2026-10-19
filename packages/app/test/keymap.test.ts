@@ -40,8 +40,23 @@ describe("keymap", () => {
     const tauri = { typing: false, nativeMenu: true };
     expect(resolveKey(key("z", { metaKey: true }), tauri)).toBeNull();
     expect(resolveKey(key("s", { metaKey: true }), tauri)).toBeNull();
-    expect(resolveKey(key("b", { metaKey: true }), tauri)).toBe("format.bold");
+    // Format ▸ Bold and Edit ▸ Fill Down carry these accelerators natively.
+    expect(resolveKey(key("b", { metaKey: true }), tauri)).toBeNull();
+    expect(resolveKey(key("d", { metaKey: true }), tauri)).toBeNull();
+    expect(resolveKey(key("l", { metaKey: true, shiftKey: true }), tauri)).toBe("format.alignLeft");
     expect(resolveKey(key("k", { metaKey: true }), tauri)).toBe("palette.toggle");
+  });
+  it("v0.2 bindings: find, fill, paste special, recalc", () => {
+    const idle = { typing: false, nativeMenu: false };
+    expect(resolveKey(key("f", { metaKey: true }), idle)).toBe("edit.find");
+    expect(resolveKey(key("ƒ", { metaKey: true, altKey: true, code: "KeyF" }), idle)).toBe("edit.findReplace");
+    expect(resolveKey(key("√", { metaKey: true, altKey: true, code: "KeyV" }), idle)).toBe("edit.pasteSpecial");
+    expect(resolveKey(key("d", { ctrlKey: true }), idle)).toBe("edit.fillDown");
+    expect(resolveKey(key("r", { metaKey: true }), idle)).toBe("edit.fillRight");
+    expect(resolveKey(key("F9", { metaKey: true, shiftKey: true }), idle)).toBe("data.recalc");
+    expect(resolveKey(key("Escape"), idle)).toBe("edit.cancelClip");
+    // ⌘F works while typing in the formula bar.
+    expect(resolveKey(key("f", { metaKey: true }), { typing: true, nativeMenu: false })).toBe("edit.find");
   });
   it("labels shortcuts", () => {
     expect(shortcutFor("format.bold")).toBe("⌘B");

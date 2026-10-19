@@ -329,3 +329,221 @@ fn open_allowlist_is_not_an_existence_oracle() -> CmdResult<()> {
     assert_eq!(a, b);
     Ok(())
 }
+
+// ----- v0.2 over the real engine ------------------------------------------------
+
+fn apply_ok(st: &AppState, doc: DocId, ops: Vec<Op>) -> CmdResult<tally_api::ApplyResult> {
+    let tx = Transaction {
+        ops,
+        label: Some("test".into()),
+        selection_before: None,
+        selection_after: None,
+    };
+    let res = with_service(st, |s| s.apply(doc, tx))?;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    Ok(res)
+}
+
+/// Column F (Total) of rows 2..=15 as numbers.
+fn totals(st: &AppState, info: &WorkbookInfo) -> CmdResult<Vec<f64>> {
+    let view = cells(st, info.doc, info.active_sheet, range(1, 5, 14, 5))?;
+    Ok((1..=14)
+        .filter_map(|r| cell(&view, r, 5).and_then(number))
+        .collect())
+}
+
+#[test]
+fn sort_invoices_by_total_descending() -> CmdResult<()> {
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    let sheet = info.active_sheet;
+    let table = range(0, 0, 14, 6);
+    let header = with_service(&st, |s| s.detect_header(info.doc, sheet, table))?;
+    assert!(header, "the invoices header row is detected");
+    let before = totals(&st, &info)?;
+    apply_ok(
+        &st,
+        info.doc,
+        vec![Op::SortRange {
+            sheet,
+            range: table,
+            keys: vec![tally_api::SortKey {
+                col: 5,
+                ascending: false,
+            }],
+            has_header: true,
+            case_sensitive: false,
+        }],
+    )?;
+    let after = totals(&st, &info)?;
+    assert_eq!(after.len(), 14);
+    assert!(after.windows(2).all(|w| w[0] >= w[1]), "{after:?}");
+    let mut expected = before;
+    expected.sort_by(|a, b| b.total_cmp(a));
+    assert_eq!(after, expected);
+    // The header stays; per-row formulas keep reading their own record.
+    let view = cells(&st, info.doc, sheet, range(0, 0, 1, 6))?;
+    assert_eq!(cell(&view, 0, 5).map(|v| v.text.as_str()), Some("Total"));
+    let qty = cell(&view, 1, 3).and_then(number).unwrap_or(f64::NAN);
+    let price = cell(&view, 1, 4).and_then(number).unwrap_or(f64::NAN);
+    assert!((qty * price - after[0]).abs() < 1e-9);
+    Ok(())
+}
+
+#[test]
+fn autofilter_status_paid() -> CmdResult<()> {
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    let sheet = info.active_sheet;
+    apply_ok(
+        &st,
+        info.doc,
+        vec![
+            Op::SetAutoFilter {
+                sheet,
+                range: Some(range(0, 0, 14, 6)),
+            },
+            Op::SetColumnFilter {
+                sheet,
+                col: 6,
+                filter: Some(tally_api::ColumnFilter {
+                    values: Some(vec!["Paid".into()]),
+                    condition: None,
+                }),
+            },
+        ],
+    )?;
+    let fi = with_service(&st, |s| s.filter_info(info.doc, sheet))?;
+    assert_eq!(fi.range, Some(range(0, 0, 14, 6)));
+    let status = fi
+        .columns
+        .iter()
+        .find(|c| c.col == 6)
+        .expect("status column");
+    let counts: Vec<(&str, u32)> = status
+        .unique
+        .iter()
+        .map(String::as_str)
+        .zip(status.counts.iter().copied())
+        .collect();
+    assert_eq!(counts, [("Due", 4), ("Overdue", 2), ("Paid", 8)]);
+    assert!(status.active.is_some());
+    let layout = with_service(&st, |s| s.sheet_layout(info.doc, sheet))?;
+    let filtered: u32 = layout
+        .row_runs
+        .iter()
+        .filter(|r| r.hidden && r.filtered == Some(true))
+        .map(|r| r.end - r.start + 1)
+        .sum();
+    assert_eq!(filtered, 6, "{:?}", layout.row_runs);
+    Ok(())
+}
+
+#[test]
+fn merge_names_find() -> CmdResult<()> {
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    let sheet = info.active_sheet;
+    let doc = info.doc;
+
+    // Merge A1:B1: the layout reports it; only the top-left value stays.
+    apply_ok(
+        &st,
+        doc,
+        vec![Op::MergeCells {
+            sheet,
+            range: range(0, 0, 0, 1),
+        }],
+    )?;
+    let layout = with_service(&st, |s| s.sheet_layout(doc, sheet))?;
+    assert_eq!(layout.merges, [range(0, 0, 0, 1)]);
+    let view = cells(&st, doc, sheet, range(0, 0, 0, 1))?;
+    assert_eq!(cell(&view, 0, 0).map(|v| v.text.as_str()), Some("Date"));
+    assert!(cell(&view, 0, 1).is_none_or(|v| v.text.is_empty()));
+
+    // A workbook name used in a formula.
+    apply_ok(
+        &st,
+        doc,
+        vec![Op::DefineName {
+            name: "TaxRate".into(),
+            scope: None,
+            refers_to: "0.1".into(),
+        }],
+    )?;
+    let names = with_service(&st, |s| s.names(doc))?;
+    assert_eq!(names.len(), 1);
+    assert_eq!(names[0].name, "TaxRate");
+    set(&st, &info, 1, 7, "=F2*TaxRate")?;
+    let view = cells(&st, doc, sheet, range(1, 5, 1, 7))?;
+    let f2 = cell(&view, 1, 5).and_then(number).unwrap_or(f64::NAN);
+    let h2 = cell(&view, 1, 7).and_then(number).unwrap_or(f64::NAN);
+    assert!((h2 - f2 * 0.1).abs() < 1e-9, "{h2} vs {f2}");
+    let edit = with_service(&st, |s| s.cell_edit_info(doc, sheet, 1, 7))?;
+    assert_eq!(edit.input, "=F2*TaxRate");
+
+    // Find "Paid": eight status cells.
+    let found = with_service(&st, |s| {
+        s.find(
+            doc,
+            &tally_api::FindQuery {
+                text: "Paid".into(),
+                sheet: Some(sheet),
+                in_formulas: false,
+                match_case: false,
+                whole_cell: true,
+                mode: tally_api::FindMode::Literal,
+                from: None,
+            },
+        )
+    })?;
+    assert_eq!(found.hits.len(), 8);
+    assert!(found.hits.iter().all(|h| h.c == 6));
+    assert!(!found.truncated);
+    Ok(())
+}
+
+#[test]
+fn xlsx_save_and_reopen_keeps_values() -> CmdResult<()> {
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    set(&st, &info, 16, 0, SUMIF)?;
+    let path = temp_path("invoices.xlsx");
+    assert_eq!(crate::dialogs::format_for(&path), FileFormat::Xlsx);
+    let saved = save_to(&st, info.doc, &path, FileFormat::Xlsx)?;
+    assert!(!saved.dirty);
+    files::allow(&st, &path)?;
+    let canon = files::check_open_allowed(&st, &path)?;
+    let reopened = open_path(&st, &canon)?;
+    let all = range(0, 0, 16, 6);
+    let key = |v: &CellView| (v.r, v.c, v.text.clone(), v.kind);
+    let before: Vec<_> = cells(&st, info.doc, info.active_sheet, all)?
+        .iter()
+        .filter(|v| v.kind != ValueKind::Empty)
+        .map(key)
+        .collect();
+    let after: Vec<_> = cells(&st, reopened.doc, reopened.active_sheet, all)?
+        .iter()
+        .filter(|v| v.kind != ValueKind::Empty)
+        .map(key)
+        .collect();
+    assert!(before.len() > 100);
+    assert_eq!(before, after);
+    let edit = with_service(&st, |s| {
+        s.cell_edit_info(reopened.doc, reopened.active_sheet, 16, 0)
+    })?;
+    assert_eq!(edit.input, SUMIF);
+    let _ = std::fs::remove_file(&path);
+    Ok(())
+}
+
+#[test]
+fn v02_commands_answer() -> CmdResult<()> {
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    let res = with_service(&st, |s| s.recalc_all(info.doc))?;
+    assert!(res.errors.is_empty());
+    let fi = with_service(&st, |s| s.filter_info(info.doc, info.active_sheet))?;
+    assert!(fi.range.is_none());
+    Ok(())
+}

@@ -47,6 +47,7 @@
   --tally-selection-border: var(--tally-accent); /* (theme) */
   --tally-fill-handle: var(--tally-accent); /* (theme) */
   --tally-resize-guide: var(--tally-accent); /* (theme) */
+  --tally-frozen-line: #a3a9b4; /* (theme) */
   --tally-editor-bg: var(--tally-gray-0); /* (theme) */
 
   /* Interaction and chrome */
@@ -144,6 +145,7 @@
   --tally-selection-border: #4f8ff7;
   --tally-fill-handle: #4f8ff7;
   --tally-resize-guide: #4f8ff7;
+  --tally-frozen-line: #5c6370;
   --tally-editor-bg: var(--tally-gray-50);
 
   /* Status chips (dark tints, light ink) */
@@ -226,6 +228,7 @@
     --tally-selection-border: #4f8ff7;
     --tally-fill-handle: #4f8ff7;
     --tally-resize-guide: #4f8ff7;
+    --tally-frozen-line: #5c6370;
     --tally-editor-bg: var(--tally-gray-50);
 
     /* Status chips (dark tints, light ink) */

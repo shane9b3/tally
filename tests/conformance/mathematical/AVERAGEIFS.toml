@@ -40,7 +40,8 @@ expect = 50
 name = "mismatched dimensions"
 cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
 formula = "=AVERAGEIFS(B1:B6;A1:A5;\">0\")"
-expect = "#VALUE!"
+expect = "Err:502"
+note = "AOO interpr1.cxx IterateParametersIfs: a range whose size differs from the first sets errIllegalArgument (Err:502); Excel gives #VALUE!."
 
 [[case]]
 name = "unpaired argument"

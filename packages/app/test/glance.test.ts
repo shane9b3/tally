@@ -1,7 +1,7 @@
 import type { CellView } from "@tally/bridge";
 import { describe, expect, it } from "vitest";
 import { CURRENCY_FORMAT } from "../src/formats";
-import { analyzeGlance, cappedRange, currentRegion } from "../src/glance";
+import { analyzeGlance, cappedRange, currentRegion, detectHeaderRow } from "../src/glance";
 
 function sheet(rows: (string | number | null)[][], at = { r: 0, c: 0 }) {
   const cells = new Map<string, CellView>();
@@ -82,5 +82,36 @@ describe("cappedRange", () => {
   it("caps the fetched rows", () => {
     expect(cappedRange({ r0: 0, c0: 0, r1: 9, c1: 3 }, 100)).toEqual({ range: { r0: 0, c0: 0, r1: 9, c1: 3 }, sampled: false });
     expect(cappedRange({ r0: 0, c0: 0, r1: 99, c1: 3 }, 100)).toEqual({ range: { r0: 0, c0: 0, r1: 24, c1: 3 }, sampled: true });
+  });
+});
+
+describe("numeric header rows (years)", () => {
+  const YEARS = [
+    ["Category", 2024, 2025],
+    ["Rent", 10, 12],
+    ["Food", 5, 8],
+    ["Rent", 3, 0],
+    ["Food", 1, 1],
+  ];
+
+  it("treats a text + year row over consistent columns as the header", () => {
+    const get = sheet(YEARS);
+    const region = { r0: 0, c0: 0, r1: 4, c1: 2 };
+    expect(detectHeaderRow(get, region)).toBe(true);
+    const g = analyzeGlance(get, region, () => "General");
+    expect(g.hasHeader).toBe(true);
+    expect(g.rows).toBe(4);
+    expect(g.sums.map((s) => [s.header, s.sum])).toEqual([
+      ["2024", 19],
+      ["2025", 21],
+    ]);
+    expect(g.category?.header).toBe("Category");
+  });
+
+  it("does not take a data row or a row of decimals for a header", () => {
+    expect(detectHeaderRow(sheet([["x", 1.5], ["y", 2]]), { r0: 0, c0: 0, r1: 1, c1: 1 })).toBe(false);
+    expect(detectHeaderRow(sheet([[1, 2], [3, 4]]), { r0: 0, c0: 0, r1: 1, c1: 1 })).toBe(false);
+    // Mixed body columns: not consistently typed.
+    expect(detectHeaderRow(sheet([["Name", 2024], ["a", 1], ["b", "x"], ["c", "y"]]), { r0: 0, c0: 0, r1: 3, c1: 1 })).toBe(false);
   });
 });

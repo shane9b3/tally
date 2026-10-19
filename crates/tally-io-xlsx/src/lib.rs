@@ -29,11 +29,13 @@ mod formula;
 mod numfmt;
 mod read;
 mod sheet;
+mod sheet_v03;
 mod sst;
 mod styles;
 mod units;
 mod workbook;
 mod write;
+mod write_v03;
 mod xml;
 
 use std::io::{Cursor, Read, Seek, Write};

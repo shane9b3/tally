@@ -128,7 +128,7 @@ test("context menu on a row header inserts a row", async ({ page }) => {
   await page.mouse.click(b.x + b.headerW / 2, b.y + HEADER_H + ROW_H + ROW_H / 2, { button: "right" });
   const menu = page.getByTestId("context-menu");
   await expect(menu).toBeVisible();
-  await expect(menu.locator('[data-item="hide"]')).toHaveAttribute("aria-disabled", "true");
+  await expect(menu.locator('[data-item="hide"]')).not.toHaveAttribute("aria-disabled", "true");
   await menu.locator('[data-item="insertAbove"]').click();
   await expect.poll(() => texts(page, 0, 0, 2, 0)).toEqual(["Date", "", "10/01/2026"]);
   // One undo step restores it.

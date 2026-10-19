@@ -1,0 +1,55 @@
+.bar {
+  position: absolute;
+  top: 8px;
+  right: 18px;
+  z-index: 20;
+  width: 400px;
+  max-width: calc(100% - 80px);
+  padding: 8px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-card);
+  background: var(--tally-bg);
+  box-shadow: var(--tally-shadow-pop);
+  animation: drop 120ms ease-out;
+}
+
+@keyframes drop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.field {
+  flex: 1;
+  margin-right: 6px;
+}
+
+.status {
+  min-width: 64px;
+  margin-right: 2px;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.options {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.mode {
+  height: 24px;
+  margin-left: auto;
+  font-size: 12px;
+}

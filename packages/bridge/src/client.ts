@@ -35,6 +35,16 @@ import type { StyleDto } from "./generated/StyleDto";
 import type { Suggestion } from "./generated/Suggestion";
 import type { Transaction } from "./generated/Transaction";
 import type { WorkbookInfo } from "./generated/WorkbookInfo";
+import type { ConditionalFormatDto } from "./generated/ConditionalFormatDto";
+import type { DocPropertiesDto } from "./generated/DocPropertiesDto";
+import type { GoalSeekRequest } from "./generated/GoalSeekRequest";
+import type { GoalSeekResult } from "./generated/GoalSeekResult";
+import type { LocaleInfo } from "./generated/LocaleInfo";
+import type { NoteDto } from "./generated/NoteDto";
+import type { PageSetupDto } from "./generated/PageSetupDto";
+import type { ProtectionInfo } from "./generated/ProtectionInfo";
+import type { ValidationDto } from "./generated/ValidationDto";
+import type { ValidationInfo } from "./generated/ValidationInfo";
 
 /** Sheet ids are stable numbers, independent of tab order. */
 export type SheetId = number;
@@ -109,6 +119,41 @@ export interface EngineClientV2 extends EngineClient {
   detectHeader(doc: DocId, sheet: SheetId, range: RangeDto): Promise<boolean>;
   /** Hard recalculation (⇧⌘F9). */
   recalcAll(doc: DocId): Promise<ApplyResult>;
+}
+
+/**
+ * v0.3 additions (conditional formatting, validation, notes, protection,
+ * page setup, document properties, goal seek, locales). The mutations are
+ * `Op`s applied through `apply`; these are the queries. Tauri commands:
+ * `conditional_formats`, `validations`, `validation_at`, `note`, `notes`,
+ * `protection_info`, `page_setup`, `document_properties`, `goal_seek`,
+ * `list_locales`, `set_locale`, `resolve_name_box_in` (see docs/api.md).
+ */
+export interface EngineClientV3 extends EngineClientV2 {
+  /** The sheet's conditional formats in priority order. */
+  conditionalFormats(doc: DocId, sheet: SheetId): Promise<ConditionalFormatDto[]>;
+  /** The sheet's data validations. */
+  validations(doc: DocId, sheet: SheetId): Promise<ValidationDto[]>;
+  /** The validation of one cell with its list items resolved, or `null`. */
+  validationAt(doc: DocId, sheet: SheetId, r: number, c: number): Promise<ValidationInfo | null>;
+  /** The note of a cell, or `null`. */
+  note(doc: DocId, sheet: SheetId, r: number, c: number): Promise<NoteDto | null>;
+  /** Every note of a sheet, row-major. */
+  notes(doc: DocId, sheet: SheetId): Promise<NoteDto[]>;
+  /** Protection state of a sheet and of the document structure. */
+  protectionInfo(doc: DocId, sheet: SheetId): Promise<ProtectionInfo>;
+  /** A sheet's page setup (with its manual breaks). */
+  pageSetup(doc: DocId, sheet: SheetId): Promise<PageSetupDto>;
+  /** Document properties. */
+  documentProperties(doc: DocId): Promise<DocPropertiesDto>;
+  /** Goal seek in a sandbox; apply `value` with `setCellInput` to accept. */
+  goalSeek(doc: DocId, req: GoalSeekRequest): Promise<GoalSeekResult>;
+  /** Supported locales. */
+  listLocales(): Promise<LocaleInfo[]>;
+  /** Sets the document locale (formatting and input recognition). */
+  setLocale(doc: DocId, locale: string): Promise<ApplyResult>;
+  /** Name box resolution relative to the sheet the UI shows. */
+  resolveNameBoxIn(doc: DocId, sheet: SheetId, text: string): Promise<SelectionDto>;
 }
 
 /** Narrows an unknown rejection value to {@link ApiError}. */

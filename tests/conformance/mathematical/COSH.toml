@@ -5,9 +5,10 @@ formula = "=COSH(0.5)"
 expect = 1.1276259652063807
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=COSH(\"0.5\")"
-expect = 1.1276259652063807
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -60,3 +61,9 @@ note = "Overflow is #NUM!."
 [[case]]
 formula = "=COSH(-10)"
 expect = 11013.232920103323
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=COSH(\"0.5\")"
+expect = 1.1276259652063807
+settings = { text_to_number = "convert_locale" }

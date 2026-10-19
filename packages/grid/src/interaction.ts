@@ -70,6 +70,8 @@ export interface InteractionHost {
   /** Whether point mode is on (the `pointMode` prop). */
   pointMode(): boolean;
   invalidateOverlay(): void;
+  /** The AutoFilter button under a canvas point, with its client rect. */
+  filterButtonAt(x: number, y: number): { col: number; rect: { left: number; top: number; right: number; bottom: number } } | null;
   /** Called when the editor opens/closes/grows. */
   editorChanged(): void;
 }
@@ -181,8 +183,8 @@ export class Interaction {
     const sel = host.selection();
     if (sel.others && sel.others.length > 0) return false;
     const geo = host.geometry();
-    const x = geo.colX(sel.range.c1 + 1);
-    const y = geo.rowY(sel.range.r1 + 1);
+    const x = geo.colRight(sel.range.c1);
+    const y = geo.rowBottom(sel.range.r1);
     if (x < geo.headerW || y < geo.headerH || x > geo.width + 4 || y > geo.height + 4) return false;
     return Math.abs(p.x - x) <= FILL_HANDLE_HIT && Math.abs(p.y - y) <= FILL_HANDLE_HIT;
   }
@@ -223,6 +225,13 @@ export class Interaction {
     if (this.onFillHandle(p)) {
       this.drag = { kind: "fill", source: { ...sel.range }, target: null };
       this.capture(e);
+      return;
+    }
+    const button = hit.area === "cell" && !host.editor.open ? host.filterButtonAt(p.x, p.y) : null;
+    if (button) {
+      // No compatibility mousedown: the popover that opens must not see this click as "outside".
+      e.preventDefault();
+      host.events().onFilterButton?.(button.col, button.rect);
       return;
     }
     if (hit.area !== "colGutter" && hit.area !== "rowGutter") this.commitIfEditing("none");

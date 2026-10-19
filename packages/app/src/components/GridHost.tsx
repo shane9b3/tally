@@ -6,6 +6,8 @@
 import { readTheme } from "@tally/tokens";
 import { Grid } from "@tally/grid/react";
 import { useMemo } from "react";
+import { filterButtonsFor } from "../dataOps";
+import { useDataStore } from "../stores/dataStore";
 import { useController } from "../context";
 import { formulaHighlights, isPointMode } from "../formulaEdit";
 import { useDocStore } from "../stores/docStore";
@@ -32,6 +34,13 @@ export function GridHost() {
   const text = edit?.text ?? "";
   const hl = useMemo(() => formulaHighlights(text, sheetName, resolved), [text, sheetName, resolved]);
   const pointMode = edit !== null && isPointMode(edit.text, edit.caret, pointSpan);
+  const active = useEditStore((s) => s.active);
+  const cell = selection.active;
+  const arrayRange = active && active.sheet === sheet && active.cell.r === cell.r && active.cell.c === cell.c ? (active.arrayRange ?? null) : null;
+  const filter = useDataStore((s) => s.filter);
+  const filterButtons = useMemo(() => filterButtonsFor(filter), [filter]);
+  const clip = useDataStore((s) => s.clip);
+  const clipRange = clip && clip.sheet === sheet ? clip.range : null;
 
   if (!source) return <div className={styles.host} data-testid="grid-loading" />;
   return (
@@ -48,6 +57,10 @@ export function GridHost() {
         pointMode={pointMode}
         refHighlights={hl.refs}
         editHighlights={hl.spans}
+        arrayRange={arrayRange}
+        clipRange={clipRange}
+        filterButtons={filterButtons}
+        onFilterButton={ctl.onFilterButton}
         onSelectionChange={ctl.onSelectionChange}
         onStartEdit={ctl.onGridStartEdit}
         onEditChange={ctl.onEditChange}

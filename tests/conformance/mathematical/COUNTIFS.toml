@@ -37,7 +37,8 @@ expect = 5
 name = "mismatched dimensions"
 cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
 formula = "=COUNTIFS(A1:A6;\">0\";B1:B5;\">0\")"
-expect = "#VALUE!"
+expect = "Err:502"
+note = "AOO interpr1.cxx IterateParametersIfs: a range whose size differs from the first sets errIllegalArgument (Err:502); Excel gives #VALUE!."
 
 [[case]]
 name = "unpaired argument"
@@ -94,3 +95,10 @@ name = "error criterion propagates"
 cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
 formula = "=COUNTIFS(A1:A6;A4)"
 expect = "#DIV/0!"
+
+[[case]]
+name = "mismatched columns"
+cells = { A1 = 1, A2 = 2, A3 = 3, B1 = 1, B2 = 2, B3 = 3 }
+formula = "=COUNTIFS(A1:A3;\">2\";A1:B3;\">1\")"
+expect = "Err:502"
+note = "Same rows, different column count (review 2 Low)."

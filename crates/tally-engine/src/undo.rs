@@ -93,6 +93,17 @@ pub enum Change {
     },
     /// Restore the whole name table (dependents are refreshed).
     Names(Box<crate::names::NameTable>),
+    /// Restore the document metadata (properties).
+    DocMeta(Box<tally_model::DocMeta>),
+    /// Restore the document structure protection.
+    DocProtection(Option<tally_model::SheetProtectionData>),
+    /// Restore the rows an AutoFilter hides.
+    FilteredRows {
+        /// Sheet.
+        sheet: SheetId,
+        /// The rows.
+        rows: crate::storage::Spans,
+    },
 }
 
 /// Side effects the API reports besides changed cells.
@@ -105,6 +116,15 @@ pub struct Effects {
     /// Non-fatal problems of a successful op (e.g. replacements that would
     /// not parse), reported as `OpError`s with the op's index.
     pub warnings: Vec<tally_api::ApiError>,
+    /// Notices for `ApplyResult.warnings` (validation warnings and
+    /// information messages of accepted input).
+    pub notices: Vec<tally_api::ApiError>,
+    /// Row heights computed by `AutoFitRows`.
+    pub fitted_rows: Option<Vec<tally_api::DimRunPx>>,
+    /// Cells changed by `ReplaceAll` ops.
+    pub replaced: Option<u32>,
+    /// `notices` with their op index (collected by the document).
+    pub notice_errors: Vec<tally_api::OpError>,
 }
 
 impl Effects {
@@ -398,7 +418,13 @@ pub fn apply_change(wb: &mut Workbook, change: Change, fx: &mut Effects) -> Opti
         Change::SheetMeta { sheet, meta } => {
             let s = wb.sheet_mut(sheet)?;
             let old = std::mem::replace(&mut s.meta, *meta);
-            wb.reapply_filter(sheet);
+            // Only a change of the filter itself re-applies it.
+            if wb
+                .sheet(sheet)
+                .is_some_and(|s| s.meta.auto_filter != old.auto_filter)
+            {
+                wb.reapply_filter(sheet);
+            }
             wb.pending.display_only.push(whole_sheet(sheet));
             fx.layout(sheet);
             Some(Change::SheetMeta {
@@ -410,6 +436,21 @@ pub fn apply_change(wb: &mut Workbook, change: Change, fx: &mut Effects) -> Opti
             let old = std::mem::replace(&mut wb.names, *table);
             wb.refresh_all_name_dependents();
             Some(Change::Names(Box::new(old)))
+        }
+        Change::DocMeta(meta) => {
+            let old = std::mem::replace(&mut wb.meta, *meta);
+            Some(Change::DocMeta(Box::new(old)))
+        }
+        Change::FilteredRows { sheet, rows } => {
+            let s = wb.sheet_mut(sheet)?;
+            let old = std::mem::replace(&mut s.filtered_rows, rows);
+            fx.layout(sheet);
+            Some(Change::FilteredRows { sheet, rows: old })
+        }
+        Change::DocProtection(p) => {
+            let old = std::mem::replace(&mut wb.structure_protection, p);
+            fx.sheets_changed = true;
+            Some(Change::DocProtection(old))
         }
     }
 }

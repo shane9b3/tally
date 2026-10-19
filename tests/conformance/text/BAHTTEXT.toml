@@ -32,7 +32,8 @@ expect = "หนึ่งล้านบาทถ้วน"
 
 [[case]]
 formula = "=BAHTTEXT(1000001)"
-expect = "หนึ่งล้านเอ็ดบาทถ้วน"
+expect = "หนึ่งล้านหนึ่งบาทถ้วน"
+note = "AOO interpr2.cxx lclAppendBlock writes เอ็ด only when the tens digit is non-zero; Excel writes หนึ่งล้านเอ็ด."
 
 [[case]]
 formula = "=BAHTTEXT(1E15)"
@@ -53,3 +54,24 @@ expect = "Err:511"
 [[case]]
 formula = "=BAHTTEXT(100)"
 expect = "หนึ่งร้อยบาทถ้วน"
+
+[[case]]
+formula = "=BAHTTEXT(101)"
+expect = "หนึ่งร้อยหนึ่งบาทถ้วน"
+note = "AOO lclAppendBlock: no เอ็ด after hundreds alone (Excel: หนึ่งร้อยเอ็ด)."
+
+[[case]]
+formula = "=BAHTTEXT(10000001)"
+expect = "สิบล้านหนึ่งบาทถ้วน"
+
+[[case]]
+formula = "=BAHTTEXT(111)"
+expect = "หนึ่งร้อยสิบเอ็ดบาทถ้วน"
+
+[[case]]
+formula = "=BAHTTEXT(1.25)"
+expect = "หนึ่งบาทยี่สิบห้าสตางค์"
+
+[[case]]
+formula = "=BAHTTEXT(0.21)"
+expect = "ยี่สิบเอ็ดสตางค์"

@@ -3,10 +3,12 @@
 //! non-matching data rows are hidden as *filtered* rows, separate from
 //! rows the user hid.
 //!
-//! The filtered rows are a function of the criteria and the cell values,
-//! so they are recomputed ([`Workbook::reapply_filter`]) whenever the
-//! criteria change and after every transaction, undo or redo that changed
-//! cells inside the area, instead of being recorded for undo.
+//! The filtered rows are a function of the criteria and the cell values.
+//! As in AOO, they are recomputed ([`Workbook::reapply_filter`]) only when
+//! the criteria change (and when that change is undone or redone), on a
+//! row/column change of the sheet, on a hard recalc and on an explicit
+//! `Op::RefreshFilter`, not after every edit: editing a filtered column
+//! leaves the visible rows alone until the filter is refreshed.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;

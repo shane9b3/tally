@@ -1,8 +1,10 @@
 //! FREQUENCY.
 //!
-//! After AOO `interpr3.cxx` `ScFrequency` (Apache-2.0): numbers of both
-//! arguments are collected (text and empties skipped), the bins are sorted,
-//! and the result is a column of `bins + 1` counts.
+//! After AOO `interpr5.cxx` `ScFrequency` (Apache-2.0): numbers of both
+//! arguments are collected (text and empties skipped), the bins are sorted
+//! for counting, and the result is a column of `bins + 1` counts written back
+//! in the caller's original bin order (`aBinIndexOrder`:
+//! `PutDouble(nCount, aBinIndexOrder[j])`). The last slot is the overflow.
 
 use super::mat::Dense;
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
@@ -24,15 +26,23 @@ fn frequency(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     run_ref(|| {
         let mut data = Vec::new();
         a.for_each_number(0, |x| data.push(x))?;
-        let mut bins = Vec::new();
-        a.for_each_number(1, |x| bins.push(x))?;
-        bins.sort_by(f64::total_cmp);
-        let mut out = Dense::zeros(bins.len() + 1, 1);
+        let mut bins: Vec<(f64, usize)> = Vec::new();
+        a.for_each_number(1, |x| bins.push((x, bins.len())))?;
+        // Stable sort: duplicate bins keep their order, so the first of
+        // equal bins collects the values.
+        bins.sort_by(|p, q| p.0.total_cmp(&q.0));
+        let mut counts = vec![0.0; bins.len() + 1];
         for x in data {
-            // First bin with x <= bin; the last slot takes the overflow.
-            let i = bins.partition_point(|b| *b < x);
-            out.set(i, 0, out.at(i, 0) + 1.0);
+            // First sorted bin with x <= bin; the last slot takes the overflow.
+            let i = bins.partition_point(|b| b.0 < x);
+            counts[i] += 1.0;
         }
+        let n = bins.len();
+        let mut out = Dense::zeros(n + 1, 1);
+        for (j, &(_, orig)) in bins.iter().enumerate() {
+            out.set(orig, 0, counts[j]);
+        }
+        out.set(n, 0, counts[n]);
         Ok(out.into_eval())
     })
 }
@@ -66,5 +76,18 @@ mod tests {
         let dup = c.range(0, "B1:B1");
         let r = call(&mut c, "FREQUENCY", vec![d, dup]);
         assert_eq!(col(&r), vec![4.0, 1.0]);
+    }
+
+    #[test]
+    fn unsorted_bins_keep_caller_order() {
+        // AOO interpr5.cxx ScFrequency: counts go back to aBinIndexOrder[j].
+        let mut c = MockEvalContext::new();
+        for (i, v) in [1.0, 2.0, 2.0, 3.0, 5.0].iter().enumerate() {
+            c.set(0, &format!("A{}", i + 1), *v);
+        }
+        c.set(0, "B1", 4.0).set(0, "B2", 2.0);
+        let (d, b) = (c.range(0, "A1:A5"), c.range(0, "B1:B2"));
+        let r = call(&mut c, "FREQUENCY", vec![d, b]);
+        assert_eq!(col(&r), vec![1.0, 3.0, 1.0]);
     }
 }

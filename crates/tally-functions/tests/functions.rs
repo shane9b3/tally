@@ -108,7 +108,16 @@ fn round_cases() {
         round(&mut c, n(1.0), n(21.0)),
         err(ErrorKind::InvalidArgument)
     );
-    assert_eq!(round(&mut c, t("2.45"), n(1.0)), num(2.5), "text converts");
+    assert_eq!(
+        round(&mut c, t("245"), n(-1.0)),
+        num(250.0),
+        "text converts"
+    );
+    assert_eq!(
+        round(&mut c, t("2.45"), n(1.0)),
+        err(ErrorKind::Value),
+        "ConvertUnambiguous: no decimals"
+    );
     assert_eq!(round(&mut c, t("x"), n(1.0)), err(ErrorKind::Value));
     assert_eq!(round(&mut c, b(true), n(0.0)), num(1.0));
     let a5 = c.range(0, "A5");

@@ -16,6 +16,28 @@ AOO 4.1 imports `.xlsx` but cannot save it (see
 XLSB, XLSM macros, XLS (BIFF) and strict-OOXML-only packages are not
 supported; an `.xlsb` is reported as `XlsxError::Unsupported`.
 
+## v0.3 feature coverage
+
+| Feature | ODS read | ODS write | XLSX read | XLSX write |
+|---|---|---|---|---|
+| Conditional formats: cell value, formula, duplicate/unique, top/bottom N (%), above/below average, text tests, error/no error | `calcext:condition` (LibreOffice); legacy `style:map` (`cell-content()…`, `cell-content-is-between`, `is-true-formula`) when the sheet has no `calcext` block | `calcext:conditional-formats` + a `style:map` fallback on the cell styles of non-empty cells for value and formula rules (OpenOffice 4.1 shows those) | `conditionalFormatting/cfRule` with `dxfs` styles | `rust_xlsxwriter` conditional formats with dxf styles |
+| Blank / not blank | `formula-is(LEN(TRIM([.A1]))=0)` recognised | written as that formula (LibreOffice has no token) | `containsBlanks` / `notContainsBlanks` | yes |
+| Colour scales, data bars, icon sets | `calcext:color-scale`, `data-bar`, `icon-set` | yes (`tally:reverse` for reversed icons) | `colorScale`, `dataBar`, `iconSet` (x14 extensions ignored) | yes (data bars as Excel 2010 bars) |
+| Date periods | `calcext:date-is` | yes | `timePeriod` | today … next month; years as a `YEAR()` formula rule |
+| Data validation | `table:content-validations` + `table:content-validation-name` (all `cell-content-…` conditions, lists of values or ranges, help and error messages) | yes | `dataValidations` (`showDropDown="1"` means *no* dropdown) | yes |
+| Notes | `office:annotation` (author, date, shown) | yes | `xl/comments*.xml` (author prefix stripped; the shown state lives in VML and is not read) | `rust_xlsxwriter` notes |
+| Hyperlinks | first `text:a xlink:href` of a cell | `text:a` around the cell text | `hyperlinks` (external relationship targets, `location` → `#Sheet.A1`) | text and empty cells only (links on numbers/formulas are dropped and reported) |
+| Sheet protection | `table:protected`, `table:protection-key` (+ digest algorithm), `loext:table-protection` options | yes | `sheetProtection` (legacy `password`, or `algorithmName`/`hashValue`/`saltValue`/`spinCount`; flags inverted to "allowed") | `protect_with_options` + the stored hash patched in (an ODF SHA hash uses the companion legacy hash) |
+| Cell protection | `style:cell-protect`, `style:print-content` | yes | `xf/protection locked hidden` | `set_unlocked` / `set_hidden` |
+| Structure protection | `table:structure-protected` on `office:spreadsheet` | yes | `workbookProtection lockStructure` | patched into `workbook.xml` |
+| Page setup | `style:page-layout` (size → paper, orientation, margins, `style:print` grid/headers, `scale-to`, `loext:scale-to-X/Y`, centring, page order, first page number) + `style:master-page` header/footer regions (fields → `&[PAGE]` …) via the table style's master page; `table:print-ranges`; `table:table-header-rows/columns` | one page layout + master page per distinct setup | `pageMargins`, `pageSetup`, `printOptions`, `headerFooter` (`&L&C&R`, `&P &N &A &F &D &T`), `_xlnm.Print_Area` / `_xlnm.Print_Titles` | yes (first page number patched in) |
+| Manual page breaks | `fo:break-before="page"` on row/column styles | yes | `rowBreaks` / `colBreaks` (`man="1"`) | yes |
+| Document properties | `meta.xml`: title, subject, keywords, description, initial creator, creator, dates | yes | `docProps/core.xml` | title, subject, author, keywords, comments |
+| Locale | default cell style `fo:language`/`fo:country` | yes | – | – |
+
+Formulas of rules and validations are OpenFormula in the model, relative to
+`base` (ODS `base-cell-address`, XLSX the top-left cell of the first range).
+
 ## XLSX (`crates/tally-io-xlsx`)
 
 ```rust
@@ -33,7 +55,7 @@ uses `rust_xlsxwriter` (pinned `=0.100.0`).
 | Part | What is read |
 |---|---|
 | `[Content_Types].xml` | optional; detects `.xlsb` and non-default workbook part names |
-| `_rels/.rels`, `xl/_rels/workbook.xml.rels` | workbook, sheet, shared-string and style targets (relative, absolute, `..` folded); `TargetMode="External"` targets are dropped |
+| `_rels/.rels`, `xl/_rels/workbook.xml.rels` | workbook, sheet, shared-string and style targets (relative, absolute, `..` folded); `TargetMode="External"` targets are kept only as hyperlink URLs (never opened) |
 | `xl/workbook.xml` | sheet order, names, `state="hidden"`/`veryHidden`; `workbookPr date1904`; `workbookView activeTab`; `calcPr iterate/iterateCount/iterateDelta`; `definedNames` |
 | `xl/sharedStrings.xml` | `<t>` and rich `<r><t>` runs concatenated; phonetic `<rPh>` dropped; whitespace kept verbatim |
 | `xl/styles.xml` | `numFmts` (custom codes → OOo codes), built-in `numFmtId` 0–49 (en-US), `fonts` (b, i, u, strike, sz, name, colour rgb/theme+tint/indexed), `fills` (pattern fill fg colour), `borders` (left/right/top/bottom/start/end style + colour), `cellXfs` (font, fill, border, number format, alignment horizontal/vertical/wrapText/indent), custom `indexedColors` |
@@ -58,21 +80,29 @@ Cells (`<c r s t>`):
 - A formula that does not parse (structured references `Table1[Col]`,
   R1C1, …) is stored as `of:=` + the original text with its cached value;
   the engine reports Err:5xx for it until the user edits it.
-- Functions resolve through the `tally-functions` registry, so the model
-  gets ODF spellings (`IFERROR` → `COM.MICROSOFT.IFERROR`). `_xlfn.` /
+- Functions resolve through the `tally-functions` registry with OOXML names
+  first (`Registry::lookup_ooxml_first`: Excel's `CONVERT`, `DURATION` and
+  `WEEKNUM` are the Analysis add-ins), so the model gets ODF spellings
+  (`IFERROR` → `COM.MICROSOFT.IFERROR`). Export parses the model's ODF names
+  ODF-first. AOO's built-in WEEKNUM (ODF `ISOWEEKNUM(d; mode)`) has no exact
+  Excel function: with a literal mode other than 1 (Monday start, ≥ 4 days =
+  ISO 8601) it is written as Excel's one-argument `_xlfn.ISOWEEKNUM(d)`;
+  otherwise as `_xlfn.ORG.OPENOFFICE.WEEKNUM(d, mode)` (Excel shows
+  `#NAME?`; Tally reads it back as the built-in). `_xlfn.` /
   `_xlws.` prefixes are stripped for known functions; unknown ones keep the
   prefix (`of:=_xlfn.NOSUCHFN(1)`) and round-trip back to Excel unchanged.
 
 Defined names become `NameData` with OpenFormula text and absolute sheet
 markers (`Sheet1!$A$1:$B$10` → `of:=[$Sheet1.$A$1:.$B$10]`); `localSheetId`
-becomes `sheet`. Built-in `_xlnm.*` names are dropped except
-`_xlnm.Print_Area`, which is kept as a sheet-local `Print_Area`.
+becomes `sheet`. `_xlnm.Print_Area` (one area) becomes the sheet's
+`PageSetupData::print_range` and `_xlnm.Print_Titles` its repeated
+rows/columns; other built-in `_xlnm.*` names are dropped (a multi-area print
+area stays a sheet-local `Print_Area` name).
 
-Ignored: `cellStyleXfs`/`cellStyles` (named styles), `dxfs`,
-conditional formatting, data validation, hyperlinks, comments, drawings,
-charts, images, pivot tables, tables (ListObjects), external links,
-`sheetProtection`, print settings other than the print area, row styles
-(`<row s customFormat>`), outline levels, VBA.
+Ignored: `cellStyleXfs`/`cellStyles` (named styles), drawings, charts,
+images, pivot tables, tables (ListObjects), external links, row styles
+(`<row s customFormat>`), outline levels, VBA, x14 extensions of
+conditional formats.
 
 ### Export (model → XLSX)
 
@@ -141,7 +171,8 @@ Excel's 1900 date system counts 1900-01-01 as 1 and has a fictitious
 | 2026-10-19 | 46314 | 46314 | 46312 | 44852 |
 
 - **Import, 1900 system:** the workbook epoch is D1899. Date serials
-  1 ≤ s < 60 gain one day, so the calendar date Excel shows is kept; the
+  0 ≤ s < 60 gain one day, so the calendar date Excel shows is kept (Excel's
+  day 0, "1900-01-00", becomes 1899-12-31 and exports back to 0); the
   fictitious 60 (1900-02-29) becomes 1900-02-28 (D1899 60), keeping its time
   of day; everything else is unchanged.
 - **Import, 1904 system:** the workbook epoch becomes D1904 and serials are
@@ -194,9 +225,11 @@ share it in a common crate). Tests: `crates/tally-io-xlsx/tests/malicious.rs`
 
 ### Known gaps
 
-- No conditional formats, data validation, comments, hyperlinks, images,
-  charts, tables, pivot tables, sheet protection or print setup (except the
-  print area), in either direction.
+- No images, charts, tables or pivot tables, in either direction. Hyperlinks
+  on numeric or formula cells are not written (`rust_xlsxwriter` stores
+  links as string cells). Custom paper sizes are written as the default
+  paper. An ODF-only password hash (SHA-256 without the companion legacy
+  hash) is dropped on XLSX export (reported).
 - Named cell styles are flattened into cell formats; `applyX` flags are not
   consulted (a cell xf's ids are taken as the effective formatting).
 - Rich text runs are flattened to plain text.

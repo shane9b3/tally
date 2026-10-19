@@ -5,9 +5,20 @@ formula = "=FREQUENCY({1;2;3;4;5};{2;4})"
 expect = [[2], [2], [1]]
 
 [[case]]
-name = "unsorted bins are sorted"
+name = "unsorted bins: symmetric data"
 formula = "=FREQUENCY({1;2;3;4;5};{4;2})"
 expect = [[2], [2], [1]]
+
+[[case]]
+name = "unsorted bins: counts in the caller's bin order"
+formula = "=FREQUENCY({1;2;2;3;5};{4;2})"
+expect = [[1], [3], [1]]
+note = "AOO interpr5.cxx ScFrequency writes each count at aBinIndexOrder[j] (the bin's original index). Asymmetric data: the old sorted-order output would be {3;1;1}."
+
+[[case]]
+name = "unsorted bins: three bins"
+formula = "=FREQUENCY({1;5;6;7;9;10};{8;2;6})"
+expect = [[1], [1], [2], [2]]
 
 [[case]]
 name = "all above"

@@ -23,9 +23,10 @@ formula = "=INT(2.9999999999999996)"
 expect = 3
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=INT(\"2.7\")"
-expect = 2
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 formula = "=INT(\"x\")"
@@ -51,3 +52,9 @@ expect = "#DIV/0!"
 [[case]]
 formula = "=INT()"
 expect = "Err:511"
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=INT(\"2.7\")"
+expect = 2
+settings = { text_to_number = "convert_locale" }

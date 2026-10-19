@@ -65,6 +65,17 @@ export interface EditState {
   seq?: number;
 }
 
+/**
+ * AutoFilter buttons: the ▾ drawn in each header cell (`row`, columns
+ * `c0..=c1`); `active` columns have a filter set and are highlighted.
+ */
+export interface FilterButtons {
+  row: number;
+  c0: number;
+  c1: number;
+  active: number[];
+}
+
 /** What a data-source notification covers. */
 export type DirtySet = RangeDto[] | "all";
 
@@ -153,6 +164,11 @@ export interface GridEvents {
    * ⇧⌘V / Ctrl+Shift+V (paste values only).
    */
   onPaste(data: DataTransfer | null, opts?: { plain: boolean }): void;
+  /**
+   * An AutoFilter ▾ button was clicked: column `col`, and the button's
+   * client rect (to anchor a popover).
+   */
+  onFilterButton(col: number, rect: { left: number; top: number; right: number; bottom: number }): void;
 }
 
 /** Everything the grid is configured with. */
@@ -176,6 +192,12 @@ export interface GridProps extends Partial<GridEvents> {
   refHighlights?: RefHighlight[];
   /** Coloured spans of the editor text (formula references). */
   editHighlights?: TextHighlight[];
+  /** The array-formula block containing the active cell (drawn as a thin outline). */
+  arrayRange?: RangeDto | null;
+  /** A copied or cut range (dashed outline until the next paste or Esc). */
+  clipRange?: RangeDto | null;
+  /** AutoFilter header buttons, or `null` without an AutoFilter. */
+  filterButtons?: FilterButtons | null;
 }
 
 /** The visible cells (inclusive), plus pixel offsets of the scroll position. */

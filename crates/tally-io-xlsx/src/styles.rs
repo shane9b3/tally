@@ -1,8 +1,8 @@
 //! `xl/styles.xml` → model styles.
 //!
-//! Only `cellXfs` are used (each cell's `s` indexes it); the named cell
-//! styles (`cellStyleXfs`), differential formats (`dxfs`, for conditional
-//! formatting) and table styles are ignored. The `applyX` flags of a cell
+//! `cellXfs` are used for cells (each cell's `s` indexes it) and `dxfs`
+//! (differential formats) for conditional formatting; the named cell
+//! styles (`cellStyleXfs`) and table styles are ignored. The `applyX` flags of a cell
 //! xf are not consulted: a cell xf's ids are the effective formatting, which
 //! is what Excel displays (the flags only say whether the xf overrides its
 //! parent cell style).
@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use std::io::BufRead;
 
 use tally_model::{
-    AlignData, BorderLine, BorderStyle, BordersData, FontData, HAlign, StyleData, VAlign,
+    AlignData, BorderLine, BorderStyle, BordersData, CellProtectionData, CfStyleData, FontData,
+    HAlign, StyleData, VAlign,
 };
 
 use crate::colors::{XColor, INDEXED};
@@ -42,6 +43,16 @@ struct RawXf {
     fill: usize,
     border: usize,
     align: AlignData,
+    protection: Option<CellProtectionData>,
+}
+
+/// A differential format as read.
+#[derive(Clone, Debug, Default)]
+struct RawDxf {
+    font: Option<RawFont>,
+    fill: Option<XColor>,
+    border: Option<RawBorders>,
+    num_fmt: Option<String>,
 }
 
 /// The cell formats of a workbook, mapped to the model style table.
@@ -53,6 +64,8 @@ pub(crate) struct StyleTable {
     pub xf_style: Vec<Option<u32>>,
     /// `cellXfs` index → the number format shows a calendar date.
     pub xf_date: Vec<bool>,
+    /// `dxfs` (conditional formatting styles).
+    pub dxfs: Vec<CfStyleData>,
 }
 
 impl StyleTable {
@@ -72,6 +85,7 @@ struct Raw {
     fills: Vec<Option<XColor>>,
     borders: Vec<RawBorders>,
     xfs: Vec<RawXf>,
+    dxfs: Vec<RawDxf>,
     indexed: Option<Vec<u32>>,
 }
 
@@ -229,10 +243,19 @@ fn parse_xf<R: BufRead>(xr: &mut XmlReader<R>, e: &Elem) -> Result<RawXf, XlsxEr
         fill: id("fillId") as usize,
         border: id("borderId") as usize,
         align: AlignData::default(),
+        protection: None,
     };
     children(xr, |xr, c| {
         if c.local() == "alignment" {
             xf.align = parse_alignment(&c);
+        }
+        if c.local() == "protection" {
+            let p = CellProtectionData {
+                locked: c.attr_local("locked").is_none_or(parse_bool),
+                hidden_formula: c.attr_local("hidden").is_some_and(parse_bool),
+                ..CellProtectionData::default()
+            };
+            xf.protection = (p != CellProtectionData::default()).then_some(p);
         }
         xr.skip()
     })?;
@@ -299,6 +322,14 @@ fn parse_raw<R: BufRead>(xr: &mut XmlReader<R>) -> Result<Raw, XlsxError> {
                         xr.skip()
                     }
                 })?,
+                "dxfs" => children(xr, |xr, c| {
+                    if c.local() == "dxf" {
+                        let d = parse_dxf(xr)?;
+                        push_checked(&mut raw.dxfs, d)
+                    } else {
+                        xr.skip()
+                    }
+                })?,
                 "colors" => children(xr, |xr, c| {
                     if c.local() == "indexedColors" {
                         let mut pal = Vec::new();
@@ -324,6 +355,47 @@ fn parse_raw<R: BufRead>(xr: &mut XmlReader<R>) -> Result<Raw, XlsxError> {
             _ => {}
         }
     }
+}
+
+fn parse_dxf<R: BufRead>(xr: &mut XmlReader<R>) -> Result<RawDxf, XlsxError> {
+    let mut d = RawDxf::default();
+    children(xr, |xr, e| match e.local() {
+        "font" => {
+            d.font = Some(parse_font(xr)?);
+            Ok(())
+        }
+        "fill" => {
+            // Differential solid fills use the background colour.
+            children(xr, |xr, p| {
+                if p.local() == "patternFill" {
+                    let mut fg = None;
+                    let mut bg = None;
+                    children(xr, |xr, c| {
+                        match c.local() {
+                            "fgColor" => fg = Some(color_of(&c)),
+                            "bgColor" => bg = Some(color_of(&c)),
+                            _ => {}
+                        }
+                        xr.skip()
+                    })?;
+                    d.fill = bg.or(fg);
+                    Ok(())
+                } else {
+                    xr.skip()
+                }
+            })
+        }
+        "border" => {
+            d.border = Some(parse_border(xr)?);
+            Ok(())
+        }
+        "numFmt" => {
+            d.num_fmt = e.attr_local("formatCode").map(str::to_string);
+            xr.skip()
+        }
+        _ => xr.skip(),
+    })?;
+    Ok(d)
 }
 
 /// Excel border style → (model style, width in 1/100 mm).
@@ -424,6 +496,7 @@ fn build(raw: &Raw) -> StyleTable {
             .clone();
         let is_date = number_format.as_deref().is_some_and(is_date_format);
         let style = StyleData {
+            protection: xf.protection,
             font,
             fill,
             align: xf.align.clone(),
@@ -442,6 +515,42 @@ fn build(raw: &Raw) -> StyleTable {
             u32::try_from(table.styles.len() - 1).unwrap_or(u32::MAX)
         });
         table.xf_style.push(Some(idx));
+    }
+    for d in &raw.dxfs {
+        let resolve = |c: &XColor| c.resolve(&indexed);
+        let mut st = CfStyleData::default();
+        if let Some(f) = &d.font {
+            st.bold = f.bold.then_some(true);
+            st.italic = f.italic.then_some(true);
+            st.underline = f.underline.then_some(true);
+            st.strike = f.strike.then_some(true);
+            st.color = f
+                .color
+                .filter(|c| !c.is_automatic())
+                .and_then(|c| resolve(&c));
+        }
+        st.fill = d.fill.and_then(|c| resolve(&c));
+        if let Some(b) = &d.border {
+            let line = |slot: &Option<(String, Option<XColor>)>| {
+                slot.as_ref().map(|(style, color)| {
+                    let (style, width_hmm) = border_line(style);
+                    BorderLine {
+                        style,
+                        width_hmm,
+                        color: color.and_then(|c| resolve(&c)).unwrap_or(0x0000_00ff),
+                    }
+                })
+            };
+            let bd = BordersData {
+                top: line(&b[0]),
+                bottom: line(&b[1]),
+                left: line(&b[2]),
+                right: line(&b[3]),
+            };
+            st.borders = (bd != BordersData::default()).then_some(bd);
+        }
+        st.number_format = d.num_fmt.as_deref().and_then(excel_to_ooo);
+        table.dxfs.push(st);
     }
     table
 }

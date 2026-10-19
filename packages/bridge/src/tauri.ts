@@ -1,5 +1,5 @@
 /**
- * `TauriClient`: the {@link EngineClient} used inside the desktop app. Each
+ * `TauriClient`: the {@link EngineClientV2} used inside the desktop app. Each
  * method invokes the Tauri command of the same name in docs/api.md (camelCase
  * JS arguments; Tauri maps them to the snake_case Rust parameters) and
  * rejects with an {@link ApiError} `{ code, message }` on failure.
@@ -20,6 +20,10 @@
  */
 import type { ApiError } from "./generated/ApiError";
 import type { ApplyResult } from "./generated/ApplyResult";
+import type { AutoFilterInfo } from "./generated/AutoFilterInfo";
+import type { FindQuery } from "./generated/FindQuery";
+import type { FindResult } from "./generated/FindResult";
+import type { NameInfo } from "./generated/NameInfo";
 import type { CellBlock } from "./generated/CellBlock";
 import type { CellEditInfo } from "./generated/CellEditInfo";
 import type { CellPos } from "./generated/CellPos";
@@ -38,7 +42,7 @@ import type { StyleDto } from "./generated/StyleDto";
 import type { Suggestion } from "./generated/Suggestion";
 import type { Transaction } from "./generated/Transaction";
 import type { WorkbookInfo } from "./generated/WorkbookInfo";
-import { isApiError, type EngineClient, type SheetId, type Unsubscribe } from "./client";
+import { isApiError, type EngineClientV2, type SheetId, type Unsubscribe } from "./client";
 import type { ShellClient, TemplateInfo } from "./shell";
 
 export { CANCELLED, type TemplateInfo } from "./shell";
@@ -85,6 +89,11 @@ export const COMMANDS = {
   assistSuggest: "assist_suggest",
   recentFiles: "recent_files",
   listTemplates: "list_templates",
+  names: "names",
+  filterInfo: "filter_info",
+  find: "find",
+  detectHeader: "detect_header",
+  recalcAll: "recalc_all",
 } as const;
 
 /** Event names, exactly as in docs/api.md. */
@@ -98,7 +107,7 @@ export function toApiError(e: unknown): ApiError {
   return { code: "internal", message: String(e) };
 }
 
-export class TauriClient implements EngineClient, ShellClient {
+export class TauriClient implements EngineClientV2, ShellClient {
   constructor(private readonly tauri: TauriTransport) {}
 
   private call<T>(cmd: string, args?: InvokeArgs): Promise<T> {
@@ -222,6 +231,28 @@ export class TauriClient implements EngineClient, ShellClient {
 
   redo(doc: DocId): Promise<ApplyResult> {
     return this.call(COMMANDS.redo, { doc });
+  }
+
+  // -- v0.2 -------------------------------------------------------------------
+
+  names(doc: DocId): Promise<NameInfo[]> {
+    return this.call(COMMANDS.names, { doc });
+  }
+
+  filterInfo(doc: DocId, sheet: SheetId): Promise<AutoFilterInfo> {
+    return this.call(COMMANDS.filterInfo, { doc, sheet });
+  }
+
+  find(doc: DocId, query: FindQuery): Promise<FindResult> {
+    return this.call(COMMANDS.find, { doc, query });
+  }
+
+  detectHeader(doc: DocId, sheet: SheetId, range: RangeDto): Promise<boolean> {
+    return this.call(COMMANDS.detectHeader, { doc, sheet, range });
+  }
+
+  recalcAll(doc: DocId): Promise<ApplyResult> {
+    return this.call(COMMANDS.recalcAll, { doc });
   }
 
   // -- events -----------------------------------------------------------------

@@ -255,12 +255,23 @@ fn sample() -> WorkbookData {
                 }),
                 ..CalcSettings::default()
             },
+            locale: Some("de-DE".into()),
+            structure_protection: Some(tally_model::SheetProtectionData {
+                password_hash: Some("abc=".into()),
+                algorithm: Some("sha256".into()),
+                ..tally_model::SheetProtectionData::default()
+            }),
         },
         meta: DocMeta {
             title: Some("Round & trip".into()),
             generator: Some("Tally/0.1".into()),
             created: Some("2026-10-19T08:00:00".into()),
             modified: Some("2026-10-19T09:00:00".into()),
+            subject: Some("Subject <x>".into()),
+            keywords: vec!["one".into(), "two".into()],
+            description: Some("Line 1\nLine 2".into()),
+            author: Some("Ana".into()),
+            last_author: Some("Ben".into()),
         },
     }
 }

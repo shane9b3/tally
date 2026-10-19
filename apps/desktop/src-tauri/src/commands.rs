@@ -280,17 +280,12 @@ pub async fn list_templates() -> CmdResult<Vec<TemplateInfo>> {
 }
 
 // ----- v0.2 (1:1 over the new DocumentService methods) ----------------------
-//
-// TODO(WP7): register these in `lib.rs`'s `generate_handler!` (the engine
-// agent may only edit this file); until then they are unused.
 
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn names(app: AppHandle, doc: DocId) -> CmdResult<Vec<NameInfo>> {
     blocking(app, move |_, st| with_service(st, |s| s.names(doc))).await
 }
 
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn filter_info(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<AutoFilterInfo> {
     blocking(app, move |_, st| {
@@ -299,13 +294,11 @@ pub async fn filter_info(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResul
     .await
 }
 
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn find(app: AppHandle, doc: DocId, query: FindQuery) -> CmdResult<FindResult> {
     blocking(app, move |_, st| with_service(st, |s| s.find(doc, &query))).await
 }
 
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn detect_header(
     app: AppHandle,
@@ -319,7 +312,6 @@ pub async fn detect_header(
     .await
 }
 
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn recalc_all(app: AppHandle, doc: DocId) -> CmdResult<ApplyResult> {
     blocking(app, move |_, st| with_service(st, |s| s.recalc_all(doc))).await

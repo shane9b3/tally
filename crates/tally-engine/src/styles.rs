@@ -185,46 +185,51 @@ impl StyleTable {
     /// The API view of style `id`.
     pub fn to_dto(&self, id: StyleId) -> StyleDto {
         let e = self.get(id);
-        let d = &e.data;
-        StyleDto {
-            id: id.0,
-            bold: d.font.bold,
-            italic: d.font.italic,
-            underline: d.font.underline,
-            strike: d.font.strike,
-            font_family: d.font.family.clone(),
-            font_size_pt: d.font.size_pt.unwrap_or(DEFAULT_FONT_SIZE_PT),
-            color: d.font.color,
-            fill: d.fill,
-            h_align: match d.align.h {
-                HAlign::General => ApiHAlign::General,
-                HAlign::Left => ApiHAlign::Left,
-                HAlign::Center => ApiHAlign::Center,
-                HAlign::Right => ApiHAlign::Right,
-                HAlign::Justify => ApiHAlign::Justify,
-            },
-            v_align: match d.align.v {
-                VAlign::Bottom => ApiVAlign::Bottom,
-                VAlign::Middle => ApiVAlign::Middle,
-                VAlign::Top => ApiVAlign::Top,
-            },
-            wrap: d.align.wrap,
-            indent: d.align.indent,
-            borders: BordersDto {
-                top: d.borders.top.as_ref().map(border_dto),
-                bottom: d.borders.bottom.as_ref().map(border_dto),
-                left: d.borders.left.as_ref().map(border_dto),
-                right: d.borders.right.as_ref().map(border_dto),
-            },
-            number_format: e.format_code.to_string(),
-            display: d.display.as_ref().map(|x| match x {
-                DisplayData::Chip { bg, fg } => DisplayDto::Chip { bg: *bg, fg: *fg },
-            }),
-        }
+        style_dto(id.0, &e.data, &e.format_code)
     }
 }
 
-fn border_dto(b: &BorderLine) -> BorderLineDto {
+/// The API view of a style with id `id`.
+pub fn style_dto(id: u32, d: &StyleData, format_code: &str) -> StyleDto {
+    StyleDto {
+        id,
+        bold: d.font.bold,
+        italic: d.font.italic,
+        underline: d.font.underline,
+        strike: d.font.strike,
+        font_family: d.font.family.clone(),
+        font_size_pt: d.font.size_pt.unwrap_or(DEFAULT_FONT_SIZE_PT),
+        color: d.font.color,
+        fill: d.fill,
+        h_align: match d.align.h {
+            HAlign::General => ApiHAlign::General,
+            HAlign::Left => ApiHAlign::Left,
+            HAlign::Center => ApiHAlign::Center,
+            HAlign::Right => ApiHAlign::Right,
+            HAlign::Justify => ApiHAlign::Justify,
+        },
+        v_align: match d.align.v {
+            VAlign::Bottom => ApiVAlign::Bottom,
+            VAlign::Middle => ApiVAlign::Middle,
+            VAlign::Top => ApiVAlign::Top,
+        },
+        wrap: d.align.wrap,
+        indent: d.align.indent,
+        borders: BordersDto {
+            top: d.borders.top.as_ref().map(border_dto),
+            bottom: d.borders.bottom.as_ref().map(border_dto),
+            left: d.borders.left.as_ref().map(border_dto),
+            right: d.borders.right.as_ref().map(border_dto),
+        },
+        number_format: format_code.to_string(),
+        display: d.display.as_ref().map(|x| match x {
+            DisplayData::Chip { bg, fg } => DisplayDto::Chip { bg: *bg, fg: *fg },
+        }),
+    }
+}
+
+/// Model border line → API border line.
+pub fn border_dto(b: &BorderLine) -> BorderLineDto {
     BorderLineDto {
         style: match b.style {
             BorderStyle::Solid => BorderStyleDto::Solid,

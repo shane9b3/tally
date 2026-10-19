@@ -26,6 +26,9 @@ const PROP_KEYS = [
   "pointMode",
   "refHighlights",
   "editHighlights",
+  "arrayRange",
+  "clipRange",
+  "filterButtons",
   "onSelectionChange",
   "onStartEdit",
   "onEditChange",
@@ -43,6 +46,7 @@ const PROP_KEYS = [
   "onCopy",
   "onCut",
   "onPaste",
+  "onFilterButton",
 ] as const satisfies readonly (keyof GridProps)[];
 
 function pickProps(p: GridComponentProps): GridProps {

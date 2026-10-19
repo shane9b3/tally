@@ -5,9 +5,10 @@ formula = "=DEGREES(1.0)"
 expect = 57.29577951308232
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=DEGREES(\"1.0\")"
-expect = 57.29577951308232
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -59,3 +60,9 @@ expect = -90
 [[case]]
 formula = "=DEGREES(0)"
 expect = 0
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=DEGREES(\"1.0\")"
+expect = 57.29577951308232
+settings = { text_to_number = "convert_locale" }

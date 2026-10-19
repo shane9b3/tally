@@ -290,6 +290,57 @@ impl Workbook {
                         crate::storage::AutoFilter { range, columns }
                     });
                 }
+                let adjust_ranges = |ranges: &[CellRangeLocal]| -> Vec<CellRangeLocal> {
+                    ranges
+                        .iter()
+                        .filter_map(|r| {
+                            if sh.rows {
+                                span(r.r0, r.r1).map(|(r0, r1)| CellRangeLocal { r0, r1, ..*r })
+                            } else {
+                                span(r.c0, r.c1).map(|(c0, c1)| CellRangeLocal { c0, c1, ..*r })
+                            }
+                        })
+                        .collect()
+                };
+                for cf in &mut sheet.meta.cond_formats {
+                    cf.ranges = adjust_ranges(&cf.ranges);
+                    let origin = cf.origin;
+                    for f in cf.formulas_mut() {
+                        f.adjust(origin, change);
+                    }
+                    cf.origin = shifted_origin(origin, change);
+                }
+                sheet.meta.cond_formats.retain(|cf| !cf.ranges.is_empty());
+                for v in &mut sheet.meta.validations {
+                    v.ranges = adjust_ranges(&v.ranges);
+                    let origin = v.origin;
+                    for f in v.formulas_mut() {
+                        f.adjust(origin, change);
+                    }
+                    v.origin = shifted_origin(origin, change);
+                }
+                sheet.meta.validations.retain(|v| !v.ranges.is_empty());
+                crate::annotations::shift_for_structure(&mut sheet.meta.notes, &sh);
+                crate::annotations::shift_for_structure(&mut sheet.meta.links, &sh);
+                crate::pagesetup::adjust_for_structure(&mut sheet.meta, &sh);
+            }
+            // Rule formulas on other sheets that point at the changed sheet.
+            for other in &mut self.sheets {
+                if other.id == sh.sheet {
+                    continue;
+                }
+                for cf in &mut other.meta.cond_formats {
+                    let origin = cf.origin;
+                    for f in cf.formulas_mut() {
+                        f.adjust(origin, change);
+                    }
+                }
+                for v in &mut other.meta.validations {
+                    let origin = v.origin;
+                    for f in v.formulas_mut() {
+                        f.adjust(origin, change);
+                    }
+                }
             }
             let sheet = sh.sheet;
             self.reapply_filter(sheet);
@@ -310,7 +361,7 @@ impl Workbook {
 }
 
 /// New position of index `p` after a row/column change, `None` if deleted.
-fn point_after(sh: &Shape, p: u32) -> Option<u32> {
+pub fn point_after(sh: &Shape, p: u32) -> Option<u32> {
     if sh.insert {
         if p >= sh.at {
             let n = p.checked_add(sh.count)?;

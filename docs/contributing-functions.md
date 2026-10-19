@@ -130,8 +130,10 @@ Too few arguments is `Err:511`, too many `Err:504`, checked before any argument 
 ### Coercion rules (all in `coerce.rs`)
 
 - Scalar: empty/missing → 0, `""`, FALSE; bool → 1/0; text → number per
-  `settings.text_to_number` (default `ConvertUnambiguous`: plain decimals and
-  ISO 8601 dates/times only, `""` is `#VALUE!`; `ConvertLocale` uses
+  `settings.text_to_number` (default `ConvertUnambiguous`: integers with an
+  optional exponent and ISO 8601 dates/times only, as AOO's
+  `ConvertStringToValue`, so `"3"` and `"-2E3"` convert but `"1.5"` is
+  `#VALUE!`; `""` is `#VALUE!`; `ConvertLocale` uses
   tally-numfmt's en-US input recognizer); errors propagate; arrays give
   their top-left element. Numbers become text through tally-numfmt's
   General formatter (`coerce::number_to_text`).
@@ -241,7 +243,11 @@ each checked against the JSON so a stale entry fails the generator:
   built-in, so those `_ADD` add-ins are stored under their UNO programmatic
   name (`COM.SUN.STAR.SHEET.ADDIN.ANALYSIS.GETGCD`); plain WEEKNUM/CONVERT/
   DURATION mean the add-in, so the built-ins keep `ISOWEEKNUM`,
-  `ORG.OPENOFFICE.CONVERT` and `PDURATION`;
+  `ORG.OPENOFFICE.CONVERT` and `PDURATION`. The built-in WEEKNUM (AOO's
+  4-day week rule) has no OOXML name and is exported under its canonical
+  name; Excel's 1-argument ISOWEEKNUM is the ISOWEEKNUM extension
+  (`COM.MICROSOFT.ISOWEEKNUM` / `_xlfn.ISOWEEKNUM`). File importers should
+  resolve names with `Registry::lookup_odf_first` / `lookup_ooxml_first`;
 - `EXTENSION_OVERRIDES` (NUMBERVALUE: listed but never implemented by AOO);
 - `XLFN_2010_PLUS` / `OOXML_RENAMED`: `ooxml_name`s. Mirror any change in
   `crates/tally-functions/src/categories/ooxml.rs`.

@@ -135,3 +135,37 @@ export const MoonIcon = () => (
     <path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z" />
   </Svg>
 );
+
+export const ArrowUpIcon = () => (
+  <Svg>
+    <path d="M8 13V3M4 7l4-4 4 4" />
+  </Svg>
+);
+
+export const ArrowDownIcon = () => (
+  <Svg>
+    <path d="M8 3v10M4 9l4 4 4-4" />
+  </Svg>
+);
+
+export const MergeIcon = () => (
+  <Svg>
+    <rect x="2" y="3.5" width="12" height="9" rx="1.5" />
+    <path d="M4.5 8h7M6 6l-1.5 2L6 10M10 6l1.5 2L10 10" />
+  </Svg>
+);
+
+/** Borders: a grid square with the outline drawn heavier. */
+export const BordersIcon = () => (
+  <Svg>
+    <rect x="2.5" y="2.5" width="11" height="11" rx="1" strokeWidth={1.75} />
+    <path d="M8 2.5v11M2.5 8h11" strokeWidth={1} strokeDasharray="1.5 1.5" />
+  </Svg>
+);
+
+export const SearchIcon = () => (
+  <Svg>
+    <circle cx="7" cy="7" r="4.25" />
+    <path d="m10.25 10.25 3.25 3.25" />
+  </Svg>
+);

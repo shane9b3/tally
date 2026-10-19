@@ -5,9 +5,10 @@ formula = "=EXP(1.0)"
 expect = 2.718281828459045
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=EXP(\"1.0\")"
-expect = 2.718281828459045
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -68,3 +69,9 @@ expect = 8.218407461554972e+307
 [[case]]
 formula = "=EXP(-1)"
 expect = 0.36787944117144233
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=EXP(\"1.0\")"
+expect = 2.718281828459045
+settings = { text_to_number = "convert_locale" }

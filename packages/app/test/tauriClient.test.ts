@@ -48,6 +48,12 @@ describe("TauriClient", () => {
     await client.saveWithDialog(1, true, null);
     await client.recentFiles();
     await client.listTemplates();
+    const query = { text: "Paid", sheet: null, inFormulas: false, matchCase: false, wholeCell: true, mode: "literal" as const, from: null };
+    await client.names(1);
+    await client.filterInfo(1, 2);
+    await client.find(1, query);
+    await client.detectHeader(1, 2, { r0: 0, c0: 0, r1: 9, c1: 3 });
+    await client.recalcAll(1);
     expect(calls).toEqual([
       { cmd: "wb_new", args: { template: null } },
       { cmd: "wb_open", args: { path: "/a.ods" } },
@@ -71,6 +77,11 @@ describe("TauriClient", () => {
       { cmd: "wb_save", args: { doc: 1, saveAs: true, format: null } },
       { cmd: "recent_files", args: undefined },
       { cmd: "list_templates", args: undefined },
+      { cmd: "names", args: { doc: 1 } },
+      { cmd: "filter_info", args: { doc: 1, sheet: 2 } },
+      { cmd: "find", args: { doc: 1, query } },
+      { cmd: "detect_header", args: { doc: 1, sheet: 2, range: { r0: 0, c0: 0, r1: 9, c1: 3 } } },
+      { cmd: "recalc_all", args: { doc: 1 } },
     ]);
     expect(new Set(calls.map((c) => c.cmd))).toEqual(new Set(Object.values(COMMANDS)));
   });

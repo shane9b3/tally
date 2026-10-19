@@ -4,7 +4,7 @@
 Run from anywhere:  python3 -I docs/functions/gen-master-list.py
 
 - One [[function]] per AOO entry, in JSON order, then the extensions
-  (IFERROR, IFNA) that AOO 4.1 lacks.
+  (IFERROR, IFNA, ISOWEEKNUM) that AOO 4.1 lacks.
 - `batch = 0` marks the 68 batch-0 names, read from the
   "## Batch-0 functions" section of docs/phase-a.md (bullet lines only).
 - Lead-approved corrections live in the explicit override tables below
@@ -29,6 +29,14 @@ EXTENSIONS = [
      "minArgs": 2, "maxArgs": 2, "source": "extension"},
     {"name": "IFNA", "category": "Logical", "odfName": "COM.MICROSOFT.IFNA",
      "ooxmlName": "_xlfn.IFNA", "minArgs": 2, "maxArgs": 2, "source": "extension"},
+    # Excel 2013 ISOWEEKNUM(date). Plain ODF ISOWEEKNUM is AOO's built-in
+    # WEEKNUM, so the extension is stored as COM.MICROSOFT.ISOWEEKNUM; the
+    # optional second argument keeps a 2-argument ODF ISOWEEKNUM resolved by
+    # its canonical name evaluating as AOO's WEEKNUM (LibreOffice tdf#50950).
+    {"name": "ISOWEEKNUM", "category": "Date&Time",
+     "odfName": "COM.MICROSOFT.ISOWEEKNUM", "ooxmlName": "_xlfn.ISOWEEKNUM",
+     "minArgs": 1, "maxArgs": 2, "source": "extension",
+     "note": "Excel ISOWEEKNUM; ODF ISOWEEKNUM is the built-in WEEKNUM"},
 ]
 BATCH0_COUNT = 68
 
@@ -88,7 +96,10 @@ OOXML_RENAMED = {
     "EFFECTIVE": "EFFECT",
     "DURATION": "_xlfn.PDURATION",
     "ZGZ": "_xlfn.RRI",
-    "WEEKNUM": "_xlfn.ISOWEEKNUM",
+    # WEEKNUM (built-in) has no OOXML name: AOO's 4-day week rule matches
+    # neither Excel WEEKNUM (week 1 contains 1 January; that is WEEKNUM_ADD)
+    # nor Excel's 1-argument ISOWEEKNUM (the ISOWEEKNUM extension). It is
+    # exported under its canonical name (correctness review 2, H2/H6).
     "WEEKNUM_ADD": "WEEKNUM",
     "CONVERT_ADD": "CONVERT",
     "DURATION_ADD": "DURATION",

@@ -8,9 +8,7 @@ mod common;
 
 use common::*;
 use tally_io_xlsx::{sniff_is_xlsx, DEFAULT_COL_WIDTH_HMM};
-use tally_model::{
-    BorderStyle, CellContentData, CellRangeLocal, DimRun, HAlign, NameData, StyleRun, VAlign,
-};
+use tally_model::{BorderStyle, CellContentData, CellRangeLocal, DimRun, HAlign, StyleRun, VAlign};
 use tally_types::{DateEpoch, ErrorKind, Value, MAX_ROWS};
 
 #[test]
@@ -231,14 +229,19 @@ fn excel365_dates_1900_system() {
 fn excel365_defined_names() {
     let wb = open("excel365-basic.xlsx");
     let n = |name: &str| wb.names.iter().find(|n| n.name == name).cloned();
+    // Print area and titles become the sheet's page setup.
+    assert_eq!(n("Print_Area"), None);
+    let p = wb.sheets[0].page_setup.as_ref().unwrap();
     assert_eq!(
-        n("Print_Area"),
-        Some(NameData {
-            name: "Print_Area".into(),
-            sheet: Some(0),
-            formula: "of:=[$Data.$A$1:.$F$12]".into()
+        p.print_range,
+        Some(tally_model::CellRangeLocal {
+            r0: 0,
+            c0: 0,
+            r1: 11,
+            c1: 5
         })
     );
+    assert_eq!(p.repeat_rows, Some((0, 0)));
     assert_eq!(n("Totals").unwrap().formula, "of:=[$Data.$D$2:.$D$6]");
     assert_eq!(n("TaxRate").unwrap().formula, "of:=0.15");
     assert_eq!(n("Broken").unwrap().formula, "of:=[.#REF!]");
@@ -247,7 +250,7 @@ fn excel365_defined_names() {
     assert_eq!(items.formula, "of:=[$'My Sheet'.$A$1:.$F$1]");
     // Other `_xlnm.*` built-ins are not names.
     assert!(wb.names.iter().all(|n| !n.name.starts_with("_xlnm")));
-    assert_eq!(wb.names.len(), 5);
+    assert_eq!(wb.names.len(), 4);
 }
 
 #[test]
@@ -305,8 +308,9 @@ fn libreoffice_shapes() {
         Some("0.00%")
     );
     assert_eq!(s.merges.len(), 1);
-    assert_eq!(wb.names.len(), 2);
-    assert_eq!(wb.names[1].formula, "of:=[$Sheet1.$B$2]");
+    assert_eq!(wb.names.len(), 1, "the print area is page setup");
+    assert_eq!(wb.names[0].formula, "of:=[$Sheet1.$B$2]");
+    assert!(s.page_setup.as_ref().unwrap().print_range.is_some());
 }
 
 #[test]

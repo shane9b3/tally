@@ -43,6 +43,25 @@ new Tauri commands in `apps/desktop/src-tauri/src/lib.rs`, `TauriClient` methods
 (default `false`); SUBTOTAL 101–111 skip rows it reports, so the engine only has to
 implement it. SUM includes filtered rows, as in AOO.
 
+## v0.3 engine status (2026-10-19)
+
+Engine, API, model, ODS and XLSX work for v0.3 is in (shapes in docs/api.md,
+file coverage in docs/file-formats.md): conditional formatting (value, formula,
+colour scale, data bar, icon set, duplicate/unique, top/bottom, average, text, blank,
+error, date period; evaluated per `get_cells` with per-version aggregates; synthesized
+`cfStyle` ids), data validation (enforced on input/paste/fill: `stop` → `validation`
+OpError, `warning`/`info` → `ApplyResult.warnings`), notes, hyperlinks (attribute and
+`HYPERLINK()`), sheet/cell/structure protection (`protected` OpError), page setup and
+manual breaks, document properties, row auto-height, locales (en-US, en-GB, de-DE,
+fr-FR, es-ES, ja-JP in `tally-numfmt`; `set_locale`) and goal seek. Also from review:
+reference unions `A1~B2` in sequence arguments, transposed paste moves references,
+`INDIRECT(…; 0)` R1C1, AutoFilters re-applied only on filter changes or
+`refreshFilter`, sort keeps every relative reference relative, SUBTOTAL users
+recalculated on visibility changes, `ApplyResult.replaced`, `resolve_name_box_in`,
+ODF/OOXML-first function lookup on import, `^` errors as POWER. Pending outside the
+engine: Tauri commands and `TauriClient` methods for `EngineClientV3` (suggested
+names in docs/api.md) and the UI.
+
 ## Function library status (2026-10-19)
 
 `crates/tally-functions` registers **407 functions**: all 405 of AOO 4.1

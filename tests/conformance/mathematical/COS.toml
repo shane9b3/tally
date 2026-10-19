@@ -5,9 +5,10 @@ formula = "=COS(0.5)"
 expect = 0.8775825618903728
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=COS(\"0.5\")"
-expect = 0.8775825618903728
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -61,3 +62,9 @@ tol = 1e-15
 formula = "=COS(1000000)"
 expect = 0.9367521275331447
 tol = 1e-09
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=COS(\"0.5\")"
+expect = 0.8775825618903728
+settings = { text_to_number = "convert_locale" }

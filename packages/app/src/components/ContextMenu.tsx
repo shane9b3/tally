@@ -1,6 +1,6 @@
 /** Right-click menus for cells, row headers and column headers. */
 import { useController } from "../context";
-import { HIDE_SOON } from "../commands";
+import { useDataStore } from "../stores/dataStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useUiStore, type ContextMenuState } from "../stores/uiStore";
 import { Popover, type PopoverItem } from "./Popover";
@@ -26,6 +26,9 @@ function Menu({ menu }: { menu: ContextMenuState }) {
   const nCols = range.c1 - range.c0 + 1;
   const rows = plural(nRows, "row", "rows");
   const cols = plural(nCols, "column", "columns");
+  const hasFilter = useDataStore.getState().filter !== null;
+  const merged = ctl.selectionIsMerged();
+  const single = nRows === 1 && nCols === 1;
   let items: PopoverItem[];
 
   if (menu.area === "rowHeader") {
@@ -34,7 +37,9 @@ function Menu({ menu }: { menu: ContextMenuState }) {
       { id: "insertBelow", label: `Insert ${rows} below`, onSelect: run(() => ctl.insertRows("after")) },
       { id: "insertN", label: "Insert rows…", onSelect: () => dialog({ kind: "insert", axis: "row", where: "before" }) },
       { id: "delete", label: `Delete ${rows}`, danger: true, separator: true, onSelect: run(ctl.deleteRows) },
-      { id: "hide", label: `Hide ${rows}`, disabled: true, title: HIDE_SOON, onSelect: () => undefined },
+      { id: "hide", label: `Hide ${rows}`, onSelect: run(() => ctl.setHidden("row", true)) },
+      { id: "show", label: "Show hidden rows", onSelect: run(() => ctl.setHidden("row", false)) },
+      { id: "freezeRows", label: "Freeze rows above", onSelect: run(() => ctl.freeze("rows")) },
       { id: "resize", label: "Row height…", separator: true, onSelect: () => openResize("row") },
       { id: "clear", label: "Clear contents", onSelect: run(ctl.clearSelection) },
     ];
@@ -44,7 +49,10 @@ function Menu({ menu }: { menu: ContextMenuState }) {
       { id: "insertRight", label: `Insert ${cols} right`, onSelect: run(() => ctl.insertCols("after")) },
       { id: "insertN", label: "Insert columns…", onSelect: () => dialog({ kind: "insert", axis: "col", where: "before" }) },
       { id: "delete", label: `Delete ${cols}`, danger: true, separator: true, onSelect: run(ctl.deleteCols) },
-      { id: "hide", label: `Hide ${cols}`, disabled: true, title: HIDE_SOON, onSelect: () => undefined },
+      { id: "hide", label: `Hide ${cols}`, onSelect: run(() => ctl.setHidden("col", true)) },
+      { id: "show", label: "Show hidden columns", onSelect: run(() => ctl.setHidden("col", false)) },
+      { id: "sortAsc", label: "Sort A → Z", separator: true, onSelect: run(() => ctl.sortByActive(true)) },
+      { id: "sortDesc", label: "Sort Z → A", onSelect: run(() => ctl.sortByActive(false)) },
       { id: "resize", label: "Column width…", separator: true, onSelect: () => openResize("col") },
       { id: "fit", label: "Fit width to contents", onSelect: run(() => ctl.autoFit("col", range.c0, range.c1)) },
       { id: "clear", label: "Clear contents", onSelect: run(ctl.clearSelection) },
@@ -55,8 +63,16 @@ function Menu({ menu }: { menu: ContextMenuState }) {
       { id: "copy", label: "Copy", hint: "⌘C", onSelect: run(ctl.copy) },
       { id: "paste", label: "Paste", hint: "⌘V", onSelect: () => void ctl.pasteFromClipboard(false) },
       { id: "pasteValues", label: "Paste values only", hint: "⇧⌘V", onSelect: () => void ctl.pasteFromClipboard(true) },
+      { id: "pasteSpecial", label: "Paste special…", hint: "⌥⌘V", onSelect: () => dialog({ kind: "pasteSpecial" }) },
       { id: "clear", label: "Clear contents", hint: "⌫", separator: true, onSelect: run(ctl.clearSelection) },
       { id: "clearFormats", label: "Clear formats", onSelect: run(ctl.clearFormats) },
+      { id: "sortAsc", label: "Sort A → Z", separator: true, onSelect: run(() => ctl.sortByActive(true)) },
+      { id: "sortDesc", label: "Sort Z → A", onSelect: run(() => ctl.sortByActive(false)) },
+      { id: "filter", label: hasFilter ? "Remove AutoFilter" : "AutoFilter", onSelect: run(ctl.toggleAutoFilter) },
+      merged
+        ? { id: "unmerge", label: "Unmerge cells", onSelect: run(ctl.unmergeCells) }
+        : { id: "merge", label: "Merge cells", disabled: single, title: single ? "Select two or more cells" : undefined, onSelect: run(ctl.mergeCells) },
+      { id: "defineName", label: "Define name…", onSelect: () => ctl.openDefineName() },
       { id: "insertRows", label: `Insert ${rows} above`, separator: true, onSelect: run(() => ctl.insertRows("before")) },
       { id: "insertCols", label: `Insert ${cols} left`, onSelect: run(() => ctl.insertCols("before")) },
       { id: "deleteRows", label: `Delete ${rows}`, danger: true, onSelect: run(ctl.deleteRows) },

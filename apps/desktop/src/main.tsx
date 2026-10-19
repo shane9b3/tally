@@ -5,7 +5,7 @@
  * the mock) from their id.
  */
 import { App, WebMockClient, type AppController } from "@tally/app";
-import type { EngineClient, ShellClient } from "@tally/bridge";
+import type { EngineClientV2, ShellClient } from "@tally/bridge";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { isTauri, makeTauriClient, setWindowTitle } from "./tauri";
@@ -15,12 +15,12 @@ const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const params = new URLSearchParams(location.search);
 
 // The browser build uses MockClient plus emulated row/column insert/delete.
-const client: EngineClient & ShellClient = tauri ? makeTauriClient() : new WebMockClient();
+const client: EngineClientV2 & ShellClient = tauri ? makeTauriClient() : new WebMockClient();
 
 declare global {
   interface Window {
     /** e2e/dev hook (browser builds only). */
-    __tally?: { client: EngineClient; controller: AppController };
+    __tally?: { client: EngineClientV2 & { recorded?: unknown[] }; controller: AppController };
   }
 }
 

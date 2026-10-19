@@ -212,3 +212,51 @@ describe("MockClient", () => {
     expect(saved.dirty).toBe(false);
   });
 });
+
+describe("MockClient v0.3 stubs", () => {
+  it("stores notes, links, validations and conditional formats", async () => {
+    const { client, doc, sheet } = await setup();
+    const res = await client.apply(
+      doc,
+      tx(
+        { type: "setNote", sheet, r: 1, c: 1, note: { r: 0, c: 0, text: "hi", author: "Ana", created: null, shown: false } },
+        { type: "setLink", sheet, r: 0, c: 0, url: "https://example.com" },
+        {
+          type: "addValidation",
+          sheet,
+          validation: {
+            id: 0,
+            ranges: [{ r0: 0, c0: 2, r1: 9, c1: 2 }],
+            kind: { type: "list", source: { type: "values", items: ["a", "b"] } },
+            allowBlank: true,
+            showDropdown: true,
+            inputHelp: null,
+            error: null,
+          },
+        },
+        {
+          type: "addConditionalFormat",
+          sheet,
+          ranges: [{ r0: 0, c0: 0, r1: 9, c1: 0 }],
+          rules: [
+            {
+              kind: { type: "cellValue", op: "gt", formulas: ["5"] },
+              style: { bold: true, italic: null, underline: null, strike: null, color: null, fill: null, borders: null, numberFormat: null, display: null },
+              stopIfTrue: false,
+            },
+          ],
+        },
+      ),
+    );
+    expect(res.errors).toEqual([]);
+    expect((await client.note(doc, sheet, 1, 1))?.text).toBe("hi");
+    expect(await client.notes(doc, sheet)).toHaveLength(1);
+    const [block] = await client.cells(doc, sheet, [{ r0: 0, c0: 0, r1: 1, c1: 1 }]);
+    expect(block?.cells.find((c) => c.r === 0 && c.c === 0)?.link).toBe("https://example.com");
+    expect((block?.cells.find((c) => c.r === 1 && c.c === 1)?.flags ?? 0) & 8).toBe(8);
+    expect((await client.validationAt(doc, sheet, 3, 2))?.listItems).toEqual(["a", "b"]);
+    expect(await client.conditionalFormats(doc, sheet)).toHaveLength(1);
+    expect((await client.pageSetup(doc, sheet)).paper).toEqual({ type: "a4" });
+    expect((await client.protectionInfo(doc, sheet)).sheetProtected).toBe(false);
+  });
+});

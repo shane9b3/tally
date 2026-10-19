@@ -9,8 +9,36 @@
   border-bottom: 1px solid var(--tally-border-subtle);
 }
 
+.nameWrap {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+.nameMenu {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tally-text-muted);
+}
+
+.nameMenu:hover {
+  background: var(--tally-hover);
+  color: var(--tally-text);
+}
+
 .nameBox {
-  width: 72px;
+  width: 104px;
+  padding-right: 24px !important;
   height: 28px;
   flex: none;
   padding: 0 10px;

@@ -5,9 +5,10 @@ formula = "=ACOSH(2.0)"
 expect = 1.3169578969248166
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=ACOSH(\"2.0\")"
-expect = 1.3169578969248166
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -63,3 +64,9 @@ expect = "Err:502"
 [[case]]
 formula = "=ACOSH(1000)"
 expect = 7.600902209541989
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=ACOSH(\"2.0\")"
+expect = 1.3169578969248166
+settings = { text_to_number = "convert_locale" }

@@ -17,7 +17,7 @@ export { useSelectionStore, toSelectionDto, fromSelectionDto, selectionRanges } 
 export { useEditStore, type EditOrigin } from "./stores/editStore";
 export { useUiStore, type Toast } from "./stores/uiStore";
 export { WebMockClient } from "./dev/webMock";
-export { fillRange, planSeries } from "./fill";
+export { fillRange } from "./fill";
 export { formulaHighlights, applyPoint, assistFor, signatureAt } from "./formulaEdit";
 export { analyzeGlance, currentRegion } from "./glance";
 export { formatNumberLite } from "./numfmtLite";

@@ -29,7 +29,9 @@ pub use format_ast::{
     FormatAst, FractionLayout, GeneralKeyword, NamedColor, NumberLayout, Section, SectionKind,
     Token, COLOR_PALETTE,
 };
-pub use locale::{DateOrder, Locale, EN_US};
+pub use locale::{
+    locale_by_tag, DateOrder, Locale, DE_DE, EN_GB, EN_US, ES_ES, FR_FR, JA_JP, LOCALES,
+};
 pub use parse_format::{parse_format, print_format, FormatError};
 pub use recognize::{
     parse_number_unambiguous, parse_number_unambiguous_with, recognize_input, recognize_input_with,

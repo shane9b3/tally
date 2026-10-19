@@ -6,20 +6,17 @@
 //!   cells always last whatever the direction (AOO). Text compares
 //!   case-insensitively by default; case-sensitive puts lowercase first.
 //! - Rows move whole: contents, formulas and styles.
-//! - Formula references: a reference whose target lies entirely inside the
-//!   sorted rows keeps its relative offsets (so `=A2*B2` in row 2 becomes
-//!   `=A5*B5` when its row moves to 5, i.e. it keeps reading its own
-//!   record, as in AOO); every other reference keeps its absolute target
-//!   (re-anchored), so `=$E$1*A2`-style lookups outside the range and
-//!   references to the header row are unaffected by the move.
+//! - Formula references keep their relative offsets, whatever they point
+//!   at (AOO `ScColumn::SwapRow`): `=A2*B2` in row 2 becomes `=A5*B5`
+//!   when its row moves to 5, and a relative reference outside the range
+//!   (`=C1` from row 2 → `=C4` from row 5) moves too; absolute references
+//!   (`$E$1`) are unaffected.
 //! - Ranges containing merges or (part of) array formulas are refused.
 //! - Undo restores a snapshot of the sorted rows.
 
 use std::cmp::Ordering;
-use std::sync::Arc;
 
 use tally_api::{ApiError, SortKey};
-use tally_formula::reanchor;
 use tally_types::{CellAddr, CellRange, Value};
 
 use crate::ops::{array_block_error, MAX_OP_CELLS, MERGED};
@@ -186,6 +183,12 @@ pub fn sort_range(
         return Ok(Vec::new());
     }
     let snap = capture_range(wb, data, true, true);
+    // Notes and hyperlinks travel with their rows.
+    let meta = crate::undo::sheet_meta(wb, range.sheet);
+    if let Some(s) = wb.sheet_mut(range.sheet) {
+        crate::annotations::permute_rows(&mut s.meta.notes, r0, data.c0, data.c1, &perm);
+        crate::annotations::permute_rows(&mut s.meta.links, r0, data.c0, data.c1, &perm);
+    }
     // Styles per cell, before clearing.
     let mut styles: Vec<Vec<StyleId>> = Vec::with_capacity(data.cols() as usize);
     if let Some(sheet) = wb.sheet(range.sheet) {
@@ -201,26 +204,12 @@ pub fn sort_range(
     clear_range_content(wb, data);
     clear_range_styles(wb, data);
     for (dst_i, &src_i) in perm.iter().enumerate() {
-        let (src_row, dst_row) = (r0 + src_i, r0 + dst_i as u32);
+        let dst_row = r0 + dst_i as u32;
         for (c, content) in &by_row[src_i as usize] {
-            let old = CellAddr::new(range.sheet, src_row, *c);
+            // AOO (`ScColumn::SwapRow`) keeps every relative reference
+            // relative: the AST (relative offsets) moves unchanged.
             let new = CellAddr::new(range.sheet, dst_row, *c);
-            let content = match content {
-                SnapContent::Formula {
-                    formula,
-                    invalid_text,
-                    array,
-                } if invalid_text.is_none() && src_row != dst_row => {
-                    let mut nf = (**formula).clone();
-                    reanchor(&mut nf, old, new, Some(&data));
-                    SnapContent::Formula {
-                        formula: Arc::new(nf),
-                        invalid_text: None,
-                        array: *array,
-                    }
-                }
-                other => other.clone(),
-            };
+            let content = content.clone();
             wb.restore_content(new, Some(content));
         }
         if let Some(sheet) = wb.sheet_mut(range.sheet) {
@@ -235,7 +224,9 @@ pub fn sort_range(
         }
     }
     wb.pending.ranges.push(data);
-    Ok(vec![Change::Range(snap)])
+    let mut out: Vec<Change> = meta.into_iter().collect();
+    out.push(Change::Range(snap));
+    Ok(out)
 }
 
 #[cfg(test)]

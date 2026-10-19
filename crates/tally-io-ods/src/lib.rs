@@ -27,6 +27,7 @@ mod numfmt;
 mod read;
 mod styles;
 mod units;
+mod v03;
 mod write;
 mod xml;
 

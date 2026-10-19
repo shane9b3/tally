@@ -52,6 +52,9 @@ pub struct FormulaCell {
     pub has_3d: bool,
     /// Uses named ranges (evaluated with names expanded).
     pub has_names: bool,
+    /// Calls a function whose result depends on row visibility (SUBTOTAL,
+    /// AGGREGATE): dirtied when rows are hidden, shown or filtered.
+    pub visibility_dependent: bool,
     /// For an array formula anchor: the block size `(rows, cols)`.
     pub array: Option<(u32, u32)>,
     /// For an array formula anchor: the last result matrix (`None` when

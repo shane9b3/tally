@@ -9,13 +9,13 @@
  * DPR aware: the backing store is `css × devicePixelRatio`, lines are
  * snapped to device pixels. Text widths are cached per (font, text).
  */
-import type { CellView, RangeDto, StyleDto } from "@tally/bridge";
+import type { BorderLineDto, BordersDto, CellView, RangeDto, StyleDto } from "@tally/bridge";
 import type { Theme } from "@tally/tokens";
 import { colToLetters } from "./colLetters";
 import { fitNumber, isGeneralNumberText } from "./fitNumber";
-import { snapFill, type Geometry, type Rect } from "./geometry";
+import { snapFill, type Geometry, type Pane, type Rect } from "./geometry";
 import { Lru } from "./lru";
-import type { GridDataSource, RefHighlight, Selection } from "./types";
+import type { FilterButtons, GridDataSource, RefHighlight, Selection } from "./types";
 
 /** Horizontal text padding inside a cell at zoom 100%. */
 export const CELL_PADDING = 6;
@@ -110,6 +110,20 @@ export function effectiveAlign(cell: CellView, style: StyleDto | undefined): Eff
   }
 }
 
+/** Stands in for cells inside merged areas when checking where text may overflow. */
+const MERGED_CELL: CellView = { r: -1, c: -1, text: " ", kind: "text", num: null, style: 0, color: null, flags: 0 };
+
+/**
+ * The ▾ button of an AutoFilter header cell (screen px): a square at the
+ * right edge of the cell, vertically centred.
+ */
+export function filterButtonRect(geo: Geometry, r: number, c: number): Rect {
+  const h = geo.rowH(r);
+  const w = geo.colW(c);
+  const s = Math.max(0, Math.min(h - 4 * geo.zoom, 16 * geo.zoom, w - 4 * geo.zoom));
+  return { x: geo.colRight(c) - s - 3 * geo.zoom, y: geo.rowY(r) + (h - s) / 2, w: s, h: s };
+}
+
 function isEmptyCell(cell: CellView | undefined): boolean {
   return cell === undefined || cell.kind === "empty" || cell.text === "";
 }
@@ -119,6 +133,8 @@ export interface MainFrame {
   source: GridDataSource;
   theme: Theme;
   dpr: number;
+  /** AutoFilter header buttons to draw. */
+  filterButtons?: FilterButtons | null;
 }
 
 export interface OverlayFrame extends MainFrame {
@@ -133,6 +149,10 @@ export interface OverlayFrame extends MainFrame {
   fillPreview?: RangeDto | null;
   /** Coloured reference outlines while editing a formula. */
   refHighlights?: readonly RefHighlight[];
+  /** The array-formula block of the active cell (thin outline). */
+  arrayRange?: RangeDto | null;
+  /** The copied/cut range (dashed outline). */
+  clipRange?: RangeDto | null;
 }
 
 /** Per-frame statistics, for the perf demo. */
@@ -218,14 +238,62 @@ export class Renderer {
     this.setFill(theme.colors.bg);
     ctx.fillRect(0, 0, geo.width, geo.height);
 
-    const vis = geo.visibleRange();
+    let count = 0;
+    let textDraws = 0;
+    for (const pane of geo.panes()) {
+      const s = this.drawPane(f, pane);
+      count += s.cells;
+      textDraws += s.textDraws;
+    }
+    this.curFill = "";
+    this.curFont = "";
+
+    this.drawHeaders(f);
+    this.drawFrozenDividers(f);
+    const stats = { cells: count, textDraws, ms: now() - t0 };
+    this.lastStats = stats;
+    return stats;
+  }
+
+  /** The 1 px lines between frozen panes and the scrolling area. */
+  private drawFrozenDividers(f: MainFrame): void {
+    const { geo, theme, dpr } = f;
+    const ctx = this.main;
+    const lw = Math.max(1, Math.round(dpr)) / dpr;
+    this.setFill(theme.colors.frozenLine);
+    if (geo.frozen.cols > 0 && geo.frozenW > 0) {
+      const x = snapFill(geo.headerW + geo.frozenW, dpr) - lw;
+      if (x < geo.width) ctx.fillRect(x, 0, lw, geo.height);
+    }
+    if (geo.frozen.rows > 0 && geo.frozenH > 0) {
+      const y = snapFill(geo.headerH + geo.frozenH, dpr) - lw;
+      if (y < geo.height) ctx.fillRect(0, y, geo.width, lw);
+    }
+    this.curFill = "";
+  }
+
+  /** Draws the cells of one pane (fills, gridlines, text, merges, borders, filter buttons), clipped to it. */
+  private drawPane(f: MainFrame, pane: Pane): { cells: number; textDraws: number } {
+    const ctx = this.main;
+    const { geo, theme, dpr } = f;
+    const vis: RangeDto = { r0: pane.r0, c0: pane.c0, r1: pane.r1, c1: pane.c1 };
     const nr = vis.r1 - vis.r0 + 1;
     const nc = vis.c1 - vis.c0 + 1;
-    // Column/row edges for the visible span.
+    if (nr <= 0 || nc <= 0 || pane.clip.w <= 0 || pane.clip.h <= 0) return { cells: 0, textDraws: 0 };
+    // Column/row edges for the visible span (the far edge from the last index, so it stays in this pane).
     const xs = new Float64Array(nc + 1);
     const ys = new Float64Array(nr + 1);
-    for (let i = 0; i <= nc; i++) xs[i] = geo.colX(vis.c0 + i);
-    for (let i = 0; i <= nr; i++) ys[i] = geo.rowY(vis.r0 + i);
+    for (let i = 0; i < nc; i++) xs[i] = geo.colX(vis.c0 + i);
+    xs[nc] = geo.colRight(vis.c1);
+    for (let i = 0; i < nr; i++) ys[i] = geo.rowY(vis.r0 + i);
+    ys[nr] = geo.rowBottom(vis.r1);
+
+    // Merged areas touching this pane.
+    const merges = geo.merges.filter((m) => m.r0 <= vis.r1 && m.r1 >= vis.r0 && m.c0 <= vis.c1 && m.c1 >= vis.c0);
+    const mergeAt = (r: number, c: number): RangeDto | undefined => {
+      for (const m of merges) if (r >= m.r0 && r <= m.r1 && c >= m.c0 && c <= m.c1) return m;
+      return undefined;
+    };
 
     // Fetch cells once per frame.
     const cells: (CellView | undefined)[] = new Array<CellView | undefined>(nr * nc);
@@ -244,14 +312,15 @@ export class Renderer {
 
     ctx.save();
     ctx.beginPath();
-    ctx.rect(geo.headerW, geo.headerH, geo.cellsW, geo.cellsH);
+    ctx.rect(pane.clip.x, pane.clip.y, pane.clip.w, pane.clip.h);
     ctx.clip();
 
-    // 1. Fills.
+    // 1. Fills (merged areas are filled from their anchor below).
     for (let i = 0; i < nr; i++) {
       for (let j = 0; j < nc; j++) {
         const st = styles[i * nc + j];
         if (!st || st.fill === null || (st.fill & 255) === 0) continue;
+        if (merges.length > 0 && mergeAt(vis.r0 + i, vis.c0 + j)) continue;
         this.setFill(cssColor(st.fill));
         const x0 = snapFill(xs[j] ?? 0, dpr);
         const y0 = snapFill(ys[i] ?? 0, dpr);
@@ -262,81 +331,190 @@ export class Renderer {
     // 2. Gridlines: one device-aligned 1 CSS px line on the right/bottom edge of each cell.
     const lw = Math.max(1, Math.round(dpr)) / dpr;
     this.setFill(theme.colors.gridLine);
-    const bottom = Math.min(geo.height, ys[nr] ?? geo.height);
-    const right = Math.min(geo.width, xs[nc] ?? geo.width);
+    const top = Math.max(pane.clip.y, ys[0] ?? pane.clip.y);
+    const left = Math.max(pane.clip.x, xs[0] ?? pane.clip.x);
+    const bottom = Math.min(pane.clip.y + pane.clip.h, ys[nr] ?? geo.height);
+    const right = Math.min(pane.clip.x + pane.clip.w, xs[nc] ?? geo.width);
     for (let j = 1; j <= nc; j++) {
       const x = xs[j] ?? 0;
       if (x === xs[j - 1]) continue;
-      ctx.fillRect(snapFill(x, dpr) - lw, geo.headerH, lw, bottom - geo.headerH);
+      ctx.fillRect(snapFill(x, dpr) - lw, top, lw, bottom - top);
     }
     for (let i = 1; i <= nr; i++) {
       const y = ys[i] ?? 0;
       if (y === ys[i - 1]) continue;
-      ctx.fillRect(geo.headerW, snapFill(y, dpr) - lw, right - geo.headerW, lw);
+      ctx.fillRect(left, snapFill(y, dpr) - lw, right - left, lw);
     }
 
-    // 3. Text (with overflow), per row.
+    // 2b. Merged areas: one fill over the whole rect hides the inner gridlines.
+    for (const m of merges) {
+      const r = geo.rangeRect(m, false);
+      if (r.w <= 0 || r.h <= 0) continue;
+      const anchor = f.source.getCell(m.r0, m.c0);
+      const st = f.source.getStyle(anchor?.style ?? 0);
+      const fill = st && st.fill !== null && (st.fill & 255) > 0 ? cssColor(st.fill) : theme.colors.bg;
+      this.setFill(fill);
+      const x0 = snapFill(r.x, dpr);
+      const y0 = snapFill(r.y, dpr);
+      ctx.fillRect(x0, y0, snapFill(r.x + r.w, dpr) - lw - x0, snapFill(r.y + r.h, dpr) - lw - y0);
+    }
+
+    // 3. Text (with overflow), per row. Cells inside merged areas are drawn with their area.
     let textDraws = 0;
+    const bounds = { cMin: pane.cMin, cMax: pane.cMax };
+    const merged = (r: number, c: number): boolean => merges.length > 0 && mergeAt(r, c) !== undefined;
     for (let i = 0; i < nr; i++) {
-      const top = ys[i] ?? 0;
-      const h = (ys[i + 1] ?? 0) - top;
+      const rowTop = ys[i] ?? 0;
+      const h = (ys[i + 1] ?? 0) - rowTop;
       if (h <= 0) continue;
       const r = vis.r0 + i;
       const getRowCell = (c: number): CellView | undefined =>
-        c >= vis.c0 && c <= vis.c1 ? cells[i * nc + (c - vis.c0)] : f.source.getCell(r, c);
+        merged(r, c) ? MERGED_CELL : c >= vis.c0 && c <= vis.c1 ? cells[i * nc + (c - vis.c0)] : f.source.getCell(r, c);
       // Cells left of the viewport whose text may overflow into it.
-      for (let c = vis.c0 - 1; c >= Math.max(0, vis.c0 - OVERFLOW_SCAN); c--) {
+      for (let c = vis.c0 - 1; c >= Math.max(pane.cMin, vis.c0 - OVERFLOW_SCAN); c--) {
+        if (merged(r, c)) break;
         const cell = f.source.getCell(r, c);
         if (isEmptyCell(cell)) continue;
-        if (cell) textDraws += this.drawCellText(f, r, c, cell, top, h, getRowCell, vis);
+        if (cell) textDraws += this.drawCellText(f, r, c, cell, rowTop, h, getRowCell, vis, bounds);
         break;
       }
       for (let j = 0; j < nc; j++) {
         const cell = cells[i * nc + j];
         if (isEmptyCell(cell) || !cell) continue;
-        textDraws += this.drawCellText(f, r, vis.c0 + j, cell, top, h, getRowCell, vis, styles[i * nc + j]);
+        if (merged(r, vis.c0 + j)) continue;
+        textDraws += this.drawCellText(f, r, vis.c0 + j, cell, rowTop, h, getRowCell, vis, bounds, styles[i * nc + j]);
       }
       // Cells right of the viewport (right-aligned or centred overflow).
-      const maxC = geo.cols.count - 1;
-      for (let c = vis.c1 + 1; c <= Math.min(maxC, vis.c1 + OVERFLOW_SCAN); c++) {
+      for (let c = vis.c1 + 1; c <= Math.min(pane.cMax, vis.c1 + OVERFLOW_SCAN); c++) {
+        if (merged(r, c)) break;
         const cell = f.source.getCell(r, c);
         if (isEmptyCell(cell)) continue;
-        if (cell) textDraws += this.drawCellText(f, r, c, cell, top, h, getRowCell, vis);
+        if (cell) textDraws += this.drawCellText(f, r, c, cell, rowTop, h, getRowCell, vis, bounds);
         break;
       }
     }
+    for (const m of merges) {
+      const anchor = f.source.getCell(m.r0, m.c0);
+      if (isEmptyCell(anchor) || !anchor) continue;
+      const r = geo.rangeRect(m, false);
+      if (r.w <= 0 || r.h <= 0) continue;
+      const box = { x: geo.colX(m.c0), w: geo.colRight(m.c1) - geo.colX(m.c0) };
+      const y0 = geo.rowY(m.r0);
+      textDraws += this.drawCellText(f, m.r0, m.c0, anchor, y0, geo.rowBottom(m.r1) - y0, () => MERGED_CELL, vis, bounds, undefined, box);
+    }
 
-    // 4. Borders.
+    // 4. Borders (a merged area takes its anchor's borders around the whole area).
+    const drawn = new Set<RangeDto>();
     for (let i = 0; i < nr; i++) {
       for (let j = 0; j < nc; j++) {
+        const r = vis.r0 + i;
+        const c = vis.c0 + j;
+        const m = merges.length > 0 ? mergeAt(r, c) : undefined;
+        if (m) {
+          if (drawn.has(m)) continue;
+          drawn.add(m);
+          const anchor = f.source.getCell(m.r0, m.c0);
+          const st = f.source.getStyle(anchor?.style ?? 0);
+          if (st) this.drawBorders(st.borders, geo.colX(m.c0), geo.colRight(m.c1), geo.rowY(m.r0), geo.rowBottom(m.r1), dpr);
+          continue;
+        }
         const st = styles[i * nc + j];
         if (!st) continue;
         const b = st.borders;
         if (!b.top && !b.bottom && !b.left && !b.right) continue;
-        const x0 = xs[j] ?? 0;
-        const x1 = xs[j + 1] ?? 0;
-        const y0 = ys[i] ?? 0;
-        const y1 = ys[i + 1] ?? 0;
-        const edge = (line: typeof b.top, rect: Rect): void => {
-          if (!line) return;
-          this.setFill(cssColor(line.color));
-          ctx.fillRect(snapFill(rect.x, dpr), snapFill(rect.y, dpr), Math.max(lw, snapFill(rect.w, dpr)), Math.max(lw, snapFill(rect.h, dpr)));
-        };
-        const w = (line: typeof b.top): number => Math.max(1, line?.widthPx ?? 1);
-        edge(b.top, { x: x0 - lw, y: y0 - lw, w: x1 - x0 + lw, h: w(b.top) });
-        edge(b.bottom, { x: x0 - lw, y: y1 - w(b.bottom), w: x1 - x0 + lw, h: w(b.bottom) });
-        edge(b.left, { x: x0 - lw, y: y0 - lw, w: w(b.left), h: y1 - y0 + lw });
-        edge(b.right, { x: x1 - w(b.right), y: y0 - lw, w: w(b.right), h: y1 - y0 + lw });
+        this.drawBorders(b, xs[j] ?? 0, xs[j + 1] ?? 0, ys[i] ?? 0, ys[i + 1] ?? 0, dpr);
       }
     }
+
+    // 5. AutoFilter buttons in the header row of the filter area.
+    const fb = f.filterButtons;
+    if (fb && fb.row >= vis.r0 && fb.row <= vis.r1 && geo.rowH(fb.row) > 0) {
+      for (let c = Math.max(fb.c0, vis.c0); c <= Math.min(fb.c1, vis.c1); c++) {
+        if (geo.colW(c) <= 0) continue;
+        this.drawFilterButton(geo, fb.row, c, fb.active.includes(c), theme, dpr);
+      }
+    }
+
     ctx.restore();
     this.curFill = "";
     this.curFont = "";
+    return { cells: count, textDraws };
+  }
 
-    this.drawHeaders(f, vis, xs, ys);
-    const stats = { cells: count, textDraws, ms: now() - t0 };
-    this.lastStats = stats;
-    return stats;
+  /** The four borders of a cell (or merged area) between x0..x1 and y0..y1 (cell edges, screen px). */
+  private drawBorders(b: BordersDto, x0: number, x1: number, y0: number, y1: number, dpr: number): void {
+    const lw = Math.max(1, Math.round(dpr)) / dpr;
+    if (b.top) this.borderLine(b.top, x0 - lw, x1, y0, true, dpr);
+    if (b.bottom) this.borderLine(b.bottom, x0 - lw, x1, y1, true, dpr);
+    if (b.left) this.borderLine(b.left, y0 - lw, y1, x0, false, dpr);
+    if (b.right) this.borderLine(b.right, y0 - lw, y1, x1, false, dpr);
+  }
+
+  /**
+   * One border line along a cell edge at `pos` (the gridline position: the
+   * line covers the gridline and grows to both sides for wider widths),
+   * from `a` to `b` on the other axis. Dashed, dotted and double styles.
+   */
+  private borderLine(line: BorderLineDto, a: number, b: number, pos: number, horizontal: boolean, dpr: number): void {
+    const ctx = this.main;
+    const lw = Math.max(1, Math.round(dpr)) / dpr;
+    const width = Math.max(lw, Math.round(Math.max(1, line.widthPx) * dpr) / dpr);
+    const base = snapFill(pos, dpr) - lw - Math.floor((width - lw) / 2 / lw) * lw;
+    this.setFill(cssColor(line.color));
+    const rect = (s: number, len: number, off: number, w: number): void => {
+      if (horizontal) ctx.fillRect(snapFill(s, dpr), base + off, len, w);
+      else ctx.fillRect(base + off, snapFill(s, dpr), w, len);
+    };
+    const len = snapFill(b, dpr) - snapFill(a, dpr);
+    if (len <= 0) return;
+    switch (line.style) {
+      case "double": {
+        // Two hairlines with a gap: at least 3 device px overall.
+        const total = Math.max(3 * lw, width);
+        const start = snapFill(pos, dpr) - lw - Math.floor((total - lw) / 2 / lw) * lw;
+        const off = start - base;
+        rect(a, len, off, lw);
+        rect(a, len, off + total - lw, lw);
+        return;
+      }
+      case "dashed":
+      case "dotted": {
+        const on = line.style === "dashed" ? Math.max(3, 3 * width) : width;
+        const gap = line.style === "dashed" ? Math.max(2, 2 * width) : width;
+        for (let s = a; s < b; s += on + gap) rect(s, Math.min(on, b - s), 0, width);
+        return;
+      }
+      default:
+        rect(a, len, 0, width);
+    }
+  }
+
+  /** The ▾ button at the right of an AutoFilter header cell. */
+  private drawFilterButton(geo: Geometry, r: number, c: number, active: boolean, theme: Theme, dpr: number): void {
+    const ctx = this.main;
+    const b = filterButtonRect(geo, r, c);
+    if (b.w <= 0) return;
+    ctx.save();
+    ctx.beginPath();
+    roundRect(ctx, b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1, 3 * geo.zoom);
+    ctx.fillStyle = active ? theme.colors.accent : theme.colors.headerBg;
+    ctx.fill();
+    ctx.lineWidth = 1 / dpr;
+    ctx.strokeStyle = active ? theme.colors.accent : theme.colors.headerLine;
+    ctx.stroke();
+    // The caret (a funnel would be busier at this size).
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2 + 0.5 * geo.zoom;
+    const s = Math.max(2.5, 3.2 * geo.zoom);
+    ctx.beginPath();
+    ctx.moveTo(cx - s, cy - s / 2);
+    ctx.lineTo(cx + s, cy - s / 2);
+    ctx.lineTo(cx, cy + s / 2 + 0.5);
+    ctx.closePath();
+    ctx.fillStyle = active ? "#ffffff" : theme.colors.headerText;
+    ctx.fill();
+    ctx.restore();
+    this.curFill = "";
   }
 
   /** Draws one cell's text, overflowing into empty neighbours. Returns 1 if drawn. */
@@ -349,18 +527,21 @@ export class Renderer {
     h: number,
     getRowCell: (c: number) => CellView | undefined,
     vis: RangeDto,
+    bounds: { cMin: number; cMax: number },
     styleArg?: StyleDto,
+    /** Horizontal extent override (a merged area); no overflow then. */
+    box?: { x: number; w: number },
   ): number {
     const { geo, theme, dpr } = f;
     const ctx = this.main;
-    const cw = geo.colW(c);
+    const cw = box ? box.w : geo.colW(c);
     if (cw <= 0) return 0;
     const style = styleArg ?? f.source.getStyle(cell.style);
     const zoom = geo.zoom;
     const font = cellFont(style, theme, zoom);
     const pad = CELL_PADDING * zoom;
     const avail = Math.max(0, cw - 2 * pad);
-    const x = geo.colX(c);
+    const x = box ? box.x : geo.colX(c);
     const align = effectiveAlign(cell, style);
     const chip = style?.display?.type === "chip" ? style.display : null;
 
@@ -385,17 +566,18 @@ export class Renderer {
     // Horizontal span the text may occupy.
     let spanL = x;
     let spanR = x + cw;
-    const overflow = cell.kind !== "number" && !chip && width > avail && !(style?.wrap ?? false);
+    const overflow = !box && cell.kind !== "number" && !chip && width > avail && !(style?.wrap ?? false);
     if (overflow) {
       const need = width + 2 * pad;
-      const maxC = geo.cols.count - 1;
+      const maxC = Math.min(geo.cols.count - 1, bounds.cMax, vis.c1 + 1);
+      const minC = Math.max(0, bounds.cMin, vis.c0 - 1);
       if (align === "left") {
-        for (let n = c + 1; n <= maxC && spanR - x < need && n <= vis.c1 + 1; n++) {
+        for (let n = c + 1; n <= maxC && spanR - x < need; n++) {
           if (!isEmptyCell(getRowCell(n))) break;
-          spanR = geo.colX(n + 1);
+          spanR = geo.colRight(n);
         }
       } else if (align === "right") {
-        for (let n = c - 1; n >= 0 && x + cw - spanL < need && n >= vis.c0 - 1; n--) {
+        for (let n = c - 1; n >= minC && x + cw - spanL < need; n--) {
           if (!isEmptyCell(getRowCell(n))) break;
           spanL = geo.colX(n);
         }
@@ -407,10 +589,10 @@ export class Renderer {
         const half = (need - cw) / 2;
         while ((canL || canR) && (x - spanL < half || spanR - (x + cw) < half)) {
           if (canR && spanR - (x + cw) < half) {
-            if (nr > maxC || nr > vis.c1 + 1 || !isEmptyCell(getRowCell(nr))) canR = false;
-            else spanR = geo.colX(++nr);
+            if (nr > maxC || !isEmptyCell(getRowCell(nr))) canR = false;
+            else spanR = geo.colRight(nr++);
           } else if (canL && x - spanL < half) {
-            if (nl < 0 || nl < vis.c0 - 1 || !isEmptyCell(getRowCell(nl))) canL = false;
+            if (nl < minC || !isEmptyCell(getRowCell(nl))) canL = false;
             else spanL = geo.colX(nl--);
           } else break;
         }
@@ -539,61 +721,72 @@ export class Renderer {
     return 1;
   }
 
-  private drawHeaders(f: MainFrame, vis: RangeDto, xs: Float64Array, ys: Float64Array): void {
+  private drawHeaders(f: MainFrame): void {
     const ctx = this.main;
     const { geo, theme, dpr } = f;
     const c = theme.colors;
     const lw = Math.max(1, Math.round(dpr)) / dpr;
     const font = headerFont(theme, geo.zoom, false);
-    const nc = vis.c1 - vis.c0 + 1;
-    const nr = vis.r1 - vis.r0 + 1;
 
-    // Column header strip.
+    // Header strips.
     this.setFill(c.headerBg);
     ctx.fillRect(geo.headerW, 0, geo.width - geo.headerW, geo.headerH);
     ctx.fillRect(0, geo.headerH, geo.headerW, geo.height - geo.headerH);
 
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(geo.headerW, 0, geo.cellsW, geo.headerH);
-    ctx.clip();
-    this.setFont(font);
-    ctx.textBaseline = "middle";
-    ctx.textAlign = "center";
-    for (let j = 0; j < nc; j++) {
-      const x0 = xs[j] ?? 0;
-      const x1 = xs[j + 1] ?? 0;
-      if (x1 - x0 <= 0) continue;
-      this.setFill(c.headerText);
-      ctx.fillText(colToLetters(vis.c0 + j), (x0 + x1) / 2, geo.headerH / 2 + 0.5);
-      this.setFill(c.gridLine);
-      ctx.fillRect(snapFill(x1, dpr) - lw, 0, lw, geo.headerH);
+    // Column letters, per column span (frozen columns, then the scrolling ones).
+    for (const span of geo.colSpans()) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(span.x0, 0, span.x1 - span.x0, geo.headerH);
+      ctx.clip();
+      this.setFont(font);
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "center";
+      for (let col = span.c0; col <= span.c1; col++) {
+        const x0 = geo.colX(col);
+        const x1 = geo.colRight(col);
+        if (x1 - x0 <= 0) continue;
+        this.setFill(c.headerText);
+        // Centre the label on the visible part (a column half under a frozen pane keeps its letter).
+        const vx0 = Math.max(x0, span.x0);
+        const vx1 = Math.min(x1, span.x1);
+        if (vx1 - vx0 > 8) ctx.fillText(colToLetters(col), (vx0 + vx1) / 2, geo.headerH / 2 + 0.5);
+        this.setFill(c.gridLine);
+        ctx.fillRect(snapFill(x1, dpr) - lw, 0, lw, geo.headerH);
+        // Hidden columns before this one: a small marker on the boundary.
+        if (col > 0 && geo.cols.isHidden(col - 1)) this.hiddenMarker(x0, geo.headerH / 2, true, geo, theme, dpr);
+      }
+      ctx.restore();
+      this.curFill = "";
+      this.curFont = "";
     }
-    ctx.restore();
-    this.curFill = "";
-    this.curFont = "";
 
-    // Row header strip.
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, geo.headerH, geo.headerW, geo.cellsH);
-    ctx.clip();
-    this.setFont(font);
-    ctx.textBaseline = "middle";
-    ctx.textAlign = "center";
-    for (let i = 0; i < nr; i++) {
-      const y0 = ys[i] ?? 0;
-      const y1 = ys[i + 1] ?? 0;
-      if (y1 - y0 <= 0) continue;
-      this.setFill(c.headerText);
-      ctx.fillText(String(vis.r0 + i + 1), geo.headerW / 2, (y0 + y1) / 2 + 0.5);
-      this.setFill(c.gridLine);
-      ctx.fillRect(0, snapFill(y1, dpr) - lw, geo.headerW, lw);
+    // Row numbers, per row span.
+    for (const span of geo.rowSpans()) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, span.y0, geo.headerW, span.y1 - span.y0);
+      ctx.clip();
+      this.setFont(font);
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "center";
+      for (let row = span.r0; row <= span.r1; row++) {
+        const y0 = geo.rowY(row);
+        const y1 = geo.rowBottom(row);
+        if (y1 - y0 <= 0) continue;
+        this.setFill(c.headerText);
+        const vy0 = Math.max(y0, span.y0);
+        const vy1 = Math.min(y1, span.y1);
+        if (vy1 - vy0 > 6) ctx.fillText(String(row + 1), geo.headerW / 2, (vy0 + vy1) / 2 + 0.5);
+        this.setFill(c.gridLine);
+        ctx.fillRect(0, snapFill(y1, dpr) - lw, geo.headerW, lw);
+        if (row > 0 && geo.rows.isHidden(row - 1)) this.hiddenMarker(geo.headerW / 2, y0, false, geo, theme, dpr);
+      }
+      ctx.restore();
+      ctx.textAlign = "left";
+      this.curFill = "";
+      this.curFont = "";
     }
-    ctx.restore();
-    ctx.textAlign = "left";
-    this.curFill = "";
-    this.curFont = "";
 
     // The select-all corner: header background and a small triangle.
     this.setFill(c.headerBg);
@@ -613,6 +806,28 @@ export class Renderer {
     ctx.fillRect(snapFill(geo.headerW, dpr) - lw, 0, lw, geo.height);
   }
 
+  /**
+   * Marks hidden rows/columns in the header: a short double tick across
+   * the boundary where they were (centred at `x`, `y`).
+   */
+  private hiddenMarker(x: number, y: number, vertical: boolean, geo: Geometry, theme: Theme, dpr: number): void {
+    const ctx = this.main;
+    const lw = Math.max(1, Math.round(dpr)) / dpr;
+    const len = Math.round((vertical ? geo.headerH : geo.headerW) * 0.36);
+    this.setFill(theme.colors.accent);
+    ctx.globalAlpha = 0.7;
+    if (vertical) {
+      const sx = snapFill(x, dpr);
+      ctx.fillRect(sx - 2 * lw, y - len / 2, lw, len);
+      ctx.fillRect(sx + lw, y - len / 2, lw, len);
+    } else {
+      const sy = snapFill(y, dpr);
+      ctx.fillRect(x - len / 2, sy - 2 * lw, len, lw);
+      ctx.fillRect(x - len / 2, sy + lw, len, lw);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   // -------------------------------------------------------------------------
   // Overlay layer
   // -------------------------------------------------------------------------
@@ -626,7 +841,6 @@ export class Renderer {
     const range = selection.range;
     const others = selection.others ?? [];
     const ranges = [...others, range];
-    const vis = geo.visibleRange();
     const lw = Math.max(1, Math.round(dpr)) / dpr;
     const rect = geo.rangeRect(range);
 
@@ -635,24 +849,22 @@ export class Renderer {
     ctx.font = font;
     ctx.textBaseline = "middle";
     ctx.textAlign = "center";
-    const colsOn = new Set<number>();
-    const rowsOn = new Set<number>();
-    for (const rg of ranges) {
-      for (let col = Math.max(vis.c0, rg.c0); col <= Math.min(vis.c1, rg.c1); col++) colsOn.add(col);
-      for (let row = Math.max(vis.r0, rg.r0); row <= Math.min(vis.r1, rg.r1); row++) rowsOn.add(row);
-    }
     ctx.save();
     ctx.beginPath();
     ctx.rect(geo.headerW, 0, geo.cellsW, geo.headerH);
     ctx.clip();
-    for (const col of colsOn) {
-      const x0 = geo.colX(col);
-      const w = geo.colW(col);
-      if (w <= 0) continue;
-      ctx.fillStyle = c.headerActiveBg;
-      ctx.fillRect(x0, 0, w - lw, geo.headerH - lw);
-      ctx.fillStyle = c.headerActiveText;
-      ctx.fillText(colToLetters(col), x0 + w / 2, geo.headerH / 2 + 0.5);
+    for (const span of geo.colSpans()) {
+      for (const rg of ranges) {
+        for (let col = Math.max(span.c0, rg.c0); col <= Math.min(span.c1, rg.c1); col++) {
+          const x0 = geo.colX(col);
+          const w = geo.colW(col);
+          if (w <= 0) continue;
+          ctx.fillStyle = c.headerActiveBg;
+          ctx.fillRect(x0, 0, w - lw, geo.headerH - lw);
+          ctx.fillStyle = c.headerActiveText;
+          ctx.fillText(colToLetters(col), x0 + w / 2, geo.headerH / 2 + 0.5);
+        }
+      }
     }
     if (rect.w > 0) {
       ctx.fillStyle = c.selectionBorder;
@@ -663,14 +875,18 @@ export class Renderer {
     ctx.beginPath();
     ctx.rect(0, geo.headerH, geo.headerW, geo.cellsH);
     ctx.clip();
-    for (const row of rowsOn) {
-      const y0 = geo.rowY(row);
-      const h = geo.rowH(row);
-      if (h <= 0) continue;
-      ctx.fillStyle = c.headerActiveBg;
-      ctx.fillRect(0, y0, geo.headerW - lw, h - lw);
-      ctx.fillStyle = c.headerActiveText;
-      ctx.fillText(String(row + 1), geo.headerW / 2, y0 + h / 2 + 0.5);
+    for (const span of geo.rowSpans()) {
+      for (const rg of ranges) {
+        for (let row = Math.max(span.r0, rg.r0); row <= Math.min(span.r1, rg.r1); row++) {
+          const y0 = geo.rowY(row);
+          const h = geo.rowH(row);
+          if (h <= 0) continue;
+          ctx.fillStyle = c.headerActiveBg;
+          ctx.fillRect(0, y0, geo.headerW - lw, h - lw);
+          ctx.fillStyle = c.headerActiveText;
+          ctx.fillText(String(row + 1), geo.headerW / 2, y0 + h / 2 + 0.5);
+        }
+      }
     }
     if (rect.h > 0) {
       ctx.fillStyle = c.selectionBorder;
@@ -682,13 +898,13 @@ export class Renderer {
     // Hovered resize gutter.
     if (f.hoverGutter !== null && f.resizeGuide === null) {
       if (f.hoverGutter.axis === "col") {
-        const gx = geo.colX(f.hoverGutter.index + 1);
+        const gx = geo.colRight(f.hoverGutter.index);
         if (gx >= geo.headerW && gx <= geo.width) {
           ctx.fillStyle = c.resizeGuide;
           ctx.fillRect(snapFill(gx, dpr) - 1.5, 3, 2, geo.headerH - 6);
         }
       } else {
-        const gy = geo.rowY(f.hoverGutter.index + 1);
+        const gy = geo.rowBottom(f.hoverGutter.index);
         if (gy >= geo.headerH && gy <= geo.height) {
           ctx.fillStyle = c.resizeGuide;
           ctx.fillRect(3, snapFill(gy, dpr) - 1.5, geo.headerW - 6, 2);
@@ -712,6 +928,18 @@ export class Renderer {
       ctx.fillRect(b.x0, b.y0, bw, b.y1 - b.y0);
       ctx.fillRect(b.x1 - bw, b.y0, bw, b.y1 - b.y0);
     };
+
+    // The array-formula block around the active cell: a thin outline.
+    if (f.arrayRange) {
+      const b = box(f.arrayRange);
+      if (b) {
+        ctx.fillStyle = c.accent;
+        ctx.globalAlpha = 0.85;
+        frame({ x0: b.x0 - 1, y0: b.y0 - 1, x1: b.x1 + 1, y1: b.y1 + 1 }, 1);
+        ctx.globalAlpha = 1;
+      }
+    }
+
     // Earlier ranges of a multi-selection: tint and a thin border.
     for (const rg of others) {
       const r = geo.rangeRect(rg);
@@ -725,13 +953,16 @@ export class Renderer {
       }
     }
     if (rect.w > 0 && rect.h > 0) {
-      const single = range.r0 === range.r1 && range.c0 === range.c1;
+      const activeMerge = geo.mergeAt(selection.active.r, selection.active.c);
+      const single =
+        (range.r0 === range.r1 && range.c0 === range.c1) ||
+        (activeMerge !== undefined && activeMerge.r0 === range.r0 && activeMerge.c0 === range.c0 && activeMerge.r1 === range.r1 && activeMerge.c1 === range.c1);
       if (!single || others.length > 0) {
         ctx.fillStyle = c.selection;
         if (!single) ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
-        // The active cell stays clear.
-        const a = geo.cellRect(selection.active.r, selection.active.c);
-        if (!single) ctx.clearRect(a.x, a.y, a.w - lw, a.h - lw);
+        // The active cell (or its merged area) stays clear.
+        const a = geo.rangeRect(activeMerge ?? { r0: selection.active.r, c0: selection.active.c, r1: selection.active.r, c1: selection.active.c });
+        if (!single && a.w > 0 && a.h > 0) ctx.clearRect(a.x, a.y, a.w - lw, a.h - lw);
       }
       // 2 px border, drawn inside the range's top-left gridlines.
       const b = box(range);
@@ -739,7 +970,7 @@ export class Renderer {
         ctx.fillStyle = c.selectionBorder;
         frame(b, 2);
         // Fill handle at the bottom-right corner (only if that corner is on screen).
-        const cornerVisible = geo.colX(range.c1 + 1) <= geo.width + 4 && geo.rowY(range.r1 + 1) <= geo.height + 4;
+        const cornerVisible = geo.colRight(range.c1) <= geo.width + 4 && geo.rowBottom(range.r1) <= geo.height + 4;
         if (!f.editing && cornerVisible && others.length === 0) {
           const s = 7;
           const hx = b.x1 - 1 - s / 2;
@@ -749,6 +980,19 @@ export class Renderer {
           ctx.fillStyle = c.fillHandle;
           ctx.fillRect(hx, hy, s, s);
         }
+      }
+    }
+
+    // Copied / cut range: a dashed ("marching ants") outline.
+    if (f.clipRange) {
+      const b = box(f.clipRange);
+      if (b) {
+        ctx.save();
+        ctx.strokeStyle = c.selectionBorder;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(b.x0 + 0.75, b.y0 + 0.75, b.x1 - b.x0 - 1.5, b.y1 - b.y0 - 1.5);
+        ctx.restore();
       }
     }
 

@@ -113,11 +113,12 @@ impl Document {
     fn result(
         &mut self,
         report: RecalcReport,
-        fx: Effects,
+        mut fx: Effects,
         errors: Vec<OpError>,
         selection: Option<SelectionDto>,
     ) -> ApplyResult {
         self.version += 1;
+        let notices: Vec<OpError> = std::mem::take(&mut fx.notice_errors);
         let mut by_sheet: Vec<SheetRanges> = Vec::new();
         for r in report.changed {
             if self.wb.sheet(r.sheet).is_none() {
@@ -154,16 +155,18 @@ impl Document {
             undo: self.undo.state(),
             selection,
             info: fx.sheets_changed.then(|| self.info()),
+            warnings: (!notices.is_empty()).then_some(notices),
+            fitted_rows: fx.fitted_rows,
+            replaced: fx.replaced,
         }
     }
 
-    /// Recalculates, then re-applies the AutoFilters whose area changed.
+    /// Recalculates. AutoFilters are not re-applied (see [`crate::filter`]);
+    /// SUBTOTAL-style formulas reading a sheet whose layout (row
+    /// visibility) changed are recalculated.
     fn recalc_and_filter(&mut self, fx: &mut Effects) -> RecalcReport {
-        let report = recalc(&mut self.wb);
-        for s in self.wb.reapply_filters_touching(&report.changed) {
-            fx.layout(s);
-        }
-        report
+        self.wb.dirty_visibility_dependents(&fx.layout_changed);
+        recalc(&mut self.wb)
     }
 
     /// Hard recalculation: rebuilds every formula's dependencies (dynamic
@@ -210,6 +213,13 @@ impl Document {
                     message: w.message,
                 });
             }
+            for w in fx.notices.drain(..) {
+                fx.notice_errors.push(OpError {
+                    op_index: i as u32,
+                    code: w.code,
+                    message: w.message,
+                });
+            }
         }
         let report = self.recalc_and_filter(&mut fx);
         if !changes.is_empty() {
@@ -222,6 +232,32 @@ impl Document {
             self.dirty = true;
         }
         self.result(report, fx, errors, tx.selection_after)
+    }
+
+    /// Sets the locale (not undoable; the document becomes dirty). Every
+    /// sheet's used area is reported as changed.
+    pub fn set_locale(&mut self, tag: &str) -> Result<ApplyResult, tally_api::ApiError> {
+        if !self.wb.set_locale(tag) {
+            return Err(tally_api::ApiError::invalid_argument(format!(
+                "unknown locale {tag:?}"
+            )));
+        }
+        let changed: Vec<CellRange> = self
+            .wb
+            .sheets
+            .iter()
+            .filter_map(|s| s.used_range())
+            .collect();
+        self.dirty = true;
+        let report = RecalcReport {
+            changed,
+            ..RecalcReport::default()
+        };
+        let mut fx = Effects::default();
+        for s in self.wb.sheets.iter().map(|s| s.id).collect::<Vec<_>>() {
+            fx.layout(s);
+        }
+        Ok(self.result(report, fx, Vec::new(), None))
     }
 
     /// Undoes the last step (a no-op result when there is none).

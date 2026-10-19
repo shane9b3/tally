@@ -28,11 +28,12 @@ expect = "R2C[3]"
 
 [[case]]
 formula = "=ADDRESS(1;1;1;1;\"Sheet2\")"
-expect = "$Sheet2.$A$1"
+expect = "Sheet2.$A$1"
+note = "AOO interpr1.cxx ScAddressFunc: CheckTabQuotes plus '.', no '$' before the sheet."
 
 [[case]]
 formula = "=ADDRESS(1;1;4;TRUE;\"My Sheet\")"
-expect = "$'My Sheet'.A1"
+expect = "'My Sheet'.A1"
 
 [[case]]
 formula = "=ADDRESS(1;16384)"
@@ -55,8 +56,39 @@ formula = "=ADDRESS(1;16385)"
 expect = "Err:502"
 
 [[case]]
-formula = "=ADDRESS(1;1;5)"
-expect = "Err:502"
+formula = "=ADDRESS(2;3;5)"
+expect = "$C$2"
+note = "AOO ScAddressFunc: abs 5-8 are aliases of 1-4."
+
+[[case]]
+formula = "=ADDRESS(2;3;7)"
+expect = "$C2"
+
+[[case]]
+formula = "=ADDRESS(1;1;9)"
+expect = "#VALUE!"
+note = "AOO ScAddressFunc: any other abs value is PushNoValue."
+
+[[case]]
+formula = "=ADDRESS(1;1;1;0;\"Sheet1\")"
+expect = "Sheet1!R1C1"
+note = "AOO ScAddressFunc: '!' separates the sheet in CONV_XL_R1C1."
+
+[[case]]
+formula = "=ADDRESS(1;2;4;0)"
+origin = "A1"
+expect = "R[1]C[2]"
+
+[[case]]
+formula = "=ADDRESS(0;-1;4;0)"
+origin = "C3"
+expect = "RC[-1]"
+note = "R1C1 relative values are offsets from the formula cell; 0 is written without brackets (address.cxx lcl_r1c1_append_r)."
+
+[[case]]
+formula = "=ADDRESS(1;1;4;1;\"2024\")"
+expect = "'2024'.A1"
+note = "CheckTabQuotes quotes purely numeric sheet names."
 
 [[case]]
 formula = "=ADDRESS(\"x\";1)"

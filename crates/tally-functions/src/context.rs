@@ -166,6 +166,14 @@ pub trait EvalContext {
         let _ = (sheet, row);
         false
     }
+
+    /// `true` if `row` (0-based) of `sheet` is hidden by an AutoFilter (a
+    /// subset of [`EvalContext::hidden_row`]). SUBTOTAL codes 1 to 11 skip
+    /// such rows, as in AOO. The default reports no filtered rows.
+    fn filtered_row(&self, sheet: SheetId, row: u32) -> bool {
+        let _ = (sheet, row);
+        false
+    }
 }
 
 /// The arguments of one call, evaluated on demand by the engine.

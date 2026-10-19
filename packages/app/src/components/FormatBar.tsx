@@ -12,7 +12,10 @@ import { useActiveStyle } from "../hooks";
 import { rgbaToHex } from "../palette";
 import { useUiStore } from "../stores/uiStore";
 import { ColorPicker } from "./ColorPicker";
-import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon, ChevronIcon, ChipsIcon, FillIcon, WrapIcon } from "./icons";
+import { BordersPicker } from "./BordersPicker";
+import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon, BordersIcon, ChevronIcon, ChipsIcon, FillIcon, MergeIcon, WrapIcon } from "./icons";
+import { useSelectionStore } from "../stores/selectionStore";
+import { useDocStore } from "../stores/docStore";
 import { Popover } from "./Popover";
 import styles from "./FormatBar.module.css";
 
@@ -47,7 +50,7 @@ function Tool({ command, label, children, active, wide }: ToolProps) {
   );
 }
 
-type Menu = { kind: "size" | "format" | "color" | "fill"; x: number; y: number } | null;
+type Menu = { kind: "size" | "format" | "color" | "fill" | "borders"; x: number; y: number } | null;
 
 export function FormatBar() {
   const ctl = useController();
@@ -64,6 +67,10 @@ export function FormatBar() {
   const textColor = style?.color != null ? rgbaToHex(style.color) : "var(--tally-text)";
   const fillColor = style?.fill != null && (style.fill & 255) > 0 ? rgbaToHex(style.fill) : "transparent";
   const done = () => ctl.focusGrid();
+  // Re-render on selection / layout changes for the merge toggle.
+  useSelectionStore((s) => s.selection);
+  useDocStore((s) => s.rev);
+  const merged = ctl.selectionIsMerged();
 
   return (
     <div className={styles.bar} role="toolbar" aria-label="Format" data-testid="format-bar">
@@ -140,6 +147,24 @@ export function FormatBar() {
         </Tool>
       </div>
       <span className={styles.sep} />
+      <div className={styles.group}>
+        <Tool command="format.toggleMerge" label={merged ? "Unmerge cells" : "Merge cells"} active={merged}>
+          <MergeIcon />
+        </Tool>
+        <button
+          type="button"
+          className={styles.tool}
+          aria-label="Borders"
+          aria-haspopup="dialog"
+          title="Borders"
+          data-testid="borders"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={open("borders")}
+        >
+          <BordersIcon />
+        </button>
+      </div>
+      <span className={styles.sep} />
       <button
         type="button"
         className={cx(styles.dropdown, styles.format)}
@@ -210,6 +235,17 @@ export function FormatBar() {
               onSelect: () => useUiStore.getState().openDialog({ kind: "numberFormat", code: style?.numberFormat ?? "General" }),
             },
           ]}
+        />
+      ) : null}
+      {menu?.kind === "borders" ? (
+        <BordersPicker
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          onPick={(preset, line) => {
+            void ctl.applyBorders(preset, line);
+            done();
+          }}
         />
       ) : null}
       {menu?.kind === "color" || menu?.kind === "fill" ? (

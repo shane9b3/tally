@@ -5,9 +5,10 @@ formula = "=TAN(0.5)"
 expect = 0.5463024898437905
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=TAN(\"0.5\")"
-expect = 0.5463024898437905
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -56,3 +57,9 @@ tol = 1e-15
 [[case]]
 formula = "=TAN(-1)"
 expect = -1.557407724654902
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=TAN(\"0.5\")"
+expect = 0.5463024898437905
+settings = { text_to_number = "convert_locale" }

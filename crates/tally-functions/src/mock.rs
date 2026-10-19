@@ -34,6 +34,9 @@ pub struct MockEvalContext {
     pub reads: Vec<CellAddr>,
     /// Rows reported by [`EvalContext::hidden_row`], as `(sheet, row)`.
     pub hidden_rows: HashSet<(SheetId, u32)>,
+    /// Rows hidden by an AutoFilter (reported by both
+    /// [`EvalContext::filtered_row`] and [`EvalContext::hidden_row`]).
+    pub filtered_rows: HashSet<(SheetId, u32)>,
     rng: u64,
 }
 
@@ -61,6 +64,7 @@ impl MockEvalContext {
             dynamic_deps: Vec::new(),
             reads: Vec::new(),
             hidden_rows: HashSet::new(),
+            filtered_rows: HashSet::new(),
             rng: 0x2545_F491_4F6C_DD1D,
         }
     }
@@ -213,7 +217,11 @@ impl EvalContext for MockEvalContext {
     }
 
     fn hidden_row(&self, sheet: SheetId, row: u32) -> bool {
-        self.hidden_rows.contains(&(sheet, row))
+        self.hidden_rows.contains(&(sheet, row)) || self.filtered_rows.contains(&(sheet, row))
+    }
+
+    fn filtered_row(&self, sheet: SheetId, row: u32) -> bool {
+        self.filtered_rows.contains(&(sheet, row))
     }
 
     fn in_array_context(&self) -> bool {

@@ -11,12 +11,14 @@
 import "@tally/tokens/fonts";
 import "@tally/tokens/tokens.css";
 import "./global.css";
-import type { EngineClient, ShellClient } from "@tally/bridge";
+import type { EngineClientV2, ShellClient } from "@tally/bridge";
 import { useEffect, useMemo, useState } from "react";
 import { buildCommands } from "./commands";
 import { CommandPalette } from "./components/CommandPalette";
 import { ContextMenu, openResizeDialog } from "./components/ContextMenu";
 import { Dialogs } from "./components/Dialogs";
+import { FilterPopover } from "./components/FilterPopover";
+import { FindBar } from "./components/FindBar";
 import { FormatBar } from "./components/FormatBar";
 import { FormulaAssist } from "./components/FormulaAssist";
 import { FormulaBar } from "./components/FormulaBar";
@@ -43,7 +45,7 @@ export interface Platform {
 
 export interface AppProps {
   /** Engine and shell (`TauriClient` in the desktop app, `MockClient` in a browser). */
-  client: EngineClient & ShellClient;
+  client: EngineClientV2 & ShellClient;
   /** Open this template instead of a blank workbook on start. */
   initialTemplate?: string | null;
   platform?: Partial<Platform>;
@@ -109,6 +111,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
           <FormulaBar />
           <div className={styles.work}>
             <GridHost />
+            <FindBar />
             {glanceOpen ? <GlancePanel /> : null}
           </div>
           <footer className={styles.footer}>
@@ -119,6 +122,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
         <CommandPalette />
         <FormulaAssist />
         <ContextMenu />
+        <FilterPopover />
         <Dialogs />
         <ShortcutsModal />
         <Toasts />

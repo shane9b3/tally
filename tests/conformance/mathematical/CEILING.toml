@@ -63,8 +63,10 @@ formula = "=CEILING(A1;1)"
 expect = 0
 
 [[case]]
+name = "decimal text is #VALUE! by default"
 formula = "=CEILING(\"2.2\";1)"
-expect = 3
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 formula = "=CEILING(1.5;\"x\")"
@@ -95,3 +97,9 @@ expect = 6
 formula = "=CEILING(0.1+0.2;0.1)"
 expect = 0.30000000000000004
 note = "approxCeil: 0.30000000000000004/0.1 snaps to 3."
+
+[[case]]
+name = "decimal text with convert_locale"
+formula = "=CEILING(\"2.2\";1)"
+expect = 3
+settings = { text_to_number = "convert_locale" }

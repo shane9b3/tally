@@ -216,7 +216,7 @@ export class CellEditor {
    */
   layout(geo: Geometry, active: CellPos, info: EditorStyleInfo, measurer: TextMeasurer): void {
     const cell = this.open && this.cell ? this.cell : active;
-    const rect = geo.cellRect(cell.r, cell.c);
+    const rect = geo.cellBox(cell.r, cell.c);
     const zoom = geo.zoom;
     if (!this.open) {
       const x = clampN(rect.x, geo.headerW, Math.max(geo.headerW, geo.width - 2));

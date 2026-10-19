@@ -22,72 +22,137 @@ pub const ADDRESS: FunctionDef =
         .returns(ReturnKind::Text)
         .help("Cell address as text.");
 
-/// Quotes a sheet name for Calc reference syntax when it is not a plain identifier.
+/// AOO `ScCompiler::CheckTabQuotes`: a sheet name that is not an identifier
+/// (letters, digits and `_`; it may start with a digit) or that is purely
+/// numeric is quoted, with embedded `'` doubled.
 fn quote_sheet(name: &str) -> String {
-    let plain = !name.is_empty()
-        && !name.starts_with(|c: char| c.is_ascii_digit())
-        && name.chars().all(|c| c.is_alphanumeric() || c == '_');
-    if plain {
+    let ident = !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_');
+    let numeric = !name.is_empty() && name.bytes().all(|c| c.is_ascii_digit());
+    if ident && !numeric {
         name.to_string()
     } else {
         format!("'{}'", name.replace('\'', "''"))
     }
 }
 
-/// Calc syntax gives `$Sheet1.$A$1` (the sheet is always absolute, as in AOO
-/// and LibreOffice); `abs` 1 = `$A$1`, 2 = `A$1`, 3 = `$A1`, 4 = `A1`.
-/// With `a1` FALSE the Excel R1C1 form is built (`R1C1`, `R1C[2]`, `R[1]C2`,
-/// `R[1]C[2]`) and the sheet is written `Sheet.` without `$`.
-/// Row/column outside the grid or `abs` outside 1..=4 is `Err:502`.
+/// The sheet prefix of AOO `ScAddressFunc`: in Calc A1 syntax a leading
+/// `'Doc'#` (or `'Doc'#$`) part is kept as is; the sheet name is quoted
+/// with [`quote_sheet`] unless it already starts and ends with `'`.
+fn sheet_prefix(name: &str, a1: bool) -> String {
+    let (doc, tab) = match a1.then(|| doc_tab_pos(name)).flatten() {
+        Some(pos) => {
+            let mut pos = pos;
+            if name[pos + 1..].starts_with('$') {
+                pos += 1;
+            }
+            name.split_at(pos + 1)
+        }
+        None => ("", name),
+    };
+    let quoted = tab.len() >= 2 && tab.starts_with('\'') && tab.ends_with('\'');
+    let tab = if quoted || tab == "'" {
+        tab.to_owned()
+    } else {
+        quote_sheet(tab)
+    };
+    format!("{doc}{tab}")
+}
+
+/// AOO `ScCompiler::GetDocTabPos`: the byte index of an unquoted `#` that
+/// follows a quoted document name (`'Doc'#Sheet`).
+fn doc_tab_pos(s: &str) -> Option<usize> {
+    if !s.starts_with('\'') {
+        return None;
+    }
+    let mut quoted = false;
+    for (i, c) in s.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            '#' if !quoted => return (s[..i].ends_with('\'')).then_some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Port of AOO `ScInterpreter::ScAddressFunc` (`interpr1.cxx`):
+///
+/// - `abs` 1 = `$A$1`, 2 = `A$1`, 3 = `$A1`, 4 = `A1`; 5 to 8 are aliases
+///   of 1 to 4; any other value is `#VALUE!` (`PushNoValue`).
+/// - `a1` is R1C1 when its floor is 0 (`CONV_XL_R1C1`): `R2C3`, `R2C[3]`,
+///   `R[2]C[3]`; a relative offset of 0 is written without brackets (`R`,
+///   `C`). As in AOO ("the XL interface actually treats rel R1C1 refs
+///   differently"), a relative row/column is an offset from the formula
+///   cell, so it may be 0 or negative as long as the target is in the grid.
+/// - `sheet` (non-empty) is prefixed with `.` in A1 syntax and `!` in R1C1
+///   syntax, without `$` (`Sheet1.$A$1`, `'My Sheet'.A1`, `Sheet1!R1C1`).
+/// - A row or column outside the grid is `Err:502`.
 fn address(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
-        let row = a.int(0)?;
-        let col = a.int(1)?;
-        let abs = a.int_opt(2, 1)?;
-        let a1 = a.bool_opt(3, true)?;
+        let floor = |x: f64| crate::coerce::approx_floor(x);
+        let row = floor(a.num(0)?);
+        let col = floor(a.num(1)?);
+        let abs = floor(a.num_opt(2, 1.0)?);
+        let a1 = floor(a.num_opt(3, 1.0)?) != 0.0;
         let sheet = if a.is_missing(4) {
             None
         } else {
             Some(a.text(4)?).filter(|s| !s.is_empty())
         };
-        if !(1..=i64::from(MAX_ROWS)).contains(&row)
-            || !(1..=i64::from(MAX_COLS)).contains(&col)
-            || !(1..=4).contains(&abs)
+        let (abs_row, abs_col) = match abs as i64 {
+            1 | 5 => (true, true),
+            2 | 6 => (true, false),
+            3 | 7 => (false, true),
+            4 | 8 => (false, false),
+            _ => return Err(ErrorKind::Value),
+        };
+        // The target cell (1-based) that must lie in the grid.
+        let origin = a.ctx().origin();
+        let (t_row, t_col) = if a1 {
+            (row, col)
+        } else {
+            (
+                if abs_row {
+                    row
+                } else {
+                    row + f64::from(origin.row) + 1.0
+                },
+                if abs_col {
+                    col
+                } else {
+                    col + f64::from(origin.col) + 1.0
+                },
+            )
+        };
+        if !(1.0..=f64::from(MAX_ROWS)).contains(&t_row)
+            || !(1.0..=f64::from(MAX_COLS)).contains(&t_col)
         {
             return Err(ErrorKind::InvalidArgument);
         }
-        let (abs_row, abs_col) = match abs {
-            1 => (true, true),
-            2 => (true, false),
-            3 => (false, true),
-            _ => (false, false),
-        };
         let cell = if a1 {
             format!(
                 "{}{}{}{}",
                 if abs_col { "$" } else { "" },
-                col_to_letters((col - 1) as u32),
+                col_to_letters((col - 1.0) as u32),
                 if abs_row { "$" } else { "" },
                 row
             )
         } else {
-            let r = if abs_row {
-                format!("R{row}")
-            } else {
-                format!("R[{row}]")
+            let part = |letter: char, v: f64, abs: bool| match (abs, v as i64) {
+                (true, n) => format!("{letter}{n}"),
+                (false, 0) => letter.to_string(),
+                (false, n) => format!("{letter}[{n}]"),
             };
-            let c = if abs_col {
-                format!("C{col}")
-            } else {
-                format!("C[{col}]")
-            };
-            format!("{r}{c}")
+            format!("{}{}", part('R', row, abs_row), part('C', col, abs_col))
         };
         let text = match sheet {
             None => cell,
-            Some(s) if a1 => format!("${}.{cell}", quote_sheet(&s)),
-            Some(s) => format!("{}.{cell}", quote_sheet(&s)),
+            Some(s) => format!(
+                "{}{}{cell}",
+                sheet_prefix(&s, a1),
+                if a1 { '.' } else { '!' }
+            ),
         };
         Ok(Value::text(text))
     })
@@ -118,7 +183,9 @@ fn indirect(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run_ref(|| {
         let text = a.text(0)?;
-        let a1 = a.bool_opt(1, true)?;
+        // AOO ScIndirect: R1C1 (CONV_XL_R1C1) when approxFloor(a1) == 0,
+        // so 0, FALSE and 0.5 all select R1C1.
+        let a1 = a.is_missing(1) || crate::coerce::approx_floor(a.num(1)?) != 0.0;
         let range = a
             .ctx()
             .parse_reference_text(text.trim(), a1)
@@ -321,7 +388,7 @@ mod tests {
                 EvalValue::Missing,
                 t("Sheet2")
             ]),
-            Value::text("$Sheet2.$A$1")
+            Value::text("Sheet2.$A$1")
         );
         assert_eq!(
             f(vec![
@@ -331,7 +398,7 @@ mod tests {
                 EvalValue::Missing,
                 t("My 'S'")
             ]),
-            Value::text("$'My ''S'''.A1")
+            Value::text("'My ''S'''.A1")
         );
         assert_eq!(
             f(vec![n(0.0), n(1.0)]),
@@ -341,8 +408,72 @@ mod tests {
             f(vec![n(1.0), n(16385.0)]),
             Value::Error(ErrorKind::InvalidArgument)
         );
+        // AOO ScAddressFunc: 5..8 alias 1..4, anything else is #VALUE!.
+        assert_eq!(f(vec![n(2.0), n(3.0), n(5.0)]), Value::text("$C$2"));
+        assert_eq!(f(vec![n(2.0), n(3.0), n(8.0)]), Value::text("C2"));
         assert_eq!(
-            f(vec![n(1.0), n(1.0), n(5.0)]),
+            f(vec![n(1.0), n(1.0), n(9.0)]),
+            Value::Error(ErrorKind::Value)
+        );
+        assert_eq!(
+            f(vec![n(1.0), n(1.0), n(0.0)]),
+            Value::Error(ErrorKind::Value)
+        );
+        let r1c1 = EvalValue::bool(false);
+        assert_eq!(
+            f(vec![n(1.0), n(1.0), n(1.0), r1c1.clone(), t("Sheet1")]),
+            Value::text("Sheet1!R1C1")
+        );
+        // A zero relative offset has no brackets.
+        assert_eq!(
+            f(vec![n(0.0), n(3.0), n(4.0), r1c1.clone()]),
+            Value::text("RC[3]")
+        );
+        assert_eq!(f(vec![n(1.0), n(1.0), n(1.0), n(0.5)]), Value::text("R1C1"));
+        // Quoting follows CheckTabQuotes.
+        assert_eq!(
+            f(vec![
+                n(1.0),
+                n(1.0),
+                n(4.0),
+                EvalValue::Missing,
+                t("2024Q1")
+            ]),
+            Value::text("2024Q1.A1")
+        );
+        assert_eq!(
+            f(vec![n(1.0), n(1.0), n(4.0), EvalValue::Missing, t("2024")]),
+            Value::text("'2024'.A1")
+        );
+        assert_eq!(
+            f(vec![n(1.0), n(1.0), n(4.0), EvalValue::Missing, t("'Q 1'")]),
+            Value::text("'Q 1'.A1")
+        );
+        assert_eq!(
+            f(vec![
+                n(1.0),
+                n(1.0),
+                n(4.0),
+                EvalValue::Missing,
+                t("'file:///a.ods'#$Sheet 1")
+            ]),
+            Value::text("'file:///a.ods'#$'Sheet 1'.A1")
+        );
+    }
+
+    #[test]
+    fn address_r1c1_relative_is_offset_from_origin() {
+        let mut c = MockEvalContext::new();
+        c.set_origin(0, "B5");
+        let r1c1 = EvalValue::bool(false);
+        let mut f = |args: Vec<EvalValue>| call(&mut c, "ADDRESS", args);
+        assert_eq!(
+            f(vec![n(-2.0), n(-1.0), n(4.0), r1c1.clone()]),
+            Value::text("R[-2]C[-1]")
+        );
+        // Target row -5 + 5 = 0 is outside the grid.
+        assert_eq!(
+            f(vec![n(-5.0), n(1.0), n(4.0), r1c1]),
             Value::Error(ErrorKind::InvalidArgument)
         );
     }
@@ -358,6 +489,26 @@ mod tests {
         );
         assert_eq!(c.dynamic_deps.len(), 1);
         assert_eq!(call(&mut c, "INDIRECT", vec![t("B2")]), Value::Number(7.0));
+        // The mock resolves only A1 text, so these show which syntax the
+        // a1 argument selected (AOO: R1C1 when approxFloor(a1) == 0).
+        assert_eq!(
+            call(&mut c, "INDIRECT", vec![t("B2"), EvalValue::bool(true)]),
+            Value::Number(7.0)
+        );
+        assert_eq!(
+            call(&mut c, "INDIRECT", vec![t("B2"), EvalValue::number(2.0)]),
+            Value::Number(7.0)
+        );
+        for r1c1 in [
+            EvalValue::bool(false),
+            EvalValue::number(0.0),
+            EvalValue::number(0.5),
+        ] {
+            assert_eq!(
+                call(&mut c, "INDIRECT", vec![t("B2"), r1c1]),
+                Value::Error(ErrorKind::Ref)
+            );
+        }
         assert_eq!(
             call(&mut c, "INDIRECT", vec![t("nonsense")]),
             Value::Error(ErrorKind::Ref)

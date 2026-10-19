@@ -82,16 +82,25 @@ pub fn builtin_format(kind: QuickFormat, locale: &Locale) -> String {
         QuickFormat::Percent => "0.00%".into(),
         QuickFormat::Currency => {
             let tag = format!("[${}-{}]", locale.currency_symbol, locale.lcid_hex);
-            format!("{tag}#,##0.00;[RED]-{tag}#,##0.00")
+            let decimals = if locale.currency_code == "JPY" {
+                ""
+            } else {
+                ".00"
+            };
+            if locale.currency_after {
+                format!("#,##0{decimals} {tag};[RED]-#,##0{decimals} {tag}")
+            } else {
+                format!("{tag}#,##0{decimals};[RED]-{tag}#,##0{decimals}")
+            }
         }
-        QuickFormat::Date => "MM/DD/YYYY".into(),
+        QuickFormat::Date => locale.short_date.into(),
         QuickFormat::IsoDate => "YYYY-MM-DD".into(),
         QuickFormat::LongDate => "DD MMM YYYY".into(),
         QuickFormat::Time => "HH:MM".into(),
         QuickFormat::TimeSeconds => "HH:MM:SS".into(),
         QuickFormat::Time12 => "HH:MM AM/PM".into(),
         QuickFormat::Duration => "[HH]:MM:SS".into(),
-        QuickFormat::DateTime => "MM/DD/YYYY HH:MM".into(),
+        QuickFormat::DateTime => format!("{} HH:MM", locale.short_date),
         QuickFormat::Scientific => "0.00E+00".into(),
         QuickFormat::Text => "@".into(),
     }
@@ -112,6 +121,24 @@ mod tests {
         assert_eq!(
             builtin_format(QuickFormat::Currency, &l),
             "[$$-409]#,##0.00;[RED]-[$$-409]#,##0.00"
+        );
+        for l in crate::LOCALES {
+            for k in QuickFormat::ALL {
+                let code = builtin_format(k, l);
+                crate::parse_format(&code).unwrap_or_else(|e| panic!("{} {code}: {e}", l.tag));
+            }
+        }
+        assert_eq!(
+            builtin_format(QuickFormat::Currency, &crate::DE_DE),
+            "#,##0.00 [$€-407];[RED]-#,##0.00 [$€-407]"
+        );
+        assert_eq!(
+            builtin_format(QuickFormat::Date, &crate::DE_DE),
+            "DD.MM.YYYY"
+        );
+        assert_eq!(
+            builtin_format(QuickFormat::Currency, &crate::JA_JP),
+            "[$¥-411]#,##0;[RED]-[$¥-411]#,##0"
         );
     }
 }

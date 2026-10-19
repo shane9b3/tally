@@ -201,9 +201,19 @@ mod tests {
             vec![db.clone(), EvalValue::text("Grade"), cr.clone()],
         );
         assert_eq!(r, n(5.0));
+        // A header-only criteria table matches every record.
+        c.set(0, "M1", "Name");
         let all = c.range(0, "M1:M1");
-        let r = call(&mut c, "DCOUNTA", vec![db, EvalValue::text("Grade"), all]);
+        let r = call(
+            &mut c,
+            "DCOUNTA",
+            vec![db.clone(), EvalValue::text("Grade"), all],
+        );
         assert_eq!(r, n(11.0));
+        // An empty criteria header names no field (AOO CreateExcelQuery).
+        let none = c.range(0, "Z1:Z1");
+        let r = call(&mut c, "DCOUNTA", vec![db, EvalValue::text("Grade"), none]);
+        assert_eq!(r, Value::Error(ErrorKind::ParamList));
     }
 
     #[test]
@@ -231,5 +241,31 @@ mod tests {
             Value::Error(ErrorKind::Div0)
         );
         assert_eq!(d(&mut c, "DMAX", EvalValue::number(2.0), "N1:N2"), n(0.0));
+    }
+
+    /// Review 2 H7 / M1 (AOO table3.cxx CreateExcelQuery).
+    #[test]
+    fn criteria_headers_and_blank_rows() {
+        let mut c = setup();
+        let w = || EvalValue::text("weight");
+        // A header that names no field invalidates the query: Err:504.
+        c.set(0, "P1", "Bogus").set(0, "P2", 1.0);
+        assert_eq!(
+            d(&mut c, "DSUM", w(), "P1:P2"),
+            Value::Error(ErrorKind::ParamList)
+        );
+        // An empty header cell inside the criteria range is unmatched too.
+        c.set(0, "R1", "Age").set(0, "T1", "Grade");
+        c.set(0, "R2", ">=17").set(0, "T2", "<5");
+        assert_eq!(
+            d(&mut c, "DSUM", w(), "R1:T2"),
+            Value::Error(ErrorKind::ParamList)
+        );
+        // A blank criteria row adds no alternative (Excel: matches all).
+        c.set(0, "V1", "Age").set(0, "V3", ">=20");
+        assert_eq!(d(&mut c, "DSUM", w(), "V1:V3"), n(270.0));
+        // With every row blank the query has no entries: all records.
+        c.set(0, "X1", "Age").set(0, "Y1", "Name").set(0, "X3", "");
+        assert_eq!(d(&mut c, "DSUM", w(), "X1:Y3"), n(920.0));
     }
 }

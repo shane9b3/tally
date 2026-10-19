@@ -106,14 +106,61 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
             resolver: &resolver,
             limits,
         };
-        let parsed = match target {
-            Some(t) => pkg.with_entry(&t, big, |r| {
+        let parsed = match &target {
+            Some(t) => pkg.with_entry(t, big, |r| {
                 parse_sheet(&mut XmlReader::new(r, xl), &ctx, &mut budget)
             })?,
             None => None,
         };
         // A sheet whose part is missing (or a chartsheet) opens empty.
-        let mut sheet = parsed.unwrap_or_default();
+        let (mut sheet, extras) = parsed.unwrap_or_default();
+        sheet.page_setup = extras.page.build();
+        // The sheet's own relationships: hyperlink targets and comments.
+        let sheet_rels: Vec<Rel> = match &target {
+            Some(t) => pkg
+                .with_entry(&rels_path(t), other, |r| {
+                    parse_rels(&mut XmlReader::new(r, xl), part_dir(t))
+                })?
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        for (range, rid, location) in extras.links {
+            let url = match (&rid, &location) {
+                (Some(id), _) => sheet_rels
+                    .iter()
+                    .find(|r| r.id == *id && r.external)
+                    .map(|r| r.target.clone()),
+                (None, Some(loc)) => Some(format!("#{}", loc.replacen('!', ".", 1))),
+                (None, None) => None,
+            };
+            let Some(mut url) = url else { continue };
+            if let (Some(_), Some(loc)) = (&rid, &location) {
+                url = format!("{url}#{loc}");
+            }
+            // One link per cell of the ref (normally a single cell).
+            let cells = (u64::from(range.r1 - range.r0) + 1) * (u64::from(range.c1 - range.c0) + 1);
+            if cells > 10_000 {
+                continue;
+            }
+            for r in range.r0..=range.r1 {
+                for c in range.c0..=range.c1 {
+                    sheet.links.push(tally_model::LinkData {
+                        row: r,
+                        col: c,
+                        url: url.clone(),
+                    });
+                }
+            }
+        }
+        sheet.links.sort_by_key(|l| (l.row, l.col));
+        sheet.links.dedup_by_key(|l| (l.row, l.col));
+        if let Some(c) = sheet_rels.iter().find(|r| r.is("comments") && !r.external) {
+            if let Some(notes) = pkg.with_entry(&c.target, other, |r| {
+                crate::sheet_v03::parse_comments(&mut XmlReader::new(r, xl))
+            })? {
+                sheet.notes = notes;
+            }
+        }
         sheet.name = entry.name.clone();
         sheet.hidden = entry.hidden;
         sheets.push(sheet);
@@ -130,7 +177,8 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
         styles: styles.styles,
         ..WorkbookData::default()
     };
-    wb.names = defined_names(&info.names, &resolver, wb.sheets.len());
+    wb.names = defined_names(&info.names, &resolver, &mut wb.sheets);
+    wb.settings.structure_protection = info.structure_protection.clone();
     if info.date1904 {
         wb.settings.calc_settings.date_epoch = DateEpoch::D1904;
     }
@@ -155,18 +203,50 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
     Ok(wb)
 }
 
-/// `definedName`s → model names. Built-in `_xlnm.*` names are dropped
-/// except `_xlnm.Print_Area` (kept as `Print_Area`, sheet-local);
-/// untranslatable names are dropped.
+/// `definedName`s → model names. `_xlnm.Print_Area` becomes the sheet's
+/// print range when it is a single area (otherwise the sheet-local name
+/// `Print_Area`), `_xlnm.Print_Titles` its repeated rows/columns; other
+/// built-in `_xlnm.*` names and untranslatable names are dropped.
+/// `Sheet1!$A$1:$C$9` (one area) → its range.
+fn single_area(text: &str) -> Option<tally_model::CellRangeLocal> {
+    if text.contains(',') {
+        return None;
+    }
+    let body = text.rsplit_once('!').map_or(text, |(_, r)| r);
+    crate::sheet::parse_range(&body.replace('$', ""))
+}
+
 fn defined_names(
     raw: &[crate::workbook::DefinedName],
     resolver: &XlsxResolver,
-    sheet_count: usize,
+    sheets: &mut [SheetData],
 ) -> Vec<NameData> {
+    let sheet_count = sheets.len();
     let mut out = Vec::new();
     for n in raw {
+        let local = n.local_sheet.filter(|s| (*s as usize) < sheet_count);
         let name = match n.name.strip_prefix("_xlnm.") {
-            Some("Print_Area") => "Print_Area".to_string(),
+            Some("Print_Area") => {
+                if let (Some(i), Some(r)) = (local, single_area(n.text.trim())) {
+                    let p = sheets[i as usize]
+                        .page_setup
+                        .get_or_insert_with(tally_model::PageSetupData::default);
+                    p.print_range = Some(r);
+                    continue;
+                }
+                "Print_Area".to_string()
+            }
+            Some("Print_Titles") => {
+                if let Some(i) = local {
+                    let (rows, cols) = crate::sheet_v03::print_titles(n.text.trim());
+                    let p = sheets[i as usize]
+                        .page_setup
+                        .get_or_insert_with(tally_model::PageSetupData::default);
+                    p.repeat_rows = rows.or(p.repeat_rows);
+                    p.repeat_cols = cols.or(p.repeat_cols);
+                }
+                continue;
+            }
             Some(_) => continue,
             None => n.name.clone(),
         };

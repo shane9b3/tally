@@ -36,10 +36,10 @@ formula = "=NOMINAL(0.1;0)"
 expect = "Err:502"
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=NOMINAL(\"0.1\";2)"
-expect = 0.0976176963403033
-tol = 1e-09
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -61,3 +61,10 @@ expect = "Err:511"
 name = "too many arguments"
 formula = "=NOMINAL(0.1;4;1)"
 expect = "Err:504"
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=NOMINAL(\"0.1\";2)"
+expect = 0.0976176963403033
+tol = 1e-09
+settings = { text_to_number = "convert_locale" }

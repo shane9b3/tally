@@ -594,6 +594,26 @@ impl Registry {
             .or_else(|| self.lookup_ooxml(name))
     }
 
+    /// Looks up a function name read from an OpenFormula (ODF) formula:
+    /// ODF stored names first, then [`Registry::lookup_any`]. Use this for
+    /// `.ods` import: with `lookup_any` a canonical name wins, so ODF
+    /// `DURATION` (the add-in) or `ISOWEEKNUM` (the built-in WEEKNUM) would
+    /// resolve to the function of that canonical name instead.
+    pub fn lookup_odf_first(&self, name: &str) -> Option<FuncId> {
+        self.by_odf
+            .get(&name.to_ascii_uppercase())
+            .copied()
+            .or_else(|| self.lookup_any(name))
+    }
+
+    /// Looks up a function name read from an OOXML (Excel) formula: OOXML
+    /// stored names first, then [`Registry::lookup_any`]. Use this for
+    /// `.xlsx` import, where plain `WEEKNUM`, `CONVERT` and `DURATION` are
+    /// the Analysis add-in functions.
+    pub fn lookup_ooxml_first(&self, name: &str) -> Option<FuncId> {
+        self.lookup_ooxml(name).or_else(|| self.lookup_any(name))
+    }
+
     /// Looks up a canonical name and returns the definition.
     pub fn def_by_name(&self, name: &str) -> Option<&FunctionDef> {
         self.lookup(name).and_then(|id| self.get(id))

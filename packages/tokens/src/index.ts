@@ -32,6 +32,8 @@ export interface ThemeColors {
   resizeGuide: string;
   /** Background of the in-cell editor. */
   editorBg: string;
+  /** The divider between frozen panes and the scrolling area. */
+  frozenLine: string;
   accent: string;
   chipGreenBg: string;
   chipGreenFg: string;
@@ -73,6 +75,7 @@ export const THEME_VARIABLES = {
     fillHandle: "--tally-fill-handle",
     resizeGuide: "--tally-resize-guide",
     editorBg: "--tally-editor-bg",
+    frozenLine: "--tally-frozen-line",
     accent: "--tally-accent",
     chipGreenBg: "--tally-chip-green-bg",
     chipGreenFg: "--tally-chip-green-fg",
@@ -108,6 +111,7 @@ export const DEFAULT_THEME: Theme = {
     fillHandle: "#2563eb",
     resizeGuide: "#2563eb",
     editorBg: "#ffffff",
+    frozenLine: "#a3a9b4",
     accent: "#2563eb",
     chipGreenBg: "#dcfce7",
     chipGreenFg: "#166534",

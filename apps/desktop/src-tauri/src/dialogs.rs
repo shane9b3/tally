@@ -42,7 +42,82 @@ pub fn format_for(path: &Path) -> FileFormat {
     }
 }
 
-/// Shows the Open dialog (ODS/CSV), then opens the chosen file.
+/// Open dialog filters: every supported format first, then one per format.
+pub const OPEN_FILTERS: &[(&str, &[&str])] = &[
+    ("Spreadsheets", &["ods", "xlsx", "csv"]),
+    ("OpenDocument Spreadsheet", &["ods"]),
+    ("Excel Workbook", &["xlsx"]),
+    ("CSV", &["csv"]),
+];
+
+/// Save dialog formats as (label, extension), in menu order.
+pub const SAVE_FORMATS: &[(&str, &str)] = &[
+    ("OpenDocument Spreadsheet", "ods"),
+    ("Excel Workbook", "xlsx"),
+    ("CSV", "csv"),
+];
+
+/// What a Save dialog shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavePlan {
+    /// Window title.
+    pub title: &'static str,
+    /// Suggested file name (stem of the current file, or "Untitled").
+    pub file_name: String,
+    /// Filters as (label, extension); the first is preselected.
+    pub filters: Vec<(&'static str, &'static str)>,
+    /// Extension appended when the chosen name has none we know.
+    pub ext: &'static str,
+}
+
+/// `true` if the path ends in `.ods`, `.xlsx` or `.csv` (any case).
+pub fn has_known_ext(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| SAVE_FORMATS.iter().any(|(_, x)| x.eq_ignore_ascii_case(e)))
+}
+
+/// The Save dialog for `doc`'s current file and the requested format: an
+/// export (`format` set) offers that format only; Save As offers all three,
+/// the current file's format first, and the format then follows the chosen
+/// extension ([`format_for`]).
+pub fn save_plan(current: Option<&Path>, format: Option<FileFormat>) -> SavePlan {
+    let stem = current
+        .and_then(|p| p.file_stem())
+        .and_then(|s| s.to_str())
+        .unwrap_or("Untitled")
+        .to_owned();
+    let (title, first, filters) = match format {
+        Some(f) => {
+            let ext = ext_of(f);
+            let title = match f {
+                FileFormat::Csv => "Export as CSV",
+                FileFormat::Xlsx => "Export as Excel Workbook",
+                FileFormat::Ods => "Export as ODS",
+            };
+            let only: Vec<_> = SAVE_FORMATS
+                .iter()
+                .copied()
+                .filter(|(_, x)| *x == ext)
+                .collect();
+            (title, ext, only)
+        }
+        None => {
+            let ext = current.map_or("ods", |p| ext_of(format_for(p)));
+            let mut all: Vec<_> = SAVE_FORMATS.to_vec();
+            all.sort_by_key(|(_, x)| *x != ext);
+            ("Save As", ext, all)
+        }
+    };
+    SavePlan {
+        title,
+        file_name: format!("{stem}.{first}"),
+        filters,
+        ext: first,
+    }
+}
+
+/// Shows the Open dialog (ODS/XLSX/CSV), then opens the chosen file.
 /// Returns `null` when the user cancels.
 #[tauri::command]
 pub async fn wb_open_dialog(
@@ -51,12 +126,11 @@ pub async fn wb_open_dialog(
 ) -> CmdResult<Option<WorkbookInfo>> {
     let handle = app.clone();
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        handle
-            .dialog()
-            .file()
-            .set_title("Open")
-            .add_filter("Spreadsheets", &["ods", "csv"])
-            .blocking_pick_file()
+        let dialog = handle.dialog().file().set_title("Open");
+        let dialog = OPEN_FILTERS
+            .iter()
+            .fold(dialog, |d, (label, exts)| d.add_filter(*label, exts));
+        dialog.blocking_pick_file()
     })
     .await
     .map_err(join_err)?;
@@ -71,7 +145,8 @@ pub async fn wb_open_dialog(
 }
 
 /// Saves `doc`. Shows a Save dialog when `save_as` is set or the document
-/// has no file yet; `format` defaults to the file's extension (else ODS).
+/// has no file yet; `format` defaults to the chosen file's extension (else
+/// ODS), so Save As to `name.xlsx` writes XLSX.
 #[tauri::command]
 pub async fn wb_save(
     app: AppHandle,
@@ -89,31 +164,20 @@ pub async fn wb_save(
     let target = match current {
         Some(p) if !save_as && !format_change => p,
         current => {
-            let fmt = format.unwrap_or(FileFormat::Ods);
-            let ext = ext_of(fmt);
-            let stem = current
-                .as_deref()
-                .and_then(|p| p.file_stem())
-                .and_then(|s| s.to_str())
-                .unwrap_or("Untitled")
-                .to_owned();
+            let plan = save_plan(current.as_deref(), format);
             let handle = app.clone();
+            let title = plan.title;
+            let file_name = plan.file_name.clone();
+            let filters = plan.filters.clone();
             let picked = tauri::async_runtime::spawn_blocking(move || {
-                let label = if ext == "csv" {
-                    "CSV"
-                } else {
-                    "OpenDocument Spreadsheet"
-                };
-                handle
+                let dialog = handle
                     .dialog()
                     .file()
-                    .set_title(if ext == "csv" {
-                        "Export as CSV"
-                    } else {
-                        "Save As"
-                    })
-                    .set_file_name(format!("{stem}.{ext}"))
-                    .add_filter(label, &[ext])
+                    .set_title(title)
+                    .set_file_name(file_name);
+                filters
+                    .iter()
+                    .fold(dialog, |d, (label, ext)| d.add_filter(*label, &[*ext]))
                     .blocking_save_file()
             })
             .await
@@ -122,8 +186,8 @@ pub async fn wb_save(
             let mut path = file
                 .into_path()
                 .map_err(|e| ApiError::invalid_argument(format!("unsupported location: {e}")))?;
-            if path.extension().is_none() {
-                path.set_extension(ext);
+            if !has_known_ext(&path) {
+                path.set_extension(plan.ext);
             }
             files::allow(&state, &path)?;
             path
@@ -136,4 +200,44 @@ pub async fn wb_save(
         Ok(info)
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_offers_every_format() {
+        assert_eq!(OPEN_FILTERS[0].1, &["ods", "xlsx", "csv"]);
+    }
+
+    #[test]
+    fn save_as_lists_three_formats_current_first() {
+        let p = save_plan(Some(Path::new("/tmp/Book.xlsx")), None);
+        assert_eq!(p.title, "Save As");
+        assert_eq!(p.file_name, "Book.xlsx");
+        let exts: Vec<_> = p.filters.iter().map(|(_, e)| *e).collect();
+        assert_eq!(exts, ["xlsx", "ods", "csv"]);
+        let p = save_plan(None, None);
+        assert_eq!(p.file_name, "Untitled.ods");
+        assert_eq!(p.filters.len(), 3);
+    }
+
+    #[test]
+    fn export_offers_its_format_only() {
+        let p = save_plan(Some(Path::new("/tmp/Book.ods")), Some(FileFormat::Xlsx));
+        assert_eq!(p.file_name, "Book.xlsx");
+        assert_eq!(p.filters, [("Excel Workbook", "xlsx")]);
+        assert_eq!(p.ext, "xlsx");
+    }
+
+    #[test]
+    fn format_follows_the_extension() {
+        assert_eq!(format_for(Path::new("a.XLSX")), FileFormat::Xlsx);
+        assert_eq!(format_for(Path::new("a.csv")), FileFormat::Csv);
+        assert_eq!(format_for(Path::new("a.ods")), FileFormat::Ods);
+        assert_eq!(format_for(Path::new("a")), FileFormat::Ods);
+        assert!(has_known_ext(Path::new("a.Xlsx")));
+        assert!(!has_known_ext(Path::new("a.txt")));
+    }
 }

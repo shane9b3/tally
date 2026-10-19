@@ -31,10 +31,10 @@ expect = 810.782167564406
 tol = 1e-09
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=PV(\"0.05\";10;-100)"
-expect = 772.173492918482
-tol = 1e-09
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "boolean type"
@@ -68,3 +68,10 @@ expect = "Err:511"
 name = "too many arguments"
 formula = "=PV(0.05;10;-100;1;1;1)"
 expect = "Err:504"
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=PV(\"0.05\";10;-100)"
+expect = 772.173492918482
+tol = 1e-09
+settings = { text_to_number = "convert_locale" }

@@ -93,13 +93,14 @@ pub fn recognize_input_with(input: &str, locale: &Locale, ctx: &RecognizeContext
             implied_format: None,
         };
     }
-    if t.eq_ignore_ascii_case(locale.true_name) {
+    let is = |name: &str| t.to_lowercase() == name.to_lowercase();
+    if is(locale.true_name) || t.eq_ignore_ascii_case("TRUE") {
         return Recognized {
             value: Value::Bool(true),
             implied_format: None,
         };
     }
-    if t.eq_ignore_ascii_case(locale.false_name) {
+    if is(locale.false_name) || t.eq_ignore_ascii_case("FALSE") {
         return Recognized {
             value: Value::Bool(false),
             implied_format: None,
@@ -225,24 +226,48 @@ fn try_number(t: &str, locale: &Locale) -> Option<(f64, Option<String>)> {
     let mut currency = false;
     if let Some(r) = s.strip_prefix(locale.currency_symbol) {
         currency = true;
-        s = r;
+        s = r.trim_start_matches([' ', '\u{a0}']);
         if sign.is_none() {
             let (sg, r) = strip_sign(s);
             sign = sg;
             s = r;
         }
+    } else if let Some(r) = s
+        .strip_suffix(locale.currency_symbol)
+        .filter(|_| locale.currency_after)
+    {
+        // `12,50 €` (symbol after the amount, with or without a space).
+        currency = true;
+        s = r.trim_end_matches([' ', '\u{a0}', '\u{202f}']);
     }
     let mut percent = false;
     if let Some(r) = s.strip_suffix('%') {
         percent = true;
-        s = r;
+        s = r.trim_end_matches(['\u{a0}', '\u{202f}']);
     }
     if paren && sign.is_some() || currency && percent {
         return None;
     }
-    let decimal_sep = u8::try_from(locale.decimal_sep).ok()?;
-    let group_sep = u8::try_from(locale.group_sep).ok();
-    let info = parse_unsigned(s.as_bytes(), decimal_sep, group_sep)?;
+    // Map the locale's separators onto `.` and `,`; the other ASCII
+    // punctuation becomes a byte that never parses.
+    let mapped: String = s
+        .chars()
+        .map(|c| {
+            if c == locale.decimal_sep {
+                '.'
+            } else if locale.is_group_char(c) {
+                ','
+            } else if c == '.' || c == ',' {
+                '\u{1}'
+            } else {
+                c
+            }
+        })
+        .collect();
+    if !mapped.is_ascii() {
+        return None;
+    }
+    let info = parse_unsigned(mapped.as_bytes(), b'.', Some(b','))?;
     if info.exponent && (currency || percent) {
         return None;
     }
@@ -312,22 +337,38 @@ struct TimeParse {
 
 fn parse_time(s: &str, locale: &Locale) -> Option<TimeParse> {
     let s = s.trim();
-    let lower = s.to_ascii_lowercase();
-    let am = locale.am_pm.0.to_ascii_lowercase();
-    let pm = locale.am_pm.1.to_ascii_lowercase();
+    let lower = s.to_lowercase();
+    let am = locale.am_pm.0.to_lowercase();
+    let pm = locale.am_pm.1.to_lowercase();
     let mut ampm: Option<bool> = None; // Some(true) = PM
     let mut body = s;
     let candidates = [
         (am.clone(), false),
         (pm.clone(), true),
+        ("am".to_string(), false),
+        ("pm".to_string(), true),
         ("a".to_string(), false),
         ("p".to_string(), true),
     ];
-    for (suf, is_pm) in candidates.iter() {
-        if lower.ends_with(suf.as_str()) {
-            ampm = Some(*is_pm);
-            body = s[..s.len() - suf.len()].trim_end();
-            break;
+    // Lowercasing may change byte lengths outside ASCII; only strip when
+    // the lengths agree.
+    if lower.len() == s.len() {
+        for (suf, is_pm) in candidates.iter() {
+            if lower.ends_with(suf.as_str()) {
+                ampm = Some(*is_pm);
+                body = s[..s.len() - suf.len()].trim_end();
+                break;
+            }
+        }
+        if ampm.is_none() {
+            // Markers before the time (`午前 9:30`).
+            for (pre, is_pm) in candidates.iter().take(2) {
+                if !pre.is_empty() && lower.starts_with(pre.as_str()) {
+                    ampm = Some(*is_pm);
+                    body = s[pre.len()..].trim_start();
+                    break;
+                }
+            }
         }
     }
     let parts: Vec<&str> = body.split(':').collect();
@@ -350,7 +391,7 @@ fn parse_time(s: &str, locale: &Locale) -> Option<TimeParse> {
     let mut has_frac = false;
     if let Some(sp) = parts.get(2) {
         has_sec = true;
-        let (whole, frac) = match sp.split_once('.') {
+        let (whole, frac) = match sp.split_once(['.', locale.decimal_sep]) {
             Some((w, f)) => (w, Some(f)),
             None => (*sp, None),
         };
@@ -406,47 +447,56 @@ enum Tk<'a> {
 }
 
 fn date_tokens(s: &str) -> Option<Vec<Tk<'_>>> {
-    let b = s.as_bytes();
     let mut out: Vec<Tk<'_>> = Vec::new();
-    let mut i = 0;
-    while i < b.len() {
-        let c = b[i];
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    let end_of = |k: usize| chars.get(k).map_or(s.len(), |(i, _)| *i);
+    let mut k = 0;
+    while k < chars.len() {
+        let (i, c) = chars[k];
         if c.is_ascii_digit() {
             let st = i;
-            while i < b.len() && b[i].is_ascii_digit() {
-                i += 1;
+            while k < chars.len() && chars[k].1.is_ascii_digit() {
+                k += 1;
             }
-            out.push(Tk::Num(&s[st..i]));
-        } else if c.is_ascii_alphabetic() {
+            out.push(Tk::Num(&s[st..end_of(k)]));
+        } else if c.is_alphabetic() {
             let st = i;
-            while i < b.len() && b[i].is_ascii_alphabetic() {
-                i += 1;
+            while k < chars.len() && chars[k].1.is_alphabetic() {
+                k += 1;
             }
-            out.push(Tk::Word(&s[st..i]));
-        } else if c == b' ' || c == b'\t' {
-            while i < b.len() && (b[i] == b' ' || b[i] == b'\t') {
-                i += 1;
+            out.push(Tk::Word(&s[st..end_of(k)]));
+            // The dot of an abbreviation (`févr.`, `Okt.`) is dropped.
+            if k < chars.len() && chars[k].1 == '.' {
+                k += 1;
+            }
+        } else if matches!(c, ' ' | '\t' | '\u{a0}') {
+            while k < chars.len() && matches!(chars[k].1, ' ' | '\t' | '\u{a0}') {
+                k += 1;
             }
             match out.last() {
                 Some(Tk::Sep(_)) => {}
                 _ => out.push(Tk::Sep(' ')),
             }
-        } else if matches!(c, b'/' | b'-' | b',' | b'.') {
+        } else if matches!(c, '/' | '-' | ',' | '.') {
             if let Some(Tk::Sep(' ')) = out.last() {
                 out.pop();
             }
             if let Some(Tk::Sep(_)) = out.last() {
                 return None;
             }
-            out.push(Tk::Sep(char::from(c)));
-            i += 1;
+            out.push(Tk::Sep(c));
+            k += 1;
             // ", " and "- " collapse into the punctuation.
-            while i < b.len() && b[i] == b' ' {
-                i += 1;
+            while k < chars.len() && chars[k].1 == ' ' {
+                k += 1;
             }
         } else {
             return None;
         }
+    }
+    // A trailing separator (`19.10.`) is dropped.
+    if let Some(Tk::Sep(' ' | '.')) = out.last() {
+        out.pop();
     }
     Some(out)
 }
@@ -473,6 +523,9 @@ fn small(s: &str) -> Option<u32> {
 /// Parses a date. Returns `(y, m, d, format)`.
 fn parse_date(s: &str, locale: &Locale, ctx: &RecognizeContext) -> Option<(i32, u32, u32, String)> {
     let toks = date_tokens(s)?;
+    // Separators of numeric dates: `/` and `-`, plus the locale's own
+    // (`.` in de-DE).
+    let num_sep = |c: &char| matches!(c, '/' | '-') || (*c == locale.date_sep && *c != ',');
     let cur_year = ctx.today.0;
     let res = match toks.as_slice() {
         // 2026-10-19 (ISO order whenever the first number has 4 digits)
@@ -488,7 +541,7 @@ fn parse_date(s: &str, locale: &Locale, ctx: &RecognizeContext) -> Option<(i32, 
         }
         // Numeric dates in locale order.
         [Tk::Num(a), Tk::Sep(s1), Tk::Num(b), Tk::Sep(s2), Tk::Num(c)]
-            if s1 == s2 && matches!(s1, '/' | '-') =>
+            if s1 == s2 && num_sep(s1) =>
         {
             let (y, m, d, yf) = match locale.date_order {
                 DateOrder::MDY => {
@@ -512,7 +565,7 @@ fn parse_date(s: &str, locale: &Locale, ctx: &RecognizeContext) -> Option<(i32, 
             (y, m, d, f)
         }
         // 10/19 (current year)
-        [Tk::Num(a), Tk::Sep(s1), Tk::Num(b)] if matches!(s1, '/' | '-') => {
+        [Tk::Num(a), Tk::Sep(s1), Tk::Num(b)] if num_sep(s1) => {
             let (m, d) = match locale.date_order {
                 DateOrder::DMY => (small(b)?, small(a)?),
                 _ => (small(a)?, small(b)?),
@@ -523,13 +576,16 @@ fn parse_date(s: &str, locale: &Locale, ctx: &RecognizeContext) -> Option<(i32, 
             };
             (cur_year, m, d, f)
         }
-        // 19 Oct 2026, 19-Oct-26, 19 October
-        [Tk::Num(d), Tk::Sep(s1), Tk::Word(mn), rest @ ..] if matches!(s1, ' ' | '-') => {
+        // 19 Oct 2026, 19-Oct-26, 19 October, 19. Oktober 2026
+        [Tk::Num(d), Tk::Sep(s0), Tk::Word(mn), rest @ ..] if matches!(s0, ' ' | '-' | '.') => {
+            let s1 = if *s0 == '.' { &' ' } else { s0 };
             let (m, long) = locale.month_from_name(mn)?;
             let mf = if long { "MMMM" } else { "MMM" };
             let (y, yf) = match rest {
                 [] => (cur_year, "YYYY"),
                 [Tk::Sep(s2), Tk::Num(y)] if s2 == s1 => year_from(y, locale)?,
+                // `19 févr. 2026`: the abbreviation dot ate the separator.
+                [Tk::Num(y)] => year_from(y, locale)?,
                 _ => return None,
             };
             (y, m, small(d)?, format!("DD{s1}{mf}{s1}{yf}"))
@@ -603,7 +659,14 @@ fn try_datetime(t: &str, locale: &Locale, ctx: &RecognizeContext) -> Option<(f64
     }
     let (date, time) = split_date_time(t);
     let date = match date {
-        Some(ds) => Some(parse_date(ds, locale, ctx)?),
+        Some(ds) => match parse_date(ds, locale, ctx) {
+            Some(d) => Some(d),
+            // A marker before the time (`午前 9:30`).
+            None => {
+                let tp = parse_time(t, locale)?;
+                return Some((tp.value, tp.format));
+            }
+        },
         None => None,
     };
     let time = match time {

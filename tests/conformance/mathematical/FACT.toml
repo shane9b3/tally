@@ -5,9 +5,10 @@ formula = "=FACT(5.0)"
 expect = 120
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=FACT(\"5.0\")"
-expect = 120
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -78,3 +79,9 @@ expect = "Err:502"
 formula = "=FACT(-0.5)"
 expect = "Err:502"
 note = "Floored to -1."
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=FACT(\"5.0\")"
+expect = 120
+settings = { text_to_number = "convert_locale" }

@@ -631,9 +631,16 @@ fn autofilter() {
     }]);
     let hidden: Vec<u32> = hidden_rows(&f);
     assert_eq!(hidden, vec![1, 2, 4]);
-    // Editing a cell re-applies the filter.
+    // Editing a cell does not re-apply the filter (AOO); refreshing does.
     let res = f.set("B2", "50");
+    assert!(!res.layout_changed.contains(&s));
+    assert_eq!(hidden_rows(&f), vec![1, 2, 4]);
+    let res = f.apply(vec![Op::RefreshFilter { sheet: s }]);
     assert!(res.layout_changed.contains(&s));
+    assert_eq!(hidden_rows(&f), vec![2, 4]);
+    f.svc.undo(f.doc).unwrap();
+    assert_eq!(hidden_rows(&f), vec![1, 2, 4], "refresh is undoable");
+    f.svc.redo(f.doc).unwrap();
     assert_eq!(hidden_rows(&f), vec![2, 4]);
     // User-hidden rows are distinct and survive removing the filter.
     f.apply(vec![Op::SetRowsHidden {

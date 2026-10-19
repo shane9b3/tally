@@ -69,3 +69,35 @@ name = "multiple areas"
 cells = { A1 = 1, C1 = 10, C2 = 20 }
 formula = "=SUM(A1;C1:C2;5)"
 expect = 36
+
+[[case]]
+name = "integer text converts"
+formula = "=SUM(\"3\")"
+expect = 3
+
+[[case]]
+name = "decimal text is #VALUE! by default"
+formula = "=SUM(\"1.5\")"
+expect = "#VALUE!"
+note = "ConvertUnambiguous (AOO interpr4.cxx ConvertStringToValue): only integers, exponents and ISO 8601 dates/times convert."
+
+[[case]]
+name = "exponent text converts"
+formula = "=SUM(\"-2E3\";1)"
+expect = -1999
+
+[[case]]
+name = "ISO date text converts"
+formula = "=SUM(\"2024-01-15\")"
+expect = 45306
+
+[[case]]
+name = "ISO time text converts"
+formula = "=SUM(\"36:00\")"
+expect = 1.5
+
+[[case]]
+name = "decimal text with convert_locale"
+formula = "=SUM(\"1.5\")"
+expect = 1.5
+settings = { text_to_number = "convert_locale" }

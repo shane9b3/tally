@@ -8,11 +8,10 @@
 //! contains a `SUBTOTAL(` call are skipped, so subtotals do not double count.
 //! Detection goes through `EvalContext::cell_format_info(..).formula`.
 //!
-//! Codes 101 to 111 skip rows for which [`EvalContext::hidden_row`] is true
-//! (hidden or filtered); the default implementation hides nothing, so they
-//! behave like 1 to 11 until the engine reports row visibility. Codes 1 to
-//! 11 include hidden rows. (AOO also drops filtered rows for 1 to 11; that
-//! needs a separate filtered-row query and is not modelled yet.)
+//! As in AOO (`ScTable::CountVisible`/`ScInterpreter` with
+//! `SUBTOTAL_IGN_FILTERED`), rows hidden by an AutoFilter are always skipped
+//! ([`EvalContext::filtered_row`]); codes 101 to 111 also skip manually
+//! hidden rows ([`EvalContext::hidden_row`], hidden or filtered).
 
 use tally_types::{CellRange, ErrorKind, Value};
 
@@ -60,6 +59,7 @@ fn is_subtotal_formula(text: &str) -> bool {
 }
 
 fn collect(ctx: &mut dyn EvalContext, range: &CellRange, skip_hidden: bool) -> Collected {
+    // Filtered rows are skipped by every code; manually hidden ones by 101 to 111.
     let mut cells = Vec::new();
     ctx.for_each_in_range(range, true, &mut |addr, v| {
         cells.push((addr, v.clone()));
@@ -67,7 +67,12 @@ fn collect(ctx: &mut dyn EvalContext, range: &CellRange, skip_hidden: bool) -> C
     });
     let mut out = Collected::default();
     for (addr, v) in cells {
-        if skip_hidden && ctx.hidden_row(addr.sheet, addr.row) {
+        let skip = if skip_hidden {
+            ctx.hidden_row(addr.sheet, addr.row)
+        } else {
+            ctx.filtered_row(addr.sheet, addr.row)
+        };
+        if skip {
             continue;
         }
         let info = ctx.cell_format_info(addr);
@@ -216,6 +221,19 @@ mod tests {
         assert_eq!(sub(&mut c, 104.0), Value::Number(1.0));
         c.hidden_rows.insert((1, 0)); // another sheet: no effect
         assert_eq!(sub(&mut c, 101.0), Value::Number(1.0));
+    }
+
+    #[test]
+    fn every_code_skips_filtered_rows() {
+        let mut c = grid();
+        c.filtered_rows.insert((0, 3)); // A4 = 4, hidden by an AutoFilter
+        assert_eq!(sub(&mut c, 9.0), Value::Number(2.0));
+        assert_eq!(sub(&mut c, 109.0), Value::Number(2.0));
+        assert_eq!(sub(&mut c, 2.0), Value::Number(2.0));
+        assert_eq!(sub(&mut c, 3.0), Value::Number(3.0));
+        c.hidden_rows.insert((0, 0)); // A1 = 1, hidden by the user
+        assert_eq!(sub(&mut c, 9.0), Value::Number(2.0));
+        assert_eq!(sub(&mut c, 109.0), Value::Number(1.0));
     }
 
     #[test]

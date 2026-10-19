@@ -14,7 +14,9 @@
 #![warn(missing_docs)]
 
 pub mod dto;
+pub mod features;
 pub mod service;
 
 pub use dto::*;
+pub use features::*;
 pub use service::{DocumentService, Result};

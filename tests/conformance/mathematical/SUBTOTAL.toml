@@ -1,4 +1,10 @@
 # SUBTOTAL conformance vectors. Schema: docs/contributing-functions.md.
+#
+# Codes 101-111 are a Tally extension (Excel/LibreOffice): AOO 4.1 rejects
+# nFunc > 11 with Err:502 (interpr1.cxx ScSubTotal). Codes 1-11 skip rows
+# hidden by an AutoFilter (AOO dociter.cxx RowFiltered); 101-111 also skip
+# manually hidden rows. The vectors here have no hidden rows (the TOML schema
+# cannot hide rows); row visibility is covered by tally-engine tests.
 
 [[case]]
 name = "SUM: text skipped, boolean counted"
@@ -70,7 +76,7 @@ expect = 13.5
 cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }
 formula = "=SUBTOTAL(109;A1:A6)"
 expect = 16
-note = "Hidden-row exclusion is not implemented: behaves like 9."
+note = "Extension (AOO 4.1: Err:502). With no hidden rows it equals code 9."
 
 [[case]]
 cells = { A1 = 1, A2 = "x", A3 = true, A4 = 4, A6 = 10 }

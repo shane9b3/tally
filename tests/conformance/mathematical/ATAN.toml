@@ -5,9 +5,10 @@ formula = "=ATAN(1.0)"
 expect = 0.7853981633974483
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=ATAN(\"1.0\")"
-expect = 0.7853981633974483
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -59,3 +60,9 @@ expect = -0.7853981633974483
 [[case]]
 formula = "=ATAN(0)"
 expect = 0
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=ATAN(\"1.0\")"
+expect = 0.7853981633974483
+settings = { text_to_number = "convert_locale" }

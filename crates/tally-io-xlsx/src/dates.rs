@@ -21,8 +21,10 @@
 //! serials; every other number is left alone (a duration `[h]:mm` of 1.5
 //! days must stay 1.5).
 //!
-//! - Import, 1900 system → D1899: serials 1 ≤ s < 60 gain one day so the
-//!   *calendar date* Excel displays is kept; the fictitious day 60 becomes
+//! - Import, 1900 system → D1899: serials 0 ≤ s < 60 gain one day so the
+//!   *calendar date* Excel displays is kept (Excel's day 0, shown as
+//!   "1900-01-00", becomes 1899-12-31, which exports back to Excel 0, so
+//!   the value round-trips); the fictitious day 60 becomes
 //!   1900-02-28 (D1899 60, keeping its time of day); everything else is
 //!   unchanged.
 //! - Import, 1904 system: the workbook epoch becomes D1904 and serials are
@@ -42,7 +44,7 @@ pub fn excel_serial_to_tally(serial: f64, date1904: bool) -> f64 {
     if date1904 || !serial.is_finite() {
         return serial;
     }
-    if (1.0..60.0).contains(&serial) {
+    if (0.0..60.0).contains(&serial) {
         serial + 1.0
     } else {
         // 60.x (the fictitious 1900-02-29) maps onto 1900-02-28 = D1899 60.
@@ -148,7 +150,8 @@ mod tests {
         // Times of day survive; the fictitious 1900-02-29 lands on 02-28.
         assert_eq!(excel_serial_to_tally(1.5, false), 2.5);
         assert_eq!(excel_serial_to_tally(60.25, false), 60.25);
-        assert_eq!(excel_serial_to_tally(0.75, false), 0.75);
+        // Day 0 ("1900-01-00") is 1899-12-31; its time of day is kept.
+        assert_eq!(excel_serial_to_tally(0.75, false), 1.75);
     }
 
     #[test]
@@ -187,5 +190,19 @@ mod tests {
         );
         assert_eq!(iso_to_serial("2026-13-01", DateEpoch::D1899), None);
         assert_eq!(iso_to_serial("x", DateEpoch::D1899), None);
+    }
+}
+
+#[cfg(test)]
+mod serial_zero_tests {
+    use super::*;
+
+    #[test]
+    fn excel_day_zero_round_trips() {
+        assert_eq!(excel_serial_to_tally(0.0, false), 1.0);
+        assert_eq!(excel_serial_to_tally(0.25, false), 1.25);
+        assert_eq!(tally_serial_to_excel(1.0, DateEpoch::D1899), 0.0);
+        assert_eq!(tally_serial_to_excel(1.25, DateEpoch::D1899), 0.25);
+        assert_eq!(excel_serial_to_tally(-1.0, false), -1.0);
     }
 }

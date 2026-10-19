@@ -5,9 +5,10 @@ formula = "=EVEN(1.5)"
 expect = 2
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=EVEN(\"1.5\")"
-expect = 2
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -71,3 +72,9 @@ expect = 2
 [[case]]
 formula = "=EVEN(3)"
 expect = 4
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=EVEN(\"1.5\")"
+expect = 2
+settings = { text_to_number = "convert_locale" }

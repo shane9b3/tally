@@ -11,7 +11,7 @@ use tally_functions::numeric::ApproxSum;
 use tally_functions::{registry, FuncId};
 use tally_numfmt::{
     format_value_with, general_string, parse_format, recognize_input_with, Formatted,
-    RecognizeContext, SectionKind, EN_US,
+    RecognizeContext, SectionKind,
 };
 use tally_types::{
     letters_to_col, CellAddr, CellRange, ErrorKind, SheetId, Value, MAX_COLS, MAX_ROWS,
@@ -33,7 +33,7 @@ fn sheet_or_err(wb: &Workbook, sheet: SheetId) -> Result<&Sheet, ApiError> {
 
 /// Formats a value with a style (no width: the grid fits General numbers).
 pub fn format_with(wb: &Workbook, v: &Value, style: &StyleEntry) -> Formatted {
-    format_value_with(v, &style.format, &EN_US, None, wb.settings.date_epoch)
+    format_value_with(v, &style.format, wb.locale, None, wb.settings.date_epoch)
 }
 
 /// The display text of a cell.
@@ -181,6 +181,15 @@ fn view_of(
         Value::Number(n) if st.is_general() => Some(*n),
         _ => None,
     };
+    let link = match content {
+        Some(CellContent::Formula(id)) => {
+            wb.formulas.get(*id).and_then(|f| hyperlink_target(wb, f))
+        }
+        _ => None,
+    };
+    if link.is_some() {
+        flags |= cell_flags::LINK;
+    }
     CellView {
         r: addr.row,
         c: addr.col,
@@ -190,6 +199,151 @@ fn view_of(
         style: style.0,
         color,
         flags,
+        cf_style: None,
+        cf_bar: None,
+        cf_icon: None,
+        link,
+    }
+}
+
+/// The target of a formula whose top-level call is `HYPERLINK(url; …)`.
+fn hyperlink_target(wb: &Workbook, f: &crate::formula_cells::FormulaCell) -> Option<String> {
+    use tally_formula::{Expr, FuncRef};
+    let mut e = &f.formula.expr;
+    while let Expr::Paren(x) = e {
+        e = x;
+    }
+    let Expr::Call {
+        func: FuncRef::Known(id),
+        args,
+    } = e
+    else {
+        return None;
+    };
+    let def = registry().get(FuncId(id.0))?;
+    if !def.name.eq_ignore_ascii_case("HYPERLINK") {
+        return None;
+    }
+    let arg = args.first()?;
+    let expr = crate::fexpr::FExpr {
+        formula: std::sync::Arc::new(tally_formula::Formula::new(arg.clone())),
+        invalid: None,
+    };
+    match expr.eval(wb, f.addr) {
+        Value::Text(t) if !t.trim().is_empty() => Some(t.to_string()),
+        _ => None,
+    }
+}
+
+/// `true` if the sheet has state that decorates cell views.
+fn has_decorations(s: &Sheet) -> bool {
+    let m = &s.meta;
+    !m.cond_formats.is_empty()
+        || !m.notes.is_empty()
+        || !m.links.is_empty()
+        || m.validations.iter().any(|v| v.has_dropdown())
+}
+
+/// Adds notes, links, validation dropdowns and conditional formats to the
+/// views of `req` (adding views for otherwise empty cells that get one).
+fn decorate(wb: &Workbook, s: &Sheet, version: u64, req: &CellRange, views: &mut Vec<CellView>) {
+    use std::collections::{BTreeSet, HashSet};
+    let m = &s.meta;
+    let have: HashSet<(u32, u32)> = views.iter().map(|v| (v.r, v.c)).collect();
+    let mut extra: BTreeSet<(u32, u32)> = BTreeSet::new();
+    for (k, _) in crate::annotations::entries_in(&m.notes, req) {
+        extra.insert(k);
+    }
+    for (k, _) in crate::annotations::entries_in(&m.links, req) {
+        extra.insert(k);
+    }
+    let add_area = |ranges: &[tally_model::CellRangeLocal], extra: &mut BTreeSet<(u32, u32)>| {
+        for r in ranges {
+            let x = CellRange::new(req.sheet, r.r0, r.c0, r.r1, r.c1);
+            if let Some(i) = x.intersect(req) {
+                for row in i.r0..=i.r1 {
+                    for col in i.c0..=i.c1 {
+                        extra.insert((row, col));
+                    }
+                }
+            }
+        }
+    };
+    for v in m.validations.iter().filter(|v| v.has_dropdown()) {
+        add_area(&v.ranges, &mut extra);
+    }
+    for cf in &m.cond_formats {
+        add_area(&cf.ranges, &mut extra);
+    }
+    let first_new = views.len();
+    for (r, c) in extra {
+        if !have.contains(&(r, c)) {
+            let addr = CellAddr::new(req.sheet, r, c);
+            views.push(view_of(wb, addr, None, s.style(r, c)));
+        }
+    }
+    let eval = crate::condfmt::CfEval::new(wb, req.sheet, version);
+    for v in views.iter_mut() {
+        let key = (v.r, v.c);
+        if m.notes.contains_key(&key) {
+            v.flags |= cell_flags::COMMENT;
+        }
+        if let Some(u) = m.links.get(&key) {
+            v.flags |= cell_flags::LINK;
+            v.link = Some(u.to_string());
+        }
+        if m.validations
+            .iter()
+            .any(|x| x.has_dropdown() && x.contains(v.r, v.c))
+        {
+            v.flags |= cell_flags::VALIDATION_DROPDOWN;
+        }
+        if m.cond_formats.is_empty() {
+            continue;
+        }
+        let Some(o) = eval.outcome(v.r, v.c) else {
+            continue;
+        };
+        if !o.style.is_empty() {
+            let base = &wb.styles.get(StyleId(v.style)).data;
+            let (id, entry) = wb.transient.style_for(base, &o.style);
+            v.cf_style = Some(id);
+            if o.style.number_format.is_some() {
+                let val = wb.value(CellAddr::new(req.sheet, v.r, v.c));
+                if !val.is_empty() {
+                    let f = format_value_with(
+                        &val,
+                        &entry.format,
+                        wb.locale,
+                        None,
+                        wb.settings.date_epoch,
+                    );
+                    v.text = f.text;
+                    v.color = f.color.map(|c| (c << 8) | 0xff);
+                    v.num = match val {
+                        Value::Number(n) if entry.format.is_general() => Some(n),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        v.cf_bar = o.bar;
+        v.cf_icon = o.icon;
+        if o.hide_value {
+            v.text.clear();
+        }
+    }
+    // Added views that nothing applied to are dropped again.
+    let mut i = first_new;
+    while i < views.len() {
+        let v = &views[i];
+        let plain =
+            v.flags == 0 && v.cf_style.is_none() && v.cf_bar.is_none() && v.cf_icon.is_none();
+        if plain && v.style == 0 && v.text.is_empty() {
+            views.swap_remove(i);
+        } else {
+            i += 1;
+        }
     }
 }
 
@@ -243,6 +397,10 @@ pub fn cells(
                     views.push(view_of(wb, addr, col.cells.get(row), col.styles.get(row)));
                 }
             }
+        }
+        if has_decorations(s) {
+            let req = CellRange::new(sheet, r.r0, r.c0, r.r1, r.c1);
+            decorate(wb, s, version, &req, &mut views);
         }
         views.sort_by_key(|v| (v.r, v.c));
         out.push(CellBlock {
@@ -373,31 +531,41 @@ fn edit_text(wb: &Workbook, v: &Value, st: &StyleEntry) -> String {
                         let hours = if *n < 0.0 || *n >= 1.0 { "[HH]" } else { "HH" };
                         format!("{hours}:MM:SS{}", if frac_secs { ".000" } else { "" })
                     }
-                    _ => "MM/DD/YYYY".to_owned(),
+                    _ => wb.locale.short_date.to_owned(),
                 };
+                let code = code.replacen("MM/DD/YYYY", wb.locale.short_date, 1);
                 if let Ok(ast) = parse_format(&code) {
-                    return format_value_with(v, &ast, &EN_US, None, wb.settings.date_epoch).text;
+                    return format_value_with(v, &ast, wb.locale, None, wb.settings.date_epoch)
+                        .text;
                 }
             }
             if let Some(SectionKind::Number(l)) = fmt.sections.first().map(|s| &s.kind) {
                 if l.percent > 0 {
-                    return format!("{}%", general_string(n * 100.0, None, &EN_US));
+                    return format!("{}%", general_string(n * 100.0, None, wb.locale));
                 }
             }
-            general_string(*n, None, &EN_US)
+            general_string(*n, None, wb.locale)
         }
         Value::Text(s) => {
             let ctx = RecognizeContext::now(wb.settings.date_epoch);
             let looks_like_value = s.starts_with('=')
                 || s.starts_with('\'')
-                || !matches!(recognize_input_with(s, &EN_US, &ctx).value, Value::Text(_));
+                || !matches!(
+                    recognize_input_with(s, wb.locale, &ctx).value,
+                    Value::Text(_)
+                );
             if looks_like_value && !st.is_text_format() {
                 format!("'{s}")
             } else {
                 s.to_string()
             }
         }
-        Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_owned(),
+        Value::Bool(b) => if *b {
+            wb.locale.true_name
+        } else {
+            wb.locale.false_name
+        }
+        .to_owned(),
         Value::Error(e) => e.display().into_owned(),
         Value::Array(m) => m
             .get(0, 0)
@@ -429,6 +597,11 @@ pub fn cell_edit_info(
             let Some(f) = wb.formulas.get(*id) else {
                 return Ok(plain(String::new()));
             };
+            let hidden = s.meta.protection.is_some()
+                && crate::protection::cell_protection(wb, s.style(r, c)).hidden_formula;
+            if hidden {
+                return Ok(plain(String::new()));
+            }
             let text = wb.formula_text(*id).unwrap_or_default();
             let hint = (f.invalid_text.is_none())
                 .then(|| explain(&f.formula, f.addr, &HeaderLabels::new(wb)))
@@ -527,7 +700,7 @@ pub fn selection_stats(wb: &Workbook, sel: &SelectionDto) -> Result<SelectionSta
     let sum = nums.total();
     let st = wb.styles.get(s.style(sel.active.r, sel.active.c));
     let formatted_sum = if st.is_general() {
-        general_string(sum, None, &EN_US)
+        general_string(sum, None, wb.locale)
     } else {
         format_with(wb, &Value::Number(sum), st).text
     };
@@ -670,14 +843,23 @@ fn parse_local_range(sheet: SheetId, s: &str) -> Option<CellRange> {
 /// Name box text → selection: a reference (optionally sheet-qualified) or
 /// a named range (sheet-scoped names of the active sheet first).
 pub fn resolve_name_box(wb: &Workbook, text: &str) -> Result<SelectionDto, ApiError> {
+    resolve_name_box_in(wb, wb.active_sheet, text)
+}
+
+/// [`resolve_name_box`] relative to `current` instead of the active sheet.
+pub fn resolve_name_box_in(
+    wb: &Workbook,
+    current: SheetId,
+    text: &str,
+) -> Result<SelectionDto, ApiError> {
+    sheet_or_err(wb, current)?;
     let t = text.trim();
     if t.is_empty() {
         return Err(ApiError::invalid_argument("empty reference"));
     }
-    if let Some(id) = wb.names.visible(t, wb.active_sheet) {
+    if let Some(id) = wb.names.visible(t, current) {
         let def = wb.names.get(id).and_then(|e| e.def.as_ref());
-        let range =
-            def.and_then(|_| wb.parse_reference_at(t, CellAddr::new(wb.active_sheet, 0, 0)));
+        let range = def.and_then(|_| wb.parse_reference_at(t, CellAddr::new(current, 0, 0)));
         return match range {
             Some(range) => Ok(SelectionDto {
                 sheet: range.sheet,
@@ -698,7 +880,7 @@ pub fn resolve_name_box(wb: &Workbook, text: &str) -> Result<SelectionDto, ApiEr
         Some(n) => wb
             .sheet_by_name_ci(&n)
             .ok_or_else(|| ApiError::not_found(format!("no sheet named {n:?}")))?,
-        None => wb.active_sheet,
+        None => current,
     };
     let range = parse_local_range(sheet, rest)
         .ok_or_else(|| ApiError::not_found(format!("{t:?} is not a cell, range or known name")))?;

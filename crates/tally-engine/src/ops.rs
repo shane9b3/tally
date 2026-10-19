@@ -265,7 +265,191 @@ fn local(r: &CellRange) -> CellRangeLocal {
 }
 
 /// Applies one op, returning the inverse changes (in apply order).
+///
+/// v0.3: ops on a protected sheet are checked first ([`precheck`]), and
+/// typed or pasted values are validated afterwards ([`postcheck`]; a
+/// failing op is reverted).
 pub fn apply_op(
+    wb: &mut Workbook,
+    op: &Op,
+    clip: Option<&ClipSnapshot>,
+    fx: &mut Effects,
+) -> Result<Vec<Change>, ApiError> {
+    if let Some(r) = crate::ops_v03::apply(wb, op, fx) {
+        return r;
+    }
+    precheck(wb, op)?;
+    let changes = apply_op_inner(wb, op, clip, fx)?;
+    postcheck(wb, op, changes, fx)
+}
+
+fn ranges_or_err(sheet: SheetId, ranges: &[RangeDto]) -> Result<Vec<CellRange>, ApiError> {
+    ranges.iter().map(|r| to_range(sheet, r)).collect()
+}
+
+/// Protection checks that can be made before an op runs.
+pub fn precheck(wb: &Workbook, op: &Op) -> Result<(), ApiError> {
+    use crate::protection::{check_edit, check_format, check_sheet_action, check_structure};
+    let cell = |sheet: SheetId, r: u32, c: u32| CellRange::new(sheet, r, c, r, c);
+    match op {
+        Op::SetCellInput { sheet, r, c, .. } => {
+            if *r < MAX_ROWS && *c < MAX_COLS {
+                check_edit(wb, &[cell(*sheet, *r, *c)])?;
+            }
+        }
+        Op::SetRangeInputs { sheet, r, c, rows } => {
+            if let Ok(range) = block_range(*sheet, *r, *c, rows) {
+                check_edit(wb, &[range])?;
+            }
+        }
+        Op::Clear {
+            sheet,
+            ranges,
+            what,
+        } => {
+            let ranges = ranges_or_err(*sheet, ranges)?;
+            if matches!(what, ClearWhat::Contents | ClearWhat::All) {
+                check_edit(wb, &ranges)?;
+            }
+            if matches!(what, ClearWhat::Formats | ClearWhat::All) {
+                check_format(wb, &ranges)?;
+            }
+        }
+        Op::ApplyStyle { sheet, ranges, .. } | Op::SetNumberFormat { sheet, ranges, .. } => {
+            check_format(wb, &ranges_or_err(*sheet, ranges)?)?;
+        }
+        Op::InsertRows { sheet, .. } => check_sheet_action(wb, *sheet, |p| p.insert_rows)?,
+        Op::DeleteRows { sheet, .. } => check_sheet_action(wb, *sheet, |p| p.delete_rows)?,
+        Op::InsertCols { sheet, .. } => check_sheet_action(wb, *sheet, |p| p.insert_cols)?,
+        Op::DeleteCols { sheet, .. } => check_sheet_action(wb, *sheet, |p| p.delete_cols)?,
+        Op::SetColWidth { sheet, .. }
+        | Op::SetRowHeight { sheet, .. }
+        | Op::SetRowsHidden { sheet, .. }
+        | Op::SetColsHidden { sheet, .. } => check_sheet_action(wb, *sheet, |p| p.format_cells)?,
+        Op::AddSheet { .. }
+        | Op::RenameSheet { .. }
+        | Op::DeleteSheet { .. }
+        | Op::MoveSheet { .. } => check_structure(wb)?,
+        Op::SetArrayFormula { sheet, range, .. } => check_edit(wb, &[to_range(*sheet, range)?])?,
+        Op::MoveRange { sheet, from, to } => {
+            let from = to_range(*sheet, from)?;
+            check_edit(wb, &[from])?;
+            if let Some(dest) = (BlockDest { from, to: *to }).range() {
+                check_edit(wb, &[dest])?;
+            }
+        }
+        Op::MergeCells { sheet, .. }
+        | Op::UnmergeCells { sheet, .. }
+        | Op::SetAutoFilter { sheet, .. } => {
+            check_sheet_action(wb, *sheet, |_| false)?;
+        }
+        Op::SetColumnFilter { sheet, .. } => check_sheet_action(wb, *sheet, |p| p.auto_filter)?,
+        Op::SortRange { sheet, range, .. } => {
+            check_sheet_action(wb, *sheet, |p| p.sort)?;
+            check_edit(wb, &[to_range(*sheet, range)?])?;
+        }
+        Op::FillRange { sheet, target, .. } => check_edit(wb, &[to_range(*sheet, target)?])?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The destination of a move.
+struct BlockDest {
+    from: CellRange,
+    to: tally_api::CellPos,
+}
+
+impl BlockDest {
+    fn range(&self) -> Option<CellRange> {
+        let r1 = u64::from(self.to.r) + u64::from(self.from.r1 - self.from.r0);
+        let c1 = u64::from(self.to.c) + u64::from(self.from.c1 - self.from.c0);
+        (r1 < u64::from(MAX_ROWS) && c1 < u64::from(MAX_COLS))
+            .then(|| CellRange::new(self.from.sheet, self.to.r, self.to.c, r1 as u32, c1 as u32))
+    }
+}
+
+/// Undoes `changes` (an op that must not stand).
+fn revert(wb: &mut Workbook, changes: Vec<Change>, fx: &mut Effects) {
+    for ch in changes.into_iter().rev() {
+        let _ = apply_change(wb, ch, fx);
+    }
+}
+
+/// Checks made after an op wrote cells: protection of what a paste or
+/// replace wrote, and data validation of typed and pasted values.
+fn postcheck(
+    wb: &mut Workbook,
+    op: &Op,
+    changes: Vec<Change>,
+    fx: &mut Effects,
+) -> Result<Vec<Change>, ApiError> {
+    let written: Vec<CellRange> = changes
+        .iter()
+        .flat_map(|c| match c {
+            Change::Range(s) if s.contents.is_some() => vec![s.range],
+            Change::Cells(list) if matches!(op, Op::ReplaceAll { .. }) => {
+                list.iter().map(|(a, _)| CellRange::single(*a)).collect()
+            }
+            _ => Vec::new(),
+        })
+        .collect();
+    if matches!(
+        op,
+        Op::Paste { .. } | Op::PasteSpecial { .. } | Op::ReplaceAll { .. }
+    ) {
+        if let Err(e) = crate::protection::check_edit(wb, &written) {
+            revert(wb, changes, fx);
+            return Err(e);
+        }
+    }
+    let validate = matches!(
+        op,
+        Op::SetCellInput { .. }
+            | Op::SetRangeInputs { .. }
+            | Op::Paste { .. }
+            | Op::PasteSpecial { .. }
+            | Op::FillRange { .. }
+    );
+    if validate {
+        let mut by_sheet: BTreeMap<SheetId, Vec<(u32, u32)>> = BTreeMap::new();
+        for r in &written {
+            let Some(s) = wb.sheet(r.sheet) else {
+                continue;
+            };
+            if s.meta.validations.is_empty() {
+                continue;
+            }
+            let cells = by_sheet.entry(r.sheet).or_default();
+            for v in &s.meta.validations {
+                for vr in &v.ranges {
+                    let vr = CellRange::new(r.sheet, vr.r0, vr.c0, vr.r1, vr.c1);
+                    let Some(x) = vr.intersect(r) else { continue };
+                    for c in x.c0..=x.c1.min(s.columns.len().saturating_sub(1) as u32) {
+                        if let Some(col) = s.column(c) {
+                            use crate::storage::ColumnStore;
+                            cells.extend(col.cells.iter_range(x.r0, x.r1).map(|(row, _)| (row, c)));
+                        }
+                    }
+                }
+            }
+        }
+        for (sheet, mut cells) in by_sheet {
+            cells.sort_unstable();
+            cells.dedup();
+            match crate::validation::check_cells(wb, sheet, &cells) {
+                Ok(n) => fx.notices.extend(n),
+                Err(e) => {
+                    revert(wb, changes, fx);
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Ok(changes)
+}
+
+fn apply_op_inner(
     wb: &mut Workbook,
     op: &Op,
     clip: Option<&ClipSnapshot>,
@@ -306,7 +490,29 @@ pub fn apply_op(
             if content {
                 check_array_blocks(wb, &ranges)?;
             }
-            let mut inv = Vec::with_capacity(ranges.len());
+            let mut inv = Vec::with_capacity(ranges.len() + 1);
+            // "Delete all" also removes notes and hyperlinks (Calc).
+            if *what == ClearWhat::All {
+                let hit = wb.sheet(*sheet).is_some_and(|s| {
+                    ranges.iter().any(|r| {
+                        crate::annotations::entries_in(&s.meta.notes, r)
+                            .next()
+                            .is_some()
+                            || crate::annotations::entries_in(&s.meta.links, r)
+                                .next()
+                                .is_some()
+                    })
+                });
+                if hit {
+                    inv.extend(sheet_meta(wb, *sheet));
+                    if let Some(s) = wb.sheet_mut(*sheet) {
+                        for r in &ranges {
+                            crate::annotations::clear_in(&mut s.meta.notes, r);
+                            crate::annotations::clear_in(&mut s.meta.links, r);
+                        }
+                    }
+                }
+            }
             for range in ranges {
                 inv.push(Change::Range(capture_range(wb, range, content, style)));
                 if content {
@@ -790,6 +996,8 @@ pub fn apply_op(
             let target = to_range(*sheet, target)?;
             crate::fill::fill_range(wb, source, target, *mode)
         }
+        // Handled by `ops_v03::apply`.
+        _ => Err(ApiError::new(ApiError::INTERNAL, "unhandled op")),
     }
 }
 
@@ -842,16 +1050,30 @@ fn structure(
     };
     let names = names_snapshot(wb);
     let meta = sheet_meta(wb, shape.sheet).ok_or_else(|| not_found_sheet(shape.sheet))?;
+    // Rule formulas on other sheets may point at this one.
+    let other_metas: Vec<Change> = wb
+        .sheets
+        .iter()
+        .filter(|s| {
+            s.id != shape.sheet
+                && (!s.meta.cond_formats.is_empty() || !s.meta.validations.is_empty())
+        })
+        .map(|s| s.id)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .filter_map(|id| sheet_meta(wb, id))
+        .collect();
     let lost = Change::Range(capture_range(wb, shape.lost(), true, true));
     let old = wb.structure_change(&change);
     wb.adjust_meta_for_structure(&change);
     fx.layout(shape.sheet);
-    Ok(vec![
-        names,
-        meta,
+    let mut out = vec![names, meta];
+    out.extend(other_metas);
+    out.extend([
         dims,
         lost,
         Change::Cells(old),
         Change::Structure(shape.inverse()),
-    ])
+    ]);
+    Ok(out)
 }

@@ -1,6 +1,6 @@
 //! Tally desktop shell (WP7): the Tauri window, native menu, file dialogs,
 //! recent files, templates and one command per `DocumentService` method
-//! (docs/api.md), over the real engine (`tally-engine` with ODS/CSV IO) and
+//! (docs/api.md), over the real engine (`tally-engine` with ODS/XLSX/CSV IO) and
 //! the rule-based ⌘K assist (`tally-assist`).
 
 #![forbid(unsafe_code)]
@@ -57,6 +57,11 @@ pub fn run() {
             commands::assist_suggest,
             commands::recent_files,
             commands::list_templates,
+            commands::names,
+            commands::filter_info,
+            commands::find,
+            commands::detect_header,
+            commands::recalc_all,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

@@ -102,10 +102,19 @@ fn power(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     run(|| {
         let x = a.num(0)?;
         let y = a.num(1)?;
-        if x == 0.0 && y < 0.0 {
-            return Err(ErrorKind::Div0);
+        // AOO ScPow pushes C pow() through PushDouble/TreatDoubleError
+        // (interpr5.cxx, formula errorcodes.hxx GetDoubleErrorValue): an
+        // infinity (overflow, 0 to a negative power) is errIllegalFPOperation
+        // (#NUM!) and a NaN (negative base, fractional exponent) is
+        // errNoValue (#VALUE!).
+        let r = x.powf(y);
+        if r.is_nan() {
+            return Err(ErrorKind::Value);
         }
-        Ok(Value::Number(x.powf(y)))
+        if r.is_infinite() {
+            return Err(ErrorKind::Num);
+        }
+        Ok(Value::Number(r))
     })
 }
 
@@ -174,8 +183,11 @@ mod tests {
     fn power_sqrt() {
         assert_eq!(f("POWER", vec![n(2.0), n(10.0)]), num(1024.0));
         assert_eq!(f("POWER", vec![n(0.0), n(0.0)]), num(1.0));
-        assert_eq!(f("POWER", vec![n(0.0), n(-1.0)]), err(ErrorKind::Div0));
-        assert_eq!(f("POWER", vec![n(-8.0), n(1.0 / 3.0)]), err(ErrorKind::Num));
+        assert_eq!(f("POWER", vec![n(0.0), n(-1.0)]), err(ErrorKind::Num));
+        assert_eq!(
+            f("POWER", vec![n(-8.0), n(1.0 / 3.0)]),
+            err(ErrorKind::Value)
+        );
         assert_eq!(f("POWER", vec![n(-2.0), n(3.0)]), num(-8.0));
         assert_eq!(f("POWER", vec![n(10.0), n(400.0)]), err(ErrorKind::Num));
         assert_eq!(f("SQRT", vec![n(16.0)]), num(4.0));

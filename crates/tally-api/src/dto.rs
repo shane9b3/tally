@@ -18,6 +18,11 @@ use serde::{Deserialize, Serialize};
 use tally_types::SheetId;
 use ts_rs::TS;
 
+use crate::features::{
+    BreakAxis, CfRuleDto, DataBarView, DocPropertiesDto, IconView, NoteDto, PageSetupDto,
+    ProtectionOptions, ValidationDto,
+};
+
 // ---------------------------------------------------------------------------
 // Documents and sheets
 // ---------------------------------------------------------------------------
@@ -168,6 +173,10 @@ pub mod cell_flags {
     pub const ARRAY: u8 = 4;
     /// The cell has a comment.
     pub const COMMENT: u8 = 8;
+    /// The cell has a list validation with a dropdown.
+    pub const VALIDATION_DROPDOWN: u8 = 16;
+    /// The cell has a hyperlink (attribute or `HYPERLINK()` result).
+    pub const LINK: u8 = 32;
 }
 
 /// What the grid needs to draw one cell.
@@ -191,6 +200,25 @@ pub struct CellView {
     pub color: Option<u32>,
     /// Bit set of [`cell_flags`].
     pub flags: u8,
+    /// Style id to draw instead of `style` because a conditional format
+    /// matches (a synthesized id; resolve it with `styles()` like any
+    /// other). Absent or `null` when no conditional style applies.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub cf_style: Option<u32>,
+    /// A conditional-format data bar to draw.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub cf_bar: Option<DataBarView>,
+    /// A conditional-format icon to draw.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub cf_icon: Option<IconView>,
+    /// The cell's hyperlink (the cell attribute, or the target of a
+    /// `HYPERLINK()` formula).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub link: Option<String>,
 }
 
 /// Kind of a cell value.
@@ -640,6 +668,174 @@ pub enum Op {
         /// Series type.
         mode: FillMode,
     },
+    // ----- v0.3 ----------------------------------------------------------
+    /// Adds a conditional format (its id is assigned by the engine).
+    AddConditionalFormat {
+        /// Sheet.
+        sheet: SheetId,
+        /// Target ranges.
+        ranges: Vec<RangeDto>,
+        /// Rules in priority order.
+        rules: Vec<CfRuleDto>,
+    },
+    /// Replaces a conditional format's ranges and rules.
+    UpdateConditionalFormat {
+        /// Sheet.
+        sheet: SheetId,
+        /// Id from `conditional_formats`.
+        id: u32,
+        /// Target ranges.
+        ranges: Vec<RangeDto>,
+        /// Rules.
+        rules: Vec<CfRuleDto>,
+    },
+    /// Deletes a conditional format.
+    DeleteConditionalFormat {
+        /// Sheet.
+        sheet: SheetId,
+        /// Id.
+        id: u32,
+    },
+    /// Adds a data validation (`validation.id` is ignored).
+    AddValidation {
+        /// Sheet.
+        sheet: SheetId,
+        /// The rule and its ranges.
+        validation: ValidationDto,
+    },
+    /// Replaces a data validation.
+    UpdateValidation {
+        /// Sheet.
+        sheet: SheetId,
+        /// Id from `validations`.
+        id: u32,
+        /// The new rule and ranges.
+        validation: ValidationDto,
+    },
+    /// Deletes a data validation.
+    DeleteValidation {
+        /// Sheet.
+        sheet: SheetId,
+        /// Id.
+        id: u32,
+    },
+    /// Sets (or replaces) the note of a cell (`note.r`/`note.c` are ignored).
+    SetNote {
+        /// Sheet.
+        sheet: SheetId,
+        /// Row.
+        r: u32,
+        /// Column.
+        c: u32,
+        /// The note.
+        note: NoteDto,
+    },
+    /// Deletes the note of a cell.
+    DeleteNote {
+        /// Sheet.
+        sheet: SheetId,
+        /// Row.
+        r: u32,
+        /// Column.
+        c: u32,
+    },
+    /// Sets a cell's hyperlink.
+    SetLink {
+        /// Sheet.
+        sheet: SheetId,
+        /// Row.
+        r: u32,
+        /// Column.
+        c: u32,
+        /// URL (`http(s):`, `mailto:`, `file:` or `#Sheet.A1`).
+        url: String,
+    },
+    /// Removes the hyperlinks of every cell in `ranges`.
+    ClearLink {
+        /// Sheet.
+        sheet: SheetId,
+        /// Ranges.
+        ranges: Vec<RangeDto>,
+    },
+    /// Protects a sheet (locked cells can no longer be edited).
+    ProtectSheet {
+        /// Sheet.
+        sheet: SheetId,
+        /// Optional password.
+        password: Option<String>,
+        /// Allowed actions (`None`: the defaults).
+        options: Option<ProtectionOptions>,
+    },
+    /// Removes sheet protection (`OpError { code: "protected" }` on a wrong
+    /// password).
+    UnprotectSheet {
+        /// Sheet.
+        sheet: SheetId,
+        /// The password, if one was set.
+        password: Option<String>,
+    },
+    /// Sets the cell protection attributes of `ranges`.
+    SetCellProtection {
+        /// Sheet.
+        sheet: SheetId,
+        /// Ranges.
+        ranges: Vec<RangeDto>,
+        /// Locked (`None`: unchanged).
+        locked: Option<bool>,
+        /// Hide formulas (`None`: unchanged).
+        hidden_formula: Option<bool>,
+    },
+    /// Protects the document structure (sheets cannot be added, deleted,
+    /// renamed or moved).
+    ProtectDocument {
+        /// Optional password.
+        password: Option<String>,
+    },
+    /// Removes document structure protection.
+    UnprotectDocument {
+        /// The password, if one was set.
+        password: Option<String>,
+    },
+    /// Replaces a sheet's page setup (breaks in `setup` are ignored).
+    SetPageSetup {
+        /// Sheet.
+        sheet: SheetId,
+        /// The setup.
+        setup: PageSetupDto,
+    },
+    /// Adds or removes a manual page break.
+    SetPageBreak {
+        /// Sheet.
+        sheet: SheetId,
+        /// Row or column break.
+        axis: BreakAxis,
+        /// The break is above this row / left of this column.
+        at: u32,
+        /// Add (`true`) or remove.
+        present: bool,
+    },
+    /// Sets title, subject, keywords, description and author.
+    SetDocumentProperties {
+        /// The properties (read-only fields are ignored).
+        props: DocPropertiesDto,
+    },
+    /// Re-applies the sheet's AutoFilter to the current values (filters
+    /// are not re-applied after edits, as in AOO).
+    RefreshFilter {
+        /// Sheet.
+        sheet: SheetId,
+    },
+    /// Sets rows `start..=end` to the height their wrapped or large-font
+    /// content needs (rows with neither keep their height). The new
+    /// heights are returned in `ApplyResult.fitted_rows`.
+    AutoFitRows {
+        /// Sheet.
+        sheet: SheetId,
+        /// First row.
+        start: u32,
+        /// Last row.
+        end: u32,
+    },
 }
 
 /// One sort key.
@@ -896,6 +1092,21 @@ pub struct ApplyResult {
     pub selection: Option<SelectionDto>,
     /// Fresh workbook info, present when `sheets_changed`.
     pub info: Option<WorkbookInfo>,
+    /// Problems of ops that still applied (validation warnings and
+    /// information messages, code `"validation"`). Absent or `null` when
+    /// there are none.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub warnings: Option<Vec<OpError>>,
+    /// Row heights computed by `Op::AutoFitRows`, as pixel runs.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub fitted_rows: Option<Vec<DimRunPx>>,
+    /// Number of cells `Op::ReplaceAll` changed (present when the
+    /// transaction had a ReplaceAll op).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub replaced: Option<u32>,
 }
 
 /// Ranges on one sheet.
@@ -1383,6 +1594,63 @@ mod tests {
         AutoFilterInfo::export_all(&cfg).unwrap();
         FindQuery::export_all(&cfg).unwrap();
         FindResult::export_all(&cfg).unwrap();
+        crate::features::ConditionalFormatDto::export_all(&cfg).unwrap();
+        crate::features::ValidationInfo::export_all(&cfg).unwrap();
+        crate::features::ProtectionInfo::export_all(&cfg).unwrap();
+        crate::features::GoalSeekRequest::export_all(&cfg).unwrap();
+        crate::features::GoalSeekResult::export_all(&cfg).unwrap();
+        crate::features::LocaleInfo::export_all(&cfg).unwrap();
+    }
+
+    #[test]
+    fn v03_shapes() {
+        use crate::features::*;
+        let op = Op::AddConditionalFormat {
+            sheet: 1,
+            ranges: vec![RangeDto {
+                r0: 0,
+                c0: 0,
+                r1: 9,
+                c1: 0,
+            }],
+            rules: vec![CfRuleDto {
+                kind: CfRuleKind::CellValue {
+                    op: CmpOp::Gt,
+                    formulas: vec!["5".into()],
+                },
+                style: CfStyleDto {
+                    bold: Some(true),
+                    ..CfStyleDto::default()
+                },
+                stop_if_true: false,
+            }],
+        };
+        let v = serde_json::to_value(&op).unwrap();
+        assert_eq!(v["type"], "addConditionalFormat");
+        assert_eq!(v["rules"][0]["kind"]["type"], "cellValue");
+        assert_eq!(v["rules"][0]["kind"]["op"], "gt");
+        assert_eq!(v["rules"][0]["stopIfTrue"], false);
+        let back: Op = serde_json::from_value(v).unwrap();
+        assert_eq!(back, op);
+        // Old CellView JSON (no v0.3 fields) still parses.
+        let cv: CellView = serde_json::from_value(json!({
+            "r": 0, "c": 0, "text": "", "kind": "empty", "num": null,
+            "style": 0, "color": null, "flags": 0
+        }))
+        .unwrap();
+        assert_eq!(cv.cf_style, None);
+        assert_eq!(
+            serde_json::to_value(IconSetKind::ThreeTrafficLights).unwrap(),
+            json!("threeTrafficLights")
+        );
+        assert_eq!(
+            serde_json::to_value(PageScale::FitTo {
+                width: 1,
+                height: 0
+            })
+            .unwrap(),
+            json!({ "type": "fitTo", "width": 1, "height": 0 })
+        );
     }
 
     #[test]

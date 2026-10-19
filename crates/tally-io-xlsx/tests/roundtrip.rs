@@ -81,6 +81,7 @@ fn styles() -> Vec<StyleData> {
             },
             number_format: Some("#,##0.00".into()),
             display: None,
+            protection: None,
         },
         // 1: date.
         StyleData {
@@ -324,14 +325,20 @@ fn names_survive() {
         names,
         [
             ("Local".into(), Some(1), "of:=[$'Second sheet'.$A$1]".into()),
-            (
-                "Print_Area".into(),
-                Some(0),
-                "of:=[$Orders.$A$1:.$G$6]".into()
-            ),
             ("Rate".into(), None, "of:=0.25".into()),
             ("Total".into(), None, "of:=[$Orders.$A$2:.$B$2]".into()),
         ]
+    );
+    // A `Print_Area` name comes back as the sheet's print range.
+    let p = back.sheets[0].page_setup.as_ref().unwrap();
+    assert_eq!(
+        p.print_range,
+        Some(CellRangeLocal {
+            r0: 0,
+            c0: 0,
+            r1: 5,
+            c1: 6
+        })
     );
 }
 

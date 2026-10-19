@@ -81,6 +81,112 @@ impl Resolver for XlsxResolver {
     }
 }
 
+/// Which spelling wins when a function name is looked up while parsing.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Lookup {
+    /// OOXML stored names first (`WEEKNUM` = WEEKNUM_ADD, `CONVERT` =
+    /// CONVERT_ADD, `DURATION` = DURATION_ADD), then canonical.
+    Ooxml,
+    /// ODF stored names first (`ISOWEEKNUM` = the built-in WEEKNUM).
+    Odf,
+    /// Canonical first (CalcA1 text).
+    Canonical,
+}
+
+/// [`XlsxResolver`] with a function lookup order for one parse.
+struct Parsing<'a> {
+    r: &'a XlsxResolver,
+    lookup: Lookup,
+}
+
+impl Resolver for Parsing<'_> {
+    fn sheet_by_name(&self, name: &str) -> Option<SheetId> {
+        self.r.sheet_by_name(name)
+    }
+
+    fn sheet_name(&self, id: SheetId) -> Option<Arc<str>> {
+        self.r.sheet_name(id)
+    }
+
+    fn name(&self, name: &str, sheet: SheetId) -> Option<NameId> {
+        self.r.name(name, sheet)
+    }
+
+    fn function(&self, name: &str) -> Option<FuncId> {
+        let reg = tally_functions::registry();
+        match self.lookup {
+            Lookup::Ooxml => reg.lookup_ooxml_first(name),
+            Lookup::Odf => reg.lookup_odf_first(name),
+            Lookup::Canonical => reg.lookup_any(name),
+        }
+        .map(|id| FuncId(id.0))
+    }
+
+    fn function_name(&self, id: FuncId) -> Option<Arc<str>> {
+        self.r.function_name(id)
+    }
+
+    fn function_name_in(&self, id: FuncId, dialect: Dialect) -> Option<Arc<str>> {
+        self.r.function_name_in(id, dialect)
+    }
+}
+
+/// The Excel name under which AOO's built-in WEEKNUM (Sunday or Monday
+/// start, week 1 = first week with ≥ 4 days) is exported when it has no
+/// exact Excel equivalent: Excel shows `#NAME?`, Tally (and LibreOffice,
+/// which uses the same `ORG.OPENOFFICE.` convention) reads it back.
+const AOO_WEEKNUM_XLSX: &str = "_xlfn.ORG.OPENOFFICE.WEEKNUM";
+
+fn builtin_weeknum() -> Option<tally_functions::FuncId> {
+    tally_functions::registry().lookup("WEEKNUM")
+}
+
+/// Export rewrite of the built-in WEEKNUM. With a literal mode other than
+/// 1 (Monday start, ≥ 4 days) it is exactly ISO 8601 and becomes Excel's
+/// one-argument `ISOWEEKNUM`; otherwise it keeps AOO's semantics under
+/// [`AOO_WEEKNUM_XLSX`].
+fn export_weeknum(e: &mut Expr) {
+    let Some(wk) = builtin_weeknum() else {
+        return;
+    };
+    let Expr::Call { func, args } = e else {
+        return;
+    };
+    if *func != FuncRef::Known(FuncId(wk.0)) {
+        return;
+    }
+    let mode = args.get(1).and_then(|m| match m {
+        Expr::Num(n) => Some(*n),
+        _ => None,
+    });
+    match (mode, tally_functions::registry().lookup("ISOWEEKNUM")) {
+        (Some(m), Some(iso)) if m.trunc() != 1.0 && !args.is_empty() => {
+            *func = FuncRef::Known(FuncId(iso.0));
+            args.truncate(1);
+        }
+        _ => *func = FuncRef::Unknown(Arc::from(AOO_WEEKNUM_XLSX)),
+    }
+}
+
+/// Import rewrite: [`AOO_WEEKNUM_XLSX`] back to the built-in WEEKNUM.
+fn import_weeknum(e: &mut Expr) {
+    if let Expr::Call {
+        func: func @ FuncRef::Unknown(_),
+        ..
+    } = e
+    {
+        let FuncRef::Unknown(n) = &*func else {
+            return;
+        };
+        let bare = n.strip_prefix("_xlfn.").unwrap_or(n);
+        if bare.eq_ignore_ascii_case("ORG.OPENOFFICE.WEEKNUM") {
+            if let Some(wk) = builtin_weeknum() {
+                *func = FuncRef::Known(FuncId(wk.0));
+            }
+        }
+    }
+}
+
 /// Visits every expression node (iteratively; trees can be deep).
 fn for_each_expr_mut(root: &mut Expr, mut f: impl FnMut(&mut Expr)) {
     let mut stack: Vec<&mut Expr> = vec![root];
@@ -108,7 +214,17 @@ pub(crate) fn parse_excel(
     let mut src = String::with_capacity(text.len() + 1);
     src.push('=');
     src.push_str(text);
-    parse(&src, origin, Dialect::excel_a1(), r)
+    let mut f = parse(
+        &src,
+        origin,
+        Dialect::excel_a1(),
+        &Parsing {
+            r,
+            lookup: Lookup::Ooxml,
+        },
+    )?;
+    for_each_expr_mut(&mut f.expr, import_weeknum);
+    Ok(f)
 }
 
 /// Prints a parsed formula as model OpenFormula text (`of:=...`).
@@ -154,15 +270,10 @@ fn mark_sheets_abs(r: &mut RefExpr) {
     }
 }
 
-/// Model formula text (OpenFormula `of:=`, legacy `oooc:=`, or a bare `=`
-/// CalcA1 formula) → Excel `<f>` text without the leading `=`.
-pub(crate) fn of_to_excel(text: &str, origin: CellAddr, r: &XlsxResolver) -> Option<String> {
-    let dialect = if text.starts_with('=') {
-        Dialect::calc_a1_en_us()
-    } else {
-        Dialect::open_formula()
-    };
-    let mut f = parse(text, origin, dialect, r).ok()?;
+/// The export rewrites: the built-in WEEKNUM ([`export_weeknum`]) and
+/// unknown `COM.MICROSOFT.X` functions as `_xlfn.X`.
+fn export_rewrites(f: &mut Formula) {
+    for_each_expr_mut(&mut f.expr, export_weeknum);
     for_each_expr_mut(&mut f.expr, |e| {
         if let Expr::Call {
             func: FuncRef::Unknown(n),
@@ -177,7 +288,40 @@ pub(crate) fn of_to_excel(text: &str, origin: CellAddr, r: &XlsxResolver) -> Opt
             }
         }
     });
+}
+
+/// Model formula text (OpenFormula `of:=`, legacy `oooc:=`, or a bare `=`
+/// CalcA1 formula) → Excel `<f>` text without the leading `=`.
+pub(crate) fn of_to_excel(text: &str, origin: CellAddr, r: &XlsxResolver) -> Option<String> {
+    let (dialect, lookup) = if text.starts_with('=') {
+        (Dialect::calc_a1_en_us(), Lookup::Canonical)
+    } else {
+        (Dialect::open_formula(), Lookup::Odf)
+    };
+    let mut f = parse(text, origin, dialect, &Parsing { r, lookup }).ok()?;
+    export_rewrites(&mut f);
     let s = print(&f, origin, Dialect::excel_a1(), r);
+    Some(s.strip_prefix('=').unwrap_or(&s).to_string())
+}
+
+/// Like [`of_to_excel`], for a formula whose relative references were
+/// written for `parsed_at` but that Excel reads relative to `printed_at`
+/// (conditional formats and validations are relative to the top-left cell
+/// of their range): the same offsets, printed at the new origin.
+pub(crate) fn of_to_excel_at(
+    text: &str,
+    parsed_at: CellAddr,
+    printed_at: CellAddr,
+    r: &XlsxResolver,
+) -> Option<String> {
+    let (dialect, lookup) = if text.starts_with('=') {
+        (Dialect::calc_a1_en_us(), Lookup::Canonical)
+    } else {
+        (Dialect::open_formula(), Lookup::Odf)
+    };
+    let mut f = parse(text, parsed_at, dialect, &Parsing { r, lookup }).ok()?;
+    export_rewrites(&mut f);
+    let s = print(&f, printed_at, Dialect::excel_a1(), r);
     Some(s.strip_prefix('=').unwrap_or(&s).to_string())
 }
 
@@ -268,6 +412,57 @@ mod tests {
             of_to_excel("of:=SUM([.A1])", at("A2"), &r).as_deref(),
             Some("SUM(A1)")
         );
+    }
+
+    #[test]
+    fn same_name_functions_resolve_by_file_format() {
+        let r = r();
+        // Excel's CONVERT / DURATION / WEEKNUM are the add-ins.
+        let cases = [
+            ("CONVERT(1,\"m\",\"ft\")", "of:=CONVERT([.A1]"),
+            ("DURATION(1,2,3,4,1)", "of:=DURATION("),
+            ("WEEKNUM(A1,2)", "of:=WEEKNUM([.A1];2)"),
+        ];
+        let reg = tally_functions::registry();
+        for (x, _) in cases {
+            let f = parse_excel(x, at("B1"), &r).unwrap();
+            let Expr::Call {
+                func: FuncRef::Known(id),
+                ..
+            } = &f.expr
+            else {
+                panic!("{x}");
+            };
+            let name = reg.get(tally_functions::FuncId(id.0)).unwrap().name;
+            assert!(name.ends_with("_ADD"), "{x} resolved to {name}");
+        }
+        // Round trips: Excel → model → Excel.
+        for x in [
+            "CONVERT(1,\"m\",\"ft\")",
+            "DURATION(A1,A2,0.1,0.1,2)",
+            "WEEKNUM(A1,2)",
+            "_xlfn.PDURATION(0.1,100,200)",
+        ] {
+            let (of, ok) = excel_to_of(x, at("B1"), &r);
+            assert!(ok, "{x}");
+            assert_eq!(of_to_excel(&of, at("B1"), &r).as_deref(), Some(x), "{of}");
+        }
+        // The model's ODF names: WEEKNUM = the add-in, ISOWEEKNUM = the
+        // built-in WEEKNUM (mode 2 is ISO 8601 → Excel ISOWEEKNUM).
+        assert_eq!(
+            of_to_excel("of:=WEEKNUM([.A1];1)", at("B1"), &r).as_deref(),
+            Some("WEEKNUM(A1,1)")
+        );
+        assert_eq!(
+            of_to_excel("of:=ISOWEEKNUM([.A1];2)", at("B1"), &r).as_deref(),
+            Some("_xlfn.ISOWEEKNUM(A1)")
+        );
+        let sunday = of_to_excel("of:=ISOWEEKNUM([.A1];1)", at("B1"), &r).unwrap();
+        assert_eq!(sunday, "_xlfn.ORG.OPENOFFICE.WEEKNUM(A1,1)");
+        // ... and that reads back as the built-in WEEKNUM.
+        let (back, ok) = excel_to_of(&sunday, at("B1"), &r);
+        assert!(ok);
+        assert_eq!(back, "of:=ISOWEEKNUM([.A1];1)");
     }
 
     #[test]

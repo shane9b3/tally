@@ -418,7 +418,12 @@ pub fn paste_internal(
                     wb.set_value(addr, cell.value.clone());
                 }
             } else if let Some(content) = &cell.content {
-                wb.restore_content(addr, Some(content.clone()));
+                let content = if opts.transpose {
+                    transposed(content)
+                } else {
+                    content.clone()
+                };
+                wb.restore_content(addr, Some(content));
             }
         }
         if formats {
@@ -431,6 +436,42 @@ pub fn paste_internal(
     }
     wb.pending.ranges.push(area);
     Ok(changes)
+}
+
+/// A formula with the relative row and column offsets of its references
+/// swapped, for Paste Special ▸ Transpose (`=A1*5` copied from B1 and
+/// transposed reads the cell left of it instead of above). Only references
+/// whose row and column are both relative are transposed; mixed and
+/// absolute ones keep their target.
+fn transposed(content: &SnapContent) -> SnapContent {
+    use tally_formula::{CellRefExpr, RefExpr};
+    let SnapContent::Formula {
+        formula,
+        invalid_text: None,
+        array,
+    } = content
+    else {
+        return content.clone();
+    };
+    let swap = |c: &mut CellRefExpr| {
+        if !c.row.abs && !c.col.abs {
+            std::mem::swap(&mut c.row, &mut c.col);
+        }
+    };
+    let mut f = (**formula).clone();
+    f.expr.walk_refs_mut(|r| match r {
+        RefExpr::Cell(c) => swap(c),
+        RefExpr::Area(a, b) => {
+            swap(a);
+            swap(b);
+        }
+        _ => {}
+    });
+    SnapContent::Formula {
+        formula: std::sync::Arc::new(f),
+        invalid_text: None,
+        array: *array,
+    }
 }
 
 fn is_array(c: &Option<SnapContent>) -> bool {

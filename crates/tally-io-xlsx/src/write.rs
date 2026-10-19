@@ -8,7 +8,7 @@
 //! re-zipped with `xl/workbook.xml` patched.
 
 use std::collections::HashSet;
-use std::io::{Cursor, Read, Seek, Write};
+use std::io::{Seek, Write};
 
 use rust_xlsxwriter::{
     Color, DocProperties, Format, FormatAlign, FormatBorder, FormatPattern, FormatUnderline,
@@ -39,6 +39,12 @@ const MAX_WARNINGS: usize = 200;
 struct Report {
     warnings: Vec<String>,
     dropped: usize,
+}
+
+impl crate::write_v03::Warn for Report {
+    fn warn(&mut self, w: String) {
+        Report::warn(self, w);
+    }
 }
 
 impl Report {
@@ -173,6 +179,14 @@ fn format_of(s: &StyleData, report: &mut Report) -> Format {
         f = f
             .set_border_right(border(l))
             .set_border_right_color(rgb(l.color));
+    }
+    if let Some(p) = s.protection {
+        if !p.locked {
+            f = f.set_unlocked();
+        }
+        if p.hidden_formula || p.hidden {
+            f = f.set_hidden();
+        }
     }
     if let Some(code) = &s.number_format {
         match ooo_to_excel(code) {
@@ -453,6 +467,21 @@ impl SheetWriter<'_> {
                 }
             }
         }
+        self.write_links(ws, sheet, report)?;
+        let warn: &mut dyn crate::write_v03::Warn = report;
+        crate::write_v03::write_conditional_formats(
+            ws,
+            sheet,
+            self.sheet_index,
+            self.resolver,
+            warn,
+        )?;
+        crate::write_v03::write_validations(ws, sheet, self.sheet_index, self.resolver, warn)?;
+        crate::write_v03::write_notes(ws, sheet, warn);
+        crate::write_v03::write_page_setup(ws, sheet, warn)?;
+        if let Some(p) = &sheet.protection {
+            crate::write_v03::write_protection(ws, p);
+        }
         if let Some((rows, cols)) = sheet.frozen {
             if rows > 0 || cols > 0 {
                 ws.set_freeze_panes(rows.min(MAX_ROWS - 1), col_num(cols.min(MAX_COLS - 1)))?;
@@ -460,6 +489,64 @@ impl SheetWriter<'_> {
         }
         if let Some(c) = sheet.tab_color {
             ws.set_tab_color(rgb(c));
+        }
+        Ok(())
+    }
+}
+
+impl SheetWriter<'_> {
+    /// Hyperlinks: written as URL cells over text (or empty) cells; links on
+    /// numbers and formulas are dropped with a warning (rust_xlsxwriter
+    /// stores hyperlinks as string cells).
+    fn write_links(
+        &self,
+        ws: &mut Worksheet,
+        sheet: &SheetData,
+        report: &mut Report,
+    ) -> Result<(), XlsxError> {
+        for l in &sheet.links {
+            if l.row >= MAX_ROWS || l.col >= MAX_COLS {
+                continue;
+            }
+            let cell = sheet
+                .cells
+                .iter()
+                .find(|c| c.row == l.row && c.col == l.col);
+            let text = match cell.map(|c| &c.content) {
+                None | Some(CellContentData::Value(Value::Empty)) => l.url.clone(),
+                Some(CellContentData::Value(Value::Text(t))) => t.to_string(),
+                Some(_) => {
+                    report.warn(format!(
+                        "sheet {:?}: the hyperlink on {} (not a text cell) was not written",
+                        sheet.name,
+                        cell_name(
+                            self.sheet_index,
+                            cell.unwrap_or(&CellData {
+                                row: l.row,
+                                col: l.col,
+                                content: CellContentData::Value(Value::Empty),
+                                style: None,
+                            }),
+                            self.data
+                        )
+                    ));
+                    continue;
+                }
+            };
+            let Some(url) = crate::write_v03::excel_url(&l.url) else {
+                report.warn(format!(
+                    "sheet {:?}: the hyperlink {:?} has a type Excel does not support",
+                    sheet.name, l.url
+                ));
+                continue;
+            };
+            let fmt = self.fmt(cell.and_then(|c| c.style));
+            if let Err(e) = ws.write_url_with_options(l.row, col_num(l.col), url, text, "", fmt) {
+                report.warn(format!(
+                    "sheet {:?}: a hyperlink was skipped ({e})",
+                    sheet.name
+                ));
+            }
         }
         Ok(())
     }
@@ -591,16 +678,31 @@ pub(crate) fn write(
     }
 
     let mut props = DocProperties::new();
-    if let Some(t) = &data.meta.title {
+    let m = &data.meta;
+    if let Some(t) = &m.title {
         props = props.set_title(t.as_str());
+    }
+    if let Some(t) = &m.subject {
+        props = props.set_subject(t.as_str());
+    }
+    if let Some(t) = &m.author {
+        props = props.set_author(t.as_str());
+    }
+    if !m.keywords.is_empty() {
+        props = props.set_keywords(m.keywords.join(", "));
+    }
+    if let Some(t) = &m.description {
+        props = props.set_comment(t.as_str());
     }
     wb.set_properties(&props);
 
     let bytes = wb.save_to_buffer()?;
-    let bytes = if epoch == DateEpoch::D1904 {
-        set_date1904(&bytes)?
-    } else {
+    let mut patches = crate::write_v03::patches(data, &mut report);
+    patches.date1904 = epoch == DateEpoch::D1904;
+    let bytes = if patches.is_empty() {
         bytes
+    } else {
+        crate::write_v03::apply_patches(&bytes, &patches)?
     };
     writer.write_all(&bytes)?;
     writer.flush()?;
@@ -627,35 +729,6 @@ fn print_area(
         }),
         _ => None,
     }
-}
-
-/// Re-zips a package we just wrote with `date1904="1"` on `workbookPr`.
-fn set_date1904(bytes: &[u8]) -> Result<Vec<u8>, XlsxError> {
-    let mut src = zip::ZipArchive::new(Cursor::new(bytes))?;
-    let mut out = zip::ZipWriter::new(Cursor::new(Vec::with_capacity(bytes.len())));
-    for i in 0..src.len() {
-        let mut file = src.by_index(i)?;
-        let name = file.name()?.into_owned();
-        if name == "xl/workbook.xml" {
-            let mut xml = String::new();
-            file.read_to_string(&mut xml)?;
-            let patched = if xml.contains("date1904") {
-                xml
-            } else if xml.contains("<workbookPr") {
-                xml.replacen("<workbookPr", "<workbookPr date1904=\"1\"", 1)
-            } else {
-                xml.replacen("<bookViews", "<workbookPr date1904=\"1\"/><bookViews", 1)
-            };
-            drop(file);
-            let opts = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
-            out.start_file(name, opts)?;
-            out.write_all(patched.as_bytes())?;
-        } else {
-            out.raw_copy_file(file)?;
-        }
-    }
-    Ok(out.finish()?.into_inner())
 }
 
 #[cfg(test)]

@@ -209,7 +209,8 @@ fn averageif(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     })
 }
 
-/// All ranges must have the dimensions of `sum_range`, else `#VALUE!`.
+/// All ranges must have the dimensions of `sum_range`, else `Err:502`
+/// (AOO `IterateParametersIfs`: `SetError(errIllegalArgument)`).
 fn sumifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
@@ -224,7 +225,7 @@ fn sumifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
             let range = a.range(i)?;
             let crit = a.criterion(i + 1)?;
             if range.rows() != sum_range.rows() || range.cols() != sum_range.cols() {
-                return Err(ErrorKind::Value);
+                return Err(ErrorKind::InvalidArgument);
             }
             pairs.push((range, crit));
         }
@@ -239,7 +240,8 @@ fn sumifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
 }
 
 /// Reads `(range; criteria)` pairs starting at argument `first`; every range
-/// must have `rows × cols` cells, else `#VALUE!`. An unpaired trailing
+/// must have `rows × cols` cells, else `Err:502` (AOO `IterateParametersIfs`
+/// sets `errIllegalArgument`). An unpaired trailing
 /// argument is `Err:511`.
 fn criteria_pairs(
     a: &mut Args,
@@ -256,7 +258,7 @@ fn criteria_pairs(
         let range = a.range(i)?;
         let crit = a.criterion(i + 1)?;
         if range.rows() != rows || range.cols() != cols {
-            return Err(ErrorKind::Value);
+            return Err(ErrorKind::InvalidArgument);
         }
         pairs.push((range, crit));
     }
@@ -478,7 +480,7 @@ mod tests {
         let short = c.range(0, "A1:A5");
         assert_eq!(
             call(&mut c, "SUMIFS", vec![b.clone(), short, t(">0")]),
-            err(ErrorKind::Value)
+            err(ErrorKind::InvalidArgument)
         );
         assert_eq!(
             call(&mut c, "SUMIFS", vec![b.clone(), a.clone()]),
@@ -535,7 +537,7 @@ mod tests {
         let short = c.range(0, "A1:A5");
         assert_eq!(
             call(&mut c, "COUNTIFS", vec![a.clone(), t(">0"), short, t(">0")]),
-            err(ErrorKind::Value)
+            err(ErrorKind::InvalidArgument)
         );
         assert_eq!(
             call(&mut c, "COUNTIFS", vec![a.clone()]),

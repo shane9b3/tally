@@ -5,9 +5,10 @@ formula = "=LN(2.5)"
 expect = 0.9162907318741551
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=LN(\"2.5\")"
-expect = 0.9162907318741551
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -67,3 +68,9 @@ expect = 2
 [[case]]
 formula = "=LN(1E-300)"
 expect = -690.7755278982137
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=LN(\"2.5\")"
+expect = 0.9162907318741551
+settings = { text_to_number = "convert_locale" }

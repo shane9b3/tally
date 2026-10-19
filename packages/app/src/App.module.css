@@ -15,6 +15,7 @@
 
 /* Grid plus the optional "At a glance" panel. */
 .work {
+  position: relative;
   display: flex;
   flex: 1;
   min-height: 0;

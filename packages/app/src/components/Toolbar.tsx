@@ -1,6 +1,7 @@
 /** Top row: (traffic-light inset), document title, action pills, panel/theme toggles, Share. */
 import { useState, type ReactNode } from "react";
 import { COMING_SOON } from "../commands";
+import { useDataStore } from "../stores/dataStore";
 import { cx, useController } from "../context";
 import { useDocStore } from "../stores/docStore";
 import { useEditStore } from "../stores/editStore";
@@ -56,6 +57,8 @@ export function Toolbar({ inset }: { inset: boolean }) {
   const glanceOpen = useUiStore((s) => s.glanceOpen);
   const themePref = useUiStore((s) => s.themePref);
   const [share, setShare] = useState<{ x: number; y: number } | null>(null);
+  const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(null);
+  const filtering = useDataStore((s) => s.filter !== null);
 
   const title = info?.title ?? "Untitled";
   const folder = info?.path ? info.path.split(/[\\/]/).slice(-2, -1)[0] : undefined;
@@ -86,8 +89,24 @@ export function Toolbar({ inset }: { inset: boolean }) {
         <Pill command="edit.undo" label="Undo" icon={<UndoIcon />} />
         <Pill command="edit.redo" label="Redo" icon={<RedoIcon />} iconOnly />
         <span className={styles.sep} />
-        <Pill command="data.sort" label="Sort" icon={<SortIcon />} tooltip={COMING_SOON} />
-        <Pill command="data.filter" label="Filter" icon={<FilterIcon />} tooltip={COMING_SOON} />
+        <button
+          type="button"
+          className={styles.pill}
+          aria-label="Sort"
+          aria-haspopup="menu"
+          aria-expanded={sortMenu !== null}
+          data-command="data.sort"
+          title="Sort the table by the active column"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setSortMenu(sortMenu ? null : { x: r.left, y: r.bottom + 6 });
+          }}
+        >
+          <SortIcon />
+          <span>Sort</span>
+        </button>
+        <Pill command="data.filter" label="Filter" icon={<FilterIcon />} active={filtering} tooltip={filtering ? "Remove the AutoFilter" : "AutoFilter: a ▾ in each header"} />
         <Pill command="insert.addUp" label="Add up" tooltip="Add up the numbers above (Σ)">
           <span className={styles.glyph}>Σ</span>
           <span>Add up</span>
@@ -120,6 +139,20 @@ export function Toolbar({ inset }: { inset: boolean }) {
       >
         Share
       </button>
+      {sortMenu ? (
+        <Popover
+          label="Sort"
+          testId="sort-menu"
+          x={sortMenu.x}
+          y={sortMenu.y}
+          onClose={() => setSortMenu(null)}
+          items={[
+            { id: "asc", label: "Sort A → Z", hint: "by active column", onSelect: () => ctl.registry.run("data.sortAsc") },
+            { id: "desc", label: "Sort Z → A", onSelect: () => ctl.registry.run("data.sortDesc") },
+            { id: "custom", label: "Sort…", separator: true, onSelect: () => ctl.registry.run("data.sort") },
+          ]}
+        />
+      ) : null}
       {share ? (
         <Popover
           label="Share"
@@ -128,6 +161,7 @@ export function Toolbar({ inset }: { inset: boolean }) {
           alignRight
           onClose={() => setShare(null)}
           items={[
+            { id: "xlsx", label: "Export XLSX…", hint: ".xlsx", onSelect: () => ctl.registry.run("file.exportXlsx") },
             { id: "ods", label: "Export ODS…", hint: ".ods", onSelect: () => ctl.registry.run("file.exportOds") },
             { id: "csv", label: "Export as CSV…", hint: ".csv", onSelect: () => ctl.registry.run("file.exportCsv") },
             { id: "saveAs", label: "Save a copy…", hint: "⇧⌘S", onSelect: () => ctl.registry.run("file.saveAs") },

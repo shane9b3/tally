@@ -30,6 +30,11 @@ export function displayName(path: string): string {
   return baseName(path).replace(/\.(ods|xlsx|csv)$/i, "");
 }
 
+/** The file format tag of a recent file (`XLSX`, `ODS`, `CSV`). */
+export function formatTag(path: string): string {
+  return /\.(ods|xlsx|csv)$/i.exec(path)?.[1]?.toUpperCase() ?? "";
+}
+
 /** The folder a recent file lives in (tooltip/secondary text). */
 function folderOf(path: string): string {
   const parts = path.split(/[\\/]/);
@@ -124,7 +129,9 @@ export function Sidebar({ inset }: { inset: boolean }) {
                   >
                     <span className={styles.dot} style={{ background: dotFor(baseName(p)) }} />
                     <span className={styles.rowTitle}>{displayName(p)}</span>
-                    <span className={styles.meta}>{t ? relativeTime(t) : ""}</span>
+                    <span className={styles.meta} data-format={formatTag(p)}>
+                      {[formatTag(p), t ? relativeTime(t) : ""].filter(Boolean).join(" · ")}
+                    </span>
                   </button>
                 </li>
               );

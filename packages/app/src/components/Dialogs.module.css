@@ -185,3 +185,167 @@
 .preset:hover {
   background: var(--tally-hover);
 }
+
+.extra {
+  display: flex;
+  gap: 8px;
+  margin-right: auto;
+}
+
+.dangerBtn {
+  background: var(--tally-danger);
+}
+
+.lead {
+  margin: -4px 0 12px;
+  color: var(--tally-text-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.gap {
+  margin-top: 12px;
+}
+
+.error {
+  margin: 6px 0 0;
+  color: var(--tally-danger);
+  font-size: 12px;
+}
+
+.select,
+.selectSmall {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--tally-border);
+  border-radius: 8px;
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.selectSmall {
+  height: 26px;
+  font-size: 12.5px;
+}
+
+.select:focus,
+.selectSmall:focus {
+  border-color: var(--tally-accent);
+  box-shadow: 0 0 0 3px var(--tally-accent-subtle);
+}
+
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--tally-text);
+  font-size: 13px;
+}
+
+.checkRow input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--tally-accent);
+}
+
+.optionGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 12px;
+  margin-top: 4px;
+}
+
+.sortRow {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sortLabel {
+  color: var(--tally-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.segmentedInline {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-surface);
+}
+
+.seg:disabled {
+  opacity: 0.45;
+}
+
+.table {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 8px;
+}
+
+.tableRow {
+  display: grid;
+  grid-template-columns: minmax(70px, 1fr) minmax(90px, 1.6fr) auto auto auto auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--tally-border-subtle);
+  font-size: 12.5px;
+}
+
+.tableRow:last-child {
+  border-bottom: 0;
+}
+
+.nameCell {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.refCell {
+  overflow: hidden;
+  color: var(--tally-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scopeCell {
+  color: var(--tally-text-muted);
+  font-size: 11.5px;
+}
+
+.rowBtn {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tally-accent-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rowBtn:hover {
+  background: var(--tally-hover);
+}
+
+.dangerText {
+  color: var(--tally-danger);
+}
+
+.wide {
+  width: 460px;
+}

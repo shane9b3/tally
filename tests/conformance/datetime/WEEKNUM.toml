@@ -1,54 +1,70 @@
+# WEEKNUM (AOO built-in, ODF ISOWEEKNUM) conformance vectors.
+# AOO interpr2.cxx ScGetWeekOfYear: GetWeekOfYear(nFlag == 1 ? SUNDAY : MONDAY)
+# with the default minimum of four days in week 1. Excel's WEEKNUM
+# semantics are WEEKNUM_ADD's.
+
+[[case]]
+formula = "=WEEKNUM(DATE(1995;1;1);2)"
+expect = 52
+note = "AOO help example: 1 January 1995 is a Sunday, so it is in the last week of 1994."
+
+[[case]]
+formula = "=WEEKNUM(DATE(1995;1;1);1)"
+expect = 1
+note = "Sunday start: the week of 1995-01-01 has seven days in 1995."
+
+[[case]]
+formula = "=WEEKNUM(DATE(2021;1;1);2)"
+expect = 53
+note = "Friday 1 January: the week has three days in 2021, so it is week 53 of 2020."
+
+[[case]]
+formula = "=WEEKNUM(DATE(2021;1;3);2)"
+expect = 53
+
+[[case]]
+formula = "=WEEKNUM(DATE(2021;1;4);2)"
+expect = 1
+
+[[case]]
+formula = "=WEEKNUM(DATE(2026;1;1);1)"
+expect = 53
+note = "Thursday 1 January; the Sunday-start week holds only three 2026 days (review 2 H6)."
+
+[[case]]
+formula = "=WEEKNUM(DATE(2026;1;1);2)"
+expect = 1
+
+[[case]]
+formula = "=WEEKNUM(DATE(2026;1;4);1)"
+expect = 1
+note = "First Sunday-start week of 2026."
+
 [[case]]
 formula = "=WEEKNUM(DATE(2026;10;19);1)"
-expect = 43
+expect = 42
 
 [[case]]
 formula = "=WEEKNUM(DATE(2026;10;19);2)"
 expect = 43
 
 [[case]]
-formula = "=WEEKNUM(DATE(2026;1;1);1)"
+formula = "=WEEKNUM(DATE(2024;12;30);2)"
 expect = 1
-note = "Week 1 contains 1 January."
+note = "A week-53 candidate whose end lies in the next year is week 1 there."
 
 [[case]]
-formula = "=WEEKNUM(DATE(2026;1;4);1)"
-expect = 2
-note = "Sunday starts week 2 in mode 1."
-
-[[case]]
-formula = "=WEEKNUM(DATE(2026;1;4);2)"
-expect = 1
-note = "Sunday still week 1 in mode 2."
-
-[[case]]
-formula = "=WEEKNUM(DATE(2026;1;5);2)"
-expect = 2
-
-[[case]]
-formula = "=WEEKNUM(DATE(2026;12;31);1)"
+formula = "=WEEKNUM(DATE(2020;12;31);2)"
 expect = 53
 
 [[case]]
-formula = "=WEEKNUM(DATE(2021;1;1);2)"
-expect = 1
+formula = "=WEEKNUM(DATE(1995;1;1);3)"
+expect = 52
+note = "AOO treats every mode other than 1 as Monday."
 
 [[case]]
-formula = "=WEEKNUM(DATE(2021;1;3);2)"
-expect = 1
-
-[[case]]
-formula = "=WEEKNUM(DATE(2021;1;4);2)"
-expect = 2
-
-[[case]]
-formula = "=WEEKNUM(46314;3)"
-expect = "Err:502"
-note = "Only modes 1 and 2 exist in AOO 4.1."
-
-[[case]]
-formula = "=WEEKNUM(46314;0)"
-expect = "Err:502"
+formula = "=WEEKNUM(DATE(1995;1;1);0)"
+expect = 52
 
 [[case]]
 formula = "=WEEKNUM(\"x\";1)"

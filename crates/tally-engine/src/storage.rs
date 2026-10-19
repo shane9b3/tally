@@ -582,8 +582,9 @@ pub struct AutoFilter {
     pub columns: BTreeMap<u32, ColumnCriteria>,
 }
 
-/// Sheet state that is not cells: merges, frozen panes, the AutoFilter.
-/// Undo snapshots it whole ([`crate::undo::Change::SheetMeta`]).
+/// Sheet state that is not cells: merges, frozen panes, the AutoFilter,
+/// conditional formats, validations, notes, links, protection and page
+/// setup. Undo snapshots it whole ([`crate::undo::Change::SheetMeta`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SheetMeta {
     /// Merged areas (non-overlapping, each larger than one cell).
@@ -592,6 +593,34 @@ pub struct SheetMeta {
     pub frozen: Option<(u32, u32)>,
     /// The AutoFilter.
     pub auto_filter: Option<AutoFilter>,
+    /// Conditional formats in priority order.
+    pub cond_formats: Vec<crate::condfmt::CondFormat>,
+    /// Data validations.
+    pub validations: Vec<crate::validation::Validation>,
+    /// Cell notes by `(row, col)`.
+    pub notes: BTreeMap<(u32, u32), crate::annotations::Note>,
+    /// Cell hyperlinks by `(row, col)`.
+    pub links: BTreeMap<(u32, u32), Arc<str>>,
+    /// Sheet protection (`None`: not protected).
+    pub protection: Option<tally_model::SheetProtectionData>,
+    /// Page setup.
+    pub page_setup: tally_model::PageSetupData,
+    /// Manual page breaks before these rows.
+    pub row_breaks: BTreeSet<u32>,
+    /// Manual page breaks before these columns.
+    pub col_breaks: BTreeSet<u32>,
+    /// Next id for conditional formats and validations.
+    pub next_id: u32,
+}
+
+impl SheetMeta {
+    /// A fresh id for a conditional format or validation.
+    pub fn alloc_id(&mut self) -> u32 {
+        self.next_id = self.next_id.max(1);
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
 }
 
 /// Shifts a set of row numbers for inserted rows (values pushed past `limit` are dropped).

@@ -10,8 +10,11 @@ import {
   type ApplyResult,
   type CellPos,
   type CellView,
-  type EngineClient,
+  type ColumnFilter,
+  type EngineClientV2,
   type FileFormat,
+  type FilterOp,
+  type NameInfo,
   type HAlign,
   type ShellClient,
   type Op,
@@ -35,6 +38,26 @@ import {
 import { CommandRegistry } from "./registry";
 import { EMPTY_PATCH } from "./formats";
 import { fillDownEnd, fillRange } from "./fill";
+import {
+  absoluteRef,
+  arrayFormulaOp,
+  bordersPatch,
+  columnFilterOp,
+  fillDownRight,
+  findQuery,
+  freezeAt,
+  friendlyError,
+  isValidName,
+  pasteOptions,
+  sortOp,
+  stepHit,
+  a1 as a1Text,
+  type BorderPreset,
+  type PasteSpecialChoice,
+  type SortSpec,
+} from "./dataOps";
+import { cappedRange, currentRegion } from "./glance";
+import { useDataStore } from "./stores/dataStore";
 import { applyCompletion, applyPoint, assistFor, assistKey } from "./formulaEdit";
 import { chipColorsFor } from "./palette";
 import { useDocStore } from "./stores/docStore";
@@ -56,6 +79,8 @@ const LAST_COL = MAX_COLS - 1;
 export const AUTOFIT_ROWS = 2000;
 /** Rows scanned below the source for a fill-handle double-click. */
 export const FILL_SCAN_ROWS = 20_000;
+/** How long a menu paste waits for the system clipboard before using the last internal copy. */
+const CLIPBOARD_TIMEOUT_MS = 400;
 /** Column width bounds for auto-fit (px at 100%). */
 const AUTOFIT_MIN = 24;
 const AUTOFIT_MAX = 600;
@@ -87,7 +112,7 @@ export class AppController {
   private lastCopy: { token: string; tsv: string } | null = null;
 
   constructor(
-    readonly client: EngineClient,
+    readonly client: EngineClientV2,
     readonly shell: ShellClient,
     readonly opts: ControllerOptions,
   ) {}
@@ -145,8 +170,11 @@ export class AppController {
     doc.setInfo(info);
     useDocStore.getState().setActiveSheet(info.activeSheet);
     doc.setSource(source);
+    useDataStore.getState().reset();
     toastWarnings(info.warnings);
     void this.refreshActive();
+    void this.refreshFilter();
+    void this.refreshNames();
   }
 
   setGrid = (grid: GridCore | null): void => {
@@ -197,14 +225,20 @@ export class AppController {
       this.grid?.scrollCellIntoView(sel.active);
     }
     const first = res.errors[0];
-    if (first) useUiStore.getState().pushToast("error", first.message);
+    if (first) useUiStore.getState().pushToast("error", friendlyError(first.code, first.message));
     void this.refreshActive();
+    const sheet = this.sheet;
+    const filtered = useDataStore.getState().filter !== null;
+    if (res.layoutChanged.includes(sheet) || (filtered && res.changed.some((c) => c.sheet === sheet))) void this.refreshFilter();
+    if (res.sheetsChanged) void this.refreshNames();
   }
 
   /** Applies ops as one undoable transaction. */
-  async apply(label: string, ops: Op[], after?: Selection): Promise<ApplyResult | null> {
+  async apply(label: string, ops: Op[], after?: Selection, keepClip = false): Promise<ApplyResult | null> {
     try {
       const doc = this.requireDoc();
+      // Any other edit ends a pending copy/cut (as in Calc and Excel).
+      if (!keepClip && useDataStore.getState().clip) useDataStore.getState().setClip(null);
       const sel = this.selection;
       const tx: Transaction = {
         ops,
@@ -231,7 +265,7 @@ export class AppController {
     try {
       const res = await this.client.cellEditInfo(info.doc, sheet, cell.r, cell.c);
       if (seq !== this.infoSeq) return;
-      useEditStore.getState().setActive({ sheet, cell, input: res.input, hint: res.hint });
+      useEditStore.getState().setActive({ sheet, cell, input: res.input, hint: res.hint, arrayRange: res.array ? (res.arrayRange ?? null) : null });
     } catch {
       // Quiet: background query (the stub engine does not support it).
       if (seq === this.infoSeq) useEditStore.getState().setActive({ sheet, cell, input: "", hint: null });
@@ -425,10 +459,16 @@ export class AppController {
     useEditStore.getState().end();
     const sheet = this.sheet;
     const unchanged = this.editOriginal !== null && edit.text === this.editOriginal;
+    // Editing `{=…}` inside an array block re-enters the whole block.
+    const active = useEditStore.getState().active;
+    const block = active && active.cell.r === edit.cell.r && active.cell.c === edit.cell.c ? active.arrayRange : null;
+    const arrayOp = block && edit.text.trim().startsWith("{=") ? arrayFormulaOp(sheet, block, edit.text) : null;
     // apply() builds the transaction synchronously, so selectionBefore is the pre-move selection.
     const pending = unchanged
       ? null
-      : this.apply("Typing", [{ type: "setCellInput", sheet, r: edit.cell.r, c: edit.cell.c, input: edit.text }]);
+      : arrayOp
+        ? this.apply("Array formula", [arrayOp])
+        : this.apply("Typing", [{ type: "setCellInput", sheet, r: edit.cell.r, c: edit.cell.c, input: edit.text }]);
     if (origin === "bar") {
       if (move !== "none") {
         const [dr, dc] = MOVES[move];
@@ -524,8 +564,8 @@ export class AppController {
   /** Fill-handle drag: see fill.ts (`fillRange` is the engine-swap point). */
   onFill = async (source: RangeDto, target: RangeDto): Promise<void> => {
     try {
-      const doc = this.requireDoc();
-      const ops = await fillRange({ client: this.client, doc, sheet: this.sheet }, source, target);
+      this.requireDoc();
+      const ops = fillRange({ sheet: this.sheet }, source, target);
       if (ops.length === 0) return;
       const sel: Selection = { range: { ...target }, active: { ...this.selection.active }, anchor: { r: target.r0, c: target.c0 } };
       await this.apply("Fill", ops, sel);
@@ -590,6 +630,10 @@ export class AppController {
     if (!edit) return false;
     const mod = e.metaKey || e.ctrlKey;
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (e.key === "Enter" && mod && e.shiftKey && !e.altKey) {
+      void this.commitArray();
+      return true;
+    }
     if (mod && !e.altKey && key === "z") {
       if (e.shiftKey) st.redo();
       else st.undo();
@@ -676,6 +720,14 @@ export class AppController {
       this.focusGrid();
       return true;
     } catch (e) {
+      // Typing a new name into the name box names the selection (Calc, Excel).
+      const name = text.trim();
+      if (isApiError(e) && e.code === "not_found" && isValidName(name) && !useDataStore.getState().names.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
+        const ok = await this.defineName(name, null, absoluteRef(this.sheetName(), this.selection.range), null);
+        if (ok) useUiStore.getState().pushToast("info", `Named ${a1Text(this.selection.range)} “${name}”`);
+        this.focusGrid();
+        return ok;
+      }
       this.notifyError(e);
       return false;
     }
@@ -692,6 +744,7 @@ export class AppController {
       const sel = this.selection;
       const out = await this.client.copy(doc, { sheet: this.sheet, ranges: [{ ...sel.range }], active: { ...sel.active } });
       this.lastCopy = { token: out.token, tsv: out.tsv };
+      useDataStore.getState().setClip({ sheet: this.sheet, range: { ...sel.range }, token: out.token, cut: false });
       await writeClipboard(out.tsv, out.html);
       return true;
     } catch (e) {
@@ -700,9 +753,19 @@ export class AppController {
     }
   };
 
+  /**
+   * Cut: copies and marks the range; the next paste of that clipboard
+   * moves it (`moveRange`, so references follow), as in Calc.
+   */
   cut = async (): Promise<void> => {
-    const range = { ...this.selection.range };
-    if (await this.copy()) this.deleteContents(range);
+    if (!(await this.copy())) return;
+    const clip = useDataStore.getState().clip;
+    if (clip) useDataStore.getState().setClip({ ...clip, cut: true });
+  };
+
+  /** Esc: forgets the pending copy/cut outline. */
+  cancelClip = (): void => {
+    if (useDataStore.getState().clip) useDataStore.getState().setClip(null);
   };
 
   onGridCopy = (): void => void this.copy();
@@ -712,14 +775,62 @@ export class AppController {
   pasteData(text: string, token: string | null, valuesOnly: boolean): Promise<ApplyResult | null> {
     if ((valuesOnly || !token) && text === "") return Promise.resolve(null);
     const target = { ...this.selection.range };
+    const clip = useDataStore.getState().clip;
+    if (!valuesOnly && token && clip?.cut && clip.token === token) {
+      useDataStore.getState().setClip(null);
+      if (clip.sheet === this.sheet) {
+        const to = { r: target.r0, c: target.c0 };
+        const h = clip.range.r1 - clip.range.r0;
+        const w = clip.range.c1 - clip.range.c0;
+        const after = { range: { r0: to.r, c0: to.c, r1: to.r + h, c1: to.c + w }, active: { ...to }, anchor: { ...to } };
+        return this.apply("Move", [{ type: "moveRange", sheet: this.sheet, from: { ...clip.range }, to }], after);
+      }
+      // Across sheets: paste, then clear the source.
+      return this.apply("Move", [
+        { type: "paste", sheet: this.sheet, target, payload: { type: "internal", token } },
+        { type: "clear", sheet: clip.sheet, ranges: [{ ...clip.range }], what: "all" },
+      ]);
+    }
+    if (valuesOnly && token) {
+      return this.apply("Paste values", [{ type: "pasteSpecial", sheet: this.sheet, target, payload: { type: "internal", token }, options: pasteOptions({ what: "values", transpose: false, skipEmpty: false, operation: "none" }) }], undefined, true);
+    }
     const payload = token && !valuesOnly ? { type: "internal" as const, token } : { type: "tsv" as const, text };
-    return this.apply(valuesOnly ? "Paste values" : "Paste", [{ type: "paste", sheet: this.sheet, target, payload }]);
+    return this.apply(valuesOnly ? "Paste values" : "Paste", [{ type: "paste", sheet: this.sheet, target, payload }], undefined, true);
+  }
+
+  /** Reads the clipboard (system if allowed, else the last copy in this window). */
+  private async readClipboard(): Promise<{ text: string | null; token: string | null }> {
+    let text: string | null = null;
+    let token: string | null = null;
+    const clip = typeof navigator === "undefined" ? undefined : navigator.clipboard;
+    const read = async (): Promise<void> => {
+      if (clip && typeof clip.read === "function") {
+        for (const item of await clip.read()) {
+          if (item.types.includes("text/html")) token = /data-tally-clip="([^"]+)"/.exec(await (await item.getType("text/html")).text())?.[1] ?? token;
+          if (item.types.includes("text/plain")) text = await (await item.getType("text/plain")).text();
+        }
+      } else if (clip) text = await clip.readText();
+    };
+    try {
+      // A permission prompt can leave the read pending: give up after a moment.
+      await Promise.race([read(), new Promise((_, reject) => setTimeout(() => reject(new Error("clipboard timeout")), CLIPBOARD_TIMEOUT_MS))]);
+    } catch {
+      text = null;
+      token = null;
+    }
+    if (text === null && this.lastCopy) {
+      text = this.lastCopy.tsv;
+      token = this.lastCopy.token;
+    }
+    return { text, token };
   }
 
   onGridPaste = (data: DataTransfer | null, opts?: { plain: boolean }): void => {
     const text = data?.getData("text/plain") ?? "";
     const html = data?.getData("text/html") ?? "";
-    const token = /data-tally-clip="([^"]+)"/.exec(html)?.[1] ?? null;
+    let token = /data-tally-clip="([^"]+)"/.exec(html)?.[1] ?? null;
+    // Some webviews drop the HTML flavour: the same text as our last copy is that copy.
+    if (token === null && this.lastCopy && text !== "" && text === this.lastCopy.tsv) token = this.lastCopy.token;
     void this.pasteData(text, token, opts?.plain ?? false);
   };
 
@@ -728,28 +839,25 @@ export class AppController {
    * the browser allows, else uses the last copy made in this window.
    */
   pasteFromClipboard = async (valuesOnly: boolean): Promise<void> => {
-    let text: string | null = null;
-    let token: string | null = null;
-    const clip = typeof navigator === "undefined" ? undefined : navigator.clipboard;
-    try {
-      if (clip && typeof clip.read === "function") {
-        for (const item of await clip.read()) {
-          if (item.types.includes("text/html")) token = /data-tally-clip="([^"]+)"/.exec(await (await item.getType("text/html")).text())?.[1] ?? token;
-          if (item.types.includes("text/plain")) text = await (await item.getType("text/plain")).text();
-        }
-      } else if (clip) text = await clip.readText();
-    } catch {
-      text = null;
-    }
-    if (text === null && this.lastCopy) {
-      text = this.lastCopy.tsv;
-      token = this.lastCopy.token;
-    }
+    const { text, token } = await this.readClipboard();
     if (text === null) {
       useUiStore.getState().pushToast("info", "Use ⌘V to paste (the clipboard is not readable here).");
       return;
     }
     await this.pasteData(text, token, valuesOnly);
+    this.focusGrid();
+  };
+
+  /** Paste Special… (values / formats / transpose / skip empty / arithmetic). */
+  pasteSpecial = async (choice: PasteSpecialChoice): Promise<void> => {
+    const { text, token } = await this.readClipboard();
+    if (text === null && !token) {
+      useUiStore.getState().pushToast("info", "Copy something first.");
+      return;
+    }
+    const payload = token ? { type: "internal" as const, token } : { type: "tsv" as const, text: text ?? "" };
+    const target = { ...this.selection.range };
+    await this.apply("Paste special", [{ type: "pasteSpecial", sheet: this.sheet, target, payload, options: pasteOptions(choice) }], undefined, true);
     this.focusGrid();
   };
 
@@ -762,7 +870,9 @@ export class AppController {
     if (doc.activeSheet !== sheet) doc.setActiveSheet(sheet);
     doc.source?.setSheet(sheet);
     useSelectionStore.getState().reset();
+    useDataStore.getState().setFilter(null);
     void this.refreshActive();
+    void this.refreshFilter();
     if (focus) this.focusGrid();
   }
 
@@ -825,7 +935,7 @@ export class AppController {
       if (!info) return;
       const res = await this.shell.saveWithDialog(info.doc, saveAs, format);
       useDocStore.getState().setInfo(res);
-      if (format === "csv" || format === "ods") useUiStore.getState().pushToast("info", `Exported ${res.title}`);
+      if (format !== null) useUiStore.getState().pushToast("info", `Exported ${res.title}`);
     } catch (e) {
       this.notifyError(e);
     }
@@ -834,7 +944,435 @@ export class AppController {
   closeDocument = async (): Promise<void> => {
     await this.newWorkbook();
   };
+  // -- v0.2: data region, sort, AutoFilter ---------------------------------------
+
+  /** The active sheet's tab name. */
+  sheetName(sheet: number = this.sheet): string {
+    return this.info?.sheets.find((s) => s.id === sheet)?.name ?? "Sheet1";
+  }
+
+  /** Merged areas of the active sheet (from the grid's layout). */
+  merges(): RangeDto[] {
+    return useDocStore.getState().source?.getLayout(this.sheet).merges ?? [];
+  }
+
+  /**
+   * The range a sort or filter acts on: the AutoFilter area when the active
+   * cell is in it, a multi-cell selection (clipped to the used area), else
+   * the current region around the active cell (Ctrl+*).
+   */
+  async dataRegion(): Promise<RangeDto | null> {
+    const doc = this.requireDoc();
+    const sheet = this.sheet;
+    const sel = this.selection;
+    const af = useDataStore.getState().filter?.range;
+    const a = sel.active;
+    if (af && a.r >= af.r0 && a.r <= af.r1 && a.c >= af.c0 && a.c <= af.c1) return { ...af };
+    const layout = await this.client.sheetLayout(doc, sheet);
+    const used = layout.used;
+    if (!used) return null;
+    const r = sel.range;
+    const merge = this.merges().find((m) => m.r0 === r.r0 && m.c0 === r.c0 && m.r1 === r.r1 && m.c1 === r.c1);
+    if (!(r.r0 === r.r1 && r.c0 === r.c1) && !merge) {
+      const out = { r0: Math.max(r.r0, used.r0), c0: Math.max(r.c0, used.c0), r1: Math.min(r.r1, used.r1), c1: Math.min(r.c1, used.c1) };
+      return out.r0 <= out.r1 && out.c0 <= out.c1 ? out : null;
+    }
+    const { range } = cappedRange(used);
+    const [block] = await this.client.cells(doc, sheet, [range]);
+    const map = new Map<string, CellView>();
+    for (const v of block?.cells ?? []) map.set(`${v.r},${v.c}`, v);
+    return currentRegion((rr, cc) => map.get(`${rr},${cc}`), a, range);
+  }
+
+  /** Header texts of `range`'s first row (for the Sort dialog), "Column X" when blank. */
+  private async headerLabels(range: RangeDto, hasHeader: boolean): Promise<string[]> {
+    const letters = (c: number) => `Column ${a1Text({ r0: 0, c0: c, r1: 0, c1: c }).replace(/\d+$/, "")}`;
+    const out: string[] = [];
+    let row: CellView[] = [];
+    if (hasHeader) {
+      const [block] = await this.client.cells(this.requireDoc(), this.sheet, [{ ...range, r1: range.r0 }]);
+      row = block?.cells ?? [];
+    }
+    for (let c = range.c0; c <= range.c1; c++) {
+      const t = row.find((v) => v.c === c)?.text.trim();
+      out.push(t ? t : letters(c));
+    }
+    return out;
+  }
+
+  private async hasHeader(range: RangeDto): Promise<boolean> {
+    if (range.r1 <= range.r0) return false;
+    const af = useDataStore.getState().filter?.range;
+    if (af && af.r0 === range.r0 && af.c0 === range.c0 && af.r1 === range.r1 && af.c1 === range.c1) return true;
+    try {
+      return await this.client.detectHeader(this.requireDoc(), this.sheet, range);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Toolbar Sort / Data ▸ Sort Ascending|Descending: the data region by the active column. */
+  sortByActive = async (ascending: boolean): Promise<void> => {
+    try {
+      const region = await this.dataRegion();
+      if (!region || region.r0 === region.r1) {
+        useUiStore.getState().pushToast("info", "Select a table (or a cell in one) to sort.");
+        return;
+      }
+      const hasHeader = await this.hasHeader(region);
+      const col = Math.min(region.c1, Math.max(region.c0, this.selection.active.c));
+      await this.sortWith({ range: region, keys: [{ col, ascending }], hasHeader }, ascending ? "Sort ascending" : "Sort descending");
+    } catch (e) {
+      this.notifyError(e);
+    }
+  };
+
+  /** Opens Sort… with the region, `detect_header` and the active column as the first key. */
+  openSortDialog = async (): Promise<void> => {
+    try {
+      const region = await this.dataRegion();
+      if (!region) {
+        useUiStore.getState().pushToast("info", "Select a table (or a cell in one) to sort.");
+        return;
+      }
+      const hasHeader = await this.hasHeader(region);
+      const labels = await this.headerLabels(region, true);
+      const col = Math.min(region.c1, Math.max(region.c0, this.selection.active.c));
+      useUiStore.getState().openDialog({ kind: "sort", range: region, hasHeader, keys: [{ col, ascending: true }], labels });
+    } catch (e) {
+      this.notifyError(e);
+    }
+  };
+
+  sortWith = async (spec: SortSpec, label = "Sort"): Promise<ApplyResult | null> => {
+    const sel = { range: { ...spec.range }, active: { r: spec.range.r0, c: spec.range.c0 }, anchor: { r: spec.range.r0, c: spec.range.c0 } };
+    return this.apply(label, [sortOp(this.sheet, spec)], sel);
+  };
+
+  async refreshFilter(): Promise<void> {
+    const info = this.info;
+    if (!info) return;
+    const sheet = this.sheet;
+    try {
+      const f = await this.client.filterInfo(info.doc, sheet);
+      if (sheet === this.sheet && this.info?.doc === info.doc) useDataStore.getState().setFilter(f.range ? f : null);
+    } catch {
+      if (sheet === this.sheet) useDataStore.getState().setFilter(null);
+    }
+  }
+
+  async refreshNames(): Promise<void> {
+    const info = this.info;
+    if (!info) return;
+    try {
+      const names = await this.client.names(info.doc);
+      if (this.info?.doc === info.doc) useDataStore.getState().setNames(names);
+    } catch {
+      useDataStore.getState().setNames([]);
+    }
+  }
+
+  /** Toolbar Filter: turns the AutoFilter on (over the data region) or off. */
+  toggleAutoFilter = async (): Promise<void> => {
+    try {
+      const sheet = this.sheet;
+      if (useDataStore.getState().filter?.range) {
+        await this.apply("Remove filter", [{ type: "setAutoFilter", sheet, range: null }]);
+      } else {
+        const region = await this.dataRegion();
+        if (!region || region.r0 === region.r1) {
+          useUiStore.getState().pushToast("info", "Select a table with a header row to filter.");
+          return;
+        }
+        await this.apply("Filter", [{ type: "setAutoFilter", sheet, range: region }]);
+      }
+      await this.refreshFilter();
+    } catch (e) {
+      this.notifyError(e);
+    }
+  };
+
+  setColumnFilter = async (col: number, filter: ColumnFilter | null): Promise<void> => {
+    await this.apply(filter ? "Filter" : "Clear filter", [columnFilterOp(this.sheet, col, filter)]);
+    await this.refreshFilter();
+  };
+
+  /** Data ▸ Clear Filters: every column's filter (the AutoFilter stays). */
+  clearFilters = async (): Promise<void> => {
+    const f = useDataStore.getState().filter;
+    const ops = (f?.columns ?? []).filter((c) => c.active).map((c) => columnFilterOp(this.sheet, c.col, null));
+    if (ops.length === 0) return;
+    await this.apply("Clear filters", ops);
+    await this.refreshFilter();
+  };
+
+  /** The ▾ of a filter header was clicked. */
+  onFilterButton = (col: number, rect: { left: number; bottom: number }): void => {
+    useUiStore.getState().openContextMenu(null);
+    useUiStore.getState().openFilterPopover({ col, x: rect.left, y: rect.bottom + 4 });
+  };
+
+  /**
+   * ⌘K "Show only rows where <column> <op> <value>" (`filter.byColumn`):
+   * turns the AutoFilter on if needed and sets the condition.
+   */
+  filterByColumn = async (args: { column?: string; op?: string; value?: string } | undefined): Promise<void> => {
+    try {
+      const letters = (args?.column ?? "").toUpperCase();
+      let col = -1;
+      for (const ch of letters) col = (col + 1) * 26 + (ch.charCodeAt(0) - 64) - 1;
+      if (col < 0) return;
+      const ops: Record<string, FilterOp> = { "=": "eq", "==": "eq", "<>": "ne", "!=": "ne", ">": "gt", ">=": "ge", "<": "lt", "<=": "le" };
+      const op = ops[args?.op ?? "="] ?? "eq";
+      const value = args?.value ?? "";
+      if (!useDataStore.getState().filter?.range) {
+        const sel = this.selection;
+        useSelectionStore.getState().setSelection({ ...sel, active: { r: sel.active.r, c: col } });
+        await this.toggleAutoFilter();
+      }
+      const af = useDataStore.getState().filter?.range;
+      if (!af || col < af.c0 || col > af.c1) {
+        useUiStore.getState().pushToast("info", "That column is outside the table.");
+        return;
+      }
+      await this.setColumnFilter(col, { values: null, condition: { op, value } });
+    } catch (e) {
+      this.notifyError(e);
+    }
+  };
+
+  // -- v0.2: merge, freeze, hide, borders ------------------------------------------
+
+  /** Whether the selection is exactly one merged area. */
+  selectionIsMerged(): boolean {
+    const r = this.selection.range;
+    return this.merges().some((m) => m.r0 <= r.r0 && m.c0 <= r.c0 && m.r1 >= r.r1 && m.c1 >= r.c1);
+  }
+
+  /** Merge (warns first when cells other than the top-left have content). */
+  mergeCells = async (): Promise<void> => {
+    try {
+      const doc = this.requireDoc();
+      const sheet = this.sheet;
+      const range = { ...this.selection.range };
+      if (range.r0 === range.r1 && range.c0 === range.c1) {
+        useUiStore.getState().pushToast("info", "Select two or more cells to merge.");
+        return;
+      }
+      const [block] = await this.client.cells(doc, sheet, [range]);
+      const filled = (block?.cells ?? []).filter((v) => v.kind !== "empty" && v.text !== "");
+      const others = filled.filter((v) => v.r !== range.r0 || v.c !== range.c0);
+      const tl = { r: range.r0, c: range.c0 };
+      const go = (): void => {
+        void this.apply("Merge cells", [{ type: "mergeCells", sheet, range }], { range, active: tl, anchor: tl });
+      };
+      if (others.length === 0) {
+        go();
+        return;
+      }
+      const keep = filled.find((v) => v.r === range.r0 && v.c === range.c0)?.text;
+      const n = others.length;
+      useUiStore.getState().openDialog({
+        kind: "confirm",
+        title: "Merge cells?",
+        message: `Only the top-left value will be kept${keep ? ` (“${keep}”)` : ""}. The contents of ${n === 1 ? "1 other cell" : `${n} other cells`} will be deleted (Undo brings them back).`,
+        ok: "Merge",
+        danger: true,
+        onConfirm: go,
+      });
+    } catch (e) {
+      this.notifyError(e);
+    }
+  };
+
+  unmergeCells = (): Promise<ApplyResult | null> => this.apply("Unmerge cells", [{ type: "unmergeCells", sheet: this.sheet, range: { ...this.selection.range } }]);
+
+  toggleMerge = async (): Promise<void> => {
+    if (this.selectionIsMerged()) await this.unmergeCells();
+    else await this.mergeCells();
+  };
+
+  /** Freezes the rows above and/or the columns left of the active cell. */
+  freeze = async (what: "both" | "rows" | "cols"): Promise<void> => {
+    const { rows, cols } = freezeAt(this.selection.active, what);
+    if (rows === 0 && cols === 0) {
+      const where = what === "rows" ? "below the rows" : what === "cols" ? "right of the columns" : "below and right of what";
+      useUiStore.getState().pushToast("info", `Select a cell ${where} you want to keep in view.`);
+      return;
+    }
+    await this.apply("Freeze panes", [{ type: "setFrozen", sheet: this.sheet, rows, cols }]);
+  };
+
+  unfreeze = (): Promise<ApplyResult | null> => this.apply("Unfreeze panes", [{ type: "setFrozen", sheet: this.sheet, rows: 0, cols: 0 }]);
+
+  isFrozen(): boolean {
+    const f = useDocStore.getState().source?.getLayout(this.sheet).frozen;
+    return !!f && (f.r > 0 || f.c > 0);
+  }
+
+  /** Hide/show the selected rows or columns. Showing a single row/column also reveals hidden neighbours. */
+  setHidden = async (axis: "row" | "col", hidden: boolean): Promise<void> => {
+    const r = this.selection.range;
+    let start = axis === "row" ? r.r0 : r.c0;
+    let end = axis === "row" ? r.r1 : r.c1;
+    if (!hidden) {
+      const layout = useDocStore.getState().source?.getLayout(this.sheet);
+      const runs = (axis === "row" ? layout?.rowRuns : layout?.colRuns) ?? [];
+      for (const run of runs) {
+        if (!run.hidden) continue;
+        if (run.end === start - 1) start = run.start;
+        if (run.start === end + 1) end = run.end;
+      }
+    }
+    const what = axis === "row" ? (hidden ? "Hide rows" : "Show rows") : hidden ? "Hide columns" : "Show columns";
+    const op: Op = axis === "row" ? { type: "setRowsHidden", sheet: this.sheet, start, end, hidden } : { type: "setColsHidden", sheet: this.sheet, start, end, hidden };
+    await this.apply(what, [op]);
+  };
+
+  /** Borders on every selected range. */
+  applyBorders = (preset: BorderPreset, line: Parameters<typeof bordersPatch>[1]): Promise<ApplyResult | null> =>
+    this.applyPatch(preset === "none" ? "Remove borders" : "Borders", { ...EMPTY_PATCH, borders: bordersPatch(preset, line) });
+
+  // -- v0.2: names --------------------------------------------------------------------
+
+  /** Define Name… prefilled with the selection (and a name from the header above, if any). */
+  openDefineName = (): void => {
+    useUiStore.getState().openDialog({
+      kind: "defineName",
+      name: "",
+      refersTo: absoluteRef(this.sheetName(), this.selection.range),
+      scope: null,
+      replacing: null,
+    });
+  };
+
+  /** Defines (or redefines) a name; `replacing` is the entry being edited (renamed or re-scoped). */
+  defineName = async (name: string, scope: number | null, refersTo: string, replacing: NameInfo | null): Promise<boolean> => {
+    const ops: Op[] = [];
+    if (replacing && (replacing.name.toLowerCase() !== name.toLowerCase() || replacing.scope !== scope)) {
+      ops.push({ type: "deleteName", name: replacing.name, scope: replacing.scope });
+    }
+    ops.push({ type: "defineName", name, scope, refersTo: refersTo.trim().replace(/^=/, "") });
+    const res = await this.apply(replacing ? "Edit name" : "Define name", ops);
+    await this.refreshNames();
+    return res !== null && res.errors.length === 0;
+  };
+
+  deleteName = async (n: NameInfo): Promise<void> => {
+    await this.apply("Delete name", [{ type: "deleteName", name: n.name, scope: n.scope }]);
+    await this.refreshNames();
+  };
+
+  // -- v0.2: find & replace --------------------------------------------------------------
+
+  /** Find next (`1`) / previous (`-1`): searches when the query changed, then steps through the hits. */
+  findStep = async (dir: 1 | -1): Promise<void> => {
+    try {
+      const doc = this.requireDoc();
+      const st = useDataStore.getState();
+      const { text, options } = st.find;
+      if (text === "") return;
+      const key = JSON.stringify([text, options, this.sheet, options.allSheets ? null : this.sheet]);
+      let { hits, index } = st.find;
+      if (st.find.searched !== key) {
+        const res = await this.client.find(doc, findQuery(text, options, this.sheet, { ...this.selection.active }));
+        hits = res.hits;
+        // Hits come rotated to start after the active cell.
+        const a = this.selection.active;
+        const last = hits.length - 1;
+        const atActive = (i: number) => hits[i]?.sheet === this.sheet && hits[i]?.r === a.r && hits[i]?.c === a.c;
+        index = dir > 0 ? 0 : atActive(last) && last > 0 ? last - 1 : last;
+        useDataStore.getState().patchFind({ hits, truncated: res.truncated, searched: key, index });
+      } else {
+        index = stepHit(index, hits.length, dir);
+        useDataStore.getState().patchFind({ index });
+      }
+      const hit = hits[index];
+      if (!hit) return;
+      if (hit.sheet !== this.sheet) this.showSheet(hit.sheet, false);
+      const cell = { r: hit.r, c: hit.c };
+      const sel = { range: { r0: cell.r, c0: cell.c, r1: cell.r, c1: cell.c }, active: cell, anchor: cell };
+      useSelectionStore.getState().setSelection(sel);
+      this.grid?.scrollCellIntoView(cell);
+    } catch (e) {
+      this.notifyError(e);
+    }
+  };
+
+  /** Replace All; returns how many cells changed (hits found minus refusals). */
+  replaceAll = async (text: string, replace: string): Promise<number> => {
+    try {
+      const doc = this.requireDoc();
+      const { options } = useDataStore.getState().find;
+      const query = findQuery(text, options, this.sheet, null);
+      const before = await this.client.find(doc, { ...query, inFormulas: true });
+      const res = await this.apply("Replace all", [{ type: "replaceAll", sheet: options.allSheets ? null : this.sheet, query, replace }]);
+      if (!res) return 0;
+      const n = Math.max(0, before.hits.length - res.errors.length);
+      const skipped = res.errors.length;
+      useDataStore.getState().patchFind({ searched: null, hits: [], index: -1 });
+      useUiStore
+        .getState()
+        .pushToast("info", n === 0 && skipped === 0 ? `No cells match “${text}”.` : `Replaced ${n === 1 ? "1 cell" : `${n} cells`}${skipped > 0 ? ` (${skipped} skipped)` : ""}.`);
+      return n;
+    } catch (e) {
+      this.notifyError(e);
+      return 0;
+    }
+  };
+
+  // -- v0.2: arrays, fill, recalc, sheets ---------------------------------------------------
+
+  /** ⌃⇧↩ in an editor: the formula as an array over the selection (or the cell's existing block). */
+  commitArray = async (): Promise<void> => {
+    const st = useEditStore.getState();
+    const edit = st.edit;
+    if (!edit) return;
+    const origin = st.origin;
+    const active = st.active;
+    const block = active && active.cell.r === edit.cell.r && active.cell.c === edit.cell.c ? active.arrayRange : null;
+    const sel = this.selection.range;
+    const inSel = edit.cell.r >= sel.r0 && edit.cell.r <= sel.r1 && edit.cell.c >= sel.c0 && edit.cell.c <= sel.c1;
+    const range = block ?? (inSel ? { ...sel } : { r0: edit.cell.r, c0: edit.cell.c, r1: edit.cell.r, c1: edit.cell.c });
+    const op = arrayFormulaOp(this.sheet, range, edit.text);
+    if (!op) {
+      useUiStore.getState().pushToast("info", "An array formula starts with = (type it, then press ⌃⇧↩).");
+      return;
+    }
+    st.end();
+    if (origin === "bar") this.focusGrid();
+    const tl = { r: range.r0, c: range.c0 };
+    await this.apply("Array formula", [op], { range, active: tl, anchor: tl });
+  };
+
+  /** ⌘D / ⌘R. */
+  fillDir = async (dir: "down" | "right"): Promise<void> => {
+    const plan = fillDownRight(this.selection.range, dir);
+    if (!plan) return;
+    await this.onFill(plan.source, plan.target);
+  };
+
+  /** ⇧⌘F9: hard recalculation. */
+  recalcAll = async (): Promise<void> => {
+    try {
+      this.handleResult(await this.client.recalcAll(this.requireDoc()));
+      useUiStore.getState().pushToast("info", "Recalculated every formula.");
+    } catch (e) {
+      this.notifyError(e);
+    }
+  };
+
+  /** Moves the active sheet one tab left/right. */
+  moveSheetBy = async (delta: -1 | 1): Promise<void> => {
+    const info = this.info;
+    if (!info) return;
+    const i = info.sheets.findIndex((s) => s.id === this.sheet);
+    const to = i + delta;
+    if (i < 0 || to < 0 || to >= info.sheets.length) return;
+    await this.moveSheet(this.sheet, to);
+  };
 }
+
 
 /** Writes TSV + HTML with the async Clipboard API (text only as a fallback). */
 export async function writeClipboard(tsv: string, html: string): Promise<void> {

@@ -5,9 +5,10 @@ formula = "=SIN(0.5)"
 expect = 0.479425538604203
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=SIN(\"0.5\")"
-expect = 0.479425538604203
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -60,3 +61,9 @@ tol = 1e-15
 [[case]]
 formula = "=SIN(-1)"
 expect = -0.8414709848078965
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=SIN(\"0.5\")"
+expect = 0.479425538604203
+settings = { text_to_number = "convert_locale" }

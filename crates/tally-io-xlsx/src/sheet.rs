@@ -78,8 +78,19 @@ enum Shared {
     Failed,
 }
 
+/// What a worksheet holds besides [`SheetData`] that the reader resolves
+/// against other parts (hyperlink relationships, comments).
+#[derive(Debug, Default)]
+pub(crate) struct SheetExtras {
+    /// Hyperlinks: (cells, relationship id, in-document location).
+    pub links: Vec<crate::sheet_v03::RawLink>,
+    /// Page setup pieces.
+    pub page: crate::sheet_v03::PageParts,
+}
+
 /// Per-sheet parse state.
 struct State<'a, 'b> {
+    extras: SheetExtras,
     ctx: &'a SheetCtx<'b>,
     budget: &'a mut Budget,
     out: SheetData,
@@ -99,8 +110,9 @@ pub(crate) fn parse_sheet<R: BufRead>(
     xr: &mut XmlReader<R>,
     ctx: &SheetCtx<'_>,
     budget: &mut Budget,
-) -> Result<SheetData, XlsxError> {
+) -> Result<(SheetData, SheetExtras), XlsxError> {
     let mut st = State {
+        extras: SheetExtras::default(),
         ctx,
         budget,
         out: SheetData::default(),
@@ -116,7 +128,47 @@ pub(crate) fn parse_sheet<R: BufRead>(
         match xr.next()? {
             Ev::Start(e) => match e.local() {
                 // Containers we descend into.
-                "worksheet" | "sheetData" | "cols" | "sheetViews" | "mergeCells" | "sheetPr" => {}
+                "worksheet" | "sheetData" | "cols" | "sheetViews" | "mergeCells" | "sheetPr"
+                | "dataValidations" | "hyperlinks" => {}
+                "conditionalFormatting" => {
+                    if let Some(cf) = crate::sheet_v03::parse_cf(
+                        xr,
+                        &e,
+                        ctx.sheet,
+                        &ctx.styles.dxfs,
+                        ctx.resolver,
+                    )? {
+                        if st.out.conditional_formats.len() < 100_000 {
+                            st.out.conditional_formats.push(cf);
+                        }
+                    }
+                }
+                "dataValidation" => {
+                    if let Some(v) = crate::sheet_v03::parse_dv(xr, &e, ctx.sheet, ctx.resolver)? {
+                        if st.out.validations.len() < 100_000 {
+                            st.out.validations.push(v);
+                        }
+                    }
+                }
+                "hyperlink" => {
+                    if let Some(l) = crate::sheet_v03::parse_link(&e) {
+                        if st.extras.links.len() < 100_000 {
+                            st.extras.links.push(l);
+                        }
+                    }
+                    xr.skip()?;
+                }
+                "sheetProtection" => {
+                    st.out.protection = crate::sheet_v03::parse_protection(&e);
+                    xr.skip()?;
+                }
+                "pageMargins" | "pageSetup" | "printOptions" | "pageSetUpPr" => {
+                    crate::sheet_v03::page_attrs(&e, &mut st.extras.page);
+                    xr.skip()?;
+                }
+                "headerFooter" => crate::sheet_v03::parse_header_footer(xr, &mut st.extras.page)?,
+                "rowBreaks" => crate::sheet_v03::parse_breaks(xr, &mut st.out.row_breaks)?,
+                "colBreaks" => crate::sheet_v03::parse_breaks(xr, &mut st.out.col_breaks)?,
                 "tabColor" => {
                     let c = XColor::from_attrs(|k| e.attr_local(k).map(str::to_string));
                     st.out.tab_color = c.resolve(&INDEXED);
@@ -159,7 +211,11 @@ pub(crate) fn parse_sheet<R: BufRead>(
         out.cells.sort_by_key(|c| (c.row, c.col));
     }
     dedup_last(&mut out.cells);
-    Ok(out)
+    out.row_breaks.sort_unstable();
+    out.row_breaks.dedup();
+    out.col_breaks.sort_unstable();
+    out.col_breaks.dedup();
+    Ok((out, st.extras))
 }
 
 /// Keeps the last of consecutive cells at the same position.

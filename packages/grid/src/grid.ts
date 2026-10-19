@@ -13,11 +13,11 @@
  */
 import type { CellPos, CellView, RangeDto, SheetLayout, StyleDto } from "@tally/bridge";
 import { CellEditor } from "./editor";
-import { Geometry, HEADER_HEIGHT, MIN_ROW_HEADER_WIDTH } from "./geometry";
+import { Geometry, HEADER_HEIGHT, MIN_ROW_HEADER_WIDTH, NO_FROZEN, type Frozen } from "./geometry";
 import { Interaction, type InteractionHost, type ResizeGuide } from "./interaction";
 import { AxisModel, ScrollAxisMap, clamp } from "./layout";
-import { CELL_PADDING, Renderer, cellFont, headerFont, type FrameStats } from "./renderer";
-import { sameSelection, type Limits } from "./selection";
+import { CELL_PADDING, Renderer, cellFont, filterButtonRect, headerFont, type FrameStats } from "./renderer";
+import { sameSelection, snapToMerges, type Limits } from "./selection";
 import { TileTracker } from "./tiles";
 import { MAX_COLS, MAX_ROWS, type DirtySet, type GridProps, type Selection, type Viewport } from "./types";
 
@@ -165,6 +165,7 @@ export class Grid {
         self.invalidate("overlay");
       },
       invalidateOverlay: () => self.invalidate("overlay"),
+      filterButtonAt: (x, y) => self.filterButtonAt(x, y),
       editorChanged: () => {
         // Show/grow the editor immediately, not a frame later.
         self.layoutEditor();
@@ -235,6 +236,9 @@ export class Grid {
     }
     if ("pointMode" in partial && !partial.pointMode && prev.pointMode) this.interaction.resetPoint();
     if ("refHighlights" in partial && partial.refHighlights !== prev.refHighlights) this.invalidate("overlay");
+    if ("arrayRange" in partial && partial.arrayRange !== prev.arrayRange) this.invalidate("overlay");
+    if ("clipRange" in partial && partial.clipRange !== prev.clipRange) this.invalidate("overlay");
+    if ("filterButtons" in partial && partial.filterButtons !== prev.filterButtons) this.invalidate("main");
     if ("editHighlights" in partial && partial.editHighlights !== prev.editHighlights) {
       this.editor.setHighlights(this.props.editHighlights ?? []);
     }
@@ -279,7 +283,8 @@ export class Grid {
 
   /** Scrolls so that `cell` is at the top-left of the viewport. */
   scrollTo(cell: CellPos): void {
-    this.setContentOffset(this.cols.indexToPx(cell.c) * this.zoom, this.rows.indexToPx(cell.r) * this.zoom);
+    const g = this.geo;
+    this.setContentOffset(this.cols.indexToPx(cell.c) * this.zoom - g.frozenW, this.rows.indexToPx(cell.r) * this.zoom - g.frozenH);
   }
 
   /** Scrolls the minimum amount that makes `cell` fully visible. */
@@ -448,7 +453,31 @@ export class Grid {
       Math.round(this.contentY * this.dpr) / this.dpr,
       this.width,
       this.height,
+      this.frozen(),
+      this.layout?.merges ?? [],
     );
+  }
+
+  /** Frozen rows/columns from the sheet layout. */
+  private frozen(): Frozen {
+    const f = this.layout?.frozen;
+    return f ? { rows: f.r, cols: f.c } : NO_FROZEN;
+  }
+
+  /** The AutoFilter button column under (x, y) (canvas px), or `null`. */
+  private filterButtonAt(x: number, y: number): { col: number; rect: { left: number; top: number; right: number; bottom: number } } | null {
+    const fb = this.props.filterButtons;
+    if (!fb) return null;
+    const geo = this.geo;
+    if (x < geo.headerW || y < geo.headerH) return null;
+    const r = geo.rowAt(y);
+    const c = geo.colAt(x);
+    if (r !== fb.row || c < fb.c0 || c > fb.c1) return null;
+    const b = filterButtonRect(geo, r, c);
+    const pad = 2;
+    if (x < b.x - pad || x > b.x + b.w + pad || y < b.y - pad || y > b.y + b.h + pad) return null;
+    const o = this.root.getBoundingClientRect();
+    return { col: c, rect: { left: o.left + b.x, top: o.top + b.y, right: o.left + b.x + b.w, bottom: o.top + b.y + b.h } };
   }
 
   /** Sets the exact content offset and derives the native scroll position. */
@@ -516,6 +545,12 @@ export class Grid {
   };
 
   private applySelection(sel: Selection, emit: boolean, reveal?: CellPos): void {
+    const merges = this.layout?.merges ?? [];
+    if (merges.length > 0) {
+      // Only keyboard moves (which reveal the new cell) jump over a merged area.
+      sel = snapToMerges(sel, reveal ? this.selection : null, merges, { rows: this.rowsCount, cols: this.colsCount });
+      if (reveal) reveal = sel.active;
+    }
     const changed = !sameSelection(sel, this.selection);
     this.selection = sel;
     if (reveal) this.scrollCellIntoView(reveal);
@@ -544,8 +579,20 @@ export class Grid {
     const base = { geo: this.geo, source: this.props.source, theme: this.props.theme, dpr: this.dpr };
     if (this.dirtyMain) {
       this.dirtyMain = false;
-      this.lastStats = this.renderer.drawMain(base);
-      this.tracker.ensureVisible(this.geo.visibleRange());
+      this.lastStats = this.renderer.drawMain({ ...base, filterButtons: this.props.filterButtons ?? null });
+      const panes = this.geo.panes();
+      // The scrolling pane first (it is the largest), then frozen ones.
+      for (let i = panes.length - 1; i >= 0; i--) {
+        const p = panes[i];
+        if (p) this.tracker.ensureVisible({ r0: p.r0, c0: p.c0, r1: p.r1, c1: p.c1 });
+      }
+      // Anchors of merged areas that start above/left of the view.
+      const vis = this.geo.visibleRange();
+      for (const m of this.geo.merges) {
+        if (m.r0 <= vis.r1 && m.r1 >= vis.r0 && m.c0 <= vis.c1 && m.c1 >= vis.c0 && (m.r0 < vis.r0 || m.c0 < vis.c0)) {
+          this.tracker.ensureVisible({ r0: m.r0, c0: m.c0, r1: m.r0, c1: m.c0 });
+        }
+      }
     }
     if (this.dirtyOverlay) {
       this.dirtyOverlay = false;
@@ -557,6 +604,8 @@ export class Grid {
         resizeGuide: this.resizeGuide,
         fillPreview: this.fillPreview,
         refHighlights: this.editor.open ? (this.props.refHighlights ?? []) : [],
+        arrayRange: this.props.arrayRange ?? null,
+        clipRange: this.editor.open ? null : (this.props.clipRange ?? null),
       });
       this.layoutEditor();
     }

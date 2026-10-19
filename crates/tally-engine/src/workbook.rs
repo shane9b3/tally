@@ -11,7 +11,7 @@ use tally_formula::{
 };
 use tally_functions::{registry, FnFlags, FuncId, ParamKind};
 use tally_model::DocMeta;
-use tally_numfmt::{recognize_input_with, RecognizeContext, EN_US};
+use tally_numfmt::{recognize_input_with, Locale, RecognizeContext, EN_US};
 use tally_types::{CalcSettings, CellAddr, CellRange, SheetId, Value, MAX_COLS, MAX_ROWS};
 
 use crate::deps::{DepIndex, HashDepIndex};
@@ -186,6 +186,12 @@ pub struct Workbook {
     pub active_sheet: SheetId,
     /// Named ranges and expressions.
     pub names: crate::names::NameTable,
+    /// Locale for formatting and input recognition.
+    pub locale: &'static Locale,
+    /// Document structure protection (`None`: not protected).
+    pub structure_protection: Option<tally_model::SheetProtectionData>,
+    /// Caches derived from the document (conditional formats).
+    pub transient: crate::condfmt::Transient,
 }
 
 impl Default for Workbook {
@@ -217,6 +223,34 @@ impl Workbook {
             meta: DocMeta::default(),
             active_sheet: 1,
             names: crate::names::NameTable::default(),
+            locale: &EN_US,
+            structure_protection: None,
+            transient: crate::condfmt::Transient::default(),
+        }
+    }
+
+    /// The formula dialect of the UI for the current locale (`;` argument
+    /// separators where the locale's decimal separator is `,`).
+    pub fn ui_dialect(&self) -> Dialect {
+        let arg_sep = if self.locale.list_sep == ';' {
+            tally_formula::ArgSep::Semicolon
+        } else {
+            tally_formula::ArgSep::Comma
+        };
+        Dialect::CalcA1 {
+            arg_sep,
+            sheet_sep: tally_formula::SheetSep::Dot,
+        }
+    }
+
+    /// Sets the locale by tag; `false` if unknown.
+    pub fn set_locale(&mut self, tag: &str) -> bool {
+        match tally_numfmt::locale_by_tag(tag) {
+            Some(l) => {
+                self.locale = l;
+                true
+            }
+            None => false,
         }
     }
 
@@ -574,8 +608,10 @@ impl Workbook {
     ) -> Option<SnapContent> {
         let (id, _) = self.formula_at(addr)?;
         let old = self.snapshot_content(addr);
+        let vis = is_visibility_dependent(&formula);
         if let Some(fc) = self.formulas.get_mut(id) {
             fc.formula = formula;
+            fc.visibility_dependent = vis;
         }
         self.refresh_formula(id);
         self.pending.cells.push(addr);
@@ -743,6 +779,7 @@ impl Workbook {
         } else {
             is_volatile(&formula)
         };
+        let vis_dep = is_visibility_dependent(&formula);
         let id = self.formulas.insert(FormulaCell {
             addr,
             formula,
@@ -755,6 +792,7 @@ impl Workbook {
             dynamic_deps: Vec::new(),
             has_3d,
             has_names,
+            visibility_dependent: vis_dep,
             array: None,
             array_result: None,
         });
@@ -820,7 +858,7 @@ impl Workbook {
             return;
         }
         let ctx = RecognizeContext::now(self.settings.date_epoch);
-        let rec = recognize_input_with(input, &EN_US, &ctx);
+        let rec = recognize_input_with(input, self.locale, &ctx);
         self.set_value(addr, rec.value);
         if let Some(code) = rec.implied_format {
             if self.styles.get(style).is_general() {
@@ -840,7 +878,30 @@ impl Workbook {
         if let Some(t) = &f.invalid_text {
             return Some(t.to_string());
         }
-        Some(print(&f.formula, f.addr, Dialect::calc_a1_en_us(), self))
+        Some(print(&f.formula, f.addr, self.ui_dialect(), self))
+    }
+
+    /// Marks dirty every visibility-dependent formula (SUBTOTAL…) that
+    /// reads one of `sheets` (after rows were hidden, shown or filtered).
+    pub fn dirty_visibility_dependents(&mut self, sheets: &[SheetId]) {
+        if sheets.is_empty() {
+            return;
+        }
+        let ids: Vec<FormulaCellId> = self
+            .formulas
+            .iter()
+            .filter(|(_, f)| {
+                f.visibility_dependent && f.precedents.iter().any(|p| sheets.contains(&p.sheet))
+            })
+            .map(|(id, _)| id)
+            .collect();
+        for id in &ids {
+            if let Some(f) = self.formulas.get_mut(*id) {
+                f.state = CellState::Dirty;
+                self.pending.cells.push(f.addr);
+            }
+        }
+        self.pending.dirty.extend(ids);
     }
 
     /// Marks every formula dirty (hard recalc).
@@ -869,6 +930,28 @@ fn is_plain_ref(e: &Expr) -> bool {
     }
 }
 
+/// `true` if the formula calls a function that skips hidden or filtered
+/// rows (SUBTOTAL, AGGREGATE).
+pub fn is_visibility_dependent(f: &Formula) -> bool {
+    let reg = registry();
+    let mut v = false;
+    f.expr.walk(|e| {
+        if let Expr::Call {
+            func: FuncRef::Known(id),
+            ..
+        } = e
+        {
+            if reg
+                .get(FuncId(id.0))
+                .is_some_and(|d| matches!(d.name, "SUBTOTAL" | "AGGREGATE"))
+            {
+                v = true;
+            }
+        }
+    });
+    v
+}
+
 /// `true` if the formula calls a volatile function.
 pub fn is_volatile(f: &Formula) -> bool {
     let reg = registry();
@@ -888,6 +971,42 @@ pub fn is_volatile(f: &Formula) -> bool {
         }
     });
     v
+}
+
+/// The workbook as a resolver for OpenFormula text read from files: ODF
+/// stored function names win (`DURATION`, `CONVERT` and `WEEKNUM` are the
+/// add-ins there, `ISOWEEKNUM` the built-in WEEKNUM), see
+/// `Registry::lookup_odf_first`.
+pub struct OdfResolver<'a>(pub &'a Workbook);
+
+impl Resolver for OdfResolver<'_> {
+    fn sheet_by_name(&self, name: &str) -> Option<SheetId> {
+        self.0.sheet_by_name(name)
+    }
+
+    fn sheet_name(&self, id: SheetId) -> Option<Arc<str>> {
+        self.0.sheet_name(id)
+    }
+
+    fn name(&self, name: &str, sheet: SheetId) -> Option<NameId> {
+        self.0.name(name, sheet)
+    }
+
+    fn name_text(&self, id: NameId) -> Option<Arc<str>> {
+        self.0.name_text(id)
+    }
+
+    fn function(&self, name: &str) -> Option<AstFuncId> {
+        registry().lookup_odf_first(name).map(|id| AstFuncId(id.0))
+    }
+
+    fn function_name(&self, id: AstFuncId) -> Option<Arc<str>> {
+        self.0.function_name(id)
+    }
+
+    fn function_name_in(&self, id: AstFuncId, dialect: Dialect) -> Option<Arc<str>> {
+        self.0.function_name_in(id, dialect)
+    }
 }
 
 impl Resolver for Workbook {

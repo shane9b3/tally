@@ -5,9 +5,10 @@ formula = "=SINH(0.5)"
 expect = 0.5210953054937474
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=SINH(\"0.5\")"
-expect = 0.5210953054937474
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -59,3 +60,9 @@ expect = "#NUM!"
 [[case]]
 formula = "=SINH(2)"
 expect = 3.6268604078470186
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=SINH(\"0.5\")"
+expect = 0.5210953054937474
+settings = { text_to_number = "convert_locale" }

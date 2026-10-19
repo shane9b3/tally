@@ -12,10 +12,12 @@ import type { RangeDto } from "@tally/bridge";
 import { useDocStore } from "./stores/docStore";
 import { useEditStore } from "./stores/editStore";
 import { useUiStore } from "./stores/uiStore";
+import { useDataStore } from "./stores/dataStore";
+import { BORDER_PRESETS, borderLine } from "./dataOps";
 
 export const COMING_SOON = "Coming soon";
 export const FILTER_SOON = "Filtering is coming in v0.2";
-export const CHART_SOON = "Charts are coming in v0.2";
+export const CHART_SOON = "Charts are coming in v0.3";
 
 /**
  * Target of `format.currency` from assist args: `range` (e.g. `F2:F15`, the
@@ -40,8 +42,6 @@ export interface CommandUi {
   resize(axis: "row" | "col"): void;
 }
 
-/** Shown on "Hide rows/columns" until the engine has the op. */
-export const HIDE_SOON = "Hiding rows and columns needs an engine op that is coming soon";
 
 export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
   const sc = (id: string): { shortcut?: string } => {
@@ -50,7 +50,9 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
   };
   const undo = useDocStore.getState;
   const editing = (): boolean => useEditStore.getState().edit !== null;
+  const notEditing = { enabled: () => !editing(), reason: "Finish editing the cell first" };
   const soon = { enabled: () => false, reason: COMING_SOON };
+  const hasFilter = (): boolean => useDataStore.getState().filter !== null;
   return [
     // Edit
     { id: "edit.undo", title: "Undo", kind: "Edit", keywords: ["revert", "back"], ...sc("edit.undo"), enabled: () => editing() || undo().undo.canUndo, run: ctl.undoAny },
@@ -61,12 +63,39 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "edit.pasteValues", title: "Paste values only", kind: "Edit", keywords: ["special", "plain", "text"], shortcut: "⇧⌘V", run: () => ctl.pasteFromClipboard(true) },
     { id: "edit.delete", title: "Clear contents", kind: "Edit", keywords: ["delete", "erase", "remove"], shortcut: "⌫", run: ctl.clearSelection },
     { id: "edit.clearFormats", title: "Clear formats", kind: "Edit", keywords: ["reset", "default", "plain"], run: async () => void (await ctl.clearFormats()) },
+    { id: "edit.pasteSpecial", title: "Paste special…", kind: "Edit", keywords: ["transpose", "values", "formats", "skip empty", "add", "multiply"], ...sc("edit.pasteSpecial"), run: () => useUiStore.getState().openDialog({ kind: "pasteSpecial" }) },
+    { id: "edit.find", title: "Find…", kind: "Edit", keywords: ["search", "look for"], ...sc("edit.find"), run: () => useUiStore.getState().setFind(true) },
+    {
+      id: "edit.findReplace",
+      title: "Find & replace…",
+      kind: "Edit",
+      keywords: ["replace", "substitute", "search"],
+      ...sc("edit.findReplace"),
+      run: () => useUiStore.getState().openDialog({ kind: "findReplace", text: useDataStore.getState().find.text }),
+    },
+    { id: "edit.findNext", title: "Find next", kind: "Edit", hidden: true, ...sc("edit.findNext"), run: () => ctl.findStep(1) },
+    { id: "edit.findPrev", title: "Find previous", kind: "Edit", hidden: true, ...sc("edit.findPrev"), run: () => ctl.findStep(-1) },
+    { id: "edit.fillDown", title: "Fill down", kind: "Edit", keywords: ["copy down", "series"], ...sc("edit.fillDown"), ...notEditing, run: () => ctl.fillDir("down") },
+    { id: "edit.fillRight", title: "Fill right", kind: "Edit", keywords: ["copy right", "series"], ...sc("edit.fillRight"), ...notEditing, run: () => ctl.fillDir("right") },
+    { id: "edit.cancelClip", title: "Cancel copy", kind: "Edit", hidden: true, ...sc("edit.cancelClip"), run: ctl.cancelClip },
     // Format
     { id: "format.bold", title: "Bold", kind: "Format", keywords: ["strong", "weight"], ...sc("format.bold"), run: () => ctl.toggleStyle("bold") },
     { id: "format.italic", title: "Italic", kind: "Format", keywords: ["slant", "emphasis"], ...sc("format.italic"), run: () => ctl.toggleStyle("italic") },
     { id: "format.underline", title: "Underline", kind: "Format", ...sc("format.underline"), run: () => ctl.toggleStyle("underline") },
     { id: "format.strike", title: "Strikethrough", kind: "Format", keywords: ["cross out", "strike"], run: () => ctl.toggleStyle("strike") },
     { id: "format.wrap", title: "Wrap text", kind: "Format", keywords: ["lines", "multi-line"], run: () => ctl.toggleStyle("wrap") },
+    { id: "format.merge", title: "Merge cells", kind: "Format", keywords: ["combine", "join", "span", "header"], run: () => ctl.mergeCells() },
+    { id: "format.unmerge", title: "Unmerge cells", kind: "Format", keywords: ["split"], run: async () => void (await ctl.unmergeCells()) },
+    { id: "format.toggleMerge", title: "Merge / unmerge", kind: "Format", hidden: true, run: () => ctl.toggleMerge() },
+    ...BORDER_PRESETS.map(
+      (b): Command => ({
+        id: `format.borders.${b.id}`,
+        title: `Borders: ${b.label.toLowerCase()}`,
+        kind: "Format",
+        keywords: ["border", "lines", "outline", "box", "grid"],
+        run: async () => void (await ctl.applyBorders(b.id, borderLine("thin"))),
+      }),
+    ),
     { id: "format.alignLeft", title: "Align left", kind: "Format", ...sc("format.alignLeft"), run: async () => void (await ctl.setAlign("left")) },
     { id: "format.alignCenter", title: "Align centre", kind: "Format", keywords: ["center", "middle"], ...sc("format.alignCenter"), run: async () => void (await ctl.setAlign("center")) },
     { id: "format.alignRight", title: "Align right", kind: "Format", ...sc("format.alignRight"), run: async () => void (await ctl.setAlign("right")) },
@@ -109,11 +138,17 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     },
     // Data / insert
     { id: "insert.addUp", title: "Add up (Σ)", kind: "Formula", keywords: ["sum", "total", "autosum"], run: () => ctl.addUp() },
-    { id: "data.sort", title: "Sort", kind: "Sort", keywords: ["order"], ...soon, run: () => undefined },
-    { id: "data.filter", title: "Filter", kind: "Filter", keywords: ["where", "only"], ...soon, run: () => undefined },
+    { id: "data.sortAsc", title: "Sort ascending (A → Z)", kind: "Sort", keywords: ["order", "smallest"], run: () => ctl.sortByActive(true) },
+    { id: "data.sortDesc", title: "Sort descending (Z → A)", kind: "Sort", keywords: ["order", "largest", "reverse"], run: () => ctl.sortByActive(false) },
+    { id: "data.sort", title: "Sort…", kind: "Sort", keywords: ["order", "keys", "columns"], run: () => ctl.openSortDialog() },
+    { id: "data.filter", title: "AutoFilter on / off", kind: "Filter", keywords: ["where", "only", "dropdown"], run: () => ctl.toggleAutoFilter() },
+    { id: "data.clearFilters", title: "Clear filters", kind: "Filter", keywords: ["show all"], enabled: hasFilter, reason: "No AutoFilter on this sheet", run: () => ctl.clearFilters() },
+    { id: "data.defineName", title: "Define name…", kind: "Data", keywords: ["named range", "name"], ...sc("data.defineName"), run: ctl.openDefineName },
+    { id: "data.manageNames", title: "Manage names…", kind: "Data", keywords: ["named ranges", "names"], run: () => useUiStore.getState().openDialog({ kind: "manageNames" }) },
+    { id: "data.recalc", title: "Recalculate all", kind: "Data", keywords: ["hard recalc", "refresh", "F9"], ...sc("data.recalc"), run: ctl.recalcAll },
     { id: "insert.chart", title: "Chart", kind: "Chart", keywords: ["graph", "plot"], ...soon, run: () => undefined },
     // Assist actions (run from ⌘K suggestions with args; hidden from the list).
-    { id: "filter.byColumn", title: "Filter by column", kind: "Filter", hidden: true, run: () => void useUiStore.getState().pushToast("info", FILTER_SOON) },
+    { id: "filter.byColumn", title: "Filter by column", kind: "Filter", hidden: true, run: (args) => ctl.filterByColumn(args) },
     { id: "chart.byColumn", title: "Chart by column", kind: "Chart", hidden: true, run: () => void useUiStore.getState().pushToast("info", CHART_SOON) },
     // Sheet structure (the Sheet menu in the palette)
     { id: "sheet.insertRowAbove", title: "Insert rows above", kind: "Sheet", keywords: ["add row"], run: async () => void (await ctl.insertRows("before")) },
@@ -122,8 +157,10 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "sheet.insertColRight", title: "Insert columns right", kind: "Sheet", keywords: ["add column"], run: async () => void (await ctl.insertCols("after")) },
     { id: "sheet.deleteRows", title: "Delete rows", kind: "Sheet", keywords: ["remove row"], run: async () => void (await ctl.deleteRows()) },
     { id: "sheet.deleteCols", title: "Delete columns", kind: "Sheet", keywords: ["remove column"], run: async () => void (await ctl.deleteCols()) },
-    { id: "sheet.hideRows", title: "Hide rows", kind: "Sheet", enabled: () => false, reason: HIDE_SOON, run: () => undefined },
-    { id: "sheet.hideCols", title: "Hide columns", kind: "Sheet", enabled: () => false, reason: HIDE_SOON, run: () => undefined },
+    { id: "sheet.hideRows", title: "Hide rows", kind: "Sheet", run: () => ctl.setHidden("row", true) },
+    { id: "sheet.showRows", title: "Show rows", kind: "Sheet", keywords: ["unhide"], run: () => ctl.setHidden("row", false) },
+    { id: "sheet.hideCols", title: "Hide columns", kind: "Sheet", run: () => ctl.setHidden("col", true) },
+    { id: "sheet.showCols", title: "Show columns", kind: "Sheet", keywords: ["unhide"], run: () => ctl.setHidden("col", false) },
     { id: "sheet.rowHeight", title: "Row height…", kind: "Sheet", keywords: ["resize"], run: () => ui.resize("row") },
     { id: "sheet.colWidth", title: "Column width…", kind: "Sheet", keywords: ["resize"], run: () => ui.resize("col") },
     // Sheets
@@ -137,6 +174,8 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
       enabled: () => (undo().info?.sheets.length ?? 0) > 1,
       run: async () => void (await ctl.deleteSheet(ctl.sheet)),
     },
+    { id: "sheet.moveLeft", title: "Move sheet left", kind: "Sheet", keywords: ["reorder", "tab"], run: () => ctl.moveSheetBy(-1) },
+    { id: "sheet.moveRight", title: "Move sheet right", kind: "Sheet", keywords: ["reorder", "tab"], run: () => ctl.moveSheetBy(1) },
     { id: "sheet.next", title: "Next sheet", kind: "Sheet", ...sc("sheet.next"), run: () => ctl.stepSheet(1) },
     { id: "sheet.prev", title: "Previous sheet", kind: "Sheet", ...sc("sheet.prev"), run: () => ctl.stepSheet(-1) },
     // File
@@ -145,6 +184,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "file.save", title: "Save", kind: "File", ...sc("file.save"), run: () => ctl.save(false) },
     { id: "file.saveAs", title: "Save as…", kind: "File", ...sc("file.saveAs"), run: () => ctl.save(true) },
     { id: "file.exportCsv", title: "Export as CSV…", kind: "File", keywords: ["share", "download", "csv"], run: () => ctl.save(true, "csv") },
+    { id: "file.exportXlsx", title: "Export Excel (XLSX)…", kind: "File", keywords: ["share", "download", "excel", "xlsx", "microsoft"], run: () => ctl.save(true, "xlsx") },
     { id: "file.exportOds", title: "Export ODS…", kind: "File", keywords: ["share", "download", "opendocument", "ods"], run: () => ctl.save(true, "ods") },
     { id: "file.close", title: "Close workbook", kind: "File", run: ctl.closeDocument },
     // View
@@ -161,6 +201,16 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
         useUiStore.getState().pushToast("info", `Theme: ${p === "system" ? "match system" : p}`);
       },
     },
+    {
+      id: "view.freeze",
+      title: "Freeze panes at the active cell",
+      kind: "View",
+      keywords: ["freeze", "lock", "header", "pin rows", "keep visible"],
+      run: () => ctl.freeze("both"),
+    },
+    { id: "view.freezeRows", title: "Freeze rows above the active cell", kind: "View", keywords: ["freeze", "header row", "lock"], run: () => ctl.freeze("rows") },
+    { id: "view.freezeCols", title: "Freeze columns left of the active cell", kind: "View", keywords: ["freeze", "lock"], run: () => ctl.freeze("cols") },
+    { id: "view.unfreeze", title: "Unfreeze panes", kind: "View", keywords: ["freeze", "unlock"], run: async () => void (await ctl.unfreeze()) },
     { id: "view.zoomIn", title: "Zoom in", kind: "View", ...sc("view.zoomIn"), run: () => useUiStore.getState().zoomBy(1) },
     { id: "view.zoomOut", title: "Zoom out", kind: "View", ...sc("view.zoomOut"), run: () => useUiStore.getState().zoomBy(-1) },
     { id: "view.zoomReset", title: "Actual size", kind: "View", keywords: ["100%", "zoom"], ...sc("view.zoomReset"), run: () => useUiStore.getState().setZoom(1) },

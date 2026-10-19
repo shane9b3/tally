@@ -12,7 +12,6 @@ use crate::registry::Registry;
 /// `(canonical name, OOXML name)`.
 pub(crate) const OOXML_NAMES: &[(&str, &str)] = &[
     ("DAYS", "_xlfn.DAYS"),
-    ("WEEKNUM", "_xlfn.ISOWEEKNUM"),
     ("EFFECTIVE", "EFFECT"),
     ("DURATION", "_xlfn.PDURATION"),
     ("ZGZ", "_xlfn.RRI"),
@@ -140,6 +139,7 @@ pub(crate) const OOXML_NAMES: &[(&str, &str)] = &[
     ("COUPNUM", "COUPNUM"),
     ("FVSCHEDULE", "FVSCHEDULE"),
     ("IFNA", "_xlfn.IFNA"),
+    ("ISOWEEKNUM", "_xlfn.ISOWEEKNUM"),
 ];
 
 /// Sets the OOXML name of every function in [`OOXML_NAMES`].

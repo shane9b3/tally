@@ -14,6 +14,10 @@ use crate::dto::{
     Direction, DocId, FileFormat, FindQuery, FindResult, FunctionInfo, NameInfo, RangeDto,
     SelectionDto, SelectionStats, SheetLayout, StyleDto, Suggestion, Transaction, WorkbookInfo,
 };
+use crate::features::{
+    ConditionalFormatDto, DocPropertiesDto, GoalSeekRequest, GoalSeekResult, LocaleInfo, NoteDto,
+    PageSetupDto, ProtectionInfo, ValidationDto, ValidationInfo,
+};
 
 /// Result type of every fallible [`DocumentService`] method.
 pub type Result<T> = std::result::Result<T, ApiError>;
@@ -78,6 +82,14 @@ pub trait DocumentService {
     /// Resolves name box text: `B12`, `A1:C5`, `Sheet2.A1`, a named range.
     fn resolve_name_box(&self, doc: DocId, text: &str) -> Result<SelectionDto>;
 
+    /// Like [`Self::resolve_name_box`], with unqualified references and
+    /// sheet-scoped names resolved against `sheet` (the sheet the UI
+    /// shows) instead of the engine's active sheet.
+    fn resolve_name_box_in(&self, doc: DocId, sheet: SheetId, text: &str) -> Result<SelectionDto> {
+        let _ = sheet;
+        self.resolve_name_box(doc, text)
+    }
+
     /// Every registered function.
     fn list_functions(&self) -> Vec<FunctionInfo>;
 
@@ -121,6 +133,85 @@ pub trait DocumentService {
     fn recalc_all(&mut self, doc: DocId) -> Result<ApplyResult> {
         let _ = doc;
         Err(ApiError::unsupported("recalc_all is not supported"))
+    }
+
+    // ----- v0.3 (default implementations report `unsupported`) -----------
+
+    /// The sheet's conditional formats in priority order.
+    fn conditional_formats(&self, doc: DocId, sheet: SheetId) -> Result<Vec<ConditionalFormatDto>> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported(
+            "conditional formats are not supported",
+        ))
+    }
+
+    /// The sheet's data validations.
+    fn validations(&self, doc: DocId, sheet: SheetId) -> Result<Vec<ValidationDto>> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("validation is not supported"))
+    }
+
+    /// The validation of one cell with its list items resolved.
+    fn validation_at(
+        &self,
+        doc: DocId,
+        sheet: SheetId,
+        r: u32,
+        c: u32,
+    ) -> Result<Option<ValidationInfo>> {
+        let _ = (doc, sheet, r, c);
+        Err(ApiError::unsupported("validation is not supported"))
+    }
+
+    /// The note of a cell.
+    fn note(&self, doc: DocId, sheet: SheetId, r: u32, c: u32) -> Result<Option<NoteDto>> {
+        let _ = (doc, sheet, r, c);
+        Err(ApiError::unsupported("notes are not supported"))
+    }
+
+    /// Every note of a sheet, row-major.
+    fn notes(&self, doc: DocId, sheet: SheetId) -> Result<Vec<NoteDto>> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("notes are not supported"))
+    }
+
+    /// Protection state of a sheet and the document structure.
+    fn protection_info(&self, doc: DocId, sheet: SheetId) -> Result<ProtectionInfo> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("protection is not supported"))
+    }
+
+    /// A sheet's page setup (with its manual breaks).
+    fn page_setup(&self, doc: DocId, sheet: SheetId) -> Result<PageSetupDto> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("page setup is not supported"))
+    }
+
+    /// Document properties.
+    fn document_properties(&self, doc: DocId) -> Result<DocPropertiesDto> {
+        let _ = doc;
+        Err(ApiError::unsupported(
+            "document properties are not supported",
+        ))
+    }
+
+    /// Goal seek, evaluated in a sandbox (the document is not changed).
+    fn goal_seek(&self, doc: DocId, req: &GoalSeekRequest) -> Result<GoalSeekResult> {
+        let _ = (doc, req);
+        Err(ApiError::unsupported("goal seek is not supported"))
+    }
+
+    /// Supported locales.
+    fn list_locales(&self) -> Vec<LocaleInfo> {
+        Vec::new()
+    }
+
+    /// Sets the document's locale (number formatting and input
+    /// recognition; persisted with the document, not undoable). The
+    /// result reports every sheet's used area as changed.
+    fn set_locale(&mut self, doc: DocId, locale: &str) -> Result<ApplyResult> {
+        let _ = (doc, locale);
+        Err(ApiError::unsupported("locales are not supported"))
     }
 }
 

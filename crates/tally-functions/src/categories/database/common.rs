@@ -11,14 +11,24 @@
 //!   omitted field) selects "no field" and is accepted by DCOUNT/DCOUNTA only.
 //!   An unknown name or an out-of-range index is `Err:502`.
 //! - The first row of the criteria range holds field names, each matched to
-//!   the first database column with the same name (case-insensitive). The
-//!   following rows are alternatives (OR); the conditions inside one row are
-//!   all required (AND). A criterion cell is parsed with [`Criterion`], so it
-//!   may be `>5`, `<>x`, `=`, a bare value, or a wildcard/regex pattern per the
-//!   document settings. An empty criterion cell is ignored, a row without
-//!   conditions matches every record, and a criteria table with no rows
-//!   below its header matches every record. A criteria column whose header
-//!   matches no database field is ignored (as in AOO's query builder).
+//!   the first database column with the same name (case-insensitive). Every
+//!   criteria header must match a database field: an unmatched header
+//!   (including an empty header cell inside the criteria range) makes the
+//!   query invalid, which is `Err:504` (AOO `table3.cxx` `CreateExcelQuery`
+//!   sets `bValid = sal_False`; `interpr1.cxx` `DBIterator` then sets
+//!   `errIllegalParameter`).
+//! - The following rows are alternatives (OR); the conditions inside one row
+//!   are all required (AND). A criterion cell is parsed with [`Criterion`],
+//!   so it may be `>5`, `<>x`, `=`, a bare value, or a wildcard/regex
+//!   pattern per the document settings. Only non-empty criterion cells
+//!   create query entries, so an empty cell is ignored and a row whose
+//!   cells are all empty adds no alternative (`CreateExcelQuery` skips it).
+//!   If no row has a condition (or the table has no rows below its header)
+//!   the query has no entries and every record matches.
+//! - Tally trims both ranges to their used area first (so a whole-column
+//!   criteria reference works); AOO's StarOffice-style 4-column criteria
+//!   table (`CreateStarQuery`, "AND/OR | field | operator | value") is not
+//!   supported.
 
 use std::collections::HashMap;
 use std::ops::ControlFlow;
@@ -118,17 +128,26 @@ pub(super) fn select(a: &mut Args, zero_ok: bool) -> Result<Selection, ErrorKind
 
     // Criteria table: per row, a list of (db column offset, criterion).
     let settings = a.ctx().settings().clone();
+    // Every criteria header must name a database field (AOO
+    // CreateExcelQuery); otherwise the query is invalid: Err:504.
+    let mut crit_cols = Vec::new();
+    for c in crit.c0..=crit.c1 {
+        let col = cdata
+            .get(&(crit.r0, c))
+            .and_then(header_text)
+            .and_then(|n| names.get(&n).copied())
+            .ok_or(ErrorKind::ParamList)?;
+        crit_cols.push(col);
+    }
     let mut alternatives: Vec<Vec<(u32, Criterion)>> = Vec::new();
     for r in (crit.r0 + 1)..=crit.r1 {
         let mut conds = Vec::new();
-        for c in crit.c0..=crit.c1 {
-            let Some(cell) = cdata.get(&(r, c)) else {
-                continue;
-            };
-            let Some(col) = cdata
-                .get(&(crit.r0, c))
-                .and_then(header_text)
-                .and_then(|n| names.get(&n).copied())
+        for (c, &col) in (crit.c0..=crit.c1).zip(&crit_cols) {
+            // AOO reads the input string and skips it when empty, so empty
+            // text (`=""`) is no condition either.
+            let Some(cell) = cdata
+                .get(&(r, c))
+                .filter(|v| !matches!(v, Value::Text(t) if t.is_empty()))
             else {
                 continue;
             };
@@ -137,7 +156,10 @@ pub(super) fn select(a: &mut Args, zero_ok: bool) -> Result<Selection, ErrorKind
             }
             conds.push((col, Criterion::parse(cell, &settings)));
         }
-        alternatives.push(conds);
+        // A row without conditions adds no OR alternative.
+        if !conds.is_empty() {
+            alternatives.push(conds);
+        }
     }
 
     let mut sel = Selection {

@@ -63,7 +63,7 @@ fn core_functions_registered_without_conflicts() {
 #[test]
 fn registry_matches_master_list() {
     let m = master();
-    assert_eq!(m.len(), 407);
+    assert_eq!(m.len(), 408);
     assert_eq!(m.values().filter(|f| f.batch == Some(0)).count(), 68);
     assert!(m["IFERROR"].extension && m["IFNA"].extension && m["NUMBERVALUE"].extension);
     // Collect every mismatch so one run shows the whole picture.
@@ -156,6 +156,22 @@ fn addin_name_clashes_follow_aoo() {
     assert_eq!(name(r.lookup_odf("PDURATION")), Some("DURATION"));
     assert_eq!(name(r.lookup_odf("RRI")), Some("ZGZ"));
     assert_eq!(name(r.lookup_odf("ISOWEEKNUM")), Some("WEEKNUM"));
+    // Review 2 H2/H6: the built-in WEEKNUM (AOO 4-day rule) has no OOXML
+    // name; Excel's 1-argument ISOWEEKNUM is the ISOWEEKNUM extension.
+    assert_eq!(r.def_by_name("WEEKNUM").unwrap().ooxml_name, None);
+    assert_eq!(name(r.lookup_ooxml("_xlfn.ISOWEEKNUM")), Some("ISOWEEKNUM"));
+    assert_eq!(
+        name(r.lookup_odf("COM.MICROSOFT.ISOWEEKNUM")),
+        Some("ISOWEEKNUM")
+    );
+    // Dialect-first lookups for file import (canonical names lose there).
+    assert_eq!(name(r.lookup_odf_first("ISOWEEKNUM")), Some("WEEKNUM"));
+    assert_eq!(name(r.lookup_odf_first("DURATION")), Some("DURATION_ADD"));
+    assert_eq!(name(r.lookup_odf_first("SUM")), Some("SUM"));
+    assert_eq!(name(r.lookup_ooxml_first("WEEKNUM")), Some("WEEKNUM_ADD"));
+    assert_eq!(name(r.lookup_ooxml_first("CONVERT")), Some("CONVERT_ADD"));
+    assert_eq!(name(r.lookup_ooxml_first("DURATION")), Some("DURATION_ADD"));
+    assert_eq!(name(r.lookup_any("DURATION")), Some("DURATION"));
     assert_eq!(name(r.lookup_ooxml("_xlfn.RRI")), Some("ZGZ"));
     assert_eq!(
         name(r.lookup_odf("com.sun.star.sheet.addin.Analysis.getGcd")),

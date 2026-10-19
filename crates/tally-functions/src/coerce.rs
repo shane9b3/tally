@@ -177,7 +177,9 @@ const fn bool_num(b: bool) -> f64 {
 ///
 /// - `GenerateError`: always `#VALUE!`;
 /// - `TreatAsZero`: always 0;
-/// - `ConvertUnambiguous` (default): [`parse_unambiguous`] or `#VALUE!`;
+/// - `ConvertUnambiguous` (default): [`convert_string_to_value`] (integers
+///   with an optional exponent and ISO 8601 dates/times only, so `"1.5"` is
+///   `#VALUE!`) or `#VALUE!`;
 /// - `ConvertLocale`: tally-numfmt's en-US input recognizer
 ///   ([`tally_numfmt::recognize_input_with`]: thousands separators,
 ///   currency, percent, fractions, US dates and times; `TRUE`/`FALSE` are
@@ -189,7 +191,7 @@ pub fn text_to_number(s: &str, settings: &CalcSettings) -> Result<f64, ErrorKind
         TextToNumber::GenerateError => Err(ErrorKind::Value),
         TextToNumber::TreatAsZero => Ok(0.0),
         TextToNumber::ConvertUnambiguous => {
-            parse_unambiguous(s, settings.date_epoch).ok_or(ErrorKind::Value)
+            convert_string_to_value(s, settings.date_epoch).ok_or(ErrorKind::Value)
         }
         TextToNumber::ConvertLocale => {
             let ctx = tally_numfmt::RecognizeContext::now(settings.date_epoch);
@@ -202,8 +204,196 @@ pub fn text_to_number(s: &str, settings: &CalcSettings) -> Result<f64, ErrorKind
     }
 }
 
-/// Parses text that is unambiguously a number, ignoring surrounding ASCII
-/// whitespace:
+/// Port of AOO `ScInterpreter::ConvertStringToValue` (`interpr4.cxx`), the
+/// `ConvertUnambiguous` text-to-number rule (LibreOffice: "convert only
+/// integer numbers including exponents, and ISO 8601 dates and times"):
+///
+/// - an integer with optional sign and exponent: `3`, `-2E3`, `1e+2`
+///   (no decimal separator, so `1.5` and `.5` are not converted);
+/// - ISO 8601 extended dates `CCYY-MM-DD`, optionally followed by `T` or
+///   one blank and a time; times `hh:mm`, `hh:mm:ss`, `hh:mm:ss.s` or
+///   `hh:mm:ss,s` (hours unlimited without a date, at most 23 with one;
+///   minutes and seconds at most 59). A date must be a valid calendar date
+///   (a day `00` reads as 1, as in AOO); no sign before a date or time.
+/// - leading whitespace and trailing blanks are ignored.
+///
+/// Returns `None` for anything else, including the empty string (Tally,
+/// like LibreOffice's default, does not treat `""` as 0). The fraction of
+/// seconds is read as written (`.05` is 0.05 s; AOO 4.1 drops leading zeros
+/// of the fraction, a bug).
+pub fn convert_string_to_value(s: &str, epoch: DateEpoch) -> Option<f64> {
+    let b = s.as_bytes();
+    let len = b.len();
+    let mut i = 0;
+    while i < len && b[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let start = i;
+    if i < len && (b[i] == b'+' || b[i] == b'-') {
+        i += 1;
+    }
+    let digits = i;
+    while i < len && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == digits {
+        return None;
+    }
+    let int_end = i;
+    let mut end = i;
+    if i < len && (b[i] == b'e' || b[i] == b'E') {
+        let mut j = i + 1;
+        if j < len && (b[j] == b'+' || b[j] == b'-') {
+            j += 1;
+        }
+        let ed = j;
+        while j < len && b[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > ed {
+            end = j;
+        }
+    }
+    let value: f64 = s[start..end].parse().ok()?;
+    if !value.is_finite() {
+        return None;
+    }
+    if end == len {
+        return Some(value);
+    }
+    match b[end] {
+        b' ' => b[end..].iter().all(|&c| c == b' ').then_some(value),
+        b'-' | b':' if end == int_end && start == digits => {
+            iso_date_time(s, start, end, b[end] == b'-', epoch)
+        }
+        _ => None,
+    }
+}
+
+/// The date/time part of [`convert_string_to_value`]: `s[start..end]` is
+/// the leading unsigned integer (year or hour) and `s[end]` its delimiter.
+fn iso_date_time(s: &str, start: usize, end: usize, date: bool, epoch: DateEpoch) -> Option<f64> {
+    const YEAR: usize = 0;
+    const MONTH: usize = 1;
+    const DAY: usize = 2;
+    const HOUR: usize = 3;
+    const MINUTE: usize = 4;
+    const SECOND: usize = 5;
+    const FRACTION: usize = 6;
+    const DONE: usize = 7;
+    const BLANK: usize = 8;
+    const LIMIT: [i64; DONE] = [0, 12, 31, 0, 59, 59, 0];
+    let b = s.as_bytes();
+    let len = b.len();
+    let mut unit = [0i64; DONE];
+    let mut frac_digits = "";
+    let mut state = if date { MONTH } else { MINUTE };
+    unit[state - 1] = s[start..end].parse().ok()?;
+    let mut p = end + 1;
+    let mut last = p;
+    let mut store = |state: usize, text: &'_ str| -> Option<()> {
+        if state == FRACTION {
+            return Some(());
+        }
+        let v: i64 = text.parse().ok()?;
+        if LIMIT[state] != 0 && LIMIT[state] < v {
+            return None;
+        }
+        unit[state] = v;
+        Some(())
+    };
+    while p < len && state < BLANK {
+        let c = b[p];
+        if c.is_ascii_digit() {
+            // At most two digits per unit, except the fraction.
+            if p - last >= 2 && state != FRACTION {
+                return None;
+            }
+        } else if p > last {
+            if state < DONE {
+                if state == FRACTION {
+                    frac_digits = &s[last..p];
+                }
+                store(state, &s[last..p])?;
+            }
+            last = p + 1;
+            let at_end = p + 1 == len;
+            match state {
+                MONTH if c != b'-' || at_end => return None,
+                DAY if (c != b'T' || at_end) && c != b' ' => return None,
+                HOUR if c != b':' || at_end => return None,
+                MINUTE | SECOND => {
+                    let sep_ok = if state == MINUTE {
+                        c == b':'
+                    } else {
+                        c == b',' || c == b'.'
+                    };
+                    if (!sep_ok || at_end) && c != b' ' {
+                        return None;
+                    }
+                    if c == b' ' {
+                        state = DONE;
+                    }
+                }
+                FRACTION => state = DONE,
+                MONTH | DAY | HOUR => {}
+                _ => return None,
+            }
+            state += 1;
+        } else {
+            return None;
+        }
+        p += 1;
+    }
+    if state == BLANK {
+        if b[p..].iter().any(|&c| c != b' ') {
+            return None;
+        }
+        state = BLANK + 1;
+    }
+    // Month without day, or hour without minute.
+    if state == MONTH
+        || (state == DAY && p <= last)
+        || state == HOUR
+        || (state == MINUTE && p <= last)
+    {
+        return None;
+    }
+    if p > last && state < DONE {
+        if state == FRACTION {
+            frac_digits = &s[last..p];
+        }
+        store(state, &s[last..p])?;
+    }
+    if date && unit[HOUR] > 23 {
+        return None;
+    }
+    if date && unit[DAY] == 0 {
+        unit[DAY] = 1;
+    }
+    let fraction = if frac_digits.is_empty() {
+        0.0
+    } else {
+        format!("0.{frac_digits}").parse::<f64>().ok()?
+    };
+    let mut v = if date {
+        tally_numfmt::date::serial_from_ymd(
+            epoch,
+            i32::try_from(unit[YEAR]).ok()?,
+            u32::try_from(unit[MONTH]).ok()?,
+            u32::try_from(unit[DAY]).ok()?,
+        )?
+    } else {
+        0.0
+    };
+    v += ((unit[HOUR] * 3600 + unit[MINUTE] * 60 + unit[SECOND]) as f64 + fraction) / 86400.0;
+    Some(v)
+}
+
+/// Parses text that is unambiguously a number in any locale, ignoring
+/// surrounding ASCII whitespace (used where AOO consults the number
+/// formatter, e.g. criteria operands and COUNT's direct text arguments;
+/// arithmetic conversion uses the stricter [`convert_string_to_value`]):
 ///
 /// - plain decimals with optional sign, fraction and exponent: `12`,
 ///   `-1.5`, `.5`, `1e3`, `2.5E-2` (no thousands separators, no `inf`/`nan`);

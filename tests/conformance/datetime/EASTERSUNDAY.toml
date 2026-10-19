@@ -55,3 +55,13 @@ expect = "#DIV/0!"
 [[case]]
 formula = "=EASTERSUNDAY()"
 expect = "Err:511"
+
+[[case]]
+formula = "=EASTERSUNDAY(24)"
+expect = 45382
+note = "AOO interpr2.cxx ScEasterSunday expands years < 100 with ExpandTwoDigitYear (2024-03-31)."
+
+[[case]]
+formula = "=EASTERSUNDAY(99)=DATE(1999;4;4)"
+expect = true
+note = "Two-digit-year pivot: 99 is 1999, as in DATE."

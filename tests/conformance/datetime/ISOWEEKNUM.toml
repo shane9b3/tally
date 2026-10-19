@@ -1,0 +1,44 @@
+# ISOWEEKNUM (extension; Excel 2013 _xlfn.ISOWEEKNUM) conformance vectors.
+# ISO 8601 week: AOO's WEEKNUM with Monday start.
+
+[[case]]
+formula = "=ISOWEEKNUM(DATE(1995;1;1))"
+expect = 52
+
+[[case]]
+formula = "=ISOWEEKNUM(DATE(2021;1;1))"
+expect = 53
+
+[[case]]
+formula = "=ISOWEEKNUM(DATE(2021;1;4))"
+expect = 1
+
+[[case]]
+formula = "=ISOWEEKNUM(DATE(2026;1;1))"
+expect = 1
+
+[[case]]
+formula = "=ISOWEEKNUM(DATE(2026;10;19))"
+expect = 43
+
+[[case]]
+formula = "=ISOWEEKNUM(DATE(2024;12;30))"
+expect = 1
+
+[[case]]
+formula = "=ISOWEEKNUM(DATE(2026;1;1);1)"
+expect = 53
+note = "Two-argument ODF ISOWEEKNUM is AOO's WEEKNUM (LibreOffice tdf#50950)."
+
+[[case]]
+cells = { A1 = "=DATE(2026;12;31)" }
+formula = "=ISOWEEKNUM(A1)"
+expect = 53
+
+[[case]]
+formula = "=ISOWEEKNUM(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=ISOWEEKNUM()"
+expect = "Err:511"

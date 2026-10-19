@@ -288,3 +288,67 @@ export function sheetEdge(from: CellPos, dir: Dir, lim: Pick<Limits, "rows" | "c
       return { r: from.r, c: lim.cols - 1 };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Merged cells
+// ---------------------------------------------------------------------------
+
+function overlaps(a: RangeDto, b: RangeDto): boolean {
+  return a.r0 <= b.r1 && b.r0 <= a.r1 && a.c0 <= b.c1 && b.c0 <= a.c1;
+}
+
+/** The merged area containing `cell`, if any. */
+export function mergeAt(merges: readonly RangeDto[], cell: CellPos): RangeDto | undefined {
+  return merges.find((m) => inRange(m, cell));
+}
+
+/** Grows `range` until every merged area it touches lies inside it. */
+export function expandToMerges(range: RangeDto, merges: readonly RangeDto[]): RangeDto {
+  const out = { ...range };
+  let grown = true;
+  while (grown) {
+    grown = false;
+    for (const m of merges) {
+      if (!overlaps(out, m)) continue;
+      if (m.r0 < out.r0 || m.c0 < out.c0 || m.r1 > out.r1 || m.c1 > out.c1) {
+        out.r0 = Math.min(out.r0, m.r0);
+        out.c0 = Math.min(out.c0, m.c0);
+        out.r1 = Math.max(out.r1, m.r1);
+        out.c1 = Math.max(out.c1, m.c1);
+        grown = true;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Snaps a selection to merged areas (AOO/Excel behaviour): the active cell
+ * becomes the anchor of its merged area, the range covers whole merged
+ * areas, and a single-cell move that stays inside the area it started from
+ * (an arrow key from the anchor) continues past the area instead.
+ */
+export function snapToMerges(sel: Selection, prev: Selection | null, merges: readonly RangeDto[], lim: Pick<Limits, "rows" | "cols">): Selection {
+  if (merges.length === 0) return sel;
+  let next = sel;
+  const single = isSingleCell(sel.range) && (sel.others ?? []).length === 0;
+  const m = mergeAt(merges, sel.active);
+  if (single && m && prev && inRange(m, prev.active) && (isSingleCell(prev.range) || sameRange(prev.range, m)) && !(sel.active.r === m.r0 && sel.active.c === m.c0)) {
+    const dr = Math.sign(sel.active.r - prev.active.r);
+    const dc = Math.sign(sel.active.c - prev.active.c);
+    if (dr !== 0 || dc !== 0) {
+      const r = dr > 0 ? m.r1 + 1 : dr < 0 ? m.r0 - 1 : prev.active.r;
+      const c = dc > 0 ? m.c1 + 1 : dc < 0 ? m.c0 - 1 : prev.active.c;
+      if (r >= 0 && c >= 0 && r < lim.rows && c < lim.cols) next = cellSelection({ r, c });
+      else next = cellSelection({ r: m.r0, c: m.c0 });
+    }
+  }
+  const am = mergeAt(merges, next.active);
+  const active = am ? { r: am.r0, c: am.c0 } : next.active;
+  const range = expandToMerges(next.range, merges);
+  const anchorMerge = mergeAt(merges, next.anchor);
+  const anchor = isSingleCell(next.range) ? { ...active } : anchorMerge && sameRange(anchorMerge, range) ? { r: anchorMerge.r0, c: anchorMerge.c0 } : next.anchor;
+  const out: Selection = { range, active, anchor };
+  if (next.others && next.others.length > 0) out.others = next.others.map((r) => expandToMerges(r, merges));
+  return sameSelection(out, sel) ? sel : out;
+}

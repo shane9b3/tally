@@ -57,8 +57,10 @@ formula = "=FLOOR(A1;1)"
 expect = 0
 
 [[case]]
+name = "decimal text is #VALUE! by default"
 formula = "=FLOOR(\"7.9\";2)"
-expect = 6
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 formula = "=FLOOR(1.5;\"x\")"
@@ -80,3 +82,9 @@ expect = "Err:504"
 [[case]]
 formula = "=FLOOR(6;3)"
 expect = 6
+
+[[case]]
+name = "decimal text with convert_locale"
+formula = "=FLOOR(\"7.9\";2)"
+expect = 6
+settings = { text_to_number = "convert_locale" }

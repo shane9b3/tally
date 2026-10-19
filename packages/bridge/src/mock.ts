@@ -10,7 +10,10 @@
  * - styles support the full `StylePatch` (display only; number formats are
  *   stored but not applied);
  * - undo/redo restores whole-document snapshots;
- * - structural ops (insert/delete rows/cols) report an `unsupported` OpError.
+ * - structural ops (insert/delete rows/cols) report an `unsupported` OpError;
+ * - v0.3 (conditional formats, validations, notes, links, protection, page
+ *   setup, properties) is stored per document and returned by the queries,
+ *   but not evaluated, enforced or undoable; goal seek is unsupported.
  *
  * Seeded in WP0; owned by WP7 from here on (WP6 may extend it via WP7 review).
  */
@@ -45,7 +48,17 @@ import type { AutoFilterInfo } from "./generated/AutoFilterInfo";
 import type { FindQuery } from "./generated/FindQuery";
 import type { FindResult } from "./generated/FindResult";
 import type { NameInfo } from "./generated/NameInfo";
-import type { EngineClientV2, SheetId, Unsubscribe } from "./client";
+import type { ConditionalFormatDto } from "./generated/ConditionalFormatDto";
+import type { DocPropertiesDto } from "./generated/DocPropertiesDto";
+import type { GoalSeekRequest } from "./generated/GoalSeekRequest";
+import type { GoalSeekResult } from "./generated/GoalSeekResult";
+import type { LocaleInfo } from "./generated/LocaleInfo";
+import type { NoteDto } from "./generated/NoteDto";
+import type { PageSetupDto } from "./generated/PageSetupDto";
+import type { ProtectionInfo } from "./generated/ProtectionInfo";
+import type { ValidationDto } from "./generated/ValidationDto";
+import type { ValidationInfo } from "./generated/ValidationInfo";
+import type { EngineClientV3, SheetId, Unsubscribe } from "./client";
 import { mockTemplate } from "./mockTemplates";
 import { BUILTIN_TEMPLATES, type ShellClient, type TemplateInfo } from "./shell";
 
@@ -94,7 +107,58 @@ interface UndoEntry {
   selectionAfter: SelectionDto | null;
 }
 
+/** v0.3 state of a mock document (not part of undo). */
+interface MockV3 {
+  cfs: Map<SheetId, ConditionalFormatDto[]>;
+  validations: Map<SheetId, ValidationDto[]>;
+  notes: Map<SheetId, Map<string, NoteDto>>;
+  links: Map<SheetId, Map<string, string>>;
+  protected: Map<SheetId, boolean>;
+  structureProtected: boolean;
+  pages: Map<SheetId, PageSetupDto>;
+  props: DocPropertiesDto;
+  nextId: number;
+}
+
+function newV3(): MockV3 {
+  return {
+    cfs: new Map(),
+    validations: new Map(),
+    notes: new Map(),
+    links: new Map(),
+    protected: new Map(),
+    structureProtected: false,
+    pages: new Map(),
+    props: { title: null, subject: null, keywords: [], description: null, author: null, created: null, modified: null, generator: null },
+    nextId: 1,
+  };
+}
+
+/** The default page setup (LibreOffice's Default page style). */
+export function defaultPageSetup(): PageSetupDto {
+  return {
+    orientation: "portrait",
+    paper: { type: "a4" },
+    margins: { topMm: 20, bottomMm: 20, leftMm: 20, rightMm: 20, headerMm: 7.5, footerMm: 7.5 },
+    scale: { type: "percent", percent: 100 },
+    printRange: null,
+    repeatRows: null,
+    repeatCols: null,
+    header: { left: "", center: "&[SHEET]", right: "" },
+    footer: { left: "", center: "Page &[PAGE]", right: "" },
+    printGridlines: false,
+    printHeaders: false,
+    centerH: false,
+    centerV: false,
+    pageOrder: "topToBottom",
+    firstPageNumber: null,
+    rowBreaks: [],
+    colBreaks: [],
+  };
+}
+
 interface MockDoc {
+  v3: MockV3;
   id: DocId;
   title: string;
   path: string | null;
@@ -356,7 +420,7 @@ function hintFor(input: string): string | null {
 /** Currency format the mock applies to template money columns. */
 const MOCK_CURRENCY = "[$$-409]#,##0.00;[RED]-[$$-409]#,##0.00";
 
-export class MockClient implements EngineClientV2, ShellClient {
+export class MockClient implements EngineClientV3, ShellClient {
   private readonly docs = new Map<DocId, MockDoc>();
   private nextDocId = 1;
   private nextClipToken = 1;
@@ -377,6 +441,7 @@ export class MockClient implements EngineClientV2, ShellClient {
       dirty: false,
       version: 0,
       state: { sheets: [newSheet(1, tpl ? tpl.sheet : "Sheet1")], activeSheet: 1, styles: [defaultStyle()], nextSheetId: 2 },
+      v3: newV3(),
       undo: [],
       redo: [],
     };
@@ -480,6 +545,20 @@ export class MockClient implements EngineClientV2, ShellClient {
           if (!inRange(range, r, c)) continue;
           cells.push(viewOf(r, c, cell, ev));
         }
+        // Notes (flag 8) and links (flag 32), adding views for empty cells.
+        const decorate = (k: string, flag: number, link?: string) => {
+          const [r, c] = parseKey(k);
+          if (!inRange(range, r, c)) return;
+          let v = cells.find((x) => x.r === r && x.c === c);
+          if (!v) {
+            v = { r, c, text: "", kind: "empty", num: null, style: 0, color: null, flags: 0 };
+            cells.push(v);
+          }
+          v.flags |= flag;
+          if (link !== undefined) v.link = link;
+        };
+        for (const k of d.v3.notes.get(sheet)?.keys() ?? []) decorate(k, 8);
+        for (const [k, url] of d.v3.links.get(sheet) ?? []) decorate(k, 32, url);
         cells.sort((a, b) => a.r - b.r || a.c - b.c);
         return { sheet, range, version: d.version, cells };
       });
@@ -614,6 +693,118 @@ export class MockClient implements EngineClientV2, ShellClient {
       const d = this.doc(doc);
       return this.result(d, new Touched(), [], null);
     });
+  }
+
+  // -- v0.3 stubs (stored, not evaluated) ------------------------------------
+
+  conditionalFormats(doc: DocId, sheet: SheetId): Promise<ConditionalFormatDto[]> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      this.sheet(d, sheet);
+      return [...(d.v3.cfs.get(sheet) ?? [])];
+    });
+  }
+
+  validations(doc: DocId, sheet: SheetId): Promise<ValidationDto[]> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      this.sheet(d, sheet);
+      return [...(d.v3.validations.get(sheet) ?? [])];
+    });
+  }
+
+  validationAt(doc: DocId, sheet: SheetId, r: number, c: number): Promise<ValidationInfo | null> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      this.sheet(d, sheet);
+      const v = (d.v3.validations.get(sheet) ?? []).find((x) => x.ranges.some((rg) => inRange(rg, r, c)));
+      if (!v) return null;
+      const items = v.kind.type === "list" && v.kind.source.type === "values" ? v.kind.source.items : [];
+      return { id: v.id, listItems: items, showDropdown: v.showDropdown && v.kind.type === "list", inputHelp: v.inputHelp, error: v.error, kind: v.kind };
+    });
+  }
+
+  note(doc: DocId, sheet: SheetId, r: number, c: number): Promise<NoteDto | null> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      this.sheet(d, sheet);
+      return d.v3.notes.get(sheet)?.get(key(r, c)) ?? null;
+    });
+  }
+
+  notes(doc: DocId, sheet: SheetId): Promise<NoteDto[]> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      this.sheet(d, sheet);
+      return [...(d.v3.notes.get(sheet)?.values() ?? [])].sort((a, b) => a.r - b.r || a.c - b.c);
+    });
+  }
+
+  protectionInfo(doc: DocId, sheet: SheetId): Promise<ProtectionInfo> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      this.sheet(d, sheet);
+      return {
+        sheetProtected: d.v3.protected.get(sheet) ?? false,
+        sheetHasPassword: false,
+        options: {
+          selectLocked: true,
+          selectUnlocked: true,
+          insertRows: false,
+          insertCols: false,
+          deleteRows: false,
+          deleteCols: false,
+          formatCells: false,
+          sort: false,
+          autoFilter: false,
+        },
+        structureProtected: d.v3.structureProtected,
+        structureHasPassword: false,
+      };
+    });
+  }
+
+  pageSetup(doc: DocId, sheet: SheetId): Promise<PageSetupDto> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      this.sheet(d, sheet);
+      return d.v3.pages.get(sheet) ?? defaultPageSetup();
+    });
+  }
+
+  documentProperties(doc: DocId): Promise<DocPropertiesDto> {
+    return this.run(() => ({ ...this.doc(doc).v3.props }));
+  }
+
+  goalSeek(doc: DocId, _req: GoalSeekRequest): Promise<GoalSeekResult> {
+    return this.run(() => {
+      this.doc(doc);
+      throw apiError("unsupported", "MockClient does not support goal seek");
+    });
+  }
+
+  listLocales(): Promise<LocaleInfo[]> {
+    return Promise.resolve([{ tag: "en-US", decimalSep: ".", groupSep: ",", listSep: ",", currencySymbol: "$" }]);
+  }
+
+  setLocale(doc: DocId, locale: string): Promise<ApplyResult> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      if (locale !== "en-US") throw apiError("invalid_argument", `unknown locale "${locale}"`);
+      return this.result(d, new Touched(), [], null);
+    });
+  }
+
+  resolveNameBoxIn(doc: DocId, sheet: SheetId, text: string): Promise<SelectionDto> {
+    const d = this.docs.get(doc);
+    if (d && d.state.sheets.some((s) => s.id === sheet)) {
+      const prev = d.state.activeSheet;
+      d.state.activeSheet = sheet;
+      return this.resolveNameBox(doc, text).finally(() => {
+        d.state.activeSheet = prev;
+      });
+    }
+    return this.resolveNameBox(doc, text);
   }
 
   copy(doc: DocId, sel: SelectionDto): Promise<ClipboardOut> {
@@ -902,6 +1093,123 @@ export class MockClient implements EngineClientV2, ShellClient {
         this.writeBlock(sh, op.target.r0, op.target.c0, rows, t);
         return;
       }
+      case "addConditionalFormat":
+      case "updateConditionalFormat": {
+        this.sheet(d, op.sheet);
+        const list = d.v3.cfs.get(op.sheet) ?? [];
+        if (op.type === "addConditionalFormat") {
+          list.push({ id: d.v3.nextId++, ranges: op.ranges, rules: op.rules });
+        } else {
+          const i = list.findIndex((x) => x.id === op.id);
+          if (i < 0) throw apiError("not_found", `no conditional format ${op.id}`);
+          list[i] = { id: op.id, ranges: op.ranges, rules: op.rules };
+        }
+        d.v3.cfs.set(op.sheet, list);
+        t.layout.add(op.sheet);
+        return;
+      }
+      case "deleteConditionalFormat": {
+        const list = d.v3.cfs.get(op.sheet) ?? [];
+        if (!list.some((x) => x.id === op.id)) throw apiError("not_found", `no conditional format ${op.id}`);
+        d.v3.cfs.set(op.sheet, list.filter((x) => x.id !== op.id));
+        t.layout.add(op.sheet);
+        return;
+      }
+      case "addValidation":
+      case "updateValidation": {
+        this.sheet(d, op.sheet);
+        const list = d.v3.validations.get(op.sheet) ?? [];
+        if (op.type === "addValidation") {
+          list.push({ ...op.validation, id: d.v3.nextId++ });
+        } else {
+          const i = list.findIndex((x) => x.id === op.id);
+          if (i < 0) throw apiError("not_found", `no validation ${op.id}`);
+          list[i] = { ...op.validation, id: op.id };
+        }
+        d.v3.validations.set(op.sheet, list);
+        t.layout.add(op.sheet);
+        return;
+      }
+      case "deleteValidation": {
+        const list = d.v3.validations.get(op.sheet) ?? [];
+        if (!list.some((x) => x.id === op.id)) throw apiError("not_found", `no validation ${op.id}`);
+        d.v3.validations.set(op.sheet, list.filter((x) => x.id !== op.id));
+        t.layout.add(op.sheet);
+        return;
+      }
+      case "setNote": {
+        this.sheet(d, op.sheet);
+        checkPos(op.r, op.c);
+        const m = d.v3.notes.get(op.sheet) ?? new Map<string, NoteDto>();
+        m.set(key(op.r, op.c), { ...op.note, r: op.r, c: op.c, created: op.note.created ?? new Date().toISOString().slice(0, 19) });
+        d.v3.notes.set(op.sheet, m);
+        t.cell(op.sheet, { r0: op.r, c0: op.c, r1: op.r, c1: op.c });
+        return;
+      }
+      case "deleteNote": {
+        const m = d.v3.notes.get(op.sheet);
+        if (!m?.delete(key(op.r, op.c))) throw apiError("not_found", "the cell has no note");
+        t.cell(op.sheet, { r0: op.r, c0: op.c, r1: op.r, c1: op.c });
+        return;
+      }
+      case "setLink": {
+        this.sheet(d, op.sheet);
+        checkPos(op.r, op.c);
+        if (/^\s*(javascript|data|vbscript):/i.test(op.url)) throw apiError("invalid_argument", "this kind of link is not allowed");
+        const m = d.v3.links.get(op.sheet) ?? new Map<string, string>();
+        m.set(key(op.r, op.c), op.url.trim());
+        d.v3.links.set(op.sheet, m);
+        t.cell(op.sheet, { r0: op.r, c0: op.c, r1: op.r, c1: op.c });
+        return;
+      }
+      case "clearLink": {
+        const m = d.v3.links.get(op.sheet);
+        if (m) {
+          for (const k of [...m.keys()]) {
+            const [r, c] = parseKey(k);
+            if (op.ranges.some((rg) => inRange(rg, r, c))) m.delete(k);
+          }
+        }
+        for (const rg of op.ranges) t.cell(op.sheet, rg);
+        return;
+      }
+      case "protectSheet":
+      case "unprotectSheet":
+        this.sheet(d, op.sheet);
+        d.v3.protected.set(op.sheet, op.type === "protectSheet");
+        t.layout.add(op.sheet);
+        return;
+      case "protectDocument":
+      case "unprotectDocument":
+        d.v3.structureProtected = op.type === "protectDocument";
+        t.sheetsChanged = true;
+        return;
+      case "setPageSetup":
+        this.sheet(d, op.sheet);
+        d.v3.pages.set(op.sheet, { ...op.setup, rowBreaks: d.v3.pages.get(op.sheet)?.rowBreaks ?? [], colBreaks: d.v3.pages.get(op.sheet)?.colBreaks ?? [] });
+        t.layout.add(op.sheet);
+        return;
+      case "setPageBreak": {
+        this.sheet(d, op.sheet);
+        const p = d.v3.pages.get(op.sheet) ?? defaultPageSetup();
+        const list = op.axis === "row" ? p.rowBreaks : p.colBreaks;
+        const next = list.filter((b) => b !== op.at);
+        if (op.present) next.push(op.at);
+        next.sort((a, b) => a - b);
+        d.v3.pages.set(op.sheet, op.axis === "row" ? { ...p, rowBreaks: next } : { ...p, colBreaks: next });
+        t.layout.add(op.sheet);
+        return;
+      }
+      case "setDocumentProperties":
+        d.v3.props = { ...d.v3.props, ...op.props, created: d.v3.props.created, modified: d.v3.props.modified, generator: d.v3.props.generator };
+        t.sheetsChanged = true;
+        return;
+      case "refreshFilter":
+      case "setCellProtection":
+      case "autoFitRows":
+        this.sheet(d, op.sheet);
+        t.layout.add(op.sheet);
+        return;
       case "insertRows":
       case "deleteRows":
       case "insertCols":

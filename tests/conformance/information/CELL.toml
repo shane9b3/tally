@@ -76,3 +76,15 @@ expect = "Err:511"
 formula = "=CELL(\"row\";A1:B2)"
 expect = 1
 note = "First cell of a range."
+
+[[case]]
+name = "coord is the Lotus form"
+formula = "=CELL(\"coord\";C5)"
+expect = "$A:$C$5"
+note = "AOO interpr1.cxx ScCell COORD: the sheet index is formatted as a column (\"passing tab as col is intentional\"), then ':' and the absolute address."
+
+[[case]]
+name = "coord on the second sheet"
+cells = { "Sheet2.A1" = 1 }
+formula = "=CELL(\"coord\";Sheet2.B2)"
+expect = "$B:$B$2"

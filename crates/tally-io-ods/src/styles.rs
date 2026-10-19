@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::io::BufRead;
 
-use tally_model::{BorderLine, HAlign, StyleData, VAlign};
+use tally_model::{BorderLine, CellProtectionData, CfStyleData, HAlign, StyleData, VAlign};
 
 use crate::numfmt::{DataStyle, DataStyles, Kind, Part};
 use crate::units::{font_size_pt, length_to_hmm, parse_border, parse_color};
@@ -33,18 +33,25 @@ pub(crate) struct RawCellStyle {
     border_bottom: Option<Option<BorderLine>>,
     border_left: Option<Option<BorderLine>>,
     border_right: Option<Option<BorderLine>>,
+    protect: Option<CellProtectionData>,
+    hide_print: Option<bool>,
+    /// `style:map` conditions (legacy conditional formatting).
+    pub(crate) maps: Vec<crate::v03::RawMap>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RowStyle {
     pub height_hmm: Option<u32>,
     pub optimal: bool,
+    /// `fo:break-before="page"`.
+    pub break_before: bool,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TableStyle {
     pub hidden: bool,
     pub tab_color: Option<u32>,
+    pub master_page: Option<String>,
 }
 
 /// The styles from one place (styles.xml or content.xml).
@@ -53,8 +60,10 @@ pub(crate) struct Scope {
     cells: HashMap<String, RawCellStyle>,
     data: DataStyles,
     columns: HashMap<String, u32>,
+    col_breaks: std::collections::HashSet<String>,
     rows: HashMap<String, RowStyle>,
     tables: HashMap<String, TableStyle>,
+    pub(crate) page_layouts: HashMap<String, crate::v03::PageLayout>,
 }
 
 /// All styles of a document plus the deduplicated output table.
@@ -70,6 +79,13 @@ pub(crate) struct StyleSheet {
     /// is O(1) per style instead of a scan of every style so far.
     dedup: HashMap<String, u32>,
     pub styles: Vec<StyleData>,
+    /// Resolved style index → the `style:map`s of the (first) style that
+    /// resolved to it.
+    pub style_maps: HashMap<u32, Vec<crate::v03::RawMap>>,
+    /// Master pages (styles.xml).
+    pub master_pages: HashMap<String, crate::v03::MasterPage>,
+    /// `fo:language`-`fo:country` of the default cell style.
+    pub default_locale: Option<String>,
 }
 
 /// A canonical key for a style. `StyleData` holds `f32` sizes, so it cannot
@@ -109,6 +125,78 @@ impl StyleSheet {
             .or_else(|| self.common.rows.get(name))
     }
 
+    /// `true` if the column style breaks the page before the column.
+    pub fn column_break(&self, name: &str) -> bool {
+        self.content.col_breaks.contains(name) || self.common.col_breaks.contains(name)
+    }
+
+    /// A page layout by name.
+    pub fn page_layout(&self, name: &str) -> Option<&crate::v03::PageLayout> {
+        self.common
+            .page_layouts
+            .get(name)
+            .or_else(|| self.content.page_layouts.get(name))
+    }
+
+    /// A named style as a conditional (differential) style: only the
+    /// properties the style chain sets.
+    pub fn cf_style(&self, name: &str) -> CfStyleData {
+        let mut chain = Vec::new();
+        let mut cur = Some(name.to_string());
+        while let Some(n) = cur {
+            if n == "Default" || chain.len() >= 16 {
+                break;
+            }
+            let Some(raw) = self.cell(&n) else { break };
+            chain.push(raw);
+            cur = raw.parent.clone();
+        }
+        let mut st = CfStyleData::default();
+        for raw in chain.iter().rev() {
+            if raw.bold.is_some() {
+                st.bold = raw.bold;
+            }
+            if raw.italic.is_some() {
+                st.italic = raw.italic;
+            }
+            if raw.underline.is_some() {
+                st.underline = raw.underline;
+            }
+            if raw.strike.is_some() {
+                st.strike = raw.strike;
+            }
+            if let Some(c) = raw.color {
+                st.color = c;
+            }
+            if let Some(f) = raw.fill {
+                st.fill = f;
+            }
+            let mut b = st.borders.clone().unwrap_or_default();
+            let mut any = false;
+            for (slot, src) in [
+                (&mut b.top, &raw.border_top),
+                (&mut b.bottom, &raw.border_bottom),
+                (&mut b.left, &raw.border_left),
+                (&mut b.right, &raw.border_right),
+            ] {
+                if let Some(x) = src {
+                    slot.clone_from(x);
+                    any = true;
+                }
+            }
+            if any {
+                st.borders = Some(b);
+            }
+            if let Some(ds) = raw.data_style.as_deref().and_then(|d| self.data_style(d)) {
+                let code = ds.to_code(|n| self.data_style(n));
+                if !code.is_empty() && code != "General" {
+                    st.number_format = Some(code);
+                }
+            }
+        }
+        st
+    }
+
     pub fn table_style(&self, name: &str) -> Option<&TableStyle> {
         self.content
             .tables
@@ -137,7 +225,8 @@ impl StyleSheet {
             return *r;
         }
         let data = self.build(name);
-        let index = if data == StyleData::default() {
+        let maps = self.cell(name).map(|r| r.maps.clone()).unwrap_or_default();
+        let index = if data == StyleData::default() && maps.is_empty() {
             None
         } else {
             let key = style_key(&data);
@@ -151,6 +240,9 @@ impl StyleSheet {
                 }
             }
         };
+        if let (Some(i), false) = (index, maps.is_empty()) {
+            self.style_maps.entry(i).or_insert(maps);
+        }
         self.resolved.insert(name.to_string(), index);
         index
     }
@@ -191,7 +283,9 @@ impl StyleSheet {
                 border_top,
                 border_bottom,
                 border_left,
-                border_right
+                border_right,
+                protect,
+                hide_print
             );
         }
         let mut s = StyleData::default();
@@ -218,6 +312,11 @@ impl StyleSheet {
         s.borders.bottom = m.border_bottom.flatten();
         s.borders.left = m.border_left.flatten();
         s.borders.right = m.border_right.flatten();
+        let mut prot = m.protect.unwrap_or_default();
+        if m.hide_print == Some(true) {
+            prot.hide_print = true;
+        }
+        s.protection = (prot != CellProtectionData::default()).then_some(prot);
         s.number_format = m
             .data_style
             .as_deref()
@@ -262,6 +361,14 @@ impl StyleSheet {
                 Ev::Start(e) => {
                     if e.name == "style:style" {
                         self.parse_style(xml, &e, origin)?;
+                    } else if e.name == "style:page-layout" {
+                        let name = e.attr("style:name").unwrap_or("").to_string();
+                        let l = crate::v03::parse_page_layout(xml)?;
+                        self.scope_mut(origin).page_layouts.insert(name, l);
+                    } else if e.name == "style:default-style"
+                        && e.attr("style:family") == Some("table-cell")
+                    {
+                        self.parse_default_style(xml)?;
                     } else if let Some(kind) = Kind::from_element(&e.name) {
                         let name = e.attr("style:name").map(str::to_string);
                         let ds = parse_data_style(xml, &e, kind)?;
@@ -271,6 +378,29 @@ impl StyleSheet {
                     } else {
                         xml.skip()?;
                     }
+                }
+                Ev::End if xml.depth() < d => return Ok(()),
+                Ev::Eof => return Ok(()),
+                _ => {}
+            }
+        }
+    }
+
+    fn parse_default_style<R: BufRead>(&mut self, xml: &mut XmlReader<R>) -> Result<(), OdsError> {
+        let d = xml.depth();
+        loop {
+            match xml.next()? {
+                Ev::Start(p) => {
+                    if p.name == "style:text-properties" {
+                        if let Some(lang) = p.attr("fo:language").filter(|l| *l != "none") {
+                            let tag = match p.attr("fo:country").filter(|c| *c != "none") {
+                                Some(c) => format!("{lang}-{c}"),
+                                None => lang.to_string(),
+                            };
+                            self.default_locale = Some(tag);
+                        }
+                    }
+                    xml.skip()?;
                 }
                 Ev::End if xml.depth() < d => return Ok(()),
                 Ev::Eof => return Ok(()),
@@ -296,8 +426,13 @@ impl StyleSheet {
         let mut row = RowStyle {
             height_hmm: None,
             optimal: true,
+            break_before: false,
         };
-        let mut table = TableStyle::default();
+        let mut col_break = false;
+        let mut table = TableStyle {
+            master_page: e.attr("style:master-page-name").map(str::to_string),
+            ..TableStyle::default()
+        };
         let d = xml.depth();
         loop {
             match xml.next()? {
@@ -308,10 +443,27 @@ impl StyleSheet {
                         "style:paragraph-properties" => apply_para_props(&mut cell, &p),
                         "style:table-column-properties" => {
                             col_width = p.attr("style:column-width").and_then(length_to_hmm);
+                            col_break = p.attr("fo:break-before") == Some("page");
                         }
                         "style:table-row-properties" => {
                             row.height_hmm = p.attr("style:row-height").and_then(length_to_hmm);
                             row.optimal = p.attr("style:use-optimal-row-height") != Some("false");
+                            row.break_before = p.attr("fo:break-before") == Some("page");
+                        }
+                        "style:map" if family == "table-cell" => {
+                            if let (Some(c), Some(a)) =
+                                (p.attr("style:condition"), p.attr("style:apply-style-name"))
+                            {
+                                if cell.maps.len() < 64 {
+                                    cell.maps.push(crate::v03::RawMap {
+                                        condition: c.to_string(),
+                                        apply_style: a.to_string(),
+                                        base: p
+                                            .attr("style:base-cell-address")
+                                            .and_then(crate::v03::parse_base),
+                                    });
+                                }
+                            }
                         }
                         "style:table-properties" => {
                             table.hidden = p.attr("table:display") == Some("false");
@@ -335,6 +487,9 @@ impl StyleSheet {
                 scope.cells.insert(name, cell);
             }
             "table-column" => {
+                if col_break {
+                    scope.col_breaks.insert(name.clone());
+                }
                 if let Some(w) = col_width {
                     scope.columns.insert(name, w);
                 }
@@ -415,6 +570,20 @@ fn apply_cell_props(s: &mut RawCellStyle, p: &Elem) {
     }
     if let Some(v) = p.attr("style:text-align-source") {
         s.align_fixed = Some(v == "fix");
+    }
+    if let Some(v) = p.attr("style:cell-protect") {
+        let t: Vec<&str> = v.split_whitespace().collect();
+        s.protect = Some(CellProtectionData {
+            locked: t
+                .iter()
+                .any(|x| matches!(*x, "protected" | "hidden-and-protected")),
+            hidden_formula: t.contains(&"formula-hidden"),
+            hidden: t.contains(&"hidden-and-protected"),
+            hide_print: false,
+        });
+    }
+    if let Some(v) = p.attr("style:print-content") {
+        s.hide_print = Some(v == "false");
     }
 }
 

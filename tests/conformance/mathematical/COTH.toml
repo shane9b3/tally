@@ -5,9 +5,10 @@ formula = "=COTH(0.5)"
 expect = 2.163953413738653
 
 [[case]]
-name = "numeric text"
+name = "decimal text is #VALUE! by default"
 formula = "=COTH(\"0.5\")"
-expect = 2.163953413738653
+expect = "#VALUE!"
+note = "Default ConvertUnambiguous converts only integers, exponents and ISO 8601 dates/times (AOO interpr4.cxx ConvertStringToValue), so decimal text is #VALUE!."
 
 [[case]]
 name = "non-numeric text"
@@ -59,3 +60,9 @@ expect = 1.3130352854993315
 [[case]]
 formula = "=COTH(-2)"
 expect = -1.0373147207275482
+
+[[case]]
+name = "numeric text (convert_locale)"
+formula = "=COTH(\"0.5\")"
+expect = 2.163953413738653
+settings = { text_to_number = "convert_locale" }

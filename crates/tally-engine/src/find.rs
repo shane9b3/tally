@@ -269,6 +269,7 @@ pub fn replace_all(
             format!("{skipped_arrays} cells of array formulas were skipped"),
         ));
     }
+    *fx.replaced.get_or_insert(0) += u32::try_from(changes.len()).unwrap_or(u32::MAX);
     Ok(changes)
 }
 

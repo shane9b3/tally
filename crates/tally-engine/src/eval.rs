@@ -162,6 +162,16 @@ pub fn eval_at_depth(root: &Expr, ctx: &mut dyn EvalContext, array: bool, depth:
                         vals.push(EvalValue::error(ErrorKind::Name));
                         continue;
                     };
+                    if let Some(flat) = flatten_unions(def, args) {
+                        // `SUM(A1~B2;C3)`: each area of a reference union is
+                        // passed as its own argument of a sequence parameter.
+                        let call = Expr::Call {
+                            func: func.clone(),
+                            args: flat,
+                        };
+                        vals.push(eval_at_depth(&call, ctx, arr, depth + 1));
+                        continue;
+                    }
                     if let Err(e) = check_arity(def, args.len()) {
                         vals.push(EvalValue::error(e));
                         continue;
@@ -270,6 +280,57 @@ pub fn eval_at_depth(root: &Expr, ctx: &mut dyn EvalContext, array: bool, depth:
     vals.pop().unwrap_or(EvalValue::Missing)
 }
 
+/// The leaves of a reference union `a~b~c` (through parentheses).
+fn union_leaves<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+    match e {
+        Expr::Paren(x) if is_union(x) => union_leaves(x, out),
+        Expr::Binary(BinOp::Union, l, r) => {
+            union_leaves(l, out);
+            union_leaves(r, out);
+        }
+        other => out.push(other),
+    }
+}
+
+fn is_union(e: &Expr) -> bool {
+    match e {
+        Expr::Paren(x) => is_union(x),
+        Expr::Binary(BinOp::Union, _, _) => true,
+        _ => false,
+    }
+}
+
+/// The arguments with every union argument of a sequence parameter split
+/// into its areas, or `None` when there is nothing to split (or the
+/// split would land an area on a non-sequence parameter).
+fn flatten_unions(def: &FunctionDef, args: &[Expr]) -> Option<Vec<Expr>> {
+    let seq = |k: ParamKind| matches!(k, ParamKind::NumberSeq | ParamKind::ValueSeq);
+    if !args
+        .iter()
+        .enumerate()
+        .any(|(i, a)| is_union(a) && seq(def.param_kind(i)))
+    {
+        return None;
+    }
+    let first = args
+        .iter()
+        .enumerate()
+        .position(|(i, a)| is_union(a) && seq(def.param_kind(i)))?;
+    let mut out: Vec<Expr> = Vec::with_capacity(args.len() + 2);
+    for (i, a) in args.iter().enumerate() {
+        if is_union(a) && seq(def.param_kind(i)) {
+            let mut leaves = Vec::new();
+            union_leaves(a, &mut leaves);
+            out.extend(leaves.into_iter().cloned());
+        } else {
+            out.push(a.clone());
+        }
+    }
+    // The shifted arguments must still meet sequence parameters.
+    let ok = (first..out.len()).all(|j| seq(def.param_kind(j)));
+    ok.then_some(out)
+}
+
 /// Resolves a reference at `origin`.
 fn resolve_ref(r: &RefExpr, origin: CellAddr) -> EvalValue {
     match r.resolve(origin) {
@@ -360,6 +421,12 @@ impl EvalContext for ArrayCtx<'_> {
     fn in_array_context(&self) -> bool {
         self.array
     }
+    fn hidden_row(&self, sheet: SheetId, row: u32) -> bool {
+        self.inner.hidden_row(sheet, row)
+    }
+    fn filtered_row(&self, sheet: SheetId, row: u32) -> bool {
+        self.inner.filtered_row(sheet, row)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +516,9 @@ fn apply_binary(
     match op {
         BinOp::Range => return range_op(&l, &r),
         BinOp::Intersect => return intersect_op(&l, &r),
-        BinOp::Union => return EvalValue::error(ErrorKind::ParamList),
+        // A union is only meaningful as an argument of a sequence parameter
+        // (see `flatten_unions`); elsewhere it is #VALUE!, as in Calc.
+        BinOp::Union => return EvalValue::error(ErrorKind::Value),
         _ => {}
     }
     let a = operand(l, array, ctx);
@@ -567,7 +636,15 @@ pub fn scalar_op(op: BinOp, a: &Value, b: &Value, s: &CalcSettings) -> Value {
                     if x == 0.0 && y == 0.0 {
                         Value::Number(1.0)
                     } else {
-                        finite(x.powf(y))
+                        // As POWER (AOO ScPow / GetDoubleErrorValue): NaN
+                        // (a negative base with a fractional exponent) is
+                        // #VALUE!, an infinite result #NUM!.
+                        let r = x.powf(y);
+                        if r.is_nan() {
+                            Value::Error(ErrorKind::Value)
+                        } else {
+                            finite(r)
+                        }
                     }
                 }
             }
@@ -739,10 +816,14 @@ mod tests {
             eval_str(&mut c, "=A1:A2!C3:C4"),
             Value::Error(ErrorKind::Null)
         );
+        assert_eq!(eval_str(&mut c, "=A1~B2"), Value::Error(ErrorKind::Value));
         assert_eq!(
-            eval_str(&mut c, "=A1~B2"),
-            Value::Error(ErrorKind::ParamList)
+            eval_str(&mut c, "=(-8)^(1/3)"),
+            Value::Error(ErrorKind::Value)
         );
+        assert_eq!(eval_str(&mut c, "=0^-1"), Value::Error(ErrorKind::Num));
+        assert_eq!(eval_str(&mut c, "=10^400"), Value::Error(ErrorKind::Num));
+        assert_eq!(eval_str(&mut c, "=(-8)^3"), Value::Number(-512.0));
     }
 
     #[test]

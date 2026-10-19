@@ -929,7 +929,7 @@ impl EvalContext for CalcCtx<'_> {
 
     fn parse_reference_text(&self, text: &str, a1: bool) -> Option<CellRange> {
         if !a1 {
-            return None;
+            return crate::r1c1::parse(&self.wb, text, self.origin);
         }
         self.wb.parse_reference_at(text, self.origin)
     }
@@ -975,7 +975,19 @@ impl EvalContext for CalcCtx<'_> {
         if !style.is_general() {
             info.format_code = Some(style.format_code.clone());
         }
+        // AOO's default cell style is protected (locked).
+        info.protected = style.data.protection.is_none_or(|p| p.locked);
         info
+    }
+
+    fn hidden_row(&self, sheet: SheetId, row: u32) -> bool {
+        self.wb.sheet(sheet).is_some_and(|s| s.row_hidden(row))
+    }
+
+    fn filtered_row(&self, sheet: SheetId, row: u32) -> bool {
+        self.wb
+            .sheet(sheet)
+            .is_some_and(|s| s.filtered_rows.contains(row))
     }
 }
 

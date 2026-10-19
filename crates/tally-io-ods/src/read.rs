@@ -62,13 +62,36 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
         })?
         .unwrap_or_default();
 
+    let mut sheets = content.sheets;
+    for (sheet, extra) in sheets.iter_mut().zip(&content.extras) {
+        let name = extra.master_page.as_deref().unwrap_or("Default");
+        let mut p = match styles.master_pages.get(name) {
+            Some(m) => crate::v03::page_setup_of(m, styles.page_layout(&m.layout)),
+            None => tally_model::PageSetupData::default(),
+        };
+        p.print_range = extra.print_range;
+        p.repeat_rows = extra.repeat_rows;
+        p.repeat_cols = extra.repeat_cols;
+        if p != tally_model::PageSetupData::default() {
+            sheet.page_setup = Some(p);
+        }
+        if sheet.conditional_formats.is_empty() {
+            legacy_maps(sheet, &styles);
+        }
+    }
+    let locale = styles
+        .default_locale
+        .clone()
+        .filter(|l| !l.eq_ignore_ascii_case("en-US"));
     let mut wb = WorkbookData {
-        sheets: content.sheets,
+        sheets,
         styles: styles.styles,
         names: content.names,
         meta,
         ..WorkbookData::default()
     };
+    wb.settings.locale = locale;
+    wb.settings.structure_protection = content.structure_protection;
     if let Some(calc) = content.calc {
         wb.settings.calc_settings = calc;
     }
@@ -126,6 +149,9 @@ fn parse_styles_xml<R: BufRead>(
                 "office:font-face-decls" => styles.parse_font_faces(xml)?,
                 "office:styles" | "office:automatic-styles" => {
                     styles.parse_block(xml, Origin::Styles)?;
+                }
+                "office:master-styles" => {
+                    styles.master_pages = crate::v03::parse_master_styles(xml)?;
                 }
                 _ => xml.skip()?,
             },
@@ -205,14 +231,88 @@ fn parse_settings<R: BufRead>(xml: &mut XmlReader<R>) -> Result<Settings, OdsErr
     Ok(s)
 }
 
+/// Turns the `style:map`s of the cell styles used on a sheet (OpenOffice's
+/// conditional formatting) into conditional formats over those cells.
+fn legacy_maps(sheet: &mut tally_model::SheetData, styles: &StyleSheet) {
+    if styles.style_maps.is_empty() {
+        return;
+    }
+    let mut cells: HashMap<u32, Vec<(u32, u32, u32)>> = HashMap::new();
+    for c in &sheet.cells {
+        if let Some(st) = c.style.filter(|s| styles.style_maps.contains_key(s)) {
+            cells.entry(st).or_default().push((c.col, c.row, c.row));
+        }
+    }
+    for r in &sheet.style_runs {
+        if styles.style_maps.contains_key(&r.style) {
+            cells
+                .entry(r.style)
+                .or_default()
+                .push((r.col, r.start_row, r.end_row));
+        }
+    }
+    let mut keys: Vec<u32> = cells.keys().copied().collect();
+    keys.sort_unstable();
+    for st in keys {
+        let Some(maps) = styles.style_maps.get(&st) else {
+            continue;
+        };
+        let rects: Vec<tally_model::CellRangeLocal> = cells[&st]
+            .iter()
+            .map(|&(c, r0, r1)| tally_model::CellRangeLocal {
+                r0,
+                c0: c,
+                r1,
+                c1: c,
+            })
+            .collect();
+        let ranges = crate::v03::merge_rects(rects);
+        let Some(first) = ranges.first().copied() else {
+            continue;
+        };
+        let mut base = None;
+        let rules: Vec<tally_model::CfRuleData> = maps
+            .iter()
+            .filter_map(|m| {
+                base = base.or(m.base);
+                crate::v03::parse_map_condition(&m.condition).map(|kind| tally_model::CfRuleData {
+                    kind,
+                    style: styles.cf_style(&m.apply_style),
+                    stop_if_true: false,
+                })
+            })
+            .collect();
+        if !rules.is_empty() {
+            sheet
+                .conditional_formats
+                .push(tally_model::ConditionalFormatData {
+                    ranges,
+                    base: base.unwrap_or((first.r0, first.c0)),
+                    rules,
+                });
+        }
+    }
+}
+
 fn parse_meta<R: BufRead>(xml: &mut XmlReader<R>) -> Result<DocMeta, OdsError> {
     let mut m = DocMeta::default();
     loop {
         match xml.next()? {
             Ev::Start(e) => {
                 let slot = match e.name.as_str() {
+                    "meta:keyword" => {
+                        let k = xml.text_content(MAX_META_TEXT)?;
+                        if !k.trim().is_empty() && m.keywords.len() < 1000 {
+                            m.keywords.push(k.trim().to_string());
+                        }
+                        continue;
+                    }
                     "meta:generator" => &mut m.generator,
                     "dc:title" => &mut m.title,
+                    "dc:subject" => &mut m.subject,
+                    "dc:description" => &mut m.description,
+                    "meta:initial-creator" => &mut m.author,
+                    "dc:creator" => &mut m.last_author,
                     "meta:creation-date" => &mut m.created,
                     "dc:date" => &mut m.modified,
                     "office:document-meta" | "office:meta" => continue,

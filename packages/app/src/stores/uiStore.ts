@@ -1,5 +1,5 @@
 /** UI-only state: sidebar, panels, palette, theme, zoom, toasts, menus. Never undoable. */
-import type { CellPos } from "@tally/bridge";
+import type { CellPos, NameInfo, RangeDto, SortKey } from "@tally/bridge";
 import type { ContextArea } from "@tally/grid";
 import { create } from "zustand";
 import { clampZoom, nextZoom } from "../formats";
@@ -32,7 +32,20 @@ export interface ContextMenuState {
 export type DialogState =
   | { kind: "resize"; axis: "col" | "row"; start: number; end: number; px: number }
   | { kind: "insert"; axis: "row" | "col"; where: "before" | "after" }
-  | { kind: "numberFormat"; code: string };
+  | { kind: "numberFormat"; code: string }
+  | { kind: "sort"; range: RangeDto; hasHeader: boolean; keys: SortKey[]; labels: string[] }
+  | { kind: "findReplace"; text: string }
+  | { kind: "pasteSpecial" }
+  | { kind: "defineName"; name: string; refersTo: string; scope: number | null; replacing: NameInfo | null }
+  | { kind: "manageNames" }
+  | { kind: "confirm"; title: string; message: string; ok: string; danger?: boolean; onConfirm: () => void };
+
+/** The AutoFilter popover of one column, anchored at client coordinates. */
+export interface FilterPopoverState {
+  col: number;
+  x: number;
+  y: number;
+}
 
 export interface UiState {
   sidebarOpen: boolean;
@@ -47,6 +60,9 @@ export interface UiState {
   toasts: Toast[];
   contextMenu: ContextMenuState | null;
   dialog: DialogState | null;
+  filterPopover: FilterPopoverState | null;
+  /** The find bar (⌘F). */
+  findOpen: boolean;
   toggleSidebar(): void;
   setSidebar(open: boolean): void;
   setPalette(open: boolean): void;
@@ -63,6 +79,8 @@ export interface UiState {
   dismissToast(id: number): void;
   openContextMenu(m: ContextMenuState | null): void;
   openDialog(d: DialogState | null): void;
+  openFilterPopover(p: FilterPopoverState | null): void;
+  setFind(open: boolean): void;
   reset(): void;
 }
 
@@ -85,6 +103,8 @@ export const useUiStore = create<UiState>()((set, get) => ({
   toasts: [],
   contextMenu: null,
   dialog: null,
+  filterPopover: null,
+  findOpen: false,
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebar: (sidebarOpen) => set({ sidebarOpen }),
   setPalette: (paletteOpen) => set({ paletteOpen }),
@@ -118,8 +138,21 @@ export const useUiStore = create<UiState>()((set, get) => ({
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   openContextMenu: (contextMenu) => set({ contextMenu }),
   openDialog: (dialog) => set({ dialog }),
+  openFilterPopover: (filterPopover) => set({ filterPopover }),
+  setFind: (findOpen) => set({ findOpen }),
   reset: () =>
-    set({ sidebarOpen: true, paletteOpen: false, glanceOpen: false, shortcutsOpen: false, zoom: 1, toasts: [], contextMenu: null, dialog: null }),
+    set({
+      sidebarOpen: true,
+      paletteOpen: false,
+      glanceOpen: false,
+      shortcutsOpen: false,
+      zoom: 1,
+      toasts: [],
+      contextMenu: null,
+      dialog: null,
+      filterPopover: null,
+      findOpen: false,
+    }),
 }));
 
 /**

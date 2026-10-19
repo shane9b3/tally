@@ -1,6 +1,7 @@
 import type { CellView } from "@tally/bridge";
 import { describe, expect, it } from "vitest";
-import { extensionOf, fillDownEnd, pasteBlocks, planSeries, toSourceValue, type SourceValue } from "../src/fill";
+import { pasteBlocks, planSeries, toSourceValue, type SourceValue } from "../src/dev/mockFill";
+import { extensionOf, fillDownEnd, fillRange } from "../src/fill";
 
 const num = (n: number, date = false): SourceValue => ({ kind: "number", num: n, date });
 const txt = (t: string): SourceValue => ({ kind: "text", text: t });
@@ -94,5 +95,14 @@ describe("fillDownEnd", () => {
     filled.add("3,1");
     expect(fillDownEnd({ r0: 0, c0: 1, r1: 0, c1: 1 }, get, 1000)).toBe(2);
     expect(fillDownEnd({ r0: 0, c0: 5, r1: 0, c1: 5 }, get, 1000)).toBeNull();
+  });
+});
+
+describe("fillRange (engine op)", () => {
+  it("sends one fillRange op with mode auto", () => {
+    const source = { r0: 0, c0: 0, r1: 1, c1: 0 };
+    const target = { r0: 0, c0: 0, r1: 9, c1: 0 };
+    expect(fillRange({ sheet: 3 }, source, target)).toEqual([{ type: "fillRange", sheet: 3, source, target, mode: "auto" }]);
+    expect(fillRange({ sheet: 3 }, source, source)).toEqual([]);
   });
 });

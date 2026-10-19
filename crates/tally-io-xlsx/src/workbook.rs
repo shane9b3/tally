@@ -19,6 +19,8 @@ pub(crate) struct Rel {
     pub target: String,
     /// Relationship type URI.
     pub rtype: String,
+    /// `TargetMode="External"` (hyperlinks): `target` is the raw URL.
+    pub external: bool,
 }
 
 impl Rel {
@@ -86,13 +88,16 @@ pub(crate) fn parse_rels<R: BufRead>(
                 let external = e
                     .attr_local("TargetMode")
                     .is_some_and(|m| m.eq_ignore_ascii_case("External"));
-                if let (Some(id), Some(target), false) =
-                    (e.attr_local("Id"), e.attr_local("Target"), external)
-                {
+                if let (Some(id), Some(target)) = (e.attr_local("Id"), e.attr_local("Target")) {
                     out.push(Rel {
                         id: id.to_string(),
-                        target: resolve_target(base_dir, target),
+                        target: if external {
+                            target.to_string()
+                        } else {
+                            resolve_target(base_dir, target)
+                        },
                         rtype: e.attr_local("Type").unwrap_or("").to_string(),
+                        external,
                     });
                 }
                 xr.skip()?;
@@ -165,6 +170,8 @@ pub(crate) struct WorkbookInfo {
     pub active_tab: u32,
     /// `calcPr iterate="1"`: (count, delta).
     pub iterate: Option<(u32, f64)>,
+    /// `workbookProtection` with `lockStructure`.
+    pub structure_protection: Option<tally_model::SheetProtectionData>,
 }
 
 pub(crate) fn parse_workbook<R: BufRead>(
@@ -178,6 +185,23 @@ pub(crate) fn parse_workbook<R: BufRead>(
                 "workbook" | "sheets" | "definedNames" | "bookViews" => {}
                 "workbookPr" => {
                     wb.date1904 = e.attr_local("date1904").is_some_and(parse_bool);
+                    xr.skip()?;
+                }
+                "workbookProtection" => {
+                    if e.attr_local("lockStructure").is_some_and(parse_bool) {
+                        let a = |k: &str| e.attr_local(k).map(str::to_string);
+                        let mut p = tally_model::SheetProtectionData::default();
+                        if let Some(h) = a("workbookPassword") {
+                            p.password_hash = Some(h);
+                            p.algorithm = Some(tally_model::hash_algorithms::XLSX_LEGACY.into());
+                        } else if let Some(h) = a("workbookHashValue") {
+                            p.password_hash = Some(h);
+                            p.algorithm = a("workbookAlgorithmName");
+                            p.salt = a("workbookSaltValue");
+                            p.spin_count = a("workbookSpinCount").and_then(|v| v.parse().ok());
+                        }
+                        wb.structure_protection = Some(p);
+                    }
                     xr.skip()?;
                 }
                 "workbookView" => {
@@ -255,6 +279,25 @@ pub(crate) fn parse_doc_props<R: BufRead>(
                 let slot = match e.local() {
                     "coreProperties" | "Properties" => continue,
                     "title" => &mut meta.title,
+                    "subject" => &mut meta.subject,
+                    "creator" => &mut meta.author,
+                    "description" => &mut meta.description,
+                    "lastModifiedBy" => &mut meta.last_author,
+                    "keywords" => {
+                        match xr.text_content(MAX) {
+                            Ok(t) => {
+                                meta.keywords = t
+                                    .split([',', ';'])
+                                    .map(|k| k.trim().to_string())
+                                    .filter(|k| !k.is_empty())
+                                    .take(1000)
+                                    .collect();
+                            }
+                            Err(XlsxError::LimitExceeded { .. }) => xr.skip()?,
+                            Err(other) => return Err(other),
+                        }
+                        continue;
+                    }
                     "created" => &mut meta.created,
                     "modified" => &mut meta.modified,
                     "Application" => &mut meta.generator,
