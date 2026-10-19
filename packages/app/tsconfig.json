@@ -1,4 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src"]
+  "compilerOptions": {
+    "types": ["vite/client"],
+    "paths": {
+      "@tally/bridge/tauri": ["../bridge/src/tauri.ts"]
+    }
+  },
+  "include": ["src", "test", "vitest.config.ts"]
 }

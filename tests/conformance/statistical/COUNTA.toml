@@ -1,0 +1,58 @@
+# COUNTA conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "mixed reference"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A5 = "" }
+formula = "=COUNTA(A1:A6)"
+expect = 5
+note = "Numbers, text, booleans, errors and the empty string all count; empty cells do not."
+
+[[case]]
+name = "empty range"
+formula = "=COUNTA(B1:B3)"
+expect = 0
+
+[[case]]
+name = "direct arguments"
+formula = "=COUNTA(1;\"a\";TRUE)"
+expect = 3
+
+[[case]]
+name = "direct error counted"
+formula = "=COUNTA(1/0;2)"
+expect = 2
+
+[[case]]
+name = "formula empty string counts"
+cells = { A1 = "=\"\"", A2 = 3 }
+formula = "=COUNTA(A1:A2)"
+expect = 2
+note = "A formula result of empty text is not an empty cell."
+
+[[case]]
+name = "missing direct argument"
+formula = "=COUNTA(1;;2)"
+expect = 3
+note = "Excel counts the omitted argument; AOO unverified."
+
+[[case]]
+name = "two ranges"
+cells = { A1 = 1, B1 = "t" }
+formula = "=COUNTA(A1:A2;B1:B2)"
+expect = 2
+
+[[case]]
+name = "error cell counted"
+cells = { A1 = "=NA()" }
+formula = "=COUNTA(A1)"
+expect = 1
+
+[[case]]
+name = "no arguments"
+formula = "=COUNTA()"
+expect = "Err:511"
+
+[[case]]
+name = "inline array"
+formula = "=COUNTA({1;2|\"x\";3})"
+expect = 4

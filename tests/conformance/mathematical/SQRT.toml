@@ -1,0 +1,47 @@
+# SQRT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=SQRT(16)"
+expect = 4
+
+[[case]]
+formula = "=SQRT(0)"
+expect = 0
+
+[[case]]
+formula = "=SQRT(2)"
+expect = 1.4142135623730951
+tol = 1e-12
+
+[[case]]
+formula = "=SQRT(-1)"
+expect = "Err:502"
+
+[[case]]
+formula = "=SQRT(\"9\")"
+expect = 3
+
+[[case]]
+formula = "=SQRT(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell"
+formula = "=SQRT(A1)"
+expect = 0
+
+[[case]]
+name = "bool"
+cells = { A1 = true }
+formula = "=SQRT(A1)"
+expect = 1
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=SQRT(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=SQRT()"
+expect = "Err:511"

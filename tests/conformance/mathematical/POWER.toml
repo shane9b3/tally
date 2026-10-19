@@ -1,0 +1,57 @@
+# POWER conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=POWER(2;10)"
+expect = 1024
+
+[[case]]
+formula = "=POWER(0;0)"
+expect = 1
+note = "AOO uses C pow(): 0^0 = 1 (Excel gives #NUM!)."
+
+[[case]]
+formula = "=POWER(0;-1)"
+expect = "#DIV/0!"
+note = "LibreOffice/AOO give #DIV/0! for zero to a negative power."
+
+[[case]]
+name = "negative base, fractional exponent"
+formula = "=POWER(-8;1/3)"
+expect = "#NUM!"
+
+[[case]]
+formula = "=POWER(-2;3)"
+expect = -8
+
+[[case]]
+formula = "=POWER(4;0.5)"
+expect = 2
+tol = 1e-12
+
+[[case]]
+name = "overflow"
+formula = "=POWER(10;400)"
+expect = "#NUM!"
+
+[[case]]
+formula = "=POWER(2;-2)"
+expect = 0.25
+
+[[case]]
+formula = "=POWER(\"x\";2)"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty base"
+formula = "=POWER(A1;2)"
+expect = 0
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=POWER(A1;2)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=POWER(2)"
+expect = "Err:511"

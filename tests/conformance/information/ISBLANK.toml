@@ -1,0 +1,66 @@
+# ISBLANK conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "empty cell"
+formula = "=ISBLANK(A1)"
+expect = true
+
+[[case]]
+name = "number"
+cells = { A1 = 0 }
+formula = "=ISBLANK(A1)"
+expect = false
+
+[[case]]
+name = "text"
+cells = { A1 = "x" }
+formula = "=ISBLANK(A1)"
+expect = false
+
+[[case]]
+name = "empty string formula"
+cells = { A1 = "=\"\"" }
+formula = "=ISBLANK(A1)"
+expect = false
+note = "A formula returning empty text is not blank."
+
+[[case]]
+name = "error cell does not propagate"
+cells = { A1 = "=1/0" }
+formula = "=ISBLANK(A1)"
+expect = false
+
+[[case]]
+name = "direct value"
+formula = "=ISBLANK(5)"
+expect = false
+
+[[case]]
+name = "direct error"
+formula = "=ISBLANK(1/0)"
+expect = false
+
+[[case]]
+name = "boolean"
+cells = { A1 = false }
+formula = "=ISBLANK(A1)"
+expect = false
+
+[[case]]
+name = "range uses intersection"
+cells = { A1 = 1, A3 = 3 }
+origin = "D2"
+formula = "=ISBLANK(A1:A3)"
+expect = true
+
+[[case]]
+name = "range without intersection"
+cells = { A1 = 1 }
+formula = "=ISBLANK(A1:A3)"
+expect = false
+note = "Implicit intersection fails: #VALUE! is not blank."
+
+[[case]]
+name = "no arguments"
+formula = "=ISBLANK()"
+expect = "Err:511"

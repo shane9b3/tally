@@ -1,7 +1,12 @@
-//! Information functions. Not started yet: add one file per function family and
-//! list its `register` call below.
+//! Information functions.
 
 use crate::registry::Registry;
 
+mod is;
+mod na;
+
 /// Registers the Information functions.
-pub fn register(_r: &mut Registry) {}
+pub fn register(r: &mut Registry) {
+    is::register(r);
+    na::register(r);
+}

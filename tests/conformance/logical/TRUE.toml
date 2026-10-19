@@ -1,0 +1,42 @@
+# TRUE conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "value"
+formula = "=TRUE()"
+expect = true
+
+[[case]]
+name = "in arithmetic"
+formula = "=TRUE()+1"
+expect = 2
+
+[[case]]
+name = "in IF"
+formula = "=IF(TRUE();\"y\";\"n\")"
+expect = "y"
+
+[[case]]
+name = "with AND"
+formula = "=AND(TRUE();TRUE())"
+expect = true
+
+[[case]]
+name = "NOT"
+formula = "=NOT(TRUE())"
+expect = false
+
+[[case]]
+name = "equals 1"
+formula = "=TRUE()=1"
+expect = true
+note = "Booleans are numbers in AOO; Excel returns FALSE."
+
+[[case]]
+name = "concatenated"
+formula = "=\"x\"&TRUE()"
+expect = "xTRUE"
+
+[[case]]
+name = "too many"
+formula = "=TRUE(1)"
+expect = "Err:504"

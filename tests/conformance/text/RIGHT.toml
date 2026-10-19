@@ -1,0 +1,53 @@
+# RIGHT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "two chars"
+formula = '=RIGHT("hello";2)'
+expect = "lo"
+
+[[case]]
+name = "default count"
+formula = '=RIGHT("hello")'
+expect = "o"
+
+[[case]]
+name = "count zero"
+formula = '=RIGHT("hello";0)'
+expect = ""
+
+[[case]]
+name = "count past end"
+formula = '=RIGHT("hi";10)'
+expect = "hi"
+
+[[case]]
+name = "negative count"
+formula = '=RIGHT("hello";-1)'
+expect = "Err:502"
+
+[[case]]
+name = "unicode chars"
+formula = '=RIGHT("héllo";4)'
+expect = "éllo"
+
+[[case]]
+name = "number argument"
+formula = '=RIGHT(12345;2)'
+expect = "45"
+
+[[case]]
+name = "cell reference"
+cells = { A1 = "abcdef" }
+formula = '=RIGHT(A1;3)'
+expect = "def"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=NA()" }
+formula = '=RIGHT(A1;1)'
+expect = "#N/A"
+
+[[case]]
+name = "too many arguments"
+formula = '=RIGHT("a";1;2)'
+expect = "Err:504"

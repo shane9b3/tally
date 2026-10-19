@@ -221,3 +221,45 @@ reader and the CSV reader (nightly CI) come in a later milestone.
 | `lying-size.ods` | An error. The zip claims 100 bytes but the entry inflates to 8 MiB; it is never trusted. |
 | `many-entries.ods` | `LimitExceeded { what: "zip entries" }` |
 | `not-a-zip.ods`, `no-content.ods`, `text-document.odt` | `NotOds` |
+
+## WP7: desktop shell (`apps/desktop/src-tauri`)
+
+Details for §7 above.
+
+### Tauri hardening (§5.4 item 7)
+
+| Rule | Where |
+|---|---|
+| Capability `default` grants only `core:default`, `core:window:allow-set-title`, `core:window:allow-start-dragging`, scoped to the `main` window. | `apps/desktop/src-tauri/capabilities/default.json` |
+| No `fs`, `shell`, `http`, `opener` or other plugins are exposed to JS. The only plugin is `tauri-plugin-dialog`, and **no `dialog:*` permission is granted**: dialogs are shown from Rust commands (`wb_open_dialog`, `wb_save`) via `DialogExt` on a blocking worker thread (`tauri::async_runtime::spawn_blocking`). `tauri-plugin-dialog` pulls in `tauri-plugin-fs` as a Rust dependency only; its commands are unreachable without permissions. | `src/dialogs.rs`, `src/lib.rs` |
+| Only our 20 commands (docs/api.md) are registered. | `src/lib.rs` `generate_handler!` |
+| CSP: `default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src ipc: http://ipc.localhost`. No remote hosts; no `unsafe-eval`. `style-src 'unsafe-inline'` is needed for React `style=` attributes and the grid's inline styles. | `tauri.conf.json` |
+| Devtools: the `devtools` cargo feature is not enabled and no window sets `devtools: true`, so devtools exist only in debug builds. | `Cargo.toml`, `tauri.conf.json` |
+| `withGlobalTauri: false`: `window.__TAURI__` is not injected; the UI imports `@tauri-apps/api` explicitly. | `tauri.conf.json` |
+| No network access from the app: the frontend makes no `fetch`; fonts are bundled (`@fontsource-variable/inter`); CSP `connect-src` allows IPC only. | `packages/app`, `packages/tokens` |
+| The webview never receives raw file bytes; files are parsed in Rust (`DocumentService::open`) and only DTOs cross IPC. | `src/commands.rs` |
+| Command code has no `unsafe` (`#![forbid(unsafe_code)]`) and no `unwrap()`; lock poisoning maps to `ApiError { code: "internal" }`. | `src/state.rs` |
+
+### `wb_open(path)` allowlist
+
+JS cannot make the shell read an arbitrary path. `wb_open` canonicalizes the
+path (`std::fs::canonicalize`, resolving `..` and symlinks) and accepts it only if it is:
+
+1. a path the user picked in a native Open or Save dialog during this session (`AppState.allowed`), or
+2. in the persisted recent-files list (`<app_config_dir>/recent.json`, ≤ 10 entries, written only by the shell after a successful dialog open or save), or
+3. inside the bundled `templates/` resource directory.
+
+Anything else is rejected with `invalid_argument`. Save paths always come
+from the Save dialog (`TauriClient.save(doc, path, …)` ignores the JS path
+and shows the dialog when `path !== null`). `wb_new(template)` takes a
+template **id**, resolved by the shell against a fixed table to a file in
+`templates/`; unknown ids are `not_found`.
+
+Residual risk: `recent.json` lives in the user's config directory, so
+anything that can write there can add entries; that attacker already has
+the user's file access.
+
+### Tests
+
+- `cargo test -p tally-desktop`: stub service behaviour, menu ids.
+- Manual: docs/qa/phase-a-manual.md §7.

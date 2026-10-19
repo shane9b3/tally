@@ -1,0 +1,50 @@
+# IFNA conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "NA replaced"
+formula = "=IFNA(NA();\"none\")"
+expect = "none"
+
+[[case]]
+name = "other error kept"
+formula = "=IFNA(1/0;\"none\")"
+expect = "#DIV/0!"
+
+[[case]]
+name = "value kept"
+formula = "=IFNA(5;0)"
+expect = 5
+
+[[case]]
+name = "fallback lazy"
+formula = "=IFNA(1;1/0)"
+expect = 1
+
+[[case]]
+name = "cell NA"
+cells = { A1 = "=NA()" }
+formula = "=IFNA(A1;9)"
+expect = 9
+
+[[case]]
+name = "cell other error"
+cells = { A1 = "=\"a\"+1" }
+formula = "=IFNA(A1;9)"
+expect = "#VALUE!"
+
+[[case]]
+name = "text cell kept"
+cells = { A1 = "t" }
+formula = "=IFNA(A1;9)"
+expect = "t"
+
+[[case]]
+name = "lookup miss"
+cells = { A1 = 1, A2 = 2 }
+formula = "=IFNA(MATCH(5;A1:A2;0);\"no\")"
+expect = "no"
+
+[[case]]
+name = "too few"
+formula = "=IFNA(1)"
+expect = "Err:511"

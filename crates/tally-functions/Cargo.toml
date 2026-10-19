@@ -14,9 +14,7 @@ test-support = []
 
 [dependencies]
 tally-types.workspace = true
-# TODO(WP4): depend on tally-numfmt again once it lands (TEXT/VALUE/DATEVALUE,
-# General formatting and locale-aware text-to-number). Removed for WP3 core so
-# this crate does not build against a moving skeleton.
+tally-numfmt = { workspace = true }
 regex.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true

@@ -1,0 +1,61 @@
+# AVERAGEIF conformance vectors. Common grid: A1=1, A2="x", A3=TRUE, A4=#DIV/0!, A5 empty, A6=5; B1:B6 = 10..60. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "separate average range"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=AVERAGEIF(A1:A6;\">0\";B1:B6)"
+expect = 33.333333333333336
+tol = 1e-12
+
+[[case]]
+name = "averages the criteria range"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=AVERAGEIF(A1:A6;\">0\")"
+expect = 2.3333333333333335
+tol = 1e-12
+
+[[case]]
+name = "no match"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=AVERAGEIF(A1:A6;\">100\";B1:B6)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "blank criterion"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=AVERAGEIF(A1:A6;\"\";B1:B6)"
+expect = 50
+
+[[case]]
+name = "text criterion"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=AVERAGEIF(A1:A6;\"x\";B1:B6)"
+expect = 20
+
+[[case]]
+name = "selected error cell propagates"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=AVERAGEIF(B1:B6;\">0\";A1:A6)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "text sum cell not counted; bool counted"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=AVERAGEIF(B1:B6;\"<35\";A1:A6)"
+expect = 1
+note = "Average of A1 (1) and A3 (TRUE) = 1; the text cell is skipped."
+
+[[case]]
+name = "average_range resized"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=AVERAGEIF(A1:A6;\"x\";B3)"
+expect = 40
+
+[[case]]
+name = "range must be a reference"
+formula = "=AVERAGEIF(5;1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=AVERAGEIF(A1:A6)"
+expect = "Err:511"

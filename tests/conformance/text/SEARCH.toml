@@ -1,0 +1,65 @@
+# SEARCH conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "case insensitive"
+formula = '=SEARCH("L";"hello")'
+expect = 3
+
+[[case]]
+name = "question mark"
+formula = '=SEARCH("e?l";"hello")'
+expect = 2
+
+[[case]]
+name = "star"
+formula = '=SEARCH("l*o";"hello")'
+expect = 3
+
+[[case]]
+name = "escaped star"
+formula = '=SEARCH("~*";"a*b")'
+expect = 2
+
+[[case]]
+name = "with start"
+formula = '=SEARCH("l";"hello";4)'
+expect = 4
+
+[[case]]
+name = "not found"
+formula = '=SEARCH("q";"hello")'
+expect = "#VALUE!"
+
+[[case]]
+name = "start past end"
+formula = '=SEARCH("l";"hello";6)'
+expect = "#VALUE!"
+
+[[case]]
+name = "dot is literal in wildcard mode"
+formula = '=SEARCH("a.c";"abc a.c")'
+expect = 5
+
+[[case]]
+name = "regex mode"
+formula = '=SEARCH("l+o";"hello")'
+expect = 3
+settings = { criteria_mode = "regex" }
+
+[[case]]
+name = "regex invalid"
+formula = '=SEARCH("(";"hello")'
+expect = "#VALUE!"
+settings = { criteria_mode = "regex" }
+
+[[case]]
+name = "literal mode star"
+formula = '=SEARCH("*";"a*b")'
+expect = 2
+settings = { criteria_mode = "literal" }
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=NA()" }
+formula = '=SEARCH("a";A1)'
+expect = "#N/A"

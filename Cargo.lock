@@ -3531,12 +3531,9 @@ dependencies = [
 name = "tally-cli"
 version = "0.1.0"
 dependencies = [
- "serde_json",
  "tally-api",
  "tally-engine",
- "tally-io-csv",
- "tally-io-ods",
- "tally-model",
+ "tally-numfmt",
  "tally-types",
 ]
 
@@ -3562,8 +3559,11 @@ dependencies = [
  "serde",
  "slotmap",
  "smallvec",
+ "tally-api",
  "tally-formula",
  "tally-functions",
+ "tally-io-csv",
+ "tally-io-ods",
  "tally-model",
  "tally-numfmt",
  "tally-types",

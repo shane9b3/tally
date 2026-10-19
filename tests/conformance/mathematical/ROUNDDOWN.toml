@@ -1,0 +1,57 @@
+# ROUNDDOWN conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=ROUNDDOWN(1.99;1)"
+expect = 1.9
+tol = 1e-12
+
+[[case]]
+name = "toward zero, count omitted"
+formula = "=ROUNDDOWN(-1.99)"
+expect = -1
+
+[[case]]
+formula = "=ROUNDDOWN(1999;-3)"
+expect = 1000
+
+[[case]]
+name = "binary residue does not drop"
+formula = "=ROUNDDOWN(2.3;1)"
+expect = 2.3
+tol = 1e-12
+
+[[case]]
+formula = "=ROUNDDOWN(0;3)"
+expect = 0
+
+[[case]]
+formula = "=ROUNDDOWN(5;21)"
+expect = "Err:502"
+
+[[case]]
+formula = "=ROUNDDOWN(5;-21)"
+expect = "Err:502"
+
+[[case]]
+formula = "=ROUNDDOWN(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=ROUNDDOWN(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "empty cell"
+formula = "=ROUNDDOWN(A1;1)"
+expect = 0
+
+[[case]]
+name = "empty count argument"
+formula = "=ROUNDDOWN(9.99;)"
+expect = 9
+
+[[case]]
+formula = "=ROUNDDOWN()"
+expect = "Err:511"

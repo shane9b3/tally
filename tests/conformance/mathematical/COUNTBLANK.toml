@@ -1,0 +1,50 @@
+# COUNTBLANK conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "empty cells"
+cells = { A1 = 1, A2 = "x", A4 = true }
+formula = "=COUNTBLANK(A1:A5)"
+expect = 2
+
+[[case]]
+name = "empty-string results count"
+cells = { A1 = "=\"\"", A2 = "", A3 = "=\"\"" }
+formula = "=COUNTBLANK(A1:A3)"
+expect = 3
+note = "AOO counts cells with empty-string results as blank."
+
+[[case]]
+name = "zero, FALSE and errors are not blank"
+cells = { A1 = 0, A2 = false, A3 = "=1/0" }
+formula = "=COUNTBLANK(A1:A3)"
+expect = 0
+
+[[case]]
+name = "single empty cell"
+formula = "=COUNTBLANK(A1)"
+expect = 1
+
+[[case]]
+name = "2-D range"
+cells = { A1 = 1, B1 = 2, A2 = 3 }
+formula = "=COUNTBLANK(A1:B2)"
+expect = 1
+
+[[case]]
+name = "whole column"
+cells = { A1 = 1, A5 = "x" }
+formula = "=COUNTBLANK(A1:A1048576)"
+expect = 1048574
+
+[[case]]
+name = "not a reference"
+formula = "=COUNTBLANK(5)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=COUNTBLANK()"
+expect = "Err:511"
+
+[[case]]
+formula = "=COUNTBLANK(A1:A2;A3)"
+expect = "Err:504"

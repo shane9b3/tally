@@ -1,0 +1,58 @@
+# ISNUMBER conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "number"
+formula = "=ISNUMBER(1)"
+expect = true
+
+[[case]]
+name = "text"
+formula = "=ISNUMBER(\"1\")"
+expect = false
+
+[[case]]
+name = "bool"
+formula = "=ISNUMBER(TRUE())"
+expect = true
+note = "AOO stores booleans as numbers, so ISNUMBER(TRUE) is TRUE; Excel says FALSE."
+
+[[case]]
+name = "empty cell"
+formula = "=ISNUMBER(A1)"
+expect = false
+
+[[case]]
+name = "number cell"
+cells = { A1 = 2.5 }
+formula = "=ISNUMBER(A1)"
+expect = true
+
+[[case]]
+name = "text number cell"
+cells = { A1 = "3" }
+formula = "=ISNUMBER(A1)"
+expect = false
+
+[[case]]
+name = "error cell"
+cells = { A1 = "=1/0" }
+formula = "=ISNUMBER(A1)"
+expect = false
+
+[[case]]
+name = "date serial cell"
+cells = { A1 = 45000 }
+formula = "=ISNUMBER(A1)"
+expect = true
+
+[[case]]
+name = "range intersection"
+cells = { A1 = "x", A2 = 2 }
+origin = "D2"
+formula = "=ISNUMBER(A1:A3)"
+expect = true
+
+[[case]]
+name = "no arguments"
+formula = "=ISNUMBER()"
+expect = "Err:511"

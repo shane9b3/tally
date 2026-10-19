@@ -1,0 +1,59 @@
+# YEAR conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "serial with time"
+formula = '=YEAR(46314.75)'
+expect = 2026
+
+[[case]]
+name = "epoch zero"
+formula = '=YEAR(0)'
+expect = 1899
+
+[[case]]
+name = "negative serial"
+formula = '=YEAR(-1)'
+expect = 1899
+
+[[case]]
+name = "from DATE"
+formula = '=YEAR(DATE(2026;10;19))'
+expect = 2026
+
+[[case]]
+name = "iso text"
+formula = '=YEAR("2026-10-19")'
+expect = 2026
+
+[[case]]
+name = "empty cell is serial 0"
+formula = '=YEAR(A5)'
+expect = 1899
+
+[[case]]
+name = "cell reference"
+cells = { A1 = 46314 }
+formula = '=YEAR(A1)'
+expect = 2026
+
+[[case]]
+name = "1904 epoch"
+formula = '=YEAR(0)'
+expect = 1904
+settings = { date_epoch = "1904" }
+
+[[case]]
+name = "out of range"
+formula = '=YEAR(1E9)'
+expect = "Err:502"
+
+[[case]]
+name = "non-date text"
+formula = '=YEAR("abc")'
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=YEAR(A1)'
+expect = "#DIV/0!"

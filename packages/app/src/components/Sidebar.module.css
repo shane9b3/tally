@@ -1,0 +1,166 @@
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  flex: none;
+  height: 100%;
+  padding: 0 12px 14px;
+  background: var(--tally-gray-50);
+  border-right: 1px solid var(--tally-border-subtle);
+  overflow-y: auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.top {
+  height: 14px;
+  flex: none;
+}
+
+/* Room for the macOS traffic lights above the first item. */
+.insetTop {
+  height: 52px;
+}
+
+.newButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  flex: none;
+  border: 0;
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-accent);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: default;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.3);
+  transition: background 120ms ease;
+}
+
+.newButton:hover {
+  background: var(--tally-accent-hover);
+}
+
+.section {
+  margin-top: 22px;
+}
+
+.heading {
+  margin: 0 0 6px;
+  padding: 0 8px;
+  color: var(--tally-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--tally-gray-700);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: default;
+}
+
+.row:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.current {
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font-weight: 500;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.current:hover {
+  background: var(--tally-bg);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+}
+
+.square {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border: 1.5px solid;
+  border-radius: 3px;
+}
+
+.rowTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  flex: none;
+  color: var(--tally-text-muted);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+.grow {
+  flex: 1;
+  min-height: 16px;
+}
+
+.tip {
+  padding: 12px 14px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-card);
+  background: var(--tally-bg);
+  color: var(--tally-gray-500);
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.tipTitle {
+  margin-bottom: 2px;
+  color: var(--tally-text);
+  font-weight: 600;
+}
+
+.kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 0 4px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  background: var(--tally-gray-50);
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}

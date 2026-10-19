@@ -1,0 +1,48 @@
+# UPPER conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "basic"
+formula = '=UPPER("aBc")'
+expect = "ABC"
+
+[[case]]
+name = "unicode"
+formula = '=UPPER("é")'
+expect = "É"
+
+[[case]]
+name = "digits kept"
+formula = '=UPPER("a1b2")'
+expect = "A1B2"
+
+[[case]]
+name = "empty"
+formula = '=UPPER("")'
+expect = ""
+
+[[case]]
+name = "number"
+formula = '=UPPER(1.5)'
+expect = "1.5"
+
+[[case]]
+name = "boolean"
+formula = '=UPPER(TRUE)'
+expect = "TRUE"
+
+[[case]]
+name = "empty cell"
+formula = '=UPPER(A5)'
+expect = ""
+
+[[case]]
+name = "cell reference"
+cells = { A1 = "hello" }
+formula = '=UPPER(A1)'
+expect = "HELLO"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=NA()" }
+formula = '=UPPER(A1)'
+expect = "#N/A"

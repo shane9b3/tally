@@ -1,0 +1,65 @@
+# DATEVALUE conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "iso"
+formula = '=DATEVALUE("2026-10-19")'
+expect = 46314
+
+[[case]]
+name = "us slash"
+formula = '=DATEVALUE("10/19/2026")'
+expect = 46314
+
+[[case]]
+name = "datetime drops time"
+formula = '=DATEVALUE("2026-10-19 18:00")'
+expect = 46314
+
+[[case]]
+name = "epoch day"
+formula = '=DATEVALUE("1899-12-30")'
+expect = 0
+
+[[case]]
+name = "not a date"
+formula = '=DATEVALUE("abc")'
+expect = "#VALUE!"
+
+[[case]]
+name = "time only"
+formula = '=DATEVALUE("14:30")'
+expect = "#VALUE!"
+
+[[case]]
+name = "plain number text"
+formula = '=DATEVALUE("42")'
+expect = "#VALUE!"
+
+[[case]]
+name = "empty text"
+formula = '=DATEVALUE("")'
+expect = "#VALUE!"
+
+[[case]]
+name = "number argument"
+formula = '=DATEVALUE(46314)'
+expect = "#VALUE!"
+note = "Only text is accepted."
+
+[[case]]
+name = "cell text"
+cells = { A1 = "2026-10-19" }
+formula = '=DATEVALUE(A1)'
+expect = 46314
+
+[[case]]
+name = "1904 epoch"
+formula = '=DATEVALUE("1904-01-02")'
+expect = 1
+settings = { date_epoch = "1904" }
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=DATEVALUE(A1)'
+expect = "#DIV/0!"

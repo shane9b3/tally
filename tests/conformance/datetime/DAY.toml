@@ -1,0 +1,59 @@
+# DAY conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "serial with time"
+formula = '=DAY(46314.75)'
+expect = 19
+
+[[case]]
+name = "epoch zero"
+formula = '=DAY(0)'
+expect = 30
+
+[[case]]
+name = "negative serial"
+formula = '=DAY(-1)'
+expect = 29
+
+[[case]]
+name = "from DATE"
+formula = '=DAY(DATE(2026;10;19))'
+expect = 19
+
+[[case]]
+name = "iso text"
+formula = '=DAY("2026-10-19")'
+expect = 19
+
+[[case]]
+name = "empty cell is serial 0"
+formula = '=DAY(A5)'
+expect = 30
+
+[[case]]
+name = "cell reference"
+cells = { A1 = 46314 }
+formula = '=DAY(A1)'
+expect = 19
+
+[[case]]
+name = "1904 epoch"
+formula = '=DAY(0)'
+expect = 1
+settings = { date_epoch = "1904" }
+
+[[case]]
+name = "out of range"
+formula = '=DAY(1E9)'
+expect = "Err:502"
+
+[[case]]
+name = "non-date text"
+formula = '=DAY("abc")'
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=DAY(A1)'
+expect = "#DIV/0!"

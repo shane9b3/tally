@@ -1,0 +1,57 @@
+# ISTEXT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "text"
+formula = "=ISTEXT(\"a\")"
+expect = true
+
+[[case]]
+name = "number"
+formula = "=ISTEXT(1)"
+expect = false
+
+[[case]]
+name = "bool"
+formula = "=ISTEXT(TRUE())"
+expect = false
+
+[[case]]
+name = "empty cell"
+formula = "=ISTEXT(A1)"
+expect = false
+
+[[case]]
+name = "text cell"
+cells = { A1 = "hello" }
+formula = "=ISTEXT(A1)"
+expect = true
+
+[[case]]
+name = "empty string formula"
+cells = { A1 = "=\"\"" }
+formula = "=ISTEXT(A1)"
+expect = true
+
+[[case]]
+name = "text number cell"
+cells = { A1 = "3" }
+formula = "=ISTEXT(A1)"
+expect = true
+
+[[case]]
+name = "error cell"
+cells = { A1 = "=NA()" }
+formula = "=ISTEXT(A1)"
+expect = false
+
+[[case]]
+name = "range intersection"
+cells = { A2 = "s" }
+origin = "D2"
+formula = "=ISTEXT(A1:A3)"
+expect = true
+
+[[case]]
+name = "no arguments"
+formula = "=ISTEXT()"
+expect = "Err:511"

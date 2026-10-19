@@ -1,0 +1,100 @@
+# VLOOKUP conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "sorted exact hit"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(3;A1:B3;2)"
+expect = "b"
+
+[[case]]
+name = "sorted between rows"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(4;A1:B3;2)"
+expect = "b"
+
+[[case]]
+name = "sorted beyond end"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(99;A1:B3;2)"
+expect = "c"
+
+[[case]]
+name = "sorted below first"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(0;A1:B3;2)"
+expect = "#N/A"
+
+[[case]]
+name = "exact hit"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(5;A1:B4;2;FALSE())"
+expect = "c"
+
+[[case]]
+name = "exact miss"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(4;A1:B4;2;FALSE())"
+expect = "#N/A"
+
+[[case]]
+name = "exact text case-insensitive"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(\"X\";A1:B4;2;0)"
+expect = "d"
+
+[[case]]
+name = "exact wildcard"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(\"?\";A1:B4;2;0)"
+expect = "d"
+note = "Wildcards per the default criteria mode."
+
+[[case]]
+name = "numeric lookup never matches text"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(\"5\";A1:B4;2;0)"
+expect = "#N/A"
+
+[[case]]
+name = "first column index"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(1;A1:B3;1;0)"
+expect = 1
+
+[[case]]
+name = "index too large"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(1;A1:B3;3;0)"
+expect = "Err:502"
+note = "AOO: illegal argument; Excel gives #REF!."
+
+[[case]]
+name = "index zero"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(1;A1:B3;0;0)"
+expect = "Err:502"
+note = "AOO: illegal argument; Excel gives #VALUE!."
+
+[[case]]
+name = "lookup error propagates"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(1/0;A1:B3;2)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "lookup value from range by intersection"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d", D2 = 3 }
+origin = "F2"
+formula = "=VLOOKUP(D1:D3;A1:B3;2;0)"
+expect = "b"
+
+[[case]]
+name = "empty sorted argument defaults to TRUE"
+cells = { A1 = 1, B1 = "a", A2 = 3, B2 = "b", A3 = 5, B3 = "c", A4 = "x", B4 = "d" }
+formula = "=VLOOKUP(4;A1:B3;2;)"
+expect = "b"
+
+[[case]]
+name = "inline array"
+formula = "=VLOOKUP(2;{1;\"a\"|2;\"b\"};2;0)"
+expect = "b"

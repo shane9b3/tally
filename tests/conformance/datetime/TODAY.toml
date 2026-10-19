@@ -1,0 +1,41 @@
+# TODAY conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "is a recent serial"
+formula = '=TODAY()>46000'
+expect = true
+
+[[case]]
+name = "is an integer"
+formula = '=TODAY()=INT(TODAY())'
+expect = true
+
+[[case]]
+name = "not after now"
+formula = '=TODAY()<=NOW()'
+expect = true
+
+[[case]]
+name = "year plausible"
+formula = '=YEAR(TODAY())>=2026'
+expect = true
+
+[[case]]
+name = "month in range"
+formula = '=AND(MONTH(TODAY())>=1;MONTH(TODAY())<=12)'
+expect = true
+
+[[case]]
+name = "weekday in range"
+formula = '=AND(WEEKDAY(TODAY())>=1;WEEKDAY(TODAY())<=7)'
+expect = true
+
+[[case]]
+name = "less than a day from now"
+formula = '=NOW()-TODAY()<1'
+expect = true
+
+[[case]]
+name = "no arguments allowed"
+formula = '=TODAY(1)'
+expect = "Err:504"

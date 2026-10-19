@@ -1,7 +1,10 @@
-//! Array functions. Not started yet: add one file per function family and
-//! list its `register` call below.
+//! Array functions.
 
 use crate::registry::Registry;
 
+mod sumproduct;
+
 /// Registers the Array functions.
-pub fn register(_r: &mut Registry) {}
+pub fn register(r: &mut Registry) {
+    sumproduct::register(r);
+}

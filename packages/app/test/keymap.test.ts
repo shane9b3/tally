@@ -1,0 +1,68 @@
+import { describe, expect, it } from "vitest";
+import { resolveKey, shortcutFor, type KeyLike } from "../src/keymap";
+import { CommandRegistry } from "../src/registry";
+
+const key = (k: string, mods: Partial<KeyLike> = {}): KeyLike => ({
+  key: k,
+  metaKey: false,
+  ctrlKey: false,
+  shiftKey: false,
+  altKey: false,
+  ...mods,
+});
+const idle = { typing: false, nativeMenu: false };
+
+describe("keymap", () => {
+  it("maps the core shortcuts (Cmd or Ctrl)", () => {
+    expect(resolveKey(key("z", { metaKey: true }), idle)).toBe("edit.undo");
+    expect(resolveKey(key("Z", { metaKey: true, shiftKey: true }), idle)).toBe("edit.redo");
+    expect(resolveKey(key("b", { ctrlKey: true }), idle)).toBe("format.bold");
+    expect(resolveKey(key("i", { metaKey: true }), idle)).toBe("format.italic");
+    expect(resolveKey(key("k", { metaKey: true }), idle)).toBe("palette.toggle");
+    expect(resolveKey(key("\\", { metaKey: true }), idle)).toBe("view.toggleSidebar");
+    expect(resolveKey(key("«", { metaKey: true, code: "Backslash" }), idle)).toBe("view.toggleSidebar");
+    expect(resolveKey(key("s", { metaKey: true }), idle)).toBe("file.save");
+    expect(resolveKey(key("n", { metaKey: true }), idle)).toBe("file.new");
+    expect(resolveKey(key("o", { metaKey: true }), idle)).toBe("file.open");
+  });
+  it("ignores plain keys and F2 (the grid handles them)", () => {
+    expect(resolveKey(key("b"), idle)).toBeNull();
+    expect(resolveKey(key("F2"), idle)).toBeNull();
+    expect(resolveKey(key("b", { metaKey: true, altKey: true }), idle)).toBeNull();
+  });
+  it("only global bindings work while typing", () => {
+    const typing = { typing: true, nativeMenu: false };
+    expect(resolveKey(key("z", { metaKey: true }), typing)).toBeNull();
+    expect(resolveKey(key("b", { metaKey: true }), typing)).toBeNull();
+    expect(resolveKey(key("k", { metaKey: true }), typing)).toBe("palette.toggle");
+  });
+  it("leaves menu accelerators to the native menu in Tauri", () => {
+    const tauri = { typing: false, nativeMenu: true };
+    expect(resolveKey(key("z", { metaKey: true }), tauri)).toBeNull();
+    expect(resolveKey(key("s", { metaKey: true }), tauri)).toBeNull();
+    expect(resolveKey(key("b", { metaKey: true }), tauri)).toBe("format.bold");
+    expect(resolveKey(key("k", { metaKey: true }), tauri)).toBe("palette.toggle");
+  });
+  it("labels shortcuts", () => {
+    expect(shortcutFor("format.bold")).toBe("⌘B");
+    expect(shortcutFor("nope")).toBeUndefined();
+  });
+});
+
+describe("CommandRegistry", () => {
+  it("runs enabled commands only and hides hidden ones", () => {
+    const reg = new CommandRegistry();
+    let ran = 0;
+    reg.register({ id: "a", title: "A", kind: "Edit", run: () => void ran++ });
+    reg.register({ id: "b", title: "B", kind: "Edit", enabled: () => false, run: () => void ran++ });
+    const off = reg.register({ id: "c", title: "C", kind: "View", hidden: true, run: () => void ran++ });
+    expect(reg.run("a")).toBe(true);
+    expect(reg.run("b")).toBe(false);
+    expect(reg.run("zzz")).toBe(false);
+    expect(reg.list().map((c) => c.id)).toEqual(["a", "b"]);
+    expect(reg.run("c")).toBe(true);
+    off();
+    expect(reg.has("c")).toBe(false);
+    expect(ran).toBe(2);
+  });
+});

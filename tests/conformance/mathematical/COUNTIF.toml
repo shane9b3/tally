@@ -1,0 +1,77 @@
+# COUNTIF conformance vectors. Common grid: A1=1, A2="x", A3=TRUE, A4=#DIV/0!, A5 empty, A6=5; B1:B6 = 10..60. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "number criterion; TRUE counts as 1"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=COUNTIF(A1:A6;1)"
+expect = 2
+note = "AOO stores booleans as numbers."
+
+[[case]]
+name = "comparison"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=COUNTIF(A1:A6;\">1\")"
+expect = 1
+
+[[case]]
+name = "text"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=COUNTIF(A1:A6;\"x\")"
+expect = 1
+
+[[case]]
+name = "empty string matches empty cells"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=COUNTIF(A1:A6;\"\")"
+expect = 1
+
+[[case]]
+name = "= matches only blank cells"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=COUNTIF(A1:A6;\"=\")"
+expect = 1
+
+[[case]]
+name = "<> matches non-blank"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=COUNTIF(A1:A6;\"<>\")"
+expect = 5
+
+[[case]]
+name = "error criterion"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=COUNTIF(A1:A6;\"#DIV/0!\")"
+expect = 1
+
+[[case]]
+name = "wildcard"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=COUNTIF(A1:A6;\"?\")"
+expect = 1
+
+[[case]]
+name = "whole column counts the empty remainder"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=COUNTIF(A1:A1048576;\"\")"
+expect = 1048571
+
+[[case]]
+name = "booleans compare as numbers"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=COUNTIF(A1:A6;\">=1\")"
+expect = 3
+
+[[case]]
+name = "range must be a reference"
+formula = "=COUNTIF(5;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error in criterion cell propagates"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=COUNTIF(A1:A6;A4)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=COUNTIF(A1:A6)"
+expect = "Err:511"

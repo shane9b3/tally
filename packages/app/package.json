@@ -8,15 +8,30 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "sideEffects": ["*.css"],
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
   },
   "dependencies": {
     "@tally/bridge": "workspace:*",
     "@tally/grid": "workspace:*",
-    "@tally/tokens": "workspace:*"
+    "@tally/tokens": "workspace:*",
+    "cmdk": "1.1.1",
+    "zustand": "5.0.15"
+  },
+  "peerDependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
-    "typescript": "5.9.3"
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "happy-dom": "21.0.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "3.2.7"
   }
 }

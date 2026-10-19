@@ -1,0 +1,63 @@
+# LEFT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "two chars"
+formula = '=LEFT("hello";2)'
+expect = "he"
+
+[[case]]
+name = "default count"
+formula = '=LEFT("hello")'
+expect = "h"
+
+[[case]]
+name = "count zero"
+formula = '=LEFT("hello";0)'
+expect = ""
+
+[[case]]
+name = "count past end"
+formula = '=LEFT("hi";10)'
+expect = "hi"
+
+[[case]]
+name = "negative count"
+formula = '=LEFT("hello";-1)'
+expect = "Err:502"
+
+[[case]]
+name = "unicode chars"
+formula = '=LEFT("héllo";2)'
+expect = "hé"
+
+[[case]]
+name = "number argument"
+formula = '=LEFT(12345;2)'
+expect = "12"
+
+[[case]]
+name = "cell reference"
+cells = { A1 = "abcdef" }
+formula = '=LEFT(A1;3)'
+expect = "abc"
+
+[[case]]
+name = "empty cell"
+formula = '=LEFT(A5;3)'
+expect = ""
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=LEFT(A1;1)'
+expect = "#DIV/0!"
+
+[[case]]
+name = "missing count argument"
+formula = '=LEFT("hello";)'
+expect = "h"
+
+[[case]]
+name = "no arguments"
+formula = '=LEFT()'
+expect = "Err:511"

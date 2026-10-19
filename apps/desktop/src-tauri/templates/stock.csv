@@ -1,0 +1,6 @@
+Item,On hand,Reorder at,Unit cost,Value
+Flour (kg),42,20,1.10,=B2*D2
+Sugar (kg),18,15,0.95,=B3*D3
+Butter (kg),9,10,7.80,=B4*D4
+Eggs (dozen),24,12,3.40,=B5*D5
+,,,Total,=SUM(E2:E5)

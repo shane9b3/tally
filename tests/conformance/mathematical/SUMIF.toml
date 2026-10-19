@@ -1,0 +1,72 @@
+# SUMIF conformance vectors. Common grid: A1=1, A2="x", A3=TRUE, A4=#DIV/0!, A5 empty, A6=5; B1:B6 = 10..60. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "sums the criteria range itself"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=SUMIF(A1:A6;\">0\")"
+expect = 7
+note = "TRUE counts as 1 (booleans are numbers in AOO)."
+
+[[case]]
+name = "separate sum range"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=SUMIF(A1:A6;\">0\";B1:B6)"
+expect = 100
+
+[[case]]
+name = "blank criterion selects empty cells"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=SUMIF(A1:A6;\"\";B1:B6)"
+expect = 50
+
+[[case]]
+name = "sum_range resized to the criteria range, anchored top-left"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=SUMIF(A1:A6;\"x\";B3)"
+expect = 40
+note = "AOO behaviour; Excel does the same."
+
+[[case]]
+name = "selected error cell propagates"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=SUMIF(B1:B6;\">0\";A1:A6)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "unselected error cell ignored"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=SUMIF(B1:B6;\"<35\";A1:A6)"
+expect = 2
+
+[[case]]
+name = "wildcard"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=SUMIF(A1:A6;\"?\";B1:B6)"
+expect = 20
+
+[[case]]
+name = "whole columns"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=SUMIF(A1:A1048576;\"\";B1:B1048576)"
+expect = 50
+
+[[case]]
+name = "no match gives 0"
+cells = { A1 = "a" }
+formula = "=SUMIF(A1:A6;\">0\";B1:B6)"
+expect = 0
+
+[[case]]
+name = "range must be a reference"
+formula = "=SUMIF(5;1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error criterion propagates"
+cells = { A1 = 1, A2 = "x", A3 = true, A4 = "=1/0", A6 = 5, B1 = 10, B2 = 20, B3 = 30, B4 = 40, B5 = 50, B6 = 60 }
+formula = "=SUMIF(A1:A6;A4;B1:B6)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=SUMIF(A1:A6)"
+expect = "Err:511"

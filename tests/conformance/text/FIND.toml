@@ -1,0 +1,57 @@
+# FIND conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "found"
+formula = '=FIND("l";"hello")'
+expect = 3
+
+[[case]]
+name = "with start"
+formula = '=FIND("l";"hello";4)'
+expect = 4
+
+[[case]]
+name = "case sensitive"
+formula = '=FIND("L";"hello")'
+expect = "#VALUE!"
+
+[[case]]
+name = "not found"
+formula = '=FIND("z";"hello")'
+expect = "#VALUE!"
+
+[[case]]
+name = "no wildcards"
+formula = '=FIND("*";"a*b")'
+expect = 2
+
+[[case]]
+name = "empty needle"
+formula = '=FIND("";"abc")'
+expect = 1
+
+[[case]]
+name = "start zero"
+formula = '=FIND("l";"hello";0)'
+expect = "#VALUE!"
+
+[[case]]
+name = "start past end"
+formula = '=FIND("l";"hello";6)'
+expect = "#VALUE!"
+
+[[case]]
+name = "unicode positions"
+formula = '=FIND("b";"é-b")'
+expect = 3
+
+[[case]]
+name = "number needle"
+formula = '=FIND(2;"a12")'
+expect = 3
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=FIND("a";A1)'
+expect = "#DIV/0!"

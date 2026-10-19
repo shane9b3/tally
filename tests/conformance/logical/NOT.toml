@@ -1,0 +1,58 @@
+# NOT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "true"
+formula = "=NOT(TRUE())"
+expect = false
+
+[[case]]
+name = "false"
+formula = "=NOT(FALSE())"
+expect = true
+
+[[case]]
+name = "zero"
+formula = "=NOT(0)"
+expect = true
+
+[[case]]
+name = "nonzero"
+formula = "=NOT(5)"
+expect = false
+
+[[case]]
+name = "text TRUE"
+formula = "=NOT(\"TRUE\")"
+expect = false
+
+[[case]]
+name = "text other"
+formula = "=NOT(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell"
+formula = "=NOT(A5)"
+expect = true
+
+[[case]]
+name = "error"
+formula = "=NOT(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "range intersection"
+cells = { A1 = 0, A2 = 0, A3 = 1 }
+origin = "D3"
+formula = "=NOT(A1:A3)"
+expect = false
+
+[[case]]
+name = "no arguments"
+formula = "=NOT()"
+expect = "Err:511"
+
+[[case]]
+name = "too many"
+formula = "=NOT(1;2)"
+expect = "Err:504"

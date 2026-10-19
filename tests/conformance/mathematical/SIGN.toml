@@ -1,0 +1,43 @@
+# SIGN conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=SIGN(-7)"
+expect = -1
+
+[[case]]
+formula = "=SIGN(0)"
+expect = 0
+
+[[case]]
+formula = "=SIGN(3.2)"
+expect = 1
+
+[[case]]
+name = "tiny positive"
+formula = "=SIGN(1E-300)"
+expect = 1
+
+[[case]]
+formula = "=SIGN(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell"
+formula = "=SIGN(A1)"
+expect = 0
+
+[[case]]
+name = "bool"
+cells = { A1 = true }
+formula = "=SIGN(A1)"
+expect = 1
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=NA()" }
+formula = "=SIGN(A1)"
+expect = "#N/A"
+
+[[case]]
+formula = "=SIGN()"
+expect = "Err:511"

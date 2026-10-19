@@ -1,0 +1,100 @@
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 0 4px;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  margin-right: 6px;
+  border: 0;
+  border-radius: var(--tally-radius-pill);
+  background: transparent;
+  color: var(--tally-gray-500);
+  cursor: default;
+}
+
+.add:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--tally-text);
+}
+
+.tab {
+  position: relative;
+  height: 26px;
+  flex: none;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--tally-gray-500);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* Hairline separators between inactive tabs. */
+.tab + .tab::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 7px;
+  bottom: 7px;
+  width: 1px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.tab.active::before,
+.active + .tab::before {
+  display: none;
+}
+
+.tab:hover:not(.active) {
+  color: var(--tally-text);
+}
+
+.active {
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.dragging {
+  opacity: 0.5;
+}
+
+.dropBefore {
+  box-shadow: inset 2px 0 0 var(--tally-accent);
+}
+
+.rename {
+  height: 26px;
+  flex: none;
+  padding: 0 10px;
+  border: 1px solid var(--tally-accent);
+  border-radius: 7px;
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--tally-accent-subtle);
+}

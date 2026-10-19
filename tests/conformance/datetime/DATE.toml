@@ -1,0 +1,78 @@
+# DATE conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "basic"
+formula = '=DATE(2026;10;19)'
+expect = 46314
+
+[[case]]
+name = "epoch day"
+formula = '=DATE(1899;12;30)'
+expect = 0
+
+[[case]]
+name = "month overflow"
+formula = '=DATE(2026;13;1)-DATE(2027;1;1)'
+expect = 0
+
+[[case]]
+name = "month zero"
+formula = '=DATE(2026;0;1)-DATE(2025;12;1)'
+expect = 0
+
+[[case]]
+name = "day zero is last of previous month"
+formula = '=DATE(2026;3;0)-DATE(2026;2;28)'
+expect = 0
+
+[[case]]
+name = "day overflow"
+formula = '=DATE(2026;1;32)-DATE(2026;2;1)'
+expect = 0
+
+[[case]]
+name = "two digit year 2000s"
+formula = '=DATE(26;1;1)-DATE(2026;1;1)'
+expect = 0
+
+[[case]]
+name = "two digit year 1900s"
+formula = '=DATE(99;1;1)-DATE(1999;1;1)'
+expect = 0
+
+[[case]]
+name = "fractional args truncated"
+formula = '=DATE(2026.9;10.9;19.9)'
+expect = 46314
+
+[[case]]
+name = "negative year"
+formula = '=DATE(-1;1;1)'
+expect = "Err:502"
+
+[[case]]
+name = "year too large"
+formula = '=DATE(10000;1;1)'
+expect = "Err:502"
+
+[[case]]
+name = "text number"
+formula = '=DATE("2026";"10";"19")'
+expect = 46314
+
+[[case]]
+name = "1904 epoch"
+formula = '=DATE(1904;1;2)'
+expect = 1
+settings = { date_epoch = "1904" }
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=DATE(A1;1;1)'
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = '=DATE(2026;1)'
+expect = "Err:511"

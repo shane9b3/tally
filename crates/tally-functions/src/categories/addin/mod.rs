@@ -1,7 +1,10 @@
-//! Add-in functions. Not started yet: add one file per function family and
-//! list its `register` call below.
+//! Add-in functions.
 
 use crate::registry::Registry;
 
+mod randbetween;
+
 /// Registers the Add-in functions.
-pub fn register(_r: &mut Registry) {}
+pub fn register(r: &mut Registry) {
+    randbetween::register(r);
+}

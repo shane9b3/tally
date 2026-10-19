@@ -1,0 +1,7 @@
+Category,Budget,Actual,Difference
+Rent,1800,1800,=B2-C2
+Groceries,600,642.18,=B3-C3
+Utilities,220,198.40,=B4-C4
+Transport,150,171.25,=B5-C5
+Fun,200,120,=B6-C6
+Total,=SUM(B2:B6),=SUM(C2:C6),=SUM(D2:D6)

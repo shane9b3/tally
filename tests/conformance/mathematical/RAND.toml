@@ -1,0 +1,34 @@
+# RAND conformance vectors (volatile; only invariants are checked). Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=AND(RAND()>=0;RAND()<1)"
+expect = true
+
+[[case]]
+formula = "=INT(RAND())"
+expect = 0
+
+[[case]]
+formula = "=RAND()+1>=1"
+expect = true
+
+[[case]]
+name = "too many arguments"
+formula = "=RAND(1)"
+expect = "Err:504"
+
+[[case]]
+formula = "=ISNUMBER(RAND())"
+expect = true
+
+[[case]]
+formula = "=INT(RAND()*10)<10"
+expect = true
+
+[[case]]
+formula = "=ROUNDDOWN(RAND();0)"
+expect = 0
+
+[[case]]
+formula = "=SIGN(RAND())>=0"
+expect = true

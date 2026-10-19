@@ -1,0 +1,48 @@
+# LOWER conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "basic"
+formula = '=LOWER("aBc")'
+expect = "abc"
+
+[[case]]
+name = "unicode"
+formula = '=LOWER("É")'
+expect = "é"
+
+[[case]]
+name = "digits kept"
+formula = '=LOWER("A1B2")'
+expect = "a1b2"
+
+[[case]]
+name = "empty"
+formula = '=LOWER("")'
+expect = ""
+
+[[case]]
+name = "number"
+formula = '=LOWER(1.5)'
+expect = "1.5"
+
+[[case]]
+name = "boolean"
+formula = '=LOWER(TRUE)'
+expect = "true"
+
+[[case]]
+name = "empty cell"
+formula = '=LOWER(A5)'
+expect = ""
+
+[[case]]
+name = "cell reference"
+cells = { A1 = "HELLO" }
+formula = '=LOWER(A1)'
+expect = "hello"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=LOWER(A1)'
+expect = "#DIV/0!"

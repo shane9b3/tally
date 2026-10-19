@@ -1,0 +1,51 @@
+# TRUNC conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=TRUNC(-3.789;1)"
+expect = -3.7
+tol = 1e-12
+
+[[case]]
+formula = "=TRUNC(3.789;0)"
+expect = 3
+
+[[case]]
+name = "toward zero"
+formula = "=TRUNC(-3.789;0)"
+expect = -3
+
+[[case]]
+formula = "=TRUNC(1234.5;-2)"
+expect = 1200
+
+[[case]]
+formula = "=TRUNC(5;21)"
+expect = "Err:502"
+
+[[case]]
+formula = "=TRUNC(0.5;0)"
+expect = 0
+
+[[case]]
+formula = "=TRUNC(\"x\";0)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = "=1/0" }
+formula = "=TRUNC(A1;0)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "empty cell"
+formula = "=TRUNC(A1;0)"
+expect = 0
+
+[[case]]
+name = "count is required in the AOO master list"
+formula = "=TRUNC(2.9)"
+expect = "Err:511"
+note = "AOO registers TRUNC(number; count) with both parameters required."
+
+[[case]]
+formula = "=TRUNC(1;2;3)"
+expect = "Err:504"

@@ -1,0 +1,32 @@
+{
+  "name": "tally-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tally desktop app: Tauri 2 shell (src-tauri) and the web entry point that mounts @tally/app.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev:web": "vite",
+    "build:web": "vite build",
+    "preview:web": "vite preview --port 5173 --strictPort",
+    "tauri": "tauri",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@tally/app": "workspace:*",
+    "@tally/bridge": "workspace:*",
+    "@tally/tokens": "workspace:*",
+    "@tauri-apps/api": "2.12.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@tauri-apps/cli": "2.12.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "5.1.4",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
+  }
+}

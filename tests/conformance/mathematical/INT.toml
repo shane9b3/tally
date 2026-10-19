@@ -1,0 +1,53 @@
+# INT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=INT(1.5)"
+expect = 1
+
+[[case]]
+name = "floors toward minus infinity"
+formula = "=INT(-1.5)"
+expect = -2
+
+[[case]]
+formula = "=INT(-0.1)"
+expect = -1
+
+[[case]]
+formula = "=INT(5)"
+expect = 5
+
+[[case]]
+name = "snaps to 15 digits like approxFloor"
+formula = "=INT(2.9999999999999996)"
+expect = 3
+
+[[case]]
+name = "numeric text"
+formula = "=INT(\"2.7\")"
+expect = 2
+
+[[case]]
+formula = "=INT(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell"
+formula = "=INT(A1)"
+expect = 0
+
+[[case]]
+name = "bool"
+cells = { A1 = true }
+formula = "=INT(A1)"
+expect = 1
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=INT(A1)"
+expect = "#DIV/0!"
+
+[[case]]
+formula = "=INT()"
+expect = "Err:511"

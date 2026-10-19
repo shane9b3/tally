@@ -1,0 +1,59 @@
+# MONTH conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "serial with time"
+formula = '=MONTH(46314.75)'
+expect = 10
+
+[[case]]
+name = "epoch zero"
+formula = '=MONTH(0)'
+expect = 12
+
+[[case]]
+name = "negative serial"
+formula = '=MONTH(-1)'
+expect = 12
+
+[[case]]
+name = "from DATE"
+formula = '=MONTH(DATE(2026;10;19))'
+expect = 10
+
+[[case]]
+name = "iso text"
+formula = '=MONTH("2026-10-19")'
+expect = 10
+
+[[case]]
+name = "empty cell is serial 0"
+formula = '=MONTH(A5)'
+expect = 12
+
+[[case]]
+name = "cell reference"
+cells = { A1 = 46314 }
+formula = '=MONTH(A1)'
+expect = 10
+
+[[case]]
+name = "1904 epoch"
+formula = '=MONTH(0)'
+expect = 1
+settings = { date_epoch = "1904" }
+
+[[case]]
+name = "out of range"
+formula = '=MONTH(1E9)'
+expect = "Err:502"
+
+[[case]]
+name = "non-date text"
+formula = '=MONTH("abc")'
+expect = "#VALUE!"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=MONTH(A1)'
+expect = "#DIV/0!"

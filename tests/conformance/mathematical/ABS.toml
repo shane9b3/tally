@@ -1,0 +1,49 @@
+# ABS conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+formula = "=ABS(-2)"
+expect = 2
+
+[[case]]
+formula = "=ABS(\"-3\")"
+expect = 3
+
+[[case]]
+formula = "=ABS(\"x\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "empty cell"
+formula = "=ABS(A5)"
+expect = 0
+
+[[case]]
+name = "bool"
+cells = { A1 = true }
+formula = "=ABS(A1)"
+expect = 1
+
+[[case]]
+name = "error propagates"
+cells = { A4 = "=1/0" }
+formula = "=ABS(A4)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "implicit intersection"
+cells = { A1 = -1, A2 = -2 }
+origin = "C2"
+formula = "=ABS(A1:A2)"
+expect = 2
+
+[[case]]
+formula = "=ABS()"
+expect = "Err:511"
+
+[[case]]
+formula = "=ABS(1;2)"
+expect = "Err:504"
+
+[[case]]
+formula = "=ABS(-0)"
+expect = 0

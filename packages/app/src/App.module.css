@@ -1,0 +1,74 @@
+.app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--tally-bg);
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 40px;
+  flex: none;
+  padding: 0 12px 0 10px;
+  background: var(--tally-gray-100);
+  border-top: 1px solid var(--tally-border-subtle);
+}
+
+.aboutOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(17, 24, 39, 0.12);
+}
+
+.about {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 300px;
+  padding: 28px 24px 24px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 14px;
+  background: var(--tally-bg);
+  box-shadow: var(--tally-shadow-card);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 8px;
+  border-radius: 14px;
+  background: var(--tally-accent);
+  color: #fff;
+  font-size: 30px;
+  font-weight: 750;
+}
+
+.aboutTitle {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.aboutText {
+  color: var(--tally-text-muted);
+  font-size: 12.5px;
+  text-align: center;
+}

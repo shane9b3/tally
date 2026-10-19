@@ -1,0 +1,66 @@
+# AND conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "all true"
+formula = "=AND(TRUE();1;2)"
+expect = true
+
+[[case]]
+name = "one false"
+formula = "=AND(TRUE();0)"
+expect = false
+
+[[case]]
+name = "range numbers"
+cells = { A1 = 1, A2 = 2, A3 = 0 }
+formula = "=AND(A1:A3)"
+expect = false
+
+[[case]]
+name = "range text skipped"
+cells = { A1 = 1, A2 = "x", A3 = true }
+formula = "=AND(A1:A3)"
+expect = true
+
+[[case]]
+name = "range only text"
+cells = { A1 = "x", A2 = "y" }
+formula = "=AND(A1:A2)"
+expect = "#VALUE!"
+note = "No logical values at all."
+
+[[case]]
+name = "empty range"
+formula = "=AND(B1:B3)"
+expect = "#VALUE!"
+
+[[case]]
+name = "direct text TRUE"
+formula = "=AND(\"true\";1)"
+expect = true
+
+[[case]]
+name = "direct non-boolean text"
+formula = "=AND(\"abc\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "error in range wins over false"
+cells = { A1 = "=NA()" }
+formula = "=AND(0;A1)"
+expect = "#N/A"
+
+[[case]]
+name = "missing argument is FALSE"
+formula = "=AND(1;)"
+expect = false
+
+[[case]]
+name = "no arguments"
+formula = "=AND()"
+expect = "Err:511"
+
+[[case]]
+name = "array literal"
+formula = "=AND({1;1|1;0})"
+expect = false

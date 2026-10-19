@@ -1,0 +1,55 @@
+# RANDBETWEEN conformance vectors (volatile; only invariants are checked). Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "single value"
+formula = "=RANDBETWEEN(1;1)"
+expect = 1
+
+[[case]]
+formula = "=AND(RANDBETWEEN(1;6)>=1;RANDBETWEEN(1;6)<=6)"
+expect = true
+
+[[case]]
+name = "integer result"
+formula = "=MOD(RANDBETWEEN(1;6);1)"
+expect = 0
+
+[[case]]
+name = "bottom above top"
+formula = "=RANDBETWEEN(5;1)"
+expect = "Err:502"
+
+[[case]]
+name = "negative"
+formula = "=RANDBETWEEN(-3;-3)"
+expect = -3
+
+[[case]]
+name = "no integer in interval"
+formula = "=RANDBETWEEN(1.2;1.8)"
+expect = "Err:502"
+note = "LibreOffice gives #NUM! (AOO Err:502)."
+
+[[case]]
+name = "bounds rounded inward"
+formula = "=RANDBETWEEN(0.5;1.5)"
+expect = 1
+
+[[case]]
+formula = "=RANDBETWEEN(\"x\";1)"
+expect = "#VALUE!"
+
+[[case]]
+formula = "=RANDBETWEEN(1)"
+expect = "Err:511"
+
+[[case]]
+name = "empty cells are 0"
+formula = "=RANDBETWEEN(A1;A1)"
+expect = 0
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = "=RANDBETWEEN(A1;3)"
+expect = "#DIV/0!"

@@ -1,0 +1,49 @@
+# PROPER conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "words"
+formula = '=PROPER("hello wORLD")'
+expect = "Hello World"
+
+[[case]]
+name = "apostrophe and hyphen"
+formula = "=PROPER(\"o'neil-smith\")"
+expect = "O'Neil-Smith"
+note = "Any non-letter starts a new word."
+
+[[case]]
+name = "digit then letter"
+formula = '=PROPER("2nd place")'
+expect = "2Nd Place"
+
+[[case]]
+name = "empty"
+formula = '=PROPER("")'
+expect = ""
+
+[[case]]
+name = "unicode"
+formula = '=PROPER("élan vital")'
+expect = "Élan Vital"
+
+[[case]]
+name = "number"
+formula = '=PROPER(1.5)'
+expect = "1.5"
+
+[[case]]
+name = "all caps"
+formula = '=PROPER("ABC DEF")'
+expect = "Abc Def"
+
+[[case]]
+name = "cell reference"
+cells = { A1 = "fOO bAR" }
+formula = '=PROPER(A1)'
+expect = "Foo Bar"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=PROPER(A1)'
+expect = "#DIV/0!"

@@ -1,0 +1,11 @@
+.host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--tally-bg);
+}
+
+.grid {
+  position: absolute !important;
+  inset: 0;
+}

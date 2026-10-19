@@ -1,4 +1,4 @@
-//! ROUND (later: ROUNDUP, ROUNDDOWN, TRUNC, INT, MROUND, EVEN, ODD).
+//! ROUND, ROUNDUP, ROUNDDOWN, TRUNC, INT (later: MROUND, EVEN, ODD).
 
 use tally_types::{ErrorKind, Value};
 
@@ -86,13 +86,168 @@ fn round(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     })
 }
 
+const ROUNDUP_PARAMS: &[Param] = &[
+    Param::required("number", ParamKind::Number),
+    Param::optional("count", ParamKind::Integer),
+];
+
+/// `ROUNDUP(number; [count])`: away from zero.
+pub const ROUNDUP: FunctionDef =
+    FunctionDef::new("ROUNDUP", Category::Mathematical, ROUNDUP_PARAMS, roundup)
+        .help("Rounds a number up to the predefined accuracy.");
+
+/// `ROUNDDOWN(number; [count])`: toward zero.
+pub const ROUNDDOWN: FunctionDef = FunctionDef::new(
+    "ROUNDDOWN",
+    Category::Mathematical,
+    ROUNDUP_PARAMS,
+    rounddown,
+)
+.help("Rounds a number down to a predefined accuracy.");
+
+const TRUNC_PARAMS: &[Param] = &[
+    Param::required("number", ParamKind::Number),
+    Param::required("count", ParamKind::Integer),
+];
+
+/// `TRUNC(number; count)`; the master list declares `count` as required.
+pub const TRUNC: FunctionDef =
+    FunctionDef::new("TRUNC", Category::Mathematical, TRUNC_PARAMS, rounddown)
+        .help("Truncates the decimal places of a number.");
+
+const INT_PARAMS: &[Param] = &[Param::required("number", ParamKind::Number)];
+
+/// `INT(number)`: floor toward minus infinity.
+pub const INT: FunctionDef = FunctionDef::new("INT", Category::Mathematical, INT_PARAMS, int)
+    .help("Rounds a number down to the nearest integer.");
+
+/// Rounds away from zero (`up`) or toward zero to `places` decimals, using
+/// AOO's approximate floor so `ROUNDUP(3.1;0)` style binary residue does not
+/// push a result over. `places` outside `-20..=20` returns `x` unchanged.
+///
+/// After Apache OpenOffice `sal/rtl/source/math.cxx` (`rtl_math_round`,
+/// modes Up and Down), Apache-2.0. Negative places divide by `10^k` rather
+/// than multiplying by `10^-k` for exactness.
+pub(crate) fn round_directed(x: f64, places: i32, up: bool) -> f64 {
+    if x == 0.0 || !x.is_finite() || !(-20..=20).contains(&places) {
+        return x;
+    }
+    let neg = x.is_sign_negative();
+    let mut v = x.abs();
+    let fac = POW10[places.unsigned_abs() as usize];
+    if places > 0 {
+        if v > f64::MAX / 1e20 {
+            return x;
+        }
+        v *= fac;
+    } else if places < 0 {
+        v /= fac;
+    }
+    v = if up {
+        -approx_floor(-v)
+    } else {
+        approx_floor(v)
+    };
+    if places > 0 {
+        v /= fac;
+    } else if places < 0 {
+        v *= fac;
+    }
+    if neg {
+        -v
+    } else {
+        v
+    }
+}
+
+fn directed(ctx: &mut dyn EvalContext, args: &mut dyn ArgList, up: bool) -> EvalValue {
+    let mut a = Args::new(ctx, args);
+    run(|| {
+        let x = a.num(0)?;
+        let places = approx_floor(a.num_opt(1, 0.0)?);
+        if !(-20.0..=20.0).contains(&places) {
+            return Err(ErrorKind::InvalidArgument);
+        }
+        Ok(Value::Number(round_directed(x, places as i32, up)))
+    })
+}
+
+fn roundup(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
+    directed(ctx, args, true)
+}
+
+fn rounddown(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
+    directed(ctx, args, false)
+}
+
+fn int(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
+    let mut a = Args::new(ctx, args);
+    run(|| Ok(Value::Number(approx_floor(a.num(0)?))))
+}
+
 pub(super) fn register(r: &mut Registry) {
     r.register(ROUND);
+    r.register(ROUNDUP);
+    r.register(ROUNDDOWN);
+    r.register(TRUNC);
+    r.register(INT);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::round_corrected;
+    use super::{round_corrected, round_directed};
+    use crate::mock::{call, MockEvalContext};
+    use crate::EvalValue;
+    use tally_types::{ErrorKind, Value};
+
+    fn n(x: f64) -> EvalValue {
+        EvalValue::number(x)
+    }
+
+    #[test]
+    fn directed_rounding() {
+        assert_eq!(round_directed(2.1, 0, true), 3.0);
+        assert_eq!(round_directed(-2.1, 0, true), -3.0);
+        assert_eq!(round_directed(2.9, 0, false), 2.0);
+        assert_eq!(round_directed(-2.9, 0, false), -2.0);
+        assert_eq!(round_directed(1.23456, 2, true), 1.24);
+        assert_eq!(round_directed(1.23456, 2, false), 1.23);
+        assert_eq!(round_directed(1234.0, -2, true), 1300.0);
+        assert_eq!(round_directed(1299.0, -2, false), 1200.0);
+        assert_eq!(round_directed(3.1, 1, true), 3.1);
+        assert_eq!(round_directed(0.0, 3, true), 0.0);
+        assert_eq!(round_directed(5.0, 25, true), 5.0);
+    }
+
+    #[test]
+    fn functions() {
+        let mut c = MockEvalContext::new();
+        let mut f = |name: &str, args: Vec<EvalValue>| call(&mut c, name, args);
+        assert_eq!(f("ROUNDUP", vec![n(1.01), n(1.0)]), Value::Number(1.1));
+        assert_eq!(f("ROUNDUP", vec![n(-1.01)]), Value::Number(-2.0));
+        assert_eq!(f("ROUNDDOWN", vec![n(-1.99)]), Value::Number(-1.0));
+        assert_eq!(
+            f("ROUNDDOWN", vec![n(1999.0), n(-3.0)]),
+            Value::Number(1000.0)
+        );
+        assert_eq!(
+            f("ROUNDUP", vec![n(1.0), n(21.0)]),
+            Value::Error(ErrorKind::InvalidArgument)
+        );
+        assert_eq!(f("TRUNC", vec![n(-3.789), n(1.0)]), Value::Number(-3.7));
+        assert_eq!(f("TRUNC", vec![n(3.789), n(0.0)]), Value::Number(3.0));
+        assert_eq!(f("INT", vec![n(-1.5)]), Value::Number(-2.0));
+        assert_eq!(f("INT", vec![n(1.5)]), Value::Number(1.0));
+        assert_eq!(f("INT", vec![n(2.9999999999999996)]), Value::Number(3.0));
+        assert_eq!(
+            f("INT", vec![EvalValue::text("x")]),
+            Value::Error(ErrorKind::Value)
+        );
+        assert_eq!(
+            f("INT", vec![EvalValue::error(ErrorKind::Div0)]),
+            Value::Error(ErrorKind::Div0)
+        );
+    }
 
     #[test]
     fn corrected_rounding() {

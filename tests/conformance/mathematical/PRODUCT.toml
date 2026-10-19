@@ -1,0 +1,67 @@
+# PRODUCT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "direct numbers"
+formula = "=PRODUCT(2;3;4)"
+expect = 24
+
+[[case]]
+name = "text skipped, bool counted"
+cells = { A1 = 2, A2 = "x", A3 = true, A4 = 4 }
+formula = "=PRODUCT(A1:A4)"
+expect = 8
+note = "AOO stores booleans as numbers."
+
+[[case]]
+name = "only text gives 0"
+cells = { A1 = "x", A2 = "y" }
+formula = "=PRODUCT(A1:A3)"
+expect = 0
+note = "AOO returns 0 when no numbers are found (Excel also 0)."
+
+[[case]]
+name = "empty range gives 0"
+formula = "=PRODUCT(B1:B3)"
+expect = 0
+
+[[case]]
+name = "error propagates"
+cells = { A1 = 2, A2 = "=1/0" }
+formula = "=PRODUCT(A1:A2)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "direct text and bool coerced"
+formula = "=PRODUCT(\"3\";TRUE)"
+expect = 3
+
+[[case]]
+name = "direct non-numeric text"
+formula = "=PRODUCT(\"x\";2)"
+expect = "#VALUE!"
+
+[[case]]
+name = "missing argument counts as zero"
+formula = "=PRODUCT(2;;5)"
+expect = 0
+
+[[case]]
+name = "multiple args"
+cells = { A1 = 2, A2 = 2 }
+formula = "=PRODUCT(A1:A2;0.5)"
+expect = 2
+
+[[case]]
+name = "inline array"
+formula = "=PRODUCT({1;2;3})"
+expect = 6
+
+[[case]]
+name = "overflow"
+formula = "=PRODUCT(1E200;1E200)"
+expect = "#NUM!"
+
+[[case]]
+name = "no args"
+formula = "=PRODUCT()"
+expect = "Err:511"

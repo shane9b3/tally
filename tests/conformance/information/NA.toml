@@ -1,0 +1,42 @@
+# NA conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "value"
+formula = "=NA()"
+expect = "#N/A"
+
+[[case]]
+name = "ISNA"
+formula = "=ISNA(NA())"
+expect = true
+
+[[case]]
+name = "propagates in arithmetic"
+formula = "=NA()+1"
+expect = "#N/A"
+
+[[case]]
+name = "IFERROR"
+formula = "=IFERROR(NA();0)"
+expect = 0
+
+[[case]]
+name = "in SUM"
+formula = "=SUM(1;NA())"
+expect = "#N/A"
+
+[[case]]
+name = "in IF branch not taken"
+formula = "=IF(TRUE();1;NA())"
+expect = 1
+
+[[case]]
+name = "cell reference"
+cells = { A1 = "=NA()" }
+formula = "=A1+1"
+expect = "#N/A"
+
+[[case]]
+name = "too many"
+formula = "=NA(1)"
+expect = "Err:504"

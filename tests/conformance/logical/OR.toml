@@ -1,0 +1,67 @@
+# OR conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "one true"
+formula = "=OR(0;1)"
+expect = true
+
+[[case]]
+name = "all false"
+formula = "=OR(0;FALSE())"
+expect = false
+
+[[case]]
+name = "range numbers"
+cells = { A1 = 0, A2 = 0, A3 = 2 }
+formula = "=OR(A1:A3)"
+expect = true
+
+[[case]]
+name = "range text skipped"
+cells = { A1 = 0, A2 = "x", A3 = false }
+formula = "=OR(A1:A3)"
+expect = false
+
+[[case]]
+name = "range only text"
+cells = { A1 = "x", A2 = "y" }
+formula = "=OR(A1:A2)"
+expect = "#VALUE!"
+note = "No logical values at all."
+
+[[case]]
+name = "empty range"
+formula = "=OR(B1:B3)"
+expect = "#VALUE!"
+
+[[case]]
+name = "direct text FALSE"
+formula = "=OR(\"FALSE\";0)"
+expect = false
+
+[[case]]
+name = "direct non-boolean text"
+formula = "=OR(\"abc\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "error wins over true"
+cells = { A1 = "=1/0" }
+formula = "=OR(1;A1)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "empty cell among values"
+cells = { A2 = 1 }
+formula = "=OR(A1:A2)"
+expect = true
+
+[[case]]
+name = "no arguments"
+formula = "=OR()"
+expect = "Err:511"
+
+[[case]]
+name = "array literal"
+formula = "=OR({0;0|0;1})"
+expect = true

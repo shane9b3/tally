@@ -1,0 +1,48 @@
+# COLUMN conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "no argument"
+formula = "=COLUMN()"
+expect = 26
+note = "Default origin is Z100: column 26."
+
+[[case]]
+name = "no argument other origin"
+origin = "C7"
+formula = "=COLUMN()"
+expect = 3
+
+[[case]]
+name = "single cell"
+formula = "=COLUMN(B5)"
+expect = 2
+
+[[case]]
+name = "range gives first column"
+formula = "=COLUMN(C3:D9)"
+expect = 3
+
+[[case]]
+name = "absolute reference"
+formula = "=COLUMN($AA$1)"
+expect = 27
+
+[[case]]
+name = "in arithmetic"
+formula = "=COLUMN(A2)+1"
+expect = 2
+
+[[case]]
+name = "text is not a reference"
+formula = "=COLUMN(\"A\")"
+expect = "#VALUE!"
+
+[[case]]
+name = "error argument"
+formula = "=COLUMN(NA())"
+expect = "#N/A"
+
+[[case]]
+name = "too many"
+formula = "=COLUMN(A1;A2)"
+expect = "Err:504"

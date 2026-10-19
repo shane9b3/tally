@@ -1,0 +1,56 @@
+# ISNA conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "NA"
+formula = "=ISNA(NA())"
+expect = true
+
+[[case]]
+name = "other error"
+formula = "=ISNA(1/0)"
+expect = false
+
+[[case]]
+name = "number"
+formula = "=ISNA(1)"
+expect = false
+
+[[case]]
+name = "text"
+formula = "=ISNA(\"#N/A\")"
+expect = false
+
+[[case]]
+name = "NA cell"
+cells = { A1 = "=NA()" }
+formula = "=ISNA(A1)"
+expect = true
+
+[[case]]
+name = "div0 cell"
+cells = { A1 = "=1/0" }
+formula = "=ISNA(A1)"
+expect = false
+
+[[case]]
+name = "empty cell"
+formula = "=ISNA(A1)"
+expect = false
+
+[[case]]
+name = "lookup miss"
+cells = { A1 = 1, A2 = 2 }
+formula = "=ISNA(MATCH(9;A1:A2;0))"
+expect = true
+
+[[case]]
+name = "range intersection"
+cells = { A3 = "=NA()" }
+origin = "D3"
+formula = "=ISNA(A1:A3)"
+expect = true
+
+[[case]]
+name = "no arguments"
+formula = "=ISNA()"
+expect = "Err:511"

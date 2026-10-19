@@ -1,0 +1,63 @@
+# ISERROR conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "division"
+formula = "=ISERROR(1/0)"
+expect = true
+
+[[case]]
+name = "NA"
+formula = "=ISERROR(NA())"
+expect = true
+
+[[case]]
+name = "number"
+formula = "=ISERROR(1)"
+expect = false
+
+[[case]]
+name = "text"
+cells = {  }
+formula = "=ISERROR(\"#DIV/0!\")"
+expect = false
+note = "Text that looks like an error is not an error."
+
+[[case]]
+name = "error cell"
+cells = { A1 = "=1/0" }
+formula = "=ISERROR(A1)"
+expect = true
+
+[[case]]
+name = "empty cell"
+formula = "=ISERROR(A1)"
+expect = false
+
+[[case]]
+name = "value error"
+formula = "=ISERROR(\"a\"+1)"
+expect = true
+
+[[case]]
+name = "propagated #VALUE!"
+formula = "=ISERROR(1+\"x\")"
+expect = true
+
+[[case]]
+name = "range intersection error"
+cells = { A2 = "=NA()" }
+origin = "D2"
+formula = "=ISERROR(A1:A3)"
+expect = true
+
+[[case]]
+name = "range without intersection"
+cells = { A1 = 1 }
+formula = "=ISERROR(A1:A3)"
+expect = true
+note = "Failed implicit intersection is #VALUE!."
+
+[[case]]
+name = "no arguments"
+formula = "=ISERROR()"
+expect = "Err:511"

@@ -1,0 +1,77 @@
+/** Small stroke icons (16 px, currentColor). */
+import type { SVGProps } from "react";
+
+function Svg(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      width={16}
+      height={16}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    />
+  );
+}
+
+export const UndoIcon = () => (
+  <Svg>
+    <path d="M5.5 4 2.5 7l3 3" />
+    <path d="M2.5 7h7a3.5 3.5 0 0 1 0 7H8" />
+  </Svg>
+);
+
+export const RedoIcon = () => (
+  <Svg>
+    <path d="m10.5 4 3 3-3 3" />
+    <path d="M13.5 7h-7a3.5 3.5 0 0 0 0 7H8" />
+  </Svg>
+);
+
+export const SortIcon = () => (
+  <Svg>
+    <path d="M5 2.5v11M2.5 11 5 13.5 7.5 11" />
+    <path d="M11 13.5v-11M8.5 5 11 2.5 13.5 5" />
+  </Svg>
+);
+
+export const FilterIcon = () => (
+  <Svg>
+    <path d="M2.5 3.5h11L9.25 8.5v4l-2.5 1.25V8.5z" />
+  </Svg>
+);
+
+export const ChartIcon = () => (
+  <Svg>
+    <path d="M3 13.5V8M8 13.5V3M13 13.5V6" strokeWidth={2.2} />
+  </Svg>
+);
+
+export const PlusIcon = () => (
+  <Svg>
+    <path d="M8 3v10M3 8h10" />
+  </Svg>
+);
+
+export const ChevronIcon = () => (
+  <Svg width={12} height={12}>
+    <path d="m4.5 6 3.5 3.5L11.5 6" />
+  </Svg>
+);
+
+export const SidebarIcon = () => (
+  <Svg>
+    <rect x="2" y="3" width="12" height="10" rx="2" />
+    <path d="M6 3v10" />
+  </Svg>
+);
+
+export const SparkIcon = () => (
+  <Svg>
+    <path d="M8 2v3M8 11v3M2 8h3M11 8h3M4 4l1.8 1.8M10.2 10.2 12 12M12 4l-1.8 1.8M5.8 10.2 4 12" />
+  </Svg>
+);

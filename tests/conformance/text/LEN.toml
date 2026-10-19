@@ -1,0 +1,53 @@
+# LEN conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "text"
+formula = '=LEN("hello")'
+expect = 5
+
+[[case]]
+name = "empty text"
+formula = '=LEN("")'
+expect = 0
+
+[[case]]
+name = "empty cell"
+formula = '=LEN(A5)'
+expect = 0
+
+[[case]]
+name = "unicode"
+formula = '=LEN("héllo")'
+expect = 5
+
+[[case]]
+name = "number general format"
+formula = '=LEN(1.5)'
+expect = 3
+
+[[case]]
+name = "boolean"
+formula = '=LEN(TRUE)'
+expect = 4
+
+[[case]]
+name = "spaces count"
+formula = '=LEN("a  b ")'
+expect = 5
+
+[[case]]
+name = "cell reference"
+cells = { A1 = "abc" }
+formula = '=LEN(A1)'
+expect = 3
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=LEN(A1)'
+expect = "#DIV/0!"
+
+[[case]]
+name = "no arguments"
+formula = '=LEN()'
+expect = "Err:511"

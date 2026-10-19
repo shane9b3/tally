@@ -11,6 +11,9 @@
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "lint": "pnpm -r --if-present lint"
+    "lint": "pnpm -r --if-present lint",
+    "dev:web": "pnpm --filter tally-desktop dev:web",
+    "tauri": "pnpm --filter tally-desktop tauri",
+    "e2e": "pnpm --filter tally-desktop exec playwright test -c ../../tests/e2e/playwright.config.ts"
   }
 }

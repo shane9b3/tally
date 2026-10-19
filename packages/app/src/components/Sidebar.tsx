@@ -1,0 +1,132 @@
+/** Left sidebar: new workbook, my workbooks (current + recent), templates, tip card. */
+import { useEffect, useMemo, useState } from "react";
+import { cx, useController } from "../context";
+import { relativeTime } from "../hooks";
+import type { TemplateInfo } from "../shell";
+import { useDocStore } from "../stores/docStore";
+import { PlusIcon } from "./icons";
+import styles from "./Sidebar.module.css";
+
+const DOTS = ["#2563eb", "#16a34a", "#f59e0b", "#db2777", "#7c3aed", "#0891b2"];
+const TEMPLATE_DOTS: Record<string, string> = { invoices: "#16a34a", budget: "#f59e0b", stock: "#7c3aed" };
+const SEEN_KEY = "tally.recentSeen";
+
+function dotFor(name: string): string {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return DOTS[h % DOTS.length] ?? "#2563eb";
+}
+
+function baseName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
+/** Per-viewer convenience: when each recent file was last open here. */
+function readSeen(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(SEEN_KEY);
+    const v: unknown = raw ? JSON.parse(raw) : {};
+    return typeof v === "object" && v !== null ? (v as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSeen(seen: Record<string, number>): void {
+  try {
+    localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
+  } catch {
+    // Storage unavailable: relative times are optional.
+  }
+}
+
+export function Sidebar({ inset }: { inset: boolean }) {
+  const ctl = useController();
+  const info = useDocStore((s) => s.info);
+  const rev = useDocStore((s) => s.rev);
+  const [recent, setRecent] = useState<string[]>([]);
+  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
+  const [editedAt, setEditedAt] = useState(() => Date.now());
+  const [, setNow] = useState(0);
+
+  useEffect(() => {
+    ctl.shell.listTemplates().then(setTemplates, () => setTemplates([]));
+  }, [ctl]);
+
+  useEffect(() => {
+    ctl.shell.recentFiles().then(setRecent, () => setRecent([]));
+    if (info?.path) writeSeen({ ...readSeen(), [info.path]: Date.now() });
+  }, [ctl, info?.path]);
+
+  useEffect(() => {
+    if (info?.dirty) setEditedAt(Date.now());
+  }, [rev, info?.dirty]);
+
+  useEffect(() => {
+    const t = setInterval(() => setNow((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const seen = useMemo(readSeen, [recent]);
+  const others = recent.filter((p) => p !== info?.path).slice(0, 6);
+
+  return (
+    <aside className={styles.sidebar} aria-label="Sidebar">
+      <div className={cx(styles.top, inset && styles.insetTop)} data-tauri-drag-region />
+      <button type="button" className={styles.newButton} onClick={() => void ctl.newWorkbook()}>
+        <PlusIcon />
+        New sheet
+      </button>
+
+      <section className={styles.section}>
+        <h3 className={styles.heading}>My workbooks</h3>
+        <ul className={styles.list}>
+          {info ? (
+            <li>
+              <button type="button" className={cx(styles.row, styles.current)} onClick={() => ctl.focusGrid()}>
+                <span className={styles.dot} style={{ background: dotFor(info.title) }} />
+                <span className={styles.rowTitle}>{info.title}</span>
+                <span className={styles.meta}>{info.dirty ? relativeTime(editedAt) : "Open"}</span>
+              </button>
+            </li>
+          ) : null}
+          {others.map((p) => {
+            const t = seen[p];
+            return (
+              <li key={p}>
+                <button type="button" className={styles.row} title={p} onClick={() => void ctl.openRecent(p)}>
+                  <span className={styles.dot} style={{ background: dotFor(baseName(p)) }} />
+                  <span className={styles.rowTitle}>{baseName(p).replace(/\.(ods|csv)$/i, "")}</span>
+                  <span className={styles.meta}>{t ? relativeTime(t) : ""}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      {templates.length > 0 ? (
+        <section className={styles.section}>
+          <h3 className={styles.heading}>Start from a template</h3>
+          <ul className={styles.list}>
+            {templates.map((t) => (
+              <li key={t.id}>
+                <button type="button" className={styles.row} title={t.description} onClick={() => void ctl.newFromTemplate(t.id)}>
+                  <span className={styles.square} style={{ borderColor: TEMPLATE_DOTS[t.id] ?? "#9ca3af" }} />
+                  <span className={styles.rowTitle}>{t.title}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      <div className={styles.grow} />
+      <div className={styles.tip}>
+        <div className={styles.tipTitle}>Tip</div>
+        Type <kbd className={styles.kbd}>=</kbd> in any cell and describe what you want, or press{" "}
+        <kbd className={styles.kbd}>⌘K</kbd> to ask in plain English.
+      </div>
+    </aside>
+  );
+}

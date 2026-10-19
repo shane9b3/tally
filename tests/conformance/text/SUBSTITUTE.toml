@@ -1,0 +1,57 @@
+# SUBSTITUTE conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "all occurrences"
+formula = '=SUBSTITUTE("a-b-c";"-";"+")'
+expect = "a+b+c"
+
+[[case]]
+name = "second occurrence"
+formula = '=SUBSTITUTE("a-b-c";"-";"+";2)'
+expect = "a-b+c"
+
+[[case]]
+name = "occurrence too large"
+formula = '=SUBSTITUTE("a-b";"-";"+";5)'
+expect = "a-b"
+
+[[case]]
+name = "case sensitive"
+formula = '=SUBSTITUTE("Abc";"a";"x")'
+expect = "Abc"
+
+[[case]]
+name = "empty search"
+formula = '=SUBSTITUTE("abc";"";"x")'
+expect = "abc"
+
+[[case]]
+name = "occurrence zero"
+formula = '=SUBSTITUTE("a";"a";"b";0)'
+expect = "Err:502"
+
+[[case]]
+name = "delete with empty"
+formula = '=SUBSTITUTE("abc";"b";"")'
+expect = "ac"
+
+[[case]]
+name = "non-overlapping"
+formula = '=SUBSTITUTE("aaa";"aa";"b")'
+expect = "ba"
+
+[[case]]
+name = "number text"
+formula = '=SUBSTITUTE(1.5;".";",")'
+expect = "1,5"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=SUBSTITUTE(A1;"a";"b")'
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = '=SUBSTITUTE("a";"a")'
+expect = "Err:511"

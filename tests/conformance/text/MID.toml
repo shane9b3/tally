@@ -1,0 +1,57 @@
+# MID conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "middle"
+formula = '=MID("hello";2;3)'
+expect = "ell"
+
+[[case]]
+name = "count past end"
+formula = '=MID("hello";4;99)'
+expect = "lo"
+
+[[case]]
+name = "start past end"
+formula = '=MID("hello";9;2)'
+expect = ""
+
+[[case]]
+name = "count zero"
+formula = '=MID("hello";2;0)'
+expect = ""
+
+[[case]]
+name = "start zero"
+formula = '=MID("hello";0;2)'
+expect = "Err:502"
+
+[[case]]
+name = "negative count"
+formula = '=MID("hello";1;-1)'
+expect = "Err:502"
+
+[[case]]
+name = "unicode chars"
+formula = '=MID("héllo";2;2)'
+expect = "él"
+
+[[case]]
+name = "number argument"
+formula = '=MID(12345;2;3)'
+expect = "234"
+
+[[case]]
+name = "fractional start truncated"
+formula = '=MID("hello";2.9;2)'
+expect = "el"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=1/0" }
+formula = '=MID(A1;1;1)'
+expect = "#DIV/0!"
+
+[[case]]
+name = "too few arguments"
+formula = '=MID("a";1)'
+expect = "Err:511"

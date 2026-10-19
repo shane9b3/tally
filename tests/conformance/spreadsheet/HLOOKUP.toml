@@ -1,0 +1,62 @@
+# HLOOKUP conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "sorted between"
+cells = { A1 = 10, B1 = 20, C1 = 30, A2 = "p", B2 = "q", C2 = "r" }
+formula = "=HLOOKUP(25;A1:C2;2)"
+expect = "q"
+
+[[case]]
+name = "sorted beyond end"
+cells = { A1 = 10, B1 = 20, C1 = 30, A2 = "p", B2 = "q", C2 = "r" }
+formula = "=HLOOKUP(99;A1:C2;2)"
+expect = "r"
+
+[[case]]
+name = "sorted below first"
+cells = { A1 = 10, B1 = 20, C1 = 30, A2 = "p", B2 = "q", C2 = "r" }
+formula = "=HLOOKUP(5;A1:C2;2)"
+expect = "#N/A"
+
+[[case]]
+name = "exact hit"
+cells = { A1 = 10, B1 = 20, C1 = 30, A2 = "p", B2 = "q", C2 = "r" }
+formula = "=HLOOKUP(30;A1:C2;1;FALSE())"
+expect = 30
+
+[[case]]
+name = "exact miss"
+cells = { A1 = 10, B1 = 20, C1 = 30, A2 = "p", B2 = "q", C2 = "r" }
+formula = "=HLOOKUP(25;A1:C2;2;FALSE())"
+expect = "#N/A"
+
+[[case]]
+name = "text row"
+cells = { A1 = 10, B1 = 20, C1 = 30, A2 = "p", B2 = "q", C2 = "r" }
+formula = "=HLOOKUP(\"B\";A1:C2;2;0)"
+expect = "#N/A"
+note = "Row 1 holds numbers only."
+
+[[case]]
+name = "text header exact"
+cells = { A1 = "x", B1 = "y", A2 = "a", B2 = "b" }
+formula = "=HLOOKUP(\"y\";A1:C2;2;0)"
+expect = "b"
+
+[[case]]
+name = "index too large"
+cells = { A1 = 10, B1 = 20, C1 = 30, A2 = "p", B2 = "q", C2 = "r" }
+formula = "=HLOOKUP(10;A1:C2;3;0)"
+expect = "Err:502"
+
+[[case]]
+name = "lookup error propagates"
+cells = { A1 = 10, B1 = 20, C1 = 30, A2 = "p", B2 = "q", C2 = "r" }
+formula = "=HLOOKUP(NA();A1:C2;2)"
+expect = "#N/A"
+
+[[case]]
+name = "bool as number"
+cells = { A1 = 1, A2 = "a" }
+formula = "=HLOOKUP(TRUE();A1:C2;2;0)"
+expect = "a"

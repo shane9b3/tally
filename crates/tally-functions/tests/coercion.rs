@@ -62,7 +62,8 @@ fn unambiguous_parser() {
     assert_eq!(p("1899-12-30"), Some(0.0));
     assert_eq!(p("2024-02-29"), Some(45_351.0));
     assert_eq!(p("2023-02-29"), None);
-    assert_eq!(p("2024-1-15"), None);
+    // tally-numfmt (the single implementation) accepts unpadded ISO parts.
+    assert_eq!(p("2024-1-15"), Some(45_306.0));
     assert_eq!(p("2024-01-15T12:00"), Some(45_306.5));
     assert_eq!(p("2024-01-15 06:00:00"), Some(45_306.25));
     assert_eq!(p("2024-01-15T24:00"), None);
@@ -72,10 +73,11 @@ fn unambiguous_parser() {
     assert_eq!(p("12:60"), None);
     assert_eq!(parse_unambiguous("1904-01-02", DateEpoch::D1904), Some(1.0));
     assert_eq!(
+        // AOO "01/01/1900" epoch: serial 0 = 1900-01-01, no fake 1900-02-29.
         parse_unambiguous("1900-03-01", DateEpoch::D1900),
-        Some(61.0)
+        Some(59.0)
     );
-    assert_eq!(parse_unambiguous("1899-12-31", DateEpoch::D1900), None);
+    assert_eq!(parse_unambiguous("1900-01-01", DateEpoch::D1900), Some(0.0));
 }
 
 #[test]

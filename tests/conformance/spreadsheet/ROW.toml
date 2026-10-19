@@ -1,0 +1,48 @@
+# ROW conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "no argument"
+formula = "=ROW()"
+expect = 100
+note = "Default origin is Z100."
+
+[[case]]
+name = "no argument other origin"
+origin = "C7"
+formula = "=ROW()"
+expect = 7
+
+[[case]]
+name = "single cell"
+formula = "=ROW(B5)"
+expect = 5
+
+[[case]]
+name = "range gives first row"
+formula = "=ROW(C3:D9)"
+expect = 3
+
+[[case]]
+name = "absolute reference"
+formula = "=ROW($A$12)"
+expect = 12
+
+[[case]]
+name = "in arithmetic"
+formula = "=ROW(A2)+1"
+expect = 3
+
+[[case]]
+name = "number is not a reference"
+formula = "=ROW(5)"
+expect = "#VALUE!"
+
+[[case]]
+name = "error argument"
+formula = "=ROW(1/0)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "too many"
+formula = "=ROW(A1;A2)"
+expect = "Err:504"

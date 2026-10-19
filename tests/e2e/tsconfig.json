@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": [],
+    "paths": {
+      "@playwright/test": ["../../apps/desktop/node_modules/@playwright/test/index.mjs"]
+    }
+  },
+  "include": ["*.ts"]
+}

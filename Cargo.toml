@@ -12,6 +12,7 @@ members = [
     "crates/tally-io-csv",
     "crates/tally-assist",
     "crates/tally-cli",
+    "apps/desktop/src-tauri",
     "xtask",
 ]
 

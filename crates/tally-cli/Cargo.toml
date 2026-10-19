@@ -1,6 +1,6 @@
 [package]
 name = "tally-cli"
-description = "Command-line front end: eval, convert, recalc and diff."
+description = "Command-line front end: eval, recalc and functions."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,12 +13,9 @@ path = "src/main.rs"
 
 [dependencies]
 tally-types.workspace = true
-tally-model.workspace = true
 tally-api.workspace = true
-tally-engine.workspace = true
-tally-io-ods.workspace = true
-tally-io-csv.workspace = true
-serde_json.workspace = true
+tally-numfmt.workspace = true
+tally-engine = { workspace = true, features = ["io"] }
 
 [lints]
 workspace = true

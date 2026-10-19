@@ -1,0 +1,49 @@
+# TRIM conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "leading trailing"
+formula = '=TRIM("  abc  ")'
+expect = "abc"
+
+[[case]]
+name = "internal runs collapse"
+formula = '=TRIM("a   b    c")'
+expect = "a b c"
+note = "AOO collapses internal runs of spaces."
+
+[[case]]
+name = "only spaces"
+formula = '=TRIM("    ")'
+expect = ""
+
+[[case]]
+name = "nothing to trim"
+formula = '=TRIM("ab")'
+expect = "ab"
+
+[[case]]
+name = "single spaces kept"
+formula = '=TRIM(" a b ")'
+expect = "a b"
+
+[[case]]
+name = "number"
+formula = '=TRIM(12)'
+expect = "12"
+
+[[case]]
+name = "empty cell"
+formula = '=TRIM(A5)'
+expect = ""
+
+[[case]]
+name = "cell reference"
+cells = { A1 = "  x   y " }
+formula = '=TRIM(A1)'
+expect = "x y"
+
+[[case]]
+name = "error propagates"
+cells = { A1 = "=NA()" }
+formula = '=TRIM(A1)'
+expect = "#N/A"

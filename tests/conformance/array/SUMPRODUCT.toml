@@ -1,0 +1,75 @@
+# SUMPRODUCT conformance vectors. Schema: docs/contributing-functions.md.
+
+[[case]]
+name = "text elements count as 0"
+cells = { A1 = 1, A2 = 2, A3 = 3, B1 = 4, B2 = "x", B3 = 6 }
+formula = "=SUMPRODUCT(A1:A3;B1:B3)"
+expect = 22
+
+[[case]]
+name = "single array"
+cells = { A1 = 1, A2 = 2, A3 = 3 }
+formula = "=SUMPRODUCT(A1:A3)"
+expect = 6
+
+[[case]]
+name = "dimension mismatch"
+cells = { A1 = 1, A2 = 2, A3 = 3, B1 = 1, C1 = 1 }
+formula = "=SUMPRODUCT(A1:A3;B1:C1)"
+expect = "#VALUE!"
+
+[[case]]
+name = "comparison times range (engine evaluates the argument)"
+cells = { A1 = 1, A2 = 2, A3 = 3, B1 = 4, B2 = 8, B3 = 16 }
+formula = "=SUMPRODUCT((A1:A3>1)*B1:B3)"
+expect = 24
+
+[[case]]
+name = "double unary"
+cells = { A1 = 1, A2 = 2, A3 = 3, B1 = 4, B2 = 8, B3 = 16 }
+formula = "=SUMPRODUCT(--(A1:A3>1);B1:B3)"
+expect = 24
+
+[[case]]
+name = "error propagates"
+cells = { A1 = 1, A2 = "=1/0", B1 = 1, B2 = 1 }
+formula = "=SUMPRODUCT(A1:A2;B1:B2)"
+expect = "#DIV/0!"
+
+[[case]]
+name = "bools count as 1/0 in ranges"
+cells = { A1 = true, A2 = true, A3 = false, B1 = 2, B2 = 3 }
+formula = "=SUMPRODUCT(A1:A3;B1:B3)"
+expect = 5
+note = "AOO stores booleans as numbers."
+
+[[case]]
+name = "inline arrays"
+formula = "=SUMPRODUCT({1;2;3};{4;5;6})"
+expect = 32
+
+[[case]]
+name = "inline array mismatch"
+formula = "=SUMPRODUCT({1;2};{1;2;3})"
+expect = "#VALUE!"
+
+[[case]]
+name = "scalars are 1x1 arrays"
+formula = "=SUMPRODUCT(3;4)"
+expect = 12
+
+[[case]]
+name = "2-D"
+cells = { A1 = 1, B1 = 2, A2 = 3, B2 = 4, C1 = 5, D1 = 6, C2 = 7, D2 = 8 }
+formula = "=SUMPRODUCT(A1:B2;C1:D2)"
+expect = 70
+
+[[case]]
+name = "whole columns"
+cells = { A1 = 2, B1 = 3, A9 = 2, B9 = 4 }
+formula = "=SUMPRODUCT(A1:A1048576;B1:B1048576)"
+expect = 14
+
+[[case]]
+formula = "=SUMPRODUCT()"
+expect = "Err:511"
