@@ -1,11 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal capability for the main window. No fs/shell/http plugins are exposed to JS; file dialogs are shown from Rust commands.",
+  "description": "Minimal capability for the main window: event listen/unlisten (menu actions), window title, and the title-bar drag region (start dragging, double-click to zoom). No fs/shell/http plugins are exposed to JS; file dialogs and the app menu are driven from Rust.",
   "windows": ["main"],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "core:window:allow-set-title",
-    "core:window:allow-start-dragging"
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
   ]
 }

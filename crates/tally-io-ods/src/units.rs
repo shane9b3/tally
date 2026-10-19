@@ -41,6 +41,9 @@ pub(crate) fn null_date_for(epoch: DateEpoch) -> &'static str {
     }
 }
 
+/// Largest year magnitude [`parse_iso_date`] accepts.
+pub(crate) const MAX_YEAR: i64 = 99_999;
+
 /// Parses `[-]YYYY-MM-DD[THH:MM[:SS[.fff]]][Z|±HH:MM]` into
 /// `(year, month, day, seconds_into_day)`. Time zones are ignored.
 pub(crate) fn parse_iso_date(s: &str) -> Option<(i64, u32, u32, f64)> {
@@ -61,6 +64,11 @@ pub(crate) fn parse_iso_date(s: &str) -> Option<(i64, u32, u32, f64)> {
         return None;
     }
     let y = if neg { -y } else { y };
+    // Far beyond any spreadsheet date (AOO: -32768..=32767); keeps the
+    // day arithmetic in `days_from_civil` from overflowing.
+    if !(-MAX_YEAR..=MAX_YEAR).contains(&y) {
+        return None;
+    }
     let secs = match time {
         None => 0.0,
         Some(t) => {

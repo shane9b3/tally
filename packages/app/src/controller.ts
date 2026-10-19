@@ -25,7 +25,7 @@ import { EMPTY_PATCH } from "./formats";
 import { useDocStore } from "./stores/docStore";
 import { useEditStore } from "./stores/editStore";
 import { fromSelectionDto, toSelectionDto, useSelectionStore } from "./stores/selectionStore";
-import { useUiStore } from "./stores/uiStore";
+import { toastWarnings, useUiStore } from "./stores/uiStore";
 import { detectSumRange, sumFormula, sumScanRanges } from "./sumRange";
 
 export interface ControllerOptions {
@@ -105,6 +105,7 @@ export class AppController {
     doc.setInfo(info);
     useDocStore.getState().setActiveSheet(info.activeSheet);
     doc.setSource(source);
+    toastWarnings(info.warnings);
     void this.refreshActive();
   }
 

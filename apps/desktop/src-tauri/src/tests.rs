@@ -273,3 +273,59 @@ fn format_currency_action_carries_its_range() -> CmdResult<()> {
     assert!(args.contains(&("range", "F2:F15")), "{args:?}");
     Ok(())
 }
+
+/// Security review M6: a panic inside an engine call is an `internal` error
+/// for that call only; the mutex is not poisoned and later commands work.
+#[test]
+fn engine_panic_leaves_later_commands_working() -> CmdResult<()> {
+    let st = state();
+    let info = new_workbook(&st, None)?;
+    let err = with_service(&st, |_| -> CmdResult<()> { panic!("injected test panic") })
+        .err()
+        .map(|e| (e.code, e.message));
+    assert_eq!(
+        err,
+        Some((
+            ApiError::INTERNAL.to_owned(),
+            "the engine failed: injected test panic".to_owned()
+        ))
+    );
+    assert!(!st.service.is_poisoned());
+    set(&st, &info, 0, 0, "42")?;
+    let v = cells(&st, info.doc, info.active_sheet, range(0, 0, 0, 0))?;
+    assert_eq!(cell(&v, 0, 0).map(|c| c.text.as_str()), Some("42"));
+    Ok(())
+}
+
+/// Security review M6: even a poisoned lock (a panic outside
+/// `with_service` while it was held) is recovered instead of disabling the
+/// app.
+#[test]
+fn poisoned_service_lock_is_recovered() -> CmdResult<()> {
+    let st = std::sync::Arc::new(state());
+    let st2 = std::sync::Arc::clone(&st);
+    let _ = std::thread::spawn(move || {
+        let _guard = st2.service.lock();
+        panic!("poison the lock");
+    })
+    .join();
+    assert!(st.service.is_poisoned());
+    let info = new_workbook(&st, None)?;
+    assert_eq!(info.sheets.len(), 1);
+    Ok(())
+}
+
+/// Security review L7: a path that was never allowed gets the same error
+/// whether or not it exists (the allowlist is checked before the file
+/// system is touched).
+#[test]
+fn open_allowlist_is_not_an_existence_oracle() -> CmdResult<()> {
+    let st = state();
+    let existing = std::env::temp_dir();
+    let missing = temp_path("does-not-exist.ods");
+    let a = files::check_open_allowed(&st, &existing).err();
+    let b = files::check_open_allowed(&st, &missing).err();
+    assert!(a.is_some());
+    assert_eq!(a, b);
+    Ok(())
+}

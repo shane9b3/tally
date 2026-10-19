@@ -19,6 +19,7 @@ pub mod view;
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 
 use tally_api::{
     ApiError, ApplyResult, CellBlock, CellEditInfo, CellPos, ClipboardOut, Direction, DocId,
@@ -36,11 +37,15 @@ pub use codec::{Decoded, Export, FileCodec, UnsupportedCodec};
 use crate::clipboard::{copy_range, ClipSnapshot};
 use crate::document::Document;
 use crate::ops::to_range;
-use crate::storage::StyleId;
+use crate::recalc::RecalcBudget;
+use crate::storage::{ColumnStore, StyleId};
 use crate::workbook::{Rng, Workbook};
 
 /// Largest file `open` reads (512 MiB).
 pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Most fields (cells plus empty fillers) one CSV export writes.
+pub const MAX_CSV_EXPORT_CELLS: u64 = 10_000_000;
 
 /// The engine behind the `DocumentService` facade.
 pub struct EngineService {
@@ -50,6 +55,8 @@ pub struct EngineService {
     codec: Box<dyn FileCodec>,
     assist: Option<AssistProvider>,
     rng: Rng,
+    open_max_evaluated: u64,
+    open_time_limit: Option<Duration>,
 }
 
 impl Default for EngineService {
@@ -81,7 +88,16 @@ impl EngineService {
             codec: Box::new(UnsupportedCodec),
             assist: None,
             rng: Rng::from_time(),
+            open_max_evaluated: RecalcBudget::OPEN_MAX_CELLS,
+            open_time_limit: Some(RecalcBudget::OPEN_TIME_LIMIT),
         }
+    }
+
+    /// Sets the recalc watchdog used by [`DocumentService::open`]: at most
+    /// `max_evaluated` formulas within `time_limit` (defaults: 50M, 20 s).
+    pub fn set_open_recalc_limits(&mut self, max_evaluated: u64, time_limit: Option<Duration>) {
+        self.open_max_evaluated = max_evaluated;
+        self.open_time_limit = time_limit;
     }
 
     /// A service with the IO crates' codec when the `io` feature is on.
@@ -127,23 +143,115 @@ impl EngineService {
         self.docs.get_mut(&doc.0).ok_or_else(|| not_found_doc(doc))
     }
 
-    fn csv_rows(wb: &Workbook) -> Vec<Vec<(String, bool)>> {
-        let sheet = wb.active_sheet;
-        let Some(used) = wb.sheet(sheet).and_then(|s| s.used_range()) else {
-            return Vec::new();
+    /// The active sheet as CSV rows, built from sparse storage.
+    ///
+    /// Rows are padded to the used width when the whole rectangle fits in
+    /// [`MAX_CSV_EXPORT_CELLS`] (so ordinary sheets give a rectangular
+    /// file). Otherwise each row stops at its last cell and empty rows are
+    /// bare line breaks, so values at A1 and XFD1048576 cost two short rows
+    /// and a million line breaks, not 17 G fields. Exports that still exceed
+    /// the cap are refused.
+    fn csv_rows(wb: &Workbook) -> Result<Vec<Vec<(String, bool)>>> {
+        let too_large = || ApiError::unsupported("the sheet is too large to export as CSV");
+        let sheet_id = wb.active_sheet;
+        let Some(sheet) = wb.sheet(sheet_id) else {
+            return Ok(Vec::new());
         };
-        (0..=used.r1)
-            .map(|r| {
-                (0..=used.c1)
-                    .map(|c| {
-                        let addr = CellAddr::new(sheet, r, c);
-                        let is_text = matches!(wb.value(addr), Value::Text(_));
-                        (view::display_text(wb, addr), is_text)
-                    })
-                    .collect()
-            })
-            .collect()
+        let Some(used) = sheet.used_range() else {
+            return Ok(Vec::new());
+        };
+        let mut present: Vec<(u32, u32)> = Vec::new();
+        for (ci, col) in sheet.columns.iter().enumerate() {
+            for (r, _) in col.cells.iter_range(0, tally_types::MAX_ROWS - 1) {
+                present.push((r, ci as u32));
+                if present.len() as u64 > MAX_CSV_EXPORT_CELLS {
+                    return Err(too_large());
+                }
+            }
+        }
+        present.sort_unstable();
+        let rows = u64::from(used.r1) + 1;
+        let width = u64::from(used.c1) + 1;
+        let dense = rows.saturating_mul(width) <= MAX_CSV_EXPORT_CELLS;
+        if !dense {
+            let mut total = rows; // one line per row
+            let mut i = 0;
+            while i < present.len() {
+                let r = present[i].0;
+                while i + 1 < present.len() && present[i + 1].0 == r {
+                    i += 1;
+                }
+                total = total.saturating_add(u64::from(present[i].1));
+                i += 1;
+            }
+            if total > MAX_CSV_EXPORT_CELLS {
+                return Err(too_large());
+            }
+        }
+        let mut out: Vec<Vec<(String, bool)>> = Vec::with_capacity(rows as usize);
+        let mut next = present.iter().peekable();
+        for r in 0..=used.r1 {
+            let mut row: Vec<(String, bool)> = Vec::new();
+            while let Some(&&(pr, c)) = next.peek() {
+                if pr != r {
+                    break;
+                }
+                next.next();
+                row.resize(c as usize, (String::new(), false));
+                let addr = CellAddr::new(sheet_id, r, c);
+                let is_text = matches!(wb.value(addr), Value::Text(_));
+                row.push((view::display_text(wb, addr), is_text));
+            }
+            if dense {
+                row.resize(width as usize, (String::new(), false));
+            }
+            out.push(row);
+        }
+        Ok(out)
     }
+}
+
+/// Writes `bytes` to `target` atomically: into a temporary file in the same
+/// directory, flushed to disk, then renamed over `target`. A crash or a full
+/// disk leaves the original file intact, and a symlink at `target` is
+/// replaced rather than written through. The original's permissions are
+/// kept.
+pub fn write_atomically(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let dir = match target.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let name = target
+        .file_name()
+        .map_or_else(|| "file".into(), |n| n.to_string_lossy().into_owned());
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let tmp = dir.join(format!(".{name}.tally-{}-{nanos}.tmp", std::process::id()));
+    let result = (|| {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        if let Ok(meta) = std::fs::metadata(target) {
+            std::fs::set_permissions(&tmp, meta.permissions())?;
+        }
+        std::fs::rename(&tmp, target)?;
+        // Persist the rename itself (best effort; not all platforms allow
+        // opening a directory).
+        if let Ok(d) = std::fs::File::open(&dir) {
+            let _ = d.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 fn file_title(path: &Path) -> String {
@@ -175,20 +283,40 @@ impl DocumentService for EngineService {
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
         let mut decoded = self.codec.read(&bytes, &ext)?;
-        let stem = path
-            .file_stem()
-            .map_or_else(|| "Sheet1".to_owned(), |s| s.to_string_lossy().into_owned());
-        for s in &mut decoded.data.sheets {
-            if s.name.trim().is_empty() {
-                s.name.clone_from(&stem);
-            }
+        if decoded.data.sheets.len() > crate::workbook::MAX_SHEETS {
+            return Err(ApiError::new(
+                ApiError::BAD_FILE,
+                format!(
+                    "the file has more than {} sheets",
+                    crate::workbook::MAX_SHEETS
+                ),
+            ));
         }
-        let wb = Workbook::from_data_with(&decoded.data, decoded.recognize_text);
+        // Only the first unnamed sheet (a CSV's only sheet) takes the file
+        // name; other unnamed sheets get `SheetN` from `from_data`.
+        if let Some(s) = decoded
+            .data
+            .sheets
+            .iter_mut()
+            .find(|s| s.name.trim().is_empty())
+        {
+            s.name = path
+                .file_stem()
+                .map_or_else(|| "Sheet1".to_owned(), |s| s.to_string_lossy().into_owned());
+        }
+        let wb = Workbook::from_data_opts(
+            &decoded.data,
+            decoded.recognize_text,
+            decoded.evaluate_formulas,
+        );
         let id = DocId(self.next_doc);
         self.next_doc += 1;
-        let mut doc = Document::new(id, wb, &file_title(path));
+        let budget = RecalcBudget::within(self.open_max_evaluated, self.open_time_limit);
+        let mut doc = Document::with_budget(id, wb, &file_title(path), &budget);
         doc.path = Some(path.to_path_buf());
         let info = doc.info();
+        // Warnings are delivered once, with the open result.
+        doc.warnings.clear();
         self.docs.insert(id.0, doc);
         Ok(info)
     }
@@ -212,7 +340,11 @@ impl DocumentService for EngineService {
         };
         let mut data = d.wb.to_data();
         data.meta.generator = Some(format!("Tally/{}", env!("CARGO_PKG_VERSION")));
-        let csv_rows = (format == FileFormat::Csv).then(|| Self::csv_rows(&d.wb));
+        let csv_rows = if format == FileFormat::Csv {
+            Some(Self::csv_rows(&d.wb)?)
+        } else {
+            None
+        };
         let bytes = self.codec.write(
             &Export {
                 data: &data,
@@ -220,7 +352,8 @@ impl DocumentService for EngineService {
             },
             format,
         )?;
-        std::fs::write(&target, bytes).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+        write_atomically(&target, &bytes)
+            .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
         let d = self
             .docs
             .get_mut(&doc.0)

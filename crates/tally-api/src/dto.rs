@@ -47,6 +47,11 @@ pub struct WorkbookInfo {
     /// Monotonic document version; bumps on every change.
     #[ts(type = "number")]
     pub version: u64,
+    /// Things the user should know about the document, shown once as toasts
+    /// (e.g. "Recalculation stopped after N formulas…" when opening a file
+    /// hit the recalc watchdog). Empty in most results.
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// One sheet tab.

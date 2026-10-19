@@ -14,8 +14,8 @@ use tally_model::{CellContentData, CellData, DocSettings, SheetData, StyleData, 
 use tally_types::{CellAddr, Value, MAX_ROWS};
 
 use crate::formula_cells::CellState;
-use crate::storage::{CellContent, ColumnStore, DimRuns, StyleId};
-use crate::workbook::{Pending, Workbook};
+use crate::storage::{CellContent, ColumnStore, DimRuns, Sheet, StyleId};
+use crate::workbook::{Pending, SheetNamer, Workbook, MAX_SHEETS};
 
 /// Style runs longer than this are clipped to the used area when exported.
 const LONG_STYLE_RUN: u32 = 10_000;
@@ -27,22 +27,45 @@ impl Workbook {
     }
 
     /// Builds a workbook; with `recognize`, text values are treated as typed
-    /// input (CSV import: numbers, dates and `=formulas` are recognised).
+    /// constants (CSV import: numbers, dates, percentages and booleans are
+    /// recognised, while `=…` stays text, see [`Self::from_data_opts`]).
     /// Formula cells are left dirty: call [`crate::recalc::recalc`] next.
     pub fn from_data_with(data: &WorkbookData, recognize: bool) -> Workbook {
+        Self::from_data_opts(data, recognize, false)
+    }
+
+    /// Like [`Self::from_data_with`]; with `recognize` and `formulas`,
+    /// recognised text starting with `=` becomes a live formula (the CSV
+    /// "Evaluate formulas" import option, off by default because a CSV from
+    /// an untrusted source would otherwise run its formulas on open).
+    pub fn from_data_opts(data: &WorkbookData, recognize: bool, formulas: bool) -> Workbook {
         let mut wb = Workbook::empty();
         wb.settings = data.settings.calc_settings.clone();
         wb.meta = data.meta.clone();
-        let mut ids = Vec::with_capacity(data.sheets.len());
-        for sd in &data.sheets {
-            let id = wb.add_sheet(Some(&sd.name), None);
-            if let Some(s) = wb.sheet_mut(id) {
-                s.hidden = sd.hidden;
-                s.tab_color = sd.tab_color;
-                s.col_dims = DimRuns::from_runs(&sd.col_widths);
-                s.row_dims = DimRuns::from_runs(&sd.row_heights);
-            }
+        // Readers cap the sheet count too; this is the engine's own limit.
+        let sheet_data = &data.sheets[..data.sheets.len().min(MAX_SHEETS)];
+        let mut ids = Vec::with_capacity(sheet_data.len());
+        // All names are made unique in one pass and the sheet index is built
+        // once, so loading is linear in the number of sheets.
+        let mut namer = SheetNamer::default();
+        for (tab, sd) in sheet_data.iter().enumerate() {
+            let name = if sd.name.trim().is_empty() {
+                namer.claim_numbered(tab as u64 + 1)
+            } else {
+                namer.claim(&sd.name)
+            };
+            let id = wb.alloc_sheet_id();
+            let mut s = Sheet::new(id, &name);
+            s.hidden = sd.hidden;
+            s.tab_color = sd.tab_color;
+            s.col_dims = DimRuns::from_runs(&sd.col_widths);
+            s.row_dims = DimRuns::from_runs(&sd.row_heights);
+            wb.sheets.push(s);
             ids.push(id);
+        }
+        wb.reindex();
+        if let Some(&first) = ids.first() {
+            wb.active_sheet = first;
         }
         if ids.is_empty() {
             ids.push(wb.add_sheet(Some("Sheet1"), None));
@@ -52,7 +75,7 @@ impl Workbook {
             .iter()
             .map(|s| wb.styles.intern(s.clone()))
             .collect();
-        for (sd, &sheet) in data.sheets.iter().zip(&ids) {
+        for (sd, &sheet) in sheet_data.iter().zip(&ids) {
             for cell in &sd.cells {
                 let addr = CellAddr::new(sheet, cell.row, cell.col);
                 if !addr.is_valid() {
@@ -64,8 +87,11 @@ impl Workbook {
                     }
                 }
                 match &cell.content {
-                    CellContentData::Value(Value::Text(t)) if recognize => {
+                    CellContentData::Value(Value::Text(t)) if recognize && formulas => {
                         wb.set_input(addr, t);
+                    }
+                    CellContentData::Value(Value::Text(t)) if recognize => {
+                        wb.set_constant_input(addr, t);
                     }
                     CellContentData::Value(v) => wb.set_value(addr, v.clone()),
                     CellContentData::Formula { text, cached } => {
@@ -124,7 +150,10 @@ impl Workbook {
                                 };
                                 let cached =
                                     (f.state == CellState::Clean).then(|| f.cached.clone());
-                                CellContentData::Formula { text, cached }
+                                CellContentData::Formula {
+                                    text: text.into(),
+                                    cached,
+                                }
                             }
                             None => continue,
                         },
@@ -260,7 +289,7 @@ mod tests {
         assert_eq!(out.sheets[0].cells.len(), 3);
         match &out.sheets[0].cells[2].content {
             CellContentData::Formula { text, cached } => {
-                assert_eq!(text, "of:=SUM([.A1:.B1])+[$Other.A1]");
+                assert_eq!(&**text, "of:=SUM([.A1:.B1])+[$Other.A1]");
                 assert_eq!(cached, &Some(Value::Number(15.0)));
             }
             other => panic!("{other:?}"),

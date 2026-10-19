@@ -11,6 +11,7 @@
 #![warn(missing_docs)]
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::io::Write;
 
 use tally_model::{CellContentData, CellData, SheetData};
@@ -55,6 +56,11 @@ pub struct CsvOptions {
     pub max_cols: u32,
     /// Maximum number of non-empty cells.
     pub max_cells: u64,
+    /// Whether the importer should turn fields starting with `=` into live
+    /// formulas (AOO's "Evaluate formulas", off by default). [`read_csv`]
+    /// always returns raw text; the engine reads this flag when it runs the
+    /// input recognizer, and with `false` `=1+2` stays the text `=1+2`.
+    pub evaluate_formulas: bool,
 }
 
 impl Default for CsvOptions {
@@ -69,6 +75,7 @@ impl Default for CsvOptions {
             max_rows: MAX_ROWS,
             max_cols: MAX_COLS,
             max_cells: 10_000_000,
+            evaluate_formulas: false,
         }
     }
 }
@@ -353,7 +360,9 @@ fn count_line_breaks(s: &[u8]) -> u64 {
 pub struct CsvCell {
     /// The text to write.
     pub text: String,
-    /// `true` if the cell's value is text (subject to the injection guard).
+    /// `true` if the cell's value is text. Informational only: the injection
+    /// guard decides on the output text, because a number format can make a
+    /// number display as `=HYPERLINK(…)` (see [`needs_injection_guard`]).
     pub is_text: bool,
 }
 
@@ -396,8 +405,8 @@ pub struct CsvWriteOptions {
     pub quote_all: bool,
     /// Record terminator.
     pub line_ending: LineEnding,
-    /// Prefix `'` to text cells that a spreadsheet would run as a formula
-    /// (default `true`; see `docs/security.md`).
+    /// Prefix `'` to fields that a spreadsheet would run as a formula
+    /// (default `true`; see `docs/security.md`). Turn it off for raw output.
     pub injection_guard: bool,
 }
 
@@ -414,31 +423,107 @@ impl Default for CsvWriteOptions {
 }
 
 /// Characters that make spreadsheet applications treat a CSV field as a
-/// formula (or DDE command) when it is opened.
-const INJECTION_TRIGGERS: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
+/// formula (or DDE command) when it is opened, including the full-width
+/// forms some CJK-locale importers normalize (U+FF1D, U+FF0B, U+FF0D, U+FF20).
+const INJECTION_TRIGGERS: [char; 8] = ['=', '+', '-', '@', '＝', '＋', '－', '＠'];
 
-/// Whether the guard would prefix `text` (a text cell) with `'`.
+/// Whether the guard would prefix the output field `text` with `'`.
+///
+/// The decision is made on the text that is written, whatever the cell's
+/// value type: a field is guarded when it starts with tab or CR, or when its
+/// first character after any leading whitespace (including LF) and `"` is
+/// one of `= + - @` or their full-width forms. A field that is entirely a
+/// plain numeric literal ([`is_plain_number`], e.g. `-5`, `-1,234.50`,
+/// `+1e-3`) is never guarded, since importers read it as a number.
 pub fn needs_injection_guard(text: &str) -> bool {
-    // Also catch `"=…"`-style variants: leading double quotes are stripped
-    // by some importers before the formula check.
-    let rest = text.trim_start_matches('"');
-    rest.chars()
+    if text.starts_with(['\t', '\r']) {
+        return true;
+    }
+    // Some importers trim spaces (LibreOffice "trim spaces") or strip
+    // leading quotes before the formula check.
+    let rest = text.trim_start_matches(|c: char| c.is_whitespace() || c == '"');
+    let trigger = rest
+        .chars()
         .next()
-        .is_some_and(|c| INJECTION_TRIGGERS.contains(&c))
+        .is_some_and(|c| INJECTION_TRIGGERS.contains(&c) || c == '\t' || c == '\r');
+    trigger && !is_plain_number(text)
+}
+
+/// `true` for a plain numeric literal, optionally surrounded by spaces:
+/// an optional sign, digits with optional `,` thousands separators, at most
+/// one decimal point, an optional exponent and an optional trailing `%`.
+pub fn is_plain_number(text: &str) -> bool {
+    let b = text.trim_matches(' ').as_bytes();
+    let mut i = 0;
+    if matches!(b.first(), Some(b'+' | b'-')) {
+        i += 1;
+    }
+    let mut digits = 0;
+    while i < b.len() && (b[i].is_ascii_digit() || (b[i] == b',' && digits > 0)) {
+        if b[i].is_ascii_digit() {
+            digits += 1;
+        }
+        i += 1;
+    }
+    if i > 0 && b[i - 1] == b',' {
+        return false; // trailing separator
+    }
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        while i < b.len() && b[i].is_ascii_digit() {
+            digits += 1;
+            i += 1;
+        }
+    }
+    if digits == 0 {
+        return false;
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        let start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == start {
+            return false;
+        }
+    }
+    if b.get(i) == Some(&b'%') {
+        i += 1;
+    }
+    i == b.len()
+}
+
+/// A `Write` over a shared writer.
+struct Shared<'a, W>(&'a RefCell<W>);
+
+impl<W: Write> Write for Shared<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.borrow_mut().flush()
+    }
 }
 
 /// Writes rows of formatted cells as CSV.
 ///
 /// Fields containing the delimiter, the quote character or a line break are
 /// quoted, with embedded quotes doubled. With
-/// [`CsvWriteOptions::injection_guard`], text cells starting with
-/// `= + - @ \t \r` (possibly after leading `"`) get a `'` prefix; non-text
-/// cells are never altered.
+/// [`CsvWriteOptions::injection_guard`], every field for which
+/// [`needs_injection_guard`] holds gets a `'` prefix, whatever the cell's
+/// type (a number format can display a number as formula text).
 pub fn write_csv<W: Write>(
     rows: impl Iterator<Item = Vec<CsvCell>>,
     opts: &CsvWriteOptions,
     w: W,
 ) -> Result<(), CsvError> {
+    // Shared so that bare line breaks can bypass the csv writer.
+    let out = RefCell::new(w);
     let mut writer = csv::WriterBuilder::new()
         .delimiter(opts.delimiter)
         .quote(opts.quote)
@@ -453,12 +538,22 @@ pub fn write_csv<W: Write>(
             LineEnding::Crlf => csv::Terminator::CRLF,
             LineEnding::Lf => csv::Terminator::Any(b'\n'),
         })
-        .from_writer(w);
+        .from_writer(Shared(&out));
+    let terminator: &[u8] = match opts.line_ending {
+        LineEnding::Crlf => b"\r\n",
+        LineEnding::Lf => b"\n",
+    };
     for row in rows {
+        if row.is_empty() {
+            // A bare line break: `write_record` would emit `""` here.
+            writer.flush()?;
+            out.borrow_mut().write_all(terminator)?;
+            continue;
+        }
         let fields: Vec<Cow<'_, str>> = row
             .iter()
             .map(|cell| {
-                if opts.injection_guard && cell.is_text && needs_injection_guard(&cell.text) {
+                if opts.injection_guard && needs_injection_guard(&cell.text) {
                     Cow::Owned(format!("'{}", cell.text))
                 } else {
                     Cow::Borrowed(cell.text.as_str())

@@ -579,6 +579,10 @@ pub fn scalar_op(op: BinOp, a: &Value, b: &Value, s: &CalcSettings) -> Value {
                 Ok(t) => t,
                 Err(e) => return Value::Error(e),
             };
+            // Text results are capped like function results (Err:513).
+            if x.len().saturating_add(y.len()) > tally_functions::MAX_TEXT_BYTES {
+                return Value::Error(ErrorKind::StringOverflow);
+            }
             let mut out = String::with_capacity(x.len() + y.len());
             out.push_str(&x);
             out.push_str(&y);

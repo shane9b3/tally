@@ -2,7 +2,7 @@
 //! index and settings. Cell-level mutators record what changed so the next
 //! [`crate::recalc`] knows where to start.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tally_formula::{
@@ -18,6 +18,72 @@ use crate::deps::{DepIndex, HashDepIndex};
 use crate::formula_cells::{CellState, FormulaCell, FormulaCellId, FormulaCells};
 use crate::storage::{CellContent, ColumnStore, Sheet, StyleId};
 use crate::styles::StyleTable;
+
+/// Hard cap on sheets per workbook (LibreOffice allows 10,000; AOO 256).
+pub const MAX_SHEETS: usize = 10_000;
+
+/// Case-insensitive key for sheet-name uniqueness.
+fn name_key(name: &str) -> String {
+    name.to_lowercase()
+}
+
+/// Makes sheet names unique (case-insensitively) in amortized O(1) per name:
+/// a set of taken names plus, per base name, the next suffix to try, so
+/// thousands of equal names do not rescan `_2`, `_3`, … each time.
+#[derive(Debug, Default)]
+pub struct SheetNamer {
+    taken: HashSet<String>,
+    next_suffix: HashMap<String, u64>,
+    /// `Sheet{n}` is known taken for every `n` in `known_taken`.
+    known_taken: std::ops::Range<u64>,
+}
+
+impl SheetNamer {
+    /// A namer that treats `names` as taken.
+    pub fn new<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
+        Self {
+            taken: names.into_iter().map(name_key).collect(),
+            next_suffix: HashMap::new(),
+            known_taken: 1..1,
+        }
+    }
+
+    /// `name` if free, else `name_2`, `name_3`, …; the result is now taken.
+    pub fn claim(&mut self, name: &str) -> String {
+        let base = name_key(name);
+        if self.taken.insert(base.clone()) {
+            return name.to_owned();
+        }
+        let mut i = self.next_suffix.get(&base).copied().unwrap_or(2);
+        loop {
+            let cand = format!("{name}_{i}");
+            i += 1;
+            if self.taken.insert(name_key(&cand)) {
+                self.next_suffix.insert(base, i);
+                return cand;
+            }
+        }
+    }
+
+    /// The first free `SheetN` with `N >= from`; the result is now taken.
+    pub fn claim_numbered(&mut self, from: u64) -> String {
+        let r = &self.known_taken;
+        let mut n = if r.start <= from && from <= r.end {
+            r.end
+        } else {
+            from
+        };
+        loop {
+            let cand = format!("Sheet{n}");
+            if self.taken.insert(name_key(&cand)) {
+                // Names are never released, so `from..=n` stays taken.
+                self.known_taken = from..n + 1;
+                return cand;
+            }
+            n += 1;
+        }
+    }
+}
 
 /// Content of one cell as captured for undo and the clipboard.
 #[derive(Clone, Debug, PartialEq)]
@@ -140,7 +206,7 @@ impl Workbook {
 
     // ----- sheets ---------------------------------------------------------
 
-    fn reindex(&mut self) {
+    pub(crate) fn reindex(&mut self) {
         self.sheet_index = self
             .sheets
             .iter()
@@ -175,35 +241,32 @@ impl Workbook {
             .map(|s| s.id)
     }
 
+    /// A [`SheetNamer`] over the current sheet names (except `except`).
+    fn namer(&self, except: Option<SheetId>) -> SheetNamer {
+        SheetNamer::new(
+            self.sheets
+                .iter()
+                .filter(|s| Some(s.id) != except)
+                .map(|s| &*s.name),
+        )
+    }
+
     /// The next free `SheetN` name.
     pub fn next_sheet_name(&self) -> String {
-        let mut n = self.sheets.len() + 1;
-        loop {
-            let name = format!("Sheet{n}");
-            if self.sheet_by_name_ci(&name).is_none() {
-                return name;
-            }
-            n += 1;
-        }
+        self.namer(None)
+            .claim_numbered(self.sheets.len() as u64 + 1)
     }
 
     /// `name` made unique among the sheets by appending `_2`, `_3`, …
     pub fn unique_sheet_name(&self, name: &str, except: Option<SheetId>) -> String {
-        let taken = |n: &str| {
-            self.sheet_by_name_ci(n)
-                .is_some_and(|id| Some(id) != except)
-        };
-        if !taken(name) {
-            return name.to_owned();
-        }
-        let mut i = 2;
-        loop {
-            let cand = format!("{name}_{i}");
-            if !taken(&cand) {
-                return cand;
-            }
-            i += 1;
-        }
+        self.namer(except).claim(name)
+    }
+
+    /// A fresh sheet id.
+    pub(crate) fn alloc_sheet_id(&mut self) -> SheetId {
+        let id = self.next_sheet_id;
+        self.next_sheet_id += 1;
+        id
     }
 
     /// Adds a sheet (name made unique) at tab `index` (appends when `None`).
@@ -461,8 +524,22 @@ impl Workbook {
     /// format is General. A leading `'` forces text; cells formatted `@`
     /// keep the input as text.
     pub fn set_input(&mut self, addr: CellAddr, input: &str) {
+        self.set_input_opts(addr, input, true);
+    }
+
+    /// Like [`Self::set_input`], but `=…` stays text instead of becoming a
+    /// formula (imported CSV: AOO's "Evaluate formulas" is off by default).
+    pub fn set_constant_input(&mut self, addr: CellAddr, input: &str) {
+        self.set_input_opts(addr, input, false);
+    }
+
+    fn set_input_opts(&mut self, addr: CellAddr, input: &str, formulas: bool) {
         if input.is_empty() {
             self.clear_content(addr);
+            return;
+        }
+        if !formulas && input.starts_with('=') {
+            self.set_value(addr, Value::text(input));
             return;
         }
         if input.starts_with('=') && input.len() > 1 {
@@ -577,6 +654,19 @@ impl Resolver for Workbook {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn namer_is_unique_and_case_insensitive() {
+        let mut n = SheetNamer::new(["Data", "data_2"]);
+        assert_eq!(n.claim("DATA"), "DATA_3");
+        assert_eq!(n.claim("Data"), "Data_4");
+        assert_eq!(n.claim("Other"), "Other");
+        let mut n = SheetNamer::new(["Sheet1", "sheet2"]);
+        assert_eq!(n.claim_numbered(1), "Sheet3");
+        assert_eq!(n.claim_numbered(2), "Sheet4");
+        assert_eq!(n.claim_numbered(10), "Sheet10");
+        assert_eq!(n.claim("Sheet10"), "Sheet10_2");
+    }
 
     #[test]
     fn sheets_and_names() {

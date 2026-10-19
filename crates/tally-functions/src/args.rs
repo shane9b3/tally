@@ -20,6 +20,21 @@ use crate::context::{ArgList, EvalContext, EvalValue};
 use crate::criteria::Criterion;
 use crate::registry::FunctionDef;
 
+/// Longest text (in bytes) a formula may produce: 4 MiB. Longer results of
+/// operators and functions are `Err:513` (string overflow), so nested text
+/// functions cannot build gigabyte strings.
+pub const MAX_TEXT_BYTES: usize = 1 << 22;
+
+/// `Err:513` if a text of `len` bytes would exceed [`MAX_TEXT_BYTES`].
+/// Functions that can grow text call this *before* allocating.
+pub fn check_text_len(len: usize) -> Result<(), ErrorKind> {
+    if len > MAX_TEXT_BYTES {
+        Err(ErrorKind::StringOverflow)
+    } else {
+        Ok(())
+    }
+}
+
 /// Runs a function body that produces a value, turning `Err(e)` into
 /// `Value::Error(e)` and non-finite numbers into `#NUM!`.
 pub fn run(body: impl FnOnce() -> Result<Value, ErrorKind>) -> EvalValue {
@@ -31,12 +46,17 @@ pub fn run_ref(body: impl FnOnce() -> Result<EvalValue, ErrorKind>) -> EvalValue
     sanitize(body().unwrap_or_else(EvalValue::error))
 }
 
-/// Maps NaN and infinities to `#NUM!` (AOO never stores them), including
-/// inside arrays.
+/// Maps NaN and infinities to `#NUM!` (AOO never stores them) and text
+/// longer than [`MAX_TEXT_BYTES`] to `Err:513`, including inside arrays.
+/// Every function result passes through here, so the text cap holds for
+/// each level of nested calls.
 pub fn sanitize(v: EvalValue) -> EvalValue {
     fn fix(v: &Value) -> Option<Value> {
         match v {
             Value::Number(n) if !n.is_finite() => Some(Value::Error(ErrorKind::Num)),
+            Value::Text(t) if t.len() > MAX_TEXT_BYTES => {
+                Some(Value::Error(ErrorKind::StringOverflow))
+            }
             _ => None,
         }
     }

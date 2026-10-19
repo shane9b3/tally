@@ -6,6 +6,7 @@
 //! allocating (§5.4 requirement 3).
 
 use std::io::BufRead;
+use std::sync::Arc;
 
 use tally_model::{CellContentData, CellData, CellRangeLocal, DimRun, SheetData};
 use tally_types::{
@@ -19,6 +20,9 @@ use crate::{Limits, OdsError, DEFAULT_COL_WIDTH_HMM};
 
 /// Maximum bytes of text in one cell.
 const MAX_CELL_TEXT: usize = 16 * 1024 * 1024;
+/// Maximum length of a `table:formula` attribute in characters (the engine's
+/// parser limit; a longer formula could never be parsed anyway).
+pub(crate) const MAX_FORMULA_LEN: usize = 8192;
 /// Styled-but-empty runs larger than this (rows × columns) are dropped: they
 /// are formatting of blank areas, which the Phase A model does not keep.
 const MAX_STYLED_EMPTY_RUN: u64 = 4096;
@@ -48,7 +52,25 @@ struct Parser<'a> {
     styles: &'a mut StyleSheet,
     limits: &'a Limits,
     cells_total: u64,
+    /// Text and formula bytes of every materialized cell so far (a shared
+    /// `Arc` counts once per cell, so this tracks the dense expansion).
+    text_bytes: u64,
+    sheets: usize,
     epoch: DateEpoch,
+}
+
+/// Bytes of text a cell's content carries (formula text plus text value).
+fn content_bytes(c: &CellContentData) -> u64 {
+    let value_bytes = |v: &Value| match v {
+        Value::Text(t) => t.len() as u64,
+        _ => 0,
+    };
+    match c {
+        CellContentData::Value(v) => value_bytes(v),
+        CellContentData::Formula { text, cached } => {
+            text.len() as u64 + cached.as_ref().map_or(0, value_bytes)
+        }
+    }
 }
 
 /// Parses `content.xml`, adding its automatic styles to `styles`.
@@ -62,6 +84,8 @@ pub(crate) fn parse_content<R: BufRead>(
         styles,
         limits,
         cells_total: 0,
+        text_bytes: 0,
+        sheets: 0,
         epoch: DateEpoch::default(),
     };
     loop {
@@ -77,6 +101,13 @@ pub(crate) fn parse_content<R: BufRead>(
                     out.calc = Some(calc);
                 }
                 "table:table" if out.is_spreadsheet => {
+                    p.sheets += 1;
+                    if p.sheets > p.limits.max_sheets {
+                        return Err(OdsError::LimitExceeded {
+                            what: "sheets",
+                            limit: p.limits.max_sheets as u64,
+                        });
+                    }
                     let sheet = p.parse_table(xml, &e)?;
                     out.sheets.push(sheet);
                 }
@@ -240,9 +271,18 @@ impl Parser<'_> {
         // Resolve styles and decide which runs materialize.
         let mut kept: Vec<(u32, u32, CellContentData, Option<u32>)> = Vec::new();
         let mut per_row: u64 = 0;
+        let mut per_row_bytes: u64 = 0;
         for run in runs {
             let non_empty = !matches!(run.cell.content, CellContentData::Value(Value::Empty));
             if run.cell.span != (1, 1) && rep == 1 && run.len == 1 {
+                // Merges count against the cell cap like cells do.
+                self.cells_total += 1;
+                if self.cells_total > self.limits.max_cells {
+                    return Err(OdsError::LimitExceeded {
+                        what: "materialized cells",
+                        limit: self.limits.max_cells,
+                    });
+                }
                 let (cs, rs) = run.cell.span;
                 sheet.merges.push(CellRangeLocal {
                     r0: *row,
@@ -270,6 +310,9 @@ impl Parser<'_> {
                 continue;
             }
             per_row += u64::from(run.len);
+            per_row_bytes = per_row_bytes.saturating_add(
+                u64::from(run.len).saturating_mul(content_bytes(&run.cell.content)),
+            );
             kept.push((run.col, run.len, run.cell.content, style));
         }
         if per_row == 0 {
@@ -284,7 +327,15 @@ impl Parser<'_> {
                 limit: self.limits.max_cells,
             });
         }
+        let bytes = per_row_bytes.saturating_mul(u64::from(eff));
+        if self.text_bytes.saturating_add(bytes) > self.limits.max_text_bytes {
+            return Err(OdsError::LimitExceeded {
+                what: "materialized cell text bytes",
+                limit: self.limits.max_text_bytes,
+            });
+        }
         self.cells_total += total;
+        self.text_bytes += bytes;
         sheet.cells.reserve(total.min(1 << 20) as usize);
         for r in 0..eff {
             for (c0, len, content, style) in &kept {
@@ -331,7 +382,24 @@ impl Parser<'_> {
             }
         }
         let text = (!paragraphs.is_empty()).then(|| paragraphs.join("\n"));
-        let formula = e.attr("table:formula").map(str::to_string);
+        let formula: Option<Arc<str>> = match e.attr("table:formula") {
+            Some(f) if f.chars().count() > MAX_FORMULA_LEN => {
+                return Err(OdsError::LimitExceeded {
+                    what: "formula length",
+                    limit: MAX_FORMULA_LEN as u64,
+                });
+            }
+            Some(f) => Some(Arc::from(f)),
+            None => None,
+        };
+        if e.attr("office:string-value")
+            .is_some_and(|s| s.len() > MAX_CELL_TEXT)
+        {
+            return Err(OdsError::LimitExceeded {
+                what: "cell text bytes",
+                limit: MAX_CELL_TEXT as u64,
+            });
+        }
         let vt = e.attr("office:value-type");
         let number = |key: &str| e.attr(key).and_then(|v| v.trim().parse::<f64>().ok());
         let mut value = match vt {
@@ -376,6 +444,11 @@ impl Parser<'_> {
             explicit_error || (formula.is_some() && matches!(vt, None | Some("string" | "float")));
         if let Some(err) = error.filter(|_| error_ok) {
             value = Value::Error(err);
+        }
+        // NaN and infinities (`office:value="NaN"`, `1e309`) never reach the
+        // model: AOO cannot store them, and they break `#NUM!` invariants.
+        if matches!(value, Value::Number(n) if !n.is_finite()) {
+            value = Value::Empty;
         }
         let content = match formula {
             Some(text) => CellContentData::Formula {

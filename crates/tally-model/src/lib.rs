@@ -16,6 +16,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use tally_types::{CalcSettings, Value};
 
@@ -76,7 +78,10 @@ pub enum CellContentData {
     /// A formula.
     Formula {
         /// Formula text in the OpenFormula dialect, e.g. `of:=SUM([.A1:.A3])`.
-        text: String,
+        ///
+        /// Shared (`Arc<str>`) so that a repeated formula cell read from a
+        /// file costs one allocation, not one per materialized cell.
+        text: Arc<str>,
         /// The cached result stored in the file, if any.
         cached: Option<Value>,
     },

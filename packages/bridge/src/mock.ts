@@ -713,6 +713,7 @@ export class MockClient implements EngineClient, ShellClient {
       activeSheet: d.state.activeSheet,
       dirty: d.dirty,
       version: d.version,
+      warnings: [],
     };
   }
 

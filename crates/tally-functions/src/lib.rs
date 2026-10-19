@@ -28,7 +28,7 @@ pub mod mock;
 pub mod numeric;
 mod registry;
 
-pub use args::{check_arity, run, run_ref, sanitize, Args};
+pub use args::{check_arity, check_text_len, run, run_ref, sanitize, Args, MAX_TEXT_BYTES};
 pub use context::{ArgList, CellFormatInfo, EvalContext, EvalValue};
 pub use criteria::{CmpOp, Criterion};
 pub use eval::call_def;

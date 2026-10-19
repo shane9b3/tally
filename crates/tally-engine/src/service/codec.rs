@@ -17,6 +17,9 @@ pub struct Decoded {
     pub data: WorkbookData,
     /// Text values are raw input to run through the recognizer (CSV).
     pub recognize_text: bool,
+    /// With `recognize_text`: `=…` text becomes a formula (CSV
+    /// `evaluate_formulas`; off by default, so `=1+2` stays text).
+    pub evaluate_formulas: bool,
 }
 
 /// What a codec needs to write a file.
@@ -24,8 +27,9 @@ pub struct Decoded {
 pub struct Export<'a> {
     /// The workbook.
     pub data: &'a WorkbookData,
-    /// For CSV: the active sheet's used area as formatted text, with a flag
-    /// telling whether the cell holds text (for the injection guard).
+    /// For CSV: the active sheet's rows as formatted text, with a flag
+    /// telling whether the cell holds text (informational; the injection
+    /// guard judges the text itself).
     pub csv_rows: Option<Vec<Vec<(String, bool)>>>,
 }
 
@@ -72,6 +76,7 @@ impl FileCodec for IoCodec {
             return Ok(Decoded {
                 data,
                 recognize_text: false,
+                evaluate_formulas: false,
             });
         }
         if matches!(ext, "csv" | "tsv" | "txt" | "tab" | "") {
@@ -92,6 +97,7 @@ impl FileCodec for IoCodec {
                     ..WorkbookData::default()
                 },
                 recognize_text: true,
+                evaluate_formulas: opts.evaluate_formulas,
             });
         }
         Err(ApiError::unsupported(format!(

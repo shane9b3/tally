@@ -4,7 +4,7 @@ import { clampZoom, nextZoom } from "../src/formats";
 import { NO_UNDO, reduceResult, useDocStore } from "../src/stores/docStore";
 import { useEditStore } from "../src/stores/editStore";
 import { fromSelectionDto, toSelectionDto } from "../src/stores/selectionStore";
-import { MAX_TOASTS, useUiStore } from "../src/stores/uiStore";
+import { MAX_TOASTS, toastWarnings, useUiStore } from "../src/stores/uiStore";
 
 const info = (over: Partial<WorkbookInfo> = {}): WorkbookInfo => ({
   doc: 1,
@@ -14,6 +14,7 @@ const info = (over: Partial<WorkbookInfo> = {}): WorkbookInfo => ({
   activeSheet: 1,
   dirty: false,
   version: 0,
+  warnings: [],
   ...over,
 });
 
@@ -105,6 +106,15 @@ describe("uiStore", () => {
     expect(toasts.map((t) => t.message)).toEqual(["b", "c", "d"]);
     useUiStore.getState().dismissToast(id);
     expect(useUiStore.getState().toasts.length).toBe(2);
+  });
+
+  it("shows open warnings (recalc watchdog) as info toasts", () => {
+    toastWarnings(info({ warnings: ["Recalculation stopped after 10 formulas"] }).warnings);
+    toastWarnings([]);
+    toastWarnings(undefined);
+    expect(useUiStore.getState().toasts.map((t) => [t.kind, t.message])).toEqual([
+      ["info", "Recalculation stopped after 10 formulas"],
+    ]);
   });
 });
 

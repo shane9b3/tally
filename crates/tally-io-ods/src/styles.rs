@@ -62,7 +62,17 @@ pub(crate) struct StyleSheet {
     pub content: Scope,
     fonts: HashMap<String, String>,
     resolved: HashMap<String, Option<u32>>,
+    /// Canonical key ([`style_key`]) → index into `styles`, so deduplication
+    /// is O(1) per style instead of a scan of every style so far.
+    dedup: HashMap<String, u32>,
     pub styles: Vec<StyleData>,
+}
+
+/// A canonical key for a style. `StyleData` holds `f32` sizes, so it cannot
+/// derive `Hash`/`Eq`; its `Debug` text is a faithful, deterministic key
+/// (equal data gives equal text).
+fn style_key(data: &StyleData) -> String {
+    format!("{data:?}")
 }
 
 /// Which part of the package a style block came from.
@@ -125,11 +135,17 @@ impl StyleSheet {
         let data = self.build(name);
         let index = if data == StyleData::default() {
             None
-        } else if let Some(i) = self.styles.iter().position(|s| *s == data) {
-            Some(i as u32)
         } else {
-            self.styles.push(data);
-            Some(self.styles.len() as u32 - 1)
+            let key = style_key(&data);
+            match self.dedup.get(&key) {
+                Some(&i) => Some(i),
+                None => {
+                    let i = self.styles.len() as u32;
+                    self.styles.push(data);
+                    self.dedup.insert(key, i);
+                    Some(i)
+                }
+            }
         };
         self.resolved.insert(name.to_string(), index);
         index

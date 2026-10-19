@@ -61,6 +61,13 @@ pub struct Limits {
     pub max_cells: u64,
     /// Maximum copies materialized for one repeated non-empty row.
     pub max_repeat: u32,
+    /// Maximum bytes of formula and string text materialized into
+    /// [`WorkbookData`] (all sheets). Each materialized cell counts its full
+    /// text length, even when repeated cells share one allocation, so the
+    /// budget reflects what the engine will hold.
+    pub max_text_bytes: u64,
+    /// Maximum number of sheets (`table:table` elements).
+    pub max_sheets: usize,
 }
 
 impl Default for Limits {
@@ -75,6 +82,8 @@ impl Default for Limits {
             max_attrs_per_element: 256,
             max_cells: 10_000_000,
             max_repeat: 1_048_576,
+            max_text_bytes: 1024 * 1024 * 1024,
+            max_sheets: 10_000,
         }
     }
 }
@@ -142,6 +151,12 @@ pub fn write_ods_with_report(
 
 /// Returns `true` if `bytes` look like an ODS package: a zip whose
 /// `mimetype` entry is the ODS media type (or the ODS template type).
+///
+/// The fast path reads only the first local file header (a conforming file
+/// starts with a stored `mimetype`). Otherwise the end-of-central-directory
+/// records are checked against the default [`Limits`] first (entry count and
+/// central-directory size, see `archive::precheck`), so the zip index is
+/// only built for an archive that `read_ods` would also accept.
 pub fn sniff_is_ods(bytes: &[u8]) -> bool {
     if !bytes.starts_with(b"PK\x03\x04") {
         return false;
@@ -168,8 +183,12 @@ pub fn sniff_is_ods(bytes: &[u8]) -> bool {
             }
         }
     }
-    // Slow path: any entry order.
-    let Ok(mut zip) = zip::ZipArchive::new(Cursor::new(bytes)) else {
+    // Slow path (any entry order), bounded by the EOCD precheck.
+    let mut cur = Cursor::new(bytes);
+    if archive::precheck(&mut cur, &Limits::default()).is_err() {
+        return false;
+    }
+    let Ok(mut zip) = zip::ZipArchive::new(cur) else {
         return false;
     };
     let Ok(file) = zip.by_name("mimetype") else {

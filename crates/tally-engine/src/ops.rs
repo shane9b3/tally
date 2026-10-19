@@ -278,6 +278,12 @@ pub fn apply_op(
             if let Some(n) = name {
                 check_sheet_name(n)?;
             }
+            if wb.sheets.len() >= crate::workbook::MAX_SHEETS {
+                return Err(ApiError::invalid_argument(format!(
+                    "a workbook can have at most {} sheets",
+                    crate::workbook::MAX_SHEETS
+                )));
+            }
             let id = wb.add_sheet(name.as_deref(), index.map(|i| i as usize));
             wb.refresh_all_precedents();
             fx.sheets_changed = true;

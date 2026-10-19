@@ -49,3 +49,11 @@ export const useUiStore = create<UiState>()((set) => ({
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   reset: () => set({ sidebarOpen: true, paletteOpen: false, zoom: 1, toasts: [] }),
 }));
+
+/**
+ * Shows the engine's one-shot document warnings (`WorkbookInfo.warnings`,
+ * e.g. "Recalculation stopped after N formulas…" on open) as info toasts.
+ */
+export function toastWarnings(warnings: readonly string[] | undefined): void {
+  for (const w of warnings ?? []) useUiStore.getState().pushToast("info", w);
+}

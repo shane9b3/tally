@@ -3,7 +3,7 @@
 use tally_types::{ErrorKind, Value};
 
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
-use crate::{run, ArgList, Args, EvalContext, EvalValue};
+use crate::{check_text_len, run, ArgList, Args, EvalContext, EvalValue};
 
 const PARAMS: &[Param] = &[
     Param::required("text", ParamKind::Text),
@@ -38,10 +38,19 @@ fn substitute(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
             return Ok(Value::Text(text));
         }
         match nth {
-            None => Ok(Value::text(text.replace(&*from, &to))),
+            None => {
+                // Size the result before building it (Err:513 past the cap).
+                if to.len() > from.len() {
+                    let n = text.matches(&*from).count();
+                    let grow = n.saturating_mul(to.len() - from.len());
+                    check_text_len(text.len().saturating_add(grow))?;
+                }
+                Ok(Value::text(text.replace(&*from, &to)))
+            }
             Some(n) => match text.match_indices(&*from).nth(n - 1) {
                 None => Ok(Value::Text(text)),
                 Some((i, _)) => {
+                    check_text_len((text.len() - from.len()).saturating_add(to.len()))?;
                     let mut out = String::with_capacity(text.len() + to.len());
                     out.push_str(&text[..i]);
                     out.push_str(&to);

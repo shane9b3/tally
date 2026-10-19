@@ -22,7 +22,9 @@ fn concatenate(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     run(|| {
         let mut out = String::new();
         for i in 0..a.count() {
-            out.push_str(&a.text(i)?);
+            let t = a.text(i)?;
+            crate::check_text_len(out.len().saturating_add(t.len()))?;
+            out.push_str(&t);
         }
         Ok(Value::text(out))
     })

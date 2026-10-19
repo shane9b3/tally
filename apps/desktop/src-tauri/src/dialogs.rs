@@ -8,7 +8,7 @@ use tally_api::{ApiError, DocId, FileFormat, WorkbookInfo};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::commands::{open_checked, save_to, CmdResult};
+use crate::commands::{blocking, open_checked, save_to, CmdResult};
 use crate::files;
 use crate::state::{lock, AppState};
 
@@ -67,7 +67,7 @@ pub async fn wb_open_dialog(
         .into_path()
         .map_err(|e| ApiError::invalid_argument(format!("unsupported location: {e}")))?;
     files::allow(&state, &path)?;
-    open_checked(&app, &state, &path).map(Some)
+    blocking(app, move |app, st| open_checked(app, st, &path).map(Some)).await
 }
 
 /// Saves `doc`. Shows a Save dialog when `save_as` is set or the document
@@ -80,7 +80,7 @@ pub async fn wb_save(
     save_as: bool,
     format: Option<FileFormat>,
 ) -> CmdResult<WorkbookInfo> {
-    let current: Option<PathBuf> = lock(&state.paths, "paths")?.get(&doc.0).cloned();
+    let current: Option<PathBuf> = lock(&state.paths).get(&doc.0).cloned();
     // Exporting to another format always asks where.
     let format_change = match (&current, format) {
         (Some(p), Some(f)) => format_for(p) != f,
@@ -130,7 +130,10 @@ pub async fn wb_save(
         }
     };
     let fmt = format.unwrap_or_else(|| format_for(&target));
-    let info = save_to(&state, doc, &target, fmt)?;
-    files::push_recent(&app, &state, &target);
-    Ok(info)
+    blocking(app, move |app, st| {
+        let info = save_to(st, doc, &target, fmt)?;
+        files::push_recent(app, st, &target);
+        Ok(info)
+    })
+    .await
 }

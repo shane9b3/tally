@@ -2,9 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use tally_api::{ApiError, DocumentService};
+use tally_api::DocumentService;
 
 /// Everything the commands share. Lock order (when more than one is needed):
 /// `service`, then `paths`, then `recent`, then `allowed`.
@@ -31,8 +31,16 @@ impl AppState {
     }
 }
 
-/// Locks a mutex, mapping poisoning to an `internal` [`ApiError`].
-pub fn lock<'a, T: ?Sized>(m: &'a Mutex<T>, what: &str) -> Result<MutexGuard<'a, T>, ApiError> {
-    m.lock()
-        .map_err(|_| ApiError::new(ApiError::INTERNAL, format!("{what} lock poisoned")))
+/// Locks a mutex, recovering from poisoning.
+///
+/// Engine calls run under `catch_unwind` (`commands::with_service`), so a
+/// panic in one command is turned into an `internal` error before the guard
+/// is dropped and the service mutex is never poisoned that way. Poisoning
+/// can still come from a panic elsewhere while a lock is held (the small
+/// path/recent/allowlist maps, or a panic while unwinding). Recovering is
+/// safe: at worst the state touched by the one failed call is inconsistent
+/// (for the engine, one document), while refusing every later command, as
+/// before, disabled the app and lost unsaved work in every other document.
+pub fn lock<T: ?Sized>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }

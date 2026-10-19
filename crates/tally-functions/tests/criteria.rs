@@ -296,3 +296,24 @@ fn array_values_use_top_left() {
     assert!(c.matches(&num(2.0)));
     assert!(Criterion::parse(&num(2.0), &d).matches(&Value::Array(m)));
 }
+
+/// Security review M2: a 4,000-character wildcard pattern against 1 MB of
+/// text (3.2 s per cell with the old backtracking matcher).
+#[test]
+fn wildcard_matching_is_linear() {
+    let text = s(&"a".repeat(1_000_000));
+    let c = Criterion::parse(&s(&format!("*{}b", "a".repeat(4000))), &settings(WILD));
+    let t = std::time::Instant::now();
+    assert!(!c.matches(&text));
+    let c2 = Criterion::parse(&s(&format!("*{}?b*", "a".repeat(4000))), &settings(WILD));
+    assert!(!c2.matches(&text));
+    let c3 = Criterion::parse(&s(&format!("*{}*", "a?".repeat(2000))), &settings(WILD));
+    assert!(c3.matches(&text));
+    let took = t.elapsed();
+    let budget = if cfg!(debug_assertions) {
+        std::time::Duration::from_millis(1500)
+    } else {
+        std::time::Duration::from_millis(100)
+    };
+    assert!(took < budget, "took {took:?}");
+}

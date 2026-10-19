@@ -2,7 +2,10 @@
 //!
 //! Implements §5.4 requirements 1 (zip bombs) and 4 (path traversal):
 //!
-//! - the entry count is capped before anything is inflated;
+//! - the entry count and the central-directory size are read from the
+//!   end-of-central-directory records ([`precheck`], hand-parsed, zip64
+//!   included) and capped *before* the zip crate indexes the central
+//!   directory, so a flood of directory records costs nothing;
 //! - every entry is read through `Read::take(limit + 1)` wrapped in a
 //!   [`Guard`] that fails as soon as the per-entry or total uncompressed byte
 //!   budget is exceeded (declared sizes in zip headers can lie, so they are
@@ -25,6 +28,125 @@ use crate::{Limits, OdsError};
 
 /// The compression ratio is only enforced once an entry has inflated past this.
 pub(crate) const RATIO_FLOOR: u64 = 10 * 1024 * 1024;
+
+/// Largest central directory accepted (16 MiB: ~10,000 entries need ~1 MiB).
+pub(crate) const MAX_CENTRAL_DIRECTORY_BYTES: u64 = 16 * 1024 * 1024;
+
+const EOCD_SIG: u32 = 0x0605_4b50;
+const EOCD_LEN: usize = 22;
+const ZIP64_LOCATOR_SIG: u32 = 0x0706_4b50;
+const ZIP64_LOCATOR_LEN: usize = 20;
+const ZIP64_EOCD_SIG: u32 = 0x0606_4b50;
+const ZIP64_EOCD_LEN: usize = 56;
+
+fn le_u16(b: &[u8], i: usize) -> Option<u64> {
+    let s = b.get(i..i + 2)?;
+    Some(u64::from(u16::from_le_bytes([s[0], s[1]])))
+}
+
+fn le_u32(b: &[u8], i: usize) -> Option<u64> {
+    let s = b.get(i..i + 4)?;
+    Some(u64::from(u32::from_le_bytes([s[0], s[1], s[2], s[3]])))
+}
+
+fn le_u64(b: &[u8], i: usize) -> Option<u64> {
+    let s = b.get(i..i + 8)?;
+    let mut a = [0u8; 8];
+    a.copy_from_slice(s);
+    Some(u64::from_le_bytes(a))
+}
+
+/// Entry count and central-directory size from one end-of-central-directory
+/// record (following the zip64 locator when the record says so).
+fn directory_extent<R: Read + Seek>(
+    reader: &mut R,
+    tail: &[u8],
+    tail_start: u64,
+    at: usize,
+) -> Result<(u64, u64), OdsError> {
+    let bad = || OdsError::NotOds;
+    let mut entries = le_u16(tail, at + 10).ok_or_else(bad)?;
+    let mut cd_size = le_u32(tail, at + 12).ok_or_else(bad)?;
+    let cd_offset = le_u32(tail, at + 16).ok_or_else(bad)?;
+    if entries == 0xFFFF || cd_size == 0xFFFF_FFFF || cd_offset == 0xFFFF_FFFF {
+        // zip64: the locator sits right before the classic record.
+        let loc = at.checked_sub(ZIP64_LOCATOR_LEN);
+        let record_at = match loc {
+            Some(l) if le_u32(tail, l) == Some(u64::from(ZIP64_LOCATOR_SIG)) => le_u64(tail, l + 8),
+            _ => None,
+        };
+        if let Some(off) = record_at {
+            let mut rec = [0u8; ZIP64_EOCD_LEN];
+            // The record may lie inside the tail we already have.
+            let in_tail = off
+                .checked_sub(tail_start)
+                .and_then(|o| usize::try_from(o).ok())
+                .and_then(|o| tail.get(o..o + ZIP64_EOCD_LEN));
+            match in_tail {
+                Some(b) => rec.copy_from_slice(b),
+                None => {
+                    reader.seek(SeekFrom::Start(off))?;
+                    reader.read_exact(&mut rec).map_err(|_| bad())?;
+                }
+            }
+            if le_u32(&rec, 0) != Some(u64::from(ZIP64_EOCD_SIG)) {
+                return Err(OdsError::NotOds);
+            }
+            entries = entries.max(le_u64(&rec, 32).ok_or_else(bad)?);
+            cd_size = cd_size.max(le_u64(&rec, 40).ok_or_else(bad)?);
+        }
+    }
+    Ok((entries, cd_size))
+}
+
+/// Reads the end-of-central-directory record(s) and rejects the archive if
+/// it declares more than `limits.max_entries` entries or a central directory
+/// larger than [`MAX_CENTRAL_DIRECTORY_BYTES`], before anything is indexed.
+///
+/// Every EOCD signature in the last 64 KiB + 22 bytes is checked (a comment
+/// may hide extra ones and parsers differ in which they pick), so the zip
+/// crate cannot be steered to a bigger directory than the one checked here.
+pub(crate) fn precheck<R: Read + Seek>(reader: &mut R, limits: &Limits) -> Result<(), OdsError> {
+    let len = reader.seek(SeekFrom::End(0))?;
+    let tail_len = len.min(u64::from(u16::MAX) + EOCD_LEN as u64);
+    let tail_start = len - tail_len;
+    reader.seek(SeekFrom::Start(tail_start))?;
+    let mut tail = vec![0u8; tail_len as usize];
+    reader.read_exact(&mut tail)?;
+    let mut found = false;
+    let sig = EOCD_SIG.to_le_bytes();
+    let last = tail.len().saturating_sub(EOCD_LEN);
+    for at in (0..=last).rev() {
+        if tail.get(at..at + 4) != Some(sig.as_slice()) {
+            continue;
+        }
+        let (entries, cd_size) = match directory_extent(reader, &tail, tail_start, at) {
+            Ok(x) => x,
+            // A stray signature in a comment: only a real record counts.
+            Err(OdsError::NotOds) => continue,
+            Err(e) => return Err(e),
+        };
+        found = true;
+        if entries > limits.max_entries as u64 {
+            return Err(OdsError::LimitExceeded {
+                what: "zip entries",
+                limit: limits.max_entries as u64,
+            });
+        }
+        if cd_size > MAX_CENTRAL_DIRECTORY_BYTES {
+            return Err(OdsError::LimitExceeded {
+                what: "zip central directory bytes",
+                limit: MAX_CENTRAL_DIRECTORY_BYTES,
+            });
+        }
+    }
+    reader.seek(SeekFrom::Start(0))?;
+    if found {
+        Ok(())
+    } else {
+        Err(OdsError::NotOds)
+    }
+}
 
 /// Wraps the archive reader and counts the bytes read from it.
 struct CountingReader<R> {
@@ -119,7 +241,8 @@ pub(crate) struct Package<R: Read + Seek> {
 
 impl<R: Read + Seek> Package<R> {
     /// Opens the zip and indexes safe entry names. A non-zip is `NotOds`.
-    pub fn open(reader: R, limits: &Limits) -> Result<Self, OdsError> {
+    pub fn open(mut reader: R, limits: &Limits) -> Result<Self, OdsError> {
+        precheck(&mut reader, limits)?;
         let consumed = Rc::new(Cell::new(0));
         let counting = CountingReader {
             inner: reader,

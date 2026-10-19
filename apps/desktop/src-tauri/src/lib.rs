@@ -33,9 +33,7 @@ pub fn run() {
         .setup(|app| {
             let recent = files::load_recent(app.handle());
             let state = app.state::<AppState>();
-            if let Ok(mut list) = state.recent.lock() {
-                *list = recent;
-            }
+            *state::lock(&state.recent) = recent;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

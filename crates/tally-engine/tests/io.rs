@@ -19,11 +19,14 @@ fn csv_open_ods_round_trip() {
     let s = info.sheets[0].id;
     assert_eq!(info.sheets[0].name, "invoices");
     let wb = &svc.document(info.doc).unwrap().wb;
+    // CSV `=` fields import as text (AOO's "Evaluate formulas" is off by
+    // default; security review M3), while numbers are still recognised.
     assert_eq!(
         wb.value(CellAddr::new(s, 1, 5)),
-        Value::Number(54.0),
-        "=D2*E2 recognised and computed"
+        Value::text("=D2*E2"),
+        "=D2*E2 stays text"
     );
+    assert_eq!(wb.value(CellAddr::new(s, 1, 3)), Value::Number(12.0));
     let before = wb.to_data();
     let dir = std::env::temp_dir().join(format!("tally-engine-io-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

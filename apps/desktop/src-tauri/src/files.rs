@@ -81,44 +81,54 @@ fn store_recent<R: Runtime>(app: &AppHandle<R>, list: &[String]) -> Result<(), A
 /// Persistence errors are logged, never surfaced: they must not fail a save.
 pub fn push_recent<R: Runtime>(app: &AppHandle<R>, state: &AppState, path: &Path) {
     let entry = path.to_string_lossy().into_owned();
-    let snapshot = match lock(&state.recent, "recent") {
-        Ok(mut list) => {
-            list.retain(|p| p != &entry);
-            list.insert(0, entry);
-            list.truncate(MAX_RECENT);
-            list.clone()
-        }
-        Err(e) => {
-            eprintln!("tally: {e}");
-            return;
-        }
+    let snapshot = {
+        let mut list = lock(&state.recent);
+        list.retain(|p| p != &entry);
+        list.insert(0, entry);
+        list.truncate(MAX_RECENT);
+        list.clone()
     };
     if let Err(e) = store_recent(app, &snapshot) {
         eprintln!("tally: {e}");
     }
 }
 
-/// Records a path the user chose in a native dialog.
+/// Records a path the user chose in a native dialog: both as given and in
+/// canonical form, since JS may pass back either (dialog result, or the
+/// canonical path from `WorkbookInfo.path` / the recent list).
 pub fn allow(state: &AppState, path: &Path) -> Result<(), ApiError> {
-    let canon = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    lock(&state.allowed, "allowlist")?.insert(canon);
+    let mut allowed = lock(&state.allowed);
+    allowed.insert(path.to_path_buf());
+    if let Ok(canon) = fs::canonicalize(path) {
+        allowed.insert(canon);
+    }
     Ok(())
 }
 
 /// Checks the `open(path)` allowlist and returns the canonical path.
+///
+/// The path is compared *as given* against the allowlist and the recent
+/// list before the file system is touched, so a rejected path gets the same
+/// error whether or not it exists (no file-existence oracle for the
+/// webview). Only an allowed path is canonicalized; the canonical form must
+/// be allowed too, so a symlink swapped in afterwards cannot redirect it.
 pub fn check_open_allowed(state: &AppState, path: &Path) -> Result<PathBuf, ApiError> {
+    let rejected = || {
+        ApiError::invalid_argument("this file was not chosen in an Open dialog; use File ▸ Open…")
+    };
+    let as_given = lock(&state.allowed).contains(path)
+        || lock(&state.recent).iter().any(|p| Path::new(p) == path);
+    if !as_given {
+        return Err(rejected());
+    }
     let canon = fs::canonicalize(path).map_err(|e| io_err("opening the file", &e))?;
-    if lock(&state.allowed, "allowlist")?.contains(&canon) {
-        return Ok(canon);
+    let canon_ok = lock(&state.allowed).contains(&canon)
+        || lock(&state.recent)
+            .iter()
+            .any(|p| Path::new(p) == canon || fs::canonicalize(p).is_ok_and(|rp| rp == canon));
+    if canon_ok {
+        Ok(canon)
+    } else {
+        Err(rejected())
     }
-    let recent = lock(&state.recent, "recent")?;
-    let in_recent = recent
-        .iter()
-        .any(|p| fs::canonicalize(p).is_ok_and(|rp| rp == canon));
-    if in_recent {
-        return Ok(canon);
-    }
-    Err(ApiError::invalid_argument(
-        "this file was not chosen in an Open dialog; use File ▸ Open…",
-    ))
 }

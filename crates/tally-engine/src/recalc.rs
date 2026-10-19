@@ -14,6 +14,7 @@
 //!    evaluated on demand, bounded by [`MAX_ON_DEMAND_DEPTH`].
 
 use std::ops::ControlFlow;
+use std::time::{Duration, Instant};
 
 use slotmap::SecondaryMap;
 use tally_formula::{Expr, ResolvedRef};
@@ -41,10 +42,72 @@ pub struct RecalcReport {
     pub evaluated: usize,
     /// Number of formulas in cycles.
     pub circular: usize,
+    /// The [`RecalcBudget`] ran out: `skipped` formulas kept their cached
+    /// values (from the file, or empty) and were marked clean.
+    pub incomplete: bool,
+    /// Formulas left unevaluated because the budget ran out.
+    pub skipped: usize,
+}
+
+/// Limits for one recalculation (the recalc watchdog, plan §5.4 item 8).
+///
+/// When either limit is hit, the remaining formulas keep their cached values
+/// and are marked clean, so later edits recalculate their dependents as
+/// usual. The check runs between formulas; one formula is never interrupted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecalcBudget {
+    /// Most formulas to evaluate.
+    pub max_cells_evaluated: u64,
+    /// Wall-clock deadline.
+    pub deadline: Option<Instant>,
+}
+
+impl RecalcBudget {
+    /// Default formula limit when a file is opened.
+    pub const OPEN_MAX_CELLS: u64 = 50_000_000;
+    /// Default time limit when a file is opened.
+    pub const OPEN_TIME_LIMIT: Duration = Duration::from_secs(20);
+
+    /// No limits.
+    pub fn unbounded() -> Self {
+        Self {
+            max_cells_evaluated: u64::MAX,
+            deadline: None,
+        }
+    }
+
+    /// At most `max_cells_evaluated` formulas, finishing within `time` from now.
+    pub fn within(max_cells_evaluated: u64, time: Option<Duration>) -> Self {
+        Self {
+            max_cells_evaluated,
+            deadline: time.and_then(|t| Instant::now().checked_add(t)),
+        }
+    }
+
+    /// The budget used when a file is opened: 50M formulas or 20 s.
+    pub fn on_open() -> Self {
+        Self::within(Self::OPEN_MAX_CELLS, Some(Self::OPEN_TIME_LIMIT))
+    }
+
+    fn exhausted(&self, evaluated: usize) -> bool {
+        evaluated as u64 >= self.max_cells_evaluated
+            || self.deadline.is_some_and(|d| Instant::now() >= d)
+    }
+}
+
+impl Default for RecalcBudget {
+    fn default() -> Self {
+        Self::unbounded()
+    }
 }
 
 /// Recalculates everything that depends on the pending changes.
 pub fn recalc(wb: &mut Workbook) -> RecalcReport {
+    recalc_with(wb, &RecalcBudget::unbounded())
+}
+
+/// [`recalc`] within `budget`.
+pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
     let pending = std::mem::take(&mut wb.pending);
     let mut dirty: Vec<FormulaCellId> = Vec::new();
     for id in pending.dirty {
@@ -97,6 +160,18 @@ pub fn recalc(wb: &mut Workbook) -> RecalcReport {
     let now = now_serial(wb.settings.date_epoch);
     let mut recalculated: Vec<CellAddr> = Vec::with_capacity(dirty.len());
     for scc in order {
+        if report.incomplete || budget.exhausted(report.evaluated) {
+            report.incomplete = true;
+            for id in &scc.members {
+                if let Some(f) = wb.formulas.get_mut(*id) {
+                    if f.state == CellState::Dirty {
+                        f.state = CellState::Clean;
+                        report.skipped += 1;
+                    }
+                }
+            }
+            continue;
+        }
         if scc.cyclic {
             for id in &scc.members {
                 if let Some(f) = wb.formulas.get_mut(*id) {
@@ -131,8 +206,13 @@ pub fn recalc(wb: &mut Workbook) -> RecalcReport {
 
 /// Marks every formula dirty and recalculates.
 pub fn hard_recalc(wb: &mut Workbook) -> RecalcReport {
+    hard_recalc_with(wb, &RecalcBudget::unbounded())
+}
+
+/// [`hard_recalc`] within `budget`.
+pub fn hard_recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
     wb.dirty_all();
-    recalc(wb)
+    recalc_with(wb, budget)
 }
 
 /// One strongly connected component, in evaluation order.

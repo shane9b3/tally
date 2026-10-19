@@ -10,7 +10,7 @@ use tally_types::{CellRange, SheetId};
 
 use crate::clipboard::ClipSnapshot;
 use crate::ops::apply_op;
-use crate::recalc::{hard_recalc, recalc, RecalcReport};
+use crate::recalc::{hard_recalc_with, recalc, RecalcBudget, RecalcReport};
 use crate::undo::{apply_change, Effects, UndoRecord, UndoStack};
 use crate::workbook::Workbook;
 
@@ -31,6 +31,11 @@ pub struct Document {
     pub title: String,
     /// Unsaved changes exist.
     pub dirty: bool,
+    /// The recalc on open hit its [`RecalcBudget`]; some formulas show the
+    /// values cached in the file.
+    pub recalc_incomplete: bool,
+    /// Warnings for the next [`Self::info`] (taken by the service once).
+    pub warnings: Vec<String>,
 }
 
 /// Formats a colour `0xRRGGBBAA` as `#rrggbb`.
@@ -40,8 +45,24 @@ fn css_color(c: u32) -> String {
 
 impl Document {
     /// Wraps a workbook (recalculating it fully).
-    pub fn new(id: DocId, mut wb: Workbook, title: &str) -> Self {
-        hard_recalc(&mut wb);
+    pub fn new(id: DocId, wb: Workbook, title: &str) -> Self {
+        Self::with_budget(id, wb, title, &RecalcBudget::unbounded())
+    }
+
+    /// Wraps a workbook, recalculating it fully within `budget`. If the
+    /// budget runs out, the remaining formulas keep their cached values,
+    /// [`Self::recalc_incomplete`] is set and a warning is queued.
+    pub fn with_budget(id: DocId, mut wb: Workbook, title: &str, budget: &RecalcBudget) -> Self {
+        let report = hard_recalc_with(&mut wb, budget);
+        let mut warnings = Vec::new();
+        if report.incomplete {
+            warnings.push(format!(
+                "Recalculation stopped after {} formulas to keep the file responsive; \
+                 {} formulas show the values saved in the file and update when you \
+                 edit the cells they depend on.",
+                report.evaluated, report.skipped
+            ));
+        }
         Self {
             id,
             wb,
@@ -50,6 +71,8 @@ impl Document {
             path: None,
             title: title.to_owned(),
             dirty: false,
+            recalc_incomplete: report.incomplete,
+            warnings,
         }
     }
 
@@ -83,6 +106,7 @@ impl Document {
             active_sheet: self.wb.active_sheet,
             dirty: self.dirty,
             version: self.version,
+            warnings: self.warnings.clone(),
         }
     }
 
