@@ -28,6 +28,7 @@ mod read;
 mod styles;
 mod units;
 mod v03;
+mod v04;
 mod write;
 mod xml;
 

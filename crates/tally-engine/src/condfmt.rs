@@ -321,6 +321,8 @@ fn style_from_api(s: &CfStyleDto) -> Result<CfStyleData, ApiError> {
             bottom: b.bottom.as_ref().map(crate::styles::border_from_dto),
             left: b.left.as_ref().map(crate::styles::border_from_dto),
             right: b.right.as_ref().map(crate::styles::border_from_dto),
+            diagonal_down: b.diagonal_down.as_ref().map(crate::styles::border_from_dto),
+            diagonal_up: b.diagonal_up.as_ref().map(crate::styles::border_from_dto),
         }),
         number_format: s.number_format.clone(),
         display: s.display.as_ref().map(|d| match d {
@@ -342,6 +344,8 @@ fn style_to_api(s: &CfStyleData) -> CfStyleDto {
             bottom: b.bottom.as_ref().map(crate::styles::border_dto),
             left: b.left.as_ref().map(crate::styles::border_dto),
             right: b.right.as_ref().map(crate::styles::border_dto),
+            diagonal_down: b.diagonal_down.as_ref().map(crate::styles::border_dto),
+            diagonal_up: b.diagonal_up.as_ref().map(crate::styles::border_dto),
         }),
         number_format: s.number_format.clone(),
         display: s.display.as_ref().map(|d| match d {

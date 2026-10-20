@@ -8,6 +8,7 @@ mod addin;
 mod array;
 mod database;
 mod datetime;
+mod examples;
 mod financial;
 mod information;
 mod logical;
@@ -31,4 +32,5 @@ pub(crate) fn register_all(r: &mut Registry) {
     text::register(r);
     addin::register(r);
     ooxml::apply(r);
+    examples::apply(r);
 }

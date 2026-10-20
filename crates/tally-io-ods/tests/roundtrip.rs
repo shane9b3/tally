@@ -82,6 +82,7 @@ fn sample() -> WorkbookData {
                 v: VAlign::Middle,
                 wrap: true,
                 indent: 0,
+                ..Default::default()
             },
             ..StyleData::default()
         },
@@ -261,6 +262,7 @@ fn sample() -> WorkbookData {
                 algorithm: Some("sha256".into()),
                 ..tally_model::SheetProtectionData::default()
             }),
+            ..Default::default()
         },
         meta: DocMeta {
             title: Some("Round & trip".into()),
@@ -274,6 +276,7 @@ fn sample() -> WorkbookData {
             last_author: Some("Ben".into()),
         },
         warnings: Vec::new(),
+        ..Default::default()
     }
 }
 

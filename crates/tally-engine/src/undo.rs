@@ -125,6 +125,15 @@ pub struct Effects {
     pub replaced: Option<u32>,
     /// `notices` with their op index (collected by the document).
     pub notice_errors: Vec<tally_api::OpError>,
+    /// Charts whose data changed (v0.4; filled by the chart index).
+    pub charts_changed: Option<Vec<tally_api::ChartRef>>,
+    /// Sheets whose chart/picture list changed (v0.4).
+    pub objects_changed: Option<Vec<SheetId>>,
+    /// Ids allocated by `Add*`/`Create*` ops, in op order (v0.4; the op
+    /// index is filled in by the document).
+    pub created: Option<Vec<tally_api::CreatedId>>,
+    /// The pivot list changed (v0.5).
+    pub pivots_changed: Option<bool>,
 }
 
 impl Effects {
@@ -133,6 +142,21 @@ impl Effects {
         if !self.layout_changed.contains(&sheet) {
             self.layout_changed.push(sheet);
         }
+    }
+
+    /// Records that a sheet's chart/picture list changed (v0.4).
+    pub fn objects(&mut self, sheet: SheetId) {
+        let v = self.objects_changed.get_or_insert_with(Vec::new);
+        if !v.contains(&sheet) {
+            v.push(sheet);
+        }
+    }
+
+    /// Records an id allocated by the op at `op_index` (v0.4).
+    pub fn created(&mut self, op_index: u32, id: u32) {
+        self.created
+            .get_or_insert_with(Vec::new)
+            .push(tally_api::CreatedId { op_index, id });
     }
 }
 

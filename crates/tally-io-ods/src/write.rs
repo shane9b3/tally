@@ -60,7 +60,7 @@ pub(crate) fn write<W: Write + Seek>(
     zip.write_all(MIMETYPE.as_bytes())?;
 
     zip.start_file("META-INF/manifest.xml", deflated)?;
-    zip.write_all(manifest().as_bytes())?;
+    zip.write_all(manifest(&crate::v04::object_manifest_entries(data)).as_bytes())?;
 
     let plan = StylePlan::new(data, &mut report);
     zip.start_file("content.xml", deflated)?;
@@ -75,11 +75,16 @@ pub(crate) fn write<W: Write + Seek>(
     zip.start_file("settings.xml", deflated)?;
     zip.write_all(settings_xml(data).as_bytes())?;
 
+    // Wave 5: chart objects and pictures (placeholder until W5-1).
+    crate::v04::write_objects(data, &mut zip, &mut report)?;
+
     zip.finish()?;
     Ok(report)
 }
 
-fn manifest() -> String {
+/// The manifest; `extra` lists the chart object and picture entries as
+/// `(full path, media type)`.
+fn manifest(extra: &[(String, String)]) -> String {
     let mut s = String::new();
     s.push_str(XML_DECL);
     s.push_str(r#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">"#);
@@ -92,6 +97,13 @@ fn manifest() -> String {
             s,
             r#"<manifest:file-entry manifest:full-path="{f}" manifest:media-type="text/xml"/>"#
         );
+    }
+    for (path, media) in extra {
+        s.push_str(r#"<manifest:file-entry manifest:full-path=""#);
+        escape_attr(path, &mut s);
+        s.push_str(r#"" manifest:media-type=""#);
+        escape_attr(media, &mut s);
+        s.push_str(r#""/>"#);
     }
     s.push_str("</manifest:manifest>");
     s
@@ -204,6 +216,8 @@ fn settings_xml(data: &WorkbookData) -> String {
             config_item(&mut s, "PositionRight", "int", &cols.to_string());
             config_item(&mut s, "PositionBottom", "int", &rows.to_string());
         }
+        // Wave 5: view options and a non-frozen split (placeholder).
+        crate::v04::write_view_settings(&mut s, sheet);
         s.push_str("</config:config-item-map-entry>");
     }
     s.push_str("</config:config-item-map-named>");
@@ -745,6 +759,8 @@ fn write_content<W: Write + Seek>(
     let global: Vec<&NameData> = data.names.iter().filter(|n| n.sheet.is_none()).collect();
     write_named_expressions(&mut s, &global, data);
     write_database_ranges(&mut s, data);
+    // Wave 5: `table:data-pilot-tables` follows `table:database-ranges`.
+    crate::v04::write_pivots(&mut s, data);
     s.push_str("</office:spreadsheet></office:body></office:document-content>");
     flush(&mut s, zip)
 }
@@ -765,6 +781,8 @@ fn run_at(runs: &[DimRun], i: u32) -> (Option<&DimRun>, Option<u32>) {
 /// Per-cell extras of a sheet: validations, notes, links, derived styles.
 struct Extras<'a> {
     tab: usize,
+    /// The sheet (for the objects anchored in its cells).
+    sheet: &'a SheetData,
     /// (ranges, validation name).
     vals: Vec<(&'a [CellRangeLocal], String)>,
     notes: HashMap<(u32, u32), &'a tally_model::NoteData>,
@@ -1040,11 +1058,15 @@ fn write_sheet<W: Write + Seek>(
     if let Some(p) = &sheet.protection {
         crate::v03::write_protection_options(s, p);
     }
+    // Wave 5: `table:scenario` and `table:shapes` precede the columns.
+    crate::v04::write_scenario(s, sheet);
+    crate::v04::write_shapes(s, sheet, tab);
     let repeat_rows = sheet.page_setup.as_ref().and_then(|p| p.repeat_rows);
     let repeat_cols = sheet.page_setup.as_ref().and_then(|p| p.repeat_cols);
 
     let extras = Extras {
         tab,
+        sheet,
         vals: sheet
             .validations
             .iter()
@@ -1172,6 +1194,7 @@ fn write_sheet<W: Write + Seek>(
                 s.push_str("<table:table-header-columns>");
             }
         }
+        crate::v04::write_group_starts(s, &sheet.col_groups, c, false);
         let (run, next) = run_at(&cols, c);
         let (width, hidden, mut stop) = match run {
             Some(r) => (r.size_hmm, r.hidden, r.end.saturating_add(1).min(end_col)),
@@ -1194,6 +1217,9 @@ fn write_sheet<W: Write + Seek>(
                     stop = stop.min(x);
                 }
             }
+        }
+        if let Some(b) = crate::v04::next_group_boundary(&sheet.col_groups, c) {
+            stop = stop.min(b);
         }
         let default = col_default.get(&c).copied();
         let mut n = 1;
@@ -1218,6 +1244,7 @@ fn write_sheet<W: Write + Seek>(
             None => s.push_str(r#" table:default-cell-style-name="Default"/>"#),
         }
         c += n;
+        crate::v04::write_group_ends(s, &sheet.col_groups, c.saturating_sub(1), false);
         if let Some((_, b)) = repeat_cols {
             if c == b.saturating_add(1) {
                 s.push_str("</table:table-header-columns>");
@@ -1256,6 +1283,7 @@ fn write_sheet<W: Write + Seek>(
                 s.push_str("<table:table-header-rows>");
             }
         }
+        crate::v04::write_group_starts(s, &sheet.row_groups, r, true);
         active.retain(|a| a.end_row >= r);
         while vi < vruns.len() && vruns[vi].start_row <= r {
             let run = vruns[vi];
@@ -1358,6 +1386,7 @@ fn write_sheet<W: Write + Seek>(
             ci += 1;
         }
         let row_cells = &cells[row_start..ci];
+        let next_group = crate::v04::next_group_boundary(&sheet.row_groups, r).unwrap_or(u32::MAX);
         let n = if row_cells.is_empty() && !brk {
             let next_cell = cells.get(ci).map_or(end_row, |c| c.row);
             next_cell
@@ -1367,6 +1396,7 @@ fn write_sheet<W: Write + Seek>(
                 .min(next_filter)
                 .min(next_break)
                 .min(next_header)
+                .min(next_group)
                 .min(end_row)
                 .max(r + 1)
                 - r
@@ -1384,6 +1414,7 @@ fn write_sheet<W: Write + Seek>(
             s.push_str("</table:table-row>");
         }
         r += n;
+        crate::v04::write_group_ends(s, &sheet.row_groups, r.saturating_sub(1), true);
         if let Some((_, b)) = repeat_rows {
             if r == b.saturating_add(1) {
                 s.push_str("</table:table-header-rows>");
@@ -1500,7 +1531,7 @@ fn write_database_ranges(s: &mut String, data: &WorkbookData) {
         .filter_map(|(i, sh)| sh.auto_filter.as_ref().map(|f| (i, sh, f)))
         .filter(|(_, _, f)| f.range.r0 <= f.range.r1 && f.range.c0 <= f.range.c1)
         .collect();
-    if filters.is_empty() {
+    if filters.is_empty() && !crate::v04::has_named_database_ranges(data) {
         return;
     }
     s.push_str("<table:database-ranges>");
@@ -1559,6 +1590,8 @@ fn write_database_ranges(s: &mut String, data: &WorkbookData) {
         }
         s.push_str("</table:database-range>");
     }
+    // Wave 5: named database ranges with their filters and subtotal rules.
+    crate::v04::write_named_database_ranges(s, data);
     s.push_str("</table:database-ranges>");
 }
 
@@ -1737,13 +1770,18 @@ fn write_cell(
     };
     let note = x.notes.get(&(cell.row, cell.col));
     let link = x.links.get(&(cell.row, cell.col));
-    if text.is_none() && note.is_none() && link.is_none() {
+    let frame = crate::v04::cell_has_frame(x.sheet, cell.row, cell.col);
+    if text.is_none() && note.is_none() && link.is_none() && !frame {
         s.push_str("/>");
         return;
     }
     s.push('>');
     if let Some(n) = note {
         crate::v03::write_annotation(s, n);
+    }
+    if frame {
+        // Wave 5: charts and pictures anchored in this cell.
+        crate::v04::write_cell_frames(s, x.sheet, x.tab, cell.row, cell.col);
     }
     match (text, link) {
         (Some(t), None) => write_paragraphs(s, &t),

@@ -30,4 +30,12 @@ innerH: BorderEdgePatch | null,
 /**
  * Vertical lines between the columns of the range.
  */
-innerV: BorderEdgePatch | null, };
+innerV: BorderEdgePatch | null, 
+/**
+ * Diagonal top-left to bottom-right, per cell (v0.4).
+ */
+diagonalDown?: BorderEdgePatch | null, 
+/**
+ * Diagonal bottom-left to top-right, per cell (v0.4).
+ */
+diagonalUp?: BorderEdgePatch | null, };

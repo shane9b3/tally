@@ -178,6 +178,11 @@ pub(crate) fn parse_content<R: BufRead>(
                 "table:database-ranges" if out.is_spreadsheet => {
                     parse_database_ranges(xml, &mut out.sheets)?;
                 }
+                "table:data-pilot-tables" if out.is_spreadsheet => {
+                    // TODO(W5-2): parse `table:data-pilot-table` into
+                    // `SheetData::pivots` of the target sheet.
+                    xml.skip()?;
+                }
                 _ => xml.skip()?,
             },
             Ev::Eof => {
@@ -307,10 +312,29 @@ impl Parser<'_> {
                     }
                     "table:table-header-rows" => header_rows = Some((xml.depth(), row)),
                     "table:table-header-columns" => header_cols = Some((xml.depth(), col)),
-                    "table:table-columns"
-                    | "table:table-column-group"
-                    | "table:table-rows"
-                    | "table:table-row-group" => {}
+                    "table:table-columns" | "table:table-rows" => {}
+                    "table:table-column-group" | "table:table-row-group" => {
+                        // TODO(W5-2): record an outline group from the
+                        // start index to the end of the element
+                        // (`table:display="false"` = collapsed) into
+                        // `sheet.col_groups`/`row_groups`; descend as now.
+                    }
+                    "table:scenario" => {
+                        // TODO(W5-2): this sheet is a scenario of the
+                        // preceding base sheet: read
+                        // `table:scenario-ranges`, `table:is-active`,
+                        // `table:comment`, `table:border-color`,
+                        // `table:display-border`, `table:copy-back`,
+                        // `table:copy-styles`, `table:protected`; the
+                        // reader folds its cells into the base sheet's
+                        // `scenarios`.
+                        xml.skip()?;
+                    }
+                    "table:shapes" => {
+                        // TODO(W5-1): page-anchored `draw:frame`s
+                        // (charts, pictures), converted to cell anchors.
+                        xml.skip()?;
+                    }
                     _ => xml.skip()?,
                 },
                 Ev::End if xml.depth() < d => break,
@@ -687,6 +711,14 @@ impl Parser<'_> {
                         paragraphs.push(p);
                     } else if c.name == "office:annotation" {
                         note = Some(crate::v03::parse_annotation(xml, &c)?);
+                    } else if c.name == "draw:frame" {
+                        // TODO(W5-1): a chart (`draw:object xlink:href`
+                        // matching `^\./?Object \d{1,5}$`, listed in the
+                        // manifest as a chart) or a picture (`draw:image`
+                        // in `Pictures/`) anchored to this cell; other
+                        // objects are skipped and counted. Limits: 1,000
+                        // charts per document, 16 MB per object XML.
+                        xml.skip()?;
                     } else {
                         xml.skip()?;
                     }
@@ -1323,7 +1355,15 @@ fn parse_database_ranges<R: BufRead>(
                     match xml.next()? {
                         Ev::Start(ch) => {
                             if ch.name == "table:filter" {
+                                // TODO(W5-2): a filter with
+                                // `table:condition-source-range-address`
+                                // is an advanced filter; conditions with
+                                // the 16 standard operators and `table:
+                                // case-sensitive` go to `standard_filter`.
                                 tree = parse_fnode(xml, &ch, &mut budget)?;
+                            } else if ch.name == "table:subtotal-rules" {
+                                // TODO(W5-2): `SheetData::subtotals`.
+                                xml.skip()?;
                             } else {
                                 xml.skip()?;
                             }
@@ -1334,6 +1374,10 @@ fn parse_database_ranges<R: BufRead>(
                     }
                 }
                 if !buttons {
+                    // TODO(W5-2): a named range (`table:name` not
+                    // `__Anonymous_Sheet_DB__N`) goes to
+                    // `SheetData::database_ranges` with its filter and
+                    // subtotal rules.
                     continue;
                 }
                 let parts = split_unquoted(target.trim(), ':');

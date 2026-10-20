@@ -13,10 +13,18 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod charts;
 pub mod dto;
 pub mod features;
+pub mod pivot;
+pub mod print;
 pub mod service;
+pub mod tools;
 
+pub use charts::*;
 pub use dto::*;
 pub use features::*;
+pub use pivot::*;
+pub use print::*;
 pub use service::{DocumentService, Result};
+pub use tools::*;

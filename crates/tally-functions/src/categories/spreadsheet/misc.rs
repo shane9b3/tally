@@ -1,5 +1,4 @@
-//! CHOOSE, LOOKUP, ERRORTYPE, HYPERLINK and the functions the engine cannot
-//! give real semantics yet (DDE, GETPIVOTDATA, MULTIPLE.OPERATIONS, STYLE).
+//! CHOOSE, LOOKUP, ERRORTYPE, HYPERLINK, DDE and STYLE.
 
 use tally_types::{ErrorKind, Value};
 
@@ -169,59 +168,6 @@ fn dde(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     })
 }
 
-// ----------------------------------------------------------- GETPIVOTDATA
-
-const PIVOT_PARAMS: &[Param] = &[
-    Param::required("data_field", ParamKind::Text),
-    Param::required("pivot_table", ParamKind::Reference),
-    Param::repeat("field_item", ParamKind::Any),
-];
-
-/// `GETPIVOTDATA(data_field; pivot_table [; field; item ...])`.
-// TODO: there are no pivot tables yet; implement once the data-pilot model
-// exists. Until then every call is `#REF!` (no pivot table found).
-pub const GETPIVOTDATA: FunctionDef =
-    FunctionDef::new("GETPIVOTDATA", Category::Spreadsheet, PIVOT_PARAMS, pivot)
-        .arity(2, 30)
-        .returns(ReturnKind::Any)
-        .help("Value from a pivot table (not supported yet; #REF!).");
-
-fn pivot(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
-    let mut a = Args::new(ctx, args);
-    run(|| {
-        a.text(0)?;
-        Err(ErrorKind::Ref)
-    })
-}
-
-// ---------------------------------------------------- MULTIPLE.OPERATIONS
-
-const MULTIPLE_PARAMS: &[Param] = &[
-    Param::required("formula", ParamKind::Lazy),
-    Param::required("row_cell", ParamKind::Lazy),
-    Param::required("row_replacement", ParamKind::Lazy),
-    Param::optional("column_cell", ParamKind::Lazy),
-    Param::optional("column_replacement", ParamKind::Lazy),
-];
-
-/// `MULTIPLE.OPERATIONS(formula; cell; replacement [; cell2; replacement2])`.
-// TODO: needs the evaluator to re-run `formula` with the cells substituted
-// (a what-if table); the function framework has no such hook. Returns
-// `Err:504` until the engine provides one.
-pub const MULTIPLE_OPERATIONS: FunctionDef = FunctionDef::new(
-    "MULTIPLE.OPERATIONS",
-    Category::Spreadsheet,
-    MULTIPLE_PARAMS,
-    multiple_operations,
-)
-.returns(ReturnKind::Any)
-.flags(FnFlags::LAZY_ARGS)
-.help("What-if table evaluation (not supported yet; Err:504).");
-
-fn multiple_operations(_ctx: &mut dyn EvalContext, _args: &mut dyn ArgList) -> EvalValue {
-    EvalValue::error(ErrorKind::ParamList)
-}
-
 // ------------------------------------------------------------------ STYLE
 
 const STYLE_PARAMS: &[Param] = &[
@@ -255,8 +201,6 @@ pub(super) fn register(r: &mut Registry) {
     r.register(ERRORTYPE);
     r.register(HYPERLINK);
     r.register(DDE);
-    r.register(GETPIVOTDATA);
-    r.register(MULTIPLE_OPERATIONS);
     r.register(STYLE);
 }
 
@@ -264,7 +208,7 @@ pub(super) fn register(r: &mut Registry) {
 mod tests {
     use crate::mock::{call, call_raw, MockArgs, MockEvalContext};
     use crate::EvalValue;
-    use tally_types::{CellRange, ErrorKind, Value};
+    use tally_types::{ErrorKind, Value};
 
     fn n(x: f64) -> EvalValue {
         EvalValue::number(x)
@@ -388,21 +332,6 @@ mod tests {
             call(&mut c, "DDE", vec![t("s"), t("f"), t("r")]),
             Value::Error(ErrorKind::NA)
         );
-        let r = c.range(0, "A1:B2");
-        assert_eq!(
-            call(&mut c, "GETPIVOTDATA", vec![t("Sales"), r]),
-            Value::Error(ErrorKind::Ref)
-        );
-        let a = c.range(0, "A1");
-        assert_eq!(
-            call(
-                &mut c,
-                "MULTIPLE.OPERATIONS",
-                vec![a.clone(), a.clone(), n(1.0)]
-            ),
-            Value::Error(ErrorKind::ParamList)
-        );
         assert_eq!(call(&mut c, "STYLE", vec![t("Good")]), Value::Number(0.0));
-        let _ = CellRange::from_a1(0, "A1");
     }
 }

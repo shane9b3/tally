@@ -1,25 +1,57 @@
-[[case]]
-formula = "=GETPIVOTDATA(\"Sales\";A1:C5)"
-expect = "#REF!"
-note = "TODO: no pivot tables yet."
+# GETPIVOTDATA reaches the engine through `EvalContext::pivot_data`. The
+# conformance runner has no pivot tables, so every lookup is `#REF!` (AOO:
+# no DataPilot table contains the reference); the cases here pin the
+# argument handling that is valid without a pivot. Value cases with a real
+# pivot live in the engine's DataPilot tests (W5-2).
 
 [[case]]
+name = "no pivot table at the reference"
+formula = "=GETPIVOTDATA(\"Sales\";A1:C5)"
+expect = "#REF!"
+
+[[case]]
+name = "AOO form with one field/item pair"
 formula = "=GETPIVOTDATA(\"Sales\";A1:C5;\"Region\";\"North\")"
 expect = "#REF!"
 
 [[case]]
+name = "single-cell reference"
 formula = "=GETPIVOTDATA(\"Sales\";A1)"
 expect = "#REF!"
 
 [[case]]
+name = "numeric item is accepted"
 formula = "=GETPIVOTDATA(\"Sales\";A1:C5;\"R\";\"N\";\"Y\";2026)"
 expect = "#REF!"
 
 [[case]]
+name = "odd argument count"
+formula = "=GETPIVOTDATA(\"Sales\";A1:C5;\"Region\")"
+expect = "#REF!"
+note = "AOO ScGetPivotData: field/item pairs must be complete; errNoRef."
+
+[[case]]
+name = "Excel 2000 form: reference first, constraint string second"
+formula = "=GETPIVOTDATA(A1;\"Sales Region[North]\")"
+expect = "#REF!"
+
+[[case]]
+name = "Excel form with unbalanced brackets"
+formula = "=GETPIVOTDATA(A1;\"Sales Region[North\")"
+expect = "#REF!"
+
+[[case]]
+name = "empty data field"
 formula = "=GETPIVOTDATA(\"\";A1:C5)"
 expect = "#REF!"
 
 [[case]]
+name = "table argument is not a reference"
+formula = "=GETPIVOTDATA(\"Sales\";5)"
+expect = "#REF!"
+
+[[case]]
+name = "IFERROR catches it"
 formula = "=IFERROR(GETPIVOTDATA(\"Sales\";A1:C5);\"none\")"
 expect = "none"
 
@@ -28,14 +60,23 @@ formula = "=ISERROR(GETPIVOTDATA(\"Sales\";A1:C5))"
 expect = true
 
 [[case]]
+name = "too few arguments"
 formula = "=GETPIVOTDATA(\"Sales\")"
 expect = "Err:511"
 
 [[case]]
+name = "error in the data field propagates"
 cells = { A1 = "=1/0" }
 formula = "=GETPIVOTDATA(A1;B1:C2)"
 expect = "#DIV/0!"
 
 [[case]]
+name = "error in an item propagates"
+cells = { A1 = "=NA()" }
+formula = "=GETPIVOTDATA(\"Sales\";B1:C2;\"Region\";A1)"
+expect = "#N/A"
+
+[[case]]
+name = "numeric data field is coerced to text"
 formula = "=GETPIVOTDATA(5;A1:C5)"
 expect = "#REF!"

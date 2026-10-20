@@ -828,6 +828,11 @@ fn write_setup(
                 u16::try_from(height).unwrap_or(0),
             );
         }
+        PageScaleData::FitPages(pages) => {
+            // Excel has no "N pages in total" mode; 1 wide × N tall is the
+            // closest (TODO(W5-3): warn and refine).
+            ws.set_print_fit_to_pages(1, u16::try_from(pages).unwrap_or(1));
+        }
     }
     if let Some(r) = p.print_range {
         if r.r1 < MAX_ROWS && r.c1 < MAX_COLS {

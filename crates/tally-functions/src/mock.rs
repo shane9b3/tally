@@ -3,11 +3,51 @@
 //! evaluated). Available under `cfg(test)` and the `test-support` feature.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use tally_types::{CalcSettings, CellAddr, CellRange, SheetId, Value};
 
 use crate::context::{ArgList, CellFormatInfo, EvalContext, EvalValue};
+
+/// A [`MockEvalContext::set_pivot_data`] hook: `(anchor, data field, filters)`.
+pub type PivotDataFn = dyn Fn(CellAddr, &str, &[(String, String)]) -> Option<Value>;
+
+/// A [`MockEvalContext::set_table_op`] hook: `(formula cell, substitutions)`.
+pub type TableOpFn = dyn Fn(CellAddr, &[(CellAddr, Value)]) -> Option<Value>;
+
+/// One recorded [`EvalContext::pivot_data`] request: `(anchor, data field, filters)`.
+pub type PivotCall = (CellAddr, String, Vec<(String, String)>);
+
+/// One recorded [`EvalContext::table_op`] request: `(formula cell, substitutions)`.
+pub type TableOpCall = (CellAddr, Vec<(CellAddr, Value)>);
+
+/// An optional shared closure with a `Debug` impl, so the context can keep
+/// deriving `Clone` and `Debug`.
+struct Hook<F: ?Sized>(Option<Arc<F>>);
+
+impl<F: ?Sized> Clone for Hook<F> {
+    fn clone(&self) -> Self {
+        Hook(self.0.clone())
+    }
+}
+
+impl<F: ?Sized> Default for Hook<F> {
+    fn default() -> Self {
+        Hook(None)
+    }
+}
+
+impl<F: ?Sized> fmt::Debug for Hook<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "Hook(set)"
+        } else {
+            "Hook(none)"
+        })
+    }
+}
 
 /// An in-memory [`EvalContext`].
 ///
@@ -37,6 +77,12 @@ pub struct MockEvalContext {
     /// Rows hidden by an AutoFilter (reported by both
     /// [`EvalContext::filtered_row`] and [`EvalContext::hidden_row`]).
     pub filtered_rows: HashSet<(SheetId, u32)>,
+    /// Every [`EvalContext::pivot_data`] request.
+    pub pivot_calls: Vec<PivotCall>,
+    /// Every [`EvalContext::table_op`] request.
+    pub table_op_calls: Vec<TableOpCall>,
+    pivot_hook: Hook<PivotDataFn>,
+    table_op_hook: Hook<TableOpFn>,
     rng: u64,
 }
 
@@ -65,8 +111,37 @@ impl MockEvalContext {
             reads: Vec::new(),
             hidden_rows: HashSet::new(),
             filtered_rows: HashSet::new(),
+            pivot_calls: Vec::new(),
+            table_op_calls: Vec::new(),
+            pivot_hook: Hook::default(),
+            table_op_hook: Hook::default(),
             rng: 0x2545_F491_4F6C_DD1D,
         }
+    }
+
+    /// Installs the pivot lookup behind [`EvalContext::pivot_data`]
+    /// (GETPIVOTDATA). The hook receives the top-left cell of the table
+    /// reference, the data field text and the `(field, item)` filters, and
+    /// returns `None` when no pivot table answers. Without a hook every
+    /// request is `None`.
+    pub fn set_pivot_data(
+        &mut self,
+        f: impl Fn(CellAddr, &str, &[(String, String)]) -> Option<Value> + 'static,
+    ) -> &mut Self {
+        self.pivot_hook = Hook(Some(Arc::new(f)));
+        self
+    }
+
+    /// Installs the what-if evaluator behind [`EvalContext::table_op`]
+    /// (MULTIPLE.OPERATIONS). The hook receives the formula cell and the
+    /// `(input cell, replacement value)` substitutions. Without a hook
+    /// every request is `None`.
+    pub fn set_table_op(
+        &mut self,
+        f: impl Fn(CellAddr, &[(CellAddr, Value)]) -> Option<Value> + 'static,
+    ) -> &mut Self {
+        self.table_op_hook = Hook(Some(Arc::new(f)));
+        self
     }
 
     /// Sets a cell (`"B3"` on `sheet`); `Value::Empty` clears it.
@@ -226,6 +301,25 @@ impl EvalContext for MockEvalContext {
 
     fn in_array_context(&self) -> bool {
         self.array_context
+    }
+
+    fn pivot_data(
+        &mut self,
+        at: CellAddr,
+        field: &str,
+        filters: &[(String, String)],
+    ) -> Option<Value> {
+        self.pivot_calls
+            .push((at, field.to_owned(), filters.to_vec()));
+        self.pivot_hook
+            .0
+            .as_ref()
+            .and_then(|f| f(at, field, filters))
+    }
+
+    fn table_op(&mut self, formula: CellAddr, subs: &[(CellAddr, Value)]) -> Option<Value> {
+        self.table_op_calls.push((formula, subs.to_vec()));
+        self.table_op_hook.0.as_ref().and_then(|f| f(formula, subs))
     }
 }
 

@@ -137,7 +137,10 @@ impl Workbook {
         // v0.3 sheet state (after the names, so rule formulas resolve them).
         for (sd, &sheet) in sheet_data.iter().zip(&ids) {
             load_v03(&mut wb, sheet, sd);
+            load_v04(&mut wb, sheet, sd);
         }
+        wb.cell_styles = data.cell_styles.clone();
+        wb.custom_sort_lists = data.settings.custom_sort_lists.clone();
         let style_ids: Vec<StyleId> = data
             .styles
             .iter()
@@ -428,6 +431,18 @@ impl Workbook {
                     .then(|| sheet.meta.page_setup.clone()),
                 row_breaks: sheet.meta.row_breaks.iter().copied().collect(),
                 col_breaks: sheet.meta.col_breaks.iter().copied().collect(),
+                // Wave 5 (identity pass-through until W5-1/2 land).
+                charts: crate::charts::to_data(self, sheet.id),
+                images: crate::charts::images_to_data(self, sheet.id),
+                pivots: crate::pivot::to_data(self, sheet.id),
+                row_groups: sheet.meta.row_groups.clone(),
+                col_groups: sheet.meta.col_groups.clone(),
+                scenarios: crate::scenarios::to_data(self, sheet.id),
+                database_ranges: sheet.meta.database_ranges.clone(),
+                standard_filter: sheet.meta.standard_filter.clone(),
+                subtotals: sheet.meta.subtotals.clone(),
+                view_options: sheet.meta.view_options.clone(),
+                split: sheet.meta.split,
             });
         }
         let mut names: Vec<NameData> = Vec::new();
@@ -459,11 +474,47 @@ impl Workbook {
                 locale: (self.locale.tag != tally_numfmt::EN_US.tag)
                     .then(|| self.locale.tag.to_string()),
                 structure_protection: self.structure_protection.clone(),
+                custom_sort_lists: self.custom_sort_lists.clone(),
             },
             meta: self.meta.clone(),
             warnings: Vec::new(),
+            cell_styles: self.cell_styles.clone(),
         }
     }
+}
+
+/// Loads the wave-5 sheet state (charts, pictures, pivots, outline groups,
+/// scenarios, database ranges, filters, subtotals, view options, split).
+/// W5-0a keeps everything as read (identity); W5-1/2 add validation.
+fn load_v04(wb: &mut Workbook, sheet: tally_types::SheetId, sd: &SheetData) {
+    crate::charts::from_data(wb, sheet, &sd.charts, &sd.images);
+    crate::pivot::from_data(wb, sheet, &sd.pivots);
+    crate::scenarios::from_data(wb, sheet, &sd.scenarios);
+    let Some(s) = wb.sheet_mut(sheet) else {
+        return;
+    };
+    let ok = |g: &tally_model::OutlineGroupData, limit: u32| {
+        g.start <= g.end && g.end < limit && (1..=crate::outline::MAX_LEVELS).contains(&g.level)
+    };
+    s.meta.row_groups = sd
+        .row_groups
+        .iter()
+        .filter(|g| ok(g, MAX_ROWS))
+        .take(100_000)
+        .copied()
+        .collect();
+    s.meta.col_groups = sd
+        .col_groups
+        .iter()
+        .filter(|g| ok(g, MAX_COLS))
+        .take(100_000)
+        .copied()
+        .collect();
+    s.meta.database_ranges = sd.database_ranges.iter().take(10_000).cloned().collect();
+    s.meta.standard_filter = sd.standard_filter.clone();
+    s.meta.subtotals = sd.subtotals.clone();
+    s.meta.view_options = sd.view_options.clone();
+    s.meta.split = sd.split;
 }
 
 /// A sheet name from a file made valid: control characters and

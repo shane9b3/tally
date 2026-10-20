@@ -7,6 +7,7 @@ members = [
     "crates/tally-formula",
     "crates/tally-numfmt",
     "crates/tally-functions",
+    "crates/tally-l10n",
     "crates/tally-engine",
     "crates/tally-io-ods",
     "crates/tally-io-xlsx",
@@ -34,6 +35,7 @@ tally-api = { path = "crates/tally-api", version = "0.1.0" }
 tally-formula = { path = "crates/tally-formula", version = "0.1.0" }
 tally-numfmt = { path = "crates/tally-numfmt", version = "0.1.0" }
 tally-functions = { path = "crates/tally-functions", version = "0.1.0" }
+tally-l10n = { path = "crates/tally-l10n", version = "0.1.0" }
 tally-engine = { path = "crates/tally-engine", version = "0.1.0" }
 tally-io-ods = { path = "crates/tally-io-ods", version = "0.1.0" }
 tally-io-xlsx = { path = "crates/tally-io-xlsx", version = "0.1.0" }

@@ -18,9 +18,18 @@ use serde::{Deserialize, Serialize};
 use tally_types::SheetId;
 use ts_rs::TS;
 
+use crate::charts::{ChartAnchor, ChartDto, ChartRef, ImageDto};
 use crate::features::{
     BreakAxis, CfRuleDto, DataBarView, DocPropertiesDto, IconView, NoteDto, PageSetupDto,
     ProtectionOptions, ValidationDto,
+};
+use crate::pivot::{AggFn, PivotDto};
+use crate::print::{CalcSettingsDto, ExternalLinkWarning};
+use crate::tools::{
+    AutoFormatOptions, CellStyleDto, CsvImportOptionsDto, DateUnit, DeleteContentsFlags,
+    NameLabelFlags, OutlineAxis, ScenarioDto, SeriesKind, SheetCell, SheetRange, ShiftDir,
+    SortOptions, SplitDto, StdCondition, StdFilterOptions, SubtotalGroup, SubtotalOptions,
+    UnderlineStyle, ViewOptionsDto,
 };
 
 // ---------------------------------------------------------------------------
@@ -57,6 +66,12 @@ pub struct WorkbookInfo {
     /// hit the recalc watchdog). Empty in most results.
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// External links the reader disabled by policy (DDE, external
+    /// references, linked sheets); absent or `null` when there are none
+    /// (v0.6).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub external_links: Option<Vec<ExternalLinkWarning>>,
 }
 
 /// One sheet tab.
@@ -275,6 +290,28 @@ pub struct StyleDto {
     pub number_format: String,
     /// Special display treatment.
     pub display: Option<DisplayDto>,
+    /// Text rotation in degrees counter-clockwise, `-90..=90`; absent or
+    /// `null` = 0 (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub rotation_deg: Option<i16>,
+    /// Vertically stacked characters (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub stacked: Option<bool>,
+    /// Shrink the text to fit the cell (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub shrink_to_fit: Option<bool>,
+    /// Underline style, when `underline` is set; absent = single (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub underline_style: Option<UnderlineStyle>,
+    /// The named cell style the cell is based on; absent = `Default`
+    /// (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub style_name: Option<String>,
 }
 
 /// Horizontal alignment.
@@ -320,6 +357,14 @@ pub struct BordersDto {
     pub left: Option<BorderLineDto>,
     /// Right.
     pub right: Option<BorderLineDto>,
+    /// Diagonal from the top-left to the bottom-right corner (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub diagonal_down: Option<BorderLineDto>,
+    /// Diagonal from the bottom-left to the top-right corner (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub diagonal_up: Option<BorderLineDto>,
 }
 
 /// One border line.
@@ -596,6 +641,11 @@ pub enum Op {
         has_header: bool,
         /// Compare text case-sensitively (lowercase first).
         case_sensitive: bool,
+        /// v0.5 options (left-to-right, copy results to, custom order,
+        /// include formats); absent or `null` = the v0.2 behaviour.
+        #[serde(default)]
+        #[ts(optional = nullable)]
+        options: Option<SortOptions>,
     },
     /// Sets (or with `None` removes) the sheet's AutoFilter area.
     SetAutoFilter {
@@ -836,6 +886,452 @@ pub enum Op {
         /// Last row.
         end: u32,
     },
+    // ----- v0.4: charts and pictures (W5-1) ------------------------------
+    /// Adds a chart (`chart.id` and `chart.name` are ignored). When
+    /// `chart.series` is empty and `chart.source` is set, the engine
+    /// derives the series. The id comes back in `ApplyResult.created`.
+    /// Refused on a protected sheet (AOO protects objects with the sheet).
+    AddChart {
+        /// Sheet.
+        sheet: SheetId,
+        /// The chart.
+        chart: ChartDto,
+    },
+    /// Replaces a chart; the id is kept.
+    UpdateChart {
+        /// Sheet.
+        sheet: SheetId,
+        /// Id from `charts`.
+        id: u32,
+        /// The new definition.
+        chart: ChartDto,
+    },
+    /// Moves and/or resizes a chart.
+    MoveResizeChart {
+        /// Sheet.
+        sheet: SheetId,
+        /// Id.
+        id: u32,
+        /// The new placement.
+        anchor: ChartAnchor,
+    },
+    /// Deletes a chart.
+    DeleteChart {
+        /// Sheet.
+        sheet: SheetId,
+        /// Id.
+        id: u32,
+    },
+    /// Moves a chart to another sheet (same anchor cell and size).
+    MoveChartToSheet {
+        /// Sheet.
+        sheet: SheetId,
+        /// Id.
+        id: u32,
+        /// Destination sheet.
+        to: SheetId,
+    },
+    /// Adds a picture (`image.id`/`image.name` are ignored; `image.data`
+    /// is base64 PNG or JPEG, ≤ 16 MB decoded). The id comes back in
+    /// `ApplyResult.created`.
+    AddImage {
+        /// Sheet.
+        sheet: SheetId,
+        /// The picture.
+        image: ImageDto,
+    },
+    /// Deletes a picture.
+    DeleteImage {
+        /// Sheet.
+        sheet: SheetId,
+        /// Id.
+        id: u32,
+    },
+    /// Moves and/or resizes a picture.
+    MoveResizeImage {
+        /// Sheet.
+        sheet: SheetId,
+        /// Id.
+        id: u32,
+        /// The new placement.
+        anchor: ChartAnchor,
+    },
+    // ----- v0.5: DataPilot (W5-2) ----------------------------------------
+    /// Creates a pivot table (`pivot.id` is ignored) and writes its
+    /// output. When the target area is not empty, the op fails with
+    /// `OpError { code: "target_not_empty" }` unless `overwrite`.
+    CreatePivot {
+        /// The definition.
+        pivot: PivotDto,
+        /// Overwrite non-empty target cells.
+        overwrite: bool,
+    },
+    /// Replaces a pivot's definition and rewrites its output.
+    UpdatePivot {
+        /// Id from `pivots`.
+        id: u32,
+        /// The new definition.
+        pivot: PivotDto,
+        /// Overwrite non-empty target cells outside the previous output.
+        overwrite: bool,
+    },
+    /// Recomputes a pivot from its source (AOO never refreshes
+    /// automatically).
+    RefreshPivot {
+        /// Id.
+        id: u32,
+    },
+    /// Deletes a pivot.
+    DeletePivot {
+        /// Id.
+        id: u32,
+        /// Also clear its output cells.
+        clear_output: bool,
+    },
+    /// Inserts a sheet holding the source rows behind a data cell.
+    PivotDrillDown {
+        /// Id.
+        id: u32,
+        /// Row of the data cell.
+        r: u32,
+        /// Column of the data cell.
+        c: u32,
+    },
+    // ----- v0.5: outline (W5-2) ------------------------------------------
+    /// Groups rows or columns `start..=end` (one level deeper; at most 8).
+    Group {
+        /// Sheet.
+        sheet: SheetId,
+        /// Rows or columns.
+        axis: OutlineAxis,
+        /// First row/column.
+        start: u32,
+        /// Last row/column.
+        end: u32,
+    },
+    /// Removes the innermost group covering `start..=end`.
+    Ungroup {
+        /// Sheet.
+        sheet: SheetId,
+        /// Rows or columns.
+        axis: OutlineAxis,
+        /// First row/column.
+        start: u32,
+        /// Last row/column.
+        end: u32,
+    },
+    /// Collapses or expands the group covering `start..=end` (hides or
+    /// shows its rows/columns).
+    SetOutlineCollapsed {
+        /// Sheet.
+        sheet: SheetId,
+        /// Rows or columns.
+        axis: OutlineAxis,
+        /// First row/column.
+        start: u32,
+        /// Last row/column.
+        end: u32,
+        /// Collapse (`true`) or expand.
+        collapsed: bool,
+    },
+    /// Shows groups up to `level` (the gutter's level buttons; `0` shows
+    /// everything collapsed, `8` everything expanded).
+    ShowOutlineLevel {
+        /// Sheet.
+        sheet: SheetId,
+        /// Rows or columns.
+        axis: OutlineAxis,
+        /// Level.
+        level: u8,
+    },
+    /// Builds groups from the formula structure of `range` (or the used
+    /// area).
+    AutoOutline {
+        /// Sheet.
+        sheet: SheetId,
+        /// Area, or `None` for the used area.
+        range: Option<RangeDto>,
+    },
+    /// Removes every group (of one axis, or both).
+    ClearOutline {
+        /// Sheet.
+        sheet: SheetId,
+        /// Axis, or `None` for both.
+        axis: Option<OutlineAxis>,
+    },
+    // ----- v0.5: filters, subtotals, data tools (W5-2) --------------------
+    /// Applies a standard filter (up to 4 conditions joined by AND/OR) to
+    /// `range`; rows are hidden, or copied to `options.copy_to`.
+    StandardFilter {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area (header row first when `options.has_header`).
+        range: RangeDto,
+        /// Conditions.
+        conditions: Vec<StdCondition>,
+        /// Options.
+        options: StdFilterOptions,
+    },
+    /// Applies an advanced filter: `criteria` holds a criteria block in
+    /// the D-function form (labels, then one OR row per line).
+    AdvancedFilter {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area.
+        range: RangeDto,
+        /// The criteria block.
+        criteria: SheetRange,
+        /// Options.
+        options: StdFilterOptions,
+    },
+    /// Removes the standard/advanced filter and shows its rows (the
+    /// AutoFilter buttons stay).
+    ResetFilter {
+        /// Sheet.
+        sheet: SheetId,
+    },
+    /// Inserts subtotal rows (`SUBTOTAL(n;…)` formulas, `X Result` and
+    /// `Grand Total` labels) and builds an outline.
+    Subtotals {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area including its header row.
+        range: RangeDto,
+        /// Groups (at most 3).
+        groups: Vec<SubtotalGroup>,
+        /// Options.
+        options: SubtotalOptions,
+    },
+    /// Removes the subtotal rows and outline of `range`.
+    RemoveSubtotals {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area.
+        range: RangeDto,
+    },
+    /// Consolidates `sources` into `dest`, by position or by labels.
+    Consolidate {
+        /// Function.
+        function: AggFn,
+        /// Source areas.
+        sources: Vec<SheetRange>,
+        /// Destination top-left.
+        dest: SheetCell,
+        /// Match row labels.
+        by_row_labels: bool,
+        /// Match column labels.
+        by_col_labels: bool,
+        /// Write formulas linking to the sources instead of values.
+        link: bool,
+    },
+    /// Splits the text of the column `range` into the columns to its
+    /// right (overwriting them).
+    TextToColumns {
+        /// Sheet.
+        sheet: SheetId,
+        /// One column of cells.
+        range: RangeDto,
+        /// Separators and column types.
+        options: CsvImportOptionsDto,
+    },
+    /// Removes rows of `range` whose `cols` repeat an earlier row (the
+    /// first occurrence stays).
+    RemoveDuplicates {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area.
+        range: RangeDto,
+        /// Columns compared (absolute; empty = all).
+        cols: Vec<u32>,
+        /// The first row holds labels.
+        has_header: bool,
+    },
+    /// Shifts cells of `range` down or right, inserting empty cells.
+    InsertCells {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area.
+        range: RangeDto,
+        /// `down` or `right`.
+        shift: ShiftDir,
+    },
+    /// Deletes the cells of `range`, shifting the rest up or left.
+    DeleteCells {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area.
+        range: RangeDto,
+        /// `up` or `left`.
+        shift: ShiftDir,
+    },
+    /// Delete Contents dialog: removes only the chosen kinds.
+    DeleteContents {
+        /// Sheet.
+        sheet: SheetId,
+        /// Ranges.
+        ranges: Vec<RangeDto>,
+        /// What to remove.
+        what: DeleteContentsFlags,
+    },
+    /// Fill Series dialog: fills `range` from its first cell in
+    /// `direction`.
+    FillSeries {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area to fill.
+        range: RangeDto,
+        /// Direction.
+        direction: Direction,
+        /// Series type.
+        kind: SeriesKind,
+        /// Time unit (date series).
+        unit: Option<DateUnit>,
+        /// Start value as typed (`None`: the first cell's value).
+        start: Option<String>,
+        /// End value as typed (`None`: fill the whole range).
+        end: Option<String>,
+        /// Increment as typed (`None`: 1).
+        increment: Option<String>,
+    },
+    // ----- v0.5: scenarios, cell styles, AutoFormat (W5-2 / W5-6) ---------
+    /// Creates a scenario from the current values of `scenario.ranges`
+    /// (`scenario.id` is ignored). The id comes back in
+    /// `ApplyResult.created`.
+    CreateScenario {
+        /// Base sheet.
+        sheet: SheetId,
+        /// The scenario.
+        scenario: ScenarioDto,
+    },
+    /// Replaces a scenario's settings (its values are kept).
+    UpdateScenario {
+        /// Base sheet.
+        sheet: SheetId,
+        /// Id.
+        id: u32,
+        /// The new settings.
+        scenario: ScenarioDto,
+    },
+    /// Shows a scenario (its values replace the ranges' cells; with
+    /// `copy_back`, the current values are stored into the scenario shown
+    /// before).
+    ShowScenario {
+        /// Base sheet.
+        sheet: SheetId,
+        /// Id.
+        id: u32,
+    },
+    /// Deletes a scenario.
+    DeleteScenario {
+        /// Base sheet.
+        sheet: SheetId,
+        /// Id.
+        id: u32,
+    },
+    /// Defines or redefines a named cell style; cells using it update.
+    DefineCellStyle {
+        /// The style (`style.builtin` is ignored).
+        style: CellStyleDto,
+    },
+    /// Deletes a named style; cells using it fall back to its parent.
+    DeleteCellStyle {
+        /// Name.
+        name: String,
+    },
+    /// Applies a named style to `ranges` (direct formatting is cleared).
+    ApplyCellStyle {
+        /// Sheet.
+        sheet: SheetId,
+        /// Ranges.
+        ranges: Vec<RangeDto>,
+        /// Style name.
+        name: String,
+    },
+    /// Applies one of AOO's 17 AutoFormat presets to `range`.
+    ApplyAutoFormat {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area.
+        range: RangeDto,
+        /// Preset name (`Default`, `3D`, `Blue`, `Currency` …).
+        preset: String,
+        /// Which parts to apply.
+        options: AutoFormatOptions,
+    },
+    // ----- v0.5: sheets, names, view, settings ----------------------------
+    /// Copies a sheet (formulas in the copy point at the copy).
+    CopySheet {
+        /// Sheet.
+        sheet: SheetId,
+        /// Name of the copy, or `None` for "Name_2".
+        name: Option<String>,
+        /// Tab index of the copy, or `None` for after the source.
+        index: Option<u32>,
+    },
+    /// Hides or shows a sheet (the last visible sheet cannot be hidden).
+    SetSheetHidden {
+        /// Sheet.
+        sheet: SheetId,
+        /// Hide (`true`) or show.
+        hidden: bool,
+    },
+    /// Sets or clears a sheet's tab colour.
+    SetTabColor {
+        /// Sheet.
+        sheet: SheetId,
+        /// `0xRRGGBBAA`, or `None` for no colour.
+        color: Option<u32>,
+    },
+    /// Creates names from the labels on the edges of `range`.
+    CreateNamesFromLabels {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area including its labels.
+        range: RangeDto,
+        /// Which edges hold labels.
+        from: NameLabelFlags,
+    },
+    /// Defines (or redefines) a named database range.
+    DefineDatabaseRange {
+        /// Name.
+        name: String,
+        /// Sheet.
+        sheet: SheetId,
+        /// The area.
+        range: RangeDto,
+        /// The first row holds labels.
+        has_header: bool,
+    },
+    /// Deletes a named database range (its cells are kept).
+    DeleteDatabaseRange {
+        /// Name.
+        name: String,
+    },
+    /// Sets a sheet's view options (persisted, undoable).
+    SetViewOptions {
+        /// Sheet.
+        sheet: SheetId,
+        /// The options.
+        options: ViewOptionsDto,
+    },
+    /// Sets (or with `None` removes) the Window ▸ Split position.
+    SetSplit {
+        /// Sheet.
+        sheet: SheetId,
+        /// The split.
+        split: Option<SplitDto>,
+    },
+    /// Replaces the custom sort lists.
+    SetCustomSortLists {
+        /// The lists.
+        lists: Vec<Vec<String>>,
+    },
+    /// Sets the calculation settings (undoable; followed by a hard
+    /// recalc).
+    SetCalcSettings {
+        /// The settings.
+        settings: CalcSettingsDto,
+    },
 }
 
 /// One sort key.
@@ -1000,6 +1496,26 @@ pub struct StylePatch {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub borders: Option<BordersPatch>,
+    /// Text rotation in degrees counter-clockwise, `-90..=90` (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub rotation_deg: Option<i16>,
+    /// Vertically stacked characters (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub stacked: Option<bool>,
+    /// Shrink to fit (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub shrink_to_fit: Option<bool>,
+    /// Indent level (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub indent: Option<u8>,
+    /// Underline style (v0.4; also sets `underline` when not `None`).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub underline_style: Option<UnderlineStyle>,
 }
 
 /// Border edits for [`StylePatch::borders`], relative to each target range:
@@ -1021,6 +1537,14 @@ pub struct BordersPatch {
     pub inner_h: Option<BorderEdgePatch>,
     /// Vertical lines between the columns of the range.
     pub inner_v: Option<BorderEdgePatch>,
+    /// Diagonal top-left to bottom-right, per cell (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub diagonal_down: Option<BorderEdgePatch>,
+    /// Diagonal bottom-left to top-right, per cell (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub diagonal_up: Option<BorderEdgePatch>,
 }
 
 /// One border edge edit.
@@ -1107,6 +1631,37 @@ pub struct ApplyResult {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub replaced: Option<u32>,
+    /// Charts whose resolved data changed (cells in a series range
+    /// changed, recalculated, or became hidden/visible). The UI re-fetches
+    /// `chart_data` for the visible ones (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub charts_changed: Option<Vec<ChartRef>>,
+    /// Sheets whose object list changed (a chart or picture was added,
+    /// removed, moved or updated). Re-fetch `charts()` / `images()` (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub objects_changed: Option<Vec<SheetId>>,
+    /// Ids allocated by `Add*`/`Create*` ops, in op order (v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub created: Option<Vec<CreatedId>>,
+    /// The pivot table list changed (create, update, delete, refresh)
+    /// (v0.5).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub pivots_changed: Option<bool>,
+}
+
+/// An id allocated by an `Add*`/`Create*` op (`ApplyResult.created`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreatedId {
+    /// Index into `Transaction::ops`.
+    pub op_index: u32,
+    /// The new id.
+    pub id: u32,
 }
 
 /// Ranges on one sheet.
@@ -1600,6 +2155,191 @@ mod tests {
         crate::features::GoalSeekRequest::export_all(&cfg).unwrap();
         crate::features::GoalSeekResult::export_all(&cfg).unwrap();
         crate::features::LocaleInfo::export_all(&cfg).unwrap();
+        // v0.4–v0.6 (wave 5)
+        crate::charts::ChartDataDto::export_all(&cfg).unwrap();
+        crate::charts::ImageDto::export_all(&cfg).unwrap();
+        crate::pivot::PivotFieldItemsDto::export_all(&cfg).unwrap();
+        crate::pivot::PivotHit::export_all(&cfg).unwrap();
+        crate::print::PrintOptionsDto::export_all(&cfg).unwrap();
+        crate::print::ChartSvgDto::export_all(&cfg).unwrap();
+        crate::print::PrintJobInfo::export_all(&cfg).unwrap();
+        crate::print::PageBreaksDto::export_all(&cfg).unwrap();
+        crate::print::SolverRequest::export_all(&cfg).unwrap();
+        crate::print::SolverResult::export_all(&cfg).unwrap();
+        crate::tools::OutlineGroupDto::export_all(&cfg).unwrap();
+        crate::tools::StandardFilterDto::export_all(&cfg).unwrap();
+        crate::tools::DatabaseRangeDto::export_all(&cfg).unwrap();
+        crate::tools::AutocompleteDto::export_all(&cfg).unwrap();
+        crate::tools::TraceDto::export_all(&cfg).unwrap();
+        crate::tools::NavigatorDto::export_all(&cfg).unwrap();
+        crate::tools::DocumentStatsDto::export_all(&cfg).unwrap();
+    }
+
+    #[test]
+    fn v04_shapes() {
+        use crate::charts::*;
+        use crate::features::PageScale;
+        use crate::pivot::*;
+        use crate::print::*;
+        use crate::tools::*;
+        // Charts.
+        let op = Op::MoveResizeChart {
+            sheet: 1,
+            id: 3,
+            anchor: ChartAnchor {
+                r: 0,
+                c: 4,
+                dx_mm: 1.0,
+                dy_mm: 0.0,
+                width_mm: 160.0,
+                height_mm: 90.0,
+            },
+        };
+        let v = serde_json::to_value(&op).unwrap();
+        assert_eq!(v["type"], "moveResizeChart");
+        assert_eq!(v["anchor"]["widthMm"], 160.0);
+        let back: Op = serde_json::from_value(v).unwrap();
+        assert_eq!(back, op);
+        // DataPilot.
+        let op = Op::DeletePivot {
+            id: 1,
+            clear_output: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&op).unwrap(),
+            json!({ "type": "deletePivot", "id": 1, "clearOutput": true })
+        );
+        // Outline and data tools.
+        let op = Op::Group {
+            sheet: 1,
+            axis: OutlineAxis::Rows,
+            start: 2,
+            end: 5,
+        };
+        assert_eq!(
+            serde_json::to_value(&op).unwrap(),
+            json!({ "type": "group", "sheet": 1, "axis": "rows", "start": 2, "end": 5 })
+        );
+        let op: Op = serde_json::from_value(json!({
+            "type": "standardFilter", "sheet": 1,
+            "range": { "r0": 0, "c0": 0, "r1": 9, "c1": 2 },
+            "conditions": [{ "connector": "and", "col": 1, "op": "gt", "value": "5" }],
+            "options": { "caseSensitive": false, "regex": false, "hasHeader": true,
+                         "noDuplicates": false, "copyTo": null, "keepCriteria": true }
+        }))
+        .unwrap();
+        assert!(matches!(op, Op::StandardFilter { ref conditions, .. } if conditions.len() == 1));
+        let op = Op::Consolidate {
+            function: AggFn::Average,
+            sources: vec![SheetRange {
+                sheet: 1,
+                range: RangeDto {
+                    r0: 0,
+                    c0: 0,
+                    r1: 3,
+                    c1: 1,
+                },
+            }],
+            dest: SheetCell {
+                sheet: 2,
+                r: 0,
+                c: 0,
+            },
+            by_row_labels: true,
+            by_col_labels: false,
+            link: false,
+        };
+        assert_eq!(serde_json::to_value(&op).unwrap()["function"], "average");
+        let op = Op::InsertCells {
+            sheet: 1,
+            range: RangeDto {
+                r0: 1,
+                c0: 1,
+                r1: 2,
+                c1: 2,
+            },
+            shift: ShiftDir::Right,
+        };
+        assert_eq!(serde_json::to_value(&op).unwrap()["shift"], "right");
+        let op = Op::FillSeries {
+            sheet: 1,
+            range: RangeDto {
+                r0: 0,
+                c0: 0,
+                r1: 9,
+                c1: 0,
+            },
+            direction: Direction::Down,
+            kind: SeriesKind::Date,
+            unit: Some(DateUnit::Month),
+            start: Some("2026-01-01".into()),
+            end: None,
+            increment: Some("1".into()),
+        };
+        let v = serde_json::to_value(&op).unwrap();
+        assert_eq!(v["unit"], "month");
+        assert_eq!(v["kind"], "date");
+        // Settings.
+        let op = Op::SetCalcSettings {
+            settings: CalcSettingsDto {
+                iterations: None,
+                date_epoch: DateEpochDto::D1899,
+                case_sensitive: false,
+                precision_as_shown: false,
+                whole_cell_match: true,
+                criteria_mode: CriteriaModeDto::Wildcards,
+                text_to_number: TextToNumberDto::ConvertUnambiguous,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&op).unwrap()["settings"]["criteriaMode"],
+            "wildcards"
+        );
+        // SortRange without the v0.5 options (an older client) still parses.
+        let sort: Op = serde_json::from_value(json!({
+            "type": "sortRange", "sheet": 1,
+            "range": { "r0": 0, "c0": 0, "r1": 9, "c1": 2 },
+            "keys": [{ "col": 1, "ascending": false }],
+            "hasHeader": true, "caseSensitive": false
+        }))
+        .unwrap();
+        assert!(matches!(sort, Op::SortRange { options: None, .. }));
+        // ApplyResult without the v0.4 fields still parses; with them it
+        // round-trips.
+        let r: ApplyResult = serde_json::from_value(json!({
+            "version": 1, "changed": [], "layoutChanged": [], "sheetsChanged": false,
+            "errors": [], "undo": { "canUndo": false, "canRedo": false,
+            "undoLabel": null, "redoLabel": null }, "selection": null, "info": null
+        }))
+        .unwrap();
+        assert!(r.created.is_none() && r.charts_changed.is_none());
+        let r = ApplyResult {
+            charts_changed: Some(vec![ChartRef { sheet: 1, id: 2 }]),
+            objects_changed: Some(vec![1]),
+            created: Some(vec![CreatedId { op_index: 0, id: 2 }]),
+            pivots_changed: Some(true),
+            ..r
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["created"][0], json!({ "opIndex": 0, "id": 2 }));
+        assert_eq!(v["chartsChanged"][0], json!({ "sheet": 1, "id": 2 }));
+        // Style extras are optional in both directions.
+        let p: StylePatch = serde_json::from_value(json!({
+            "bold": null, "italic": null, "underline": null, "strike": null,
+            "fontFamily": null, "fontSizePt": null, "color": null, "fill": null,
+            "hAlign": null, "vAlign": null, "wrap": null, "numberFormat": null
+        }))
+        .unwrap();
+        assert_eq!(p.rotation_deg, None);
+        assert_eq!(
+            serde_json::to_value(PageScale::FitPages { pages: 2 }).unwrap(),
+            json!({ "type": "fitPages", "pages": 2 })
+        );
+        let b: BordersDto = serde_json::from_value(json!({
+            "top": null, "bottom": null, "left": null, "right": null
+        }))
+        .unwrap();
+        assert_eq!(b.diagonal_down, None);
     }
 
     #[test]
@@ -1669,6 +2409,7 @@ mod tests {
             }],
             has_header: true,
             case_sensitive: false,
+            options: None,
         };
         let v = serde_json::to_value(&op).unwrap();
         assert_eq!(v["type"], "sortRange");

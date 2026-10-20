@@ -5,12 +5,12 @@
 use std::collections::BTreeSet;
 
 use tally_api::{
-    ApiError, DocPropertiesDto, HeaderFooter, Margins, Orientation, PageOrder, PageScale,
-    PageSetupDto, Paper, RangeDto,
+    ApiError, DocPropertiesDto, HeaderFooter, Margins, NotesPrint, Orientation, PageOrder,
+    PageScale, PageSetupDto, Paper, RangeDto,
 };
 use tally_model::{
-    CellRangeLocal, DocMeta, HeaderFooterData, MarginsData, OrientationData, PageOrderData,
-    PageScaleData, PageSetupData, PaperData,
+    CellRangeLocal, DocMeta, HeaderFooterData, MarginsData, NotesPrintData, OrientationData,
+    PageOrderData, PageScaleData, PageSetupData, PaperData,
 };
 use tally_types::{MAX_COLS, MAX_ROWS};
 
@@ -90,6 +90,7 @@ pub fn to_api(meta: &SheetMeta) -> PageSetupDto {
         scale: match p.scale {
             PageScaleData::Percent(n) => PageScale::Percent { percent: n },
             PageScaleData::FitTo { width, height } => PageScale::FitTo { width, height },
+            PageScaleData::FitPages(pages) => PageScale::FitPages { pages },
         },
         print_range: p.print_range.map(|r| RangeDto {
             r0: r.r0,
@@ -112,6 +113,13 @@ pub fn to_api(meta: &SheetMeta) -> PageSetupDto {
         first_page_number: p.first_page_number,
         row_breaks: meta.row_breaks.iter().copied().collect(),
         col_breaks: meta.col_breaks.iter().copied().collect(),
+        print_charts: Some(p.print_charts),
+        print_notes: Some(match p.print_notes {
+            NotesPrintData::None => NotesPrint::None,
+            NotesPrintData::AtEnd => NotesPrint::AtEnd,
+        }),
+        print_zero_values: Some(p.print_zero_values),
+        print_formulas: Some(p.print_formulas),
     }
 }
 
@@ -161,6 +169,12 @@ pub fn from_api(d: &PageSetupDto) -> Result<PageSetupData, ApiError> {
             }
             PageScaleData::FitTo { width, height }
         }
+        PageScale::FitPages { pages } => {
+            if pages == 0 || pages > 1000 {
+                return Err(ApiError::invalid_argument("bad page count"));
+            }
+            PageScaleData::FitPages(pages)
+        }
     };
     let print_range = match d.print_range {
         None => None,
@@ -204,6 +218,13 @@ pub fn from_api(d: &PageSetupDto) -> Result<PageSetupData, ApiError> {
             PageOrder::LeftToRight => PageOrderData::LeftToRight,
         },
         first_page_number: d.first_page_number,
+        print_charts: d.print_charts.unwrap_or(true),
+        print_notes: match d.print_notes {
+            Some(NotesPrint::AtEnd) => NotesPrintData::AtEnd,
+            _ => NotesPrintData::None,
+        },
+        print_zero_values: d.print_zero_values.unwrap_or(true),
+        print_formulas: d.print_formulas.unwrap_or(false),
     })
 }
 

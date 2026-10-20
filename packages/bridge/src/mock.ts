@@ -58,7 +58,30 @@ import type { PageSetupDto } from "./generated/PageSetupDto";
 import type { ProtectionInfo } from "./generated/ProtectionInfo";
 import type { ValidationDto } from "./generated/ValidationDto";
 import type { ValidationInfo } from "./generated/ValidationInfo";
-import type { EngineClientV3, SheetId, Unsubscribe } from "./client";
+import type { AutocompleteDto } from "./generated/AutocompleteDto";
+import type { CalcSettingsDto } from "./generated/CalcSettingsDto";
+import type { CellStyleDto } from "./generated/CellStyleDto";
+import type { ChartDataDto } from "./generated/ChartDataDto";
+import type { ChartDto } from "./generated/ChartDto";
+import type { ChartKind } from "./generated/ChartKind";
+import type { ChartSvgDto } from "./generated/ChartSvgDto";
+import type { DatabaseRangeDto } from "./generated/DatabaseRangeDto";
+import type { DocumentStatsDto } from "./generated/DocumentStatsDto";
+import type { ImageDto } from "./generated/ImageDto";
+import type { NavigatorDto } from "./generated/NavigatorDto";
+import type { PageBreaksDto } from "./generated/PageBreaksDto";
+import type { PivotDto } from "./generated/PivotDto";
+import type { PivotFieldItemsDto } from "./generated/PivotFieldItemsDto";
+import type { PivotHit } from "./generated/PivotHit";
+import type { PivotSource } from "./generated/PivotSource";
+import type { PrintJobInfo } from "./generated/PrintJobInfo";
+import type { PrintLayoutDto } from "./generated/PrintLayoutDto";
+import type { PrintOptionsDto } from "./generated/PrintOptionsDto";
+import type { ScenarioDto } from "./generated/ScenarioDto";
+import type { SolverRequest } from "./generated/SolverRequest";
+import type { SolverResult } from "./generated/SolverResult";
+import type { TraceDto } from "./generated/TraceDto";
+import type { EngineClientV4, SheetId, Unsubscribe } from "./client";
 import { mockTemplate } from "./mockTemplates";
 import { BUILTIN_TEMPLATES, type ShellClient, type TemplateInfo } from "./shell";
 
@@ -420,7 +443,7 @@ function hintFor(input: string): string | null {
 /** Currency format the mock applies to template money columns. */
 const MOCK_CURRENCY = "[$$-409]#,##0.00;[RED]-[$$-409]#,##0.00";
 
-export class MockClient implements EngineClientV3, ShellClient {
+export class MockClient implements EngineClientV4, ShellClient {
   private readonly docs = new Map<DocId, MockDoc>();
   private nextDocId = 1;
   private nextClipToken = 1;
@@ -805,6 +828,172 @@ export class MockClient implements EngineClientV3, ShellClient {
       });
     }
     return this.resolveNameBox(doc, text);
+  }
+
+  // -- v0.4–v0.6 stubs (wave 5) ----------------------------------------------
+  // List queries answer empty lists so panels render; the rest is
+  // `unsupported` until the engine work packages land (the browser build's
+  // `WebMockClient` adds emulation where the e2e flows need it).
+
+  charts(doc: DocId, sheet: SheetId): Promise<ChartDto[]> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      return [];
+    });
+  }
+
+  chartData(doc: DocId, sheet: SheetId, id: number): Promise<ChartDataDto> {
+    return this.unsupportedV4(doc, `chart ${id} on sheet ${sheet}`);
+  }
+
+  suggestChart(doc: DocId, sheet: SheetId, _sel: RangeDto, kind: ChartKind): Promise<ChartDto> {
+    return this.unsupportedV4(doc, `${kind} chart suggestions on sheet ${sheet}`);
+  }
+
+  images(doc: DocId, sheet: SheetId): Promise<ImageDto[]> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      return [];
+    });
+  }
+
+  pivots(doc: DocId): Promise<PivotDto[]> {
+    return this.run(() => {
+      this.doc(doc);
+      return [];
+    });
+  }
+
+  pivotFieldItems(doc: DocId, _source: PivotSource): Promise<PivotFieldItemsDto[]> {
+    return this.unsupportedV4(doc, "pivot tables");
+  }
+
+  pivotAt(doc: DocId, sheet: SheetId, _r: number, _c: number): Promise<PivotHit | null> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      return null;
+    });
+  }
+
+  autocomplete(doc: DocId, sheet: SheetId, _r: number, _c: number, _prefix: string): Promise<AutocompleteDto> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      return { completion: null, items: [] };
+    });
+  }
+
+  cellStyles(doc: DocId): Promise<CellStyleDto[]> {
+    return this.run(() => {
+      const style = this.doc(doc).state.styles[0];
+      return style ? [{ name: "Default", parent: null, builtin: true, style }] : [];
+    });
+  }
+
+  scenarios(doc: DocId, sheet: SheetId): Promise<ScenarioDto[]> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      return [];
+    });
+  }
+
+  databaseRanges(doc: DocId): Promise<DatabaseRangeDto[]> {
+    return this.run(() => {
+      this.doc(doc);
+      return [];
+    });
+  }
+
+  navigator(doc: DocId): Promise<NavigatorDto> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      const sheets = d.state.sheets.map((s) => ({ title: s.name, sheet: s.id, range: null, id: null }));
+      const notes = d.state.sheets.flatMap((s) =>
+        [...(d.v3.notes.get(s.id)?.values() ?? [])].map((n) => ({
+          title: n.text,
+          sheet: s.id,
+          range: { r0: n.r, c0: n.c, r1: n.r, c1: n.c },
+          id: null,
+        })),
+      );
+      return { sheets, names: [], databaseRanges: [], charts: [], images: [], pivots: [], notes, scenarios: [] };
+    });
+  }
+
+  documentStatistics(doc: DocId): Promise<DocumentStatsDto> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      let cells = 0;
+      let formulas = 0;
+      for (const s of d.state.sheets) {
+        for (const cell of s.cells.values()) {
+          if (cell.input === "") continue;
+          cells += 1;
+          if (cell.input.startsWith("=")) formulas += 1;
+        }
+      }
+      const notes = d.state.sheets.reduce((n, s) => n + (d.v3.notes.get(s.id)?.size ?? 0), 0);
+      return { sheets: d.state.sheets.length, cells, formulas, pages: null, charts: 0, notes, names: 0 };
+    });
+  }
+
+  printLayout(doc: DocId, _opts: PrintOptionsDto): Promise<PrintLayoutDto> {
+    return this.unsupportedV4(doc, "printing");
+  }
+
+  pageBreaks(doc: DocId, sheet: SheetId): Promise<PageBreaksDto> {
+    return this.unsupportedV4(doc, `page breaks on sheet ${sheet}`);
+  }
+
+  preparePrintJob(doc: DocId, _opts: PrintOptionsDto, _charts: ChartSvgDto[]): Promise<PrintJobInfo> {
+    return this.unsupportedV4(doc, "printing");
+  }
+
+  printJobPagePng(_job: number, _page: number, _dpi: number): Promise<string> {
+    return Promise.reject(apiError("unsupported", "MockClient does not support printing"));
+  }
+
+  printJobPdf(_job: number): Promise<Uint8Array> {
+    return Promise.reject(apiError("unsupported", "MockClient does not support PDF export"));
+  }
+
+  calcSettings(doc: DocId): Promise<CalcSettingsDto> {
+    return this.run(() => {
+      this.doc(doc);
+      return {
+        iterations: null,
+        dateEpoch: "d1899",
+        caseSensitive: false,
+        precisionAsShown: false,
+        wholeCellMatch: true,
+        criteriaMode: "wildcards",
+        textToNumber: "convertUnambiguous",
+      };
+    });
+  }
+
+  solver(doc: DocId, _req: SolverRequest): Promise<SolverResult> {
+    return this.unsupportedV4(doc, "the solver");
+  }
+
+  precedents(doc: DocId, sheet: SheetId, _r: number, _c: number): Promise<TraceDto[]> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      return [];
+    });
+  }
+
+  dependents(doc: DocId, sheet: SheetId, _r: number, _c: number): Promise<TraceDto[]> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      return [];
+    });
+  }
+
+  private unsupportedV4<T>(doc: DocId, what: string): Promise<T> {
+    return this.run(() => {
+      this.doc(doc);
+      throw apiError("unsupported", `MockClient does not support ${what}`);
+    });
   }
 
   copy(doc: DocId, sel: SelectionDto): Promise<ClipboardOut> {

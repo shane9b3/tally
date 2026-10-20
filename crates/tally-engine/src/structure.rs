@@ -324,6 +324,11 @@ impl Workbook {
                 crate::annotations::shift_for_structure(&mut sheet.meta.links, &sh);
                 crate::pagesetup::adjust_for_structure(&mut sheet.meta, &sh);
             }
+            // Wave 5 objects (anchors and ranges on this and other sheets).
+            crate::charts::adjust_structure(self, &sh);
+            crate::outline::adjust_structure(self, &sh);
+            crate::pivot::adjust_structure(self, &sh);
+            crate::scenarios::adjust_structure(self, &sh);
             // Rule formulas on other sheets that point at the changed sheet.
             for other in &mut self.sheets {
                 if other.id == sh.sheet {

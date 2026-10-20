@@ -232,6 +232,11 @@ fn parse_alignment(e: &Elem) -> AlignData {
             .attr_local("indent")
             .and_then(|v| v.trim().parse::<u32>().ok())
             .map_or(0, |i| u8::try_from(i.min(250)).unwrap_or(250)),
+        // TODO(W5-2): `textRotation` (0–90 ccw, 91–180 = cw, 255 =
+        // stacked) and `shrinkToFit`.
+        rotation_deg: 0,
+        stacked: false,
+        shrink_to_fit: false,
     }
 }
 
@@ -462,6 +467,8 @@ fn build(raw: &Raw) -> StyleTable {
             bold: rf.bold,
             italic: rf.italic,
             underline: rf.underline,
+            // TODO(W5-2): `u val="double|singleAccounting|doubleAccounting"`.
+            underline_style: tally_model::UnderlineStyleData::Single,
             strike: rf.strike,
             family: rf
                 .name
@@ -520,6 +527,8 @@ fn build(raw: &Raw) -> StyleTable {
             borders,
             number_format,
             display: None,
+            // TODO(W5-2): `xfId` → `cellStyles` name.
+            style_name: None,
         };
         table.xf_date.push(is_date);
         if style == StyleData::default() {
@@ -563,6 +572,9 @@ fn build(raw: &Raw) -> StyleTable {
                 bottom: line(&b[1]),
                 left: line(&b[2]),
                 right: line(&b[3]),
+                // TODO(W5-2): `diagonal` with `diagonalDown`/`diagonalUp`.
+                diagonal_down: None,
+                diagonal_up: None,
             };
             st.borders = (bd != BordersData::default()).then_some(bd);
         }

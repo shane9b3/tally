@@ -36,6 +36,7 @@ mod units;
 mod workbook;
 mod write;
 mod write_v03;
+mod write_v04;
 mod xml;
 
 use std::io::{Cursor, Read, Seek, Write};

@@ -3607,6 +3607,7 @@ dependencies = [
  "serde",
  "smallvec",
  "tally-functions",
+ "tally-l10n",
  "tally-numfmt",
  "tally-types",
  "thiserror 2.0.21",
@@ -3649,6 +3650,13 @@ dependencies = [
  "tally-types",
  "thiserror 2.0.21",
  "zip",
+]
+
+[[package]]
+name = "tally-l10n"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

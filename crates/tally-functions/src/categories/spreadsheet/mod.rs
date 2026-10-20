@@ -6,8 +6,10 @@ mod index;
 mod lookup;
 mod match_;
 mod misc;
+mod pivot;
 mod reference;
 mod rowcol;
+mod tableop;
 
 /// Registers the Spreadsheet functions.
 pub fn register(r: &mut Registry) {
@@ -17,4 +19,6 @@ pub fn register(r: &mut Registry) {
     rowcol::register(r);
     reference::register(r);
     misc::register(r);
+    pivot::register(r);
+    tableop::register(r);
 }

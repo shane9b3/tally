@@ -373,6 +373,7 @@ fn sort_invoices_by_total_descending() -> CmdResult<()> {
             }],
             has_header: true,
             case_sensitive: false,
+            options: None,
         }],
     )?;
     let after = totals(&st, &info)?;

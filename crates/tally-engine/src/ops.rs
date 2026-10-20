@@ -335,6 +335,12 @@ pub fn apply_op(
     if let Some(r) = crate::ops_v03::apply(wb, op, fx) {
         return r;
     }
+    if let Some(r) = crate::ops_v04::apply(wb, op, fx) {
+        return r;
+    }
+    if let Some(r) = crate::ops_v05::apply(wb, op, fx) {
+        return r;
+    }
     precheck(wb, op)?;
     let changes = apply_op_inner(wb, op, clip, fx)?;
     postcheck(wb, op, changes, fx)
@@ -1032,8 +1038,17 @@ fn apply_op_inner(
             keys,
             has_header,
             case_sensitive,
+            options,
         } => {
             check_sheet(wb, *sheet)?;
+            // TODO(W5-2): left-to-right, copy to, custom order, include
+            // formats and natural sort in `crate::sort`.
+            if options
+                .as_ref()
+                .is_some_and(|o| *o != tally_api::SortOptions::default())
+            {
+                return Err(ApiError::unsupported("sort options are coming in wave 5"));
+            }
             let range = to_range(*sheet, range)?;
             crate::sort::sort_range(wb, range, keys, *has_header, *case_sensitive)
         }
@@ -1058,7 +1073,7 @@ fn apply_op_inner(
             let target = to_range(*sheet, target)?;
             crate::fill::fill_range(wb, source, target, *mode)
         }
-        // Handled by `ops_v03::apply`.
+        // Handled by `ops_v03::apply`, `ops_v04::apply` or `ops_v05::apply`.
         _ => Err(ApiError::new(ApiError::INTERNAL, "unhandled op")),
     }
 }

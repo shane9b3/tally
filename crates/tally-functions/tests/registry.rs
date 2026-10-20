@@ -356,3 +356,38 @@ fn unknown_id_is_name_error() {
     assert_eq!(v, e(ErrorKind::Name));
     assert!(build_registry().len() == registry().len());
 }
+
+/// Every registered function has a localized spelling in every locale of
+/// `tally-l10n` (its canonical list is the registry's name set), and
+/// nothing in that list is unregistered.
+#[test]
+fn localized_names_cover_the_registry() {
+    let reg = registry();
+    let canonical: std::collections::HashSet<&str> =
+        tally_l10n::names::CANONICAL.iter().copied().collect();
+    let mut problems = Vec::new();
+    for (_, def) in reg.iter() {
+        if !canonical.contains(def.name) {
+            problems.push(format!("{}: not in tally_l10n::names::CANONICAL", def.name));
+            continue;
+        }
+        for locale in tally_l10n::locales().iter().copied() {
+            let local = tally_l10n::localized_name(locale, def.name);
+            if local.is_empty() {
+                problems.push(format!("{}: no {locale} name", def.name));
+            } else if tally_l10n::canonical_name(locale, local) != Some(def.name) {
+                problems.push(format!(
+                    "{}: {locale} {local} does not round-trip",
+                    def.name
+                ));
+            }
+        }
+    }
+    for name in tally_l10n::names::CANONICAL {
+        if reg.lookup(name).is_none() {
+            problems.push(format!("{name}: in CANONICAL but not registered"));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n  "));
+    assert_eq!(tally_l10n::names::CANONICAL.len(), reg.len());
+}

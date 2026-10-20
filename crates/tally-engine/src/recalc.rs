@@ -977,6 +977,26 @@ impl EvalContext for CalcCtx<'_> {
             .sheet(sheet)
             .is_some_and(|s| s.filtered_rows.contains(row))
     }
+
+    /// TODO(W5-3): a goal-seek style sandbox that re-evaluates the
+    /// precedent chain from `subs` to `formula`, capped at
+    /// `crate::tools::MAX_TABLE_OPS` calls per recalc.
+    fn table_op(&mut self, formula: CellAddr, subs: &[(CellAddr, Value)]) -> Option<Value> {
+        let _ = (formula, subs);
+        None
+    }
+
+    /// TODO(W5-2): look up the pivot whose output contains `at` in
+    /// `SheetMeta::pivots` and read the requested data cell.
+    fn pivot_data(
+        &mut self,
+        at: CellAddr,
+        field: &str,
+        filters: &[(String, String)],
+    ) -> Option<Value> {
+        let _ = (at, field, filters);
+        None
+    }
 }
 
 /// A test-only hook that makes the evaluation of one chosen cell record a

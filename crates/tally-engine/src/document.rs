@@ -107,6 +107,8 @@ impl Document {
             dirty: self.dirty,
             version: self.version,
             warnings: self.warnings.clone(),
+            // TODO(W5-3): filled from the reader's external-link policy report.
+            external_links: None,
         }
     }
 
@@ -158,6 +160,10 @@ impl Document {
             warnings: (!notices.is_empty()).then_some(notices),
             fitted_rows: fx.fitted_rows,
             replaced: fx.replaced,
+            charts_changed: fx.charts_changed,
+            objects_changed: fx.objects_changed,
+            created: fx.created,
+            pivots_changed: fx.pivots_changed,
         }
     }
 

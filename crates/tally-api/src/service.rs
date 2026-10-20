@@ -9,6 +9,7 @@ use std::path::Path;
 
 use tally_types::SheetId;
 
+use crate::charts::{ChartDataDto, ChartDto, ChartKind, ImageDto};
 use crate::dto::{
     ApiError, ApplyResult, AutoFilterInfo, CellBlock, CellEditInfo, CellPos, ClipboardOut,
     Direction, DocId, FileFormat, FindQuery, FindResult, FunctionInfo, NameInfo, RangeDto,
@@ -17,6 +18,15 @@ use crate::dto::{
 use crate::features::{
     ConditionalFormatDto, DocPropertiesDto, GoalSeekRequest, GoalSeekResult, LocaleInfo, NoteDto,
     PageSetupDto, ProtectionInfo, ValidationDto, ValidationInfo,
+};
+use crate::pivot::{PivotDto, PivotFieldItemsDto, PivotHit, PivotSource};
+use crate::print::{
+    CalcSettingsDto, ChartSvgDto, PageBreaksDto, PrintJobInfo, PrintLayoutDto, PrintOptionsDto,
+    SolverRequest, SolverResult,
+};
+use crate::tools::{
+    AutocompleteDto, CellStyleDto, DatabaseRangeDto, DocumentStatsDto, NavigatorDto, ScenarioDto,
+    TraceDto,
 };
 
 /// Result type of every fallible [`DocumentService`] method.
@@ -212,6 +222,175 @@ pub trait DocumentService {
     fn set_locale(&mut self, doc: DocId, locale: &str) -> Result<ApplyResult> {
         let _ = (doc, locale);
         Err(ApiError::unsupported("locales are not supported"))
+    }
+
+    // ----- v0.4 charts and pictures (W5-1; defaults report `unsupported`) --
+
+    /// The charts of a sheet, in id order.
+    fn charts(&self, doc: DocId, sheet: SheetId) -> Result<Vec<ChartDto>> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("charts are not supported"))
+    }
+
+    /// The resolved data of a chart, read from cached values without
+    /// recalculating (≤ 255 series, ≤ 32,000 points per series).
+    fn chart_data(&self, doc: DocId, sheet: SheetId, id: u32) -> Result<ChartDataDto> {
+        let _ = (doc, sheet, id);
+        Err(ApiError::unsupported("charts are not supported"))
+    }
+
+    /// A chart proposal for a selection: detects the data region around
+    /// it, guesses labels and series orientation and anchors the chart to
+    /// the right of the region at 16 × 9 cm. Nothing is added.
+    fn suggest_chart(
+        &self,
+        doc: DocId,
+        sheet: SheetId,
+        sel: RangeDto,
+        kind: ChartKind,
+    ) -> Result<ChartDto> {
+        let _ = (doc, sheet, sel, kind);
+        Err(ApiError::unsupported("charts are not supported"))
+    }
+
+    /// The pictures of a sheet (without their bytes).
+    fn images(&self, doc: DocId, sheet: SheetId) -> Result<Vec<ImageDto>> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("pictures are not supported"))
+    }
+
+    // ----- v0.5 DataPilot and data tools (W5-2) ----------------------------
+
+    /// Every pivot table of the document.
+    fn pivots(&self, doc: DocId) -> Result<Vec<PivotDto>> {
+        let _ = doc;
+        Err(ApiError::unsupported("pivot tables are not supported"))
+    }
+
+    /// The fields and distinct items of a pivot source (which may be
+    /// scanned before any pivot exists).
+    fn pivot_field_items(
+        &self,
+        doc: DocId,
+        source: &PivotSource,
+    ) -> Result<Vec<PivotFieldItemsDto>> {
+        let _ = (doc, source);
+        Err(ApiError::unsupported("pivot tables are not supported"))
+    }
+
+    /// The pivot output a cell belongs to, if any.
+    fn pivot_at(&self, doc: DocId, sheet: SheetId, r: u32, c: u32) -> Result<Option<PivotHit>> {
+        let _ = (doc, sheet, r, c);
+        Err(ApiError::unsupported("pivot tables are not supported"))
+    }
+
+    /// AutoInput: the column's text completions for `prefix` at a cell.
+    fn autocomplete(
+        &self,
+        doc: DocId,
+        sheet: SheetId,
+        r: u32,
+        c: u32,
+        prefix: &str,
+    ) -> Result<AutocompleteDto> {
+        let _ = (doc, sheet, r, c, prefix);
+        Err(ApiError::unsupported("AutoInput is not supported"))
+    }
+
+    /// Named cell styles, `Default` first.
+    fn cell_styles(&self, doc: DocId) -> Result<Vec<CellStyleDto>> {
+        let _ = doc;
+        Err(ApiError::unsupported("cell styles are not supported"))
+    }
+
+    /// The scenarios of a (base) sheet.
+    fn scenarios(&self, doc: DocId, sheet: SheetId) -> Result<Vec<ScenarioDto>> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("scenarios are not supported"))
+    }
+
+    /// Every named database range.
+    fn database_ranges(&self, doc: DocId) -> Result<Vec<DatabaseRangeDto>> {
+        let _ = doc;
+        Err(ApiError::unsupported("database ranges are not supported"))
+    }
+
+    /// The Navigator's entries.
+    fn navigator(&self, doc: DocId) -> Result<NavigatorDto> {
+        let _ = doc;
+        Err(ApiError::unsupported("the Navigator is not supported"))
+    }
+
+    /// Document statistics.
+    fn document_statistics(&self, doc: DocId) -> Result<DocumentStatsDto> {
+        let _ = doc;
+        Err(ApiError::unsupported(
+            "document statistics are not supported",
+        ))
+    }
+
+    // ----- v0.6 print, PDF, calculation semantics and detective (W5-3) -----
+
+    /// Pagination of a print (no rendering).
+    fn print_layout(&self, doc: DocId, opts: &PrintOptionsDto) -> Result<PrintLayoutDto> {
+        let _ = (doc, opts);
+        Err(ApiError::unsupported("printing is not supported"))
+    }
+
+    /// Automatic and manual page breaks of a sheet (Page Break Preview).
+    fn page_breaks(&self, doc: DocId, sheet: SheetId) -> Result<PageBreaksDto> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("printing is not supported"))
+    }
+
+    /// Builds a print job (cells, charts as the given SVGs) and keeps it in
+    /// an LRU of 4 jobs.
+    fn prepare_print_job(
+        &mut self,
+        doc: DocId,
+        opts: &PrintOptionsDto,
+        charts: &[ChartSvgDto],
+    ) -> Result<PrintJobInfo> {
+        let _ = (doc, opts, charts);
+        Err(ApiError::unsupported("printing is not supported"))
+    }
+
+    /// One page of a job rasterized to PNG, base64.
+    fn print_job_page_png(&self, job: u32, page: u32, dpi: u32) -> Result<String> {
+        let _ = (job, page, dpi);
+        Err(ApiError::unsupported("printing is not supported"))
+    }
+
+    /// The PDF of a job.
+    fn print_job_pdf(&self, job: u32) -> Result<Vec<u8>> {
+        let _ = job;
+        Err(ApiError::unsupported("PDF export is not supported"))
+    }
+
+    /// The document's calculation settings.
+    fn calc_settings(&self, doc: DocId) -> Result<CalcSettingsDto> {
+        let _ = doc;
+        Err(ApiError::unsupported(
+            "calculation settings are not supported",
+        ))
+    }
+
+    /// The linear solver, run in a sandbox (the document is not changed).
+    fn solver(&self, doc: DocId, req: &SolverRequest) -> Result<SolverResult> {
+        let _ = (doc, req);
+        Err(ApiError::unsupported("the solver is not supported"))
+    }
+
+    /// Detective: the cells a formula reads (direct precedents).
+    fn precedents(&self, doc: DocId, sheet: SheetId, r: u32, c: u32) -> Result<Vec<TraceDto>> {
+        let _ = (doc, sheet, r, c);
+        Err(ApiError::unsupported("the detective is not supported"))
+    }
+
+    /// Detective: the formulas that read a cell (direct dependents).
+    fn dependents(&self, doc: DocId, sheet: SheetId, r: u32, c: u32) -> Result<Vec<TraceDto>> {
+        let _ = (doc, sheet, r, c);
+        Err(ApiError::unsupported("the detective is not supported"))
     }
 }
 

@@ -609,12 +609,36 @@ pub struct SheetMeta {
     pub row_breaks: BTreeSet<u32>,
     /// Manual page breaks before these columns.
     pub col_breaks: BTreeSet<u32>,
-    /// Next id for conditional formats and validations.
+    /// Next id for conditional formats, validations, charts, pictures,
+    /// pivots and scenarios.
     pub next_id: u32,
+    /// Charts anchored on the sheet (v0.4, W5-1).
+    pub charts: Vec<crate::charts::Chart>,
+    /// Pictures anchored on the sheet (v0.4, W5-1).
+    pub images: Vec<crate::charts::Image>,
+    /// DataPilot tables whose output is on the sheet (v0.5, W5-2).
+    pub pivots: Vec<crate::pivot::PivotTable>,
+    /// Row outline groups (v0.5, W5-2).
+    pub row_groups: Vec<tally_model::OutlineGroupData>,
+    /// Column outline groups (v0.5, W5-2).
+    pub col_groups: Vec<tally_model::OutlineGroupData>,
+    /// Scenarios of this base sheet (v0.5, W5-2).
+    pub scenarios: Vec<crate::scenarios::Scenario>,
+    /// Named database ranges on the sheet (v0.5, W5-2).
+    pub database_ranges: Vec<tally_model::DatabaseRangeData>,
+    /// The standard/advanced filter of the AutoFilter area (v0.5, W5-2).
+    pub standard_filter: Option<tally_model::StandardFilterData>,
+    /// The Data ▸ Subtotals definition (v0.5, W5-2).
+    pub subtotals: Option<tally_model::SubtotalsData>,
+    /// View toggles (`None`: defaults) (v0.5).
+    pub view_options: Option<tally_model::ViewOptionsData>,
+    /// Window ▸ Split position (v0.5).
+    pub split: Option<tally_model::SplitData>,
 }
 
 impl SheetMeta {
-    /// A fresh id for a conditional format or validation.
+    /// A fresh id for a conditional format, validation, chart, picture,
+    /// pivot or scenario (one counter per sheet).
     pub fn alloc_id(&mut self) -> u32 {
         self.next_id = self.next_id.max(1);
         let id = self.next_id;

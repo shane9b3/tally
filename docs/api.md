@@ -281,3 +281,122 @@ native menu (`apps/desktop/src-tauri/src/menu.rs`) lists them, and
 
 `doc-changed` carries only changes the UI did not initiate (volatile recalc, async
 load). Results of the UI's own `apply`/`undo`/`redo` come back as return values.
+
+## v0.4–v0.6 (wave 5)
+
+Contracts landed in W5-0a (`crates/tally-api/src/{charts,pivot,tools,print}.rs`); the
+behaviour lands in W5-1 (charts, pictures), W5-2 (DataPilot, outline, data tools,
+scenarios, cell styles) and W5-3 (print, PDF, calculation semantics, solver,
+detective). Until then every new `DocumentService` method answers `unsupported`, and
+every new op is refused with `OpError { code: "unsupported" }` by `ops_v04`/`ops_v05`.
+`EngineClientV4` (`packages/bridge/src/client.ts`) lists the queries; `MockClient` has
+stubs (empty lists for the list queries, `unsupported` for the rest). The UI shell
+registers the commands in `apps/desktop/src-tauri/src/commands_v4.rs` (W5-0b) with the
+names below; the shell-only `wb_export_pdf` and `wb_print` take a job id.
+
+### Queries (`EngineClientV4`)
+
+| Tauri command | Arguments | Returns | `DocumentService` method | `EngineClientV4` method |
+|---|---|---|---|---|
+| `charts` | `doc, sheet` | `ChartDto[]` (id order) | `charts(doc, sheet)` | `charts(doc, sheet)` |
+| `chart_data` | `doc, sheet, id` | `ChartDataDto` (cached values, ≤ 255 series, ≤ 32,000 points, `truncated`) | `chart_data(doc, sheet, id)` | `chartData(doc, sheet, id)` |
+| `suggest_chart` | `doc, sheet, sel: RangeDto, kind: ChartKind` | `ChartDto` (region detection, labels heuristic, anchored right of the region at 16 × 9 cm; nothing is added) | `suggest_chart(doc, sheet, sel, kind)` | `suggestChart(doc, sheet, sel, kind)` |
+| `images` | `doc, sheet` | `ImageDto[]` (`data` empty) | `images(doc, sheet)` | `images(doc, sheet)` |
+| `pivots` | `doc` | `PivotDto[]` | `pivots(doc)` | `pivots(doc)` |
+| `pivot_field_items` | `doc, source: PivotSource` | `PivotFieldItemsDto[]` (≤ 10,000 items per field) | `pivot_field_items(doc, &source)` | `pivotFieldItems(doc, source)` |
+| `pivot_at` | `doc, sheet, r, c` | `PivotHit \| null` | `pivot_at(doc, sheet, r, c)` | `pivotAt(doc, sheet, r, c)` |
+| `autocomplete` | `doc, sheet, r, c, prefix` | `AutocompleteDto` (`{ completion, items }`, ≤ 1,000 items) | `autocomplete(doc, sheet, r, c, prefix)` | `autocomplete(doc, sheet, r, c, prefix)` |
+| `cell_styles` | `doc` | `CellStyleDto[]` (`Default` first) | `cell_styles(doc)` | `cellStyles(doc)` |
+| `scenarios` | `doc, sheet` | `ScenarioDto[]` | `scenarios(doc, sheet)` | `scenarios(doc, sheet)` |
+| `database_ranges` | `doc` | `DatabaseRangeDto[]` | `database_ranges(doc)` | `databaseRanges(doc)` |
+| `navigator` | `doc` | `NavigatorDto` | `navigator(doc)` | `navigator(doc)` |
+| `document_statistics` | `doc` | `DocumentStatsDto` | `document_statistics(doc)` | `documentStatistics(doc)` |
+| `print_layout` | `doc, opts: PrintOptionsDto` | `PrintLayoutDto` | `print_layout(doc, &opts)` | `printLayout(doc, opts)` |
+| `page_breaks` | `doc, sheet` | `PageBreaksDto` | `page_breaks(doc, sheet)` | `pageBreaks(doc, sheet)` |
+| `prepare_print_job` | `doc, opts: PrintOptionsDto, charts: ChartSvgDto[]` (≤ 4 MB per SVG) | `PrintJobInfo` (`{ job, layout }`; an LRU of 4 jobs) | `prepare_print_job(doc, &opts, &charts)` | `preparePrintJob(doc, opts, charts)` |
+| `print_job_page_png` | `job, page, dpi` | `string` (base64 PNG) | `print_job_page_png(job, page, dpi)` | `printJobPagePng(job, page, dpi)` |
+| `print_job_pdf` | `job` | bytes | `print_job_pdf(job)` | `printJobPdf(job)` (the shell's `wb_export_pdf(doc, job)` / `wb_print(doc, job)` normally consume the PDF) |
+| `calc_settings` | `doc` | `CalcSettingsDto` | `calc_settings(doc)` | `calcSettings(doc)` |
+| `solver` | `doc, req: SolverRequest` | `SolverResult` (sandboxed; nothing changes) | `solver(doc, &req)` | `solver(doc, req)` |
+| `precedents` | `doc, sheet, r, c` | `TraceDto[]` | `precedents(doc, sheet, r, c)` | `precedents(doc, sheet, r, c)` |
+| `dependents` | `doc, sheet, r, c` | `TraceDto[]` | `dependents(doc, sheet, r, c)` | `dependents(doc, sheet, r, c)` |
+
+### Ops (all undoable once implemented)
+
+Charts and pictures (v0.4, W5-1; refused on a protected sheet):
+
+| `type` | Fields | Notes |
+|---|---|---|
+| `addChart` | `sheet, chart: ChartDto` | `chart.id`/`name` ignored; with empty `series` and a `source`, the engine derives the series. The id comes back in `ApplyResult.created`. |
+| `updateChart` | `sheet, id, chart` | Full replace; the id is kept. |
+| `moveResizeChart` | `sheet, id, anchor: ChartAnchor` | `{ r, c, dxMm, dyMm, widthMm, heightMm }`. |
+| `deleteChart` | `sheet, id` | |
+| `moveChartToSheet` | `sheet, id, to` | |
+| `addImage` / `deleteImage` / `moveResizeImage` | `sheet, image: ImageDto` / `sheet, id` / `sheet, id, anchor` | `image.data` is base64 PNG or JPEG, ≤ 16 MB decoded. |
+
+DataPilot (v0.5, W5-2):
+
+| `type` | Fields | Notes |
+|---|---|---|
+| `createPivot` | `pivot: PivotDto, overwrite` | A non-empty target gives `OpError { code: "target_not_empty" }` unless `overwrite`; the UI asks "Destination range is not empty. Overwrite?". |
+| `updatePivot` | `id, pivot, overwrite` | |
+| `refreshPivot` | `id` | AOO never refreshes automatically. |
+| `deletePivot` | `id, clearOutput` | |
+| `pivotDrillDown` | `id, r, c` | Inserts a sheet with the matching source rows. |
+
+Outline (v0.5): `group` / `ungroup` `{ sheet, axis: rows \| cols, start, end }`,
+`setOutlineCollapsed { sheet, axis, start, end, collapsed }`,
+`showOutlineLevel { sheet, axis, level }`, `autoOutline { sheet, range \| null }`,
+`clearOutline { sheet, axis \| null }`. At most 8 levels.
+
+Filters, subtotals and data tools (v0.5):
+
+| `type` | Fields | Notes |
+|---|---|---|
+| `standardFilter` | `sheet, range, conditions: StdCondition[], options: StdFilterOptions` | ≤ 4 conditions, `connector: and \| or`, the 16 AOO operators (`eq ne lt gt le ge largest smallest largestPct smallestPct contains notContains beginsWith notBeginsWith endsWith notEndsWith`), `regex`, `noDuplicates`, `copyTo: SheetCell \| null`, `keepCriteria`. |
+| `advancedFilter` | `sheet, range, criteria: SheetRange, options` | D-function criteria semantics. |
+| `resetFilter` | `sheet` | Shows the rows; AutoFilter buttons stay. |
+| `subtotals` | `sheet, range, groups: SubtotalGroup[] (≤ 3), options: SubtotalOptions` | Inserts `SUBTOTAL(n;…)` rows, `X Result` / `Grand Total` labels and an outline. |
+| `removeSubtotals` | `sheet, range` | |
+| `consolidate` | `function: AggFn, sources: SheetRange[], dest: SheetCell, byRowLabels, byColLabels, link` | |
+| `textToColumns` | `sheet, range, options: CsvImportOptionsDto` | `{ delimiters, mergeDelimiters, quote, trim, detectNumbers, fixedWidths, columnTypes }`. |
+| `removeDuplicates` | `sheet, range, cols, hasHeader` | The first occurrence stays. |
+| `insertCells` / `deleteCells` | `sheet, range, shift: down \| right` / `up \| left` | Partial-range reference adjustment. |
+| `deleteContents` | `sheet, ranges, what: DeleteContentsFlags` | `{ text, numbers, dates, formulas, notes, formats, objects }`. |
+| `fillSeries` | `sheet, range, direction, kind: linear \| growth \| date \| autoFill, unit: day \| weekday \| month \| year \| null, start, end, increment` | Values as typed (`string \| null`). |
+
+Scenarios, cell styles, AutoFormat (v0.5):
+
+| `type` | Fields | Notes |
+|---|---|---|
+| `createScenario` | `sheet, scenario: ScenarioDto` | From the current values of `scenario.ranges`; id in `created`. |
+| `updateScenario` / `showScenario` / `deleteScenario` | `sheet, id[, scenario]` | `showScenario` copies the previous scenario's cells back when `copyBack`. |
+| `defineCellStyle` | `style: CellStyleDto` | `{ name, parent, builtin, style: StyleDto }`; cells based on it update. |
+| `deleteCellStyle` | `name` | Cells fall back to the parent. |
+| `applyCellStyle` | `sheet, ranges, name` | Clears direct formatting. |
+| `applyAutoFormat` | `sheet, range, preset, options: AutoFormatOptions` | The 17 AOO presets (`Default`, `3D`, `Black 1`, `Black 2`, `Blue`, `Brown`, `Currency`, `Currency 3D`, `Currency Gray`, `Currency Lavender`, `Currency Turquoise`, `Gray`, `Green`, `Lavender`, `Red`, `Turquoise`, `Yellow`). |
+
+Sheets, names, view and settings (v0.5–v0.6):
+
+| `type` | Fields | Notes |
+|---|---|---|
+| `copySheet` | `sheet, name \| null, index \| null` | Formulas in the copy point at the copy. |
+| `setSheetHidden` | `sheet, hidden` | The last visible sheet cannot be hidden. |
+| `setTabColor` | `sheet, color \| null` | |
+| `createNamesFromLabels` | `sheet, range, from: NameLabelFlags` | `{ top, left, bottom, right }`. |
+| `defineDatabaseRange` / `deleteDatabaseRange` | `name, sheet, range, hasHeader` / `name` | |
+| `setViewOptions` | `sheet, options: ViewOptionsDto` | `{ showFormulas, valueHighlighting, showZeroValues, showGridlines, showHeaders }`, persisted. |
+| `setSplit` | `sheet, split: SplitDto \| null` | `{ xPx, yPx }` at zoom 100 %. |
+| `setCustomSortLists` | `lists: string[][]` | |
+| `setCalcSettings` | `settings: CalcSettingsDto` | `{ iterations: { steps, minChange } \| null, dateEpoch: d1899 \| d1900 \| d1904, caseSensitive, precisionAsShown, wholeCellMatch, criteriaMode: wildcards \| regex \| literal, textToNumber }`; followed by a hard recalc. |
+
+Additive changes to existing DTOs (all optional, so older clients keep working):
+
+- `sortRange.options?: SortOptions | null` (`{ leftToRight, copyTo, customOrder, includeFormats, natural }`; a non-default value is refused with `unsupported` until W5-2).
+- `StyleDto.rotationDeg?`, `stacked?`, `shrinkToFit?`, `underlineStyle?: UnderlineStyle`, `styleName?`; `BordersDto.diagonalDown?`, `diagonalUp?`.
+- `StylePatch.rotationDeg?`, `stacked?`, `shrinkToFit?`, `indent?`, `underlineStyle?`; `BordersPatch.diagonalDown?`, `diagonalUp?` (per cell). These already apply in the engine.
+- `PageScale` gains `{ type: "fitPages", pages }`; `PageSetupDto.printCharts?`, `printNotes?: none | atEnd`, `printZeroValues?`, `printFormulas?`.
+- `ApplyResult.chartsChanged?: ChartRef[]`, `objectsChanged?: SheetId[]`, `created?: CreatedId[]` (`{ opIndex, id }`), `pivotsChanged?: boolean`.
+- `WorkbookInfo.externalLinks?: ExternalLinkWarning[]` (`{ kind: dde | externalReference | linkedSheet | linkedImage, count, detail }`; disabled by policy, see docs/security.md).
+
+Error codes added: `target_not_empty` (DataPilot).

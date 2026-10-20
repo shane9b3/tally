@@ -20,4 +20,12 @@ left: BorderLineDto | null,
 /**
  * Right.
  */
-right: BorderLineDto | null, };
+right: BorderLineDto | null, 
+/**
+ * Diagonal from the top-left to the bottom-right corner (v0.4).
+ */
+diagonalDown?: BorderLineDto | null, 
+/**
+ * Diagonal from the bottom-left to the top-right corner (v0.4).
+ */
+diagonalUp?: BorderLineDto | null, };

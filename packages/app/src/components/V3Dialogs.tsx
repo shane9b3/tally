@@ -1166,7 +1166,7 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
   const rc = parseSpan(repeatCols, "col");
   const err = pr === null && printRange.trim() !== "" ? "The print range is not a range (e.g. A1:G15)." : (pr?.length ?? 0) > 1 ? "Use one print range." : rr === undefined ? "Rows to repeat look like 1:2." : rc === undefined ? "Columns to repeat look like A:B." : null;
   const [w, h] = paperMm(s);
-  const scaleOk = s.scale.type === "percent" ? s.scale.percent >= 10 && s.scale.percent <= 400 : s.scale.width >= 0 && s.scale.height >= 0;
+  const scaleOk = s.scale.type === "percent" ? s.scale.percent >= 10 && s.scale.percent <= 400 : s.scale.type === "fitTo" ? s.scale.width >= 0 && s.scale.height >= 0 : s.scale.pages >= 1;
   const sheetName = ctl.sheetName();
   const fileName = useDocStore((st) => st.info?.title ?? "Untitled");
   const m = s.margins;
@@ -1259,9 +1259,9 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
                   </>
                 ) : (
                   <>
-                    <input className={cx(styles.input, v3.small)} aria-label="Pages wide" inputMode="numeric" value={s.scale.width} onChange={(e) => s.scale.type === "fitTo" && set({ scale: { ...s.scale, width: Math.max(0, Math.round(Number(e.target.value) || 0)) } })} />
+                    <input className={cx(styles.input, v3.small)} aria-label="Pages wide" inputMode="numeric" value={s.scale.type === "fitTo" ? s.scale.width : 0} onChange={(e) => s.scale.type === "fitTo" && set({ scale: { ...s.scale, width: Math.max(0, Math.round(Number(e.target.value) || 0)) } })} />
                     <span>wide ×</span>
-                    <input className={cx(styles.input, v3.small)} aria-label="Pages tall" inputMode="numeric" value={s.scale.height} onChange={(e) => s.scale.type === "fitTo" && set({ scale: { ...s.scale, height: Math.max(0, Math.round(Number(e.target.value) || 0)) } })} />
+                    <input className={cx(styles.input, v3.small)} aria-label="Pages tall" inputMode="numeric" value={s.scale.type === "fitTo" ? s.scale.height : 0} onChange={(e) => s.scale.type === "fitTo" && set({ scale: { ...s.scale, height: Math.max(0, Math.round(Number(e.target.value) || 0)) } })} />
                     <span>tall (0 = any)</span>
                   </>
                 )}
@@ -1378,7 +1378,7 @@ function PagePreview({ setup, size, header, footer, ctx }: { setup: PageSetupDto
         ) : null}
       </div>
       <div className={styles.note}>
-        {setup.orientation === "landscape" ? "Landscape" : "Portrait"}, {setup.scale.type === "percent" ? `${setup.scale.percent} %` : `fit ${setup.scale.width || "any"} × ${setup.scale.height || "any"}`}
+        {setup.orientation === "landscape" ? "Landscape" : "Portrait"}, {setup.scale.type === "percent" ? `${setup.scale.percent} %` : setup.scale.type === "fitTo" ? `fit ${setup.scale.width || "any"} × ${setup.scale.height || "any"}` : `fit ${setup.scale.pages} pages`}
       </div>
     </div>
   );

@@ -504,6 +504,10 @@ impl SheetWriter<'_> {
         crate::write_v03::write_validations(ws, sheet, self.sheet_index, self.resolver, warn)?;
         crate::write_v03::write_notes(ws, sheet, warn);
         crate::write_v03::write_page_setup(ws, sheet, warn)?;
+        // Wave 5 (placeholders until W5-1/W5-2 land).
+        crate::write_v04::write_outline(ws, sheet)?;
+        crate::write_v04::write_charts(ws, sheet, self.sheet_index, warn)?;
+        crate::write_v04::write_images(ws, sheet, warn)?;
         if let Some(p) = &sheet.protection {
             crate::write_v03::write_protection(ws, p);
         }
@@ -724,6 +728,9 @@ pub(crate) fn write(
     let bytes = wb.save_to_buffer()?;
     let mut patches = crate::write_v03::patches(data, &mut report);
     patches.date1904 = epoch == DateEpoch::D1904;
+    // Wave 5 parts added through the patches pass (placeholders).
+    crate::write_v04::scenario_patches(data, &mut patches, &mut report);
+    crate::write_v04::pivot_patches(data, &mut patches, &mut report);
     let bytes = if patches.is_empty() {
         bytes
     } else {

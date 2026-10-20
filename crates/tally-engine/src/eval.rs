@@ -665,6 +665,17 @@ impl EvalContext for ArrayCtx<'_> {
     fn filtered_row(&self, sheet: SheetId, row: u32) -> bool {
         self.inner.filtered_row(sheet, row)
     }
+    fn table_op(&mut self, formula: CellAddr, subs: &[(CellAddr, Value)]) -> Option<Value> {
+        self.inner.table_op(formula, subs)
+    }
+    fn pivot_data(
+        &mut self,
+        at: CellAddr,
+        field: &str,
+        filters: &[(String, String)],
+    ) -> Option<Value> {
+        self.inner.pivot_data(at, field, filters)
+    }
 }
 
 // ---------------------------------------------------------------------------

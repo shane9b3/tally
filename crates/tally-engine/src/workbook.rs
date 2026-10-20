@@ -199,6 +199,11 @@ pub struct Workbook {
     /// While loading: original (lowercase) names of sheets that were
     /// renamed to valid names, so the file's formulas still resolve them.
     pub(crate) load_aliases: HashMap<String, SheetId>,
+    /// Named cell styles with their parent chains (v0.4, W5-2; see
+    /// [`crate::cellstyles`]). Empty means only the built-in `Default`.
+    pub cell_styles: Vec<tally_model::CellStyleData>,
+    /// Custom sort lists (v0.5).
+    pub custom_sort_lists: Vec<Vec<String>>,
 }
 
 impl Default for Workbook {
@@ -235,6 +240,8 @@ impl Workbook {
             transient: crate::condfmt::Transient::default(),
             import_warnings: Vec::new(),
             load_aliases: HashMap::new(),
+            cell_styles: Vec::new(),
+            custom_sort_lists: Vec::new(),
         }
     }
 

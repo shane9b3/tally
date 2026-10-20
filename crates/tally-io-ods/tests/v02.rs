@@ -462,6 +462,7 @@ fn borders_round_trip() {
             bottom: Some(line(26, BorderStyle::Solid, 0x0000_00ff)),
             left: Some(line(26, BorderStyle::Solid, 0x0000_00ff)),
             right: Some(line(26, BorderStyle::Solid, 0x0000_00ff)),
+            ..Default::default()
         },
         ..StyleData::default()
     };
@@ -471,6 +472,7 @@ fn borders_round_trip() {
             bottom: None,
             left: Some(line(2, BorderStyle::Dotted, 0x00ff_00ff)),
             right: Some(line(53, BorderStyle::Dashed, 0x1234_56ff)),
+            ..Default::default()
         },
         ..StyleData::default()
     };

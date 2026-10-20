@@ -23,7 +23,11 @@
 //!   setup, document properties), [`autofit`] (row heights), [`goalseek`],
 //!   [`fexpr`] (rule formulas) and [`ops_v03`] (their ops);
 //! - [`document`]: one open document (workbook + undo + version);
-//! - [`service`]: `EngineService`, the `DocumentService` implementation.
+//! - [`service`]: `EngineService`, the `DocumentService` implementation;
+//! - wave 5 (v0.4–v0.6, W5-0a skeletons): [`charts`] and [`ops_v04`]
+//!   (charts, pictures), [`pivot`], [`outline`], [`scenarios`],
+//!   [`cellstyles`], [`tools`] (data tools, assists, solver) and
+//!   [`ops_v05`] (their ops), [`print`] (pagination).
 //!
 //! See `docs/architecture-plan.md` §3.2, §3.6, §4.3, §4.4 and §7 WP1.
 
@@ -32,6 +36,8 @@
 
 pub mod annotations;
 pub mod autofit;
+pub mod cellstyles;
+pub mod charts;
 pub mod clipboard;
 pub mod condfmt;
 pub mod convert;
@@ -48,15 +54,22 @@ pub mod moves;
 pub mod names;
 pub mod ops;
 pub mod ops_v03;
+pub mod ops_v04;
+pub mod ops_v05;
+pub mod outline;
 pub mod pagesetup;
+pub mod pivot;
+pub mod print;
 pub mod protection;
 pub mod r1c1;
 pub mod recalc;
+pub mod scenarios;
 pub mod service;
 pub mod sort;
 pub mod storage;
 pub mod structure;
 pub mod styles;
+pub mod tools;
 pub mod undo;
 pub mod units;
 pub mod validation;

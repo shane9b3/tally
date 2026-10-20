@@ -1469,10 +1469,7 @@ pub(crate) fn parse_page_layout<R: BufRead>(
                                 height: y.unwrap_or(0),
                             })
                         } else if let Some(n) = pages {
-                            Some(PageScaleData::FitTo {
-                                width: n,
-                                height: n,
-                            })
+                            Some(PageScaleData::FitPages(n.clamp(1, 1000)))
                         } else {
                             pct.map(|v| PageScaleData::Percent((v.round() as u32).clamp(10, 400)))
                         };
@@ -1780,6 +1777,9 @@ pub(crate) fn write_page_layout(s: &mut String, layout: &str, p: &PageSetupData)
                 s,
                 r#" loext:scale-to-X="{width}" loext:scale-to-Y="{height}""#
             );
+        }
+        PageScaleData::FitPages(pages) => {
+            let _ = write!(s, r#" style:scale-to-pages="{pages}""#);
         }
     }
     let centering = match (p.center_h, p.center_v) {

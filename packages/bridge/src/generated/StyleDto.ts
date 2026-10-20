@@ -2,6 +2,7 @@
 import type { BordersDto } from "./BordersDto";
 import type { DisplayDto } from "./DisplayDto";
 import type { HAlign } from "./HAlign";
+import type { UnderlineStyle } from "./UnderlineStyle";
 import type { VAlign } from "./VAlign";
 
 /**
@@ -71,4 +72,26 @@ numberFormat: string,
 /**
  * Special display treatment.
  */
-display: DisplayDto | null, };
+display: DisplayDto | null, 
+/**
+ * Text rotation in degrees counter-clockwise, `-90..=90`; absent or
+ * `null` = 0 (v0.4).
+ */
+rotationDeg?: number | null, 
+/**
+ * Vertically stacked characters (v0.4).
+ */
+stacked?: boolean | null, 
+/**
+ * Shrink the text to fit the cell (v0.4).
+ */
+shrinkToFit?: boolean | null, 
+/**
+ * Underline style, when `underline` is set; absent = single (v0.4).
+ */
+underlineStyle?: UnderlineStyle | null, 
+/**
+ * The named cell style the cell is based on; absent = `Default`
+ * (v0.4).
+ */
+styleName?: string | null, };

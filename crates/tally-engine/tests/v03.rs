@@ -554,6 +554,7 @@ fn notes_follow_cells() {
         }],
         has_header: false,
         case_sensitive: false,
+        options: None,
     }]);
     assert_eq!(f.svc.note(f.doc, s, 1, 0).unwrap().unwrap().text, "on b");
     round_trip(
@@ -990,6 +991,7 @@ fn sort_keeps_relative_references_relative() {
         }],
         has_header: false,
         case_sensitive: false,
+        options: None,
     }]);
     // Row 1 (A=2, B=D1) moved to row 2 and now reads D2 (AOO SwapRow).
     let edit = |a: &str| {

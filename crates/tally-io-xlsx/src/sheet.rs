@@ -222,15 +222,40 @@ pub(crate) fn parse_sheet<R: BufRead>(
                     }
                     xr.skip()?;
                 }
-                "sheetView" => {}
+                "sheetView" => {
+                    // TODO(W5-2): `showFormulas`, `showZeros`,
+                    // `showGridLines`, `showRowColHeaders` →
+                    // `SheetData::view_options`.
+                }
                 "pane" => {
+                    // TODO(W5-2): a non-frozen pane (`state` absent or
+                    // "split") → `SheetData::split` (twips → hmm).
                     st.pane(&e);
+                    xr.skip()?;
+                }
+                "drawing" | "legacyDrawing" | "picture" => {
+                    // TODO(W5-1): sheet rels `drawing` →
+                    // `xdr:twoCellAnchor`/`oneCellAnchor`/`absoluteAnchor`
+                    // (1 hmm = 360 EMU) → `c:chart r:id` →
+                    // `xl/charts/chartN.xml` (chart_read.rs) or `a:blip`
+                    // pictures; resolved only through the rels helpers.
+                    xr.skip()?;
+                }
+                "scenarios" => {
+                    // TODO(W5-2): `scenario` with `inputCells` →
+                    // `SheetData::scenarios`.
+                    xr.skip()?;
+                }
+                "outlinePr" => {
+                    // TODO(W5-2): `summaryBelow`/`summaryRight`.
                     xr.skip()?;
                 }
                 "col" => {
                     st.col(&e);
                     xr.skip()?;
                 }
+                // TODO(W5-2): `outlineLevel`/`collapsed` on `row` and `col`
+                // → `SheetData::row_groups`/`col_groups`.
                 "row" => st.row_start(&e),
                 "c" => st.cell(xr, &e)?,
                 "mergeCell" => {

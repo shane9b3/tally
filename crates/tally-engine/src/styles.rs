@@ -6,9 +6,11 @@ use std::sync::Arc;
 
 use tally_api::{
     BorderEdgePatch, BorderLineDto, BorderStyleDto, BordersDto, BordersPatch, DisplayDto,
-    HAlign as ApiHAlign, StyleDto, StylePatch, VAlign as ApiVAlign,
+    HAlign as ApiHAlign, StyleDto, StylePatch, UnderlineStyle, VAlign as ApiVAlign,
 };
-use tally_model::{BorderLine, BorderStyle, DisplayData, HAlign, StyleData, VAlign};
+use tally_model::{
+    BorderLine, BorderStyle, DisplayData, HAlign, StyleData, UnderlineStyleData, VAlign,
+};
 use tally_numfmt::{parse_format, FormatAst, SectionKind};
 use tally_types::CellRange;
 
@@ -178,6 +180,27 @@ impl StyleTable {
         self.intern(d)
     }
 
+    /// The style `id` with its diagonal borders replaced (`None` = left
+    /// unchanged; `line: None` removes the diagonal) (v0.4).
+    pub fn with_diagonals(
+        &mut self,
+        id: StyleId,
+        down: Option<&BorderEdgePatch>,
+        up: Option<&BorderEdgePatch>,
+    ) -> StyleId {
+        if down.is_none() && up.is_none() {
+            return id;
+        }
+        let mut d = self.get(id).data.clone();
+        if let Some(e) = down {
+            d.borders.diagonal_down = e.line.as_ref().map(border_from_dto);
+        }
+        if let Some(e) = up {
+            d.borders.diagonal_up = e.line.as_ref().map(border_from_dto);
+        }
+        self.intern(d)
+    }
+
     /// The style `id` with number format `code`.
     pub fn with_format(&mut self, id: StyleId, code: &str) -> StyleId {
         let mut d = self.get(id).data.clone();
@@ -223,11 +246,47 @@ pub fn style_dto(id: u32, d: &StyleData, format_code: &str) -> StyleDto {
             bottom: d.borders.bottom.as_ref().map(border_dto),
             left: d.borders.left.as_ref().map(border_dto),
             right: d.borders.right.as_ref().map(border_dto),
+            diagonal_down: d.borders.diagonal_down.as_ref().map(border_dto),
+            diagonal_up: d.borders.diagonal_up.as_ref().map(border_dto),
         },
         number_format: format_code.to_string(),
         display: d.display.as_ref().map(|x| match x {
             DisplayData::Chip { bg, fg } => DisplayDto::Chip { bg: *bg, fg: *fg },
         }),
+        rotation_deg: (d.align.rotation_deg != 0).then_some(d.align.rotation_deg),
+        stacked: d.align.stacked.then_some(true),
+        shrink_to_fit: d.align.shrink_to_fit.then_some(true),
+        underline_style: (d.font.underline && d.font.underline_style != UnderlineStyleData::Single)
+            .then(|| underline_dto(d.font.underline_style)),
+        style_name: d.style_name.clone(),
+    }
+}
+
+/// Model underline style → API.
+pub fn underline_dto(u: UnderlineStyleData) -> UnderlineStyle {
+    match u {
+        UnderlineStyleData::Single => UnderlineStyle::Single,
+        UnderlineStyleData::Double => UnderlineStyle::Double,
+        UnderlineStyleData::SingleAccounting => UnderlineStyle::SingleAccounting,
+        UnderlineStyleData::DoubleAccounting => UnderlineStyle::DoubleAccounting,
+        UnderlineStyleData::Dotted => UnderlineStyle::Dotted,
+        UnderlineStyleData::Dashed => UnderlineStyle::Dashed,
+        UnderlineStyleData::Wave => UnderlineStyle::Wave,
+        UnderlineStyleData::Bold => UnderlineStyle::Bold,
+    }
+}
+
+/// API underline style → model.
+pub fn underline_from_dto(u: UnderlineStyle) -> UnderlineStyleData {
+    match u {
+        UnderlineStyle::Single => UnderlineStyleData::Single,
+        UnderlineStyle::Double => UnderlineStyleData::Double,
+        UnderlineStyle::SingleAccounting => UnderlineStyleData::SingleAccounting,
+        UnderlineStyle::DoubleAccounting => UnderlineStyleData::DoubleAccounting,
+        UnderlineStyle::Dotted => UnderlineStyleData::Dotted,
+        UnderlineStyle::Dashed => UnderlineStyleData::Dashed,
+        UnderlineStyle::Wave => UnderlineStyleData::Wave,
+        UnderlineStyle::Bold => UnderlineStyleData::Bold,
     }
 }
 
@@ -299,12 +358,20 @@ pub fn apply_borders(wb: &mut crate::workbook::Workbook, range: CellRange, b: &B
             } else {
                 b.inner_v.as_ref()
             };
-            if top.is_none() && bottom.is_none() && left.is_none() && right.is_none() {
+            let (down, up) = (b.diagonal_down.as_ref(), b.diagonal_up.as_ref());
+            if top.is_none()
+                && bottom.is_none()
+                && left.is_none()
+                && right.is_none()
+                && down.is_none()
+                && up.is_none()
+            {
                 continue;
             }
             let sub = CellRange::new(range.sheet, r0, c0, r1, c1);
             crate::ops::map_styles(wb, sub, |t, old| {
-                t.with_borders(old, [top, bottom, left, right])
+                let id = t.with_borders(old, [top, bottom, left, right]);
+                t.with_diagonals(id, down, up)
             });
         }
     }
@@ -358,6 +425,23 @@ pub fn apply_patch(d: &mut StyleData, p: &StylePatch) {
     if let Some(v) = &p.number_format {
         d.number_format = Some(v.clone());
     }
+    // v0.4 format-cells extras.
+    if let Some(v) = p.rotation_deg {
+        d.align.rotation_deg = v.clamp(-90, 90);
+    }
+    if let Some(v) = p.stacked {
+        d.align.stacked = v;
+    }
+    if let Some(v) = p.shrink_to_fit {
+        d.align.shrink_to_fit = v;
+    }
+    if let Some(v) = p.indent {
+        d.align.indent = v;
+    }
+    if let Some(u) = p.underline_style {
+        d.font.underline = true;
+        d.font.underline_style = underline_from_dto(u);
+    }
 }
 
 #[cfg(test)]
@@ -383,6 +467,7 @@ mod tests {
                 ..line.clone()
             })),
             inner_v: None,
+            ..Default::default()
         };
         let range = CellRange::new(1, 0, 0, 2, 1);
         apply_borders(&mut wb, range, &patch);

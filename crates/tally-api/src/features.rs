@@ -672,6 +672,12 @@ pub enum PageScale {
         /// Pages tall.
         height: u32,
     },
+    /// Fit the print range into this many pages in total (AOO "Fit print
+    /// range(s) on number of pages"; v0.4).
+    FitPages {
+        /// Pages.
+        pages: u32,
+    },
 }
 
 /// Margins in millimetres.
@@ -759,6 +765,22 @@ pub struct PageSetupDto {
     /// Manual column breaks (read-only here).
     #[serde(default)]
     pub col_breaks: Vec<u32>,
+    /// Print charts and pictures (absent = `true`; v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub print_charts: Option<bool>,
+    /// How notes are printed (absent = not printed; v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub print_notes: Option<crate::print::NotesPrint>,
+    /// Print zero values (absent = `true`; v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub print_zero_values: Option<bool>,
+    /// Print formulas instead of results (absent = `false`; v0.4).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub print_formulas: Option<bool>,
 }
 
 /// Axis of a manual page break.

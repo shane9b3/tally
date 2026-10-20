@@ -49,6 +49,7 @@ fn styles() -> Vec<StyleData> {
                 family: Some("Arial".into()),
                 size_pt: Some(14.0),
                 color: Some(0x1122_33ff),
+                ..Default::default()
             },
             fill: Some(0xffee_ddff),
             align: AlignData {
@@ -56,6 +57,7 @@ fn styles() -> Vec<StyleData> {
                 v: VAlign::Middle,
                 wrap: true,
                 indent: 1,
+                ..Default::default()
             },
             borders: BordersData {
                 top: Some(BorderLine {
@@ -78,10 +80,12 @@ fn styles() -> Vec<StyleData> {
                     width_hmm: 53,
                     color: 0x0000_ffff,
                 }),
+                ..Default::default()
             },
             number_format: Some("#,##0.00".into()),
             display: None,
             protection: None,
+            ..Default::default()
         },
         // 1: date.
         StyleData {

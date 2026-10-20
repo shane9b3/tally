@@ -15,4 +15,8 @@ width: number,
 /**
  * Pages tall.
  */
-height: number, };
+height: number, } | { "type": "fitPages", 
+/**
+ * Pages.
+ */
+pages: number, };

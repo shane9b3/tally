@@ -21,6 +21,14 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tally_types::{CalcSettings, Value};
 
+pub mod charts;
+pub mod pivot;
+pub mod tools;
+
+pub use charts::*;
+pub use pivot::*;
+pub use tools::*;
+
 /// Longest number format code kept (characters). Readers replace longer
 /// codes with General and add a warning; the engine refuses longer codes
 /// in `SetNumberFormat` (security review 2, HIGH-4: a 1 MB code made every
@@ -51,6 +59,10 @@ pub struct WorkbookData {
     /// (shown to the user once when the file opens). Writers ignore it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Named cell styles with their parent chains (v0.4). Empty means only
+    /// the built-in `Default`.
+    #[serde(default)]
+    pub cell_styles: Vec<CellStyleData>,
 }
 
 /// One sheet.
@@ -116,6 +128,40 @@ pub struct SheetData {
     /// Manual page breaks before these columns (sorted).
     #[serde(default)]
     pub col_breaks: Vec<u32>,
+    /// Charts anchored on this sheet (v0.4, W5-1).
+    #[serde(default)]
+    pub charts: Vec<ChartData>,
+    /// Pictures anchored on this sheet (v0.4, W5-1).
+    #[serde(default)]
+    pub images: Vec<ImageData>,
+    /// DataPilot tables whose output is on this sheet (v0.5, W5-2).
+    #[serde(default)]
+    pub pivots: Vec<PivotData>,
+    /// Row outline groups (v0.5).
+    #[serde(default)]
+    pub row_groups: Vec<OutlineGroupData>,
+    /// Column outline groups (v0.5).
+    #[serde(default)]
+    pub col_groups: Vec<OutlineGroupData>,
+    /// Scenarios of this (base) sheet (v0.5).
+    #[serde(default)]
+    pub scenarios: Vec<ScenarioData>,
+    /// Named database ranges on this sheet (v0.5).
+    #[serde(default)]
+    pub database_ranges: Vec<DatabaseRangeData>,
+    /// The standard/advanced filter of the anonymous database range (the
+    /// AutoFilter area), if one is set (v0.5).
+    #[serde(default)]
+    pub standard_filter: Option<StandardFilterData>,
+    /// The Data ▸ Subtotals definition, kept for "Remove" (v0.5).
+    #[serde(default)]
+    pub subtotals: Option<SubtotalsData>,
+    /// View toggles; `None` for the defaults (v0.5).
+    #[serde(default)]
+    pub view_options: Option<ViewOptionsData>,
+    /// Window ▸ Split position (v0.5).
+    #[serde(default)]
+    pub split: Option<SplitData>,
 }
 
 // ---------------------------------------------------------------------------
@@ -829,6 +875,9 @@ pub enum PageScaleData {
         /// Pages tall.
         height: u32,
     },
+    /// Fit the print range into this many pages in total (ODS
+    /// `style:scale-to-pages`; v0.4).
+    FitPages(u32),
 }
 
 impl Default for PageScaleData {
@@ -930,6 +979,22 @@ pub struct PageSetupData {
     pub page_order: PageOrderData,
     /// First page number (`None`: continue / 1).
     pub first_page_number: Option<u32>,
+    /// Print charts and pictures (v0.4; AOO default `true`).
+    #[serde(default = "default_true")]
+    pub print_charts: bool,
+    /// How notes are printed (v0.4).
+    #[serde(default)]
+    pub print_notes: NotesPrintData,
+    /// Print zero values (v0.4; default `true`).
+    #[serde(default = "default_true")]
+    pub print_zero_values: bool,
+    /// Print formulas instead of results (v0.4).
+    #[serde(default)]
+    pub print_formulas: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for PageSetupData {
@@ -956,6 +1021,10 @@ impl Default for PageSetupData {
             center_v: false,
             page_order: PageOrderData::TopToBottom,
             first_page_number: None,
+            print_charts: true,
+            print_notes: NotesPrintData::None,
+            print_zero_values: true,
+            print_formulas: false,
         }
     }
 }
@@ -1111,6 +1180,10 @@ pub struct StyleData {
     /// Cell protection; `None` is the default (locked, formula visible).
     #[serde(default)]
     pub protection: Option<CellProtectionData>,
+    /// The named cell style this style is based on (`None` = `Default`);
+    /// see [`WorkbookData::cell_styles`] (v0.4).
+    #[serde(default)]
+    pub style_name: Option<String>,
 }
 
 /// Font attributes.
@@ -1130,6 +1203,9 @@ pub struct FontData {
     pub size_pt: Option<f32>,
     /// Text colour (`0xRRGGBBAA`), or `None` for automatic.
     pub color: Option<u32>,
+    /// Underline style, used when `underline` is set (v0.4).
+    #[serde(default)]
+    pub underline_style: UnderlineStyleData,
 }
 
 /// Horizontal alignment.
@@ -1171,6 +1247,16 @@ pub struct AlignData {
     pub wrap: bool,
     /// Indent level.
     pub indent: u8,
+    /// Text rotation in degrees counter-clockwise, `-90..=90` (ODS
+    /// `style:rotation-angle`, XLSX `textRotation`); `0` = none (v0.4).
+    #[serde(default)]
+    pub rotation_deg: i16,
+    /// Vertically stacked characters (v0.4).
+    #[serde(default)]
+    pub stacked: bool,
+    /// Shrink the text to fit the cell (v0.4).
+    #[serde(default)]
+    pub shrink_to_fit: bool,
 }
 
 /// Line style of a border.
@@ -1209,6 +1295,14 @@ pub struct BordersData {
     pub left: Option<BorderLine>,
     /// Right border.
     pub right: Option<BorderLine>,
+    /// Diagonal from the top-left to the bottom-right corner (ODS
+    /// `style:diagonal-tl-br`, XLSX `diagonalDown`; v0.4).
+    #[serde(default)]
+    pub diagonal_down: Option<BorderLine>,
+    /// Diagonal from the bottom-left to the top-right corner (ODS
+    /// `style:diagonal-bl-tr`, XLSX `diagonalUp`; v0.4).
+    #[serde(default)]
+    pub diagonal_up: Option<BorderLine>,
 }
 
 /// Special display styles.
@@ -1254,6 +1348,10 @@ pub struct DocSettings {
     /// renamed, moved or hidden); `None` when not protected.
     #[serde(default)]
     pub structure_protection: Option<SheetProtectionData>,
+    /// Custom sort lists (Tools ▸ Options ▸ Sort Lists), each a list of
+    /// entries in order (v0.5).
+    #[serde(default)]
+    pub custom_sort_lists: Vec<Vec<String>>,
 }
 
 /// Document metadata. Timestamps are ISO 8601 strings as stored in the file.
@@ -1331,12 +1429,20 @@ mod tests {
                 v: VAlign::Middle,
                 wrap: true,
                 indent: 1,
+                rotation_deg: 45,
+                stacked: false,
+                shrink_to_fit: true,
             },
             borders: BordersData {
                 bottom: Some(BorderLine {
                     style: BorderStyle::Double,
                     width_hmm: 26,
                     color: 0x0000_00ff,
+                }),
+                diagonal_down: Some(BorderLine {
+                    style: BorderStyle::Dashed,
+                    width_hmm: 26,
+                    color: 0xff00_00ff,
                 }),
                 ..BordersData::default()
             },
@@ -1349,6 +1455,7 @@ mod tests {
                 locked: false,
                 ..CellProtectionData::default()
             }),
+            style_name: Some("Heading".into()),
         };
         let sheet1 =
             SheetData {
@@ -1515,14 +1622,193 @@ mod tests {
                 protection: Some(SheetProtectionData::default()),
                 page_setup: Some(PageSetupData {
                     orientation: OrientationData::Landscape,
-                    scale: PageScaleData::FitTo {
-                        width: 1,
-                        height: 0,
-                    },
+                    scale: PageScaleData::FitPages(3),
+                    print_formulas: true,
+                    print_notes: NotesPrintData::AtEnd,
                     ..PageSetupData::default()
                 }),
                 row_breaks: vec![20],
                 col_breaks: vec![],
+                charts: vec![ChartData {
+                    name: "Object 1".into(),
+                    kind: ChartKindData::Line,
+                    stacking: StackingData::Percent,
+                    title: Some("Sales".into()),
+                    categories: Some(ChartRangeData {
+                        areas: vec![(
+                            0,
+                            CellRangeLocal {
+                                r0: 1,
+                                c0: 0,
+                                r1: 5,
+                                c1: 0,
+                            },
+                        )],
+                        invalid: false,
+                    }),
+                    series: vec![ChartSeriesData {
+                        name: Some(SeriesNameData::Text("Q1".into())),
+                        values: ChartRangeData {
+                            areas: vec![(
+                                0,
+                                CellRangeLocal {
+                                    r0: 1,
+                                    c0: 1,
+                                    r1: 5,
+                                    c1: 1,
+                                },
+                            )],
+                            invalid: false,
+                        },
+                        trend: Some(TrendLineData {
+                            kind: TrendKindData::Exponential,
+                            show_equation: true,
+                            show_r2: true,
+                            name: None,
+                        }),
+                        error_bars: Some(ErrorBarsData {
+                            kind: ErrorBarKindData::StdDev { k: 1.5 },
+                            direction: ErrorBarDirData::Plus,
+                        }),
+                        ..ChartSeriesData::default()
+                    }],
+                    y2_axis: Some(ChartAxisData {
+                        log: true,
+                        min: Some(1.0),
+                        ..ChartAxisData::default()
+                    }),
+                    ..ChartData::default()
+                }],
+                images: vec![ImageData {
+                    name: "Image 1".into(),
+                    anchor: ChartAnchorData {
+                        row: 2,
+                        col: 3,
+                        width_hmm: 1000,
+                        height_hmm: 500,
+                        ..ChartAnchorData::default()
+                    },
+                    mime: "image/png".into(),
+                    bytes: vec![0x89, 0x50, 0x4e, 0x47],
+                }],
+                pivots: vec![PivotData {
+                    name: "DataPilot1".into(),
+                    source: PivotSourceData::Range {
+                        sheet: 0,
+                        range: CellRangeLocal {
+                            r0: 0,
+                            c0: 0,
+                            r1: 24,
+                            c1: 5,
+                        },
+                    },
+                    target: (30, 0),
+                    row_fields: vec![PivotFieldData {
+                        source_col: 0,
+                        name: "Region".into(),
+                        sort: PivotSortData::Data {
+                            data_field: 0,
+                            ascending: false,
+                        },
+                        group: Some(PivotGroupData::Date {
+                            start: None,
+                            end: None,
+                            parts: vec![DatePartData::Months, DatePartData::Days(7)],
+                        }),
+                        ..PivotFieldData::default()
+                    }],
+                    data_fields: vec![PivotDataFieldData {
+                        source_col: 5,
+                        function: AggFnData::StDevP,
+                        caption: None,
+                        show_as: Some(ShowAsData {
+                            kind: ShowAsKindData::PercentOfColumn,
+                            base_field: None,
+                            base_item: Some(BaseItemData::Previous),
+                        }),
+                    }],
+                    ..PivotData::default()
+                }],
+                row_groups: vec![OutlineGroupData {
+                    start: 1,
+                    end: 4,
+                    level: 1,
+                    collapsed: true,
+                }],
+                col_groups: vec![],
+                scenarios: vec![ScenarioData {
+                    name: "Best case".into(),
+                    ranges: vec![CellRangeLocal {
+                        r0: 0,
+                        c0: 0,
+                        r1: 0,
+                        c1: 0,
+                    }],
+                    cells: vec![CellData {
+                        row: 0,
+                        col: 0,
+                        content: CellContentData::Value(Value::Number(9.0)),
+                        style: None,
+                    }],
+                    border_color: Some(0x00ff_00ff),
+                    active: true,
+                    ..ScenarioData::default()
+                }],
+                database_ranges: vec![DatabaseRangeData {
+                    name: "Orders".into(),
+                    range: CellRangeLocal {
+                        r0: 0,
+                        c0: 0,
+                        r1: 9,
+                        c1: 2,
+                    },
+                    has_header: true,
+                    filter_buttons: false,
+                    filter: None,
+                    subtotals: Some(SubtotalsData {
+                        range: CellRangeLocal {
+                            r0: 0,
+                            c0: 0,
+                            r1: 9,
+                            c1: 2,
+                        },
+                        groups: vec![SubtotalGroupData {
+                            group_by: 0,
+                            columns: vec![2],
+                            function: AggFnData::Sum,
+                        }],
+                        ..SubtotalsData::default()
+                    }),
+                }],
+                standard_filter: Some(StandardFilterData {
+                    range: CellRangeLocal {
+                        r0: 0,
+                        c0: 0,
+                        r1: 9,
+                        c1: 2,
+                    },
+                    conditions: vec![StdConditionData {
+                        connector: StdConnectorData::Or,
+                        col: 1,
+                        op: StdFilterOpData::LargestPct,
+                        value: "10".into(),
+                    }],
+                    options: StdFilterOptionsData {
+                        regex: true,
+                        copy_to: Some((1, 0, 0)),
+                        ..StdFilterOptionsData::default()
+                    },
+                    criteria: None,
+                }),
+                subtotals: None,
+                view_options: Some(ViewOptionsData {
+                    show_formulas: true,
+                    ..ViewOptionsData::default()
+                }),
+                split: Some(SplitData {
+                    x_hmm: 5000,
+                    y_hmm: 0,
+                }),
             };
         WorkbookData {
             sheets: vec![
@@ -1547,6 +1833,7 @@ mod tests {
                 },
                 locale: Some("de-DE".into()),
                 structure_protection: None,
+                custom_sort_lists: vec![vec!["Q1".into(), "Q2".into()]],
             },
             meta: DocMeta {
                 title: Some("Sample".into()),
@@ -1560,6 +1847,19 @@ mod tests {
                 last_author: None,
             },
             warnings: Vec::new(),
+            cell_styles: vec![CellStyleData {
+                name: "Heading".into(),
+                parent: Some("Default".into()),
+                style: StyleData {
+                    font: FontData {
+                        bold: true,
+                        underline: true,
+                        underline_style: UnderlineStyleData::Double,
+                        ..FontData::default()
+                    },
+                    ..StyleData::default()
+                },
+            }],
         }
     }
 
@@ -1595,6 +1895,56 @@ mod tests {
         )
         .unwrap();
         assert!(s.notes.is_empty() && s.protection.is_none());
+        // A v0.3 sheet and style without any of the v0.4 fields.
+        assert!(s.charts.is_empty() && s.pivots.is_empty() && s.split.is_none());
+        let st: StyleData = serde_json::from_str(
+            r#"{"font":{"bold":false,"italic":false,"underline":false,"strike":false,
+                "family":null,"size_pt":null,"color":null},"fill":null,
+                "align":{"h":"General","v":"Bottom","wrap":false,"indent":0},
+                "borders":{"top":null,"bottom":null,"left":null,"right":null},
+                "number_format":null,"display":null}"#,
+        )
+        .unwrap();
+        assert_eq!(st, StyleData::default());
+        let p: PageSetupData = serde_json::from_value(serde_json::json!({
+            "orientation": "Portrait", "paper": "A4",
+            "margins": MarginsData::default(), "scale": {"Percent": 100},
+            "print_range": null, "repeat_rows": null, "repeat_cols": null,
+            "header": null, "footer": null, "print_gridlines": false,
+            "print_headers": false, "center_h": false, "center_v": false,
+            "page_order": "TopToBottom", "first_page_number": null
+        }))
+        .unwrap();
+        assert!(p.print_charts && p.print_zero_values && !p.print_formulas);
+        assert_eq!(p.print_notes, NotesPrintData::None);
+    }
+
+    #[test]
+    fn v04_fields_round_trip_and_default_off() {
+        let wb = sample();
+        let s = &wb.sheets[0];
+        assert_eq!(s.charts.len(), 1);
+        let json = serde_json::to_string(&wb).unwrap();
+        let back: WorkbookData = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.sheets[0].charts, s.charts);
+        assert_eq!(back.sheets[0].pivots, s.pivots);
+        assert_eq!(back.sheets[0].scenarios, s.scenarios);
+        assert_eq!(back.cell_styles, wb.cell_styles);
+        assert_eq!(
+            back.settings.custom_sort_lists,
+            wb.settings.custom_sort_lists
+        );
+        assert_eq!(back.styles[0].align.rotation_deg, 45);
+        assert!(back.styles[0].borders.diagonal_down.is_some());
+        // Chart defaults match AOO: 16 × 9 cm, legend right, Y major grid.
+        let c = ChartData::default();
+        assert_eq!((c.anchor.width_hmm, c.anchor.height_hmm), (16_000, 9_000));
+        assert_eq!(c.legend, LegendPosData::Right);
+        assert!(c.y_axis.major_grid && !c.x_axis.major_grid);
+        assert!(ChartRangeData::default().is_unset());
+        // Older SheetData JSON without any v0.4 field still loads.
+        let sd: SheetData = serde_json::from_str(r#"{"name":"A","cells":[],"col_widths":[],"row_heights":[],"merges":[],"frozen":null,"tab_color":null,"hidden":false}"#).unwrap();
+        assert_eq!(sd.view_options, None);
     }
 
     #[test]

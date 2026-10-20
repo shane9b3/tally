@@ -165,6 +165,24 @@ impl ParamKind {
         )
     }
 
+    /// The kind's name as serialized in [`crate::ParamMeta::kind`]
+    /// (`"number"`, `"numberSeq"`, `"reference"`, …).
+    pub const fn name(self) -> &'static str {
+        match self {
+            ParamKind::Number => "number",
+            ParamKind::Integer => "integer",
+            ParamKind::Text => "text",
+            ParamKind::Bool => "bool",
+            ParamKind::Any => "any",
+            ParamKind::NumberSeq => "numberSeq",
+            ParamKind::ValueSeq => "valueSeq",
+            ParamKind::Reference => "reference",
+            ParamKind::Array => "array",
+            ParamKind::Criteria => "criteria",
+            ParamKind::Lazy => "lazy",
+        }
+    }
+
     /// `true` for kinds that are lifted elementwise in array context.
     pub const fn is_liftable(self) -> bool {
         matches!(
@@ -311,6 +329,11 @@ pub struct FunctionDef {
     pub eval: EvalFn,
     /// One-line description (long docs live in `docs/functions`).
     pub help: &'static str,
+    /// One realistic example call in the en-US UI dialect, e.g.
+    /// `=SUMIF(A1:A10;">5";B1:B10)`, for the Function Wizard. Filled from
+    /// the generated table in `categories/examples.rs` (see
+    /// `docs/functions/wizard-metadata.md`); `""` until then.
+    pub example: &'static str,
 }
 
 impl FunctionDef {
@@ -353,6 +376,7 @@ impl FunctionDef {
             extension: false,
             eval,
             help: "",
+            example: "",
         }
     }
 
@@ -396,6 +420,12 @@ impl FunctionDef {
     /// Sets the one-line help text.
     pub const fn help(mut self, help: &'static str) -> Self {
         self.help = help;
+        self
+    }
+
+    /// Sets the example call (`=NAME(...)` in the en-US UI dialect).
+    pub const fn example(mut self, example: &'static str) -> Self {
+        self.example = example;
         self
     }
 
@@ -540,6 +570,21 @@ impl Registry {
             self.by_ooxml.remove(&old.to_ascii_uppercase());
         }
         Self::insert(&mut self.by_ooxml, &mut self.conflicts, "ooxml", ooxml, id);
+    }
+
+    /// Sets the example call of the function registered as `name`. An
+    /// unknown `name` is recorded as a conflict in the `"example"` table
+    /// (a stale generated table; the registry tests catch it).
+    pub(crate) fn set_example(&mut self, name: &str, example: &'static str) {
+        match self.lookup(name) {
+            Some(id) => self.defs[id.0 as usize].example = example,
+            None => self.conflicts.push(NameConflict {
+                table: "example",
+                name: name.to_ascii_uppercase(),
+                kept: FuncId(u32::MAX),
+                rejected: FuncId(u32::MAX),
+            }),
+        }
     }
 
     /// Name clashes seen during registration (should be empty).

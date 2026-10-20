@@ -270,6 +270,7 @@ fn sample() -> WorkbookData {
             center_v: false,
             page_order: PageOrderData::LeftToRight,
             first_page_number: Some(3),
+            ..Default::default()
         }),
         row_breaks: vec![20, 40],
         col_breaks: vec![5],

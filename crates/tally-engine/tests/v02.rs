@@ -498,6 +498,7 @@ fn sort_rows() {
             }],
             has_header: true,
             case_sensitive: false,
+            options: None,
         }],
     );
     let col = |f: &Fixture, c: &str| -> Vec<Value> {
@@ -528,6 +529,7 @@ fn sort_rows() {
         }],
         has_header: false,
         case_sensitive: false,
+        options: None,
     }]);
     assert_eq!(
         col(&f, "A")[1..].to_vec(),
@@ -555,6 +557,7 @@ fn sort_rows() {
                 }],
                 has_header: false,
                 case_sensitive: false,
+                options: None,
             }]
         ),
         "merged"
@@ -820,6 +823,8 @@ fn borders_patch_and_ods() {
             right: edge.clone(),
             inner_h: None,
             inner_v: edge,
+            diagonal_down: None,
+            diagonal_up: None,
         }),
         ..StylePatch::default()
     };

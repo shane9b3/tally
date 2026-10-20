@@ -174,6 +174,33 @@ pub trait EvalContext {
         let _ = (sheet, row);
         false
     }
+
+    /// MULTIPLE.OPERATIONS (wave 5): the value of the formula cell
+    /// `formula` when each cell in `subs` temporarily holds the paired
+    /// value. The engine re-evaluates the precedent chain from the
+    /// substituted cells to `formula` in a sandbox, without changing the
+    /// document (capped at 10,000 calls per recalc). The default, `None`,
+    /// means the host has no table-operation sandbox; the function then
+    /// returns `Err:504`.
+    fn table_op(&mut self, formula: CellAddr, subs: &[(CellAddr, Value)]) -> Option<Value> {
+        let _ = (formula, subs);
+        None
+    }
+
+    /// GETPIVOTDATA (wave 5): the value of data field `field` of the pivot
+    /// table whose output contains `at`, restricted by `filters`
+    /// (`(field name, item name)` pairs). `None` when no pivot output
+    /// contains `at` or the host has no pivot tables; the function then
+    /// returns `#REF!`.
+    fn pivot_data(
+        &mut self,
+        at: CellAddr,
+        field: &str,
+        filters: &[(String, String)],
+    ) -> Option<Value> {
+        let _ = (at, field, filters);
+        None
+    }
 }
 
 /// The arguments of one call, evaluated on demand by the engine.
