@@ -9,6 +9,7 @@ use tally_types::{CellAddr, DateEpoch, IterSettings};
 use crate::archive::Package;
 use crate::formula::{excel_name_to_of, XlsxResolver};
 use crate::sheet::{parse_sheet, Budget, SheetCtx};
+use crate::sheet_v03::MAX_LINKS_PER_SHEET;
 use crate::sst::parse_sst;
 use crate::styles::{parse_styles, StyleTable};
 use crate::workbook::{
@@ -47,7 +48,8 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
         .with_entry("_rels/.rels", other, |r| {
             parse_rels(&mut XmlReader::new(r, xl), "")
         })?
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .list;
     let candidates: Vec<String> = root_rels
         .iter()
         .filter(|r| r.is("officeDocument"))
@@ -68,7 +70,8 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
         .with_entry(&rels_path(&wb_path), other, |r| {
             parse_rels(&mut XmlReader::new(r, xl), &dir)
         })?
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .list;
     let rel_target = |kind: &str, default: &str| {
         rels.iter()
             .find(|r| r.is(kind))
@@ -119,48 +122,94 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
         let (mut sheet, extras) = parsed.unwrap_or_default();
         sheet.page_setup = extras.page.build();
         // The sheet's own relationships: hyperlink targets and comments.
-        let sheet_rels: Vec<Rel> = match &target {
+        let sheet_rels = match &target {
             Some(t) => pkg
                 .with_entry(&rels_path(t), other, |r| {
                     parse_rels(&mut XmlReader::new(r, xl), part_dir(t))
                 })?
                 .unwrap_or_default(),
-            None => Vec::new(),
+            None => Default::default(),
         };
-        for (range, rid, location) in extras.links {
-            let url = match (&rid, &location) {
-                (Some(id), _) => sheet_rels
-                    .iter()
-                    .find(|r| r.id == *id && r.external)
-                    .map(|r| r.target.clone()),
-                (None, Some(loc)) => Some(format!("#{}", loc.replacen('!', ".", 1))),
+        if sheet_rels.dropped > 0 {
+            budget.warn(format!(
+                "Hyperlink targets longer than {} bytes were dropped.",
+                crate::workbook::MAX_REL_TARGET
+            ));
+        }
+        // Relationship id → external target (MEDIUM-6: one hash lookup
+        // per link instead of a scan of every relationship).
+        let external: std::collections::HashMap<&str, &str> = sheet_rels
+            .list
+            .iter()
+            .filter(|r| r.external)
+            .map(|r| (r.id.as_str(), r.target.as_str()))
+            .collect();
+        // Links are expanded to one entry per cell of their `ref`; every
+        // cell counts against the cell budget, at most 10,000 per ref and
+        // MAX_LINKS_PER_SHEET per sheet (HIGH-3), and the URL is shared.
+        let mut seen: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+        let mut links_capped = false;
+        'links: for (range, rid, location) in extras.links {
+            let url: Option<Arc<str>> = match (&rid, &location) {
+                (Some(id), None) => external.get(id.as_str()).map(|t| Arc::from(*t)),
+                (Some(id), Some(loc)) => external
+                    .get(id.as_str())
+                    .map(|t| Arc::from(format!("{t}#{loc}"))),
+                (None, Some(loc)) => Some(Arc::from(format!("#{}", loc.replacen('!', ".", 1)))),
                 (None, None) => None,
             };
-            let Some(mut url) = url else { continue };
-            if let (Some(_), Some(loc)) = (&rid, &location) {
-                url = format!("{url}#{loc}");
+            let Some(url) = url else { continue };
+            if url.len() > crate::workbook::MAX_REL_TARGET {
+                links_capped = true;
+                continue;
             }
-            // One link per cell of the ref (normally a single cell).
             let cells = (u64::from(range.r1 - range.r0) + 1) * (u64::from(range.c1 - range.c0) + 1);
             if cells > 10_000 {
                 continue;
             }
+            // Expanded link cells count against the cell budget; past it
+            // the remaining links are dropped (the file still opens).
+            if budget.cells.saturating_add(cells) > limits.max_cells {
+                links_capped = true;
+                break;
+            }
+            budget.add_cells(cells, limits)?;
             for r in range.r0..=range.r1 {
                 for c in range.c0..=range.c1 {
-                    sheet.links.push(tally_model::LinkData {
-                        row: r,
-                        col: c,
-                        url: url.clone(),
-                    });
+                    if sheet.links.len() >= MAX_LINKS_PER_SHEET {
+                        links_capped = true;
+                        break 'links;
+                    }
+                    if seen.insert((r, c)) {
+                        sheet.links.push(tally_model::LinkData {
+                            row: r,
+                            col: c,
+                            url: url.clone(),
+                        });
+                    }
                 }
             }
         }
+        if links_capped {
+            budget.warn(format!(
+                "Only the first {MAX_LINKS_PER_SHEET} hyperlinks of a sheet are kept."
+            ));
+        }
         sheet.links.sort_by_key(|l| (l.row, l.col));
-        sheet.links.dedup_by_key(|l| (l.row, l.col));
-        if let Some(c) = sheet_rels.iter().find(|r| r.is("comments") && !r.external) {
-            if let Some(notes) = pkg.with_entry(&c.target, other, |r| {
+        if let Some(c) = sheet_rels
+            .list
+            .iter()
+            .find(|r| r.is("comments") && !r.external)
+        {
+            if let Some((notes, truncated)) = pkg.with_entry(&c.target, other, |r| {
                 crate::sheet_v03::parse_comments(&mut XmlReader::new(r, xl))
             })? {
+                if truncated > 0 {
+                    budget.warn(format!(
+                        "Comments are kept up to {} KiB of text; longer ones were truncated.",
+                        crate::sheet_v03::MAX_NOTE_TEXT / 1024
+                    ));
+                }
                 sheet.notes = notes;
             }
         }

@@ -12,6 +12,11 @@
 //! `SUBTOTAL_IGN_FILTERED`), rows hidden by an AutoFilter are always skipped
 //! ([`EvalContext::filtered_row`]); codes 101 to 111 also skip manually
 //! hidden rows ([`EvalContext::hidden_row`], hidden or filtered).
+//!
+//! Any number of references follows the code (AOO `MustHaveParamCountMin(2)`
+//! then the chosen function over all of them), so `SUBTOTAL(9;A1:A2;A3)`
+//! and `SUBTOTAL(9;A1:A2~B1:B2)` (a union, see [`EvalValue::areas`]) sum
+//! every area. Inline arrays are accepted; scalars are `#VALUE!`.
 
 use tally_types::{CellRange, ErrorKind, Value};
 
@@ -21,10 +26,10 @@ use crate::{run, ArgList, Args, EvalContext, EvalValue};
 
 const PARAMS: &[Param] = &[
     Param::required("function", ParamKind::Integer),
-    Param::required("range", ParamKind::Reference),
+    Param::repeat("range", ParamKind::Reference),
 ];
 
-/// `SUBTOTAL(function; range)`.
+/// `SUBTOTAL(function; range; ...)`.
 pub const SUBTOTAL: FunctionDef =
     FunctionDef::new("SUBTOTAL", Category::Mathematical, PARAMS, subtotal)
         .help("Calculates subtotals in a spreadsheet.");
@@ -105,16 +110,24 @@ fn subtotal(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
             101..=111 => (code - 100, true),
             _ => return Err(ErrorKind::InvalidArgument),
         };
-        let c = match a.any(1) {
-            EvalValue::Range(r) => collect(a.ctx(), &r, skip_hidden),
-            EvalValue::Array(m) => {
-                let mut c = Collected::default();
-                m.data.iter().for_each(|v| c.add(v));
-                c
+        let mut c = Collected::default();
+        for i in 1..a.count() {
+            let arg = a.any(i);
+            if let Some(areas) = arg.areas() {
+                for r in areas {
+                    let part = collect(a.ctx(), r, skip_hidden);
+                    c.numbers.extend(part.numbers);
+                    c.non_empty += part.non_empty;
+                    c.error = c.error.or(part.error);
+                }
+                continue;
             }
-            EvalValue::Scalar(Value::Error(e)) => return Err(e),
-            _ => return Err(ErrorKind::Value),
-        };
+            match arg {
+                EvalValue::Array(m) => m.data.iter().for_each(|v| c.add(v)),
+                EvalValue::Scalar(Value::Error(e)) => return Err(e),
+                _ => return Err(ErrorKind::Value),
+            }
+        }
         // COUNT and COUNTA never propagate errors.
         match code {
             2 => return Ok(Value::Number(c.numbers.len() as f64)),
@@ -250,5 +263,80 @@ mod tests {
             call(&mut c, "SUBTOTAL", vec![EvalValue::number(9.0), r]),
             Value::Error(ErrorKind::Value)
         );
+        assert_eq!(
+            call(&mut c, "SUBTOTAL", vec![EvalValue::number(9.0)]),
+            Value::Error(ErrorKind::MissingVariable2)
+        );
+    }
+
+    /// Review 3 M2: any number of references, each filtered the same way.
+    #[test]
+    fn several_references() {
+        let mut c = grid();
+        c.set(0, "B1", 10.0).set(0, "B2", 20.0);
+        let a = c.range(0, "A1:A4");
+        let b = c.range(0, "B1:B2");
+        let b2 = c.range(0, "B2");
+        let f = |c: &mut MockEvalContext, code: f64, refs: Vec<EvalValue>| {
+            let mut args = vec![EvalValue::number(code)];
+            args.extend(refs);
+            call(c, "SUBTOTAL", args)
+        };
+        assert_eq!(
+            f(&mut c, 9.0, vec![a.clone(), b.clone()]),
+            Value::Number(36.0)
+        );
+        assert_eq!(
+            f(&mut c, 9.0, vec![a.clone(), b2.clone()]),
+            Value::Number(26.0)
+        );
+        assert_eq!(
+            f(&mut c, 6.0, vec![a.clone(), b2.clone()]),
+            Value::Number(80.0)
+        );
+        assert_eq!(
+            f(&mut c, 2.0, vec![a.clone(), b.clone()]),
+            Value::Number(5.0)
+        );
+        assert_eq!(
+            f(&mut c, 3.0, vec![a.clone(), b.clone()]),
+            Value::Number(6.0)
+        );
+        assert_eq!(
+            f(&mut c, 4.0, vec![a.clone(), b.clone()]),
+            Value::Number(20.0)
+        );
+        assert_eq!(
+            f(&mut c, 1.0, vec![a.clone(), b.clone()]),
+            Value::Number(7.2)
+        );
+        c.hidden_rows.insert((0, 1)); // row 2: A2 = "x", B2 = 20
+        assert_eq!(
+            f(&mut c, 9.0, vec![a.clone(), b.clone()]),
+            Value::Number(36.0)
+        );
+        assert_eq!(
+            f(&mut c, 109.0, vec![a.clone(), b.clone()]),
+            Value::Number(16.0)
+        );
+        // A scalar among the references is still #VALUE!.
+        assert_eq!(
+            f(&mut c, 9.0, vec![a, EvalValue::number(1.0)]),
+            Value::Error(ErrorKind::Value)
+        );
+    }
+
+    /// Review 3 M1: a union is every area (AOO `svRefList` in `ScSum`).
+    #[cfg(feature = "ref-union")]
+    #[test]
+    fn union_argument() {
+        let mut c = MockEvalContext::new();
+        c.set(0, "A1", 1.0).set(0, "A2", 2.0);
+        c.set(0, "B1", 10.0).set(0, "B2", 20.0);
+        let u = c.union(0, &["A1:A2", "B1:B2"]);
+        let mut f = |code: f64| call(&mut c, "SUBTOTAL", vec![EvalValue::number(code), u.clone()]);
+        assert_eq!(f(9.0), Value::Number(33.0));
+        assert_eq!(f(2.0), Value::Number(4.0));
+        assert_eq!(f(4.0), Value::Number(20.0));
     }
 }

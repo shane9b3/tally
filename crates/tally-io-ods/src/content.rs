@@ -538,6 +538,7 @@ impl Parser<'_> {
                     }
                 }
                 if let Some(url) = run.cell.link.take() {
+                    let url: std::sync::Arc<str> = url.into();
                     for r in *row..=rep_end {
                         for c in run.col..=c1 {
                             if sheet.links.len() < crate::v03::MAX_ITEMS {

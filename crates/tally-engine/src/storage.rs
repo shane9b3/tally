@@ -583,55 +583,66 @@ pub struct AutoFilter {
 }
 
 /// Sheet state that is not cells: merges, frozen panes, the AutoFilter,
-/// conditional formats, validations, notes, links, protection and page
-/// setup. Undo snapshots it whole ([`crate::undo::Change::SheetMeta`]).
+/// conditional formats, validations, notes, links, protection, page
+/// setup and the wave-5 objects.
+///
+/// Every collection is behind an `Arc` and edited copy-on-write
+/// (`Arc::make_mut`), so cloning the meta is a handful of reference-count
+/// increments and an undo entry holds only the collections an op changed
+/// ([`MetaPart`], [`crate::undo::Change::Meta`]). The `Vec` collections of
+/// large elements hold `Arc<T>` elements for the same reason: adding one
+/// conditional format copies 2,048 pointers, not 2,048 parsed formulas.
+/// Notes and links are additionally undone per entry (see
+/// `ops_v03::with_meta_cells`), so one note edit on a sheet with 100,000
+/// notes records one entry. See the top of `ops_v03.rs` for how to add an
+/// op that edits the meta.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SheetMeta {
     /// Merged areas (non-overlapping, each larger than one cell).
-    pub merges: Vec<tally_model::CellRangeLocal>,
+    pub merges: Arc<Vec<tally_model::CellRangeLocal>>,
     /// Frozen `(rows, cols)`; `None` when not frozen.
     pub frozen: Option<(u32, u32)>,
     /// The AutoFilter.
-    pub auto_filter: Option<AutoFilter>,
+    pub auto_filter: Option<Arc<AutoFilter>>,
     /// Conditional formats in priority order.
-    pub cond_formats: Vec<crate::condfmt::CondFormat>,
+    pub cond_formats: Arc<Vec<Arc<crate::condfmt::CondFormat>>>,
     /// Data validations.
-    pub validations: Vec<crate::validation::Validation>,
+    pub validations: Arc<Vec<Arc<crate::validation::Validation>>>,
     /// Cell notes by `(row, col)`.
-    pub notes: BTreeMap<(u32, u32), crate::annotations::Note>,
+    pub notes: Arc<BTreeMap<(u32, u32), crate::annotations::Note>>,
     /// Cell hyperlinks by `(row, col)`.
-    pub links: BTreeMap<(u32, u32), Arc<str>>,
+    pub links: Arc<BTreeMap<(u32, u32), Arc<str>>>,
     /// Sheet protection (`None`: not protected).
-    pub protection: Option<tally_model::SheetProtectionData>,
+    pub protection: Option<Arc<tally_model::SheetProtectionData>>,
     /// Page setup.
-    pub page_setup: tally_model::PageSetupData,
+    pub page_setup: Arc<tally_model::PageSetupData>,
     /// Manual page breaks before these rows.
-    pub row_breaks: BTreeSet<u32>,
+    pub row_breaks: Arc<BTreeSet<u32>>,
     /// Manual page breaks before these columns.
-    pub col_breaks: BTreeSet<u32>,
+    pub col_breaks: Arc<BTreeSet<u32>>,
     /// Next id for conditional formats, validations, charts, pictures,
     /// pivots and scenarios.
     pub next_id: u32,
     /// Charts anchored on the sheet (v0.4, W5-1).
-    pub charts: Vec<crate::charts::Chart>,
+    pub charts: Arc<Vec<Arc<crate::charts::Chart>>>,
     /// Pictures anchored on the sheet (v0.4, W5-1).
-    pub images: Vec<crate::charts::Image>,
+    pub images: Arc<Vec<Arc<crate::charts::Image>>>,
     /// DataPilot tables whose output is on the sheet (v0.5, W5-2).
-    pub pivots: Vec<crate::pivot::PivotTable>,
+    pub pivots: Arc<Vec<Arc<crate::pivot::PivotTable>>>,
     /// Row outline groups (v0.5, W5-2).
-    pub row_groups: Vec<tally_model::OutlineGroupData>,
+    pub row_groups: Arc<Vec<tally_model::OutlineGroupData>>,
     /// Column outline groups (v0.5, W5-2).
-    pub col_groups: Vec<tally_model::OutlineGroupData>,
+    pub col_groups: Arc<Vec<tally_model::OutlineGroupData>>,
     /// Scenarios of this base sheet (v0.5, W5-2).
-    pub scenarios: Vec<crate::scenarios::Scenario>,
+    pub scenarios: Arc<Vec<Arc<crate::scenarios::Scenario>>>,
     /// Named database ranges on the sheet (v0.5, W5-2).
-    pub database_ranges: Vec<tally_model::DatabaseRangeData>,
+    pub database_ranges: Arc<Vec<tally_model::DatabaseRangeData>>,
     /// The standard/advanced filter of the AutoFilter area (v0.5, W5-2).
-    pub standard_filter: Option<tally_model::StandardFilterData>,
+    pub standard_filter: Option<Arc<tally_model::StandardFilterData>>,
     /// The Data ▸ Subtotals definition (v0.5, W5-2).
-    pub subtotals: Option<tally_model::SubtotalsData>,
+    pub subtotals: Option<Arc<tally_model::SubtotalsData>>,
     /// View toggles (`None`: defaults) (v0.5).
-    pub view_options: Option<tally_model::ViewOptionsData>,
+    pub view_options: Option<Arc<tally_model::ViewOptionsData>>,
     /// Window ▸ Split position (v0.5).
     pub split: Option<tally_model::SplitData>,
 }
@@ -645,6 +656,171 @@ impl SheetMeta {
         self.next_id += 1;
         id
     }
+
+    /// The protection record, if the sheet is protected.
+    pub fn protection(&self) -> Option<&tally_model::SheetProtectionData> {
+        self.protection.as_deref()
+    }
+}
+
+fn same_arc<T>(a: &Arc<T>, b: &Arc<T>) -> bool {
+    Arc::ptr_eq(a, b)
+}
+
+fn same_opt_arc<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => Arc::ptr_eq(x, y),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn same_value<T: PartialEq>(a: &T, b: &T) -> bool {
+    a == b
+}
+
+/// Defines [`MetaKind`], [`MetaPart`] and the snapshot/compare/restore
+/// code for every field of [`SheetMeta`]. One line per field:
+/// `Variant / field: Type by comparison`, where the comparison is
+/// `same_arc` (an `Arc`: identity), `same_opt_arc` (`Option<Arc>`) or
+/// `same_value` (a small plain value). To add a field, add it to the
+/// struct and one line here.
+macro_rules! meta_parts {
+    ($( $variant:ident / $field:ident : $ty:ty ; $same:ident ),* $(,)?) => {
+        /// A field of [`SheetMeta`] (one bit each, for per-transaction
+        /// bookkeeping in [`crate::undo::Effects`]).
+        #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+        #[allow(missing_docs)]
+        pub enum MetaKind {
+            $($variant,)*
+        }
+
+        impl MetaKind {
+            /// Every kind, in field order.
+            pub const ALL: &'static [MetaKind] = &[$(MetaKind::$variant,)*];
+
+            /// The kind's bit in a mask.
+            pub fn bit(self) -> u32 {
+                1 << (self as u32)
+            }
+        }
+
+        /// A snapshot of one [`SheetMeta`] field, as undo keeps it. Besides
+        /// one variant per field, notes and links can be recorded per
+        /// entry (`NoteEntries`, `LinkEntries`: the previous value of each
+        /// touched cell, `None` for "no entry"), which is what single-cell
+        /// ops use.
+        #[derive(Clone, Debug)]
+        #[allow(missing_docs)]
+        pub enum MetaPart {
+            $($variant($ty),)*
+            NoteEntries(Vec<((u32, u32), Option<crate::annotations::Note>)>),
+            LinkEntries(Vec<((u32, u32), Option<Arc<str>>)>),
+        }
+
+        impl SheetMeta {
+            /// A snapshot of one field (reference-count increments only).
+            pub fn part(&self, kind: MetaKind) -> MetaPart {
+                match kind {
+                    $(MetaKind::$variant => MetaPart::$variant(self.$field.clone()),)*
+                }
+            }
+
+            /// Snapshots of every field.
+            pub fn all_parts(&self) -> Vec<MetaPart> {
+                MetaKind::ALL.iter().map(|k| self.part(*k)).collect()
+            }
+        }
+
+        impl MetaPart {
+            /// The field this part restores (`None` for entry lists, which
+            /// never count as a whole-field record).
+            pub fn kind(&self) -> Option<MetaKind> {
+                match self {
+                    $(MetaPart::$variant(_) => Some(MetaKind::$variant),)*
+                    MetaPart::NoteEntries(_) | MetaPart::LinkEntries(_) => None,
+                }
+            }
+
+            /// `true` if `meta` still holds this snapshot's collection
+            /// (pointer identity for `Arc`s: a copy-on-write edit always
+            /// produces a new allocation while the snapshot is alive).
+            pub fn unchanged_in(&self, meta: &SheetMeta) -> bool {
+                match self {
+                    $(MetaPart::$variant(v) => $same(v, &meta.$field),)*
+                    MetaPart::NoteEntries(_) | MetaPart::LinkEntries(_) => false,
+                }
+            }
+
+            /// Puts the snapshot into `meta` and returns the part that
+            /// restores what was there.
+            pub fn swap_into(self, meta: &mut SheetMeta) -> MetaPart {
+                match self {
+                    $(MetaPart::$variant(v) => {
+                        MetaPart::$variant(std::mem::replace(&mut meta.$field, v))
+                    })*
+                    MetaPart::NoteEntries(list) => {
+                        let map = Arc::make_mut(&mut meta.notes);
+                        let mut inv = Vec::with_capacity(list.len());
+                        for (k, v) in list.into_iter().rev() {
+                            let old = match v {
+                                Some(n) => map.insert(k, n),
+                                None => map.remove(&k),
+                            };
+                            inv.push((k, old));
+                        }
+                        MetaPart::NoteEntries(inv)
+                    }
+                    MetaPart::LinkEntries(list) => {
+                        let map = Arc::make_mut(&mut meta.links);
+                        let mut inv = Vec::with_capacity(list.len());
+                        for (k, v) in list.into_iter().rev() {
+                            let old = match v {
+                                Some(u) => map.insert(k, u),
+                                None => map.remove(&k),
+                            };
+                            inv.push((k, old));
+                        }
+                        MetaPart::LinkEntries(inv)
+                    }
+                }
+            }
+        }
+    };
+}
+
+meta_parts!(
+    Merges / merges: Arc<Vec<tally_model::CellRangeLocal>>; same_arc,
+    Frozen / frozen: Option<(u32, u32)>; same_value,
+    AutoFilter / auto_filter: Option<Arc<AutoFilter>>; same_opt_arc,
+    CondFormats / cond_formats: Arc<Vec<Arc<crate::condfmt::CondFormat>>>; same_arc,
+    Validations / validations: Arc<Vec<Arc<crate::validation::Validation>>>; same_arc,
+    Notes / notes: Arc<BTreeMap<(u32, u32), crate::annotations::Note>>; same_arc,
+    Links / links: Arc<BTreeMap<(u32, u32), Arc<str>>>; same_arc,
+    Protection / protection: Option<Arc<tally_model::SheetProtectionData>>; same_opt_arc,
+    PageSetup / page_setup: Arc<tally_model::PageSetupData>; same_arc,
+    RowBreaks / row_breaks: Arc<BTreeSet<u32>>; same_arc,
+    ColBreaks / col_breaks: Arc<BTreeSet<u32>>; same_arc,
+    NextId / next_id: u32; same_value,
+    Charts / charts: Arc<Vec<Arc<crate::charts::Chart>>>; same_arc,
+    Images / images: Arc<Vec<Arc<crate::charts::Image>>>; same_arc,
+    Pivots / pivots: Arc<Vec<Arc<crate::pivot::PivotTable>>>; same_arc,
+    RowGroups / row_groups: Arc<Vec<tally_model::OutlineGroupData>>; same_arc,
+    ColGroups / col_groups: Arc<Vec<tally_model::OutlineGroupData>>; same_arc,
+    Scenarios / scenarios: Arc<Vec<Arc<crate::scenarios::Scenario>>>; same_arc,
+    DatabaseRanges / database_ranges: Arc<Vec<tally_model::DatabaseRangeData>>; same_arc,
+    StandardFilter / standard_filter: Option<Arc<tally_model::StandardFilterData>>; same_opt_arc,
+    Subtotals / subtotals: Option<Arc<tally_model::SubtotalsData>>; same_opt_arc,
+    ViewOptions / view_options: Option<Arc<tally_model::ViewOptionsData>>; same_opt_arc,
+    Split / split: Option<tally_model::SplitData>; same_value,
+);
+
+/// The entries of a `(row, col)` map at `keys` (for `MetaPart::*Entries`).
+pub fn map_entries<T: Clone>(
+    map: &BTreeMap<(u32, u32), T>,
+    keys: &[(u32, u32)],
+) -> Vec<((u32, u32), Option<T>)> {
+    keys.iter().map(|k| (*k, map.get(k).cloned())).collect()
 }
 
 /// Shifts a set of row numbers for inserted rows (values pushed past `limit` are dropped).

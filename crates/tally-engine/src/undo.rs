@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tally_api::SelectionDto;
 use tally_types::{CellAddr, CellRange, SheetId, MAX_ROWS};
 
-use crate::storage::{CellContent, ColumnStore, DimRuns, Sheet, SheetMeta, StyleId};
+use crate::storage::{CellContent, ColumnStore, DimRuns, MetaKind, MetaPart, Sheet, StyleId};
 use crate::workbook::{SnapContent, Workbook};
 
 /// Undo stack depth (the OOo default).
@@ -83,13 +83,16 @@ pub enum Change {
     /// the records that use it also carry snapshots of the lost cells, the
     /// dimensions and the rewritten formulas, which undo restores afterwards.
     Structure(tally_formula::StructureChange),
-    /// Restore a sheet's merges, frozen panes and AutoFilter (the filtered
-    /// rows are recomputed).
-    SheetMeta {
+    /// Restore parts of a sheet's meta (merges, frozen panes, the
+    /// AutoFilter, conditional formats, notes, …): only the collections an
+    /// op changed, as `Arc` snapshots or per-entry lists (see
+    /// [`crate::storage::SheetMeta`]). The filtered rows are recomputed
+    /// when the AutoFilter is restored.
+    Meta {
         /// Sheet.
         sheet: SheetId,
-        /// The state.
-        meta: Box<SheetMeta>,
+        /// The parts, each restoring one field; applied last to first.
+        parts: Vec<MetaPart>,
     },
     /// Restore the whole name table (dependents are refreshed).
     Names(Box<crate::names::NameTable>),
@@ -134,6 +137,16 @@ pub struct Effects {
     pub created: Option<Vec<tally_api::CreatedId>>,
     /// The pivot list changed (v0.5).
     pub pivots_changed: Option<bool>,
+    /// Per sheet, the [`MetaKind`]s whose whole-collection snapshot this
+    /// transaction already holds in an earlier [`Change::Meta`] (a bit
+    /// mask of [`MetaKind::bit`]). Later ops of the same transaction skip
+    /// re-recording them: undo restores the earliest state anyway, and
+    /// not holding the `Arc` lets `Arc::make_mut` edit in place.
+    pub meta_recorded: std::collections::HashMap<SheetId, u32>,
+    /// A protection change happened: the undo and redo stacks are cleared
+    /// after the transaction (protection cannot be undone around; Excel
+    /// and AOO do the same).
+    pub clear_undo: bool,
 }
 
 impl Effects {
@@ -157,6 +170,19 @@ impl Effects {
         self.created
             .get_or_insert_with(Vec::new)
             .push(tally_api::CreatedId { op_index, id });
+    }
+
+    /// `true` if this transaction already holds a whole-collection
+    /// snapshot of `kind` for `sheet`.
+    pub fn meta_recorded(&self, sheet: SheetId, kind: MetaKind) -> bool {
+        self.meta_recorded
+            .get(&sheet)
+            .is_some_and(|m| m & kind.bit() != 0)
+    }
+
+    /// Marks `kind` of `sheet` as recorded in this transaction.
+    pub fn record_meta(&mut self, sheet: SheetId, kind: MetaKind) {
+        *self.meta_recorded.entry(sheet).or_default() |= kind.bit();
     }
 }
 
@@ -226,6 +252,11 @@ impl UndoStack {
     /// Number of undo steps.
     pub fn undo_len(&self) -> usize {
         self.undo.len()
+    }
+
+    /// The undo records, oldest first (tests inspect what they hold).
+    pub fn undo_records(&self) -> &[UndoRecord] {
+        &self.undo
     }
 
     /// Drops both stacks.
@@ -439,22 +470,22 @@ pub fn apply_change(wb: &mut Workbook, change: Change, fx: &mut Effects) -> Opti
             fx.sheets_changed = true;
             Some(Change::MoveSheet { id, to: from })
         }
-        Change::SheetMeta { sheet, meta } => {
+        Change::Meta { sheet, parts } => {
             let s = wb.sheet_mut(sheet)?;
-            let old = std::mem::replace(&mut s.meta, *meta);
+            let mut filter_changed = false;
+            let mut inv = Vec::with_capacity(parts.len());
+            for p in parts.into_iter().rev() {
+                filter_changed |=
+                    p.kind() == Some(MetaKind::AutoFilter) && !p.unchanged_in(&s.meta);
+                inv.push(p.swap_into(&mut s.meta));
+            }
             // Only a change of the filter itself re-applies it.
-            if wb
-                .sheet(sheet)
-                .is_some_and(|s| s.meta.auto_filter != old.auto_filter)
-            {
+            if filter_changed {
                 wb.reapply_filter(sheet);
             }
             wb.pending.display_only.push(whole_sheet(sheet));
             fx.layout(sheet);
-            Some(Change::SheetMeta {
-                sheet,
-                meta: Box::new(old),
-            })
+            Some(Change::Meta { sheet, parts: inv })
         }
         Change::Names(table) => {
             let old = std::mem::replace(&mut wb.names, *table);
@@ -479,12 +510,32 @@ pub fn apply_change(wb: &mut Workbook, change: Change, fx: &mut Effects) -> Opti
     }
 }
 
-/// A snapshot of a sheet's meta state (for undo).
+/// A snapshot of a sheet's whole meta state (for undo): every field as an
+/// `Arc` snapshot. Cheap to take, but the op's edits then copy each
+/// collection they touch once (copy-on-write), so prefer [`meta_parts`]
+/// with the fields the op changes.
 pub fn sheet_meta(wb: &Workbook, sheet: SheetId) -> Option<Change> {
-    Some(Change::SheetMeta {
+    Some(Change::Meta {
         sheet,
-        meta: Box::new(wb.sheet(sheet)?.meta.clone()),
+        parts: wb.sheet(sheet)?.meta.all_parts(),
     })
+}
+
+/// A snapshot of the given fields of a sheet's meta (for undo).
+pub fn meta_parts(wb: &Workbook, sheet: SheetId, kinds: &[MetaKind]) -> Option<Change> {
+    let meta = &wb.sheet(sheet)?.meta;
+    Some(Change::Meta {
+        sheet,
+        parts: kinds.iter().map(|k| meta.part(*k)).collect(),
+    })
+}
+
+/// An undo entry restoring the given entries of a sheet's notes or links.
+pub fn meta_entries(sheet: SheetId, part: MetaPart) -> Change {
+    Change::Meta {
+        sheet,
+        parts: vec![part],
+    }
 }
 
 /// A snapshot of the name table (for undo).

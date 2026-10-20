@@ -542,7 +542,7 @@ impl SheetWriter<'_> {
                 .iter()
                 .find(|c| c.row == l.row && c.col == l.col);
             let text = match cell.map(|c| &c.content) {
-                None | Some(CellContentData::Value(Value::Empty)) => l.url.clone(),
+                None | Some(CellContentData::Value(Value::Empty)) => l.url.to_string(),
                 Some(CellContentData::Value(Value::Text(t))) => t.to_string(),
                 Some(_) => {
                     report.warn(format!(

@@ -24,19 +24,13 @@ pub const INDEX: FunctionDef = FunctionDef::new("INDEX", Category::Spreadsheet, 
 /// sums a column); an array yields a value or sub-array. Row or column 0
 /// selects the whole column or row. If only a row is given for a
 /// single-row range it is the column (`INDEX(A1:C1;2)` is B1). Out of range
-/// is `#REF!`, negative `#VALUE!`. Only one area is supported, so `range`
-/// must be 1 if given.
+/// is `#REF!`, negative `#VALUE!`. `range` picks the area of a union
+/// ([`EvalValue::areas`]; AOO `svRefList`): past the last area is `#REF!`
+/// (`errNoRef`), and anything but 1 is `#REF!` for a single area.
 fn index(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run_ref(|| {
-        let first = a.any(0);
-        let (rows, cols) = match &first {
-            EvalValue::Range(r) => (r.rows(), r.cols()),
-            EvalValue::Array(m) | EvalValue::Scalar(Value::Array(m)) => (m.rows, m.cols),
-            EvalValue::Scalar(Value::Error(e)) => return Err(*e),
-            EvalValue::Scalar(_) => (1, 1),
-            EvalValue::Missing => return Err(ErrorKind::Value),
-        };
+        let mut first = a.any(0);
         let mut row = a.int_opt(1, 0)?;
         let col_missing = a.is_missing(2);
         let mut col = a.int_opt(2, 0)?;
@@ -44,9 +38,23 @@ fn index(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         if row < 0 || col < 0 || area < 0 {
             return Err(ErrorKind::Value);
         }
-        if area != 1 {
+        if let Some(areas) = first.areas() {
+            if area < 1 || area as usize > areas.len() {
+                return Err(ErrorKind::Ref);
+            }
+            first = EvalValue::Range(areas[area as usize - 1]);
+        } else if area != 1 {
             return Err(ErrorKind::Ref);
         }
+        let (rows, cols) = match &first {
+            EvalValue::Range(r) => (r.rows(), r.cols()),
+            EvalValue::Array(m) | EvalValue::Scalar(Value::Array(m)) => (m.rows, m.cols),
+            EvalValue::Scalar(Value::Error(e)) => return Err(*e),
+            EvalValue::Scalar(_) => (1, 1),
+            EvalValue::Missing => return Err(ErrorKind::Value),
+            #[allow(unreachable_patterns)]
+            _ => return Err(ErrorKind::Value),
+        };
         if col_missing && rows == 1 && cols > 1 {
             col = row;
             row = 0;
@@ -157,6 +165,35 @@ mod tests {
         assert_eq!(
             call_raw(&mut c, "INDEX", &mut args),
             EvalValue::error(ErrorKind::Ref)
+        );
+    }
+
+    /// Review 3 M1: the `range` argument selects a union's area.
+    #[cfg(feature = "ref-union")]
+    #[test]
+    fn union_area() {
+        let mut c = sheet();
+        let u = c.union(0, &["A1:A2", "B1:B2"]);
+        assert_eq!(
+            call(&mut c, "INDEX", vec![u.clone(), n(2.0), n(1.0), n(2.0)]),
+            Value::Number(5.0)
+        );
+        assert_eq!(
+            call(&mut c, "INDEX", vec![u.clone(), n(1.0), n(1.0)]),
+            Value::Number(1.0)
+        );
+        let mut args = MockArgs::new(vec![u.clone(), n(0.0), n(1.0), n(2.0)]);
+        assert_eq!(
+            call_raw(&mut c, "INDEX", &mut args),
+            EvalValue::Range(CellRange::from_a1(0, "B1:B2").expect("range"))
+        );
+        assert_eq!(
+            call(&mut c, "INDEX", vec![u.clone(), n(1.0), n(1.0), n(3.0)]),
+            Value::Error(ErrorKind::Ref)
+        );
+        assert_eq!(
+            call(&mut c, "INDEX", vec![u, n(1.0), n(1.0), n(0.0)]),
+            Value::Error(ErrorKind::Ref)
         );
     }
 

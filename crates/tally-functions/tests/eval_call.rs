@@ -170,3 +170,52 @@ fn non_finite_results_become_num() {
         err(ErrorKind::Num)
     );
 }
+
+/// Review 3 M1: a union reaching a scalar parameter is `#VALUE!` (there is
+/// no cell to intersect with); sequence parameters flatten it; array
+/// lifting cannot materialize it.
+#[cfg(feature = "ref-union")]
+#[test]
+fn unions_per_param_kind() {
+    let mut c = MockEvalContext::new();
+    c.set(0, "A1", 1.0)
+        .set(0, "A2", 2.0)
+        .set(0, "B1", 10.0)
+        .set(0, "B2", 20.0);
+    c.set_origin(0, "D1");
+    let u = c.union(0, &["A1:A2", "B1:B2"]);
+    assert_eq!(call(&mut c, "SUM", vec![u.clone()]), num(33.0));
+    assert_eq!(call(&mut c, "COUNT", vec![u.clone()]), num(4.0));
+    assert_eq!(call(&mut c, "MAX", vec![u.clone()]), num(20.0));
+    assert_eq!(
+        call(&mut c, "ROUND", vec![u.clone()]),
+        err(ErrorKind::Value)
+    );
+    assert_eq!(call(&mut c, "LEN", vec![u.clone()]), err(ErrorKind::Value));
+    assert_eq!(call(&mut c, "ISREF", vec![u.clone()]), Value::Bool(true));
+    assert_eq!(call(&mut c, "TYPE", vec![u.clone()]), num(64.0));
+    assert_eq!(
+        call(&mut c, "SUMPRODUCT", vec![u.clone()]),
+        err(ErrorKind::Value)
+    );
+    assert_eq!(
+        call(&mut c, "VLOOKUP", vec![n(1.0), u.clone(), n(1.0)]),
+        err(ErrorKind::Value)
+    );
+    assert_eq!(call(&mut c, "MEDIAN", vec![u.clone()]), num(6.0));
+    c.array_context = true;
+    assert_eq!(call(&mut c, "ROUND", vec![u]), err(ErrorKind::Value));
+}
+
+#[test]
+fn mock_locale() {
+    let mut c = MockEvalContext::new();
+    assert_eq!(c.locale_tag(), "en-US");
+    c.set_locale("de_de");
+    assert_eq!(c.locale_tag(), "de-DE");
+    c.set_locale("fr");
+    assert_eq!(c.locale_tag(), "fr-FR");
+    assert!(
+        std::panic::catch_unwind(|| MockEvalContext::new().set_locale("de-CH").locale).is_err()
+    );
+}

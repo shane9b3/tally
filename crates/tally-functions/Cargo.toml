@@ -11,6 +11,10 @@ publish.workspace = true
 # Exposes `mock::{MockEvalContext, MockArgs}` so other crates' tests (and this
 # crate's integration tests) can drive functions without an engine.
 test-support = []
+# Adds `EvalValue::Union` (reference unions handed to one parameter).
+# Transitional: off until the engine builds the variant for `~` instead of
+# splitting unions into sequence arguments; see docs/functions/engine-hooks.md.
+ref-union = []
 
 [dependencies]
 tally-types.workspace = true

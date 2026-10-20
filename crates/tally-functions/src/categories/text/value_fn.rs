@@ -3,6 +3,8 @@
 use tally_numfmt::{recognize_input_with, Locale, RecognizeContext};
 use tally_types::{ErrorKind, Value};
 
+use crate::coerce::locale_of;
+
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
 use crate::{run, ArgList, Args, EvalContext, EvalValue};
 
@@ -13,15 +15,17 @@ pub const VALUE: FunctionDef = FunctionDef::new("VALUE", Category::Text, VALUE_P
     .returns(ReturnKind::Number)
     .help("Converts text to a number.");
 
-/// Converts text with the full en-US input recognizer (thousands
-/// separators, currency, percent, dates, times), independent of
+/// Converts text with the full input recognizer of the document locale
+/// (thousands separators, currency, percent, dates, times in that
+/// locale's spelling; AOO `ScValue` → `IsNumberFormat`), independent of
 /// `settings.text_to_number`. Only a numeric result is accepted.
 pub(super) fn text_to_value(
     s: &str,
     epoch: tally_types::DateEpoch,
+    locale: &Locale,
 ) -> Option<(f64, Option<String>)> {
     let ctx = RecognizeContext::now(epoch);
-    let rec = recognize_input_with(s, &Locale::en_us(), &ctx);
+    let rec = recognize_input_with(s, locale, &ctx);
     match rec.value {
         Value::Number(n) => Some((n, rec.implied_format)),
         _ => None,
@@ -39,7 +43,8 @@ fn value(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         Value::Text(s) if s.trim().is_empty() => Err(ErrorKind::InvalidArgument),
         Value::Text(s) => {
             let epoch = a.ctx().settings().date_epoch;
-            text_to_value(&s, epoch)
+            let locale = locale_of(a.ctx());
+            text_to_value(&s, epoch, locale)
                 .map(|(n, _)| Value::Number(n))
                 .ok_or(ErrorKind::Value)
         }
@@ -71,6 +76,30 @@ mod tests {
         assert!(matches!(s("14:30"), Value::Number(x) if (x - 870.0 / 1440.0).abs() < 1e-12));
         assert_eq!(s(" 7 "), Value::Number(7.0));
         assert_eq!(s("2026-10-19"), Value::Number(46314.0));
+    }
+
+    /// Review 3 H2: the document locale decides the spelling (AOO uses
+    /// the document's number formatter).
+    #[test]
+    fn document_locale() {
+        let mut c = MockEvalContext::new();
+        c.set_locale("de-DE");
+        let mut v = |x: &str| call(&mut c, "VALUE", vec![EvalValue::text(x)]);
+        assert_eq!(v("1,7"), Value::Number(1.7));
+        assert_eq!(v("1.234,5"), Value::Number(1234.5));
+        assert_eq!(v("19.10.2026"), Value::Number(46314.0));
+        assert_eq!(v("2026-10-19"), Value::Number(46314.0));
+        assert_eq!(v("12,5%"), Value::Number(0.125));
+        assert_eq!(v("1,5 €"), Value::Number(1.5));
+        // en-US spellings are not German numbers: `1.7` is 1 July.
+        assert_eq!(v("1.7"), Value::Number(46204.0));
+        assert_eq!(v("$1,234.50"), Value::Error(ErrorKind::Value));
+        let mut c = MockEvalContext::new();
+        c.set_locale("fr-FR");
+        assert_eq!(
+            call(&mut c, "VALUE", vec![EvalValue::text("1\u{a0}234,5")]),
+            Value::Number(1234.5)
+        );
     }
 
     #[test]

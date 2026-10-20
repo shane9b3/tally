@@ -12,8 +12,8 @@ expect = 502
 
 [[case]]
 formula = "=ERRORTYPE(INDIRECT(\"zz\"))"
-expect = 524
-note = "#REF!"
+expect = 502
+note = "Err:502 (AOO ScIndirect: PushIllegalArgument)."
 
 [[case]]
 cells = { A1 = "=1/0" }

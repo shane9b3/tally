@@ -204,6 +204,8 @@ impl Document {
         let mut errors = Vec::new();
         let mut changes = Vec::new();
         let mut spent: u64 = 0;
+        let mut meta_ops: u64 = 0;
+        let mut note_bytes: u64 = 0;
         for (i, op) in tx.ops.iter().enumerate() {
             let cost = crate::ops::op_cost(&self.wb, op);
             if spent.saturating_add(cost) > crate::ops::MAX_TX_CELLS {
@@ -218,6 +220,27 @@ impl Document {
                     message: e.message,
                 });
                 continue;
+            }
+            if let Some(bytes) = crate::ops_v03::meta_op_cost(op) {
+                meta_ops += 1;
+                note_bytes = note_bytes.saturating_add(bytes);
+                if meta_ops > crate::ops_v03::MAX_META_OPS_PER_TX
+                    || note_bytes > crate::ops_v03::MAX_NOTE_BYTES_PER_TX
+                {
+                    let e = tally_api::ApiError::unsupported(format!(
+                        "the change is too large for one step (more than {} \
+                         formatting, validation, note or link changes, or more \
+                         than {} MiB of note text); split it into smaller steps",
+                        crate::ops_v03::MAX_META_OPS_PER_TX,
+                        crate::ops_v03::MAX_NOTE_BYTES_PER_TX >> 20
+                    ));
+                    errors.push(OpError {
+                        op_index: i as u32,
+                        code: e.code,
+                        message: e.message,
+                    });
+                    continue;
+                }
             }
             spent += cost;
             match apply_op(&mut self.wb, op, clip, &mut fx) {
@@ -244,7 +267,12 @@ impl Document {
             }
         }
         let report = self.recalc_and_filter(&mut fx);
-        if !changes.is_empty() {
+        if fx.clear_undo {
+            // Protection changes are not undoable: nothing before them can
+            // be undone around them either (security review 3, LOW-9).
+            self.undo.clear();
+            self.dirty = true;
+        } else if !changes.is_empty() {
             self.undo.push(UndoRecord {
                 label: tx.label.clone(),
                 selection_before: tx.selection_before.clone(),

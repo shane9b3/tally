@@ -45,6 +45,7 @@ impl ArgList for Prepared<'_> {
 fn is_multi_cell(v: &EvalValue) -> bool {
     match v {
         EvalValue::Range(r) => !r.is_single(),
+        v if v.is_reference() => true,
         EvalValue::Array(m) => m.rows * m.cols != 1,
         EvalValue::Scalar(Value::Array(m)) => m.rows * m.cols != 1,
         _ => false,
@@ -59,6 +60,10 @@ fn intersect_arg(r: &CellRange, ctx: &mut dyn EvalContext) -> EvalValue {
 }
 
 fn materialize(v: &EvalValue, ctx: &mut dyn EvalContext) -> Result<Arc<Matrix>, ErrorKind> {
+    if v.areas().is_some_and(|a| a.len() != 1) {
+        // A union has no rectangular shape.
+        return Err(ErrorKind::Value);
+    }
     match v {
         EvalValue::Array(m) | EvalValue::Scalar(Value::Array(m)) => Ok(m.clone()),
         EvalValue::Range(r) => {
@@ -106,7 +111,8 @@ fn invoke(
 
 /// Calls `def` with `args`: checks arity (`Err:511` too few, `Err:504` too
 /// many), evaluates every non-[`ParamKind::Lazy`] argument once, applies
-/// implicit intersection to ranges given to scalar params, lifts liftable
+/// implicit intersection to ranges given to scalar params (a union given
+/// to a scalar param is `#VALUE!`), lifts liftable
 /// params elementwise when `ctx.in_array_context()` (never for
 /// [`FnFlags::LAZY_ARGS`] functions), then runs the implementation.
 /// Non-finite numeric results become `#NUM!`.
@@ -141,6 +147,25 @@ pub fn call_def(def: &FunctionDef, ctx: &mut dyn EvalContext, args: &mut dyn Arg
         Vec::new()
     };
 
+    intersect_scalars(def, ctx, &mut slots, &lifted);
+
+    if lifted.is_empty() {
+        return invoke(def, ctx, args, slots);
+    }
+    lift(def, ctx, args, slots, &lifted)
+}
+
+/// Implicit intersection of the references given to scalar parameters
+/// (skipping lifted ones); a union cannot be intersected and becomes
+/// `#VALUE!`. Kept out of line so [`call_def`], which sits on the
+/// recursion path of nested lazy calls, keeps a small frame.
+#[inline(never)]
+fn intersect_scalars(
+    def: &FunctionDef,
+    ctx: &mut dyn EvalContext,
+    slots: &mut [Option<EvalValue>],
+    lifted: &[usize],
+) {
     for (i, slot) in slots.iter_mut().enumerate() {
         if lifted.contains(&i) || !def.param_kind(i).is_scalar() {
             continue;
@@ -148,13 +173,10 @@ pub fn call_def(def: &FunctionDef, ctx: &mut dyn EvalContext, args: &mut dyn Arg
         if let Some(EvalValue::Range(r)) = slot {
             let r = *r;
             *slot = Some(intersect_arg(&r, ctx));
+        } else if slot.as_ref().is_some_and(EvalValue::is_reference) {
+            *slot = Some(EvalValue::error(ErrorKind::Value));
         }
     }
-
-    if lifted.is_empty() {
-        return invoke(def, ctx, args, slots);
-    }
-    lift(def, ctx, args, slots, &lifted)
 }
 
 fn lift(

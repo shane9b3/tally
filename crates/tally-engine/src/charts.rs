@@ -53,17 +53,17 @@ pub fn from_data(wb: &mut Workbook, sheet: SheetId, charts: &[ChartData], images
     };
     for c in charts.iter().take(MAX_CHARTS) {
         let id = s.meta.alloc_id();
-        s.meta.charts.push(Chart {
+        std::sync::Arc::make_mut(&mut s.meta.charts).push(std::sync::Arc::new(Chart {
             id,
             data: c.clone(),
-        });
+        }));
     }
     for i in images.iter().take(MAX_CHARTS) {
         let id = s.meta.alloc_id();
-        s.meta.images.push(Image {
+        std::sync::Arc::make_mut(&mut s.meta.images).push(std::sync::Arc::new(Image {
             id,
             data: i.clone(),
-        });
+        }));
     }
 }
 

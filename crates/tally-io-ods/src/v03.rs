@@ -27,6 +27,14 @@ use crate::OdsError;
 /// Most conditional formats, validations or notes read per document part.
 pub(crate) const MAX_ITEMS: usize = 100_000;
 const MAX_TEXT: usize = 64 * 1024;
+/// Most conditional formats per sheet (the engine's cap).
+pub(crate) const MAX_CF_PER_SHEET: usize = 2_048;
+/// Most ranges per conditional format.
+pub(crate) const MAX_CF_RANGES: usize = 64;
+/// Longest note text kept (the engine's cap; longer notes are truncated).
+pub(crate) const MAX_NOTE_TEXT: usize = 32 * 1024;
+/// Longest `table:protection-key` kept.
+const MAX_PROTECTION_KEY: usize = 1024;
 
 pub(crate) const URI_SHA256: &str = "http://www.w3.org/2000/09/xmldsig#sha256";
 pub(crate) const URI_SHA1: &str = "http://www.w3.org/2000/09/xmldsig#sha1";
@@ -592,7 +600,9 @@ pub(crate) fn parse_cond_formats<R: BufRead>(
     loop {
         match xml.next()? {
             Ev::Start(e) if e.name == "calcext:conditional-format" => {
-                let ranges = parse_range_list(e.attr("calcext:target-range-address").unwrap_or(""));
+                let mut ranges =
+                    parse_range_list(e.attr("calcext:target-range-address").unwrap_or(""));
+                ranges.truncate(MAX_CF_RANGES);
                 let mut base: Option<(u32, u32)> = None;
                 let mut rules: Vec<CfRuleData> = Vec::new();
                 let dd = xml.depth();
@@ -611,7 +621,7 @@ pub(crate) fn parse_cond_formats<R: BufRead>(
                         _ => {}
                     }
                 }
-                if !ranges.is_empty() && !rules.is_empty() && out.len() < MAX_ITEMS {
+                if !ranges.is_empty() && !rules.is_empty() && out.len() < MAX_CF_PER_SHEET {
                     let b = base.unwrap_or((ranges[0].r0, ranges[0].c0));
                     out.push(ConditionalFormatData {
                         ranges,
@@ -1233,6 +1243,7 @@ pub(crate) fn parse_annotation<R: BufRead>(
         ..NoteData::default()
     };
     let mut lines: Vec<String> = Vec::new();
+    let mut total = 0usize;
     let d = xml.depth();
     loop {
         match xml.next()? {
@@ -1241,7 +1252,10 @@ pub(crate) fn parse_annotation<R: BufRead>(
                 "dc:date" => n.created = Some(xml.text_content(MAX_TEXT)?),
                 "text:p" => {
                     let t = xml.text_content(MAX_TEXT)?;
-                    if lines.len() < 4096 {
+                    // Notes are capped at MAX_NOTE_TEXT (the engine's
+                    // limit): text past it is not kept (MEDIUM-8).
+                    if lines.len() < 4096 && total < MAX_NOTE_TEXT {
+                        total += t.len() + 1;
                         lines.push(t);
                     }
                 }
@@ -1253,6 +1267,13 @@ pub(crate) fn parse_annotation<R: BufRead>(
         }
     }
     n.text = lines.join("\n");
+    if n.text.len() > MAX_NOTE_TEXT {
+        let mut end = MAX_NOTE_TEXT;
+        while !n.text.is_char_boundary(end) {
+            end -= 1;
+        }
+        n.text.truncate(end);
+    }
     n.author = n.author.filter(|a| !a.is_empty());
     Ok(n)
 }
@@ -1280,7 +1301,10 @@ pub(crate) fn parse_protection_attrs(e: &Elem, flag: &str) -> Option<SheetProtec
         return None;
     }
     let mut p = SheetProtectionData::default();
-    if let Some(k) = e.attr("table:protection-key").filter(|k| !k.is_empty()) {
+    if let Some(k) = e
+        .attr("table:protection-key")
+        .filter(|k| !k.is_empty() && k.len() <= MAX_PROTECTION_KEY)
+    {
         p.password_hash = Some(k.to_string());
         p.algorithm = Some(
             match e

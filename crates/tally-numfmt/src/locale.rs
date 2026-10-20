@@ -69,6 +69,11 @@ pub struct Locale {
     pub currency_after: bool,
     /// Short date format code (`MM/DD/YYYY` in en-US).
     pub short_date: &'static str,
+    /// Localized format-code keyword letters as `(localized, English)`
+    /// pairs (de-DE: `T` for `D`, `J` for `Y`). [`crate::parse_format_with_locale`]
+    /// accepts a run of a localized letter as the English keyword; the
+    /// English letters are always accepted too.
+    pub format_letters: &'static [(char, char)],
 }
 
 /// The en-US locale.
@@ -121,6 +126,7 @@ pub const EN_US: Locale = Locale {
     era_names: ("Before Christ", "Anno Domini"),
     currency_after: false,
     short_date: "MM/DD/YYYY",
+    format_letters: &[],
 };
 
 const EN_MONTHS: [&str; 12] = [
@@ -178,6 +184,7 @@ pub const EN_GB: Locale = Locale {
     era_names: ("Before Christ", "Anno Domini"),
     currency_after: false,
     short_date: "DD/MM/YYYY",
+    format_letters: &[],
 };
 
 /// The de-DE locale.
@@ -230,6 +237,7 @@ pub const DE_DE: Locale = Locale {
     era_names: ("vor Christus", "nach Christus"),
     currency_after: true,
     short_date: "DD.MM.YYYY",
+    format_letters: &[('T', 'D'), ('J', 'Y')],
 };
 
 /// The fr-FR locale (the grouping separator is a no-break space).
@@ -282,6 +290,7 @@ pub const FR_FR: Locale = Locale {
     era_names: ("avant Jésus-Christ", "après Jésus-Christ"),
     currency_after: true,
     short_date: "DD/MM/YYYY",
+    format_letters: &[('J', 'D'), ('A', 'Y')],
 };
 
 /// The es-ES locale.
@@ -339,6 +348,7 @@ pub const ES_ES: Locale = Locale {
     era_names: ("antes de Cristo", "después de Cristo"),
     currency_after: true,
     short_date: "DD/MM/YYYY",
+    format_letters: &[('A', 'Y')],
 };
 
 /// The ja-JP locale.
@@ -380,22 +390,37 @@ pub const JA_JP: Locale = Locale {
     era_names: ("紀元前", "西暦"),
     currency_after: false,
     short_date: "YYYY/MM/DD",
+    format_letters: &[],
 };
 
 /// Every built-in locale, en-US first.
 pub const LOCALES: [&Locale; 6] = [&EN_US, &EN_GB, &DE_DE, &FR_FR, &ES_ES, &JA_JP];
 
-/// The built-in locale with this BCP 47 tag (case-insensitive; `de`,
-/// `de_DE` and `de-AT` fall back to the language's locale).
+/// The built-in locale with this BCP 47 tag.
+///
+/// Matching is case-insensitive and accepts `_` for `-` (`de_DE`). A
+/// language-only tag (`de`, `fr`) maps to that language's default region
+/// (the first entry of [`LOCALES`] with that language: `de-DE`, `fr-FR`).
+/// A tag with a region that is not built in (`de-CH`, `es-MX`, `pt-BR`)
+/// is `None`: Swiss German or Mexican Spanish conventions differ from the
+/// language's default (decimal separator, currency), so callers must fall
+/// back explicitly and report it rather than get silently wrong formats.
 pub fn locale_by_tag(tag: &str) -> Option<&'static Locale> {
     let t = tag.trim().replace('_', "-");
     if let Some(l) = LOCALES.iter().find(|l| l.tag.eq_ignore_ascii_case(&t)) {
         return Some(l);
     }
-    let lang = t.split('-').next()?.to_ascii_lowercase();
+    if t.is_empty() || t.contains('-') {
+        return None;
+    }
     LOCALES
         .iter()
-        .find(|l| l.tag.split('-').next().is_some_and(|x| x == lang))
+        .find(|l| {
+            l.tag
+                .split('-')
+                .next()
+                .is_some_and(|x| x.eq_ignore_ascii_case(&t))
+        })
         .copied()
 }
 
@@ -478,9 +503,17 @@ mod tests {
     fn lookup_by_tag() {
         assert_eq!(locale_by_tag("de-DE").map(|l| l.tag), Some("de-DE"));
         assert_eq!(locale_by_tag("fr").map(|l| l.tag), Some("fr-FR"));
-        assert_eq!(locale_by_tag("es_MX").map(|l| l.tag), Some("es-ES"));
+        assert_eq!(locale_by_tag("de_DE").map(|l| l.tag), Some("de-DE"));
         assert_eq!(locale_by_tag("EN-gb").map(|l| l.tag), Some("en-GB"));
+        assert_eq!(locale_by_tag(" DE ").map(|l| l.tag), Some("de-DE"));
+        assert_eq!(locale_by_tag("en").map(|l| l.tag), Some("en-US"));
+        // Unknown regions do not fall back to the language (review 3, M7).
+        assert!(locale_by_tag("es_MX").is_none());
+        assert!(locale_by_tag("de-CH").is_none());
+        assert!(locale_by_tag("pt-BR").is_none());
         assert!(locale_by_tag("xx-YY").is_none());
+        assert!(locale_by_tag("xx").is_none());
+        assert!(locale_by_tag("").is_none());
         assert_eq!(DE_DE.month_from_name("märz"), Some((3, true)));
         assert_eq!(FR_FR.month_from_name("févr."), Some((2, false)));
         assert_eq!(FR_FR.month_from_name("févr"), Some((2, false)));

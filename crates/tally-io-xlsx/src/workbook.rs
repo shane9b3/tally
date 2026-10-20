@@ -75,13 +75,21 @@ pub(crate) fn rels_path(path: &str) -> String {
     }
 }
 
+/// Longest relationship target kept (hyperlink URLs; the engine caps
+/// links at 8 KiB anyway, so a longer target is dropped before it is
+/// copied to every cell of a range; security review 3, HIGH-3).
+pub(crate) const MAX_REL_TARGET: usize = 8 * 1024;
+
 /// Parses a `.rels` part. External targets (`TargetMode="External"`) are
-/// dropped: we never follow links out of the package.
+/// never followed: for hyperlinks the raw URL is kept. Relationships with
+/// a target over [`MAX_REL_TARGET`] bytes are dropped (`dropped` counts
+/// them).
 pub(crate) fn parse_rels<R: BufRead>(
     xr: &mut XmlReader<R>,
     base_dir: &str,
-) -> Result<Vec<Rel>, XlsxError> {
+) -> Result<Rels, XlsxError> {
     let mut out = Vec::new();
+    let mut dropped = 0usize;
     loop {
         match xr.next()? {
             Ev::Start(e) if e.local() == "Relationship" => {
@@ -89,6 +97,11 @@ pub(crate) fn parse_rels<R: BufRead>(
                     .attr_local("TargetMode")
                     .is_some_and(|m| m.eq_ignore_ascii_case("External"));
                 if let (Some(id), Some(target)) = (e.attr_local("Id"), e.attr_local("Target")) {
+                    if target.len() > MAX_REL_TARGET {
+                        dropped += 1;
+                        xr.skip()?;
+                        continue;
+                    }
                     out.push(Rel {
                         id: id.to_string(),
                         target: if external {
@@ -102,10 +115,19 @@ pub(crate) fn parse_rels<R: BufRead>(
                 }
                 xr.skip()?;
             }
-            Ev::Eof => return Ok(out),
+            Ev::Eof => return Ok(Rels { list: out, dropped }),
             _ => {}
         }
     }
+}
+
+/// The relationships of one part.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Rels {
+    /// In file order.
+    pub list: Vec<Rel>,
+    /// Relationships dropped for an over-long target.
+    pub dropped: usize,
 }
 
 /// What `[Content_Types].xml` says about the package.

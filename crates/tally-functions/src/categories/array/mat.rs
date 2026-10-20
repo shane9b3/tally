@@ -46,7 +46,8 @@ impl Dense {
 }
 
 /// Argument as a matrix of values (ranges are read with empties kept as
-/// `Value::Empty`). A scalar error propagates; an omitted argument is `#VALUE!`.
+/// `Value::Empty`). A scalar error propagates; an omitted argument or a
+/// reference union (no rectangular shape) is `#VALUE!`.
 pub(super) fn values(ctx: &mut dyn EvalContext, arg: EvalValue) -> Result<Arc<Matrix>, ErrorKind> {
     match arg {
         EvalValue::Missing => Err(ErrorKind::Value),
@@ -65,6 +66,8 @@ pub(super) fn values(ctx: &mut dyn EvalContext, arg: EvalValue) -> Result<Arc<Ma
             });
             Ok(Arc::new(m))
         }
+        #[allow(unreachable_patterns)]
+        _ => Err(ErrorKind::Value),
     }
 }
 

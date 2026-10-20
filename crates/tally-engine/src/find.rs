@@ -95,7 +95,17 @@ fn searched_text(
     in_formulas: bool,
 ) -> Option<String> {
     if in_formulas {
+        // Hidden formulas on a protected sheet are not searchable
+        // (security review 3, LOW-9), as they are not shown or copied.
+        let hidden = || {
+            crate::protection::sheet_protection(wb, addr.sheet).is_some()
+                && wb.sheet(addr.sheet).is_some_and(|s| {
+                    crate::protection::cell_protection(wb, s.style(addr.row, addr.col))
+                        .hidden_formula
+                })
+        };
         match content {
+            CellContent::Formula(_) if hidden() => None,
             CellContent::Formula(id) => wb.formula_text(*id),
             CellContent::ArrayPart(_) => None,
             CellContent::Value(_) => cell_edit_info(wb, addr.sheet, addr.row, addr.col)

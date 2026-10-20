@@ -14,7 +14,7 @@ use tally_types::{CellAddr, CellRange, ErrorKind, SheetId, Value, MAX_COLS, MAX_
 use crate::ops::{block_range, check_array_blocks, check_merges, write_inputs, MAX_OP_CELLS};
 use crate::storage::{CellContent, ColumnStore, StyleId};
 use crate::undo::{
-    capture_range, clear_range_content, clear_range_styles, sheet_meta, Change, Effects,
+    capture_range, clear_range_content, clear_range_styles, meta_parts, Change, Effects,
 };
 use crate::workbook::{Rng, SnapContent, Workbook};
 
@@ -351,7 +351,7 @@ pub fn paste_internal(
     }
     let mut changes = Vec::new();
     if carry_merges {
-        changes.extend(sheet_meta(wb, sheet));
+        changes.extend(meta_parts(wb, sheet, &[crate::storage::MetaKind::Merges]));
     }
     changes.push(Change::Range(capture_range(wb, area, contents, formats)));
     let place = |dr: u32, dc: u32| if opts.transpose { (dc, dr) } else { (dr, dc) };
@@ -379,7 +379,8 @@ pub fn paste_internal(
     }
     if carry_merges {
         if let Some(s) = wb.sheet_mut(sheet) {
-            s.meta.merges.retain(|m| {
+            let merges = std::sync::Arc::make_mut(&mut s.meta.merges);
+            merges.retain(|m| {
                 !(area.r0 <= m.r0 && m.r1 <= area.r1 && area.c0 <= m.c0 && m.c1 <= area.c1)
             });
             for rr in 0..reps_r {
@@ -394,7 +395,7 @@ pub fn paste_internal(
                             c1: target.c0 + rc * cols + b1,
                         };
                         if n.r1 <= area.r1 && n.c1 <= area.c1 {
-                            s.meta.merges.push(n);
+                            merges.push(n);
                         }
                     }
                 }

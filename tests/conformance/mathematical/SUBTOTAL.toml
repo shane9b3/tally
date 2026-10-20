@@ -133,5 +133,44 @@ formula = "=SUBTOTAL(9)"
 expect = "Err:511"
 
 [[case]]
-formula = "=SUBTOTAL(1;A1;A2)"
-expect = "Err:504"
+name = "several references (AOO: MustHaveParamCountMin(2), any number of ranges)"
+cells = { A1 = 1, A2 = 2, A3 = 3 }
+formula = "=SUBTOTAL(9;A1:A2;A3)"
+expect = 6
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = 3 }
+formula = "=SUBTOTAL(6;A1:A2;A3)"
+expect = 6
+
+[[case]]
+cells = { A1 = 1, A2 = "x", A3 = 3, B1 = 10 }
+formula = "=SUBTOTAL(2;A1:A3;B1)"
+expect = 3
+
+[[case]]
+cells = { A1 = 1, A2 = "x", A3 = 3, B1 = 10 }
+formula = "=SUBTOTAL(3;A1:A3;B1)"
+expect = 4
+
+[[case]]
+cells = { A1 = 1, A2 = 2, B1 = 10, B2 = 20 }
+formula = "=SUBTOTAL(4;A1:A2;B1:B2)"
+expect = 20
+
+[[case]]
+cells = { A1 = 1, A2 = 2, B1 = 10, B2 = 20 }
+formula = "=SUBTOTAL(1;A1:A2;B1:B2;D1)"
+expect = 8.25
+note = "The empty D1 adds nothing."
+
+[[case]]
+name = "a scalar among the references"
+cells = { A1 = 1, A2 = 2 }
+formula = "=SUBTOTAL(9;A1:A2;5)"
+expect = "#VALUE!"
+
+[[case]]
+cells = { A1 = 1, A2 = 2, A3 = "=1/0" }
+formula = "=SUBTOTAL(9;A1:A2;A3)"
+expect = "#DIV/0!"

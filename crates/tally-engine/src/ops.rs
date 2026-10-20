@@ -17,10 +17,11 @@ use tally_types::{CellAddr, CellRange, SheetId, MAX_COLS, MAX_ROWS};
 
 use crate::clipboard::ClipSnapshot;
 use crate::formula_cells::FormulaCellId;
+use crate::storage::MetaKind;
 use crate::storage::{AutoFilter, StyleId};
 use crate::undo::{
-    apply_change, capture_range, clear_range_content, clear_range_styles, names_snapshot,
-    remove_sheet, sheet_meta, Change, Effects,
+    apply_change, capture_range, clear_range_content, clear_range_styles, meta_parts,
+    names_snapshot, remove_sheet, sheet_meta, Change, Effects,
 };
 use crate::units::{px_to_hmm, DEFAULT_COL_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX};
 use crate::workbook::Workbook;
@@ -76,6 +77,9 @@ pub fn op_cost(wb: &Workbook, op: &Op) -> u64 {
 
 /// Error code: the op would change part of an array formula block.
 pub const ARRAY_BLOCK: &str = "array_block";
+
+/// `(row, col)` keys of a per-cell map.
+type CellKeys = Vec<(u32, u32)>;
 /// Error code: the op would change part of a merged area.
 pub const MERGED: &str = "merged";
 
@@ -194,7 +198,7 @@ pub fn check_merges(wb: &Workbook, range: &CellRange) -> Result<(), ApiError> {
     let Some(s) = wb.sheet(range.sheet) else {
         return Ok(());
     };
-    for m in &s.meta.merges {
+    for m in s.meta.merges.iter() {
         let mr = CellRange::new(range.sheet, m.r0, m.c0, m.r1, m.c1);
         if mr.intersects(range) && !range.contains_range(&mr) {
             return Err(ApiError::new(
@@ -484,7 +488,7 @@ fn postcheck(
                 continue;
             }
             let cells = by_sheet.entry(r.sheet).or_default();
-            for v in &s.meta.validations {
+            for v in s.meta.validations.iter() {
                 for vr in &v.ranges {
                     let vr = CellRange::new(r.sheet, vr.r0, vr.c0, vr.r1, vr.c1);
                     let Some(x) = vr.intersect(r) else { continue };
@@ -554,26 +558,54 @@ fn apply_op_inner(
                 check_array_blocks(wb, &ranges)?;
             }
             let mut inv = Vec::with_capacity(ranges.len() + 1);
-            // "Delete all" also removes notes and hyperlinks (Calc).
+            // "Delete all" also removes notes and hyperlinks (Calc); undo
+            // keeps the removed entries, not the whole maps.
             if *what == ClearWhat::All {
-                let hit = wb.sheet(*sheet).is_some_and(|s| {
-                    ranges.iter().any(|r| {
-                        crate::annotations::entries_in(&s.meta.notes, r)
-                            .next()
-                            .is_some()
-                            || crate::annotations::entries_in(&s.meta.links, r)
-                                .next()
-                                .is_some()
+                let (note_keys, link_keys): (CellKeys, CellKeys) = wb
+                    .sheet(*sheet)
+                    .map(|s| {
+                        (
+                            ranges
+                                .iter()
+                                .flat_map(|r| crate::annotations::entries_in(&s.meta.notes, r))
+                                .map(|(k, _)| k)
+                                .collect(),
+                            ranges
+                                .iter()
+                                .flat_map(|r| crate::annotations::entries_in(&s.meta.links, r))
+                                .map(|(k, _)| k)
+                                .collect(),
+                        )
                     })
-                });
-                if hit {
-                    inv.extend(sheet_meta(wb, *sheet));
+                    .unwrap_or_default();
+                if !note_keys.is_empty() || !link_keys.is_empty() {
                     if let Some(s) = wb.sheet_mut(*sheet) {
-                        for r in &ranges {
-                            crate::annotations::clear_in(&mut s.meta.notes, r);
-                            crate::annotations::clear_in(&mut s.meta.links, r);
+                        let mut parts = Vec::new();
+                        if !note_keys.is_empty() {
+                            parts.push(crate::storage::MetaPart::NoteEntries(
+                                crate::storage::map_entries(&s.meta.notes, &note_keys),
+                            ));
+                            let map = Arc::make_mut(&mut s.meta.notes);
+                            for k in &note_keys {
+                                map.remove(k);
+                            }
                         }
+                        if !link_keys.is_empty() {
+                            parts.push(crate::storage::MetaPart::LinkEntries(
+                                crate::storage::map_entries(&s.meta.links, &link_keys),
+                            ));
+                            let map = Arc::make_mut(&mut s.meta.links);
+                            for k in &link_keys {
+                                map.remove(k);
+                            }
+                        }
+                        inv.push(Change::Meta {
+                            sheet: *sheet,
+                            parts,
+                        });
                     }
+                    wb.pending.display_only.extend(ranges.iter().copied());
+                    fx.layout(*sheet);
                 }
             }
             for range in ranges {
@@ -729,6 +761,23 @@ fn apply_op_inner(
                 ));
             }
             let names = names_snapshot(wb);
+            // Rule formulas of the other sheets that point at this one are
+            // restored by undo (LOW-12): their collections are cheap
+            // `Arc` snapshots.
+            let other_metas: Vec<Change> = wb
+                .sheets
+                .iter()
+                .filter(|s| {
+                    s.id != *sheet
+                        && (!s.meta.cond_formats.is_empty() || !s.meta.validations.is_empty())
+                })
+                .map(|s| s.id)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .filter_map(|id| {
+                    meta_parts(wb, id, &[MetaKind::CondFormats, MetaKind::Validations])
+                })
+                .collect();
             // Formulas elsewhere that reference the sheet become #REF!.
             let change = StructureChange::DeleteSheet { sheet: *sheet };
             let mut adjusted: Vec<(FormulaCellId, CellAddr)> = Vec::new();
@@ -765,7 +814,10 @@ fn apply_op_inner(
                 }
             }
             wb.refresh_all_name_dependents();
-            Ok(vec![names, Change::Cells(old_cells), ins])
+            let mut out = vec![names];
+            out.extend(other_metas);
+            out.extend([Change::Cells(old_cells), ins]);
+            Ok(out)
         }
         Op::MoveSheet { sheet, to } => {
             check_sheet(wb, *sheet)?;
@@ -811,6 +863,9 @@ fn apply_op_inner(
             scope,
             refers_to,
         } => {
+            // Names are workbook state: allowed unless the document
+            // structure is protected (LOW-9).
+            crate::protection::check_structure(wb)?;
             if let Some(s) = scope {
                 check_sheet(wb, *s)?;
             }
@@ -830,6 +885,7 @@ fn apply_op_inner(
             Ok(vec![inv])
         }
         Op::DeleteName { name, scope } => {
+            crate::protection::check_structure(wb)?;
             let id = wb
                 .names
                 .lookup(name, *scope)
@@ -882,7 +938,8 @@ fn apply_op_inner(
             }
             check_merges(wb, &range)?;
             check_array_blocks(wb, &[range])?;
-            let meta = sheet_meta(wb, *sheet).ok_or_else(|| not_found_sheet(*sheet))?;
+            let meta = meta_parts(wb, *sheet, &[MetaKind::Merges])
+                .ok_or_else(|| not_found_sheet(*sheet))?;
             let content = capture_range(wb, range, true, false);
             // Only the top-left cell keeps its content.
             let anchor = range.start();
@@ -905,10 +962,9 @@ fn apply_op_inner(
             }
             if let Some(s) = wb.sheet_mut(*sheet) {
                 let l = local(&range);
-                s.meta
-                    .merges
-                    .retain(|m| !(l.r0 <= m.r0 && m.r1 <= l.r1 && l.c0 <= m.c0 && m.c1 <= l.c1));
-                s.meta.merges.push(l);
+                let merges = Arc::make_mut(&mut s.meta.merges);
+                merges.retain(|m| !(l.r0 <= m.r0 && m.r1 <= l.r1 && l.c0 <= m.c0 && m.c1 <= l.c1));
+                merges.push(l);
             }
             wb.pending.ranges.push(range);
             fx.layout(*sheet);
@@ -917,10 +973,19 @@ fn apply_op_inner(
         Op::UnmergeCells { sheet, range } => {
             check_sheet(wb, *sheet)?;
             let range = to_range(*sheet, range)?;
-            let meta = sheet_meta(wb, *sheet).ok_or_else(|| not_found_sheet(*sheet))?;
+            let meta = meta_parts(wb, *sheet, &[MetaKind::Merges])
+                .ok_or_else(|| not_found_sheet(*sheet))?;
             let mut hit = Vec::new();
             if let Some(s) = wb.sheet_mut(*sheet) {
-                s.meta.merges.retain(|m| {
+                let touched = s
+                    .meta
+                    .merges
+                    .iter()
+                    .any(|m| CellRange::new(*sheet, m.r0, m.c0, m.r1, m.c1).intersects(&range));
+                if !touched {
+                    return Ok(Vec::new());
+                }
+                Arc::make_mut(&mut s.meta.merges).retain(|m| {
                     let mr = CellRange::new(*sheet, m.r0, m.c0, m.r1, m.c1);
                     let keep = !mr.intersects(&range);
                     if !keep {
@@ -938,7 +1003,8 @@ fn apply_op_inner(
             if *rows >= MAX_ROWS || *cols >= MAX_COLS {
                 return Err(ApiError::invalid_argument("cannot freeze the whole sheet"));
             }
-            let meta = sheet_meta(wb, *sheet).ok_or_else(|| not_found_sheet(*sheet))?;
+            let meta = meta_parts(wb, *sheet, &[MetaKind::Frozen])
+                .ok_or_else(|| not_found_sheet(*sheet))?;
             if let Some(s) = wb.sheet_mut(*sheet) {
                 s.meta.frozen = (*rows > 0 || *cols > 0).then_some((*rows, *cols));
             }
@@ -990,11 +1056,14 @@ fn apply_op_inner(
         Op::SetAutoFilter { sheet, range } => {
             check_sheet(wb, *sheet)?;
             let range = range.as_ref().map(|r| to_range(*sheet, r)).transpose()?;
-            let meta = sheet_meta(wb, *sheet).ok_or_else(|| not_found_sheet(*sheet))?;
+            let meta = meta_parts(wb, *sheet, &[MetaKind::AutoFilter])
+                .ok_or_else(|| not_found_sheet(*sheet))?;
             if let Some(s) = wb.sheet_mut(*sheet) {
-                s.meta.auto_filter = range.map(|r| AutoFilter {
-                    range: local(&r),
-                    columns: BTreeMap::new(),
+                s.meta.auto_filter = range.map(|r| {
+                    Arc::new(AutoFilter {
+                        range: local(&r),
+                        columns: BTreeMap::new(),
+                    })
                 });
             }
             wb.reapply_filter(*sheet);
@@ -1006,7 +1075,8 @@ fn apply_op_inner(
             if let Some(f) = filter {
                 crate::filter::check_filter_size(f)?;
             }
-            let meta = sheet_meta(wb, *sheet).ok_or_else(|| not_found_sheet(*sheet))?;
+            let meta = meta_parts(wb, *sheet, &[MetaKind::AutoFilter])
+                .ok_or_else(|| not_found_sheet(*sheet))?;
             let s = wb
                 .sheet_mut(*sheet)
                 .ok_or_else(|| not_found_sheet(*sheet))?;
@@ -1014,6 +1084,7 @@ fn apply_op_inner(
                 .meta
                 .auto_filter
                 .as_mut()
+                .map(Arc::make_mut)
                 .ok_or_else(|| ApiError::invalid_argument("the sheet has no AutoFilter"))?;
             if *col < af.range.c0 || *col > af.range.c1 {
                 return Err(ApiError::invalid_argument(
@@ -1138,7 +1209,7 @@ fn structure(
         .map(|s| s.id)
         .collect::<Vec<_>>()
         .into_iter()
-        .filter_map(|id| sheet_meta(wb, id))
+        .filter_map(|id| meta_parts(wb, id, &[MetaKind::CondFormats, MetaKind::Validations]))
         .collect();
     let lost = Change::Range(capture_range(wb, shape.lost(), true, true));
     let old = wb.structure_change(&change);

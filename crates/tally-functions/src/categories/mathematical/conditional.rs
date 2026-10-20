@@ -5,6 +5,17 @@
 //! arithmetically (COUNTIF) or through the sum range (SUMIF family: an empty
 //! sum cell adds nothing), which keeps `COUNTIF(A:A; "")` and
 //! `SUMIF(A:A; ""; B:B)` correct.
+//!
+//! Criteria are parsed in the document locale ([`Args::criterion`]), so
+//! `">1,5"` and `"<19.10.2026"` are numbers under de-DE (AOO uses the
+//! document's number formatter).
+//!
+//! Unions (`A1:A2~B1:B2`, [`EvalValue::areas`]): COUNTIF, COUNTBLANK and
+//! SUMIF/AVERAGEIF without a sum range take every area in turn (AOO
+//! `ScCountIf`, `ScCountEmptyCells` and `IterateParametersIf` iterate
+//! `svRefList`); SUMIF/AVERAGEIF with a sum range reject a union with
+//! `Err:504` (`IterateParametersIf`: `errIllegalParameter` when
+//! `bSumExtraRange`). The `*IFS` functions take single areas (`#VALUE!`).
 
 use std::collections::HashMap;
 use std::ops::ControlFlow;
@@ -160,14 +171,14 @@ fn for_each_selected(
     failure.map_or(Ok(()), Err)
 }
 
-/// Sums or averages the numbers (booleans count as numbers) of `target`
-/// at selected positions. A selected error cell propagates.
+/// Adds the numbers (booleans count as numbers) of `target` at selected
+/// positions to `acc`. A selected error cell propagates.
 fn accumulate(
     ctx: &mut dyn EvalContext,
     target: &CellRange,
     matchers: &[Matcher],
-) -> Result<ApproxSum, ErrorKind> {
-    let mut acc = ApproxSum::new();
+    acc: &mut ApproxSum,
+) -> Result<(), ErrorKind> {
     for_each_selected(ctx, target, matchers, |v| {
         match v {
             Value::Number(x) => acc.add(*x),
@@ -176,21 +187,31 @@ fn accumulate(
             _ => {}
         }
         ControlFlow::Continue(())
-    })?;
-    Ok(acc)
+    })
 }
 
 /// Shared body of SUMIF and AVERAGEIF: `range; criteria; [target]`.
 fn single_criterion(a: &mut Args) -> Result<ApproxSum, ErrorKind> {
-    let range = a.range(0)?;
+    let areas = a.ranges(0)?;
     let crit = a.criterion(1)?;
-    let target = if a.is_missing(2) {
-        range
+    let sum_range = if a.is_missing(2) {
+        None
     } else {
-        resized(&a.range(2)?, range.rows(), range.cols())
+        if areas.len() > 1 {
+            return Err(ErrorKind::ParamList);
+        }
+        Some(a.range(2)?)
     };
-    let m = Matcher::build(a.ctx(), &range, &crit);
-    accumulate(a.ctx(), &target, &[m])
+    let mut acc = ApproxSum::new();
+    for range in &areas {
+        let target = match &sum_range {
+            Some(s) => resized(s, range.rows(), range.cols()),
+            None => *range,
+        };
+        let m = Matcher::build(a.ctx(), range, &crit);
+        accumulate(a.ctx(), &target, &[m], &mut acc)?;
+    }
+    Ok(acc)
 }
 
 fn sumif(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
@@ -233,9 +254,9 @@ fn sumifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
             .iter()
             .map(|(r, c)| Matcher::build(a.ctx(), r, c))
             .collect();
-        Ok(Value::Number(
-            accumulate(a.ctx(), &sum_range, &matchers)?.total(),
-        ))
+        let mut acc = ApproxSum::new();
+        accumulate(a.ctx(), &sum_range, &matchers, &mut acc)?;
+        Ok(Value::Number(acc.total()))
     })
 }
 
@@ -305,7 +326,8 @@ fn averageifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         }
         let target = a.range(0)?;
         let matchers = criteria_pairs(&mut a, 1, target.rows(), target.cols())?;
-        let acc = accumulate(a.ctx(), &target, &matchers)?;
+        let mut acc = ApproxSum::new();
+        accumulate(a.ctx(), &target, &matchers, &mut acc)?;
         if acc.count() == 0 {
             return Err(ErrorKind::Div0);
         }
@@ -318,21 +340,24 @@ fn averageifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
 fn countif(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
-        let range = a.range(0)?;
+        let areas = a.ranges(0)?;
         let crit = a.criterion(1)?;
-        let mut visited = 0u64;
+        let empty_ok = crit.matches(&Value::Empty);
         let mut hits = 0u64;
-        a.ctx().for_each_in_range(&range, true, &mut |_, v| {
-            if !v.is_empty() {
-                visited += 1;
-                if crit.matches(v) {
-                    hits += 1;
+        for range in &areas {
+            let mut visited = 0u64;
+            a.ctx().for_each_in_range(range, true, &mut |_, v| {
+                if !v.is_empty() {
+                    visited += 1;
+                    if crit.matches(v) {
+                        hits += 1;
+                    }
                 }
+                ControlFlow::Continue(())
+            });
+            if empty_ok {
+                hits += range.cell_count() - visited;
             }
-            ControlFlow::Continue(())
-        });
-        if crit.matches(&Value::Empty) {
-            hits += range.cell_count() - visited;
         }
         Ok(Value::Number(hits as f64))
     })
@@ -347,17 +372,22 @@ fn countblank(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
             Value::Text(s) => s.is_empty(),
             _ => false,
         };
-        match a.any(0) {
-            EvalValue::Range(range) => {
+        let arg = a.any(0);
+        if let Some(areas) = arg.areas() {
+            let mut blanks = 0u64;
+            for range in areas {
                 let mut nonblank = 0u64;
-                a.ctx().for_each_in_range(&range, true, &mut |_, v| {
+                a.ctx().for_each_in_range(range, true, &mut |_, v| {
                     if !blank(v) {
                         nonblank += 1;
                     }
                     ControlFlow::Continue(())
                 });
-                Ok(Value::Number((range.cell_count() - nonblank) as f64))
+                blanks += range.cell_count() - nonblank;
             }
+            return Ok(Value::Number(blanks as f64));
+        }
+        match arg {
             EvalValue::Array(m) => Ok(Value::Number(
                 m.data.iter().filter(|v| blank(v)).count() as f64
             )),
@@ -496,6 +526,70 @@ mod tests {
             err(ErrorKind::Div0)
         );
         assert_eq!(call(&mut c, "AVERAGEIF", vec![a, t(">0")]), num(7.0 / 3.0));
+    }
+
+    /// Review 3 H2: criteria operands are read in the document locale.
+    #[test]
+    fn criteria_in_document_locale() {
+        let mut c = MockEvalContext::new();
+        c.set_locale("de-DE");
+        c.set(0, "A1", 1.0).set(0, "A2", 2.0).set(0, "A3", 1.7);
+        c.set(0, "A4", 46314.0).set(0, "A5", 46204.0); // 19.10.2026, 1.7.2026
+        let a = c.range(0, "A1:A3");
+        let d = c.range(0, "A4:A5");
+        assert_eq!(
+            call(&mut c, "COUNTIF", vec![a.clone(), t(">1,5")]),
+            num(2.0)
+        );
+        // Under de-DE `1.5` is 1 May (as AOO reads it), so no number is
+        // above that date serial; ISO dates and plain decimals stay readable.
+        assert_eq!(
+            call(&mut c, "COUNTIF", vec![a.clone(), t(">1.5")]),
+            num(0.0)
+        );
+        assert_eq!(
+            call(&mut c, "COUNTIF", vec![a.clone(), t(">1,5E0")]),
+            num(2.0)
+        );
+        assert_eq!(call(&mut c, "COUNTIF", vec![a.clone(), t("1,7")]), num(1.0));
+        assert_eq!(call(&mut c, "COUNTIF", vec![a, t(">1.000")]), num(0.0));
+        assert_eq!(
+            call(&mut c, "SUMIF", vec![d.clone(), t("<19.10.2026")]),
+            num(46204.0)
+        );
+        assert_eq!(
+            call(&mut c, "SUMIF", vec![d.clone(), t("<2026-10-19")]),
+            num(46204.0)
+        );
+        // Month-day-year is text under de-DE: no date matches it.
+        assert_eq!(call(&mut c, "SUMIF", vec![d, t("<10/19/2026")]), num(0.0));
+    }
+
+    /// Review 3 M1: unions in the criteria range.
+    #[cfg(feature = "ref-union")]
+    #[test]
+    fn unions() {
+        let mut c = grid();
+        let u = c.union(0, &["A1:A3", "B1:B2"]);
+        assert_eq!(call(&mut c, "COUNTIF", vec![u.clone(), t(">1")]), num(2.0));
+        assert_eq!(call(&mut c, "COUNTIF", vec![u.clone(), t("")]), num(0.0));
+        assert_eq!(call(&mut c, "SUMIF", vec![u.clone(), t(">0")]), num(32.0));
+        assert_eq!(
+            call(&mut c, "AVERAGEIF", vec![u.clone(), t(">0")]),
+            num(32.0 / 4.0)
+        );
+        let b = c.range(0, "B1:B6");
+        assert_eq!(
+            call(&mut c, "SUMIF", vec![u.clone(), t(">0"), b.clone()]),
+            err(ErrorKind::ParamList)
+        );
+        assert_eq!(
+            call(&mut c, "SUMIFS", vec![b, u.clone(), t(">0")]),
+            err(ErrorKind::Value)
+        );
+        let blanks = c.union(0, &["A5:A6", "C1:C2"]);
+        assert_eq!(call(&mut c, "COUNTBLANK", vec![blanks]), num(3.0));
+        assert_eq!(call(&mut c, "COUNTBLANK", vec![u]), num(0.0));
     }
 
     #[test]

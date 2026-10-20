@@ -21,4 +21,11 @@ version: number,
 /**
  * Only non-empty or styled cells; missing cells are empty and default-styled.
  */
-cells: Array<CellView>, };
+cells: Array<CellView>, 
+/**
+ * `true` when the call's conditional-formatting work budget ran out
+ * while this block was decorated: some of its cells are shown without
+ * their conditional formats (the first cells of the call got them).
+ * Absent or `null` otherwise.
+ */
+cfTruncated?: boolean | null, };

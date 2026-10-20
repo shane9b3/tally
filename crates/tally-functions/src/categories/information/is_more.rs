@@ -67,7 +67,7 @@ fn isnontext(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
 
 fn isref(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
-    run(|| Ok(Value::Bool(matches!(a.any(0), EvalValue::Range(_)))))
+    run(|| Ok(Value::Bool(a.any(0).is_reference())))
 }
 
 fn isformula(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
@@ -106,6 +106,7 @@ fn type_fn(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     run(|| match a.any(0) {
         EvalValue::Array(_) | EvalValue::Scalar(Value::Array(_)) => Ok(Value::Number(64.0)),
         EvalValue::Range(r) if !r.is_single() => Ok(Value::Number(64.0)),
+        v if v.is_reference() && !matches!(v, EvalValue::Range(_)) => Ok(Value::Number(64.0)),
         other => {
             let v = scalar_value(&other, a.ctx());
             Ok(Value::Number(type_of(&v)))

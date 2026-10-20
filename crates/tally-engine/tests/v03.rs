@@ -15,6 +15,18 @@ use tally_api::{
 };
 use tally_types::{CellAddr, Value};
 
+/// Applies `ops` and checks that the result cannot be undone (protection
+/// changes clear the undo stacks; security review 3, LOW-9).
+fn not_undoable(f: &mut Fixture, ops: Vec<Op>) {
+    let res = f.apply(ops.clone());
+    assert!(res.errors.is_empty(), "{ops:?}: {:?}", res.errors);
+    assert!(!res.undo.can_undo, "{ops:?} must clear the undo stack");
+    assert!(!res.undo.can_redo, "{ops:?} must clear the redo stack");
+    let after = f.data();
+    f.svc.undo(f.doc).unwrap();
+    assert_eq!(f.data(), after, "undo after {ops:?} changes nothing");
+}
+
 fn round_trip(f: &mut Fixture, ops: Vec<Op>) {
     let before = f.data();
     let res = f.apply(ops.clone());
@@ -656,7 +668,7 @@ fn sheet_and_cell_protection() {
         locked: None,
         hidden_formula: Some(true),
     }]);
-    round_trip(
+    not_undoable(
         &mut f,
         vec![Op::ProtectSheet {
             sheet: s,
@@ -702,7 +714,7 @@ fn sheet_and_cell_protection() {
         password: Some("nope".into()),
     }]);
     assert_eq!(res.errors[0].code, "protected");
-    round_trip(
+    not_undoable(
         &mut f,
         vec![Op::UnprotectSheet {
             sheet: s,
@@ -743,7 +755,7 @@ fn sheet_and_cell_protection() {
 #[test]
 fn structure_protection() {
     let mut f = Fixture::new();
-    round_trip(
+    not_undoable(
         &mut f,
         vec![Op::ProtectDocument {
             password: Some("x".into()),
@@ -766,7 +778,7 @@ fn structure_protection() {
             .code,
         "protected"
     );
-    round_trip(
+    not_undoable(
         &mut f,
         vec![Op::UnprotectDocument {
             password: Some("x".into()),
@@ -1045,7 +1057,10 @@ fn indirect_r1c1() {
     f.set("C7", "=SUM(INDIRECT(\"R1C1:R3C2\",0))");
     assert_eq!(f.value("C7"), Value::Number(16.0));
     f.set("C8", "=INDIRECT(\"A1\",0)");
-    assert_eq!(f.value("C8"), Value::Error(tally_types::ErrorKind::Ref));
+    assert_eq!(
+        f.value("C8"),
+        Value::Error(tally_types::ErrorKind::InvalidArgument)
+    );
 }
 
 #[test]

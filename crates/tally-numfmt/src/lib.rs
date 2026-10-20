@@ -1,6 +1,7 @@
 //! Number formatting for Tally (WP4).
 //!
-//! - [`parse_format`] / [`print_format`]: OOo format codes ⇄ [`FormatAst`];
+//! - [`parse_format`] / [`print_format`]: OOo format codes ⇄ [`FormatAst`]
+//!   ([`parse_format_with_locale`] for codes in a locale's spelling);
 //! - [`format_value`] / [`format_value_with`]: value + format → [`Formatted`];
 //! - [`recognize_input`] / [`recognize_input_with`]: typed text → value and
 //!   implied format; [`parse_number_unambiguous`] for ConvertUnambiguous;
@@ -32,7 +33,7 @@ pub use format_ast::{
 pub use locale::{
     locale_by_tag, DateOrder, Locale, DE_DE, EN_GB, EN_US, ES_ES, FR_FR, JA_JP, LOCALES,
 };
-pub use parse_format::{parse_format, print_format, FormatError};
+pub use parse_format::{parse_format, parse_format_with_locale, print_format, FormatError};
 pub use recognize::{
     parse_number_unambiguous, parse_number_unambiguous_with, recognize_input, recognize_input_with,
     RecognizeContext, Recognized,

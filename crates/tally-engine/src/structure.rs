@@ -249,6 +249,54 @@ impl Workbook {
         old
     }
 
+    /// Rewrites the rule formulas of a sheet's conditional formats and
+    /// validations for a structural change on another sheet, copying only
+    /// the formats and validations whose formulas change.
+    pub(crate) fn adjust_other_sheet_rules(
+        meta: &mut crate::storage::SheetMeta,
+        change: &StructureChange,
+    ) {
+        fn adjusted(
+            f: &crate::fexpr::FExpr,
+            origin: CellAddr,
+            change: &StructureChange,
+        ) -> Option<crate::fexpr::FExpr> {
+            let mut n = f.clone();
+            n.adjust(origin, change);
+            (n.formula != f.formula).then_some(n)
+        }
+        for i in 0..meta.cond_formats.len() {
+            let cf = &meta.cond_formats[i];
+            let origin = cf.origin;
+            let mut probe = (**cf).clone();
+            let changed = probe
+                .formulas_mut()
+                .into_iter()
+                .any(|f| adjusted(f, origin, change).is_some());
+            if changed {
+                let cf = Arc::make_mut(&mut Arc::make_mut(&mut meta.cond_formats)[i]);
+                for f in cf.formulas_mut() {
+                    f.adjust(origin, change);
+                }
+            }
+        }
+        for i in 0..meta.validations.len() {
+            let v = &meta.validations[i];
+            let origin = v.origin;
+            let mut probe = (**v).clone();
+            let changed = probe
+                .formulas_mut()
+                .into_iter()
+                .any(|f| adjusted(f, origin, change).is_some());
+            if changed {
+                let v = Arc::make_mut(&mut Arc::make_mut(&mut meta.validations)[i]);
+                for f in v.formulas_mut() {
+                    f.adjust(origin, change);
+                }
+            }
+        }
+    }
+
     /// Adjusts what is not cells for a row/column change: the sheet's
     /// merges and AutoFilter (they grow, shrink or go away like area
     /// references) and every name's references. Callers record
@@ -260,7 +308,7 @@ impl Workbook {
             if let Some(sheet) = self.sheet_mut(sh.sheet) {
                 let span = |lo: u32, hi: u32| span_after(&sh, lo, hi);
                 let mut merges = Vec::with_capacity(sheet.meta.merges.len());
-                for m in &sheet.meta.merges {
+                for m in sheet.meta.merges.iter() {
                     let n = if sh.rows {
                         span(m.r0, m.r1).map(|(r0, r1)| CellRangeLocal { r0, r1, ..*m })
                     } else {
@@ -270,8 +318,11 @@ impl Workbook {
                         merges.push(n);
                     }
                 }
-                sheet.meta.merges = merges;
+                if *sheet.meta.merges != merges {
+                    sheet.meta.merges = Arc::new(merges);
+                }
                 if let Some(af) = sheet.meta.auto_filter.take() {
+                    let af = Arc::unwrap_or_clone(af);
                     let r = af.range;
                     let n = if sh.rows {
                         span(r.r0, r.r1).map(|(r0, r1)| CellRangeLocal { r0, r1, ..r })
@@ -287,7 +338,7 @@ impl Workbook {
                                 .filter_map(|(c, f)| point_after(&sh, c).map(|nc| (nc, f)))
                                 .collect()
                         };
-                        crate::storage::AutoFilter { range, columns }
+                        Arc::new(crate::storage::AutoFilter { range, columns })
                     });
                 }
                 let adjust_ranges = |ranges: &[CellRangeLocal]| -> Vec<CellRangeLocal> {
@@ -302,26 +353,44 @@ impl Workbook {
                         })
                         .collect()
                 };
-                for cf in &mut sheet.meta.cond_formats {
-                    cf.ranges = adjust_ranges(&cf.ranges);
-                    let origin = cf.origin;
-                    for f in cf.formulas_mut() {
-                        f.adjust(origin, change);
+                if !sheet.meta.cond_formats.is_empty() {
+                    let list = Arc::make_mut(&mut sheet.meta.cond_formats);
+                    for cf in list.iter_mut() {
+                        let cf = Arc::make_mut(cf);
+                        cf.ranges = adjust_ranges(&cf.ranges);
+                        let origin = cf.origin;
+                        for f in cf.formulas_mut() {
+                            f.adjust(origin, change);
+                        }
+                        cf.origin = shifted_origin(origin, change);
                     }
-                    cf.origin = shifted_origin(origin, change);
+                    list.retain(|cf| !cf.ranges.is_empty());
                 }
-                sheet.meta.cond_formats.retain(|cf| !cf.ranges.is_empty());
-                for v in &mut sheet.meta.validations {
-                    v.ranges = adjust_ranges(&v.ranges);
-                    let origin = v.origin;
-                    for f in v.formulas_mut() {
-                        f.adjust(origin, change);
+                if !sheet.meta.validations.is_empty() {
+                    let list = Arc::make_mut(&mut sheet.meta.validations);
+                    for v in list.iter_mut() {
+                        let v = Arc::make_mut(v);
+                        v.ranges = adjust_ranges(&v.ranges);
+                        let origin = v.origin;
+                        for f in v.formulas_mut() {
+                            f.adjust(origin, change);
+                        }
+                        v.origin = shifted_origin(origin, change);
                     }
-                    v.origin = shifted_origin(origin, change);
+                    list.retain(|v| !v.ranges.is_empty());
                 }
-                sheet.meta.validations.retain(|v| !v.ranges.is_empty());
-                crate::annotations::shift_for_structure(&mut sheet.meta.notes, &sh);
-                crate::annotations::shift_for_structure(&mut sheet.meta.links, &sh);
+                if !sheet.meta.notes.is_empty() {
+                    crate::annotations::shift_for_structure(
+                        Arc::make_mut(&mut sheet.meta.notes),
+                        &sh,
+                    );
+                }
+                if !sheet.meta.links.is_empty() {
+                    crate::annotations::shift_for_structure(
+                        Arc::make_mut(&mut sheet.meta.links),
+                        &sh,
+                    );
+                }
                 crate::pagesetup::adjust_for_structure(&mut sheet.meta, &sh);
             }
             // Wave 5 objects (anchors and ranges on this and other sheets).
@@ -334,18 +403,9 @@ impl Workbook {
                 if other.id == sh.sheet {
                     continue;
                 }
-                for cf in &mut other.meta.cond_formats {
-                    let origin = cf.origin;
-                    for f in cf.formulas_mut() {
-                        f.adjust(origin, change);
-                    }
-                }
-                for v in &mut other.meta.validations {
-                    let origin = v.origin;
-                    for f in v.formulas_mut() {
-                        f.adjust(origin, change);
-                    }
-                }
+                // Only formulas that actually change are rewritten, so
+                // untouched sheets keep sharing their collections.
+                Self::adjust_other_sheet_rules(&mut other.meta, change);
             }
             let sheet = sh.sheet;
             self.reapply_filter(sheet);

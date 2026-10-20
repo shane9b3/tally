@@ -9,11 +9,21 @@
 //! Rule formulas are [`FExpr`]s written for the top-left cell of the first
 //! range and evaluated at each cell (relative references move with it).
 //!
+//! Cost controls (security review 3, CRITICAL-1), all per document
+//! version in [`Transient`]: a [`RangeIndex`] per sheet finds the formats
+//! covering a cell in O(log n + k); the absolute subexpressions of a rule
+//! formula (`SUM($A:$A)`) are folded to literals once
+//! ([`FExpr::fold_absolute`]); the outcome of every evaluated cell is
+//! cached; and each `cells()` call has a work budget
+//! ([`MAX_CF_WORK_PER_CALL`]) past which the remaining cells are left
+//! unformatted and the block reports `cf_truncated`.
+//!
 //! Matching style rules combine by priority: the first rule (in format
 //! order, then rule order) that sets a property wins for that property.
 //! Colour scales set the fill, if no higher rule did; the first data bar
 //! and the first icon set apply. `stop_if_true` ends the evaluation.
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -29,18 +39,34 @@ use tally_model::{
 use tally_numfmt::{general_string, parse_format, FormatAst};
 use tally_types::{CellAddr, CellRange, SheetId, Value, MAX_COLS, MAX_ROWS};
 
-use crate::fexpr::{number_of, truthy, FExpr};
+use crate::fexpr::{eval_formula_counted, number_of, truthy, FExpr};
+use crate::rangeindex::RangeIndex;
 use crate::storage::{ColumnStore, StyleId};
 use crate::workbook::Workbook;
 
 /// Style ids at or above this are synthesized conditional styles.
 pub const CF_STYLE_BASE: u32 = 0x4000_0000;
-/// Most conditional formats per sheet.
-pub const MAX_CF_PER_SHEET: usize = 10_000;
+/// Most conditional formats per sheet (security review 3, CRITICAL-1:
+/// 10,000 formats covering one viewport took a minute per fetch; the
+/// readers and `AddConditionalFormat` drop extras with a warning).
+pub const MAX_CF_PER_SHEET: usize = 2_048;
 /// Most rules per conditional format.
 pub const MAX_RULES: usize = 64;
-/// Most ranges per conditional format or validation.
+/// Most ranges per conditional format.
+pub const MAX_CF_RANGES: usize = 64;
+/// Most ranges per validation.
 pub const MAX_RANGES: usize = 1024;
+/// Work budget of one `cells()` call for conditional formats, in the
+/// evaluator's element operations plus [`RULE_COST`] per rule evaluated.
+/// Past it the remaining cells of the call are not decorated and the
+/// block carries `cf_truncated` (CRITICAL-1 (2)).
+pub const MAX_CF_WORK_PER_CALL: u64 = 8_000_000;
+/// Fixed charge per rule evaluation (context set-up and the call itself;
+/// a simple rule such as `A1>0` costs about 200 ns in a release build,
+/// so the budget bounds one call at roughly 80 ms of rule evaluation).
+pub const RULE_COST: u64 = 20;
+/// Most cached cell outcomes per document version.
+const MAX_CACHED_OUTCOMES: usize = 1 << 18;
 
 /// A conditional format.
 #[derive(Clone, Debug, PartialEq)]
@@ -358,13 +384,15 @@ fn style_to_api(s: &CfStyleData) -> CfStyleDto {
 // API ⇄ engine
 // ---------------------------------------------------------------------------
 
-/// Validates DTO ranges (at least one, inside the grid).
-pub fn ranges_from_api(ranges: &[RangeDto]) -> Result<Vec<CellRangeLocal>, ApiError> {
+/// Validates DTO ranges (at least one, at most `max`, inside the grid).
+pub fn ranges_from_api(ranges: &[RangeDto], max: usize) -> Result<Vec<CellRangeLocal>, ApiError> {
     if ranges.is_empty() {
         return Err(ApiError::invalid_argument("at least one range is needed"));
     }
-    if ranges.len() > MAX_RANGES {
-        return Err(ApiError::invalid_argument("too many ranges"));
+    if ranges.len() > max {
+        return Err(ApiError::invalid_argument(format!(
+            "too many ranges (at most {max})"
+        )));
     }
     ranges
         .iter()
@@ -547,7 +575,7 @@ pub fn from_api(
     ranges: &[RangeDto],
     rules: &[CfRuleDto],
 ) -> Result<CondFormat, ApiError> {
-    let ranges = ranges_from_api(ranges)?;
+    let ranges = ranges_from_api(ranges, MAX_CF_RANGES)?;
     if rules.is_empty() || rules.len() > MAX_RULES {
         return Err(ApiError::invalid_argument(format!(
             "a conditional format needs 1 to {MAX_RULES} rules"
@@ -708,7 +736,7 @@ pub fn from_model(
         .iter()
         .copied()
         .filter(|r| r.r0 <= r.r1 && r.c0 <= r.c1 && r.r1 < MAX_ROWS && r.c1 < MAX_COLS)
-        .take(MAX_RANGES)
+        .take(MAX_CF_RANGES)
         .collect();
     if ranges.is_empty() {
         return None;
@@ -1034,12 +1062,47 @@ pub struct CfStyleEntry {
     pub format: Arc<FormatAst>,
 }
 
+/// What the conditional formats do to one cell, as the grid needs it
+/// (the synthesized style id instead of the patch).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CfDecor {
+    /// The synthesized style (`CF_STYLE_BASE + i`), if a style applies.
+    pub style: Option<u32>,
+    /// The style sets a number format (the view text is re-rendered).
+    pub number_format: bool,
+    /// A data bar.
+    pub bar: Option<DataBarView>,
+    /// An icon.
+    pub icon: Option<IconView>,
+    /// The value is hidden.
+    pub hide_value: bool,
+}
+
 #[derive(Debug, Default)]
 struct TransientInner {
     version: u64,
     aggs: HashMap<(SheetId, u32), Arc<Agg>>,
     styles: Vec<CfStyleEntry>,
     style_index: HashMap<String, u32>,
+    /// Per sheet: the index of the format ranges (format position → id).
+    index: HashMap<SheetId, Arc<RangeIndex<u32>>>,
+    /// Folded rule formulas by the address of the original `Formula`
+    /// (stable within a version: the meta is immutable between versions).
+    folded: HashMap<usize, Option<Arc<tally_formula::Formula>>>,
+    /// Evaluated cells: `None` when nothing applies.
+    outcomes: HashMap<(SheetId, u32, u32), Option<CfDecor>>,
+}
+
+impl TransientInner {
+    fn at_version(&mut self, version: u64) {
+        if self.version != version {
+            self.version = version;
+            self.aggs.clear();
+            self.index.clear();
+            self.folded.clear();
+            self.outcomes.clear();
+        }
+    }
 }
 
 /// Per-document caches that are not document state: conditional-format
@@ -1075,17 +1138,87 @@ impl Transient {
     fn agg(&self, wb: &Workbook, version: u64, sheet: SheetId, cf: &CondFormat) -> Arc<Agg> {
         {
             let mut g = self.lock();
-            if g.version != version {
-                g.version = version;
-                g.aggs.clear();
-            }
+            g.at_version(version);
             if let Some(a) = g.aggs.get(&(sheet, cf.id)) {
                 return a.clone();
             }
         }
         let a = Arc::new(Agg::compute(wb, sheet, cf));
-        self.lock().aggs.insert((sheet, cf.id), a.clone());
+        let mut g = self.lock();
+        g.at_version(version);
+        g.aggs.insert((sheet, cf.id), a.clone());
         a
+    }
+
+    /// The range index of `sheet`'s formats (positions in
+    /// `meta.cond_formats`), built once per version.
+    fn index(&self, wb: &Workbook, version: u64, sheet: SheetId) -> Arc<RangeIndex<u32>> {
+        {
+            let mut g = self.lock();
+            g.at_version(version);
+            if let Some(i) = g.index.get(&sheet) {
+                return i.clone();
+            }
+        }
+        let items: Vec<(CellRangeLocal, u32)> = wb
+            .sheet(sheet)
+            .map(|s| {
+                s.meta
+                    .cond_formats
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, cf)| cf.ranges.iter().map(move |r| (*r, i as u32)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let idx = Arc::new(RangeIndex::build(items));
+        let mut g = self.lock();
+        g.at_version(version);
+        g.index.insert(sheet, idx.clone());
+        idx
+    }
+
+    /// `f` with its absolute subexpressions folded at `at` (cached per
+    /// version by the formula's identity); the work spent folding.
+    fn folded(
+        &self,
+        wb: &Workbook,
+        version: u64,
+        f: &FExpr,
+        at: CellAddr,
+    ) -> (Arc<tally_formula::Formula>, u64) {
+        let key = Arc::as_ptr(&f.formula) as usize;
+        {
+            let mut g = self.lock();
+            g.at_version(version);
+            if let Some(cached) = g.folded.get(&key) {
+                return (cached.clone().unwrap_or_else(|| f.formula.clone()), 0);
+            }
+        }
+        let folded = f.fold_absolute(wb, at);
+        let out = folded.clone().unwrap_or_else(|| f.formula.clone());
+        let mut g = self.lock();
+        g.at_version(version);
+        if g.folded.len() < MAX_CACHED_OUTCOMES {
+            g.folded.insert(key, folded);
+        }
+        // Folding evaluated the absolute parts once; charge it as one
+        // rule evaluation.
+        (out, RULE_COST)
+    }
+
+    fn cached_outcome(&self, version: u64, key: (SheetId, u32, u32)) -> Option<Option<CfDecor>> {
+        let mut g = self.lock();
+        g.at_version(version);
+        g.outcomes.get(&key).cloned()
+    }
+
+    fn remember_outcome(&self, version: u64, key: (SheetId, u32, u32), d: Option<CfDecor>) {
+        let mut g = self.lock();
+        g.at_version(version);
+        if g.outcomes.len() < MAX_CACHED_OUTCOMES {
+            g.outcomes.insert(key, d);
+        }
     }
 
     /// The synthesized style id for `base` with `patch` applied.
@@ -1347,25 +1480,129 @@ fn lerp_color(a: u32, b: u32, t: f64) -> u32 {
     out
 }
 
-/// Evaluates conditional formats for the cells of one sheet.
+/// `true` if applying `p` under `acc` could change `acc` (every property
+/// `p` sets is still unset in `acc`-wise). Rules that cannot contribute
+/// are not evaluated.
+fn can_contribute(p: &CfStyleData, acc: &CfStyleData) -> bool {
+    macro_rules! any_new {
+        ($($f:ident),*) => { false $(|| (p.$f.is_some() && acc.$f.is_none()))* };
+    }
+    if any_new!(
+        bold,
+        italic,
+        underline,
+        strike,
+        color,
+        fill,
+        number_format,
+        display
+    ) {
+        return true;
+    }
+    match (&p.borders, &acc.borders) {
+        (Some(_), None) => true,
+        (Some(b), Some(a)) => {
+            (b.top.is_some() && a.top.is_none())
+                || (b.bottom.is_some() && a.bottom.is_none())
+                || (b.left.is_some() && a.left.is_none())
+                || (b.right.is_some() && a.right.is_none())
+        }
+        (None, _) => false,
+    }
+}
+
+/// Evaluates conditional formats for the cells of one sheet within one
+/// `cells()` call: one work budget, the per-version caches of
+/// [`Transient`], and the format index of the sheet.
 pub struct CfEval<'a> {
     wb: &'a Workbook,
     sheet: SheetId,
     version: u64,
+    index: Arc<RangeIndex<u32>>,
+    spent: Cell<u64>,
+    budget: u64,
+    truncated: Cell<bool>,
+    candidates: RefCell<Vec<u32>>,
 }
 
 impl<'a> CfEval<'a> {
-    /// An evaluator for `sheet` at document `version` (aggregates are
-    /// cached per version).
+    /// An evaluator for `sheet` at document `version` (aggregates, the
+    /// index, folded formulas and outcomes are cached per version).
     pub fn new(wb: &'a Workbook, sheet: SheetId, version: u64) -> Self {
-        Self { wb, sheet, version }
+        Self::with_budget(wb, sheet, version, MAX_CF_WORK_PER_CALL)
+    }
+
+    /// [`Self::new`] with a custom work budget (tests).
+    pub fn with_budget(wb: &'a Workbook, sheet: SheetId, version: u64, budget: u64) -> Self {
+        let has = wb
+            .sheet(sheet)
+            .is_some_and(|s| !s.meta.cond_formats.is_empty());
+        let index = if has {
+            wb.transient.index(wb, version, sheet)
+        } else {
+            Arc::new(RangeIndex::default())
+        };
+        Self {
+            wb,
+            sheet,
+            version,
+            index,
+            spent: Cell::new(0),
+            budget,
+            truncated: Cell::new(false),
+            candidates: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// `true` once the call's work budget ran out: cells evaluated after
+    /// that are left unformatted.
+    pub fn truncated(&self) -> bool {
+        self.truncated.get()
+    }
+
+    /// Work spent so far (tests).
+    pub fn work(&self) -> u64 {
+        self.spent.get()
+    }
+
+    /// The distinct rectangles of the sheet's formats intersecting `r`.
+    pub fn rects_in(&self, r: &CellRangeLocal) -> Vec<CellRangeLocal> {
+        self.index.intersections(r)
+    }
+
+    /// Charges `n`; `false` when the budget is spent.
+    fn charge(&self, n: u64) -> bool {
+        let w = self.spent.get().saturating_add(n);
+        self.spent.set(w);
+        if w > self.budget {
+            self.truncated.set(true);
+            return false;
+        }
+        true
+    }
+
+    /// Evaluates a rule formula at `addr`, folded and charged. `None`
+    /// when the budget is spent.
+    fn eval(&self, f: &FExpr, anchor: CellAddr, addr: CellAddr) -> Option<Value> {
+        if f.invalid.is_some() {
+            return self
+                .charge(1)
+                .then_some(Value::Error(tally_types::ErrorKind::Name));
+        }
+        let (formula, fold_cost) = self.wb.transient.folded(self.wb, self.version, f, anchor);
+        if !self.charge(fold_cost + RULE_COST) {
+            return None;
+        }
+        let (v, work) = eval_formula_counted(self.wb, &formula, addr);
+        self.charge(work);
+        Some(v)
     }
 
     fn threshold(&self, t: &Threshold, agg: &Agg, at: CellAddr) -> Option<f64> {
         let operand = || {
             t.value
                 .as_ref()
-                .and_then(|f| number_of(&f.eval(self.wb, at)))
+                .and_then(|f| number_of(&self.eval(f, at, at)?))
         };
         match t.kind {
             CfValueKindData::Min => agg.min(),
@@ -1381,21 +1618,35 @@ impl<'a> CfEval<'a> {
         }
     }
 
-    fn rule_matches(&self, cf: &CondFormat, rule: &CfRule, addr: CellAddr, v: &Value) -> bool {
+    /// Whether `rule` matches at `addr`; `None` when the budget is spent.
+    fn rule_matches(
+        &self,
+        cf: &CondFormat,
+        rule: &CfRule,
+        anchor: CellAddr,
+        addr: CellAddr,
+        v: &Value,
+    ) -> Option<bool> {
         let agg = || self.wb.transient.agg(self.wb, self.version, self.sheet, cf);
-        match &rule.kind {
+        Some(match &rule.kind {
             CfKind::CellValue { op, operands } => {
-                let a = operands.first().map(|f| f.eval(self.wb, addr));
-                let b = operands.get(1).map(|f| f.eval(self.wb, addr));
-                match a {
-                    Some(a) => compare(v, *op, &a, b.as_ref()),
-                    None => false,
-                }
+                let a = match operands.first() {
+                    Some(f) => self.eval(f, anchor, addr)?,
+                    None => return Some(false),
+                };
+                let b = match operands.get(1) {
+                    Some(f) => Some(self.eval(f, anchor, addr)?),
+                    None => None,
+                };
+                compare(v, *op, &a, b.as_ref())
             }
-            CfKind::Formula(f) => truthy(&f.eval(self.wb, addr)),
+            CfKind::Formula(f) => truthy(&self.eval(f, anchor, addr)?),
             CfKind::Duplicate | CfKind::Unique => {
+                if !self.charge(1) {
+                    return None;
+                }
                 let Some(k) = val_key(v) else {
-                    return false;
+                    return Some(false);
                 };
                 let n = agg().counts.get(&k).copied().unwrap_or(0);
                 if matches!(rule.kind, CfKind::Duplicate) {
@@ -1409,13 +1660,16 @@ impl<'a> CfEval<'a> {
                 percent,
                 bottom,
             } => {
+                if !self.charge(1) {
+                    return None;
+                }
                 let Value::Number(x) = v else {
-                    return false;
+                    return Some(false);
                 };
                 let a = agg();
                 let n = a.nums.len();
                 if n == 0 {
-                    return false;
+                    return Some(false);
                 }
                 let k = if *percent {
                     ((n as u64 * u64::from(*rank)) / 100).max(1) as usize
@@ -1430,11 +1684,14 @@ impl<'a> CfEval<'a> {
                 }
             }
             CfKind::Average { above, equal } => {
+                if !self.charge(1) {
+                    return None;
+                }
                 let Value::Number(x) = v else {
-                    return false;
+                    return Some(false);
                 };
                 let Some(m) = agg().mean() else {
-                    return false;
+                    return Some(false);
                 };
                 match (above, equal) {
                     (true, false) => *x > m,
@@ -1444,8 +1701,11 @@ impl<'a> CfEval<'a> {
                 }
             }
             CfKind::Text { op, text } => {
+                if !self.charge(1) {
+                    return None;
+                }
                 let Some(s) = value_text(v) else {
-                    return false;
+                    return Some(false);
                 };
                 let (s, t) = (s.to_lowercase(), text.to_lowercase());
                 match op {
@@ -1455,33 +1715,65 @@ impl<'a> CfEval<'a> {
                     CfTextOpData::EndsWith => s.ends_with(&t),
                 }
             }
-            CfKind::Blank => value_text(v).is_some_and(|s| s.trim().is_empty()),
-            CfKind::NotBlank => !value_text(v).is_some_and(|s| s.trim().is_empty()),
-            CfKind::Error => matches!(v, Value::Error(_)),
-            CfKind::NotError => !matches!(v, Value::Error(_)),
-            CfKind::DateIs(p) => match v {
-                Value::Number(n) => date_matches(self.wb, *n, *p),
-                _ => false,
-            },
+            CfKind::Blank => {
+                if !self.charge(1) {
+                    return None;
+                }
+                value_text(v).is_some_and(|s| s.trim().is_empty())
+            }
+            CfKind::NotBlank => {
+                if !self.charge(1) {
+                    return None;
+                }
+                !value_text(v).is_some_and(|s| s.trim().is_empty())
+            }
+            CfKind::Error => {
+                if !self.charge(1) {
+                    return None;
+                }
+                matches!(v, Value::Error(_))
+            }
+            CfKind::NotError => {
+                if !self.charge(1) {
+                    return None;
+                }
+                !matches!(v, Value::Error(_))
+            }
+            CfKind::DateIs(p) => {
+                if !self.charge(1) {
+                    return None;
+                }
+                match v {
+                    Value::Number(n) => date_matches(self.wb, *n, *p),
+                    _ => false,
+                }
+            }
             CfKind::ColorScale(_) | CfKind::DataBar { .. } | CfKind::IconSet { .. } => false,
-        }
+        })
     }
 
-    /// The outcome for one cell (`None` when no format covers it or nothing
-    /// applies).
+    /// The outcome for one cell (`None` when no format covers it, nothing
+    /// applies, or the budget ran out before it was evaluated).
     pub fn outcome(&self, row: u32, col: u32) -> Option<CfOutcome> {
         let sheet = self.wb.sheet(self.sheet)?;
-        if sheet.meta.cond_formats.is_empty() {
+        if self.index.is_empty() || self.truncated.get() {
+            return None;
+        }
+        let mut candidates = self.candidates.borrow_mut();
+        self.index.covering_sorted(row, col, &mut candidates);
+        if candidates.is_empty() {
+            return None;
+        }
+        if !self.charge(candidates.len() as u64) {
             return None;
         }
         let addr = CellAddr::new(self.sheet, row, col);
         let mut out = CfOutcome::default();
-        let mut value: Option<Value> = None;
-        'formats: for cf in &sheet.meta.cond_formats {
-            if !cf.contains(row, col) {
+        let v = self.wb.value(addr);
+        'formats: for &i in candidates.iter() {
+            let Some(cf) = sheet.meta.cond_formats.get(i as usize) else {
                 continue;
-            }
-            let v = value.get_or_insert_with(|| self.wb.value(addr)).clone();
+            };
             let anchor = cf.anchor(self.sheet);
             for rule in &cf.rules {
                 match &rule.kind {
@@ -1491,10 +1783,15 @@ impl<'a> CfEval<'a> {
                             continue;
                         }
                         let agg = self.wb.transient.agg(self.wb, self.version, self.sheet, cf);
-                        let pts: Vec<(f64, u32)> = stops
-                            .iter()
-                            .filter_map(|(t, c)| self.threshold(t, &agg, anchor).map(|p| (p, *c)))
-                            .collect();
+                        let mut pts: Vec<(f64, u32)> = Vec::with_capacity(stops.len());
+                        for (t, c) in stops {
+                            if let Some(p) = self.threshold(t, &agg, anchor) {
+                                pts.push((p, *c));
+                            }
+                        }
+                        if self.truncated.get() {
+                            return None;
+                        }
                         if pts.len() != stops.len() || pts.is_empty() {
                             continue;
                         }
@@ -1532,10 +1829,12 @@ impl<'a> CfEval<'a> {
                             continue;
                         }
                         let agg = self.wb.transient.agg(self.wb, self.version, self.sheet, cf);
-                        let (Some(lo), Some(hi)) = (
-                            self.threshold(min, &agg, anchor),
-                            self.threshold(max, &agg, anchor),
-                        ) else {
+                        let lo = self.threshold(min, &agg, anchor);
+                        let hi = self.threshold(max, &agg, anchor);
+                        if self.truncated.get() {
+                            return None;
+                        }
+                        let (Some(lo), Some(hi)) = (lo, hi) else {
                             continue;
                         };
                         let span = hi - lo;
@@ -1586,6 +1885,9 @@ impl<'a> CfEval<'a> {
                                 _ => {}
                             }
                         }
+                        if self.truncated.get() {
+                            return None;
+                        }
                         let n = set.icon_count();
                         let index = index.min(n - 1);
                         let index = if *reverse { n - 1 - index } else { index };
@@ -1598,7 +1900,14 @@ impl<'a> CfEval<'a> {
                         }
                     }
                     _ => {
-                        if self.rule_matches(cf, rule, addr, &v) {
+                        // A rule whose style adds nothing to what higher
+                        // rules set cannot change the outcome unless it
+                        // stops the evaluation.
+                        if !rule.stop_if_true && !can_contribute(&rule.style, &out.style) {
+                            continue;
+                        }
+                        let hit = self.rule_matches(cf, rule, anchor, addr, &v)?;
+                        if hit {
                             merge_under(&mut out.style, &rule.style);
                             if rule.stop_if_true {
                                 break 'formats;
@@ -1609,6 +1918,46 @@ impl<'a> CfEval<'a> {
             }
         }
         (!out.is_empty()).then_some(out)
+    }
+
+    /// The decoration of one cell with base style `base`, from the
+    /// per-version cache when the cell was evaluated before. `None` when
+    /// nothing applies or the budget is spent (then nothing is cached).
+    pub fn decor(&self, row: u32, col: u32, base: StyleId) -> Option<CfDecor> {
+        if self.index.is_empty() {
+            return None;
+        }
+        let key = (self.sheet, row, col);
+        if let Some(d) = self.wb.transient.cached_outcome(self.version, key) {
+            return d;
+        }
+        if self.truncated.get() {
+            return None;
+        }
+        let o = self.outcome(row, col);
+        if self.truncated.get() {
+            return None;
+        }
+        let d = o.map(|o| {
+            let (style, number_format) = if o.style.is_empty() {
+                (None, false)
+            } else {
+                let base = &self.wb.styles.get(base).data;
+                let (id, _) = self.wb.transient.style_for(base, &o.style);
+                (Some(id), o.style.number_format.is_some())
+            };
+            CfDecor {
+                style,
+                number_format,
+                bar: o.bar,
+                icon: o.icon,
+                hide_value: o.hide_value,
+            }
+        });
+        self.wb
+            .transient
+            .remember_outcome(self.version, key, d.clone());
+        d
     }
 }
 

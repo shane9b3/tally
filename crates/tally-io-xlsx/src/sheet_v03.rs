@@ -23,6 +23,21 @@ use crate::XlsxError;
 
 /// Most rules, validations, links or breaks read per sheet.
 const MAX_ITEMS: usize = 100_000;
+/// Most conditional formats per sheet (the engine's cap; extras are
+/// dropped with a warning).
+pub(crate) const MAX_CF_PER_SHEET: usize = 2_048;
+/// Most ranges per conditional format.
+pub(crate) const MAX_CF_RANGES: usize = 64;
+/// Most expanded hyperlink cells per sheet.
+pub(crate) const MAX_LINKS_PER_SHEET: usize = 100_000;
+/// Longest in-document `location` of a hyperlink.
+const MAX_LOCATION: usize = 8 * 1024;
+/// Longest comment text kept (the engine's note cap).
+pub(crate) const MAX_NOTE_TEXT: usize = 32 * 1024;
+/// Most hash rounds honoured for `spinCount` (clamped; MEDIUM-5).
+const MAX_SPIN_COUNT: u32 = 100_000;
+/// Longest `hashValue` / `saltValue` / `password` kept.
+const MAX_HASH_LEN: usize = 1024;
 /// Longest attribute-like text kept (messages, header/footer).
 const MAX_TEXT: usize = 64 * 1024;
 
@@ -182,7 +197,8 @@ pub(crate) fn parse_cf<R: BufRead>(
     dxfs: &[CfStyleData],
     r: &XlsxResolver,
 ) -> Result<Option<ConditionalFormatData>, XlsxError> {
-    let ranges = parse_sqref(attr(e, "sqref").unwrap_or(""));
+    let mut ranges = parse_sqref(attr(e, "sqref").unwrap_or(""));
+    ranges.truncate(MAX_CF_RANGES);
     let base = ranges.first().map_or((0, 0), |r| (r.r0, r.c0));
     let origin = CellAddr::new(sheet, base.0, base.1);
     let mut rules: Vec<(u32, CfRuleData)> = Vec::new();
@@ -361,7 +377,8 @@ pub(crate) fn parse_dv<R: BufRead>(
     sheet: u32,
     r: &XlsxResolver,
 ) -> Result<Option<ValidationData>, XlsxError> {
-    let ranges = parse_sqref(attr(e, "sqref").unwrap_or(""));
+    let mut ranges = parse_sqref(attr(e, "sqref").unwrap_or(""));
+    ranges.truncate(MAX_CF_RANGES);
     let base = ranges.first().map_or((0, 0), |r| (r.r0, r.c0));
     let origin = CellAddr::new(sheet, base.0, base.1);
     let mut f1: Option<String> = None;
@@ -466,16 +483,25 @@ pub(crate) fn parse_protection(e: &Elem) -> Option<SheetProtectionData> {
     if !attr_bool(e, "sheet", false) {
         return None;
     }
+    // Over-long hash material is dropped (the sheet stays protected and
+    // any password unlocks it, as for an unknown algorithm); the spin
+    // count is clamped to Excel's default (MEDIUM-5).
     let a = |k: &str| attr(e, k).map(str::to_string);
+    let too_long = ["password", "hashValue", "saltValue", "algorithmName"]
+        .iter()
+        .any(|k| attr(e, k).is_some_and(|v| v.len() > MAX_HASH_LEN));
     let mut p = SheetProtectionData::default();
-    if let Some(h) = a("password").filter(|h| !h.is_empty()) {
+    if too_long {
+        // Keep the sheet protected without hash material: any password
+        // unlocks it (as for an unknown algorithm) instead of none.
+    } else if let Some(h) = a("password").filter(|h| !h.is_empty()) {
         p.password_hash = Some(h);
         p.algorithm = Some(hash_algorithms::XLSX_LEGACY.into());
     } else if let Some(h) = a("hashValue") {
         p.password_hash = Some(h);
         p.algorithm = a("algorithmName");
         p.salt = a("saltValue");
-        p.spin_count = attr_u32(e, "spinCount");
+        p.spin_count = attr_u32(e, "spinCount").map(|n| n.min(MAX_SPIN_COUNT));
     }
     // Each attribute says the action is *protected* (not allowed).
     let allowed = |k: &str, protected_by_default: bool| !attr_bool(e, k, protected_by_default);
@@ -649,19 +675,37 @@ pub(crate) type RawLink = (CellRangeLocal, Option<String>, Option<String>);
 /// Reads one `hyperlink`.
 pub(crate) fn parse_link(e: &Elem) -> Option<RawLink> {
     let range = parse_range(attr(e, "ref")?)?;
+    let location = attr(e, "location")?;
+    if location.len() > MAX_LOCATION {
+        return None;
+    }
     Some((
         range,
         attr(e, "id").map(str::to_string),
-        attr(e, "location").map(str::to_string),
+        Some(location.to_string()),
     ))
 }
 
-/// `xl/comments*.xml` → notes.
+/// Reads one `hyperlink` without a `location`.
+pub(crate) fn parse_link_any(e: &Elem) -> Option<RawLink> {
+    match attr(e, "location") {
+        Some(_) => parse_link(e),
+        None => Some((
+            parse_range(attr(e, "ref")?)?,
+            attr(e, "id").map(str::to_string),
+            None,
+        )),
+    }
+}
+
+/// `xl/comments*.xml` → notes, with the number of comments truncated to
+/// [`MAX_NOTE_TEXT`].
 pub(crate) fn parse_comments<R: BufRead>(
     xr: &mut XmlReader<R>,
-) -> Result<Vec<NoteData>, XlsxError> {
+) -> Result<(Vec<NoteData>, usize), XlsxError> {
     let mut authors: Vec<String> = Vec::new();
     let mut notes: Vec<NoteData> = Vec::new();
+    let mut truncated = 0usize;
     loop {
         match xr.next()? {
             Ev::Start(e) => match e.local() {
@@ -681,13 +725,21 @@ pub(crate) fn parse_comments<R: BufRead>(
                     if let Some(p) = pos {
                         if notes.len() < MAX_ITEMS {
                             // Excel prefixes the text with "Author:\n".
-                            let t = match &author {
+                            let mut t = match &author {
                                 Some(a) => text
                                     .strip_prefix(&format!("{a}:"))
                                     .map(|x| x.trim_start_matches(['\n', '\r']).to_string())
                                     .unwrap_or(text),
                                 None => text,
                             };
+                            if t.len() > MAX_NOTE_TEXT {
+                                let mut end = MAX_NOTE_TEXT;
+                                while !t.is_char_boundary(end) {
+                                    end -= 1;
+                                }
+                                t.truncate(end);
+                                truncated += 1;
+                            }
                             notes.push(NoteData {
                                 row: p.r0,
                                 col: p.c0,
@@ -707,7 +759,7 @@ pub(crate) fn parse_comments<R: BufRead>(
     }
     notes.sort_by_key(|n| (n.row, n.col));
     notes.dedup_by_key(|n| (n.row, n.col));
-    Ok(notes)
+    Ok((notes, truncated))
 }
 
 /// `_xlnm.Print_Titles` text → (rows, cols) to repeat.

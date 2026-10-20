@@ -352,3 +352,85 @@ mod props {
         }
     }
 }
+
+/// Review 3 H2: the `ConvertLocale` rule and `locale_of` follow the
+/// document locale; the settings-only forms stay en-US.
+#[test]
+fn convert_locale_follows_document_locale() {
+    use tally_functions::coerce::{locale_of, text_to_number_in, value_to_number_in};
+    let s = CalcSettings {
+        text_to_number: TextToNumber::ConvertLocale,
+        ..CalcSettings::default()
+    };
+    let de = tally_numfmt::locale_by_tag("de-DE").unwrap();
+    assert_eq!(text_to_number_in("1,5", &s, de), Ok(1.5));
+    assert_eq!(text_to_number_in("1.000,5", &s, de), Ok(1000.5));
+    assert_eq!(text_to_number_in("19.10.2026", &s, de), Ok(46_314.0));
+    assert_eq!(text_to_number_in("WAHR", &s, de), Ok(1.0));
+    assert_eq!(
+        text_to_number_in("$1,234.50", &s, de),
+        Err(ErrorKind::Value)
+    );
+    assert_eq!(text_to_number("1,5", &s), Err(ErrorKind::Value));
+    assert_eq!(value_to_number_in(&Value::text("1,5"), &s, de), Ok(1.5));
+
+    let mut c = ctx();
+    assert_eq!(locale_of(&c).tag, "en-US");
+    c.set_locale("de-DE");
+    assert_eq!(locale_of(&c).tag, "de-DE");
+    c.settings = s;
+    assert_eq!(to_number(&t("1,5"), &mut c), Ok(1.5));
+    assert_eq!(
+        to_number(&t("1.5"), &mut c),
+        Ok(46_143.0),
+        "1 May 2026 under de-DE"
+    );
+    let mut sum = 0.0;
+    number_seq(&t("2,5"), &mut c, |x| sum += x).unwrap();
+    assert_eq!(sum, 2.5);
+    // The default rule is locale-independent (integers and ISO only).
+    c.settings = CalcSettings::default();
+    assert_eq!(to_number(&t("1,5"), &mut c), Err(ErrorKind::Value));
+}
+
+#[test]
+fn recognize_number_in_locale() {
+    use tally_functions::coerce::recognize_number;
+    use tally_numfmt::{RecognizeContext, DE_DE, EN_US};
+    let now = RecognizeContext::now(DateEpoch::D1899);
+    assert_eq!(recognize_number("1,5", &DE_DE, &now), Some(1.5));
+    assert_eq!(recognize_number("1.5", &EN_US, &now), Some(1.5));
+    assert_eq!(recognize_number("1,000", &EN_US, &now), Some(1000.0));
+    assert_eq!(recognize_number("2026-10-19", &DE_DE, &now), Some(46_314.0));
+    assert_eq!(recognize_number("1e3", &DE_DE, &now), Some(1000.0));
+    assert_eq!(recognize_number("abc", &DE_DE, &now), None);
+}
+
+/// A reference union is a sequence of its areas for the `*_seq` helpers
+/// and `#VALUE!` as a scalar (review 3, M1).
+#[cfg(feature = "ref-union")]
+#[test]
+fn unions_in_sequences_and_scalars() {
+    let mut c = ctx();
+    c.set(0, "A1", 1.0).set(0, "A2", 2.0).set(0, "B1", 10.0);
+    c.set(0, "B2", "x").set(0, "C3", true);
+    let u = c.union(0, &["A1:A2", "B1:B2", "C3"]);
+    assert_eq!(u.areas().map(<[CellRange]>::len), Some(3));
+    assert!(u.is_reference());
+    let mut got = Vec::new();
+    number_seq(&u, &mut c, |x| got.push(x)).unwrap();
+    assert_eq!(got, vec![1.0, 2.0, 10.0, 1.0]);
+    let mut got = Vec::new();
+    number_seq_with_text_as_zero(&u, &mut c, |x| got.push(x)).unwrap();
+    assert_eq!(got, vec![1.0, 2.0, 10.0, 0.0, 1.0]);
+    let mut seen = Vec::new();
+    values_seq(&u, &mut c, |v, src| seen.push((v.clone(), src)));
+    assert_eq!(seen.len(), 5);
+    assert!(seen.iter().all(|(_, s)| *s == SeqSource::Reference));
+    assert_eq!(scalar_value(&u, &mut c), Value::Error(ErrorKind::Value));
+    assert_eq!(to_number(&u, &mut c), Err(ErrorKind::Value));
+    assert_eq!(to_text(&u, &mut c), Err(ErrorKind::Value));
+    // The first error in area order propagates.
+    c.set(0, "B1", Value::Error(ErrorKind::Div0));
+    assert_eq!(number_seq(&u, &mut c, |_| {}), Err(ErrorKind::Div0));
+}

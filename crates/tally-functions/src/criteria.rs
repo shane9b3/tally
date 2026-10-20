@@ -8,12 +8,14 @@
 //!
 //! - An operator prefix (`=`, `<>`, `<`, `<=`, `>`, `>=`) is stripped; no
 //!   prefix means "equal" (a *bare* criterion).
-//! - The remaining text becomes the operand: a number if the en-US input
-//!   recognizer ([`tally_numfmt::recognize_input_with`], today's date for
-//!   year-less dates) or [`crate::coerce::parse_unambiguous`] accepts it (so
-//!   `">10/1/2026"`, `">1,000"`, `">50%"`, `">$5"` and `">2024-01-01"`
-//!   work, as in AOO), a boolean for `TRUE`/`FALSE`, an error for `#N/A`-style names,
-//!   otherwise text.
+//! - The remaining text becomes the operand: a number if the document
+//!   locale's input recognizer ([`crate::coerce::recognize_number`]: today's
+//!   date for year-less dates) or [`crate::coerce::parse_unambiguous`]
+//!   accepts it (so `">10/1/2026"`, `">1,000"`, `">50%"`, `">$5"` and
+//!   `">2024-01-01"` work under en-US and `">1,5"`, `"<19.10.2026"` under
+//!   de-DE, as AOO's `IsNumberFormat` makes them), a boolean for
+//!   `TRUE`/`FALSE` or the locale's names (`WAHR`/`FALSCH`), an error for
+//!   `#N/A`-style names, otherwise text.
 //! - A number operand matches numbers (by [`approx_equal`]), booleans (as
 //!   1/0, following AOO's storage model) and, for `=`, text that parses as
 //!   that number. Ordering operators never match text or empty cells.
@@ -36,11 +38,10 @@
 //!   the same error (callers usually propagate it first).
 
 use regex::{Regex, RegexBuilder};
+use tally_numfmt::{Locale, RecognizeContext, EN_US};
 use tally_types::{approx_equal, CalcSettings, CriteriaMode, DateEpoch, ErrorKind, Value};
 
-use tally_numfmt::{recognize_input_with, RecognizeContext, EN_US};
-
-use crate::coerce::{parse_unambiguous, top_left};
+use crate::coerce::{parse_unambiguous, recognize_number, top_left};
 
 /// Comparison operator of a criterion.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -378,20 +379,29 @@ fn cmp_numbers(a: f64, b: f64) -> std::cmp::Ordering {
     }
 }
 
-/// The numeric value of a criterion operand: the en-US input recognizer
-/// first (so `"10/1/2026"`, `"1,000"`, `"50%"` and `"$5"` are numbers, as
-/// AOO's `IsNumberFormat` makes them), then the unambiguous parser.
-fn criterion_number(rest: &str, epoch: DateEpoch) -> Option<f64> {
-    let ctx = RecognizeContext::now(epoch);
-    match recognize_input_with(rest, &EN_US, &ctx).value {
-        Value::Number(n) => Some(n),
-        _ => parse_unambiguous(rest, epoch),
-    }
+/// The numeric value of a criterion operand: the locale's input recognizer
+/// first (so `"10/1/2026"`, `"1,000"`, `"50%"` and `"$5"` are numbers under
+/// en-US, as AOO's `IsNumberFormat` makes them), then the unambiguous parser.
+fn criterion_number(rest: &str, epoch: DateEpoch, locale: &Locale) -> Option<f64> {
+    recognize_number(rest, locale, &RecognizeContext::now(epoch))
+}
+
+/// Case-insensitive match of a boolean name (`TRUE`, or the locale's `WAHR`).
+fn is_name(s: &str, name: &str) -> bool {
+    s.len() <= name.len() * 4 && s.to_lowercase() == name.to_lowercase()
 }
 
 impl Criterion {
-    /// Parses a criterion from a cell or argument value (see the module docs).
+    /// Parses a criterion from a cell or argument value (see the module
+    /// docs) with en-US number spellings; [`Criterion::parse_in`] takes the
+    /// document locale, which is what functions use.
     pub fn parse(value: &Value, settings: &CalcSettings) -> Criterion {
+        Criterion::parse_in(value, settings, &EN_US)
+    }
+
+    /// Parses a criterion whose numeric operands are spelled in `locale`
+    /// (see the module docs).
+    pub fn parse_in(value: &Value, settings: &CalcSettings, locale: &Locale) -> Criterion {
         let epoch = settings.date_epoch;
         let (op, operand) = match value {
             Value::Empty => (CmpOp::Eq, Operand::Number(0.0)),
@@ -399,7 +409,7 @@ impl Criterion {
             Value::Bool(b) => (CmpOp::Eq, Operand::Bool(*b)),
             Value::Error(e) => (CmpOp::Eq, Operand::Error(*e)),
             Value::Array(m) => {
-                return Criterion::parse(&top_left(m).unwrap_or(Value::Empty), settings)
+                return Criterion::parse_in(&top_left(m).unwrap_or(Value::Empty), settings, locale)
             }
             Value::Text(s) => {
                 let (op, rest, bare) = split_op(s);
@@ -410,11 +420,11 @@ impl Criterion {
                         },
                         _ => Operand::Text(TextPattern::new("", settings, true)),
                     }
-                } else if let Some(n) = criterion_number(rest, epoch) {
+                } else if let Some(n) = criterion_number(rest, epoch, locale) {
                     Operand::Number(n)
-                } else if rest.eq_ignore_ascii_case("TRUE") {
+                } else if is_name(rest, "TRUE") || is_name(rest, locale.true_name) {
                     Operand::Bool(true)
-                } else if rest.eq_ignore_ascii_case("FALSE") {
+                } else if is_name(rest, "FALSE") || is_name(rest, locale.false_name) {
                     Operand::Bool(false)
                 } else if let Some(e) = ErrorKind::parse(rest) {
                     Operand::Error(e)

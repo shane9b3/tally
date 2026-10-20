@@ -23,6 +23,19 @@ pub enum EvalValue {
     Range(CellRange),
     /// An inline or computed array.
     Array(Arc<Matrix>),
+    /// A reference union (`A1:A2~B1:B2`): two or more areas in formula
+    /// order, as AOO's `svRefList`. Built with [`EvalValue::union`].
+    ///
+    /// Transitional: the variant exists only with the `ref-union` cargo
+    /// feature, because the engine's evaluator still matches `EvalValue`
+    /// exhaustively and splits unions into separate sequence arguments
+    /// instead. The engine switches by enabling the feature and building
+    /// this variant for the `~` operator (see docs/functions/engine-hooks.md).
+    /// Function code never matches on it directly: it uses
+    /// [`EvalValue::areas`], which is a one-element slice for a plain
+    /// reference, so every function compiles both ways.
+    #[cfg(feature = "ref-union")]
+    Union(Arc<[CellRange]>),
 }
 
 impl EvalValue {
@@ -52,6 +65,40 @@ impl EvalValue {
     /// Shorthand for `Scalar(Value::Error(e))`.
     pub fn error(e: tally_types::ErrorKind) -> Self {
         EvalValue::Scalar(Value::Error(e))
+    }
+
+    /// A reference of one or more areas: a plain [`EvalValue::Range`] for
+    /// one area, [`EvalValue::Union`] for several (with the `ref-union`
+    /// feature; without it a multi-area union is `#VALUE!`, which is what
+    /// the engine reports for an unsplit `~` today), `#REF!` for none.
+    pub fn union(areas: Vec<CellRange>) -> Self {
+        match areas.len() {
+            0 => EvalValue::error(tally_types::ErrorKind::Ref),
+            1 => EvalValue::Range(areas[0]),
+            #[cfg(feature = "ref-union")]
+            _ => EvalValue::Union(Arc::from(areas)),
+            #[cfg(not(feature = "ref-union"))]
+            _ => EvalValue::error(tally_types::ErrorKind::Value),
+        }
+    }
+
+    /// The areas of a reference argument: one for [`EvalValue::Range`],
+    /// all of them for a union, `None` for anything that is not a
+    /// reference. Functions with [`crate::ParamKind::Reference`] parameters
+    /// that accept unions (AREAS, COUNTIF, SUBTOTAL, INDEX, ISREF) read
+    /// their argument through this.
+    pub fn areas(&self) -> Option<&[CellRange]> {
+        match self {
+            EvalValue::Range(r) => Some(std::slice::from_ref(r)),
+            #[cfg(feature = "ref-union")]
+            EvalValue::Union(areas) => Some(areas),
+            _ => None,
+        }
+    }
+
+    /// `true` for a reference (a range or a union).
+    pub fn is_reference(&self) -> bool {
+        self.areas().is_some()
     }
 
     /// `true` for [`EvalValue::Missing`].
@@ -106,6 +153,18 @@ pub trait EvalContext {
 
     /// The document's calculation settings.
     fn settings(&self) -> &CalcSettings;
+
+    /// The document locale as a BCP 47 tag (`"de-DE"`): what the number
+    /// formatter uses for typed input. Criteria operands, VALUE, DATEVALUE,
+    /// TIMEVALUE, the `ConvertLocale` text-to-number rule, the default
+    /// separators of NUMBERVALUE, and the format codes and output of TEXT,
+    /// FIXED and DOLLAR follow it, as AOO's `pFormatter` does. The default
+    /// is en-US; the engine returns `Workbook::locale.tag`. Functions
+    /// resolve it with [`crate::coerce::locale_of`], which falls back to
+    /// en-US for a tag [`tally_numfmt::locale_by_tag`] does not know.
+    fn locale_tag(&self) -> &str {
+        "en-US"
+    }
 
     /// The value of one cell, evaluating it first if it is a dirty formula.
     /// Out-of-grid or deleted cells yield `Value::Error(ErrorKind::Ref)`.

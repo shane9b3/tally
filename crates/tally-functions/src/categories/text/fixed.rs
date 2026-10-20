@@ -1,10 +1,15 @@
 //! FIXED and DOLLAR.
 //!
 //! Both round half away from zero (after snapping to 15 digits) and then
-//! format with a generated number format code through `tally-numfmt`.
+//! format with a generated number format code through `tally-numfmt`,
+//! rendered in the document locale (AOO `ScFixed`/`ScCurrency` generate the
+//! code from the locale's standard number/currency format: `FIXED(1234.5)`
+//! is `1.234,50` and `DOLLAR(1234.5)` is `1.234,50 €` under de-DE).
 
 use tally_numfmt::{format_value_with, parse_format, Locale};
 use tally_types::{round_to_15_digits, ErrorKind, Value};
+
+use crate::coerce::locale_of;
 
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
 use crate::{run, ArgList, Args, EvalContext, EvalValue};
@@ -59,7 +64,7 @@ fn render(
     a: &mut Args<'_>,
     x: f64,
     decimals: i64,
-    code: impl Fn(&str) -> String,
+    code: impl Fn(&str, &Locale) -> String,
     keep_group: bool,
 ) -> Result<Value, ErrorKind> {
     if !(-15..=15).contains(&decimals) {
@@ -70,10 +75,24 @@ fn render(
     if !keep_group {
         body = body.replacen("#,##0", "0", 1);
     }
-    let ast = parse_format(&code(&body)).map_err(|_| ErrorKind::InvalidArgument)?;
+    let locale = locale_of(a.ctx());
+    let ast = parse_format(&code(&body, locale)).map_err(|_| ErrorKind::InvalidArgument)?;
     let epoch = a.ctx().settings().date_epoch;
-    let out = format_value_with(&Value::Number(r), &ast, &Locale::en_us(), None, epoch);
+    let out = format_value_with(&Value::Number(r), &ast, locale, None, epoch);
     Ok(Value::text(out.text))
+}
+
+/// The locale's currency format with the given digit body, as
+/// `tally_numfmt::builtin_format(QuickFormat::Currency, ..)` lays it out:
+/// `[$$-409]#,##0.00;-[$$-409]#,##0.00` (en-US), `#,##0.00 [$€-407];…`
+/// (de-DE).
+fn currency_code(body: &str, locale: &Locale) -> String {
+    let tag = format!("[${}-{}]", locale.currency_symbol, locale.lcid_hex);
+    if locale.currency_after {
+        format!("{body} {tag};-{body} {tag}")
+    } else {
+        format!("{tag}{body};-{tag}{body}")
+    }
 }
 
 fn fixed(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
@@ -82,7 +101,7 @@ fn fixed(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         let x = a.num(0)?;
         let decimals = a.int_opt(1, 2)?;
         let no_commas = a.bool_opt(2, false)?;
-        render(&mut a, x, decimals, str::to_owned, !no_commas)
+        render(&mut a, x, decimals, |body, _| body.to_owned(), !no_commas)
     })
 }
 
@@ -91,13 +110,7 @@ fn dollar(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     run(|| {
         let x = a.num(0)?;
         let decimals = a.int_opt(1, 2)?;
-        render(
-            &mut a,
-            x,
-            decimals,
-            |body| format!("\"$\"{body};-\"$\"{body}"),
-            true,
-        )
+        render(&mut a, x, decimals, currency_code, true)
     })
 }
 
@@ -155,5 +168,32 @@ mod tests {
             Value::text("$1,200")
         );
         assert_eq!(t("DOLLAR", vec![n(0.0)]), Value::text("$0.00"));
+    }
+
+    #[test]
+    fn document_locale() {
+        let mut c = MockEvalContext::new();
+        c.set_locale("de-DE");
+        let mut t = |name: &str, a: Vec<EvalValue>| call(&mut c, name, a);
+        assert_eq!(t("FIXED", vec![n(1234.567)]), Value::text("1.234,57"));
+        assert_eq!(
+            t("FIXED", vec![n(1234.567), n(1.0), EvalValue::bool(true)]),
+            Value::text("1234,6")
+        );
+        assert_eq!(t("DOLLAR", vec![n(1234.567)]), Value::text("1.234,57 €"));
+        assert_eq!(t("DOLLAR", vec![n(-1234.567)]), Value::text("-1.234,57 €"));
+        assert_eq!(t("DOLLAR", vec![n(5.0), n(0.0)]), Value::text("5 €"));
+        let mut c = MockEvalContext::new();
+        c.set_locale("en-GB");
+        assert_eq!(
+            call(&mut c, "DOLLAR", vec![n(1234.567)]),
+            Value::text("£1,234.57")
+        );
+        let mut c = MockEvalContext::new();
+        c.set_locale("ja-JP");
+        assert_eq!(
+            call(&mut c, "DOLLAR", vec![n(1234.5)]),
+            Value::text("¥1,234.50")
+        );
     }
 }

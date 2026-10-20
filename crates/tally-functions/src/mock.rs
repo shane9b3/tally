@@ -60,6 +60,9 @@ pub struct MockEvalContext {
     formats: HashMap<CellAddr, CellFormatInfo>,
     /// Calculation settings (mutable for tests).
     pub settings: CalcSettings,
+    /// The document locale tag reported by [`EvalContext::locale_tag`]
+    /// (default `en-US`; see [`MockEvalContext::set_locale`]).
+    pub locale: &'static str,
     /// The formula cell.
     pub origin: CellAddr,
     /// What [`EvalContext::in_array_context`] returns.
@@ -103,6 +106,7 @@ impl MockEvalContext {
             cells: HashMap::new(),
             formats: HashMap::new(),
             settings: CalcSettings::default(),
+            locale: "en-US",
             origin: CellAddr::new(0, 0, 0),
             array_context: false,
             now: 45_306.5,
@@ -168,6 +172,29 @@ impl MockEvalContext {
             .unwrap_or_default()
     }
 
+    /// Sets the document locale by tag (`"de-DE"`), as the engine does from
+    /// `DocSettings.locale`. Panics on a tag `tally_numfmt::locale_by_tag`
+    /// does not know (test helper); unknown tags are the engine's business.
+    pub fn set_locale(&mut self, tag: &str) -> &mut Self {
+        let l = tally_numfmt::locale_by_tag(tag)
+            .unwrap_or_else(|| panic!("unknown locale tag {tag:?}"));
+        self.locale = l.tag;
+        self
+    }
+
+    /// A reference union argument from A1 ranges, e.g.
+    /// `ctx.union(0, &["A1:A2", "B1:B2"])` (see [`EvalValue::union`]).
+    /// Panics on malformed text (test helper).
+    pub fn union(&self, sheet: SheetId, a1s: &[&str]) -> EvalValue {
+        EvalValue::union(
+            a1s.iter()
+                .map(|a1| {
+                    CellRange::from_a1(sheet, a1).unwrap_or_else(|| panic!("bad A1 range {a1:?}"))
+                })
+                .collect(),
+        )
+    }
+
     /// Sets the formula cell.
     pub fn set_origin(&mut self, sheet: SheetId, a1: &str) -> &mut Self {
         self.origin = addr(sheet, a1);
@@ -209,6 +236,10 @@ impl EvalContext for MockEvalContext {
 
     fn settings(&self) -> &CalcSettings {
         &self.settings
+    }
+
+    fn locale_tag(&self) -> &str {
+        self.locale
     }
 
     fn cell_value(&mut self, addr: CellAddr) -> Value {

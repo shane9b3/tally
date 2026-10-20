@@ -313,8 +313,34 @@ impl SparseData {
     /// Reads `arg` without interpreting it: references are visited sparsely
     /// through [`EvalContext::for_each_in_range`], arrays element by
     /// element, and a scalar (an error included) is a 1×1 matrix. A missing
-    /// argument is an empty 1×1 matrix. Empty cells are never stored.
+    /// argument is an empty 1×1 matrix. A reference union is one column of
+    /// its areas' cells in order (AOO's number-sequence iteration of
+    /// `svRefList`), so paired functions see a shape mismatch. Empty cells
+    /// are never stored.
     pub(crate) fn read(ctx: &mut dyn EvalContext, arg: EvalValue) -> Self {
+        if let Some(areas) = arg.areas().filter(|a| a.len() != 1) {
+            let mut items = Vec::new();
+            let mut base = 0usize;
+            for r in areas {
+                let rows = r.rows() as usize;
+                let mut part = Vec::new();
+                ctx.for_each_in_range(r, true, &mut |addr, v| {
+                    if !matches!(v, Value::Empty) {
+                        let idx = (addr.col - r.c0) as usize * rows + (addr.row - r.r0) as usize;
+                        part.push((base + idx, v.clone()));
+                    }
+                    ControlFlow::Continue(())
+                });
+                part.sort_by_key(|x| x.0);
+                items.extend(part);
+                base += r.cell_count() as usize;
+            }
+            return Self {
+                rows: base.max(1),
+                cols: 1,
+                items,
+            };
+        }
         match arg {
             EvalValue::Missing => Self::scalar(Value::Empty),
             EvalValue::Scalar(Value::Array(m)) | EvalValue::Array(m) => {
@@ -345,6 +371,8 @@ impl SparseData {
                 items.sort_by_key(|x| x.0);
                 Self { rows, cols, items }
             }
+            #[allow(unreachable_patterns)]
+            _ => Self::scalar(Value::Error(ErrorKind::Value)),
         }
     }
 

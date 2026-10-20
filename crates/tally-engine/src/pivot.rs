@@ -38,10 +38,10 @@ pub fn from_data(wb: &mut Workbook, sheet: SheetId, pivots: &[PivotData]) {
     };
     for p in pivots.iter().take(MAX_PIVOTS) {
         let id = s.meta.alloc_id();
-        s.meta.pivots.push(PivotTable {
+        std::sync::Arc::make_mut(&mut s.meta.pivots).push(std::sync::Arc::new(PivotTable {
             id,
             data: p.clone(),
-        });
+        }));
     }
 }
 

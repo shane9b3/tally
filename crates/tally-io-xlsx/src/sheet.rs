@@ -59,7 +59,7 @@ impl Budget {
 
     /// Counts `n` cells (merges, array block areas, style runs) against
     /// [`Limits::max_cells`].
-    fn add_cells(&mut self, n: u64, limits: &Limits) -> Result<(), XlsxError> {
+    pub(crate) fn add_cells(&mut self, n: u64, limits: &Limits) -> Result<(), XlsxError> {
         self.cells = self.cells.saturating_add(n);
         if self.cells > limits.max_cells {
             return Err(XlsxError::LimitExceeded {
@@ -180,8 +180,13 @@ pub(crate) fn parse_sheet<R: BufRead>(
                         &ctx.styles.dxfs,
                         ctx.resolver,
                     )? {
-                        if st.out.conditional_formats.len() < 100_000 {
+                        if st.out.conditional_formats.len() < crate::sheet_v03::MAX_CF_PER_SHEET {
                             st.out.conditional_formats.push(cf);
+                        } else {
+                            st.budget.warn(format!(
+                                "Only the first {} conditional formats of a sheet are kept.",
+                                crate::sheet_v03::MAX_CF_PER_SHEET
+                            ));
                         }
                     }
                 }
@@ -193,8 +198,8 @@ pub(crate) fn parse_sheet<R: BufRead>(
                     }
                 }
                 "hyperlink" => {
-                    if let Some(l) = crate::sheet_v03::parse_link(&e) {
-                        if st.extras.links.len() < 100_000 {
+                    if let Some(l) = crate::sheet_v03::parse_link_any(&e) {
+                        if st.extras.links.len() < crate::sheet_v03::MAX_LINKS_PER_SHEET {
                             st.extras.links.push(l);
                         }
                     }

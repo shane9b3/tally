@@ -8,7 +8,7 @@
 //! | missing / empty | 0 | `""` | `false` |
 //! | number | itself | General format ([`number_to_text`]) | `n != 0` |
 //! | bool | 1 / 0 | `TRUE` / `FALSE` | itself |
-//! | text | per `settings.text_to_number` ([`text_to_number`]) | itself | `TRUE`/`FALSE` (any case), else `#VALUE!` |
+//! | text | per `settings.text_to_number` ([`text_to_number_in`], document locale) | itself | `TRUE`/`FALSE` (any case), else `#VALUE!` |
 //! | error | propagated | propagated | propagated |
 //! | reference | implicit intersection with the origin ([`intersect`]), then the cell's value as above |||
 //! | array | its top-left element (`#VALUE!` if empty) |||
@@ -24,15 +24,37 @@
 //! as the number 1 or 0 with a boolean number format, so SUM, AVERAGE and
 //! COUNT include them. Tally keeps a distinct [`Value::Bool`] but follows
 //! that storage model here (this differs from Excel, which skips them).
+//!
+//! # Unions
+//!
+//! A reference union ([`EvalValue::areas`] with several areas) is a
+//! sequence of its areas in formula order for the `*_seq` helpers (AOO
+//! iterates `svRefList` the same way); as a scalar argument it is
+//! `#VALUE!`, like any multi-cell reference that cannot be intersected.
+//!
+//! # Locale
+//!
+//! [`locale_of`] resolves [`EvalContext::locale_tag`] to the
+//! [`tally_numfmt::Locale`] whose input recognizer and formatter AOO's
+//! `pFormatter` stands for: the `ConvertLocale` rule, criteria operands,
+//! VALUE, DATEVALUE, TIMEVALUE, TEXT, FIXED, DOLLAR and NUMBERVALUE
+//! defaults follow the document locale, not en-US.
 
 use std::ops::ControlFlow;
 
+use tally_numfmt::{Locale, EN_US};
 use tally_types::{
     round_to_15_digits, CalcSettings, CellAddr, CellRange, DateEpoch, ErrorKind, Matrix,
     TextToNumber, Value,
 };
 
 use crate::context::{EvalContext, EvalValue};
+
+/// The document locale of `ctx` ([`EvalContext::locale_tag`]), en-US when
+/// the tag is not a built-in locale (the engine reports that case itself).
+pub fn locale_of(ctx: &dyn EvalContext) -> &'static Locale {
+    tally_numfmt::locale_by_tag(ctx.locale_tag()).unwrap_or(&EN_US)
+}
 
 /// Implicit intersection of `range` with the formula's `origin`.
 ///
@@ -75,24 +97,39 @@ pub fn scalar_value(arg: &EvalValue, ctx: &mut dyn EvalContext) -> Value {
             },
             Err(e) => Value::Error(e),
         },
+        // A union has no single cell to intersect with.
+        #[allow(unreachable_patterns)]
+        _ => Value::Error(ErrorKind::Value),
     }
 }
 
-/// Coerces an argument to a number (see the module table).
+/// Coerces an argument to a number (see the module table), with the
+/// document locale for the `ConvertLocale` rule.
 pub fn to_number(arg: &EvalValue, ctx: &mut dyn EvalContext) -> Result<f64, ErrorKind> {
     let v = scalar_value(arg, ctx);
-    value_to_number(&v, ctx.settings())
+    value_to_number_in(&v, ctx.settings(), locale_of(ctx))
 }
 
-/// Coerces a plain value to a number (see the module table).
+/// Coerces a plain value to a number (see the module table) with the en-US
+/// locale; [`value_to_number_in`] takes the document locale.
 pub fn value_to_number(v: &Value, settings: &CalcSettings) -> Result<f64, ErrorKind> {
+    value_to_number_in(v, settings, &EN_US)
+}
+
+/// Coerces a plain value to a number (see the module table); `locale` is
+/// used by the `ConvertLocale` rule.
+pub fn value_to_number_in(
+    v: &Value,
+    settings: &CalcSettings,
+    locale: &Locale,
+) -> Result<f64, ErrorKind> {
     match v {
         Value::Empty => Ok(0.0),
         Value::Number(n) => Ok(*n),
         Value::Bool(b) => Ok(bool_num(*b)),
-        Value::Text(s) => text_to_number(s, settings),
+        Value::Text(s) => text_to_number_in(s, settings, locale),
         Value::Error(e) => Err(*e),
-        Value::Array(m) => value_to_number(&top_left(m)?, settings),
+        Value::Array(m) => value_to_number_in(&top_left(m)?, settings, locale),
     }
 }
 
@@ -180,13 +217,26 @@ const fn bool_num(b: bool) -> f64 {
 /// - `ConvertUnambiguous` (default): [`convert_string_to_value`] (integers
 ///   with an optional exponent and ISO 8601 dates/times only, so `"1.5"` is
 ///   `#VALUE!`) or `#VALUE!`;
-/// - `ConvertLocale`: tally-numfmt's en-US input recognizer
-///   ([`tally_numfmt::recognize_input_with`]: thousands separators,
-///   currency, percent, fractions, US dates and times; `TRUE`/`FALSE` are
-///   1/0), `#VALUE!` if it recognises no number.
+/// - `ConvertLocale`: tally-numfmt's input recognizer for the document
+///   locale ([`tally_numfmt::recognize_input_with`]: thousands separators,
+///   currency, percent, fractions, dates and times in the locale's
+///   spelling; `TRUE`/`FALSE` and the localized names are 1/0), `#VALUE!`
+///   if it recognises no number.
 ///
 /// The empty string is `#VALUE!` in both converting modes.
+///
+/// This form uses en-US; [`text_to_number_in`] takes the document locale.
 pub fn text_to_number(s: &str, settings: &CalcSettings) -> Result<f64, ErrorKind> {
+    text_to_number_in(s, settings, &EN_US)
+}
+
+/// [`text_to_number`] with the document locale for the `ConvertLocale` rule
+/// (under de-DE `"1,5"` is 1.5 and `"19.10.2026"` a date).
+pub fn text_to_number_in(
+    s: &str,
+    settings: &CalcSettings,
+    locale: &Locale,
+) -> Result<f64, ErrorKind> {
     match settings.text_to_number {
         TextToNumber::GenerateError => Err(ErrorKind::Value),
         TextToNumber::TreatAsZero => Ok(0.0),
@@ -195,12 +245,30 @@ pub fn text_to_number(s: &str, settings: &CalcSettings) -> Result<f64, ErrorKind
         }
         TextToNumber::ConvertLocale => {
             let ctx = tally_numfmt::RecognizeContext::now(settings.date_epoch);
-            match tally_numfmt::recognize_input_with(s, &tally_numfmt::EN_US, &ctx).value {
+            match tally_numfmt::recognize_input_with(s, locale, &ctx).value {
                 Value::Number(n) => Ok(n),
                 Value::Bool(b) => Ok(bool_num(b)),
                 _ => Err(ErrorKind::Value),
             }
         }
+    }
+}
+
+/// The number a text names in `locale`, as AOO's `IsNumberFormat` reads
+/// it: the locale's input recognizer first (`"1,5"`, `"19.10.2026"`,
+/// `"1.000"` and `"50%"` under de-DE; `"$5"`, `"10/19/2026"` under
+/// en-US), then [`parse_unambiguous`] (plain decimals and ISO dates in any
+/// locale). `None` if neither recognises a number. Shared by the criteria
+/// parser, VALUE, DATEVALUE and TIMEVALUE; `now` supplies the year of
+/// year-less dates.
+pub fn recognize_number(
+    s: &str,
+    locale: &Locale,
+    now: &tally_numfmt::RecognizeContext,
+) -> Option<f64> {
+    match tally_numfmt::recognize_input_with(s, locale, now).value {
+        Value::Number(n) => Some(n),
+        _ => parse_unambiguous(s, now.epoch),
     }
 }
 
@@ -437,15 +505,21 @@ fn visit(
         EvalValue::Missing => f(&Value::Empty, SeqSource::Direct),
         EvalValue::Scalar(Value::Array(m)) | EvalValue::Array(m) => visit_matrix(m, f),
         EvalValue::Scalar(v) => f(v, SeqSource::Direct),
-        EvalValue::Range(r) => {
+        // A range, or each area of a union in turn.
+        other => {
             let mut out = ControlFlow::Continue(());
-            ctx.for_each_in_range(r, true, &mut |_, v| match f(v, SeqSource::Reference) {
-                ControlFlow::Continue(()) => ControlFlow::Continue(()),
-                ControlFlow::Break(e) => {
-                    out = ControlFlow::Break(e);
-                    ControlFlow::Break(())
+            for r in other.areas().unwrap_or_default() {
+                ctx.for_each_in_range(r, true, &mut |_, v| match f(v, SeqSource::Reference) {
+                    ControlFlow::Continue(()) => ControlFlow::Continue(()),
+                    ControlFlow::Break(e) => {
+                        out = ControlFlow::Break(e);
+                        ControlFlow::Break(())
+                    }
+                });
+                if out.is_break() {
+                    break;
                 }
-            });
+            }
             out
         }
     };
@@ -479,13 +553,14 @@ pub fn number_seq(
     mut f: impl FnMut(f64),
 ) -> Result<(), ErrorKind> {
     let settings = ctx.settings().clone();
+    let locale = locale_of(ctx);
     visit(arg, ctx, &mut |v, src| {
         match (v, src) {
             (Value::Number(n), _) => f(*n),
             (Value::Bool(b), _) => f(bool_num(*b)),
             (Value::Error(e), _) => return ControlFlow::Break(*e),
             (Value::Empty, SeqSource::Direct) => f(0.0),
-            (Value::Text(s), SeqSource::Direct) => match text_to_number(s, &settings) {
+            (Value::Text(s), SeqSource::Direct) => match text_to_number_in(s, &settings, locale) {
                 Ok(n) => f(n),
                 Err(e) => return ControlFlow::Break(e),
             },
@@ -503,13 +578,14 @@ pub fn number_seq_with_text_as_zero(
     mut f: impl FnMut(f64),
 ) -> Result<(), ErrorKind> {
     let settings = ctx.settings().clone();
+    let locale = locale_of(ctx);
     visit(arg, ctx, &mut |v, src| {
         match (v, src) {
             (Value::Number(n), _) => f(*n),
             (Value::Bool(b), _) => f(bool_num(*b)),
             (Value::Error(e), _) => return ControlFlow::Break(*e),
             (Value::Empty, SeqSource::Direct) => f(0.0),
-            (Value::Text(s), SeqSource::Direct) => match text_to_number(s, &settings) {
+            (Value::Text(s), SeqSource::Direct) => match text_to_number_in(s, &settings, locale) {
                 Ok(n) => f(n),
                 Err(e) => return ControlFlow::Break(e),
             },

@@ -9,6 +9,7 @@ use crate::format_ast::{
     FormatAst, FractionLayout, GeneralKeyword, NamedColor, NumberLayout, Section, SectionKind,
     Token,
 };
+use crate::locale::Locale;
 
 /// Why a format code could not be parsed.
 #[derive(Clone, PartialEq, Eq, Debug, thiserror::Error)]
@@ -48,27 +49,160 @@ pub fn parse_format(code: &str) -> Result<FormatAst, FormatError> {
     let total = parts.len();
     let mut sections = Vec::with_capacity(total);
     for (i, part) in parts.iter().enumerate() {
-        let mut tokens = tokenize(part)?;
-        if total == 1 && tokens.is_empty() {
-            tokens.push(Token::General(GeneralKeyword::General));
-        }
-        let kind = analyze(&mut tokens, i)?;
-        let condition = tokens.iter().find_map(|t| match t {
-            Token::Condition(c) => Some(*c),
-            _ => None,
-        });
-        let color = tokens.iter().find_map(|t| match t {
-            Token::Color(c) => Some(*c),
-            _ => None,
-        });
-        sections.push(Section {
-            condition,
-            color,
-            tokens,
-            kind,
-        });
+        sections.push(build_section(part, i, total)?);
     }
     Ok(FormatAst { sections })
+}
+
+/// Parses a format code written with `locale`'s conventions, as AOO's
+/// scanner reads a code in the document language (`TEXT(1,7;"0,00")` in a
+/// German document is `1,70`):
+///
+/// - the locale's decimal separator is the decimal point and its grouping
+///   separator the grouping comma (de-DE `#.##0,00` is `#,##0.00`); a `.`
+///   that is neither is a literal (fr-FR `0.0` prints the dot). A space
+///   counts as the grouping separator only between two digit placeholders,
+///   so `0 %` keeps its blank;
+/// - in date and time sections the separators are kept as literals
+///   (`TT.MM.JJJJ`), except the decimal separator before `0`s of fractional
+///   seconds (`SS,00`);
+/// - the locale's keyword letters ([`Locale::format_letters`]: German `T`
+///   and `J`, French `J` and `A`) are accepted next to the English ones;
+/// - `;` always separates sections, and quoted text, `[..]` modifiers and
+///   escaped characters are untouched.
+///
+/// For a locale with en-US separators and no localized letters this is
+/// [`parse_format`].
+pub fn parse_format_with_locale(code: &str, locale: &Locale) -> Result<FormatAst, FormatError> {
+    if locale.decimal_sep == '.' && locale.group_sep == ',' && locale.format_letters.is_empty() {
+        return parse_format(code);
+    }
+    let parts = split_sections(code)?;
+    if parts.len() > 4 {
+        return Err(FormatError::TooManySections);
+    }
+    let total = parts.len();
+    let mut sections = Vec::with_capacity(total);
+    for (i, part) in parts.iter().enumerate() {
+        let canon = canonicalize(part, locale, true);
+        let mut section = build_section(&canon, i, total)?;
+        if matches!(section.kind, SectionKind::Date(_)) {
+            let canon = canonicalize(part, locale, false);
+            section = build_section(&canon, i, total)?;
+        }
+        sections.push(section);
+    }
+    Ok(FormatAst { sections })
+}
+
+/// Rewrites one section from `locale`'s conventions to the canonical en-US
+/// code (see [`parse_format_with_locale`]). With `separators` the number
+/// separators are mapped; without, only the fractional-seconds decimal
+/// separator is (date and time sections).
+fn canonicalize(s: &[char], locale: &Locale, separators: bool) -> Vec<char> {
+    let mut out = Vec::with_capacity(s.len() + 2);
+    let is_digit = |c: Option<&char>| matches!(c, Some('#' | '0' | '?'));
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i];
+        match c {
+            '"' => {
+                let mut j = i + 1;
+                while j < s.len() && s[j] != '"' {
+                    j += 1;
+                }
+                out.extend_from_slice(&s[i..(j + 1).min(s.len())]);
+                i = j + 1;
+            }
+            '[' => {
+                let mut j = i + 1;
+                while j < s.len() && s[j] != ']' {
+                    j += 1;
+                }
+                out.extend_from_slice(&s[i..(j + 1).min(s.len())]);
+                i = j + 1;
+            }
+            '\\' | '*' | '_' => {
+                out.extend_from_slice(&s[i..(i + 2).min(s.len())]);
+                i += 2;
+            }
+            _ if c.is_ascii_alphabetic() => {
+                let mut j = i + 1;
+                while j < s.len() && s[j].is_ascii_alphabetic() {
+                    j += 1;
+                }
+                let run = &s[i..j];
+                let upper = c.to_ascii_uppercase();
+                let uniform = run.iter().all(|x| x.to_ascii_uppercase() == upper);
+                // `A/P` is the 12-hour marker, not a run of the French year letter.
+                let a_p = run.len() == 1
+                    && upper == 'A'
+                    && s.get(j) == Some(&'/')
+                    && s.get(j + 1).is_some_and(|c| c.eq_ignore_ascii_case(&'P'));
+                let mapped = locale
+                    .format_letters
+                    .iter()
+                    .find(|(from, _)| *from == upper)
+                    .map(|(_, to)| *to);
+                match mapped {
+                    Some(to) if uniform && !a_p => {
+                        out.extend(std::iter::repeat_n(to, run.len()));
+                    }
+                    _ => out.extend_from_slice(run),
+                }
+                i = j;
+            }
+            _ if separators && c == locale.decimal_sep => {
+                out.push('.');
+                i += 1;
+            }
+            _ if separators
+                && locale.is_group_char(c)
+                && (!c.is_whitespace() || (is_digit(out.last()) && is_digit(s.get(i + 1)))) =>
+            {
+                out.push(',');
+                i += 1;
+            }
+            '.' | ',' if separators => {
+                // Neither separator of this locale: a literal.
+                out.push('\\');
+                out.push(c);
+                i += 1;
+            }
+            _ if !separators && c == locale.decimal_sep && s.get(i + 1) == Some(&'0') => {
+                out.push('.');
+                i += 1;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Tokenizes and classifies section `i` of `total`.
+fn build_section(part: &[char], i: usize, total: usize) -> Result<Section, FormatError> {
+    let mut tokens = tokenize(part)?;
+    if total == 1 && tokens.is_empty() {
+        tokens.push(Token::General(GeneralKeyword::General));
+    }
+    let kind = analyze(&mut tokens, i)?;
+    let condition = tokens.iter().find_map(|t| match t {
+        Token::Condition(c) => Some(*c),
+        _ => None,
+    });
+    let color = tokens.iter().find_map(|t| match t {
+        Token::Color(c) => Some(*c),
+        _ => None,
+    });
+    Ok(Section {
+        condition,
+        color,
+        tokens,
+        kind,
+    })
 }
 
 /// Splits at top-level `;` (outside quotes, brackets and escapes).
@@ -767,6 +901,7 @@ fn print_dt(dt: &DateTimeToken, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tally_types::Value;
 
     #[test]
     fn minutes_vs_months() {
@@ -826,5 +961,83 @@ mod tests {
         ));
         assert_eq!(parse_format("0@"), Err(FormatError::TextAndNumber));
         assert_eq!(parse_format("0\\"), Err(FormatError::DanglingEscape('\\')));
+    }
+
+    #[test]
+    fn localized_separators() {
+        use crate::{format_value, DE_DE, EN_US, FR_FR};
+        let de = |code: &str| parse_format_with_locale(code, &DE_DE).unwrap();
+        assert_eq!(print_format(&de("0,00")), "0.00");
+        assert_eq!(print_format(&de("#.##0,00")), "#,##0.00");
+        assert_eq!(
+            print_format(&de("#.##0,00 [$€-407];[RED]-#.##0,00 [$€-407]")),
+            "#,##0.00 [$€-407];[RED]-#,##0.00 [$€-407]"
+        );
+        // Scaling commas and the percent sign work in the locale spelling.
+        assert_eq!(print_format(&de("#.##0.")), "#,##0,");
+        assert_eq!(print_format(&de("0,0%")), "0.0%");
+        // Quoted text, modifiers and escapes are untouched.
+        assert_eq!(
+            print_format(&de("0,00 \"Stück, netto\"")),
+            "0.00 \"Stück, netto\""
+        );
+        assert_eq!(print_format(&de("[>1.5]0,0;0")), "[>1.5]0.0;0");
+        assert_eq!(print_format(&de("0\\.0,0")), "0\\.0.0");
+        let r = format_value(&Value::Number(1.7), &de("0,00"), &DE_DE, None);
+        assert_eq!(r.text, "1,70");
+        let r = format_value(&Value::Number(1234.5), &de("#.##0,00"), &DE_DE, None);
+        assert_eq!(r.text, "1.234,50");
+        // en-US codes still parse under en-US; the en-US code under de-DE
+        // reads "." as the grouping separator and "," as the decimal point.
+        assert_eq!(print_format(&de("0.00")), "0,00");
+        let r = format_value(&Value::Number(1.7), &de("0.00"), &DE_DE, None);
+        assert_eq!(r.text, "002");
+        assert_eq!(
+            print_format(&parse_format_with_locale("#,##0.00", &EN_US).unwrap()),
+            "#,##0.00"
+        );
+        // fr-FR: NBSP or a space between placeholders groups; a dot is literal.
+        let fr = |code: &str| parse_format_with_locale(code, &FR_FR).unwrap();
+        assert_eq!(print_format(&fr("# ##0,00")), "#,##0.00");
+        assert_eq!(print_format(&fr("#\u{a0}##0,00")), "#,##0.00");
+        assert_eq!(print_format(&fr("0 %")), "0 %");
+        assert_eq!(print_format(&fr("0.0")), "0\\.0");
+        let r = format_value(&Value::Number(1234.5), &fr("# ##0,00"), &FR_FR, None);
+        assert_eq!(r.text, "1\u{a0}234,50");
+    }
+
+    #[test]
+    fn localized_keywords_and_dates() {
+        use crate::{format_value, DE_DE, ES_ES, FR_FR};
+        let de = |code: &str| parse_format_with_locale(code, &DE_DE).unwrap();
+        assert_eq!(print_format(&de("TT.MM.JJJJ")), "DD.MM.YYYY");
+        assert_eq!(print_format(&de("tt.mm.jj")), "DD.MM.YY");
+        assert_eq!(print_format(&de("DD.MM.YYYY")), "DD.MM.YYYY");
+        assert_eq!(print_format(&de("NN, T. MMMM JJJJ")), "NN, D. MMMM YYYY");
+        assert_eq!(print_format(&de("HH:MM:SS,00")), "HH:MM:SS.00");
+        assert_eq!(print_format(&de("[HH]:MM:SS")), "[HH]:MM:SS");
+        // 2026-10-19 (serial 46314) in the 1899 epoch.
+        let r = format_value(&Value::Number(46314.0), &de("TT.MM.JJJJ"), &DE_DE, None);
+        assert_eq!(r.text, "19.10.2026");
+        let r = format_value(&Value::Number(46314.0), &de("DD.MM.YYYY"), &DE_DE, None);
+        assert_eq!(r.text, "19.10.2026");
+        // Mixed letter runs and AM/PM are not keyword runs.
+        assert_eq!(print_format(&de("HH:MM AM/PM")), "HH:MM AM/PM");
+        let fr = |code: &str| parse_format_with_locale(code, &FR_FR).unwrap();
+        assert_eq!(print_format(&fr("JJ/MM/AAAA")), "DD/MM/YYYY");
+        assert_eq!(print_format(&fr("HH:MM A/P")), "HH:MM A/P");
+        assert_eq!(print_format(&fr("HH:MM AM/PM")), "HH:MM AM/PM");
+        let es = |code: &str| parse_format_with_locale(code, &ES_ES).unwrap();
+        assert_eq!(print_format(&es("DD/MM/AAAA")), "DD/MM/YYYY");
+        // Text and General sections are unchanged.
+        assert_eq!(print_format(&de("@")), "@");
+        assert_eq!(
+            print_format(&de("Standard")),
+            print_format(&parse_format("Standard").unwrap())
+        );
+        assert_eq!(
+            parse_format_with_locale("0,0;0;0;@;0", &DE_DE),
+            Err(FormatError::TooManySections)
+        );
     }
 }

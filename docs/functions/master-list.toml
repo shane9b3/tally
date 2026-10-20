@@ -1168,7 +1168,7 @@ name = "SUBTOTAL"
 category = "Mathematical"
 odf_name = "SUBTOTAL"
 min_args = 2
-max_args = 2
+max_args = 255
 source = "builtin"
 extension = false
 

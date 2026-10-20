@@ -176,6 +176,13 @@ pub struct CellBlock {
     pub version: u64,
     /// Only non-empty or styled cells; missing cells are empty and default-styled.
     pub cells: Vec<CellView>,
+    /// `true` when the call's conditional-formatting work budget ran out
+    /// while this block was decorated: some of its cells are shown without
+    /// their conditional formats (the first cells of the call got them).
+    /// Absent or `null` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub cf_truncated: Option<bool>,
 }
 
 /// Flag bits for [`CellView::flags`].

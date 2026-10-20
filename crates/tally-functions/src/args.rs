@@ -205,8 +205,13 @@ impl<'a> Args<'a> {
         }
     }
 
-    /// Argument `i` as a reference. A scalar error propagates; anything
-    /// else that is not a reference is `#VALUE!`.
+    /// The document locale (see [`EvalContext::locale_tag`]).
+    pub fn locale(&self) -> &'static tally_numfmt::Locale {
+        coerce::locale_of(&*self.ctx)
+    }
+
+    /// Argument `i` as a single-area reference. A scalar error propagates;
+    /// a union or anything else that is not a reference is `#VALUE!`.
     pub fn range(&mut self, i: usize) -> Result<CellRange, ErrorKind> {
         match self.any(i) {
             EvalValue::Range(r) => Ok(r),
@@ -215,13 +220,29 @@ impl<'a> Args<'a> {
         }
     }
 
-    /// Argument `i` parsed as a criterion; an error value propagates.
+    /// Argument `i` as the areas of a reference: one for a range, all of
+    /// them for a union (see [`EvalValue::areas`]). A scalar error
+    /// propagates; anything else that is not a reference is `#VALUE!`.
+    pub fn ranges(&mut self, i: usize) -> Result<Vec<CellRange>, ErrorKind> {
+        let v = self.any(i);
+        match v.areas() {
+            Some(areas) => Ok(areas.to_vec()),
+            None => match v {
+                EvalValue::Scalar(Value::Error(e)) => Err(e),
+                _ => Err(ErrorKind::Value),
+            },
+        }
+    }
+
+    /// Argument `i` parsed as a criterion in the document locale; an error
+    /// value propagates.
     pub fn criterion(&mut self, i: usize) -> Result<Criterion, ErrorKind> {
         let v = self.value(i);
         if let Value::Error(e) = v {
             return Err(e);
         }
-        Ok(Criterion::parse(&v, self.ctx.settings()))
+        let locale = self.locale();
+        Ok(Criterion::parse_in(&v, self.ctx.settings(), locale))
     }
 
     /// SUM semantics over argument `i` (see [`coerce::number_seq`]).

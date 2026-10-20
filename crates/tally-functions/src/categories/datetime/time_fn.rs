@@ -1,7 +1,9 @@
 //! HOUR, MINUTE, SECOND, TIME and TIMEVALUE.
 
-use tally_numfmt::{recognize_input_with, Locale, RecognizeContext};
+use tally_numfmt::{recognize_input_with, RecognizeContext};
 use tally_types::{ErrorKind, Value};
+
+use crate::coerce::locale_of;
 
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
 use crate::{run, ArgList, Args, EvalContext, EvalValue};
@@ -81,9 +83,9 @@ fn time(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
 
 const TV_PARAMS: &[Param] = &[Param::required("text", ParamKind::Text)];
 
-/// `TIMEVALUE(text)`: the time-of-day fraction of text recognized as a time
-/// or date-time (a bare date gives 0). Text that is not a date or time is
-/// `Err:502`, as in AOO.
+/// `TIMEVALUE(text)`: the time-of-day fraction of text recognized (in the
+/// document locale) as a time or date-time (a bare date gives 0). Text that
+/// is not a date or time is `Err:502`, as in AOO.
 pub const TIMEVALUE: FunctionDef =
     FunctionDef::new("TIMEVALUE", Category::DateTime, TV_PARAMS, timevalue)
         .returns(ReturnKind::Number)
@@ -94,7 +96,8 @@ fn timevalue(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     run(|| {
         let s = a.text(0)?;
         let epoch = a.ctx().settings().date_epoch;
-        let rec = recognize_input_with(&s, &Locale::en_us(), &RecognizeContext::now(epoch));
+        let locale = locale_of(a.ctx());
+        let rec = recognize_input_with(&s, locale, &RecognizeContext::now(epoch));
         let n = match rec.value {
             Value::Number(n) => n,
             _ => return Err(ErrorKind::InvalidArgument),
@@ -189,5 +192,18 @@ mod tests {
         assert_eq!(tv("2026-10-19"), Value::Number(0.0));
         assert_eq!(tv("abc"), Value::Error(ErrorKind::InvalidArgument));
         assert_eq!(tv("42"), Value::Error(ErrorKind::InvalidArgument));
+    }
+
+    #[test]
+    fn timevalue_document_locale() {
+        let mut c = MockEvalContext::new();
+        c.set_locale("de-DE");
+        let mut tv = |s: &str| call(&mut c, "TIMEVALUE", vec![EvalValue::text(s)]);
+        assert!(approx_equal(num(tv("19.10.2026 18:00")), 0.75));
+        assert!(approx_equal(num(tv("12:30:00")), 12.5 / 24.0));
+        assert_eq!(
+            tv("10/19/2026 18:00"),
+            Value::Error(ErrorKind::InvalidArgument)
+        );
     }
 }

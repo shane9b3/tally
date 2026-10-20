@@ -3,21 +3,23 @@
 use tally_numfmt::{recognize_input_with, Locale, RecognizeContext};
 use tally_types::{DateEpoch, ErrorKind, Value};
 
+use crate::coerce::locale_of;
+
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
 use crate::{run, ArgList, Args, EvalContext, EvalValue};
 
 const PARAMS: &[Param] = &[Param::required("text", ParamKind::Text)];
 
 /// `DATEVALUE(text)`: only text is accepted; the text must be recognized as
-/// a date or date-time (the time part is dropped).
+/// a date or date-time in the document locale (the time part is dropped).
 pub const DATEVALUE: FunctionDef =
     FunctionDef::new("DATEVALUE", Category::DateTime, PARAMS, datevalue)
         .returns(ReturnKind::Number)
         .help("Date serial of a date given as text.");
 
-fn recognize(s: &str, epoch: DateEpoch) -> Option<(f64, Option<String>)> {
+fn recognize(s: &str, epoch: DateEpoch, locale: &Locale) -> Option<(f64, Option<String>)> {
     let ctx = RecognizeContext::now(epoch);
-    let rec = recognize_input_with(s, &Locale::en_us(), &ctx);
+    let rec = recognize_input_with(s, locale, &ctx);
     match rec.value {
         Value::Number(n) => Some((n, rec.implied_format)),
         _ => None,
@@ -30,7 +32,8 @@ fn datevalue(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         Value::Error(e) => Err(e),
         Value::Text(s) => {
             let epoch = a.ctx().settings().date_epoch;
-            let (n, fmt) = recognize(&s, epoch).ok_or(ErrorKind::Value)?;
+            let locale = locale_of(a.ctx());
+            let (n, fmt) = recognize(&s, epoch, locale).ok_or(ErrorKind::Value)?;
             // Date formats contain a day or year code; time-only ("HH:MM")
             // and plain numbers do not.
             let is_date = fmt.is_some_and(|f| f.contains(['D', 'Y']));
@@ -83,6 +86,26 @@ mod tests {
         assert_eq!(
             dv(EvalValue::error(ErrorKind::NA)),
             Value::Error(ErrorKind::NA)
+        );
+    }
+
+    /// Review 3 H2: German spellings under de-DE.
+    #[test]
+    fn document_locale() {
+        let mut c = MockEvalContext::new();
+        c.set_locale("de-DE");
+        let mut dv = |x: &str| call(&mut c, "DATEVALUE", vec![EvalValue::text(x)]);
+        assert_eq!(dv("19.10.2026"), Value::Number(46314.0));
+        assert_eq!(dv("1.7.2026"), Value::Number(46204.0));
+        assert_eq!(dv("19. Oktober 2026"), Value::Number(46314.0));
+        assert_eq!(dv("2026-10-19"), Value::Number(46314.0));
+        // Month-day-year is not a German date.
+        assert_eq!(dv("10/19/2026"), Value::Error(ErrorKind::Value));
+        let mut c = MockEvalContext::new();
+        c.set_locale("en-GB");
+        assert_eq!(
+            call(&mut c, "DATEVALUE", vec![EvalValue::text("19/10/2026")]),
+            Value::Number(46314.0)
         );
     }
 

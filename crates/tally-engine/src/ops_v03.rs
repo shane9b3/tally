@@ -1,7 +1,57 @@
 //! The v0.3 ops: conditional formats, validations, notes, links,
 //! protection, page setup and breaks, document properties and row
-//! auto-height. Each records the undo state it replaces (the sheet meta,
-//! the styles of a range, the row heights or the document metadata).
+//! auto-height. Each records the undo state it replaces (the parts of
+//! the sheet meta it changed, the styles of a range, the row heights or
+//! the document metadata).
+//!
+//! # How to add a meta op
+//!
+//! A "meta op" edits [`SheetMeta`] (the per-sheet state that is not
+//! cells: conditional formats, validations, notes, links, protection,
+//! page setup, breaks, charts, pivots, outline groups, scenarios, …).
+//! Every collection in `SheetMeta` sits behind an `Arc` and is edited
+//! copy-on-write, so undo can keep "the collection before the op" as one
+//! pointer and an op that touches one collection never copies the others.
+//!
+//! 1. Run protection checks first (`check_sheet_action`, `check_edit`),
+//!    then parse and validate the arguments, and only then mutate. The
+//!    helper restores every field it snapshotted when the closure fails,
+//!    but a field this transaction already recorded in an earlier op is
+//!    edited in place (see [`Effects::meta_recorded`]); an op that fails
+//!    after mutating such a field leaves the mutation behind, so: check,
+//!    then mutate.
+//! 2. Wrap the edit in [`with_meta`]:
+//!    ```ignore
+//!    with_meta(wb, sheet, fx, |wb, meta| {
+//!        let chart = crate::charts::from_api(wb, sheet, dto)?; // parse first
+//!        let id = meta.alloc_id();
+//!        Arc::make_mut(&mut meta.charts).push(Arc::new(Chart { id, data: chart }));
+//!        Ok(())
+//!    })
+//!    ```
+//!    Inside the closure `meta` *is* the sheet's meta (it is taken out of
+//!    the sheet for the duration, so `wb.sheet(sheet).meta` is empty
+//!    there: read through `meta`). Mutate collections with
+//!    `Arc::make_mut(&mut meta.field)`; replace a `Vec<Arc<T>>` element
+//!    with a new `Arc` (or `Arc::make_mut` the element to edit it).
+//! 3. `with_meta` compares every field before and after by pointer
+//!    identity and records only the changed ones in one
+//!    [`Change::Meta`]; it marks the sheet's layout as changed and
+//!    invalidates the display of the whole sheet. Report anything else
+//!    through `fx` (`fx.objects(sheet)`, `fx.created(..)`, …).
+//! 4. For ops that touch a few cells of the notes or links map, use
+//!    [`with_meta_cells`] with the touched keys: the undo entry is then
+//!    the previous value of those cells, not the whole map (a note edit
+//!    on a sheet with 100,000 notes records one entry). The closure must
+//!    not touch other keys of that map.
+//! 5. New `SheetMeta` fields: add the field to the struct and one line
+//!    to the `meta_parts!` table in `storage.rs`; everything here picks
+//!    it up.
+//!
+//! Costs and budgets: a meta op costs 1 in the transaction cell budget
+//! ([`crate::ops::op_cost`]); a transaction may hold at most
+//! [`MAX_META_OPS_PER_TX`] meta ops and [`MAX_NOTE_BYTES_PER_TX`] bytes
+//! of note text (security review 3, CRITICAL-2).
 
 use std::sync::Arc;
 
@@ -12,7 +62,8 @@ use tally_types::{CellRange, SheetId, MAX_COLS, MAX_ROWS};
 use crate::annotations::Note;
 use crate::ops::{check_sheet, map_styles, to_range};
 use crate::protection::{check_edit, check_sheet_action, protected_error};
-use crate::undo::{capture_range, sheet_meta, Change, Effects};
+use crate::storage::{map_entries, MetaKind, MetaPart, SheetMeta};
+use crate::undo::{capture_range, Change, Effects};
 use crate::workbook::Workbook;
 
 /// Longest note text.
@@ -21,6 +72,31 @@ pub const MAX_NOTE_LEN: usize = 32 * 1024;
 pub const MAX_URL_LEN: usize = 8 * 1024;
 /// Most notes (or links) per sheet.
 pub const MAX_NOTES: usize = 1_000_000;
+/// Most meta ops (conditional formats, validations, notes, links,
+/// protection, page setup, breaks, document properties) in one
+/// transaction; the ones past it fail with `unsupported`.
+pub const MAX_META_OPS_PER_TX: u64 = 100_000;
+/// Most bytes of note text one transaction may set.
+pub const MAX_NOTE_BYTES_PER_TX: u64 = 64 * 1024 * 1024;
+
+/// Which per-cell map an op edits (per-entry undo, see
+/// [`with_meta_cells`]).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CellMap {
+    /// `SheetMeta::notes`.
+    Notes,
+    /// `SheetMeta::links`.
+    Links,
+}
+
+impl CellMap {
+    fn kind(self) -> MetaKind {
+        match self {
+            CellMap::Notes => MetaKind::Notes,
+            CellMap::Links => MetaKind::Links,
+        }
+    }
+}
 
 fn cell_range(sheet: SheetId, r: u32, c: u32) -> Result<CellRange, ApiError> {
     if r >= MAX_ROWS || c >= MAX_COLS {
@@ -33,25 +109,97 @@ fn not_found(what: &str, id: u32) -> ApiError {
     ApiError::not_found(format!("no {what} {id}"))
 }
 
-/// Records the sheet meta, then runs `f` on it.
-fn with_meta(
+/// Runs `f` on the sheet's meta and records the fields it changed for
+/// undo (see the module documentation).
+pub fn with_meta(
     wb: &mut Workbook,
     sheet: SheetId,
     fx: &mut Effects,
-    f: impl FnOnce(&Workbook, &mut crate::storage::SheetMeta) -> Result<(), ApiError>,
+    f: impl FnOnce(&Workbook, &mut SheetMeta) -> Result<(), ApiError>,
+) -> Result<Vec<Change>, ApiError> {
+    with_meta_cells(wb, sheet, fx, None, f)
+}
+
+/// [`with_meta`] for an op that edits only `cells` of one per-cell map
+/// (`cells = Some((map, keys))`): that map is recorded per entry instead
+/// of as a whole, and `f` must not touch other keys of it.
+pub fn with_meta_cells(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    fx: &mut Effects,
+    cells: Option<(CellMap, &[(u32, u32)])>,
+    f: impl FnOnce(&Workbook, &mut SheetMeta) -> Result<(), ApiError>,
 ) -> Result<Vec<Change>, ApiError> {
     check_sheet(wb, sheet)?;
-    let undo = sheet_meta(wb, sheet).ok_or_else(|| ApiError::not_found("no sheet"))?;
-    let mut meta = wb.sheet(sheet).map(|s| s.meta.clone()).unwrap_or_default();
-    f(wb, &mut meta)?;
-    if let Some(s) = wb.sheet_mut(sheet) {
-        s.meta = meta;
+    let no_sheet = || ApiError::not_found("no sheet");
+    let s = wb.sheet(sheet).ok_or_else(no_sheet)?;
+    let hinted = cells.map(|(m, _)| m.kind());
+    // Snapshots (reference counts only) of the fields this transaction
+    // does not hold yet; the hinted map is recorded per entry instead.
+    let before: Vec<MetaPart> = MetaKind::ALL
+        .iter()
+        .copied()
+        .filter(|k| Some(*k) != hinted && !fx.meta_recorded(sheet, *k))
+        .map(|k| s.meta.part(k))
+        .collect();
+    let entries: Option<MetaPart> = cells.map(|(m, keys)| match m {
+        CellMap::Notes => MetaPart::NoteEntries(map_entries(&s.meta.notes, keys)),
+        CellMap::Links => MetaPart::LinkEntries(map_entries(&s.meta.links, keys)),
+    });
+    let mut meta = std::mem::take(&mut wb.sheet_mut(sheet).ok_or_else(no_sheet)?.meta);
+    let result = f(wb, &mut meta);
+    let s = wb.sheet_mut(sheet).ok_or_else(no_sheet)?;
+    s.meta = meta;
+    if let Err(e) = result {
+        for p in before {
+            p.swap_into(&mut s.meta);
+        }
+        if let Some(p) = entries {
+            p.swap_into(&mut s.meta);
+        }
+        return Err(e);
     }
+    let mut parts: Vec<MetaPart> = before
+        .into_iter()
+        .filter(|p| !p.unchanged_in(&s.meta))
+        .collect();
+    for p in &parts {
+        if let Some(k) = p.kind() {
+            fx.record_meta(sheet, k);
+        }
+    }
+    parts.extend(entries);
     wb.pending
         .display_only
         .push(CellRange::new(sheet, 0, 0, MAX_ROWS - 1, MAX_COLS - 1));
     fx.layout(sheet);
-    Ok(vec![undo])
+    Ok(vec![Change::Meta { sheet, parts }])
+}
+
+/// `true` for an op [`MAX_META_OPS_PER_TX`] counts, with the note bytes
+/// it sets (for [`MAX_NOTE_BYTES_PER_TX`]).
+pub fn meta_op_cost(op: &Op) -> Option<u64> {
+    match op {
+        Op::SetNote { note, .. } => Some(note.text.len() as u64),
+        Op::AddConditionalFormat { .. }
+        | Op::UpdateConditionalFormat { .. }
+        | Op::DeleteConditionalFormat { .. }
+        | Op::AddValidation { .. }
+        | Op::UpdateValidation { .. }
+        | Op::DeleteValidation { .. }
+        | Op::DeleteNote { .. }
+        | Op::SetLink { .. }
+        | Op::ClearLink { .. }
+        | Op::ProtectSheet { .. }
+        | Op::UnprotectSheet { .. }
+        | Op::SetCellProtection { .. }
+        | Op::ProtectDocument { .. }
+        | Op::UnprotectDocument { .. }
+        | Op::SetPageSetup { .. }
+        | Op::SetPageBreak { .. }
+        | Op::SetDocumentProperties { .. } => Some(0),
+        _ => None,
+    }
 }
 
 /// The current local time as ISO 8601 (seconds).
@@ -64,7 +212,10 @@ pub fn now_iso() -> String {
     format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}")
 }
 
-fn check_url(url: &str) -> Result<(), ApiError> {
+/// Refuses empty, over-long, control-character and active-content URLs
+/// (`javascript:`, `data:`, `vbscript:`). Applied to `SetLink` and to
+/// links read from files (security review 3, LOW-10).
+pub fn check_url(url: &str) -> Result<(), ApiError> {
     let u = url.trim();
     if u.is_empty() || u.len() > MAX_URL_LEN {
         return Err(ApiError::invalid_argument("bad URL"));
@@ -86,6 +237,14 @@ fn check_url(url: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// `true` if any range of `a` intersects any range of `b`.
+fn ranges_intersect(a: &[tally_model::CellRangeLocal], b: &[tally_model::CellRangeLocal]) -> bool {
+    a.iter().any(|x| {
+        b.iter()
+            .any(|y| x.r0 <= y.r1 && y.r0 <= x.r1 && x.c0 <= y.c1 && y.c0 <= x.c1)
+    })
+}
+
 /// Applies a v0.3 op; `None` for the other ops.
 pub fn apply(
     wb: &mut Workbook,
@@ -104,9 +263,10 @@ pub fn apply(
                 if meta.cond_formats.len() >= crate::condfmt::MAX_CF_PER_SHEET {
                     return Err(ApiError::invalid_argument("too many conditional formats"));
                 }
-                let id = meta.alloc_id();
+                let id = meta.next_id.max(1);
                 let cf = crate::condfmt::from_api(wb, sheet, id, ranges, rules)?;
-                meta.cond_formats.push(cf);
+                meta.alloc_id();
+                Arc::make_mut(&mut meta.cond_formats).push(Arc::new(cf));
                 Ok(())
             })
         })(),
@@ -124,7 +284,8 @@ pub fn apply(
                     .iter()
                     .position(|c| c.id == id)
                     .ok_or_else(|| not_found("conditional format", id))?;
-                meta.cond_formats[i] = crate::condfmt::from_api(wb, sheet, id, ranges, rules)?;
+                let cf = crate::condfmt::from_api(wb, sheet, id, ranges, rules)?;
+                Arc::make_mut(&mut meta.cond_formats)[i] = Arc::new(cf);
                 Ok(())
             })
         })(),
@@ -137,7 +298,7 @@ pub fn apply(
                     .iter()
                     .position(|c| c.id == id)
                     .ok_or_else(|| not_found("conditional format", id))?;
-                meta.cond_formats.remove(i);
+                Arc::make_mut(&mut meta.cond_formats).remove(i);
                 Ok(())
             })
         })(),
@@ -148,15 +309,19 @@ pub fn apply(
                 if meta.validations.len() >= crate::validation::MAX_VALIDATIONS {
                     return Err(ApiError::invalid_argument("too many validations"));
                 }
-                let id = meta.alloc_id();
+                let id = meta.next_id.max(1);
                 let v = crate::validation::from_api(wb, sheet, id, validation)?;
+                meta.alloc_id();
                 // A cell has one validation: the new one replaces the
                 // others where they overlap (as Calc's Validity dialog).
-                for old in &mut meta.validations {
-                    old.ranges = subtract_all(&old.ranges, &v.ranges);
+                let list = Arc::make_mut(&mut meta.validations);
+                for old in list.iter_mut() {
+                    if ranges_intersect(&old.ranges, &v.ranges) {
+                        Arc::make_mut(old).ranges = subtract_all(&old.ranges, &v.ranges);
+                    }
                 }
-                meta.validations.retain(|o| !o.ranges.is_empty());
-                meta.validations.push(v);
+                list.retain(|o| !o.ranges.is_empty());
+                list.push(Arc::new(v));
                 Ok(())
             })
         })(),
@@ -174,13 +339,14 @@ pub fn apply(
                     .position(|v| v.id == id)
                     .ok_or_else(|| not_found("validation", id))?;
                 let v = crate::validation::from_api(wb, sheet, id, validation)?;
-                for (j, old) in meta.validations.iter_mut().enumerate() {
-                    if j != i {
-                        old.ranges = subtract_all(&old.ranges, &v.ranges);
+                let list = Arc::make_mut(&mut meta.validations);
+                for (j, old) in list.iter_mut().enumerate() {
+                    if j != i && ranges_intersect(&old.ranges, &v.ranges) {
+                        Arc::make_mut(old).ranges = subtract_all(&old.ranges, &v.ranges);
                     }
                 }
-                meta.validations[i] = v;
-                meta.validations.retain(|o| !o.ranges.is_empty());
+                list[i] = Arc::new(v);
+                list.retain(|o| !o.ranges.is_empty());
                 Ok(())
             })
         })(),
@@ -193,7 +359,7 @@ pub fn apply(
                     .iter()
                     .position(|v| v.id == id)
                     .ok_or_else(|| not_found("validation", id))?;
-                meta.validations.remove(i);
+                Arc::make_mut(&mut meta.validations).remove(i);
                 Ok(())
             })
         })(),
@@ -205,7 +371,8 @@ pub fn apply(
                 return Err(ApiError::invalid_argument("the note is too long"));
             }
             let (r, c) = (*r, *c);
-            with_meta(wb, *sheet, fx, |_, meta| {
+            let keys = [(r, c)];
+            with_meta_cells(wb, *sheet, fx, Some((CellMap::Notes, &keys)), |_, meta| {
                 if !meta.notes.contains_key(&(r, c)) && meta.notes.len() >= MAX_NOTES {
                     return Err(ApiError::invalid_argument("too many notes"));
                 }
@@ -218,7 +385,7 @@ pub fn apply(
                             .and_then(|n| n.created.as_ref().map(|s| s.to_string()))
                     })
                     .unwrap_or_else(now_iso);
-                meta.notes.insert(
+                Arc::make_mut(&mut meta.notes).insert(
                     (r, c),
                     Note {
                         text: note.text.as_str().into(),
@@ -239,11 +406,13 @@ pub fn apply(
             let cell = cell_range(*sheet, *r, *c)?;
             check_edit(wb, &[cell])?;
             let (r, c) = (*r, *c);
-            with_meta(wb, *sheet, fx, |_, meta| {
-                meta.notes
-                    .remove(&(r, c))
-                    .map(|_| ())
-                    .ok_or_else(|| ApiError::not_found("the cell has no note"))
+            let keys = [(r, c)];
+            with_meta_cells(wb, *sheet, fx, Some((CellMap::Notes, &keys)), |_, meta| {
+                if !meta.notes.contains_key(&(r, c)) {
+                    return Err(ApiError::not_found("the cell has no note"));
+                }
+                Arc::make_mut(&mut meta.notes).remove(&(r, c));
+                Ok(())
             })
         })(),
         Op::SetLink { sheet, r, c, url } => (|| {
@@ -252,11 +421,12 @@ pub fn apply(
             check_edit(wb, &[cell])?;
             check_url(url)?;
             let (r, c) = (*r, *c);
-            with_meta(wb, *sheet, fx, |_, meta| {
+            let keys = [(r, c)];
+            with_meta_cells(wb, *sheet, fx, Some((CellMap::Links, &keys)), |_, meta| {
                 if !meta.links.contains_key(&(r, c)) && meta.links.len() >= MAX_NOTES {
                     return Err(ApiError::invalid_argument("too many links"));
                 }
-                meta.links.insert((r, c), Arc::from(url.trim()));
+                Arc::make_mut(&mut meta.links).insert((r, c), Arc::from(url.trim()));
                 Ok(())
             })
         })(),
@@ -267,9 +437,22 @@ pub fn apply(
                 .map(|r| to_range(*sheet, r))
                 .collect::<Result<_, _>>()?;
             check_edit(wb, &ranges)?;
-            with_meta(wb, *sheet, fx, |_, meta| {
-                for r in &ranges {
-                    crate::annotations::clear_in(&mut meta.links, r);
+            let keys: Vec<(u32, u32)> = wb
+                .sheet(*sheet)
+                .map(|s| {
+                    ranges
+                        .iter()
+                        .flat_map(|r| crate::annotations::entries_in(&s.meta.links, r))
+                        .map(|(k, _)| k)
+                        .collect()
+                })
+                .unwrap_or_default();
+            with_meta_cells(wb, *sheet, fx, Some((CellMap::Links, &keys)), |_, meta| {
+                if !keys.is_empty() {
+                    let map = Arc::make_mut(&mut meta.links);
+                    for k in &keys {
+                        map.remove(k);
+                    }
                 }
                 Ok(())
             })
@@ -288,10 +471,13 @@ pub fn apply(
             }
             let opts = options.clone().unwrap_or_else(ProtectionOptions::default);
             let p = crate::protection::new_protection(password.as_deref(), &opts);
-            with_meta(wb, *sheet, fx, |_, meta| {
-                meta.protection = Some(p);
+            let out = with_meta(wb, *sheet, fx, |_, meta| {
+                meta.protection = Some(Arc::new(p));
                 Ok(())
-            })
+            })?;
+            // Protection is not undoable (LOW-9): the stacks are cleared.
+            fx.clear_undo = true;
+            Ok(out)
         })(),
         Op::UnprotectSheet { sheet, password } => (|| {
             check_sheet(wb, *sheet)?;
@@ -304,10 +490,12 @@ pub fn apply(
                     "Incorrect password.",
                 ));
             }
-            with_meta(wb, *sheet, fx, |_, meta| {
+            let out = with_meta(wb, *sheet, fx, |_, meta| {
                 meta.protection = None;
                 Ok(())
-            })
+            })?;
+            fx.clear_undo = true;
+            Ok(out)
         })(),
         Op::SetCellProtection {
             sheet,
@@ -356,6 +544,7 @@ pub fn apply(
                 &ProtectionOptions::default(),
             ));
             fx.sheets_changed = true;
+            fx.clear_undo = true;
             Ok(vec![Change::DocProtection(old)])
         })(),
         Op::UnprotectDocument { password } => (|| {
@@ -372,12 +561,17 @@ pub fn apply(
             }
             wb.structure_protection = None;
             fx.sheets_changed = true;
+            fx.clear_undo = true;
             Ok(vec![Change::DocProtection(Some(p))])
         })(),
         Op::SetPageSetup { sheet, setup } => (|| {
+            check_sheet(wb, *sheet)?;
+            // Page setup is formatting: allowed on a protected sheet only
+            // when the protection permits formatting (LOW-9).
+            check_sheet_action(wb, *sheet, |p| p.format_cells)?;
             let p = crate::pagesetup::from_api(setup)?;
             with_meta(wb, *sheet, fx, |_, meta| {
-                meta.page_setup = p;
+                meta.page_setup = Arc::new(p);
                 Ok(())
             })
         })(),
@@ -387,6 +581,8 @@ pub fn apply(
             at,
             present,
         } => (|| {
+            check_sheet(wb, *sheet)?;
+            check_sheet_action(wb, *sheet, |p| p.format_cells)?;
             let limit = match axis {
                 BreakAxis::Row => MAX_ROWS,
                 BreakAxis::Col => MAX_COLS,
@@ -401,12 +597,15 @@ pub fn apply(
                     BreakAxis::Col => &mut meta.col_breaks,
                 };
                 if present {
-                    if set.len() >= 10_000 && !set.contains(&at) {
+                    if set.contains(&at) {
+                        return Ok(());
+                    }
+                    if set.len() >= 10_000 {
                         return Err(ApiError::invalid_argument("too many page breaks"));
                     }
-                    set.insert(at);
-                } else {
-                    set.remove(&at);
+                    Arc::make_mut(set).insert(at);
+                } else if set.contains(&at) {
+                    Arc::make_mut(set).remove(&at);
                 }
                 Ok(())
             })

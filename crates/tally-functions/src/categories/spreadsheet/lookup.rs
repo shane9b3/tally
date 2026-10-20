@@ -28,14 +28,15 @@ pub(super) enum Table {
 
 impl Table {
     /// Builds a table from an argument; a scalar error propagates, other
-    /// scalars are a 1x1 table, a missing argument is `#VALUE!`.
+    /// scalars are a 1x1 table, a missing argument or a reference union
+    /// (no rectangular shape) is `#VALUE!`.
     pub(super) fn from_eval(v: EvalValue) -> Result<Table, ErrorKind> {
         match v {
             EvalValue::Range(r) => Ok(Table::Range(r)),
             EvalValue::Array(m) | EvalValue::Scalar(Value::Array(m)) => Ok(Table::Mat(m)),
             EvalValue::Scalar(Value::Error(e)) => Err(e),
             EvalValue::Scalar(s) => Ok(Table::Mat(Arc::new(Matrix::new_filled(1, 1, s)))),
-            EvalValue::Missing => Err(ErrorKind::Value),
+            _ => Err(ErrorKind::Value),
         }
     }
 

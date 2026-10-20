@@ -36,10 +36,10 @@ pub fn from_data(wb: &mut Workbook, sheet: SheetId, scenarios: &[ScenarioData]) 
     };
     for sc in scenarios.iter().take(MAX_SCENARIOS) {
         let id = s.meta.alloc_id();
-        s.meta.scenarios.push(Scenario {
+        std::sync::Arc::make_mut(&mut s.meta.scenarios).push(std::sync::Arc::new(Scenario {
             id,
             data: sc.clone(),
-        });
+        }));
     }
 }
 

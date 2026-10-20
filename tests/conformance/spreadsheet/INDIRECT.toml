@@ -63,19 +63,25 @@ expect = 6
 
 [[case]]
 formula = "=INDIRECT(\"\")"
-expect = "#REF!"
+expect = "Err:502"
+note = "AOO ScIndirect ends with PushIllegalArgument when the text is no reference and no range name (correctness review 3)."
 
 [[case]]
 formula = "=INDIRECT(\"nonsense\")"
-expect = "#REF!"
+expect = "Err:502"
 
 [[case]]
 formula = "=INDIRECT(\"A0\")"
-expect = "#REF!"
+expect = "Err:502"
 
 [[case]]
 formula = "=INDIRECT(1)"
-expect = "#REF!"
+expect = "Err:502"
+
+[[case]]
+formula = "=INDIRECT(\"B2\";0)"
+expect = "Err:502"
+note = "A1 text under R1C1 syntax."
 
 [[case]]
 formula = "=INDIRECT(1/0)"

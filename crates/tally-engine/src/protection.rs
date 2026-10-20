@@ -16,6 +16,15 @@ use crate::workbook::Workbook;
 /// Error code of edits refused by protection.
 pub const PROTECTED: &str = "protected";
 
+/// Most hash rounds honoured for an OOXML `spinCount` (Excel's default;
+/// a file asking for more is clamped, so one unlock attempt stays
+/// around 30 ms; security review 3, MEDIUM-5).
+pub const MAX_SPIN_COUNT: u32 = 100_000;
+/// Longest salt or hash value (base64) kept from a file; longer ones are
+/// dropped at load (the sheet stays protected, any password unlocks it,
+/// as for an unknown algorithm).
+pub const MAX_HASH_LEN: usize = 1024;
+
 /// The error for an edit of a protected cell.
 pub fn protected_error() -> ApiError {
     ApiError::new(
@@ -391,7 +400,7 @@ fn ooxml_hash(algorithm: &str, salt: &[u8], password: &str, spin: u32) -> Option
         buf.extend_from_slice(&u.to_le_bytes());
     }
     let mut cur = h(&buf)?;
-    for i in 0..spin.min(10_000_000) {
+    for i in 0..spin.min(MAX_SPIN_COUNT) {
         let mut b = cur;
         b.extend_from_slice(&i.to_le_bytes());
         cur = h(&b)?;
@@ -483,7 +492,7 @@ pub fn options_to_api(p: &SheetProtectionData) -> ProtectionOptions {
 /// The API state.
 pub fn info(wb: &Workbook, sheet: SheetId) -> Option<ProtectionInfo> {
     let s = wb.sheet(sheet)?;
-    let p = s.meta.protection.as_ref();
+    let p = s.meta.protection();
     let has_pw = |p: &SheetProtectionData| {
         p.password_hash.as_deref().is_some_and(|h| !h.is_empty()) || p.xlsx_legacy_hash.is_some()
     };
@@ -507,7 +516,7 @@ pub fn cell_protection(wb: &Workbook, id: StyleId) -> CellProtectionData {
 
 /// The sheet's protection, if protected.
 pub fn sheet_protection(wb: &Workbook, sheet: SheetId) -> Option<&SheetProtectionData> {
-    wb.sheet(sheet).and_then(|s| s.meta.protection.as_ref())
+    wb.sheet(sheet).and_then(|s| s.meta.protection())
 }
 
 /// `true` if every cell of `range` is unlocked.

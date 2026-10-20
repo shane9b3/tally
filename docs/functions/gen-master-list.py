@@ -49,6 +49,10 @@ ARITY_OVERRIDES = {
     # implements the ODFF 1.2 / Excel 2013 form NUMBERVALUE(text; [decimal_sep];
     # [group_sep]) as an extension (see EXTENSION_OVERRIDES).
     "NUMBERVALUE": {"minArgs": 1, "maxArgs": 3},
+    # SUBTOTAL: the wizard lists one range, but ScSubTotal only checks
+    # MustHaveParamCountMin(2) and the chosen function takes every further
+    # reference (correctness review 3, M2).
+    "SUBTOTAL": {"maxArgs": 255},
 }
 
 # ODF-name clashes between the Analysis add-in and built-ins (AOO rule,

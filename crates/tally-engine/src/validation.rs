@@ -7,6 +7,7 @@
 //! value and report a notice in `ApplyResult.warnings`. Clearing a cell is
 //! never checked, and a rule without an error alert accepts anything.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tally_api::{
@@ -22,6 +23,7 @@ use tally_types::{CellAddr, CellRange, SheetId, Value, MAX_COLS, MAX_ROWS};
 
 use crate::condfmt::{cmp_from_api, cmp_to_api, compare, operand_count, ranges_from_api};
 use crate::fexpr::{number_of, truthy, FExpr};
+use crate::rangeindex::RangeIndex;
 use crate::storage::ColumnStore;
 use crate::workbook::Workbook;
 
@@ -175,7 +177,7 @@ pub fn from_api(
     id: u32,
     v: &ValidationDto,
 ) -> Result<Validation, ApiError> {
-    let ranges = ranges_from_api(&v.ranges)?;
+    let ranges = ranges_from_api(&v.ranges, crate::condfmt::MAX_RANGES)?;
     let origin = CellAddr::new(sheet, ranges[0].r0, ranges[0].c0);
     let cmp = |what: NumKind, op: tally_api::CmpOp, f: &[String]| -> Result<VKind, ApiError> {
         let op = cmp_from_api(op);
@@ -462,55 +464,274 @@ fn text_len(v: &Value) -> Option<f64> {
     })
 }
 
-/// `true` if `v` (the value of `addr`) passes the rule. `fresh` evaluates
-/// with dirty precedents recalculated.
-pub fn is_valid(wb: &mut Workbook, val: &Validation, addr: CellAddr, v: &Value) -> bool {
-    if v.is_empty() {
-        return val.allow_blank;
+/// Most cells one op's validation check evaluates; the rest are accepted
+/// with a notice (security review 3, HIGH-4).
+pub const MAX_VALIDATION_CELLS_PER_OP: u64 = 2_000_000;
+/// Work budget of one op's validation check (element operations of the
+/// rule formulas plus a fixed charge per cell).
+pub const MAX_VALIDATION_WORK_PER_OP: u64 = 50_000_000;
+/// Fixed charge per checked cell.
+const CELL_COST: u64 = 16;
+
+/// A list source resolved once: the keys a value may match.
+#[derive(Debug, Default)]
+struct ListSet {
+    /// Numbers (and booleans as 0/1) by bit pattern, `-0` as `0`.
+    nums: HashSet<u64>,
+    /// Lowercased text items (text values compare case-insensitively).
+    texts: HashSet<String>,
+    /// Lowercased, trimmed text items (a number matches its general text).
+    trimmed: HashSet<String>,
+}
+
+fn num_bits(n: f64) -> u64 {
+    if n == 0.0 {
+        0
+    } else {
+        n.to_bits()
     }
-    match &val.kind {
-        VKind::Any => true,
-        VKind::List(src) => {
-            let items = list_values(wb, src, addr);
-            items.iter().any(|item| {
-                compare(v, CmpOpData::Eq, item, None)
-                    || match (v, item) {
-                        (Value::Number(n), Value::Text(t)) => {
-                            tally_numfmt::general_string(*n, None, wb.locale)
-                                .eq_ignore_ascii_case(t.trim())
-                        }
-                        _ => false,
-                    }
-            })
-        }
-        VKind::Compare { what, op, operands } => {
-            let x = match what {
-                NumKind::TextLength => text_len(v),
-                _ => match v {
-                    Value::Number(n) => Some(*n),
-                    _ => None,
+}
+
+impl ListSet {
+    fn from_values(items: &[Value]) -> Self {
+        let mut set = ListSet::default();
+        for item in items {
+            let item = match item {
+                Value::Array(m) => match m.get(0, 0) {
+                    Some(v) => v,
+                    None => continue,
                 },
+                v => v,
             };
-            let Some(x) = x else {
-                return false;
-            };
-            if *what == NumKind::Whole && x.fract() != 0.0 {
-                return false;
-            }
-            let ops: Vec<Value> = operands.iter().map(|f| f.eval_fresh(wb, addr)).collect();
-            let num = |v: &Value| number_of(v).map_or(v.clone(), Value::Number);
-            match ops.first() {
-                Some(a) => compare(
-                    &Value::Number(x),
-                    *op,
-                    &num(a),
-                    ops.get(1).map(num).as_ref(),
-                ),
-                None => true,
+            match item {
+                Value::Number(n) => {
+                    set.nums.insert(num_bits(*n));
+                }
+                Value::Bool(b) => {
+                    set.nums.insert(num_bits(f64::from(u8::from(*b))));
+                }
+                Value::Text(t) => {
+                    set.texts.insert(t.to_lowercase());
+                    set.trimmed.insert(t.trim().to_lowercase());
+                }
+                Value::Empty | Value::Error(_) | Value::Array(_) => {}
             }
         }
-        VKind::Custom(f) => truthy(&f.eval_fresh(wb, addr)),
+        set
     }
+
+    /// Mirrors `compare(v, Eq, item)` plus the number-as-text match of
+    /// the single-cell check.
+    fn contains(&self, v: &Value, locale: &tally_numfmt::Locale) -> bool {
+        match v {
+            Value::Number(n) => {
+                self.nums.contains(&num_bits(*n))
+                    || (!self.trimmed.is_empty()
+                        && self.trimmed.contains(
+                            &tally_numfmt::general_string(*n, None, locale).to_lowercase(),
+                        ))
+            }
+            Value::Bool(b) => self.nums.contains(&num_bits(f64::from(u8::from(*b)))),
+            Value::Text(t) => self.texts.contains(&t.to_lowercase()),
+            Value::Empty => self.texts.contains(""),
+            Value::Array(m) => m.get(0, 0).is_some_and(|x| self.contains(x, locale)),
+            Value::Error(_) => false,
+        }
+    }
+}
+
+/// What a shared list set is keyed by: the resolved source range (so
+/// validations with the same absolute source share one set) or, for
+/// literal lists, the validation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ListKey {
+    Validation(u32),
+    Range(CellRange),
+}
+
+/// The per-op state of a validation check: list sets and folded formulas
+/// resolved once per validation, and the budget.
+pub struct Checker {
+    lists: HashMap<ListKey, Arc<ListSet>>,
+    folded: HashMap<usize, Arc<tally_formula::Formula>>,
+    cells: u64,
+    work: u64,
+    work_budget: u64,
+    exhausted: bool,
+}
+
+impl Default for Checker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Checker {
+    /// A fresh checker (one per op).
+    pub fn new() -> Self {
+        Self::with_budget(MAX_VALIDATION_WORK_PER_OP)
+    }
+
+    /// A checker with a custom work budget (tests).
+    pub fn with_budget(work_budget: u64) -> Self {
+        Self {
+            lists: HashMap::new(),
+            folded: HashMap::new(),
+            cells: 0,
+            work: 0,
+            work_budget,
+            exhausted: false,
+        }
+    }
+
+    /// `true` once the budget ran out (later cells are accepted).
+    pub fn exhausted(&self) -> bool {
+        self.exhausted
+    }
+
+    /// Cells checked so far.
+    pub fn cells_checked(&self) -> u64 {
+        self.cells
+    }
+
+    fn charge(&mut self, n: u64) -> bool {
+        self.work = self.work.saturating_add(n);
+        if self.work > self.work_budget || self.cells > MAX_VALIDATION_CELLS_PER_OP {
+            self.exhausted = true;
+        }
+        !self.exhausted
+    }
+
+    /// `f` with its absolute parts folded (once per formula per op), then
+    /// evaluated freshly at `addr`; `None` when the budget is spent.
+    fn eval(&mut self, wb: &mut Workbook, f: &FExpr, addr: CellAddr) -> Option<Value> {
+        if f.invalid.is_some() {
+            return Some(Value::Error(tally_types::ErrorKind::Name));
+        }
+        let key = Arc::as_ptr(&f.formula) as usize;
+        let formula = match self.folded.get(&key) {
+            Some(x) => x.clone(),
+            None => {
+                let folded = f
+                    .fold_absolute_fresh(wb, addr)
+                    .unwrap_or_else(|| f.formula.clone());
+                self.charge(CELL_COST);
+                self.folded.insert(key, folded.clone());
+                folded
+            }
+        };
+        let (v, work) = crate::fexpr::eval_formula_fresh_counted(wb, &formula, addr);
+        self.charge(work);
+        Some(v)
+    }
+
+    /// The list set of `val` (shared across cells when the source does
+    /// not depend on the cell).
+    fn list(
+        &mut self,
+        wb: &mut Workbook,
+        val: &Validation,
+        src: &ListSrc,
+        addr: CellAddr,
+    ) -> Arc<ListSet> {
+        let key = match src {
+            ListSrc::Values(_) => Some(ListKey::Validation(val.id)),
+            ListSrc::Expr(f) if crate::fexpr::is_absolute(f) => {
+                let e = crate::names::resolve_chain(&wb.names, &f.formula.expr, addr.sheet);
+                match e {
+                    Expr::Ref(r) => match r.resolve(addr) {
+                        ResolvedRef::Range(cr) => Some(ListKey::Range(cr)),
+                        _ => Some(ListKey::Validation(val.id)),
+                    },
+                    _ => Some(ListKey::Validation(val.id)),
+                }
+            }
+            ListSrc::Expr(_) => None,
+        };
+        if let Some(k) = key {
+            if let Some(s) = self.lists.get(&k) {
+                return s.clone();
+            }
+        }
+        let items = list_values(wb, src, addr);
+        self.charge(items.len() as u64);
+        let set = Arc::new(ListSet::from_values(&items));
+        if let Some(k) = key {
+            self.lists.insert(k, set.clone());
+        }
+        set
+    }
+
+    /// `true` if `v` (the value of `addr`) passes the rule, or the budget
+    /// is spent (the value is accepted then).
+    pub fn is_valid(
+        &mut self,
+        wb: &mut Workbook,
+        val: &Validation,
+        addr: CellAddr,
+        v: &Value,
+    ) -> bool {
+        if v.is_empty() {
+            return val.allow_blank;
+        }
+        if self.exhausted {
+            return true;
+        }
+        self.cells += 1;
+        if !self.charge(CELL_COST) {
+            return true;
+        }
+        match &val.kind {
+            VKind::Any => true,
+            VKind::List(src) => {
+                let set = self.list(wb, val, src, addr);
+                set.contains(v, wb.locale)
+            }
+            VKind::Compare { what, op, operands } => {
+                let x = match what {
+                    NumKind::TextLength => text_len(v),
+                    _ => match v {
+                        Value::Number(n) => Some(*n),
+                        _ => None,
+                    },
+                };
+                let Some(x) = x else {
+                    return false;
+                };
+                if *what == NumKind::Whole && x.fract() != 0.0 {
+                    return false;
+                }
+                let mut ops: Vec<Value> = Vec::with_capacity(operands.len());
+                for f in operands {
+                    match self.eval(wb, f, addr) {
+                        Some(v) => ops.push(v),
+                        None => return true,
+                    }
+                }
+                let num = |v: &Value| number_of(v).map_or(v.clone(), Value::Number);
+                match ops.first() {
+                    Some(a) => compare(
+                        &Value::Number(x),
+                        *op,
+                        &num(a),
+                        ops.get(1).map(num).as_ref(),
+                    ),
+                    None => true,
+                }
+            }
+            VKind::Custom(f) => match self.eval(wb, f, addr) {
+                Some(v) => truthy(&v),
+                None => true,
+            },
+        }
+    }
+}
+
+/// `true` if `v` (the value of `addr`) passes the rule, evaluating with
+/// dirty precedents recalculated (one-off check; `check_cells` shares the
+/// work across cells).
+pub fn is_valid(wb: &mut Workbook, val: &Validation, addr: CellAddr, v: &Value) -> bool {
+    Checker::new().is_valid(wb, val, addr, v)
 }
 
 /// The first validation of `sheet` covering the cell.
@@ -520,36 +741,82 @@ pub fn at(wb: &Workbook, sheet: SheetId, row: u32, col: u32) -> Option<&Validati
         .validations
         .iter()
         .find(|v| v.contains(row, col))
+        .map(|v| &**v)
 }
 
 /// Checks the values just written to `cells`. `Err` for a `Stop` alert
-/// (the caller reverts the op); notices for `Warning`/`Info`.
+/// (the caller reverts the op); notices for `Warning`/`Info`, and one
+/// notice when the per-op budget ran out and the remaining cells were
+/// accepted unchecked.
 pub fn check_cells(
     wb: &mut Workbook,
     sheet: SheetId,
     cells: &[(u32, u32)],
 ) -> Result<Vec<ApiError>, ApiError> {
+    check_cells_with_budget(wb, sheet, cells, MAX_VALIDATION_WORK_PER_OP)
+}
+
+/// [`check_cells`] with a custom work budget (tests).
+pub fn check_cells_with_budget(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    cells: &[(u32, u32)],
+    work_budget: u64,
+) -> Result<Vec<ApiError>, ApiError> {
     let mut notices = Vec::new();
     let Some(s) = wb.sheet(sheet) else {
         return Ok(notices);
     };
-    if s.meta.validations.is_empty() {
+    if s.meta.validations.is_empty() || cells.is_empty() {
         return Ok(notices);
     }
-    let vals: Vec<Arc<Validation>> = s
-        .meta
-        .validations
+    // The collection is shared, not copied (Arc); the index maps each
+    // cell to the first validation with an alert covering it.
+    let vals: Arc<Vec<Arc<Validation>>> = s.meta.validations.clone();
+    let with_alert: Vec<u32> = vals
         .iter()
-        .filter(|v| v.error.is_some())
-        .map(|v| Arc::new(v.clone()))
+        .enumerate()
+        .filter(|(_, v)| v.error.is_some())
+        .map(|(i, _)| i as u32)
         .collect();
+    if with_alert.is_empty() {
+        return Ok(notices);
+    }
+    let index = (cells.len() as u64 * with_alert.len() as u64 > 4096).then(|| {
+        RangeIndex::build(
+            with_alert
+                .iter()
+                .flat_map(|&i| vals[i as usize].ranges.iter().map(move |r| (*r, i))),
+        )
+    });
+    let mut checker = Checker::with_budget(work_budget);
+    let mut hits: Vec<u32> = Vec::new();
+    let mut skipped = 0u64;
     for &(r, c) in cells {
-        let Some(val) = vals.iter().find(|v| v.contains(r, c)) else {
+        let pos = match &index {
+            Some(idx) => {
+                idx.covering_sorted(r, c, &mut hits);
+                hits.first().copied()
+            }
+            None => with_alert
+                .iter()
+                .copied()
+                .find(|&i| vals[i as usize].contains(r, c)),
+        };
+        let Some(pos) = pos else {
             continue;
         };
+        let val = &vals[pos as usize];
         let addr = CellAddr::new(sheet, r, c);
         let v = current_value(wb, addr);
-        if v.is_empty() || is_valid(wb, val, addr, &v) {
+        if v.is_empty() {
+            continue;
+        }
+        if checker.exhausted() {
+            skipped += 1;
+            continue;
+        }
+        if checker.is_valid(wb, val, addr, &v) {
             continue;
         }
         let Some(err) = &val.error else { continue };
@@ -567,6 +834,16 @@ pub fn check_cells(
                 }
             }
         }
+    }
+    if skipped > 0 {
+        notices.push(ApiError::new(
+            VALIDATION,
+            format!(
+                "Validation checked {} cells and stopped; {skipped} more cells were \
+                 accepted without checking (the rules are too costly for one step).",
+                checker.cells_checked()
+            ),
+        ));
     }
     Ok(notices)
 }

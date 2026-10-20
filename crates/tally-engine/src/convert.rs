@@ -7,7 +7,7 @@
 //! [`StyleRun`]s, so a bold whole column does not become a million cells
 //! and no formatting is lost.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use tally_formula::{parse, print, Dialect, Expr, Formula};
@@ -106,7 +106,7 @@ impl Workbook {
         let mut merges_capped = false;
         for (sd, &sheet) in sheet_data.iter().zip(&ids) {
             if let Some(s) = wb.sheet_mut(sheet) {
-                s.meta.merges = clean_merges(&sd.merges);
+                s.meta.merges = Arc::new(clean_merges(&sd.merges));
                 merges_capped |= sd.merges.len() > MAX_MERGES_PER_SHEET
                     && s.meta.merges.len() == MAX_MERGES_PER_SHEET;
                 s.meta.frozen = sd
@@ -115,7 +115,7 @@ impl Workbook {
                 if let Some(af) = &sd.auto_filter {
                     let r = af.range;
                     if r.r0 <= r.r1 && r.c0 <= r.c1 && r.r1 < MAX_ROWS && r.c1 < MAX_COLS {
-                        s.meta.auto_filter = Some(crate::filter::from_model(af));
+                        s.meta.auto_filter = Some(Arc::new(crate::filter::from_model(af)));
                         s.filtered_rows = Spans::from_spans(
                             af.filtered_rows
                                 .iter()
@@ -135,9 +135,15 @@ impl Workbook {
             }
         }
         // v0.3 sheet state (after the names, so rule formulas resolve them).
+        let mut v03_stats = LoadV03Stats::default();
         for (sd, &sheet) in sheet_data.iter().zip(&ids) {
-            load_v03(&mut wb, sheet, sd);
+            load_v03(&mut wb, sheet, sd, &mut v03_stats);
             load_v04(&mut wb, sheet, sd);
+        }
+        for w in v03_stats.warnings() {
+            if !wb.import_warnings.contains(&w) {
+                wb.import_warnings.push(w);
+            }
         }
         wb.cell_styles = data.cell_styles.clone();
         wb.custom_sort_lists = data.settings.custom_sort_lists.clone();
@@ -387,7 +393,7 @@ impl Workbook {
                 cells,
                 col_widths: sheet.col_dims.runs().to_vec(),
                 row_heights: sheet.row_dims.runs().to_vec(),
-                merges: sheet.meta.merges.clone(),
+                merges: (*sheet.meta.merges).clone(),
                 frozen: sheet.meta.frozen,
                 tab_color: sheet.tab_color,
                 hidden: sheet.hidden,
@@ -423,25 +429,25 @@ impl Workbook {
                     .map(|((r, c), u)| LinkData {
                         row: *r,
                         col: *c,
-                        url: u.to_string(),
+                        url: u.clone(),
                     })
                     .collect(),
-                protection: sheet.meta.protection.clone(),
-                page_setup: (sheet.meta.page_setup != PageSetupData::default())
-                    .then(|| sheet.meta.page_setup.clone()),
+                protection: sheet.meta.protection().cloned(),
+                page_setup: (*sheet.meta.page_setup != PageSetupData::default())
+                    .then(|| (*sheet.meta.page_setup).clone()),
                 row_breaks: sheet.meta.row_breaks.iter().copied().collect(),
                 col_breaks: sheet.meta.col_breaks.iter().copied().collect(),
                 // Wave 5 (identity pass-through until W5-1/2 land).
                 charts: crate::charts::to_data(self, sheet.id),
                 images: crate::charts::images_to_data(self, sheet.id),
                 pivots: crate::pivot::to_data(self, sheet.id),
-                row_groups: sheet.meta.row_groups.clone(),
-                col_groups: sheet.meta.col_groups.clone(),
+                row_groups: (*sheet.meta.row_groups).clone(),
+                col_groups: (*sheet.meta.col_groups).clone(),
                 scenarios: crate::scenarios::to_data(self, sheet.id),
-                database_ranges: sheet.meta.database_ranges.clone(),
-                standard_filter: sheet.meta.standard_filter.clone(),
-                subtotals: sheet.meta.subtotals.clone(),
-                view_options: sheet.meta.view_options.clone(),
+                database_ranges: (*sheet.meta.database_ranges).clone(),
+                standard_filter: sheet.meta.standard_filter.as_deref().cloned(),
+                subtotals: sheet.meta.subtotals.as_deref().cloned(),
+                view_options: sheet.meta.view_options.as_deref().cloned(),
                 split: sheet.meta.split,
             });
         }
@@ -496,24 +502,26 @@ fn load_v04(wb: &mut Workbook, sheet: tally_types::SheetId, sd: &SheetData) {
     let ok = |g: &tally_model::OutlineGroupData, limit: u32| {
         g.start <= g.end && g.end < limit && (1..=crate::outline::MAX_LEVELS).contains(&g.level)
     };
-    s.meta.row_groups = sd
-        .row_groups
-        .iter()
-        .filter(|g| ok(g, MAX_ROWS))
-        .take(100_000)
-        .copied()
-        .collect();
-    s.meta.col_groups = sd
-        .col_groups
-        .iter()
-        .filter(|g| ok(g, MAX_COLS))
-        .take(100_000)
-        .copied()
-        .collect();
-    s.meta.database_ranges = sd.database_ranges.iter().take(10_000).cloned().collect();
-    s.meta.standard_filter = sd.standard_filter.clone();
-    s.meta.subtotals = sd.subtotals.clone();
-    s.meta.view_options = sd.view_options.clone();
+    s.meta.row_groups = Arc::new(
+        sd.row_groups
+            .iter()
+            .filter(|g| ok(g, MAX_ROWS))
+            .take(100_000)
+            .copied()
+            .collect(),
+    );
+    s.meta.col_groups = Arc::new(
+        sd.col_groups
+            .iter()
+            .filter(|g| ok(g, MAX_COLS))
+            .take(100_000)
+            .copied()
+            .collect(),
+    );
+    s.meta.database_ranges = Arc::new(sd.database_ranges.iter().take(10_000).cloned().collect());
+    s.meta.standard_filter = sd.standard_filter.clone().map(Arc::new);
+    s.meta.subtotals = sd.subtotals.clone().map(Arc::new);
+    s.meta.view_options = sd.view_options.clone().map(Arc::new);
     s.meta.split = sd.split;
 }
 
@@ -535,9 +543,104 @@ pub fn sanitize_sheet_name(name: &str) -> String {
     mapped.trim_matches('\'').to_string()
 }
 
+/// Most bytes of note text kept per workbook when loading (notes past it
+/// are dropped with a warning; security review 3, MEDIUM-8).
+pub const MAX_NOTE_BYTES_PER_WORKBOOK: u64 = 64 * 1024 * 1024;
+
+/// What loading a sheet's v0.3 state dropped or changed (summed over the
+/// workbook, reported once each).
+#[derive(Default)]
+struct LoadV03Stats {
+    cf_dropped: usize,
+    cf_ranges_truncated: usize,
+    validations_dropped: usize,
+    validation_ranges_truncated: usize,
+    notes_truncated: usize,
+    notes_dropped_budget: usize,
+    note_bytes: u64,
+    links_dropped: usize,
+    protection_hash_dropped: usize,
+}
+
+impl LoadV03Stats {
+    fn warnings(&self) -> Vec<String> {
+        let mut w = Vec::new();
+        let n = |n: usize| {
+            if n == 1 {
+                "one".to_string()
+            } else {
+                n.to_string()
+            }
+        };
+        if self.cf_dropped > 0 {
+            w.push(format!(
+                "Only the first {} conditional formats of a sheet are kept; {} were dropped.",
+                crate::condfmt::MAX_CF_PER_SHEET,
+                n(self.cf_dropped)
+            ));
+        }
+        if self.cf_ranges_truncated > 0 {
+            w.push(format!(
+                "A conditional format applies to at most {} ranges; {} had more and were truncated.",
+                crate::condfmt::MAX_CF_RANGES,
+                n(self.cf_ranges_truncated)
+            ));
+        }
+        if self.validations_dropped > 0 {
+            w.push(format!(
+                "Only the first {} validations of a sheet are kept; {} were dropped.",
+                crate::validation::MAX_VALIDATIONS,
+                n(self.validations_dropped)
+            ));
+        }
+        if self.validation_ranges_truncated > 0 {
+            w.push(format!(
+                "A validation applies to at most {} ranges; {} had more and were truncated.",
+                crate::condfmt::MAX_RANGES,
+                n(self.validation_ranges_truncated)
+            ));
+        }
+        if self.notes_truncated > 0 {
+            w.push(format!(
+                "Notes are kept up to {} KiB of text; {} longer were truncated.",
+                crate::ops_v03::MAX_NOTE_LEN / 1024,
+                n(self.notes_truncated)
+            ));
+        }
+        if self.notes_dropped_budget > 0 {
+            w.push(format!(
+                "The file holds more than {} MiB of note text; {} notes were dropped.",
+                MAX_NOTE_BYTES_PER_WORKBOOK >> 20,
+                n(self.notes_dropped_budget)
+            ));
+        }
+        if self.links_dropped > 0 {
+            w.push(format!(
+                "{} hyperlinks with a target this application does not open \
+                 (script or data links, control characters, over 8 KiB) were dropped.",
+                n(self.links_dropped)
+            ));
+        }
+        if self.protection_hash_dropped > 0 {
+            w.push(format!(
+                "A sheet protection record carried an over-long password hash or salt \
+                 (more than {} bytes); it was dropped and any password unlocks the sheet.",
+                crate::protection::MAX_HASH_LEN
+            ));
+        }
+        w
+    }
+}
+
 /// Loads conditional formats, validations, notes, links, protection, page
-/// setup and breaks of one sheet (invalid entries are skipped).
-fn load_v03(wb: &mut Workbook, sheet: tally_types::SheetId, sd: &SheetData) {
+/// setup and breaks of one sheet (invalid entries are skipped; what the
+/// caps drop is counted in `stats`).
+fn load_v03(
+    wb: &mut Workbook,
+    sheet: tally_types::SheetId,
+    sd: &SheetData,
+    stats: &mut LoadV03Stats,
+) {
     let mut next_id = 1u32;
     let mut cfs = Vec::new();
     for d in sd
@@ -545,42 +648,92 @@ fn load_v03(wb: &mut Workbook, sheet: tally_types::SheetId, sd: &SheetData) {
         .iter()
         .take(crate::condfmt::MAX_CF_PER_SHEET)
     {
+        if d.ranges.len() > crate::condfmt::MAX_CF_RANGES {
+            stats.cf_ranges_truncated += 1;
+        }
         if let Some(cf) = crate::condfmt::from_model(wb, sheet, next_id, d) {
             next_id += 1;
-            cfs.push(cf);
+            cfs.push(Arc::new(cf));
         }
     }
-    let mut vals: Vec<crate::validation::Validation> = Vec::new();
+    stats.cf_dropped += sd
+        .conditional_formats
+        .len()
+        .saturating_sub(crate::condfmt::MAX_CF_PER_SHEET);
+    let mut vals: Vec<Arc<crate::validation::Validation>> = Vec::new();
     for d in sd
         .validations
         .iter()
         .take(crate::validation::MAX_VALIDATIONS)
     {
+        if d.ranges.len() > crate::condfmt::MAX_RANGES {
+            stats.validation_ranges_truncated += 1;
+        }
         if let Some(v) = crate::validation::from_model(wb, sheet, next_id, d) {
             next_id += 1;
-            vals.push(v);
+            vals.push(Arc::new(v));
         }
     }
+    stats.validations_dropped += sd
+        .validations
+        .len()
+        .saturating_sub(crate::validation::MAX_VALIDATIONS);
     let Some(s) = wb.sheet_mut(sheet) else {
         return;
     };
-    s.meta.cond_formats = cfs;
-    s.meta.validations = vals;
+    s.meta.cond_formats = Arc::new(cfs);
+    s.meta.validations = Arc::new(vals);
     s.meta.next_id = next_id;
     let ok = |r: u32, c: u32| r < MAX_ROWS && c < MAX_COLS;
+    let mut notes: BTreeMap<(u32, u32), crate::annotations::Note> = BTreeMap::new();
     for n in sd.notes.iter().take(crate::ops_v03::MAX_NOTES) {
-        if ok(n.row, n.col) {
-            s.meta
-                .notes
-                .insert((n.row, n.col), crate::annotations::Note::from_model(n));
+        if !ok(n.row, n.col) {
+            continue;
         }
+        let mut note = crate::annotations::Note::from_model(n);
+        if note.text.len() > crate::ops_v03::MAX_NOTE_LEN {
+            note.text = truncate_utf8(&note.text, crate::ops_v03::MAX_NOTE_LEN).into();
+            stats.notes_truncated += 1;
+        }
+        let bytes = note.text.len() as u64;
+        if stats.note_bytes.saturating_add(bytes) > MAX_NOTE_BYTES_PER_WORKBOOK {
+            stats.notes_dropped_budget += 1;
+            continue;
+        }
+        stats.note_bytes += bytes;
+        notes.insert((n.row, n.col), note);
     }
+    s.meta.notes = Arc::new(notes);
+    let mut links: BTreeMap<(u32, u32), Arc<str>> = BTreeMap::new();
     for l in sd.links.iter().take(crate::ops_v03::MAX_NOTES) {
-        if ok(l.row, l.col) && !l.url.is_empty() && l.url.len() <= crate::ops_v03::MAX_URL_LEN {
-            s.meta.links.insert((l.row, l.col), l.url.as_str().into());
+        if !ok(l.row, l.col) {
+            continue;
         }
+        if crate::ops_v03::check_url(&l.url).is_err() {
+            stats.links_dropped += 1;
+            continue;
+        }
+        links.insert((l.row, l.col), l.url.clone());
     }
-    s.meta.protection = sd.protection.clone();
+    s.meta.links = Arc::new(links);
+    s.meta.protection = sd.protection.as_ref().map(|p| {
+        let mut p = p.clone();
+        let too_long = |v: &Option<String>| {
+            v.as_ref()
+                .is_some_and(|x| x.len() > crate::protection::MAX_HASH_LEN)
+        };
+        if too_long(&p.password_hash) || too_long(&p.salt) || too_long(&p.xlsx_legacy_hash) {
+            p.password_hash = None;
+            p.salt = None;
+            p.xlsx_legacy_hash = None;
+            p.spin_count = None;
+            stats.protection_hash_dropped += 1;
+        }
+        p.spin_count = p
+            .spin_count
+            .map(|n| n.min(crate::protection::MAX_SPIN_COUNT));
+        Arc::new(p)
+    });
     if let Some(p) = &sd.page_setup {
         let mut p = p.clone();
         p.print_range = p
@@ -588,22 +741,36 @@ fn load_v03(wb: &mut Workbook, sheet: tally_types::SheetId, sd: &SheetData) {
             .filter(|r| r.r0 <= r.r1 && r.c0 <= r.c1 && r.r1 < MAX_ROWS && r.c1 < MAX_COLS);
         p.repeat_rows = p.repeat_rows.filter(|(a, b)| a <= b && *b < MAX_ROWS);
         p.repeat_cols = p.repeat_cols.filter(|(a, b)| a <= b && *b < MAX_COLS);
-        s.meta.page_setup = p;
+        s.meta.page_setup = Arc::new(p);
     }
-    s.meta.row_breaks = sd
-        .row_breaks
-        .iter()
-        .copied()
-        .filter(|b| *b > 0 && *b < MAX_ROWS)
-        .take(10_000)
-        .collect();
-    s.meta.col_breaks = sd
-        .col_breaks
-        .iter()
-        .copied()
-        .filter(|b| *b > 0 && *b < MAX_COLS)
-        .take(10_000)
-        .collect();
+    s.meta.row_breaks = Arc::new(
+        sd.row_breaks
+            .iter()
+            .copied()
+            .filter(|b| *b > 0 && *b < MAX_ROWS)
+            .take(10_000)
+            .collect(),
+    );
+    s.meta.col_breaks = Arc::new(
+        sd.col_breaks
+            .iter()
+            .copied()
+            .filter(|b| *b > 0 && *b < MAX_COLS)
+            .take(10_000)
+            .collect(),
+    );
+}
+
+/// The longest prefix of `s` within `max` bytes on a character boundary.
+pub fn truncate_utf8(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// Loads interchange names (invalid, duplicate or unparsable ones are skipped).

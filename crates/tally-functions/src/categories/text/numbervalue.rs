@@ -7,10 +7,14 @@
 //! and LibreOffice: whitespace is ignored, group separators are dropped
 //! before the decimal separator, trailing `%` divide by 100, empty text is
 //! 0, only the first character of a separator argument counts, and an empty
-//! separator argument is `#VALUE!`. Defaults are the en-US `.` and `,`
-//! (`.` as the group separator when the decimal separator is `,`).
+//! separator argument is `#VALUE!`. The defaults are the document locale's
+//! separators (`.` and `,` under en-US, `,` and `.` under de-DE); when only
+//! the decimal separator is given, the group separator is `.` for a `,`
+//! decimal and `,` otherwise.
 
 use tally_types::{ErrorKind, Value};
+
+use crate::coerce::locale_of;
 
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
 use crate::{run, ArgList, Args, EvalContext, EvalValue};
@@ -84,8 +88,14 @@ fn numbervalue(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
             }
             a.text(i)?.chars().next().map(Some).ok_or(ErrorKind::Value)
         };
-        let decimal = sep(&mut a, 1)?.unwrap_or('.');
-        let group = sep(&mut a, 2)?;
+        let locale = locale_of(a.ctx());
+        let explicit_decimal = sep(&mut a, 1)?;
+        let decimal = explicit_decimal.unwrap_or(locale.decimal_sep);
+        let group = match sep(&mut a, 2)? {
+            Some(g) => Some(g),
+            None if explicit_decimal.is_none() => Some(locale.group_sep),
+            None => None,
+        };
         Ok(Value::Number(number_value(&text, decimal, group)?))
     })
 }
@@ -145,6 +155,30 @@ mod tests {
         assert_eq!(
             nv3(vec![EvalValue::text("1"), EvalValue::text("")]),
             Value::Error(ErrorKind::Value)
+        );
+    }
+
+    #[test]
+    fn document_locale_defaults() {
+        let mut c = MockEvalContext::new();
+        c.set_locale("de-DE");
+        let mut nv = |args: Vec<EvalValue>| call(&mut c, "NUMBERVALUE", args);
+        assert_eq!(nv(vec![EvalValue::text("1.234,5")]), Value::Number(1234.5));
+        assert_eq!(nv(vec![EvalValue::text("1,5")]), Value::Number(1.5));
+        assert_eq!(
+            nv(vec![EvalValue::text("1,234.5")]),
+            Value::Error(ErrorKind::Value)
+        );
+        // Explicit separators win over the locale.
+        assert_eq!(
+            nv(vec![EvalValue::text("1,234.5"), EvalValue::text(".")]),
+            Value::Number(1234.5)
+        );
+        let mut c = MockEvalContext::new();
+        c.set_locale("fr-FR");
+        assert_eq!(
+            call(&mut c, "NUMBERVALUE", vec![EvalValue::text("1\u{a0}234,5")]),
+            Value::Number(1234.5)
         );
     }
 

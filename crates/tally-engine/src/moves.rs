@@ -18,7 +18,7 @@ use tally_types::{CellAddr, CellRange};
 use crate::formula_cells::FormulaCellId;
 use crate::ops::{check_array_blocks, check_merges, MAX_OP_CELLS};
 use crate::undo::{
-    capture_range, clear_range_content, clear_range_styles, names_snapshot, sheet_meta, Change,
+    capture_range, clear_range_content, clear_range_styles, meta_parts, names_snapshot, Change,
     Effects,
 };
 use crate::workbook::{SnapContent, Workbook};
@@ -66,7 +66,7 @@ pub fn move_range(
         }
     }
     if let Some(sh) = wb.sheet(sheet) {
-        for m in &sh.meta.merges {
+        for m in sh.meta.merges.iter() {
             let mr = CellRange::new(sheet, m.r0, m.c0, m.r1, m.c1);
             if !within(&mr) && mr.intersects(&dest) && !dest.contains_range(&mr) {
                 return Err(ApiError::new(
@@ -78,7 +78,16 @@ pub fn move_range(
     }
 
     let names = names_snapshot(wb);
-    let meta = sheet_meta(wb, sheet).ok_or_else(|| ApiError::not_found("no sheet"))?;
+    let meta = meta_parts(
+        wb,
+        sheet,
+        &[
+            crate::storage::MetaKind::Merges,
+            crate::storage::MetaKind::Notes,
+            crate::storage::MetaKind::Links,
+        ],
+    )
+    .ok_or_else(|| ApiError::not_found("no sheet"))?;
     let src = capture_range(wb, from, true, true);
     let dst = capture_range(wb, dest, true, true);
 
@@ -180,21 +189,39 @@ pub fn move_range(
             r.r0 <= m.r0 && m.r1 <= r.r1 && r.c0 <= m.c0 && m.c1 <= r.c1
         };
         let mut moved = Vec::new();
-        sh.meta.merges.retain(|m| {
-            if within(m, &from) {
-                moved.push(shifted(m, dr, dc));
-                false
-            } else {
-                !within(m, &dest)
-            }
-        });
-        // (Merges that stay are disjoint from the destination, see above.)
-        if !moved.is_empty() {
-            sh.meta.merges.extend(moved);
+        let touches_merge = sh
+            .meta
+            .merges
+            .iter()
+            .any(|m| within(m, &from) || within(m, &dest));
+        if touches_merge {
+            let merges = Arc::make_mut(&mut sh.meta.merges);
+            merges.retain(|m| {
+                if within(m, &from) {
+                    moved.push(shifted(m, dr, dc));
+                    false
+                } else {
+                    !within(m, &dest)
+                }
+            });
+            // (Merges that stay are disjoint from the destination, see above.)
+            merges.extend(moved);
         }
         // Notes and hyperlinks move with their cells.
-        crate::annotations::move_block(&mut sh.meta.notes, &from, dr, dc);
-        crate::annotations::move_block(&mut sh.meta.links, &from, dr, dc);
+        fn inside_any<T>(
+            map: &std::collections::BTreeMap<(u32, u32), T>,
+            a: &CellRange,
+            b: &CellRange,
+        ) -> bool {
+            crate::annotations::entries_in(map, a).next().is_some()
+                || crate::annotations::entries_in(map, b).next().is_some()
+        }
+        if inside_any(&sh.meta.notes, &from, &dest) {
+            crate::annotations::move_block(Arc::make_mut(&mut sh.meta.notes), &from, dr, dc);
+        }
+        if inside_any(&sh.meta.links, &from, &dest) {
+            crate::annotations::move_block(Arc::make_mut(&mut sh.meta.links), &from, dr, dc);
+        }
     }
     fx.layout(sheet);
     Ok(vec![

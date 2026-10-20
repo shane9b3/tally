@@ -62,6 +62,7 @@ pub mod pivot;
 pub mod print;
 pub mod protection;
 pub mod r1c1;
+pub mod rangeindex;
 pub mod recalc;
 pub mod scenarios;
 pub mod service;

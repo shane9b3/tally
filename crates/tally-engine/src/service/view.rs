@@ -264,43 +264,83 @@ fn has_decorations(s: &Sheet) -> bool {
 
 /// Adds notes, links, validation dropdowns and conditional formats to the
 /// views of `req` (adding views for otherwise empty cells that get one).
-fn decorate(wb: &Workbook, s: &Sheet, version: u64, req: &CellRange, views: &mut Vec<CellView>) {
-    use std::collections::{BTreeSet, HashSet};
+/// `eval` is the call's conditional-format evaluator (one work budget per
+/// `cells()` call).
+fn decorate(
+    wb: &Workbook,
+    s: &Sheet,
+    eval: &crate::condfmt::CfEval<'_>,
+    req: &CellRange,
+    views: &mut Vec<CellView>,
+) {
+    use std::collections::HashSet;
     let m = &s.meta;
     let have: HashSet<(u32, u32)> = views.iter().map(|v| (v.r, v.c)).collect();
-    let mut extra: BTreeSet<(u32, u32)> = BTreeSet::new();
+    // Cells of `req` that need a view: a bitmap over the request (at most
+    // MAX_CELLS_PER_CALL cells), marked per distinct rectangle, so a
+    // thousand formats on one range cost one pass (CRITICAL-1).
+    let cols = u64::from(req.c1 - req.c0) + 1;
+    let area = (u64::from(req.r1 - req.r0) + 1) * cols;
+    let mut extra = vec![false; area as usize];
+    let mut any_extra = false;
+    let mark = |extra: &mut Vec<bool>, any: &mut bool, r: u32, c: u32| {
+        let i = (u64::from(r - req.r0) * cols + u64::from(c - req.c0)) as usize;
+        extra[i] = true;
+        *any = true;
+    };
     for (k, _) in crate::annotations::entries_in(&m.notes, req) {
-        extra.insert(k);
+        mark(&mut extra, &mut any_extra, k.0, k.1);
     }
     for (k, _) in crate::annotations::entries_in(&m.links, req) {
-        extra.insert(k);
+        mark(&mut extra, &mut any_extra, k.0, k.1);
     }
-    let add_area = |ranges: &[tally_model::CellRangeLocal], extra: &mut BTreeSet<(u32, u32)>| {
-        for r in ranges {
+    let local = tally_model::CellRangeLocal {
+        r0: req.r0,
+        c0: req.c0,
+        r1: req.r1,
+        c1: req.c1,
+    };
+    let mut rects: Vec<tally_model::CellRangeLocal> = Vec::new();
+    for v in m.validations.iter().filter(|v| v.has_dropdown()) {
+        for r in &v.ranges {
             let x = CellRange::new(req.sheet, r.r0, r.c0, r.r1, r.c1);
             if let Some(i) = x.intersect(req) {
-                for row in i.r0..=i.r1 {
-                    for col in i.c0..=i.c1 {
-                        extra.insert((row, col));
-                    }
-                }
+                rects.push(tally_model::CellRangeLocal {
+                    r0: i.r0,
+                    c0: i.c0,
+                    r1: i.r1,
+                    c1: i.c1,
+                });
             }
         }
-    };
-    for v in m.validations.iter().filter(|v| v.has_dropdown()) {
-        add_area(&v.ranges, &mut extra);
     }
-    for cf in &m.cond_formats {
-        add_area(&cf.ranges, &mut extra);
+    if !m.cond_formats.is_empty() {
+        rects.extend(eval.rects_in(&local));
     }
-    let first_new = views.len();
-    for (r, c) in extra {
-        if !have.contains(&(r, c)) {
-            let addr = CellAddr::new(req.sheet, r, c);
-            views.push(view_of(wb, addr, None, s.style(r, c)));
+    rects.sort_unstable_by_key(|r| (r.r0, r.c0, r.r1, r.c1));
+    rects.dedup();
+    for r in rects {
+        for row in r.r0..=r.r1 {
+            for col in r.c0..=r.c1 {
+                mark(&mut extra, &mut any_extra, row, col);
+            }
         }
     }
-    let eval = crate::condfmt::CfEval::new(wb, req.sheet, version);
+    let first_new = views.len();
+    if any_extra {
+        for (i, flag) in extra.iter().enumerate() {
+            if !*flag {
+                continue;
+            }
+            let r = req.r0 + (i as u64 / cols) as u32;
+            let c = req.c0 + (i as u64 % cols) as u32;
+            if !have.contains(&(r, c)) {
+                let addr = CellAddr::new(req.sheet, r, c);
+                views.push(view_of(wb, addr, None, s.style(r, c)));
+            }
+        }
+    }
+    let has_dropdowns = m.validations.iter().any(|v| v.has_dropdown());
     for v in views.iter_mut() {
         let key = (v.r, v.c);
         if m.notes.contains_key(&key) {
@@ -310,44 +350,45 @@ fn decorate(wb: &Workbook, s: &Sheet, version: u64, req: &CellRange, views: &mut
             v.flags |= cell_flags::LINK;
             v.link = Some(u.to_string());
         }
-        if m.validations
-            .iter()
-            .any(|x| x.has_dropdown() && x.contains(v.r, v.c))
+        if has_dropdowns
+            && m.validations
+                .iter()
+                .any(|x| x.has_dropdown() && x.contains(v.r, v.c))
         {
             v.flags |= cell_flags::VALIDATION_DROPDOWN;
         }
         if m.cond_formats.is_empty() {
             continue;
         }
-        let Some(o) = eval.outcome(v.r, v.c) else {
+        let Some(d) = eval.decor(v.r, v.c, StyleId(v.style)) else {
             continue;
         };
-        if !o.style.is_empty() {
-            let base = &wb.styles.get(StyleId(v.style)).data;
-            let (id, entry) = wb.transient.style_for(base, &o.style);
+        if let Some(id) = d.style {
             v.cf_style = Some(id);
-            if o.style.number_format.is_some() {
-                let val = wb.value(CellAddr::new(req.sheet, v.r, v.c));
-                if !val.is_empty() {
-                    let f = format_value_with(
-                        &val,
-                        &entry.format,
-                        wb.locale,
-                        None,
-                        wb.settings.date_epoch,
-                    );
-                    v.text = cap_view_text(f.text);
-                    v.color = f.color.map(|c| (c << 8) | 0xff);
-                    v.num = match val {
-                        Value::Number(n) if entry.format.is_general() => Some(n),
-                        _ => None,
-                    };
+            if d.number_format {
+                if let Some(entry) = wb.transient.style(id) {
+                    let val = wb.value(CellAddr::new(req.sheet, v.r, v.c));
+                    if !val.is_empty() {
+                        let f = format_value_with(
+                            &val,
+                            &entry.format,
+                            wb.locale,
+                            None,
+                            wb.settings.date_epoch,
+                        );
+                        v.text = cap_view_text(f.text);
+                        v.color = f.color.map(|c| (c << 8) | 0xff);
+                        v.num = match val {
+                            Value::Number(n) if entry.format.is_general() => Some(n),
+                            _ => None,
+                        };
+                    }
                 }
             }
         }
-        v.cf_bar = o.bar;
-        v.cf_icon = o.icon;
-        if o.hide_value {
+        v.cf_bar = d.bar;
+        v.cf_icon = d.icon;
+        if d.hide_value {
             v.text.clear();
         }
     }
@@ -372,6 +413,23 @@ pub fn cells(
     sheet: SheetId,
     ranges: &[RangeDto],
 ) -> Result<Vec<CellBlock>, ApiError> {
+    cells_with_cf_budget(
+        wb,
+        version,
+        sheet,
+        ranges,
+        crate::condfmt::MAX_CF_WORK_PER_CALL,
+    )
+}
+
+/// [`cells`] with a custom conditional-format work budget (tests).
+pub fn cells_with_cf_budget(
+    wb: &Workbook,
+    version: u64,
+    sheet: SheetId,
+    ranges: &[RangeDto],
+    cf_budget: u64,
+) -> Result<Vec<CellBlock>, ApiError> {
     let s = sheet_or_err(wb, sheet)?;
     let total: u64 = ranges
         .iter()
@@ -389,6 +447,8 @@ pub fn cells(
         )));
     }
     let mut out = Vec::with_capacity(ranges.len());
+    let decorations = has_decorations(s);
+    let eval = crate::condfmt::CfEval::with_budget(wb, sheet, version, cf_budget);
     for r in ranges {
         if r.r0 > r.r1 || r.c0 > r.c1 || r.r1 >= MAX_ROWS || r.c1 >= MAX_COLS {
             return Err(ApiError::invalid_argument("range outside the grid"));
@@ -416,9 +476,10 @@ pub fn cells(
                 }
             }
         }
-        if has_decorations(s) {
+        let truncated_before = eval.truncated();
+        if decorations {
             let req = CellRange::new(sheet, r.r0, r.c0, r.r1, r.c1);
-            decorate(wb, s, version, &req, &mut views);
+            decorate(wb, s, &eval, &req, &mut views);
         }
         views.sort_by_key(|v| (v.r, v.c));
         out.push(CellBlock {
@@ -426,6 +487,7 @@ pub fn cells(
             range: *r,
             version,
             cells: views,
+            cf_truncated: (decorations && (truncated_before || eval.truncated())).then_some(true),
         });
     }
     Ok(out)

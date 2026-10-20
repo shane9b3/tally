@@ -184,10 +184,29 @@ pub fn sort_range(
     }
     let snap = capture_range(wb, data, true, true);
     // Notes and hyperlinks travel with their rows.
-    let meta = crate::undo::sheet_meta(wb, range.sheet);
+    let meta = crate::undo::meta_parts(
+        wb,
+        range.sheet,
+        &[
+            crate::storage::MetaKind::Notes,
+            crate::storage::MetaKind::Links,
+        ],
+    );
     if let Some(s) = wb.sheet_mut(range.sheet) {
-        crate::annotations::permute_rows(&mut s.meta.notes, r0, data.c0, data.c1, &perm);
-        crate::annotations::permute_rows(&mut s.meta.links, r0, data.c0, data.c1, &perm);
+        if crate::annotations::entries_in(&s.meta.notes, &data)
+            .next()
+            .is_some()
+        {
+            let notes = std::sync::Arc::make_mut(&mut s.meta.notes);
+            crate::annotations::permute_rows(notes, r0, data.c0, data.c1, &perm);
+        }
+        if crate::annotations::entries_in(&s.meta.links, &data)
+            .next()
+            .is_some()
+        {
+            let links = std::sync::Arc::make_mut(&mut s.meta.links);
+            crate::annotations::permute_rows(links, r0, data.c0, data.c1, &perm);
+        }
     }
     // Styles per cell, before clearing.
     let mut styles: Vec<Vec<StyleId>> = Vec::with_capacity(data.cols() as usize);

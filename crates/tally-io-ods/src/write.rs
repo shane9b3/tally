@@ -1078,7 +1078,7 @@ fn write_sheet<W: Write + Seek>(
         links: sheet
             .links
             .iter()
-            .map(|l| ((l.row, l.col), l.url.as_str()))
+            .map(|l| ((l.row, l.col), &*l.url))
             .collect(),
         derived: &plan.derived,
     };

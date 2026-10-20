@@ -682,8 +682,9 @@ pub struct LinkData {
     pub row: u32,
     /// Column.
     pub col: u32,
-    /// The URL (or `#Sheet1.A1` for an in-document target).
-    pub url: String,
+    /// The URL (or `#Sheet1.A1` for an in-document target). Shared, so a
+    /// link that a file applies to a whole range costs one allocation.
+    pub url: std::sync::Arc<str>,
 }
 
 /// Well-known values of [`SheetProtectionData::algorithm`].

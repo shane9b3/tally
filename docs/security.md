@@ -310,6 +310,10 @@ off in release builds are all owned by WP7 (`apps/desktop/**`).
 | Loading: overlapping merges are dropped in O(n log n) (a row sweep, `convert::clean_merges`), at most 100,000 per sheet; array blocks cover at most 10,000,000 cells per workbook (`convert::MAX_ARRAY_CELLS`), checked before anything is materialized; imported sheet names are made valid (`convert::sanitize_sheet_name`: `[ ] * ? : / \` and control characters become `_`) while the file's formulas still resolve the original names. What loading drops or changes is shown once as a warning. | `tally-engine::convert::tests::clean_merges_is_n_log_n`, `tally-engine::convert::tests::clean_merges_drops_overlaps_and_invalid`, `tally-engine::convert::tests::array_budget_is_checked_before_materializing`, `tally-engine::security2::files::many_merges_open_fast`, `tally-engine::security2::imported_sheet_names_are_sanitized` (release: `engine_array_budget_release`) |
 | At most 10,000 sheets per workbook (`workbook::MAX_SHEETS`), and sheet names are made unique in amortized O(1) (`SheetNamer`), so loading is linear in the sheet count. Only the first unnamed sheet takes the file name. | `tally-engine::security::same_named_sheets_load_fast` (2,000 same-named sheets: 43 s before), `tally-engine::security::sheet_count_is_capped`, `tally-engine::security::files::same_named_sheets_open_fast` |
 | Maximum array size (2^21 elements per lifted range). | engine eval tests |
+| Conditional formats per `cells()` call: at most 2,048 formats per sheet with 64 ranges each (`condfmt::MAX_CF_PER_SHEET`, `MAX_CF_RANGES`; readers and `AddConditionalFormat` drop extras with a warning); a range index per sheet and document version finds the formats covering a cell in O(log n + k) (`rangeindex::RangeIndex`, identical rectangles stored once); absolute subexpressions of rule formulas (`SUM($A:$A)`) are folded to literals once per version (`FExpr::fold_absolute`); evaluated cells are cached per version; rules whose style adds nothing to higher rules are skipped; and each call has a work budget of 8,000,000 element operations plus 20 per rule evaluation (`condfmt::MAX_CF_WORK_PER_CALL`, `RULE_COST`, about 80 ms of rule evaluation in a release build), past which the remaining cells of the call are left unformatted and `CellBlock.cf_truncated` is set. | `tally-engine::security3::stacked_identical_rules_render_within_the_budget`, `cf_budget_truncates_and_flags_the_block`, `range_index_handles_many_disjoint_blocks`, `absolute_subexpressions_are_evaluated_once_per_version`, `loaded_conditional_formats_are_capped_with_warnings` (release: `cf_viewports_render_under_100ms_release`) |
+| Sheet meta undo: every `SheetMeta` collection is behind an `Arc` and edited copy-on-write; an undo entry holds only the collections an op changed (`Change::Meta`, pointer identity before/after) and note/link edits record the replaced entries (`ops_v03::with_meta_cells`), so undo memory scales with what was touched. A transaction holds at most 100,000 meta ops and 64 MiB of note text (`ops_v03::MAX_META_OPS_PER_TX`, `MAX_NOTE_BYTES_PER_TX`). See "Sheet meta copy-on-write" under Review 3. | `tally-engine::security3::many_note_ops_in_one_transaction_record_single_entries`, `single_note_edits_on_a_large_sheet_share_the_map`, `meta_ops_record_only_the_touched_collections`, `failing_meta_ops_leave_the_meta_untouched`, `meta_ops_per_transaction_are_capped` (release: `note_transactions_release_timing`) |
+| Validation per op: list sources are resolved once per op into a hash set of normalized keys (shared by every validation with the same absolute source range, `validation::Checker`), custom and comparison formulas have their absolute parts folded once per op, the written cells are matched to validations through a range index, and each op checks at most 2,000,000 cells within 50,000,000 element operations (`validation::MAX_VALIDATION_CELLS_PER_OP`, `MAX_VALIDATION_WORK_PER_OP`); past that the remaining cells are accepted with a notice in `ApplyResult.warnings`. | `tally-engine::security3::list_validation_resolves_the_list_once_per_op`, `custom_validation_folds_absolute_parts_once_per_op`, `validation_budget_accepts_the_rest_with_a_notice` |
+| Protection records: OOXML `spinCount` clamped to 100,000 (`protection::MAX_SPIN_COUNT`, in the reader and in `verify`), hash/salt/key values over 1 KiB dropped at load (the sheet stays protected and any password unlocks it, as for an unknown algorithm). Imported notes are cut at 32 KiB (`ops_v03::MAX_NOTE_LEN`) and limited to 64 MiB per workbook (`convert::MAX_NOTE_BYTES_PER_WORKBOOK`); imported links go through `check_url` (script/data links, control characters, over 8 KiB are dropped), each with a one-time warning. XLSX hyperlink targets over 8 KiB are dropped when the relationships are parsed, the URL is one `Arc<str>` per `ref`, expanded link cells count against `max_cells` and stop at 100,000 per sheet, and relationship ids are looked up in a hash map. | `tally-engine::security3::spin_count_is_clamped_and_long_hashes_dropped`, `imported_notes_and_links_are_capped`; `tally-io-xlsx::security3::*`; `tally-io-ods::security3::*` |
 
 The file readers' own cap of 10,000,000 cells (above) bounds what reaches the
 engine.
@@ -354,6 +358,60 @@ review's generators (`p*.py`) on the same machine, release build, before
 
 Not covered here: the shell-side argument limits (`src/limits.rs`, owned by
 the shell) and per-document locks (planned, see §8).
+
+## Review 3 fixes
+
+From `docs/reviews/security-review-3-2026-10-20.md`. Timings are the
+review's generators and probe (`scratchpad/sec3`) on the same machine,
+release build without LTO, before and after; "viewport" is
+`cells(A1:T1000)`.
+
+| Finding | Fix | Tests | Before → after |
+|---|---|---|---|
+| CRITICAL-1 CF evaluated per viewport fetch, no budget | Range index per sheet/version (identical rectangles stored once), folded absolute subexpressions once per version, per-cell outcome cache per version, rules that cannot contribute are skipped, 8M-unit work budget per `cells()` call with `CellBlock.cf_truncated`, caps 2,048 formats × 64 ranges (§8) | `tally-engine::security3::stacked_identical_rules_render_within_the_budget`, `cf_budget_truncates_and_flags_the_block`, `range_index_handles_many_disjoint_blocks`, `absolute_subexpressions_are_evaluated_once_per_version`, `loaded_conditional_formats_are_capped_with_warnings`, `tally-engine::rangeindex::tests`, `tally-engine::fexpr::tests::absolute_subexpressions_fold_to_literals` | 10k `[.A1]>0` ODS: > 60 s → 73 ms (2,048 kept, warning); 10k XLSX `expression`: 55 s → 46 ms; 1k stacked XLSX: 5.5 s → 47 ms; 1k × 1,024 ranges ODS: 36 s → 73 ms (64 ranges kept per format); 10k × 8 KiB formulas: 6.5 s → 31 ms; `SUM($A:$A)>A1` over 1M numbers: > 60 s → 38 ms first fetch, 2 ms cached; 10k via API: 56 s → 91 ms (2,048 kept) |
+| CRITICAL-2 whole-meta clones on undo | `SheetMeta` collections behind `Arc` with copy-on-write, `Change::Meta` holds only changed collections (pointer identity), notes/links undone per entry, meta ops and note bytes per transaction capped; "How to add a meta op" at the top of `ops_v03.rs` | `tally-engine::security3::many_note_ops_in_one_transaction_record_single_entries`, `single_note_edits_on_a_large_sheet_share_the_map`, `meta_ops_record_only_the_touched_collections`, `failing_meta_ops_leave_the_meta_untouched`, `meta_ops_per_transaction_are_capped` | 10k `SetNote` in one tx: 1.25 s, 5.8 GB → 13 ms, 28 MB; 100 note edits on 100k notes: +13 MB each, 1.37 GB → 83 MB total (+0.1 MB each); 20 note edits on 1k × 1,024 CF: +16 MB each → +0; 100k `SetLink`: killed at 4.1 GB → 99 ms, 196 MB; 10k `AddValidation`: killed at 6 GB → 131 ms |
+| HIGH-3 XLSX hyperlink expansion | Targets > 8 KiB dropped at `.rels` parse, `LinkData.url: Arc<str>` shared per `ref`, expanded cells count against `max_cells` (then stop, file still opens), 100k links per sheet before expanding, `HashMap` relationship lookup (MEDIUM-6) | `tally-io-xlsx::security3::over_long_hyperlink_targets_are_dropped_at_parse_time`, `hyperlink_expansion_is_capped_per_sheet`, `relationship_lookup_is_a_hash_map`; `tally-io-ods::security3::repeated_links_share_one_url` | 8 MB target × 10k cells: killed at 6.6 GB → 37 ms, 31 MB; 1 MB target: 2.9 s, 2.6 GB → 5 ms, 11 MB; 64 KB target: 794 MB → 9 MB; 100k refs × 10k cells: > 60 s, 1.8 GB → opens in 0.15 s with the first 100k links; 100k relationships: 8.8 s → 109 ms |
+| HIGH-4 validation cost | List sets resolved once per op (shared per source range), folded formulas, range index, per-op budget with a notice | `tally-engine::security3::list_validation_resolves_the_list_once_per_op`, `custom_validation_folds_absolute_parts_once_per_op`, `validation_budget_accepts_the_rest_with_a_notice` | 10k-item list + fill 100k: > 60 s → 21 ms; custom `SUM($B:$B)>A1` over 1M, fill 10k: 30.9 s → 9 ms; 10k list validations from a file, fill 100k: 2.9 s → 10 ms |
+| MEDIUM-5 `spinCount` / hash sizes | Clamp 100,000 in the reader and in `ooxml_hash`; hash/salt/key > 1 KiB dropped (reader and load) | `tally-engine::security3::spin_count_is_clamped_and_long_hashes_dropped`, `tally-io-xlsx::security3::spin_count_is_clamped_and_long_hash_material_dropped`, `tally-io-ods::security3::long_protection_keys_are_dropped` | unlock attempt at spin 4,294,967,295: 3.1 s → 31 ms; 16 MB salt: 357 ms per attempt → 2 µs |
+| MEDIUM-8 note text | Imported notes cut at 32 KiB (ODS, XLSX and load), 64 MiB per workbook, warnings | `tally-engine::security3::imported_notes_and_links_are_capped`, `tally-io-ods::security3::long_notes_are_truncated`, `tally-io-xlsx::security3::long_comments_are_truncated` | 33.5 MB note: loaded whole → 32 KiB |
+| LOW-9 protection gaps | `SetPageSetup`/`SetPageBreak` need `format_cells` on a protected sheet (`SetFrozen` and `RefreshFilter` stay allowed: view state); `DefineName`/`DeleteName` need an unprotected document structure; `ProtectSheet`/`UnprotectSheet`/`ProtectDocument`/`UnprotectDocument` clear the undo and redo stacks (not undoable, as Excel); `find` with `in_formulas` skips hidden formulas on protected sheets | `tally-engine::security3::protection_gates_page_setup_names_undo_and_find`, `tally-engine::v03::sheet_and_cell_protection`, `structure_protection` | undo after protect unprotected the sheet → nothing to undo |
+| LOW-10 imported hostile links | `check_url` at load for both formats (dropped with a warning) | `tally-engine::security3::imported_notes_and_links_are_capped` | 13 hostile targets loaded → 7 dropped (`javascript:`, `data:`, `vbscript:`, control characters, over 8 KiB) |
+| LOW-12 undo of `DeleteSheet` | The record snapshots the conditional formats and validations of the other sheets (cheap `Arc`s) | `tally-engine::security3::undo_of_delete_sheet_restores_rule_formulas` | `SUM(#REF!)` after undo → `SUM(Other.A:A)` |
+
+MEDIUM-7 (dev mock in the bundle) and LOW-11 (Windows `open_url`) are
+shell/UI fixes, owned by `apps/desktop` and `packages/app`.
+
+### Sheet meta copy-on-write
+
+`SheetMeta` (`crates/tally-engine/src/storage.rs`) keeps every per-sheet
+collection that is not cells (merges, AutoFilter, conditional formats,
+validations, notes, links, protection, page setup, breaks, charts,
+pictures, pivots, outline groups, scenarios, database ranges, filters,
+view options) behind an `Arc`. Cloning the meta is a handful of
+reference-count increments; an op edits a collection with
+`Arc::make_mut`, which copies it once if an undo record still holds the
+previous version and otherwise edits in place. `Vec` collections of large
+elements (formats, validations, charts, pictures, pivots, scenarios) hold
+`Arc<T>` elements, so adding one format copies 2,048 pointers rather than
+2,048 parsed formulas.
+
+Undo records are `Change::Meta { sheet, parts }` where each `MetaPart` is
+one field's previous value. `ops_v03::with_meta` snapshots every field
+(pointer copies) before the op's closure runs, compares pointers
+afterwards and keeps only the fields that changed; fields already recorded
+earlier in the same transaction are not snapshotted again
+(`Effects::meta_recorded`), so a transaction of 10,000 note edits records
+10,000 one-entry parts and edits the map in place. Notes and links use
+`with_meta_cells`, which records the previous value of the touched cells
+instead of the map, so one note edit on a sheet with 100,000 notes costs
+one entry. Ops outside `ops_v03` that touch the meta record only the
+fields they change through `undo::meta_parts`. Every op that fails
+restores the fields it snapshotted; an op must therefore validate before
+it mutates a field that an earlier op of the same transaction already
+recorded (the rule is spelled out in the `ops_v03.rs` module
+documentation, "How to add a meta op", which the chart, pivot and print
+work follows). Adding a field means one struct field and one line in the
+`meta_parts!` table.
 
 ## 9. Fuzzing: later
 
@@ -438,9 +496,11 @@ accepts only `http://host…`, `https://host…` and `mailto:address`, at most
 2048 bytes, with no whitespace, control characters, quotes, `\`, `<`, `>`
 or backticks; `file:` and every other scheme (including anything read from
 a file) is `invalid_argument`. The URL goes to the OS handler as a single
-argument: `open` on macOS and `xdg-open` on Linux (no shell parses it), and
-`cmd /C start "" <url>` on Windows with `^ & | < > % ( ) !` escaped. No
-opener plugin and no JS permission is involved. The UI opens a link only on
+argument: `open` on macOS, `xdg-open` on Linux and
+`rundll32.exe url.dll,FileProtocolHandler <url>` on Windows; no shell parses
+it on any platform (review 3, LOW-11, replaced the earlier `cmd /C start`
+route, which left `,` `;` `=` unescaped). `links::launcher_argv` is
+unit-tested per OS. No opener plugin and no JS permission is involved. The UI opens a link only on
 ⌘-click or a click on the active cell's ↗ (a plain click selects), and
 handles `#Sheet.A1` links itself by going to the cell. `user_name` returns
 the OS account name for new note authors (no other data). With v0.3 the

@@ -317,3 +317,28 @@ fn wildcard_matching_is_linear() {
     };
     assert!(took < budget, "took {took:?}");
 }
+
+/// Review 3 H2: `parse_in` reads numeric operands in the document locale;
+/// `parse` stays en-US.
+#[test]
+fn operands_in_document_locale() {
+    use tally_numfmt::{DE_DE, EN_US};
+    let d = settings(WILD);
+    let de = |text: &str| Criterion::parse_in(&s(text), &d, &DE_DE);
+    assert!(de(">1,5").is_numeric());
+    assert!(de(">1,5").matches(&num(2.0)));
+    assert!(!de(">1,5").matches(&num(1.0)));
+    assert!(de("1.000").matches(&num(1000.0)));
+    assert!(de("<19.10.2026").matches(&num(46_204.0)));
+    assert!(!de("<19.10.2026").matches(&num(46_314.0)));
+    assert!(de("<2026-10-19").matches(&num(46_204.0)));
+    // `1.5` is 1 May under de-DE, a number nonetheless.
+    assert!(de("1.5").is_numeric());
+    assert!(de("1.5").matches(&num(46_143.0)));
+    assert!(de("WAHR").is_numeric());
+    assert!(de("WAHR").matches(&Value::Bool(true)));
+    // Text under en-US.
+    assert!(!Criterion::parse(&s(">1,5"), &d).is_numeric());
+    assert!(!Criterion::parse_in(&s("19.10.2026"), &d, &EN_US).is_numeric());
+    assert!(Criterion::parse(&s("10/19/2026"), &d).matches(&num(46_314.0)));
+}

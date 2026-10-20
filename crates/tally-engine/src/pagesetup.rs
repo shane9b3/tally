@@ -231,7 +231,31 @@ pub fn from_api(d: &PageSetupDto) -> Result<PageSetupData, ApiError> {
 /// Adjusts the print range, repeated rows/columns and breaks for a
 /// row/column change.
 pub fn adjust_for_structure(meta: &mut SheetMeta, sh: &Shape) {
-    let p = &mut meta.page_setup;
+    let needs = |p: &tally_model::PageSetupData| {
+        p.print_range.is_some()
+            || (sh.rows && p.repeat_rows.is_some())
+            || (!sh.rows && p.repeat_cols.is_some())
+    };
+    if needs(&meta.page_setup) {
+        adjust_page_setup(std::sync::Arc::make_mut(&mut meta.page_setup), sh);
+    }
+    let breaks = if sh.rows {
+        &mut meta.row_breaks
+    } else {
+        &mut meta.col_breaks
+    };
+    if !breaks.is_empty() {
+        let old = std::mem::take(std::sync::Arc::make_mut(breaks));
+        *breaks = std::sync::Arc::new(
+            old.into_iter()
+                .filter_map(|b| point_after(sh, b))
+                .filter(|b| *b > 0)
+                .collect::<BTreeSet<u32>>(),
+        );
+    }
+}
+
+fn adjust_page_setup(p: &mut tally_model::PageSetupData, sh: &Shape) {
     if let Some(r) = p.print_range {
         p.print_range = if sh.rows {
             span_after(sh, r.r0, r.r1).map(|(r0, r1)| CellRangeLocal { r0, r1, ..r })
@@ -245,19 +269,6 @@ pub fn adjust_for_structure(meta: &mut SheetMeta, sh: &Shape) {
         }
     } else if let Some((a, b)) = p.repeat_cols {
         p.repeat_cols = span_after(sh, a, b);
-    }
-    let breaks = if sh.rows {
-        &mut meta.row_breaks
-    } else {
-        &mut meta.col_breaks
-    };
-    if !breaks.is_empty() {
-        let old = std::mem::take(breaks);
-        *breaks = old
-            .into_iter()
-            .filter_map(|b| point_after(sh, b))
-            .filter(|b| *b > 0)
-            .collect::<BTreeSet<u32>>();
     }
 }
 
@@ -324,8 +335,8 @@ mod tests {
             c1: 3,
         });
         dto.repeat_rows = Some([0, 1]);
-        meta.page_setup = from_api(&dto).unwrap();
-        meta.row_breaks.insert(5);
+        meta.page_setup = std::sync::Arc::new(from_api(&dto).unwrap());
+        std::sync::Arc::make_mut(&mut meta.row_breaks).insert(5);
         let back = to_api(&meta);
         assert_eq!(back.paper, Paper::Letter);
         assert_eq!(back.row_breaks, vec![5]);

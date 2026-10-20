@@ -79,6 +79,9 @@ fn operand(ctx: &mut dyn EvalContext, arg: EvalValue) -> Result<Operand, ErrorKi
                 entries,
             })
         }
+        // A reference union has no rectangular shape.
+        #[allow(unreachable_patterns)]
+        _ => Err(ErrorKind::Value),
     }
 }
 

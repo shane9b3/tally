@@ -112,7 +112,8 @@ pub(super) fn select(a: &mut Args, zero_ok: bool) -> Result<Selection, ErrorKind
             Some(*names.get(&key).ok_or(ErrorKind::InvalidArgument)?)
         }
         other => {
-            let n = crate::coerce::value_to_number(other, a.ctx().settings())?.trunc();
+            let locale = a.locale();
+            let n = crate::coerce::value_to_number_in(other, a.ctx().settings(), locale)?.trunc();
             if n == 0.0 {
                 None
             } else if n >= 1.0 && n <= f64::from(ncols) {
@@ -126,8 +127,10 @@ pub(super) fn select(a: &mut Args, zero_ok: bool) -> Result<Selection, ErrorKind
         return Err(ErrorKind::InvalidArgument);
     }
 
-    // Criteria table: per row, a list of (db column offset, criterion).
+    // Criteria table: per row, a list of (db column offset, criterion),
+    // parsed in the document locale like COUNTIF's.
     let settings = a.ctx().settings().clone();
+    let locale = a.locale();
     // Every criteria header must name a database field (AOO
     // CreateExcelQuery); otherwise the query is invalid: Err:504.
     let mut crit_cols = Vec::new();
@@ -154,7 +157,7 @@ pub(super) fn select(a: &mut Args, zero_ok: bool) -> Result<Selection, ErrorKind
             if let Value::Error(e) = cell {
                 return Err(*e);
             }
-            conds.push((col, Criterion::parse(cell, &settings)));
+            conds.push((col, Criterion::parse_in(cell, &settings, locale)));
         }
         // A row without conditions adds no OR alternative.
         if !conds.is_empty() {

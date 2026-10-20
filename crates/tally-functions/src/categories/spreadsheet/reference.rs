@@ -177,8 +177,10 @@ pub const INDIRECT: FunctionDef =
         .help("Reference given by text.");
 
 /// The text is parsed by the engine (`EvalContext::parse_reference_text`);
-/// failure is `#REF!`. The resolved range is recorded as a dynamic
-/// dependency and returned as a reference.
+/// text that is no reference (`"foo"`, `""`, `"A0"`, or A1 text under
+/// R1C1) is `Err:502` (AOO `ScIndirect` ends with `PushIllegalArgument`
+/// after the range-name lookup fails). The resolved range is recorded as a
+/// dynamic dependency and returned as a reference.
 fn indirect(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run_ref(|| {
@@ -189,7 +191,7 @@ fn indirect(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         let range = a
             .ctx()
             .parse_reference_text(text.trim(), a1)
-            .ok_or(ErrorKind::Ref)?;
+            .ok_or(ErrorKind::InvalidArgument)?;
         a.ctx().record_dynamic_dep(&range);
         Ok(EvalValue::Range(range))
     })
@@ -246,36 +248,40 @@ fn offset(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
 
 const REF1: &[Param] = &[Param::required("reference", ParamKind::Reference)];
 
-/// `AREAS(reference)`: unions are not supported, so always 1 for a reference.
+/// `AREAS(reference)`: the number of areas, so 1 for a range and the number
+/// of members of a union (AOO `ScAreas`, `svRefList`).
 pub const AREAS: FunctionDef = FunctionDef::new("AREAS", Category::Spreadsheet, REF1, areas)
     .returns(ReturnKind::Number)
     .help("Number of areas in a reference.");
-/// `ROWS(array)`.
+/// `ROWS(array)`: a union is `Err:504` (AOO `ScRows`: `errIllegalParameter`
+/// for every stack type but a reference or a matrix).
 pub const ROWS: FunctionDef = FunctionDef::new("ROWS", Category::Spreadsheet, REF1, rows)
     .returns(ReturnKind::Number)
     .help("Number of rows of a reference or array.");
-/// `COLUMNS(array)`.
+/// `COLUMNS(array)`: a union is `Err:504`, as for [`ROWS`].
 pub const COLUMNS: FunctionDef = FunctionDef::new("COLUMNS", Category::Spreadsheet, REF1, columns)
     .returns(ReturnKind::Number)
     .help("Number of columns of a reference or array.");
 
 fn dims(a: &mut Args<'_>) -> Result<(u32, u32), ErrorKind> {
-    match a.any(0) {
-        EvalValue::Range(r) => Ok((r.rows(), r.cols())),
+    let v = a.any(0);
+    if let Some(areas) = v.areas() {
+        return match areas {
+            [r] => Ok((r.rows(), r.cols())),
+            _ => Err(ErrorKind::ParamList),
+        };
+    }
+    match v {
         EvalValue::Array(m) | EvalValue::Scalar(Value::Array(m)) => Ok((m.rows, m.cols)),
         EvalValue::Scalar(Value::Error(e)) => Err(e),
         EvalValue::Scalar(_) => Ok((1, 1)),
-        EvalValue::Missing => Err(ErrorKind::Value),
+        _ => Err(ErrorKind::Value),
     }
 }
 
 fn areas(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
-    run(|| match a.any(0) {
-        EvalValue::Range(_) => Ok(Value::Number(1.0)),
-        EvalValue::Scalar(Value::Error(e)) => Err(e),
-        _ => Err(ErrorKind::Value),
-    })
+    run(|| Ok(Value::Number(a.ranges(0)?.len() as f64)))
 }
 
 fn rows(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
@@ -506,16 +512,21 @@ mod tests {
         ] {
             assert_eq!(
                 call(&mut c, "INDIRECT", vec![t("B2"), r1c1]),
-                Value::Error(ErrorKind::Ref)
+                Value::Error(ErrorKind::InvalidArgument)
             );
         }
+        // Review 3 L: unparsable text is Err:502 (AOO PushIllegalArgument).
         assert_eq!(
             call(&mut c, "INDIRECT", vec![t("nonsense")]),
-            Value::Error(ErrorKind::Ref)
+            Value::Error(ErrorKind::InvalidArgument)
         );
         assert_eq!(
             call(&mut c, "INDIRECT", vec![t("")]),
-            Value::Error(ErrorKind::Ref)
+            Value::Error(ErrorKind::InvalidArgument)
+        );
+        assert_eq!(
+            call(&mut c, "INDIRECT", vec![t("A0")]),
+            Value::Error(ErrorKind::InvalidArgument)
         );
     }
 
@@ -578,6 +589,37 @@ mod tests {
         assert_eq!(
             call(&mut c, "ROWS", vec![EvalValue::error(ErrorKind::NA)]),
             Value::Error(ErrorKind::NA)
+        );
+    }
+
+    /// Review 3 M1: AREAS counts a union's members; ROWS/COLUMNS reject it
+    /// with Err:504 as AOO does.
+    #[cfg(feature = "ref-union")]
+    #[test]
+    fn shape_functions_on_unions() {
+        let mut c = MockEvalContext::new();
+        let u = c.union(0, &["A1:A2", "B1:B2", "D5"]);
+        assert_eq!(call(&mut c, "AREAS", vec![u.clone()]), Value::Number(3.0));
+        assert_eq!(
+            call(&mut c, "ROWS", vec![u.clone()]),
+            Value::Error(ErrorKind::ParamList)
+        );
+        assert_eq!(
+            call(&mut c, "COLUMNS", vec![u.clone()]),
+            Value::Error(ErrorKind::ParamList)
+        );
+        // A one-member union is a plain range.
+        let one = c.union(0, &["A1:A2"]);
+        assert_eq!(one, c.range(0, "A1:A2"));
+        assert_eq!(call(&mut c, "AREAS", vec![one]), Value::Number(1.0));
+        assert_eq!(
+            EvalValue::union(Vec::new()),
+            EvalValue::error(ErrorKind::Ref)
+        );
+        // OFFSET takes a single-area reference only.
+        assert_eq!(
+            call(&mut c, "OFFSET", vec![u, n(1.0), n(0.0)]),
+            Value::Error(ErrorKind::Value)
         );
     }
 
