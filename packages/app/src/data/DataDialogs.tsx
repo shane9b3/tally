@@ -1031,7 +1031,7 @@ export function RecoveryDialog({ d }: { d: D<"recovery"> }) {
             <span className={styles.grow} title={f.path}>
               {f.title} <span className={styles.muted}>{f.savedAt}</span>
             </span>
-            <button type="button" className={dlg.rowBtn} onClick={() => void ctl.w56.recover(f).then((ok) => {
+            <button type="button" className={dlg.rowBtn} onClick={() => void ctl.w56.recover(f, files.filter((x) => x !== f)).then((ok) => {
               if (ok) setFiles(files.filter((x) => x !== f));
             })} data-testid="recover">
               Recover

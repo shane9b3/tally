@@ -14,6 +14,10 @@ real-file corpus).
 - Gates at 7c29f0f: 1,567 Rust tests, 755 TS tests, 60 e2e; clippy and fmt clean; bundle check ok; release bundle builds (Tally.app 27 MiB, dmg 12.4 MiB).
 
 ## Known gaps / follow-ups
+- Multi-window (one document per window, native macOS tabs; `windows.rs`, `registry.rs`, docs/qa/multi-window-manual.md) is unit-tested only: window creation, AppKit's automatic Window-menu list and tab items (Merge All Windows, Show Tab Bar), ⌘` cycling, focus on quit, Dock reopen, per-document print windows and the Windows/Linux window list have not been checked by hand yet (owner: run the checklist on the release build). Watch for the native tab bar overlapping the toolbar under the overlay title bar.
+- The Dock's Quit and log-out still cannot show the save prompt (`terminate:` is not vetoable through tao); every edited window's document gets an exit snapshot instead.
+- With no window open (macOS), only File ▸ New and File ▸ Open… work from the menu; other File items (templates, Open Recent ▸ Clear Menu) need a window.
+- The window registry uses a small leaf mutex (never held across engine, dialog, window or menu calls) instead of atomics; per-document engine locks are still a separate task.
 - macOS printing: `wb_print` shows the PDF in a `tally-print` window and calls `Webview::print()`; if that fails it opens the PDF in Preview. Whether WKWebView's print sheet actually appears for PDF content has not been checked by hand yet (owner: File ▸ Print… in the release build).
 - XLSX does not write the Window ▸ Split (`pane` without freeze); ODS does.
 - Split is restored on sheet show, not after undo/redo.

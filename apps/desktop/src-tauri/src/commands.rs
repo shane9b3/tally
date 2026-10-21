@@ -98,13 +98,38 @@ pub fn open_path(state: &AppState, path: &std::path::Path) -> CmdResult<Workbook
     Ok(info)
 }
 
-/// Opens an allowlisted path and records it in the recent list.
+/// Pure: the open document whose file is `canon`, among the remembered
+/// files (`paths`, doc id → path; compared as given and canonicalized).
+pub fn doc_with_path<'a>(
+    paths: impl IntoIterator<Item = (&'a u32, &'a PathBuf)>,
+    canon: &std::path::Path,
+) -> Option<DocId> {
+    paths
+        .into_iter()
+        .find(|(_, p)| p.as_path() == canon || std::fs::canonicalize(p).is_ok_and(|c| c == canon))
+        .map(|(d, _)| DocId(*d))
+}
+
+/// Opens an allowlisted path and records it in the recent list. A file that
+/// is already open in a document window is not opened twice: that window
+/// comes to the front and the result is `cancelled` (the UI shows nothing).
 pub fn open_checked<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
     path: &std::path::Path,
 ) -> CmdResult<WorkbookInfo> {
     let canon = files::check_open_allowed(state, path)?;
+    let open_doc = doc_with_path(lock(&state.paths).iter(), &canon);
+    if let Some(doc) = open_doc {
+        let window = app
+            .try_state::<crate::registry::Windows>()
+            .and_then(|w| w.with(|r| r.window_of(doc)));
+        if let Some(label) = window {
+            crate::windows::focus(app, &label);
+            files::push_recent(app, state, &canon);
+            return Err(ApiError::new(ApiError::CANCELLED, "already open"));
+        }
+    }
     let info = open_path(state, &canon)?;
     files::push_recent(app, state, &canon);
     Ok(info)

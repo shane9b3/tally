@@ -84,7 +84,8 @@ pub fn ui_table(locale: Locale) -> BTreeMap<&'static str, &'static str> {
         .collect()
 }
 
-/// `set_ui_language(lang)`: stores the language and rebuilds the menu.
+/// `set_ui_language(lang)`: stores the language and rebuilds the (app-wide)
+/// menu.
 #[tauri::command]
 pub async fn set_ui_language(app: AppHandle, lang: String) -> CmdResult<()> {
     crate::limits::text_max("the language", &lang, crate::limits::MAX_LOCALE)?;
@@ -95,6 +96,9 @@ pub async fn set_ui_language(app: AppHandle, lang: String) -> CmdResult<()> {
         .map_err(|e| ApiError::new(ApiError::INTERNAL, format!("menu: {e}")))?;
     app.set_menu(menu)
         .map_err(|e| ApiError::new(ApiError::INTERNAL, format!("menu: {e}")))?;
+    // The fresh menu's Window list (Windows/Linux); the other windows switch
+    // their own UI on `prefs-changed` (`prefs::broadcast_prefs`).
+    crate::windows::refresh_window_menu(&app);
     Ok(())
 }
 

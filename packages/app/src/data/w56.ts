@@ -155,7 +155,7 @@ export class W56Features {
       }),
     );
     void this.loadPrefs();
-    void this.offerRecovery();
+    // Crash recovery is offered by `AppController.start` (first window only).
     return () => {
       offs.splice(0).forEach((f) => f());
       this.offSource?.();
@@ -941,6 +941,28 @@ export class W56Features {
     }
     if (prefs.uiLanguage !== prev.uiLanguage) await this.applyUiLanguage(prefs.uiLanguage, true);
     if (prefs.autosaveMinutes !== prev.autosaveMinutes) this.restartAutosave();
+    // The other document windows re-read the prefs (`prefs-changed`).
+    this.ctl.broadcastPrefs(null);
+  }
+
+  /**
+   * `prefs-changed`: another window stored new prefs. Re-reads them and
+   * applies what changed here (UI language without rebuilding the native
+   * menu again, the autosave timer). Nothing is broadcast back.
+   */
+  async reloadPrefs(): Promise<void> {
+    if (!this.shell.getPrefs) return;
+    let prefs: AppPrefs;
+    try {
+      prefs = parsePrefs(JSON.parse(await this.shell.getPrefs()));
+    } catch {
+      return;
+    }
+    const prev = this.store.prefs;
+    this.store.setPrefs(prefs);
+    writeLocalPrefs(prefs);
+    if (prefs.uiLanguage !== prev.uiLanguage) await this.applyUiLanguage(prefs.uiLanguage, false);
+    if (prefs.autosaveMinutes !== prev.autosaveMinutes) this.restartAutosave();
   }
 
   /** Installs a UI language: the `t()` table, the command titles and the native menu. */
@@ -1127,7 +1149,8 @@ export class W56Features {
     }
   }
 
-  private async offerRecovery(): Promise<void> {
+  /** Offers the autosaved snapshots of a crashed session (the first window only; `AppController.start`). */
+  async offerRecovery(): Promise<void> {
     if (!this.shell.listRecovery) return;
     try {
       const files = await this.shell.listRecovery();
@@ -1137,12 +1160,20 @@ export class W56Features {
     }
   }
 
-  /** Opens a recovery snapshot (after the unsaved-changes guard); `true` when it was opened. */
-  async recover(file: RecoveryFile): Promise<boolean> {
+  /**
+   * Opens a recovery snapshot: in its own window in the desktop app (the
+   * first one may take over the untouched start-up window), after the
+   * unsaved-changes guard in the browser; `true` when it was opened.
+   * `remaining`: the other snapshots still listed, offered again if
+   * loading here closed the recovery dialog.
+   */
+  async recover(file: RecoveryFile, remaining: RecoveryFile[] = []): Promise<boolean> {
     if (!this.shell.recoverSnapshot) return false;
-    if (!(await this.ctl.confirmUnsaved())) return false;
+    if (!(await this.ctl.replaceGuard())) return false;
     try {
-      this.ctl.load(await this.shell.recoverSnapshot(file.path));
+      await this.ctl.present(await this.shell.recoverSnapshot(file.path));
+      // Taking over this window reset its dialogs: keep offering the others.
+      if (remaining.length > 0 && this.store.dialog === null) this.store.openDialog({ kind: "recovery", files: remaining });
       this.toast("info", `Recovered “${file.title}”. Save it to keep it.`);
       return true;
     } catch (e) {
@@ -1189,10 +1220,10 @@ export class W56Features {
   }
 
   async newFromUserTemplate(id: string): Promise<void> {
-    if (!(await this.ctl.confirmUnsaved())) return;
+    if (!(await this.ctl.replaceGuard())) return;
     try {
       const info = await this.shell.newFromUserTemplate?.(id);
-      if (info) this.ctl.load(info);
+      if (info) await this.ctl.present(info);
     } catch (e) {
       this.ctl.notifyError(e);
     }

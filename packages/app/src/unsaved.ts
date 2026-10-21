@@ -4,7 +4,10 @@
  * close button, Quit) asks `AppController.confirmUnsaved()` first. When the
  * document is dirty (`WorkbookInfo.dirty` in the doc store) the save prompt
  * opens: "Do you want to save the changes you made to “<title>”?" with
- * Save / Don't Save / Cancel (as in macOS and AOO).
+ * Save / Don't Save / Cancel (as in macOS and AOO). In the desktop app each
+ * document has its own window (windows.ts), so New/Open/… no longer replace
+ * a document there; the guard runs for ⌘W, the window's close button and,
+ * window by window, for Quit.
  *
  * The decision logic is pure and exported for tests; the prompt itself is a
  * small zustand store that `SavePrompt` (components/SavePrompt.tsx) renders.
@@ -37,12 +40,14 @@ export type CloseKind = "window" | "quit";
 
 /** Optional desktop-shell hooks (`TauriClient`; the browser has none). */
 export interface CloseShell {
-  /** `set_document_edited`: the macOS "edited" dot, the shell's close guard flag and the document it snapshots on exit. */
-  setDocumentEdited?(edited: boolean, doc: DocId | null): Promise<void>;
-  /** `close-requested`: the shell held back a window close / quit because the document is edited. */
+  /** `set_document_edited`: the macOS "edited" dot, the shell's close guard flag, the document it snapshots on exit and its title (Window menu). */
+  setDocumentEdited?(edited: boolean, doc: DocId | null, title?: string | null): Promise<void>;
+  /** `close-requested`: the shell held back this window's close / a quit because the document is edited. */
   onCloseRequested?(cb: (kind: CloseKind) => void): () => void;
-  /** `confirm_close`: the guard resolved; close the window or quit for real. */
+  /** `confirm_close`: the guard resolved; close this window, or go on with the quit. */
   confirmClose?(quit: boolean): Promise<void>;
+  /** `cancel_quit`: the guard was cancelled during a quit; the whole quit is aborted. */
+  cancelQuit?(): Promise<void>;
 }
 
 export interface SavePromptState {

@@ -34,6 +34,7 @@
   "menu.window.minimize": "Minimizar",
   "menu.window.zoom": "Zoom",
   "menu.window.bringAllToFront": "Traer todo al frente",
+  "menu.window.maximize": "Maximizar",
   "cmd.edit.undo": "Deshacer",
   "cmd.edit.redo": "Rehacer",
   "cmd.edit.copy": "Copiar",

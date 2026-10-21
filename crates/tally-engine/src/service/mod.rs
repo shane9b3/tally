@@ -396,6 +396,10 @@ impl DocumentService for EngineService {
         Ok(info)
     }
 
+    fn info(&self, doc: DocId) -> Result<WorkbookInfo> {
+        Ok(self.document(doc)?.info())
+    }
+
     fn is_dirty(&self, doc: DocId) -> Result<bool> {
         Ok(self.document(doc)?.dirty)
     }

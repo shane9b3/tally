@@ -18,6 +18,7 @@ export { useSelectionStore, toSelectionDto, fromSelectionDto, selectionRanges } 
 export { useEditStore, type EditOrigin } from "./stores/editStore";
 export { useUiStore, type Toast } from "./stores/uiStore";
 export { guardDecision, proceedAfter, useSavePromptStore, type CloseKind, type CloseShell, type SaveChoice } from "./unsaved";
+export { canReuseWindow, type ReuseState, type ThemeChoice, type WindowShell } from "./windows";
 // `WebMockClient` is deliberately not exported here: the desktop bundle must
 // not ship the dev mock (security review 3, MEDIUM-7). Dev/e2e builds load it
 // through `@tally/app/dev` with a dynamic import.

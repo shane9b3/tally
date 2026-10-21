@@ -1,6 +1,6 @@
 /**
- * Custom title bar for Windows (W5-5, §4 item 48): the main window runs
- * without OS decorations there (`tauri.windows.conf.json`), so this strip
+ * Custom title bar for Windows (W5-5, §4 item 48): every document window runs
+ * without OS decorations there (`src-tauri/src/windows.rs`), so this strip
  * provides the drag region, the document title and the caption buttons
  * (minimize, maximize/restore, close) through the window API, allowed by
  * `capabilities/windows-titlebar.json`. Not mounted on macOS (overlay title

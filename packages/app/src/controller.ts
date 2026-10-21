@@ -72,6 +72,7 @@ import { V3Features } from "./features";
 import { useV3Store } from "./stores/v3Store";
 import { W5Features } from "./objects/w5Features";
 import { guardDecision, proceedAfter, useSavePromptStore, type CloseKind, type CloseShell } from "./unsaved";
+import { canReuseWindow, type WindowShell } from "./windows";
 import { W56Features } from "./data/w56";
 
 export interface ControllerOptions {
@@ -121,9 +122,16 @@ export class AppController {
   private lastCopy: { token: string; tsv: string } | null = null;
   /** The unsaved-changes guard is running (prompt open or its Save in progress). */
   private guarding = false;
-  /** The edited state and document last reported to the shell (`set_document_edited`). */
+  /** The edited state, document and title last reported to the shell (`set_document_edited`). */
   private reportedEdited: boolean | null = null;
   private reportedDoc: DocId | null = null;
+  private reportedTitle: string | null = null;
+  /** The blank workbook this window started with, until its first change (window reuse, windows.ts). */
+  private pristineDoc: DocId | null = null;
+  /** A quit asked while this window's own prompt was up (it answers for both). */
+  private quitWaiting = false;
+  /** A theme change applied from another window (`prefs-changed`) is not broadcast back. */
+  private remoteTheme = false;
   /** Typing commits in flight (still "edited" until the engine marks the doc dirty). */
   private committing = 0;
   /** The last typing commit's apply (the guard waits for it before reading `dirty`). */
@@ -170,6 +178,10 @@ export class AppController {
       useDocStore.subscribe(() => this.syncDocumentEdited()),
       useEditStore.subscribe(() => this.syncDocumentEdited()),
       this.closeShell.onCloseRequested?.((kind) => void this.closeRequested(kind)) ?? (() => undefined),
+      this.windowShell.onPrefsChanged?.((e) => this.prefsChangedElsewhere(e.theme)) ?? (() => undefined),
+      useUiStore.subscribe((s, prev) => {
+        if (s.themePref !== prev.themePref && !this.remoteTheme) this.broadcastPrefs(s.themePref);
+      }),
     );
     this.syncDocumentEdited();
     return () => {
@@ -178,21 +190,38 @@ export class AppController {
     };
   }
 
+  /**
+   * Shows this window's first document: the one the desktop shell opened the
+   * window for (`window_init`), else a new blank workbook (or `template`).
+   * Only the session's first window offers the crash recovery.
+   */
   async start(template?: string | null): Promise<void> {
     this.client.listFunctions().then(
       (fns) => this.w56.setFunctions(fns),
       () => undefined,
     );
+    let offerRecovery = true;
     try {
-      const info = await this.client.newWorkbook(template ?? null);
-      this.load(info);
+      const init = this.windowShell.windowInit ? await this.windowShell.windowInit() : null;
+      if (init) offerRecovery = init.offerRecovery;
+      if (init?.doc) {
+        this.load(init.doc);
+      } else {
+        const blank = template === undefined || template === null;
+        this.load(await this.client.newWorkbook(template ?? null), blank);
+      }
     } catch (e) {
       this.notifyError(e);
     }
+    if (offerRecovery) void this.w56.offerRecovery();
   }
 
-  /** Shows a workbook (replacing the current one). */
-  load(info: WorkbookInfo): void {
+  /**
+   * Shows a workbook (replacing the current one). `pristine`: a blank
+   * workbook this window starts with, which a later Open may replace.
+   */
+  load(info: WorkbookInfo, pristine = false): void {
+    this.pristineDoc = pristine ? info.doc : null;
     const doc = useDocStore.getState();
     const prev = doc.info;
     doc.source?.dispose();
@@ -999,6 +1028,15 @@ export class AppController {
     return this.shell as unknown as CloseShell;
   }
 
+  private get windowShell(): WindowShell {
+    return this.shell as unknown as WindowShell;
+  }
+
+  /** Desktop: one document per window (`place_document`); the browser keeps one document. */
+  get multiWindow(): boolean {
+    return typeof this.windowShell.placeDocument === "function";
+  }
+
   /** Whether the open edit session holds typed text not yet in the document. */
   get pendingEdit(): boolean {
     return isPendingEdit(useEditStore.getState().edit, this.editOriginal);
@@ -1011,12 +1049,72 @@ export class AppController {
    */
   private syncDocumentEdited(): void {
     const info = useDocStore.getState().info;
-    const edited = (info?.dirty ?? false) || this.pendingEdit || this.committing > 0;
+    const edited = this.edited;
+    // The first change makes the start-up blank workbook a real document (no window reuse).
+    if (edited) this.pristineDoc = null;
     const doc = info?.doc ?? null;
-    if ((edited === this.reportedEdited && doc === this.reportedDoc) || !this.closeShell.setDocumentEdited) return;
+    const title = info?.title ?? null;
+    if ((edited === this.reportedEdited && doc === this.reportedDoc && title === this.reportedTitle) || !this.closeShell.setDocumentEdited) return;
     this.reportedEdited = edited;
     this.reportedDoc = doc;
-    this.closeShell.setDocumentEdited(edited, doc).catch((e: unknown) => console.warn("tally: set_document_edited", e));
+    this.reportedTitle = title;
+    this.closeShell.setDocumentEdited(edited, doc, title).catch((e: unknown) => console.warn("tally: set_document_edited", e));
+  }
+
+  /** Unsaved changes: dirty, or uncommitted typing (or its commit still in flight). */
+  private get edited(): boolean {
+    return (useDocStore.getState().info?.dirty ?? false) || this.pendingEdit || this.committing > 0;
+  }
+
+  /** Whether a document opened from here may replace this window's (windows.ts). */
+  canReuseWindow(): boolean {
+    return canReuseWindow({ info: this.info, pristineDoc: this.pristineDoc, edited: this.edited });
+  }
+
+  /**
+   * Before creating a document that replaces this one: the browser's single
+   * document asks about unsaved changes; with windows nothing is replaced
+   * unless the window is untouched, so there is nothing to ask.
+   */
+  replaceGuard = async (): Promise<boolean> => this.multiWindow || (await this.confirmUnsaved());
+
+  /**
+   * Shows a document just created or opened: in the desktop app in a new
+   * window, or in this one when it only holds its untouched blank workbook
+   * (`place_document`); in the browser it replaces the current document.
+   */
+  present = async (info: WorkbookInfo): Promise<void> => {
+    const place = this.windowShell.placeDocument;
+    if (!place) {
+      this.load(info);
+      return;
+    }
+    try {
+      if ((await place.call(this.windowShell, info.doc, this.canReuseWindow())) === "here") this.load(info);
+      // The new window shows the engine's summary, which no longer has the
+      // open warnings (they are delivered once): show them here.
+      else toastWarnings(info.warnings.map((w) => `${info.title}: ${w}`));
+    } catch (e) {
+      this.notifyError(e);
+    }
+  };
+
+  /** Tells the other windows about a prefs or theme change made here. */
+  broadcastPrefs(theme: "system" | "light" | "dark" | null): void {
+    this.windowShell.broadcastPrefs?.(theme).catch((e: unknown) => console.warn("tally: broadcast_prefs", e));
+  }
+
+  /** `prefs-changed`: another window changed the prefs or the theme. */
+  private prefsChangedElsewhere(theme: "system" | "light" | "dark" | null): void {
+    if (theme) {
+      this.remoteTheme = true;
+      try {
+        useUiStore.getState().setThemePref(theme);
+      } finally {
+        this.remoteTheme = false;
+      }
+    }
+    void this.w56.reloadPrefs();
   }
 
   /**
@@ -1075,54 +1173,79 @@ export class AppController {
   }
 
   /**
-   * The desktop shell held back a window close or quit (`close-requested`):
-   * run the guard, then close/quit for real. Don't Save closes the document
-   * first so its autosave snapshot is removed, as an in-app close does.
+   * The desktop shell held back this window's close or a quit
+   * (`close-requested`): run the guard, then let the shell close the window
+   * (which closes the document in the engine and removes its autosave
+   * snapshot) or go on with the quit (`confirm_close`). Cancel during a quit
+   * tells the shell (`cancel_quit`), which aborts the whole quit.
    */
   closeRequested = async (kind: CloseKind): Promise<boolean> => {
-    if (!(await this.confirmUnsaved())) return false;
-    const info = this.info;
-    if (info?.dirty) await this.client.close(info.doc).catch(() => undefined);
+    if (this.guarding) {
+      // A prompt is already up in this window (⌘W, or the red button): it
+      // answers for the quit too. Cancel there must also end the quit.
+      if (kind === "quit") this.quitWaiting = true;
+      return false;
+    }
+    const ok = await this.confirmUnsaved();
+    const quitAsked = kind === "quit" || this.quitWaiting;
+    this.quitWaiting = false;
+    if (!ok) {
+      // Cancel (or a cancelled Save As) during a quit aborts the whole quit.
+      if (quitAsked) await this.closeShell.cancelQuit?.().catch((e: unknown) => console.warn("tally: cancel_quit", e));
+      return false;
+    }
     try {
+      // A window close answered during a quit closes the window; the shell
+      // then goes on with the quit.
       await this.closeShell.confirmClose?.(kind === "quit");
     } catch (e) {
       this.notifyError(e);
     }
+    // Answered for a quit that may still be cancelled elsewhere: the next
+    // change here is reported again, which re-arms the shell's guard.
+    if (kind === "quit") this.reportedEdited = null;
     return true;
   };
 
+  /** File ▸ New: a new window in the desktop app; the browser replaces the document (guarded). */
   newWorkbook = async (): Promise<void> => {
+    const place = this.windowShell.placeDocument;
+    if (place) {
+      await place.call(this.windowShell, null, false).catch(this.notifyError);
+      return;
+    }
     if (!(await this.confirmUnsaved())) return;
     try {
-      this.load(await this.client.newWorkbook(null));
+      this.load(await this.client.newWorkbook(null), true);
     } catch (e) {
       this.notifyError(e);
     }
   };
 
   newFromTemplate = async (id: string): Promise<void> => {
-    if (!(await this.confirmUnsaved())) return;
+    if (!(await this.replaceGuard())) return;
     try {
-      this.load(await this.client.newWorkbook(id));
+      await this.present(await this.client.newWorkbook(id));
     } catch (e) {
       this.notifyError(e);
     }
   };
 
+  /** File ▸ Open…: a file already open in a window brings that window to the front (the shell answers `null`). */
   openDialog = async (): Promise<void> => {
-    if (!(await this.confirmUnsaved())) return;
+    if (!(await this.replaceGuard())) return;
     try {
       const info = await this.shell.openDialog();
-      if (info) this.load(info);
+      if (info) await this.present(info);
     } catch (e) {
       this.notifyError(e);
     }
   };
 
   openRecent = async (path: string): Promise<void> => {
-    if (!(await this.confirmUnsaved())) return;
+    if (!(await this.replaceGuard())) return;
     try {
-      this.load(await this.client.open(path));
+      await this.present(await this.client.open(path));
     } catch (e) {
       this.notifyError(e);
     }
@@ -1140,9 +1263,14 @@ export class AppController {
     }
   };
 
-  /** File ▸ Close (⌘W): replaces the document with a blank one (guarded in `newWorkbook`). */
+  /**
+   * File ▸ Close (⌘W): closes this window in the desktop app (guarded like
+   * the red button); the browser replaces the document with a blank one
+   * (guarded in `newWorkbook`).
+   */
   closeDocument = async (): Promise<void> => {
-    await this.newWorkbook();
+    if (this.multiWindow) await this.closeRequested("window");
+    else await this.newWorkbook();
   };
   // -- v0.2: data region, sort, AutoFilter ---------------------------------------
 

@@ -26,7 +26,7 @@ Types come from `crates/tally-api/src/dto.rs` and are generated into
 | Tauri command | Arguments | Returns | `DocumentService` method | `EngineClient` method |
 |---|---|---|---|---|
 | `wb_new` | `template?: string` (id: `invoices`, `budget`, `stock`) | `WorkbookInfo` | `new_workbook(template)` (id passed through; the engine builds it) | `newWorkbook(template?)` |
-| `wb_open_dialog` | none | `WorkbookInfo \| null` | shell only: native dialog (filters: ODS/OTS, XLSX, XLS, SXC, CSV/TSV, HTML, dBase), then `open(path)` | `ShellClient.openDialog()` |
+| `wb_open_dialog` | none | `WorkbookInfo \| null` | shell only: native dialog (filters: ODS/OTS, XLSX, XLS, SXC, CSV/TSV, HTML, dBase), then `open(path)`; `null` when cancelled or when the file is already open in a window (brought to the front) | `ShellClient.openDialog()` |
 | `wb_open` | `path: string` | `WorkbookInfo` | `open(path)` | `open(path)` |
 | `wb_save` | `doc, saveAs: boolean, format?: FileFormat` | `WorkbookInfo` | shell shows a dialog when `saveAs`, no path or a format change (Save As offers ODS, XLSX, CSV, HTML and dBase; without `format` the chosen extension decides), then `save(doc, path, format)` | `save(doc, path \| null, format)`; `ShellClient.saveWithDialog(doc, saveAs, format)` |
 | `wb_close` | `doc` | `void` | `close(doc)` | `close(doc)` |
@@ -280,15 +280,17 @@ and their args from the rule provider:
 | Event | Payload | `EngineClient` |
 |---|---|---|
 | `doc-changed` | `DocChangedEvent { doc, result: ApplyResult }` | `onDocChanged(cb)` |
-| `menu-action` | `MenuActionEvent { id: string }` | `onMenuAction(cb)` |
-| `close-requested` | `{ kind: "window" \| "quit" }` | `onCloseRequested(cb)` (shell; `closing.rs`) |
+| `menu-action` | `MenuActionEvent { id: string }` | `onMenuAction(cb)`; sent to the front document window only |
+| `close-requested` | `{ kind: "window" \| "quit" }` | `onCloseRequested(cb)` (shell; `closing.rs`); sent to the one window being asked |
+| `prefs-changed` | `{ theme: "system" \| "light" \| "dark" \| null }` | `onPrefsChanged(cb)` (shell; `prefs.rs`); sent to the other document windows |
 
 Menu ids are `CommandRegistry` command ids (`packages/app/src/commands.ts`); the
 native menu (`apps/desktop/src-tauri/src/menu.rs`) lists them, and
 `packages/app/test/menuIds.test.ts` checks every one is registered.
 
 `doc-changed` carries only changes the UI did not initiate (volatile recalc, async
-load). Results of the UI's own `apply`/`undo`/`redo` come back as return values.
+load). Results of the UI's own `apply`/`undo`/`redo` come back as return values. It goes to every
+window; each one ignores documents it does not show.
 
 ## v0.4–v0.6 (wave 5)
 
@@ -352,7 +354,7 @@ Wave-5 shell commands (no `DocumentService` method; optional `ShellClient.export
 | Tauri command | Arguments | Returns | What it does |
 |---|---|---|---|
 | `wb_export_pdf` | `doc, job` | `void` | Native Save dialog, then writes `print_job_pdf(job)`; `cancelled` when dismissed. |
-| `wb_print` | `doc, job` | `void` | Sends the job's PDF to the OS print dialog (see "Printing on macOS" below). |
+| `wb_print` | `doc, job` | `void` | Sends the job's PDF to the OS print dialog (see "Printing on macOS" below). The macOS print window belongs to the calling document window and closes with it. |
 
 Wave-5 argument limits (`limits.rs`, checked before the engine; `invalid_argument`):
 
@@ -472,31 +474,86 @@ stand-ins).
 | `localized_function_names` | `lang` | `[canonical, localized][]` | The function-name table of a locale (the app ships a generated copy, `functionNames.json`). |
 | `clear_recent` | — | `void` | File ▸ Open Recent ▸ Clear Menu. |
 
-### Unsaved-changes guard (`closing.rs`)
+### Document windows (`windows.rs`, `registry.rs`)
 
-Every UI path that replaces or closes the document runs
-`AppController.confirmUnsaved()` (`packages/app/src/unsaved.ts`): when the
-document is dirty it asks Save / Don't Save / Cancel. The shell only needs the
-dirty flag, so window close and quit can be guarded without the service lock.
+One document per window. Every document window is a `doc-<n>` webview
+window with the shared macOS tabbing identifier `dev.tally.document`
+(so "Prefer tabs" and Window ▸ Merge All Windows make native tabs);
+`tauri.conf.json` lists no window, the first one is created at launch by
+the same code as the rest. Each window runs its own webview (own JS realm,
+own stores, own autosave timer for its document) and listens to its own
+window's events only (`getCurrentWebviewWindow().listen`), so events the
+shell sends with `emit_to(label)` reach one window.
 
 | Tauri command | Arguments | Returns | What it does |
 |---|---|---|---|
-| `set_document_edited` | `edited, doc: DocId \| null` | `void` | Synchronous command (main thread, in call order). Records the dirty state and the document's id (sent whenever either changes; both live in atomics, outside the service mutex) and, on macOS, sets the window's "document edited" dot (`-[NSWindow setDocumentEdited:]` via the safe `objc2-app-kit` binding). |
-| `confirm_close` | `quit` | `void` | The save prompt resolved with Save or Don't Save: marks the close confirmed and destroys the main window (`quit: false`) or exits (`quit: true`). |
+| `window_init` | — | `{ doc: WorkbookInfo \| null, offerRecovery: boolean }` | The engine's summary (`DocumentService::info`) of the document bound to the *calling* window (Tauri supplies the caller, so a webview cannot read another window's document; a reload of the webview gets the same document again), else `null` (the webview creates a blank workbook). `offerRecovery` is `true` for the first window of the session only, which offers the crash recovery. |
+| `place_document` | `doc: DocId \| null, reuse: boolean` | `"here" \| "window"` | Shows a document the caller just created or opened (New from template, Open…, Open Recent, user templates, recovery). Only the id is taken: the summary comes from the engine (an unknown document is `not_found`). `"here"`: `reuse` was asked (the caller's document is the untitled blank workbook it started with, never edited) and the shell's own record agrees the window is not edited; the caller then loads it. `"window"`: a new window was registered bound to the document, then built (its open warnings, delivered once, are shown in the calling window). `doc: null` opens a new blank window (File ▸ New). A document already shown in another window is refused (`invalid_argument`, that window comes to the front); at most 100 windows; if the window cannot be created the document is closed again. |
+| `broadcast_prefs` | `theme: "system" \| "light" \| "dark" \| null` | `void` | The caller changed the prefs (already stored with `set_prefs`) or the theme: the other document windows get `prefs-changed { theme }`, re-read `get_prefs` and apply the language, autosave interval and theme. |
 
-While edited, `WindowEvent::CloseRequested` (main window) and
-`RunEvent::ExitRequested` are prevented and `close-requested` is emitted; the
-app menu's Quit (⌘Q) is a custom item (`app-quit`) handled the same way, since
-the predefined Quit (`terminate:`) cannot be intercepted.
+Opening a file that is already open (`wb_open`, `wb_open_dialog`) does not
+open it twice: the window showing it comes to the front and the call
+answers `cancelled` (`wb_open`) or `null` (`wb_open_dialog`), which the UI
+ignores. `wb_print` puts the macOS print window under the calling document
+window: closing that window closes its print windows.
+
+Menu items go to the front document window (the most recently focused one)
+as `menu-action`. With no document window (macOS keeps running without
+one) File ▸ New opens a blank window and File ▸ Open… shows the dialog and
+opens the file in a new window; other items do nothing. A Dock click with no
+window opens a new Untitled window (`RunEvent::Reopen`). The Window menu
+(id `__tauri_window_menu__`) has Minimize, Zoom (Maximize elsewhere) and, on
+macOS, Enter Full Screen and Bring All to Front; on macOS it is
+`NSApp.windowsMenu`, so AppKit lists the windows and adds the window-tab
+items itself. On Windows and Linux the shell appends a list of the document
+windows (check mark on the front one; choosing one focuses it), rebuilt on
+open, close, focus and title changes.
+
+Closing a document window removes its autosave snapshot at once and closes
+its document in the engine, forgetting its path (what the in-app Close did).
+⌘W while a print window is the key window closes that print window. macOS
+keeps running when the last document window closes; Windows and Linux exit.
+
+### Unsaved-changes guard (`closing.rs`)
+
+The guard is per window. In the desktop app New / Open / templates /
+recovery no longer replace a document (they open a window, or take over the
+untouched start-up window), so the prompt (`AppController.confirmUnsaved()`,
+`packages/app/src/unsaved.ts`, Save / Don't Save / Cancel) runs for ⌘W, the
+window's close button and Quit; the browser build (one document, no window
+shell) still asks before replacing the document. The shell only needs each
+window's dirty flag, kept per window label in a registry whose lock is a
+leaf lock (never held across an engine call, dialog, window or menu call),
+so window close and quit are guarded without the service lock.
+
+| Tauri command | Arguments | Returns | What it does |
+|---|---|---|---|
+| `set_document_edited` | `edited, doc: DocId \| null, title: string \| null` | `void` | Synchronous command (main thread, in call order). Records the *calling window's* dirty state, its document's id (window ↔ document, the exit snapshot; a document bound to another window is refused) and its title (the Window menu), sent whenever one of them changes, and, on macOS, sets that window's "document edited" dot (`-[NSWindow setDocumentEdited:]` via the safe `objc2-app-kit` binding). Calls from a window the shell did not create as a document window are refused. |
+| `confirm_close` | `quit` | `void` | The calling window's prompt resolved with Save or Don't Save. `quit: false`: marks the window confirmed and destroys it. `quit: true`: only from the window the quit is asking (ignored otherwise): marks it confirmed and moves the quit on to the next edited window, or exits. A change reported afterwards re-arms that window's guard. |
+| `cancel_quit` | — | `void` | Cancel (or a cancelled Save As) in the window the quit is asking (ignored from any other): the quit is aborted and earlier answers in other windows are forgotten (they ask again next time). Also sent when a quit arrived while the window's own close prompt was up and that prompt was cancelled. |
+
+While a window is edited, its `WindowEvent::CloseRequested` is prevented and
+`close-requested { kind: "window" }` is sent to that window. Quit (the app
+menu's Quit / ⌘Q, a custom item `app-quit` since the predefined Quit,
+`terminate:`, cannot be intercepted; or `RunEvent::ExitRequested` without a
+code while windows are open) asks the edited windows one at a time, the
+front one first: the shell focuses the window and sends it
+`close-requested { kind: "quit" }`; Save / Don't Save (`confirm_close(true)`)
+goes on to the next edited window, clean windows are never asked, and when
+none is left the app exits. Cancel anywhere (`cancel_quit`) aborts the whole
+quit. Documents answered with Don't Save stay open until the app really
+exits (another window may still cancel the quit); their autosave snapshots
+are removed at exit.
 
 The Dock's Quit, log-out and shutdown (`terminate:`) cannot be vetoed, but tao
-turns `applicationWillTerminate` into `RunEvent::Exit`: if the document is
-edited and the user did not answer the prompt (no `confirm_close`), the shell
-writes a last autosave snapshot of `doc` there (same code path as
-`autosave_snapshot`), only if the engine reports the document dirty, waiting at most about 1.5 s for
-the engine lock (the write itself is not time-bounded), and skips it with a log line otherwise. The next launch offers it through
-`list_recovery`. When the main window is destroyed, the shell also destroys any
-other webview window (a File ▸ Print preview) and exits.
+turns `applicationWillTerminate` into `RunEvent::Exit`: the shell writes a
+last autosave snapshot of every document whose window is edited and was not
+answered (same code path as `autosave_snapshot`), only if the engine reports
+the document dirty, waiting at most about 1.5 s in total for the engine lock
+(the writes themselves are not time-bounded), and skips with a log line
+otherwise; the snapshots of clean or answered documents are removed. The next
+launch offers them through `list_recovery` (first window only); each
+recovered document opens in its own window.
 
 The native menu is built in the UI language from `prefs.json` at startup
 (`menu::build` → `menu::build_localized`). Function-name localisation is

@@ -34,6 +34,7 @@ const answer = (c: SaveChoice) => useSavePromptStore.getState().answer(c);
 type Shell = {
   setDocumentEdited: (edited: boolean, doc: DocId | null) => Promise<void>;
   confirmClose: (quit: boolean) => Promise<void>;
+  cancelQuit: () => Promise<void>;
   onCloseRequested: (cb: (kind: CloseKind) => void) => () => void;
 };
 
@@ -42,6 +43,7 @@ async function controller(withShell = false) {
   const edited: boolean[] = [];
   const editedDocs: (DocId | null)[] = [];
   const confirms: boolean[] = [];
+  let cancels = 0;
   let closeCb: ((kind: CloseKind) => void) | null = null;
   if (withShell) {
     Object.assign(client, {
@@ -52,6 +54,10 @@ async function controller(withShell = false) {
       },
       confirmClose: (quit: boolean) => {
         confirms.push(quit);
+        return Promise.resolve();
+      },
+      cancelQuit: () => {
+        cancels++;
         return Promise.resolve();
       },
       onCloseRequested: (cb: (kind: CloseKind) => void) => {
@@ -85,7 +91,20 @@ async function controller(withShell = false) {
     ctl.startEdit({ r: 0, c: 0 }, text, origin);
     expect(ctl.pendingEdit).toBe(true);
   };
-  return { client, ctl, detach, opened, edit, type, a1, edited, editedDocs, confirms, fireClose: (k: CloseKind) => closeCb?.(k) };
+  return {
+    client,
+    ctl,
+    detach,
+    opened,
+    edit,
+    type,
+    a1,
+    edited,
+    editedDocs,
+    confirms,
+    cancels: () => cancels,
+    fireClose: (k: CloseKind) => closeCb?.(k),
+  };
 }
 
 beforeEach(() => {
@@ -308,21 +327,104 @@ describe("window close and quit (desktop shell)", () => {
     expect(editedDocs.at(-1)).toBe(ctl.info!.doc);
   });
 
-  it("close-requested: Cancel keeps the window; Don't Save closes the doc and confirms", async () => {
-    const { ctl, client, edit, confirms, fireClose } = await controller(true);
+  it("close-requested: Cancel keeps the window; Don't Save confirms (the shell closes the doc)", async () => {
+    const { ctl, client, edit, confirms, cancels, fireClose } = await controller(true);
     await edit();
     fireClose("window");
     await promptOpen();
     answer("cancel");
     await tick();
     expect(confirms).toEqual([]);
+    // Cancelling a window close is not a cancelled quit.
+    expect(cancels()).toBe(0);
     const close = vi.spyOn(client, "close");
-    const doc = ctl.info!.doc;
     const run = ctl.closeRequested("quit");
     await promptOpen();
     answer("discard");
     expect(await run).toBe(true);
-    expect(close).toHaveBeenCalledWith(doc);
+    // The document stays open until the quit really ends (another window may still cancel it).
+    expect(close).not.toHaveBeenCalled();
+    expect(confirms).toEqual([true]);
+  });
+
+  it("Cancel during a quit tells the shell, which aborts the whole quit", async () => {
+    const { ctl, client, edit, confirms, cancels } = await controller(true);
+    await edit();
+    let run = ctl.closeRequested("quit");
+    await promptOpen();
+    answer("cancel");
+    expect(await run).toBe(false);
+    expect(cancels()).toBe(1);
+    expect(confirms).toEqual([]);
+    // A cancelled Save As counts as Cancel.
+    vi.spyOn(client, "saveWithDialog").mockRejectedValueOnce({ code: CANCELLED, message: "" });
+    run = ctl.closeRequested("quit");
+    await promptOpen();
+    answer("save");
+    expect(await run).toBe(false);
+    expect(cancels()).toBe(2);
+  });
+
+  it("⌘Q while this window's own close prompt is up: Cancel there also cancels the quit", async () => {
+    const { ctl, edit, confirms, cancels, fireClose } = await controller(true);
+    await edit();
+    const windowClose = ctl.closeRequested("window");
+    await promptOpen();
+    // The quit asks this window while its window prompt is up: ignored for now…
+    fireClose("quit");
+    await tick();
+    expect(cancels()).toBe(0);
+    answer("cancel");
+    expect(await windowClose).toBe(false);
+    // …but the Cancel ends the quit too (no stale quit left in the shell).
+    expect(cancels()).toBe(1);
+    expect(confirms).toEqual([]);
+  });
+
+  it("the quit reaching a window whose close prompt is up: Don't Save closes it and the quit goes on", async () => {
+    const { ctl, edit, confirms, cancels, fireClose } = await controller(true);
+    await edit();
+    const windowClose = ctl.closeRequested("window");
+    await promptOpen();
+    fireClose("quit");
+    await tick();
+    answer("discard");
+    expect(await windowClose).toBe(true);
+    // The window closes (the shell continues the quit when it is destroyed); nothing is cancelled.
+    expect(confirms).toEqual([false]);
+    expect(cancels()).toBe(0);
+    // A later plain window close does not report a quit cancel.
+    await edit();
+    const again = ctl.closeRequested("window");
+    await promptOpen();
+    answer("cancel");
+    await again;
+    expect(cancels()).toBe(0);
+  });
+
+  it("after answering a quit, the next change is reported again (re-arms the shell's guard)", async () => {
+    const { ctl, edit, edited, fireClose } = await controller(true);
+    await edit();
+    fireClose("quit");
+    await promptOpen();
+    answer("discard");
+    for (let i = 0; i < 5; i++) await tick();
+    const before = edited.length;
+    await edit("more");
+    expect(edited.length).toBe(before + 1);
+    expect(edited.at(-1)).toBe(true);
+  });
+
+  it("a second close-requested while the prompt is up is ignored (not a cancel)", async () => {
+    const { ctl, edit, confirms, cancels } = await controller(true);
+    await edit();
+    const first = ctl.closeRequested("quit");
+    await promptOpen();
+    expect(await ctl.closeRequested("quit")).toBe(false);
+    expect(cancels()).toBe(0);
+    expect(useSavePromptStore.getState().prompt).not.toBeNull();
+    answer("discard");
+    expect(await first).toBe(true);
     expect(confirms).toEqual([true]);
   });
 
@@ -365,11 +467,13 @@ describe("TauriClient close commands", () => {
         return Promise.resolve(() => undefined);
       },
     });
-    await client.setDocumentEdited(true, 3);
+    await client.setDocumentEdited(true, 3, "Book.ods");
     await client.confirmClose(false);
+    await client.cancelQuit();
     expect(calls).toEqual([
-      { cmd: "set_document_edited", args: { edited: true, doc: 3 } },
+      { cmd: "set_document_edited", args: { edited: true, doc: 3, title: "Book.ods" } },
       { cmd: "confirm_close", args: { quit: false } },
+      { cmd: "cancel_quit", args: undefined },
     ]);
     const kinds: string[] = [];
     client.onCloseRequested((k) => kinds.push(k));
@@ -605,16 +709,15 @@ describe("uncommitted typing (in-cell editor, formula bar)", () => {
     expect(confirms).toEqual([]);
   });
 
-  it("window close with typing: the shell's close is confirmed after Don't Save", async () => {
-    const { ctl, client, type, confirms, fireClose } = await controller(true);
-    const close = vi.spyOn(client, "close");
+  it("quit with typing: the typing is committed, then Don't Save confirms", async () => {
+    const { ctl, type, a1, confirms, fireClose } = await controller(true);
     type("typed");
-    const doc = ctl.info!.doc;
     fireClose("quit");
     await promptOpen();
+    expect(await a1()).toBe("typed");
     answer("discard");
     for (let i = 0; i < 5; i++) await tick();
-    expect(close).toHaveBeenCalledWith(doc);
+    expect(ctl.info?.dirty).toBe(true);
     expect(confirms).toEqual([true]);
   });
 });

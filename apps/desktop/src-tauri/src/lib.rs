@@ -1,4 +1,4 @@
-//! Tally desktop shell (WP7): the Tauri window, native menu, file dialogs,
+//! Tally desktop shell (WP7): the document windows, native menu, file dialogs,
 //! recent files, templates and one command per `DocumentService` method
 //! (docs/api.md), over the real engine (`tally-engine` with ODS/XLSX/CSV IO) and
 //! the rule-based ⌘K assist (`tally-assist`).
@@ -20,6 +20,7 @@ mod links;
 mod menu;
 mod prefs;
 mod print;
+mod registry;
 mod state;
 mod templates;
 #[cfg(test)]
@@ -39,7 +40,7 @@ pub fn run() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new(service))
-        .manage(closing::CloseState::default())
+        .manage(registry::Windows::default())
         .menu(menu::build)
         .on_menu_event(menu::on_event)
         .on_window_event(closing::on_window_event)
@@ -49,9 +50,9 @@ pub fn run() {
             let state = app.state::<AppState>();
             *state::lock(&state.recent) = recent;
             print::setup(app.handle());
-            if let Some(main) = app.get_webview_window("main") {
-                windows::setup(&main);
-            }
+            // The first document window (tauri.conf.json lists none: every
+            // window is a `doc-<n>` made by `windows::open_doc_window`).
+            windows::open_doc_window(app.handle(), None).map_err(|e| e.message)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -145,6 +146,11 @@ pub fn run() {
             // Unsaved-changes guard and the macOS "edited" dot.
             closing::set_document_edited,
             closing::confirm_close,
+            closing::cancel_quit,
+            // Document windows (one document per window).
+            windows::window_init,
+            windows::place_document,
+            prefs::broadcast_prefs,
         ])
         .build(tauri::generate_context!());
     match result {

@@ -1,9 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "windows-titlebar",
-  "description": "Windows only (W5-5, §4 item 48): the main window runs without OS decorations (tauri.windows.conf.json) and the React title bar drives the caption buttons through the window API: minimize, maximize/restore, close, and reading the maximized state for the button glyph.",
-  "platforms": ["windows"],
-  "windows": ["main"],
+  "description": "Windows only (W5-5, §4 item 48): the document windows (`doc-*`) run without OS decorations (windows.rs) and the React title bar drives the caption buttons through the window API: minimize, maximize/restore, close, and reading the maximized state for the button glyph.",
+  "platforms": [
+    "windows"
+  ],
+  "windows": [
+    "doc-*"
+  ],
   "permissions": [
     "core:window:allow-minimize",
     "core:window:allow-maximize",

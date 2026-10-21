@@ -34,6 +34,7 @@
   "menu.window.minimize": "Placer dans le Dock",
   "menu.window.zoom": "Réduire/agrandir",
   "menu.window.bringAllToFront": "Tout ramener au premier plan",
+  "menu.window.maximize": "Agrandir",
   "cmd.edit.undo": "Annuler",
   "cmd.edit.redo": "Rétablir",
   "cmd.edit.copy": "Copier",

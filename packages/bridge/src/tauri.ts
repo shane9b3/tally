@@ -13,12 +13,17 @@
  * `tauriClientV4.test.ts` checks that every method has a registered command.
  *
  * The Tauri transport is injected (`invoke` from `@tauri-apps/api/core`,
- * `listen` from `@tauri-apps/api/event`) so this package keeps no runtime
- * dependency on Tauri and tests can pass fakes:
+ * and a `listen` for the current window's events) so this package keeps no
+ * runtime dependency on Tauri and tests can pass fakes. Each document
+ * window has its own webview, and the shell sends `menu-action` and
+ * `close-requested` to one window only, so the desktop listens with the
+ * current window as the target (the global `listen` of
+ * `@tauri-apps/api/event` would also receive other windows' events):
  *
  *   import { invoke } from "@tauri-apps/api/core";
- *   import { listen } from "@tauri-apps/api/event";
- *   const client = new TauriClient({ invoke, listen });
+ *   import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+ *   const win = getCurrentWebviewWindow();
+ *   const client = new TauriClient({ invoke, listen: (e, h) => win.listen(e, h) });
  *
  * Owned by WP7.
  */
@@ -193,6 +198,11 @@ export const COMMANDS = {
   // Unsaved-changes guard: apps/desktop/src-tauri/src/closing.rs
   setDocumentEdited: "set_document_edited",
   confirmClose: "confirm_close",
+  cancelQuit: "cancel_quit",
+  // Document windows: apps/desktop/src-tauri/src/{windows,prefs}.rs
+  windowInit: "window_init",
+  placeDocument: "place_document",
+  broadcastPrefs: "broadcast_prefs",
 } as const;
 
 /**
@@ -235,10 +245,29 @@ export const V4_METHODS = [
 export const W56_SHELL_COMMANDS = ["getPrefs", "setPrefs", "autosave", "listRecovery", "recoverSnapshot", "discardRecovery", "saveAsTemplate", "listUserTemplates", "newFromUserTemplate", "setUiLanguage", "clearRecent"] as const satisfies readonly (keyof typeof COMMANDS)[];
 
 /** The unsaved-changes guard's shell commands (closing.rs); `unsaved.test.ts` covers them. */
-export const CLOSE_SHELL_COMMANDS = ["setDocumentEdited", "confirmClose"] as const satisfies readonly (keyof typeof COMMANDS)[];
+export const CLOSE_SHELL_COMMANDS = ["setDocumentEdited", "confirmClose", "cancelQuit"] as const satisfies readonly (keyof typeof COMMANDS)[];
+
+/** The document-window shell commands (windows.rs, prefs.rs); `windows.test.ts` covers them. */
+export const WINDOW_SHELL_COMMANDS = ["windowInit", "placeDocument", "broadcastPrefs"] as const satisfies readonly (keyof typeof COMMANDS)[];
 
 /** Event names, exactly as in docs/api.md. */
-export const EVENTS = { docChanged: "doc-changed", menuAction: "menu-action", closeRequested: "close-requested" } as const;
+export const EVENTS = { docChanged: "doc-changed", menuAction: "menu-action", closeRequested: "close-requested", prefsChanged: "prefs-changed" } as const;
+
+/** What a document window's webview gets on start (`window_init`). */
+export interface WindowInit {
+  /** The document this window shows (the engine's summary); `null`: create a blank workbook. */
+  doc: WorkbookInfo | null;
+  /** The first window of the session offers the crash recovery. */
+  offerRecovery: boolean;
+}
+
+/** `place_document`: shown in the calling window (`"here"`) or in a new one (`"window"`). */
+export type Placement = "here" | "window";
+
+/** `prefs-changed`: another window changed the prefs (re-read them) or the theme. */
+export interface PrefsChangedEvent {
+  theme: "system" | "light" | "dark" | null;
+}
 
 /** Normalises any rejection into an {@link ApiError}. */
 export function toApiError(e: unknown): ApiError {
@@ -644,16 +673,48 @@ export class TauriClient implements EngineClientV4, ShellClient {
   // -- unsaved-changes guard (closing.rs) -------------------------------------
 
   /**
-   * `set_document_edited`: the dirty state for the close/quit guard and the macOS "edited" dot,
-   * with the document's id so the shell can write a last autosave snapshot on a Dock Quit.
+   * `set_document_edited`: this window's dirty state for the close/quit guard and the macOS
+   * "edited" dot, with the document's id (window ↔ document, the exit snapshot on a Dock Quit)
+   * and its title (the Window menu).
    */
-  setDocumentEdited(edited: boolean, doc: DocId | null): Promise<void> {
-    return this.call(COMMANDS.setDocumentEdited, { edited, doc });
+  setDocumentEdited(edited: boolean, doc: DocId | null, title: string | null = null): Promise<void> {
+    return this.call(COMMANDS.setDocumentEdited, { edited, doc, title });
   }
 
-  /** `confirm_close`: the save prompt resolved; close the window (`quit: false`) or quit. */
+  /** `confirm_close`: the save prompt resolved; close this window (`quit: false`) or go on with the quit. */
   confirmClose(quit: boolean): Promise<void> {
     return this.call(COMMANDS.confirmClose, { quit });
+  }
+
+  /** `cancel_quit`: Cancel (or a cancelled Save As) during a quit aborts the whole quit. */
+  cancelQuit(): Promise<void> {
+    return this.call(COMMANDS.cancelQuit);
+  }
+
+  // -- document windows (windows.rs) -----------------------------------------------
+
+  /** `window_init`: the document this window shows (also after a reload), and whether to offer recovery. */
+  windowInit(): Promise<WindowInit> {
+    return this.call(COMMANDS.windowInit);
+  }
+
+  /**
+   * `place_document`: shows a document just created or opened, in this window (`"here"`, only with
+   * `reuse` and when the shell agrees) or in a new one (which gets the engine's summary of `doc`);
+   * `doc: null` opens a new blank window.
+   */
+  placeDocument(doc: DocId | null, reuse: boolean): Promise<Placement> {
+    return this.call(COMMANDS.placeDocument, { doc, reuse });
+  }
+
+  /** `broadcast_prefs`: tells the other document windows that the prefs (or the theme) changed. */
+  broadcastPrefs(theme: PrefsChangedEvent["theme"]): Promise<void> {
+    return this.call(COMMANDS.broadcastPrefs, { theme });
+  }
+
+  /** `prefs-changed`: another document window changed the prefs or the theme. */
+  onPrefsChanged(cb: (event: PrefsChangedEvent) => void): Unsubscribe {
+    return this.subscribe(EVENTS.prefsChanged, cb);
   }
 
   /** `close-requested { kind }`: a window close or quit is waiting for the save prompt. */

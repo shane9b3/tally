@@ -34,6 +34,7 @@
   "menu.window.minimize": "Minimize",
   "menu.window.zoom": "Zoom",
   "menu.window.bringAllToFront": "Bring All to Front",
+  "menu.window.maximize": "Maximize",
   "cmd.edit.undo": "Undo",
   "cmd.edit.redo": "Redo",
   "cmd.edit.copy": "Copy",

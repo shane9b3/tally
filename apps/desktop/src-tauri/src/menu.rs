@@ -1,6 +1,16 @@
 //! The native menu. Native items (Cut/Copy/Paste/Select All, window items)
 //! are handled by the OS; every other item emits `menu-action { id }` to the
-//! webview, where the id is a `CommandRegistry` command id.
+//! front document window's webview (the most recently focused one; see
+//! [`route`]), where the id is a `CommandRegistry` command id. With no
+//! document window (macOS keeps running without one) File ▸ New and Open
+//! are handled here and open a window.
+//!
+//! The Window menu has the id [`WINDOW_SUBMENU_ID`], so on macOS Tauri makes
+//! it `NSApp.windowsMenu` and AppKit adds the open windows (titles, a check
+//! mark on the key window) and the window-tab items (Show Previous/Next
+//! Tab, Move Tab to New Window, Merge All Windows; Show Tab Bar / Show All
+//! Tabs go to the View menu) by itself. On Windows and Linux the shell
+//! keeps its own window list there ([`set_window_list`]).
 //!
 //! Wave-5 items (W5-0b) are listed already so the menu, the registry and
 //! `menuIds.test.ts` stay in sync; the registry has them `enabled: false`
@@ -8,11 +18,16 @@
 //! for now; the `t()` keys are the `cmd.<id>` entries of
 //! `crates/tally-l10n/ui/en.json` (W5-6E wires the native strings).
 
-use tauri::menu::{Menu, MenuBuilder, MenuEvent, MenuItemBuilder, Submenu, SubmenuBuilder};
-use tauri::{AppHandle, Runtime};
+use tauri::menu::{
+    CheckMenuItemBuilder, Menu, MenuBuilder, MenuEvent, MenuItemBuilder, MenuItemKind, Submenu,
+    SubmenuBuilder, WINDOW_SUBMENU_ID,
+};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::events::emit_menu_action;
 use crate::l10n;
+use crate::registry::{ListEntry, Windows};
+use crate::windows::FOCUS_PREFIX;
 use tally_l10n::Locale;
 
 /// A custom menu entry. `Item` ids are `CommandRegistry` command ids
@@ -383,12 +398,86 @@ fn submenu<R: Runtime>(
     .build()
 }
 
+/// A label from the UI table (`key`), English keeping `fallback`.
+fn ui_label(locale: Locale, key: &str, fallback: &str) -> String {
+    if locale == Locale::En || !tally_l10n::has_ui_key(key) {
+        return fallback.to_owned();
+    }
+    tally_l10n::t(locale, key).to_owned()
+}
+
 /// The app menu's Quit label (`app.quit`, "Quit Tally").
 fn quit_label(locale: Locale) -> String {
-    if locale == Locale::En || !tally_l10n::has_ui_key("app.quit") {
-        return "Quit Tally".to_owned();
+    ui_label(locale, "app.quit", "Quit Tally")
+}
+
+/// The Window menu: Minimize, Zoom (Maximize off macOS), and on macOS Enter
+/// Full Screen and Bring All to Front; AppKit appends the windows and the
+/// tab items. Elsewhere [`set_window_list`] appends the windows after the
+/// trailing separator.
+fn window_menu<R: Runtime>(app: &AppHandle<R>, locale: Locale) -> tauri::Result<Submenu<R>> {
+    let mac = cfg!(target_os = "macos");
+    let b = SubmenuBuilder::with_id(
+        app,
+        WINDOW_SUBMENU_ID,
+        l10n::submenu_label(locale, "Window"),
+    )
+    .minimize_with_text(ui_label(locale, "menu.window.minimize", "Minimize"));
+    let b = if mac {
+        b.maximize_with_text(ui_label(locale, "menu.window.zoom", "Zoom"))
+            .separator()
+            .fullscreen()
+            .separator()
+            .bring_all_to_front_with_text(ui_label(
+                locale,
+                "menu.window.bringAllToFront",
+                "Bring All to Front",
+            ))
+    } else {
+        b.maximize_with_text(ui_label(locale, "menu.window.maximize", "Maximize"))
+            .separator()
+    };
+    b.build()
+}
+
+/// Pure: the Window menu's list items as (menu id, text, checked).
+pub fn window_list_items(
+    list: &[ListEntry],
+    windows_mnemonics: bool,
+) -> Vec<(String, String, bool)> {
+    list.iter()
+        .map(|e| {
+            let text = if windows_mnemonics {
+                // `&` marks a mnemonic in Win32 menus.
+                e.title.replace('&', "&&")
+            } else {
+                e.title.clone()
+            };
+            (format!("{FOCUS_PREFIX}{}", e.label), text, e.checked)
+        })
+        .collect()
+}
+
+/// Replaces the window list at the end of the Window menu (Windows/Linux).
+pub fn set_window_list<R: Runtime>(app: &AppHandle<R>, list: &[ListEntry]) -> tauri::Result<()> {
+    let Some(menu) = app.menu() else {
+        return Ok(());
+    };
+    let Some(MenuItemKind::Submenu(window)) = menu.get(WINDOW_SUBMENU_ID) else {
+        return Ok(());
+    };
+    for item in window.items()? {
+        if item.id().as_ref().starts_with(FOCUS_PREFIX) {
+            window.remove(&item)?;
+        }
     }
-    tally_l10n::t(locale, "app.quit").to_owned()
+    for (id, text, checked) in window_list_items(list, cfg!(target_os = "windows")) {
+        let item = CheckMenuItemBuilder::with_id(id, text)
+            .checked(checked)
+            .build(app)?;
+        window.append(&item)?;
+    }
+    Ok(())
 }
 
 /// Builds the application menu in the UI language stored in the prefs.
@@ -398,6 +487,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
 /// Builds the application menu with `tally_l10n` labels for `locale` (W5-6).
 pub fn build_localized<R: Runtime>(app: &AppHandle<R>, locale: Locale) -> tauri::Result<Menu<R>> {
+    // The Window menu's list names untitled windows in the UI language.
+    if let Some(windows) = app.try_state::<Windows>() {
+        let untitled = ui_label(locale, "app.untitled", "Untitled");
+        windows.with(|r| r.set_untitled(&untitled));
+    }
     let undo = MenuItemBuilder::with_id("edit.undo", l10n::item_label(locale, "edit.undo", "Undo"))
         .accelerator("CmdOrCtrl+Z")
         .build(app)?;
@@ -453,15 +547,7 @@ pub fn build_localized<R: Runtime>(app: &AppHandle<R>, locale: Locale) -> tauri:
         .item(&submenu(app, locale, "View", VIEW)?)
         .item(&submenu(app, locale, "Sheet", SHEET)?)
         .item(&submenu(app, locale, "Tools", TOOLS)?);
-    if cfg!(target_os = "macos") {
-        let window = SubmenuBuilder::new(app, l10n::submenu_label(locale, "Window"))
-            .minimize()
-            .maximize()
-            .separator()
-            .fullscreen()
-            .build()?;
-        menu = menu.item(&window);
-    }
+    menu = menu.item(&window_menu(app, locale)?);
     let help = if cfg!(target_os = "macos") {
         // "About" lives in the app menu on macOS.
         submenu(app, locale, "Help", &HELP[..1])?
@@ -472,13 +558,72 @@ pub fn build_localized<R: Runtime>(app: &AppHandle<R>, locale: Locale) -> tauri:
     menu.build()
 }
 
-/// Forwards custom items to the webview.
+/// Where a menu selection goes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Route {
+    /// The guarded Quit (`closing::request_quit`).
+    Quit,
+    /// Bring this window to the front (the Window menu's list).
+    Focus(String),
+    /// `menu-action { id }` to this document window.
+    Emit(String),
+    /// No document window: open a blank one (File ▸ New).
+    NewWindow,
+    /// No document window: the Open dialog, then a window (File ▸ Open…).
+    OpenDialog,
+    /// ⌘W while a print window is the key window: close that window.
+    ClosePrint(String),
+    /// Nothing to do.
+    Ignore,
+}
+
+/// Pure: routes menu item `id` given the front document window and the
+/// key window when that is a print window.
+pub fn route(id: &str, front: Option<&str>, key_print: Option<&str>) -> Route {
+    if id == crate::closing::QUIT_ID {
+        return Route::Quit;
+    }
+    if let Some(label) = id.strip_prefix(FOCUS_PREFIX) {
+        return Route::Focus(label.to_owned());
+    }
+    if !custom_ids().contains(&id) {
+        return Route::Ignore;
+    }
+    if let (Some(print), "file.close") = (key_print, id) {
+        return Route::ClosePrint(print.to_owned());
+    }
+    match (front, id) {
+        (Some(label), _) => Route::Emit(label.to_owned()),
+        (None, "file.new") => Route::NewWindow,
+        (None, "file.open") => Route::OpenDialog,
+        (None, _) => Route::Ignore,
+    }
+}
+
+/// Handles a menu selection ([`route`]).
 pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let id = event.id().as_ref();
-    if id == crate::closing::QUIT_ID {
-        crate::closing::request_quit(app);
-    } else if custom_ids().contains(&id) {
-        emit_menu_action(app, id);
+    let (front, key_print) = app
+        .state::<Windows>()
+        .with(|r| (r.front(), r.key_print().map(str::to_owned)));
+    match route(id, front.as_deref(), key_print.as_deref()) {
+        Route::Quit => crate::closing::request_quit(app),
+        Route::Focus(label) => {
+            crate::windows::focus(app, &label);
+            // The check item toggled itself; put the marks right.
+            crate::windows::refresh_window_menu(app);
+        }
+        Route::Emit(label) => emit_menu_action(app, &label, id),
+        Route::NewWindow => crate::windows::spawn_doc_window(app, None),
+        Route::OpenDialog => crate::dialogs::spawn_open(app),
+        Route::ClosePrint(label) => {
+            if let Some(w) = app.get_webview_window(&label) {
+                if let Err(e) = w.destroy() {
+                    eprintln!("tally: closing window {label}: {e}");
+                }
+            }
+        }
+        Route::Ignore => {}
     }
 }
 
@@ -492,6 +637,101 @@ mod tests {
         assert_eq!(quit_label(Locale::De), "Tally beenden");
         // Handled in Rust (closing::request_quit), never forwarded to the webview.
         assert!(!custom_ids().contains(&crate::closing::QUIT_ID));
+    }
+
+    #[test]
+    fn menu_actions_go_to_the_front_window_or_open_one() {
+        assert_eq!(route("app-quit", Some("doc-1"), None), Route::Quit);
+        assert_eq!(route("app-quit", None, None), Route::Quit);
+        assert_eq!(
+            route("file.close", Some("doc-2"), None),
+            Route::Emit("doc-2".into())
+        );
+        assert_eq!(
+            route("file.new", Some("doc-2"), None),
+            Route::Emit("doc-2".into())
+        );
+        assert_eq!(route("file.new", None, None), Route::NewWindow);
+        assert_eq!(route("file.open", None, None), Route::OpenDialog);
+        assert_eq!(route("file.close", None, None), Route::Ignore);
+        assert_eq!(route("format.bold", None, None), Route::Ignore);
+        assert_eq!(route("not.a.command", Some("doc-1"), None), Route::Ignore);
+        assert_eq!(
+            route("window.focus.doc-3", Some("doc-1"), None),
+            Route::Focus("doc-3".into())
+        );
+        // ⌘W in a print window closes that window, not its document window;
+        // other items still go to the front document window.
+        assert_eq!(
+            route("file.close", Some("doc-1"), Some("tally-print-4")),
+            Route::ClosePrint("tally-print-4".into())
+        );
+        assert_eq!(
+            route("format.bold", Some("doc-1"), Some("tally-print-4")),
+            Route::Emit("doc-1".into())
+        );
+        // The window list is the shell's own, never forwarded.
+        assert!(!custom_ids().iter().any(|id| id.starts_with(FOCUS_PREFIX)));
+    }
+
+    #[test]
+    fn window_list_items_focus_their_window() {
+        let list = [
+            ListEntry {
+                label: "doc-1".into(),
+                title: "Q&A.ods".into(),
+                checked: false,
+            },
+            ListEntry {
+                label: "doc-4".into(),
+                title: "Untitled".into(),
+                checked: true,
+            },
+        ];
+        assert_eq!(
+            window_list_items(&list, false),
+            [
+                ("window.focus.doc-1".to_owned(), "Q&A.ods".to_owned(), false),
+                ("window.focus.doc-4".to_owned(), "Untitled".to_owned(), true),
+            ]
+        );
+        assert_eq!(window_list_items(&list, true)[0].1, "Q&&A.ods");
+        for (id, _, _) in window_list_items(&list, false) {
+            let label = id.strip_prefix(FOCUS_PREFIX).unwrap_or_default();
+            assert!(crate::registry::is_doc_label(label));
+        }
+    }
+
+    #[test]
+    fn untitled_windows_are_listed_in_the_ui_language() {
+        assert_eq!(ui_label(Locale::En, "app.untitled", "Untitled"), "Untitled");
+        for locale in [Locale::De, Locale::Fr, Locale::Es] {
+            assert_ne!(ui_label(locale, "app.untitled", "Untitled"), "Untitled");
+        }
+    }
+
+    #[test]
+    fn window_menu_labels_are_localised() {
+        assert_eq!(ui_label(Locale::En, "menu.window.zoom", "Zoom"), "Zoom");
+        for key in [
+            "menu.window.minimize",
+            "menu.window.zoom",
+            "menu.window.maximize",
+            "menu.window.bringAllToFront",
+        ] {
+            assert!(tally_l10n::has_ui_key(key), "{key}");
+            for locale in [Locale::De, Locale::Fr, Locale::Es] {
+                assert_ne!(ui_label(locale, key, "?"), "?", "{key}");
+            }
+        }
+        assert_eq!(
+            ui_label(
+                Locale::De,
+                "menu.window.bringAllToFront",
+                "Bring All to Front"
+            ),
+            "Alle nach vorne bringen"
+        );
     }
 
     #[test]

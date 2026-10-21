@@ -1,6 +1,6 @@
 import type { DocId, Transaction } from "@tally/bridge";
 import { describe, expect, it, vi } from "vitest";
-import { COMMANDS, TauriClient, V4_METHODS, W56_SHELL_COMMANDS, CLOSE_SHELL_COMMANDS, type InvokeArgs, type TauriEvent } from "@tally/bridge/tauri";
+import { COMMANDS, TauriClient, V4_METHODS, W56_SHELL_COMMANDS, CLOSE_SHELL_COMMANDS, WINDOW_SHELL_COMMANDS, type InvokeArgs, type TauriEvent } from "@tally/bridge/tauri";
 
 function fake(result: unknown = null) {
   const calls: { cmd: string; args: InvokeArgs | undefined }[] = [];
@@ -22,13 +22,13 @@ function fake(result: unknown = null) {
 }
 
 describe("TauriClient", () => {
-  it("sends the edited flag with the document id (null when there is none)", async () => {
+  it("sends the edited flag with the document id and title (null when there is none)", async () => {
     const { client, calls } = fake();
-    await client.setDocumentEdited(true, 3 as DocId);
+    await client.setDocumentEdited(true, 3 as DocId, "Book.ods");
     await client.setDocumentEdited(false, null);
     expect(calls).toEqual([
-      { cmd: "set_document_edited", args: { edited: true, doc: 3 } },
-      { cmd: "set_document_edited", args: { edited: false, doc: null } },
+      { cmd: "set_document_edited", args: { edited: true, doc: 3, title: "Book.ods" } },
+      { cmd: "set_document_edited", args: { edited: false, doc: null, title: null } },
     ]);
   });
 
@@ -123,7 +123,7 @@ describe("TauriClient", () => {
       { cmd: "user_name", args: undefined },
     ]);
     // Wave-5 commands (`V4_METHODS`, `wb_export_pdf`, `wb_print`) are covered by tauriClientV4.test.ts.
-    const v4 = new Set<string>([...V4_METHODS.map((m) => COMMANDS[m]), COMMANDS.exportPdf, COMMANDS.print, ...W56_SHELL_COMMANDS.map((m) => COMMANDS[m]), ...CLOSE_SHELL_COMMANDS.map((m) => COMMANDS[m])]);
+    const v4 = new Set<string>([...V4_METHODS.map((m) => COMMANDS[m]), COMMANDS.exportPdf, COMMANDS.print, ...W56_SHELL_COMMANDS.map((m) => COMMANDS[m]), ...CLOSE_SHELL_COMMANDS.map((m) => COMMANDS[m]), ...WINDOW_SHELL_COMMANDS.map((m) => COMMANDS[m])]);
     expect(new Set(calls.map((c) => c.cmd))).toEqual(new Set(Object.values(COMMANDS).filter((c) => !v4.has(c))));
   });
 

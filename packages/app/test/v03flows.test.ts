@@ -248,7 +248,7 @@ describe("other v0.3 flows", () => {
 describe("Tauri shell", () => {
   it("registers every TauriClient command", () => {
     const lib = readFileSync(fileURLToPath(new URL("../../../apps/desktop/src-tauri/src/lib.rs", import.meta.url)), "utf8");
-    const registered = new Set([...lib.matchAll(/(?:commands|commands_v4|dialogs|prefs|autosave|templates|l10n|files|closing)::([a-z_]+),/g)].map((m) => m[1]));
+    const registered = new Set([...lib.matchAll(/(?:commands|commands_v4|dialogs|prefs|autosave|templates|l10n|files|closing|windows)::([a-z_]+),/g)].map((m) => m[1]));
     expect(Object.values(COMMANDS).filter((c) => !registered.has(c))).toEqual([]);
   });
 });

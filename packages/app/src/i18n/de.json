@@ -34,6 +34,7 @@
   "menu.window.minimize": "Im Dock ablegen",
   "menu.window.zoom": "Zoomen",
   "menu.window.bringAllToFront": "Alle nach vorne bringen",
+  "menu.window.maximize": "Maximieren",
   "cmd.edit.undo": "Rückgängig",
   "cmd.edit.redo": "Wiederherstellen",
   "cmd.edit.copy": "Kopieren",

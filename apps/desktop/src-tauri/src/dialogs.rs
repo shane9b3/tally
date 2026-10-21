@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use tally_api::{ApiError, DocId, FileFormat, WorkbookInfo};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::commands::{blocking, open_checked, save_to, CmdResult};
@@ -136,12 +136,9 @@ pub fn save_plan(current: Option<&Path>, format: Option<FileFormat>) -> SavePlan
 }
 
 /// Shows the Open dialog ([`OPEN_FILTERS`]), then opens the chosen file.
-/// Returns `null` when the user cancels.
-#[tauri::command]
-pub async fn wb_open_dialog(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> CmdResult<Option<WorkbookInfo>> {
+/// `None` when the user cancels, or when the file is already open in a
+/// window, which is brought to the front instead ([`open_checked`]).
+pub async fn pick_and_open<R: Runtime>(app: AppHandle<R>) -> CmdResult<Option<WorkbookInfo>> {
     let handle = app.clone();
     let picked = tauri::async_runtime::spawn_blocking(move || {
         let dialog = handle.dialog().file().set_title("Open");
@@ -158,8 +155,33 @@ pub async fn wb_open_dialog(
     let path = file
         .into_path()
         .map_err(|e| ApiError::invalid_argument(format!("unsupported location: {e}")))?;
-    files::allow(&state, &path)?;
-    blocking(app, move |app, st| open_checked(app, st, &path).map(Some)).await
+    files::allow(&app.state::<AppState>(), &path)?;
+    match blocking(app, move |app, st| open_checked(app, st, &path)).await {
+        Ok(info) => Ok(Some(info)),
+        Err(e) if e.code == ApiError::CANCELLED => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// `wb_open_dialog`: [`pick_and_open`] for the calling webview, which then
+/// places the document (`place_document`). Returns `null` when the user
+/// cancels or the file is already open in a window (now in front).
+#[tauri::command]
+pub async fn wb_open_dialog(app: AppHandle) -> CmdResult<Option<WorkbookInfo>> {
+    pick_and_open(app).await
+}
+
+/// File ▸ Open… with no document window (macOS): the dialog, then a window
+/// for the file. Errors are logged (there is no webview to show them).
+pub fn spawn_open<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match pick_and_open(app.clone()).await {
+            Ok(Some(info)) => crate::windows::spawn_doc_window(&app, Some(info)),
+            Ok(None) => {}
+            Err(e) => eprintln!("tally: open: {}", e.message),
+        }
+    });
 }
 
 /// Saves `doc`. Shows a Save dialog when `save_as` is set or the document

@@ -55,6 +55,15 @@ pub trait DocumentService {
         self.open(path)
     }
 
+    /// The current summary of an open document (the desktop shell hands it
+    /// to a new window, so the window never trusts a summary from a webview).
+    fn info(&self, doc: DocId) -> Result<WorkbookInfo> {
+        let _ = doc;
+        Err(ApiError::unsupported(
+            "document summaries are not available",
+        ))
+    }
+
     /// Whether `doc` has unsaved changes (`WorkbookInfo.dirty`), for the
     /// shell's exit snapshot, which must not copy a clean document.
     fn is_dirty(&self, doc: DocId) -> Result<bool> {

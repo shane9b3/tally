@@ -46,7 +46,7 @@ async function customTitleBar(client: Client): Promise<boolean> {
 function mount(client: Client, titleBar = false): void {
   const onReady = (ctl: AppController): void => {
     if (import.meta.env.DEV && !tauri) window.__tally = { client, controller: ctl };
-    if (tauri) setWindowTitle(ctl);
+    if (tauri) setWindowTitle(ctl, mac);
   };
   const root = document.getElementById("root");
   if (!root) return;

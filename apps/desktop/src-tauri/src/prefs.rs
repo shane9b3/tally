@@ -5,13 +5,31 @@
 //! object of at most [`MAX_PREFS_BYTES`] bytes, and reads two keys it needs
 //! itself: `uiLanguage` (the native menu) and `autosaveMinutes` (documentation
 //! only; the timer runs in the webview).
+//!
+//! Every document window runs its own webview with its own copy of the
+//! prefs: after a change in one window (Tools ▸ Options, View ▸ Theme) it
+//! calls `broadcast_prefs(theme)` and the other document windows get
+//! `prefs-changed { theme }`, re-read `get_prefs` and apply the theme.
 
 use std::fs;
 use std::path::PathBuf;
 
+use serde::Serialize;
 use serde_json::Value;
 use tally_api::ApiError;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
+
+use crate::registry::is_doc_label;
+
+/// Event sent to the other document windows after a prefs or theme change.
+pub const PREFS_CHANGED: &str = "prefs-changed";
+
+/// Payload of [`PREFS_CHANGED`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PrefsChangedEvent {
+    /// The theme preference (`system`, `light`, `dark`), if it changed.
+    pub theme: Option<String>,
+}
 
 /// Largest prefs document accepted (bytes).
 pub const MAX_PREFS_BYTES: usize = 64 * 1024;
@@ -101,6 +119,46 @@ pub async fn set_prefs(app: AppHandle, json: String) -> Result<(), ApiError> {
     store(&app, &json)
 }
 
+/// A theme preference the UI knows (`None`: unchanged).
+pub fn check_theme(theme: Option<&str>) -> Result<(), ApiError> {
+    match theme {
+        None | Some("system" | "light" | "dark") => Ok(()),
+        Some(_) => Err(ApiError::invalid_argument("unknown theme")),
+    }
+}
+
+/// Pure: the windows a change in `from` is sent to (the other document windows).
+pub fn broadcast_targets<'a>(labels: impl IntoIterator<Item = &'a str>, from: &str) -> Vec<String> {
+    labels
+        .into_iter()
+        .filter(|l| is_doc_label(l) && *l != from)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `broadcast_prefs(theme)`: the calling window changed the prefs (already
+/// stored with `set_prefs`) or the theme; the other document windows get
+/// `prefs-changed { theme }`.
+#[tauri::command]
+pub async fn broadcast_prefs(
+    app: AppHandle,
+    window: WebviewWindow,
+    theme: Option<String>,
+) -> Result<(), ApiError> {
+    check_theme(theme.as_deref())?;
+    let all = app.webview_windows();
+    let targets = broadcast_targets(all.keys().map(String::as_str), window.label());
+    for label in targets {
+        let event = PrefsChangedEvent {
+            theme: theme.clone(),
+        };
+        if let Err(e) = app.emit_to(label.as_str(), PREFS_CHANGED, event) {
+            eprintln!("tally: emitting {PREFS_CHANGED} to {label}: {e}");
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +187,18 @@ mod tests {
         assert!(next.contains("\"autoInput\":false"));
         let fresh = with_string_key("garbage", "uiLanguage", "de").unwrap();
         assert_eq!(fresh, r#"{"uiLanguage":"de"}"#);
+    }
+
+    #[test]
+    fn prefs_changes_reach_the_other_document_windows() {
+        let labels = ["doc-1", "doc-2", "tally-print-4", "doc-7"];
+        assert_eq!(broadcast_targets(labels, "doc-2"), ["doc-1", "doc-7"]);
+        assert!(broadcast_targets(["doc-1"], "doc-1").is_empty());
+        assert!(check_theme(None).is_ok());
+        assert!(check_theme(Some("dark")).is_ok());
+        assert_eq!(
+            check_theme(Some("javascript:")).unwrap_err().code,
+            ApiError::INVALID_ARGUMENT
+        );
     }
 }

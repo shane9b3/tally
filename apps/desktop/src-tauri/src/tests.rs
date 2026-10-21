@@ -330,6 +330,47 @@ fn open_allowlist_is_not_an_existence_oracle() -> CmdResult<()> {
     Ok(())
 }
 
+/// Multi-window: a file already open in a document window is found by its
+/// path as remembered for Save, given or canonical (a saved document keeps
+/// the dialog's path, an opened one the canonical path).
+#[test]
+fn an_open_file_is_found_by_its_path() -> CmdResult<()> {
+    let st = state();
+    let info = new_workbook(&st, None)?;
+    let file = temp_path("open-twice.ods");
+    let saved = save_to(&st, info.doc, &file, FileFormat::Ods)?;
+    assert_eq!(saved.doc, info.doc);
+    let canon =
+        std::fs::canonicalize(&file).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+    let paths = crate::state::lock(&st.paths).clone();
+    assert_eq!(
+        crate::commands::doc_with_path(&paths, &canon),
+        Some(info.doc)
+    );
+    assert_eq!(
+        crate::commands::doc_with_path(&paths, &temp_path("other.ods")),
+        None
+    );
+    let _ = std::fs::remove_file(&file);
+    Ok(())
+}
+
+/// Security review (multi-window S3): a new window's summary comes from the
+/// engine (`DocumentService::info`); an unknown document is refused.
+#[test]
+fn a_new_window_gets_the_engine_summary_of_its_document() -> CmdResult<()> {
+    let st = state();
+    let info = new_workbook(&st, Some("invoices"))?;
+    let again = with_service(&st, |s| s.info(info.doc))?;
+    assert_eq!(again.doc, info.doc);
+    assert_eq!(again.title, info.title);
+    assert_eq!(again.sheets, info.sheets);
+    assert_eq!(again.dirty, info.dirty);
+    let err = with_service(&st, |s| s.info(DocId(9_999))).err();
+    assert_eq!(err.map(|e| e.code), Some(ApiError::NOT_FOUND.to_owned()));
+    Ok(())
+}
+
 // ----- v0.2 over the real engine ------------------------------------------------
 
 fn apply_ok(st: &AppState, doc: DocId, ops: Vec<Op>) -> CmdResult<tally_api::ApplyResult> {
@@ -1727,4 +1768,51 @@ mod wave5 {
         assert_eq!(text_at(&v, 16, 0), "");
         Ok(())
     }
+}
+
+// ----- app ACL manifest (build.rs) ---------------------------------------------
+
+mod app_acl {
+    include!("../app_commands.rs");
+}
+
+/// Security review (multi-window S1): with an app manifest Tauri checks every
+/// app command against the capabilities. The manifest must list exactly the
+/// registered commands, and only the document windows may call them.
+#[test]
+fn every_registered_command_is_in_the_acl_manifest_and_granted_to_document_windows() {
+    let lib = include_str!("lib.rs");
+    let start = lib.find("generate_handler![").unwrap_or(0);
+    let body = &lib[start..];
+    let body = &body[..body.find("])").unwrap_or(body.len())];
+    let registered: Vec<&str> = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with("//"))
+        .filter_map(|l| l.strip_suffix(',')?.rsplit("::").next())
+        .collect();
+    assert_eq!(registered, app_acl::APP_COMMANDS);
+
+    let caps: serde_json::Value =
+        serde_json::from_str(include_str!("../capabilities/default.json")).unwrap_or_default();
+    assert_eq!(caps["windows"], serde_json::json!(["doc-*"]));
+    let granted: Vec<String> = caps["permissions"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| p.as_str())
+                .filter(|p| p.starts_with("allow-"))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let expected: Vec<String> = app_acl::APP_COMMANDS
+        .iter()
+        .map(|c| format!("allow-{}", c.replace('_', "-")))
+        .collect();
+    assert_eq!(granted, expected);
+    // The other capability grants no app command.
+    let titlebar = include_str!("../capabilities/windows-titlebar.json");
+    assert!(!titlebar.contains("\"allow-"));
+    assert!(titlebar.contains("\"doc-*\""));
 }

@@ -259,18 +259,20 @@ pub async fn export_pdf(
 
 /// `wb_print(doc, job)`: macOS shows the PDF in a print window and opens the
 /// print dialog; other platforms hand a temporary PDF to the system viewer.
-pub async fn print(app: AppHandle, doc: DocId, job: u32) -> CmdResult<()> {
+/// The print window belongs to the document window that asked (`owner`):
+/// closing that window closes it too (`closing.rs`).
+pub async fn print(app: AppHandle, owner: String, doc: DocId, job: u32) -> CmdResult<()> {
     let _ = doc;
     let bytes = blocking(app.clone(), move |_, st| pdf_bytes(st, job)).await?;
     if cfg!(target_os = "macos") {
-        print_in_window(&app, job, bytes)
+        print_in_window(&app, &owner, job, bytes)
     } else {
         open_in_viewer(job, &bytes)
     }
 }
 
 /// Stores the PDF for the `tally-print` scheme and opens the print window.
-fn print_in_window(app: &AppHandle, job: u32, bytes: Vec<u8>) -> CmdResult<()> {
+fn print_in_window(app: &AppHandle, owner: &str, job: u32, bytes: Vec<u8>) -> CmdResult<()> {
     {
         let jobs = app.state::<PrintJobs>();
         let mut map = lock(&jobs.0);
@@ -282,10 +284,14 @@ fn print_in_window(app: &AppHandle, job: u32, bytes: Vec<u8>) -> CmdResult<()> {
         }
         map.insert(job, bytes.clone());
     }
-    let label = format!("tally-print-{job}");
+    let label = format!("{}{job}", crate::registry::PRINT_PREFIX);
     if let Some(existing) = app.get_webview_window(&label) {
         let _ = existing.close();
     }
+    // Registered before it exists, so its first focus event already counts
+    // (⌘W closes it while it is the key window).
+    app.state::<crate::registry::Windows>()
+        .with(|r| r.add_print(&label, owner));
     let url = tauri::Url::parse(&print_url(job))
         .map_err(|e| ApiError::new(ApiError::INTERNAL, format!("print url: {e}")))?;
     let window = tauri::webview::WebviewWindowBuilder::new(
