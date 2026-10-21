@@ -240,13 +240,16 @@ export class AppController {
    * are reported as dialogs/toasts (`V3Features.reportProblems`); other
    * errors show the first one as a toast.
    */
-  handleResult(res: ApplyResult, ops: readonly Op[] | null = null): void {
+  handleResult(res: ApplyResult, ops: readonly Op[] | null = null, restoreSelection = true): void {
     const before = this.sheet;
     useDocStore.getState().source?.applyResult(res);
     useDocStore.getState().applyResult(res);
     const after = this.sheet;
     if (after !== before) this.showSheet(after, false);
-    if (res.selection && res.selection.sheet === this.sheet) {
+    // Undo/redo (and ops that name their own selection) put the cursor back;
+    // a plain edit must not, or Enter/Tab would snap back to the edited cell
+    // after the grid has already moved on.
+    if (restoreSelection && res.selection && res.selection.sheet === this.sheet) {
       const sel = fromSelectionDto(res.selection);
       useSelectionStore.getState().setSelection(sel);
       this.grid?.scrollCellIntoView(sel.active);
@@ -278,7 +281,7 @@ export class AppController {
         selectionAfter: toSelectionDto(after ?? sel, this.sheet),
       };
       const res = await this.client.apply(doc, tx);
-      this.handleResult(res, ops);
+      this.handleResult(res, ops, after !== undefined);
       return res;
     } catch (e) {
       this.notifyError(e);
