@@ -236,6 +236,8 @@
   "dialog.no": "Nein",
   "dialog.save": "Speichern",
   "dialog.dontSave": "Nicht speichern",
+  "dialog.saveChanges.title": "Möchten Sie die Änderungen an „{name}“ speichern?",
+  "dialog.saveChanges.detail": "Ihre Änderungen gehen verloren, wenn Sie sie nicht speichern.",
   "dialog.delete": "Löschen",
   "dialog.rename": "Umbenennen",
   "dialog.insert": "Einfügen",

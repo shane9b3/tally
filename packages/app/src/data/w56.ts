@@ -1137,13 +1137,17 @@ export class W56Features {
     }
   }
 
-  async recover(file: RecoveryFile): Promise<void> {
-    if (!this.shell.recoverSnapshot) return;
+  /** Opens a recovery snapshot (after the unsaved-changes guard); `true` when it was opened. */
+  async recover(file: RecoveryFile): Promise<boolean> {
+    if (!this.shell.recoverSnapshot) return false;
+    if (!(await this.ctl.confirmUnsaved())) return false;
     try {
       this.ctl.load(await this.shell.recoverSnapshot(file.path));
       this.toast("info", `Recovered “${file.title}”. Save it to keep it.`);
+      return true;
     } catch (e) {
       this.ctl.notifyError(e);
+      return false;
     }
   }
 
@@ -1185,6 +1189,7 @@ export class W56Features {
   }
 
   async newFromUserTemplate(id: string): Promise<void> {
+    if (!(await this.ctl.confirmUnsaved())) return;
     try {
       const info = await this.shell.newFromUserTemplate?.(id);
       if (info) this.ctl.load(info);

@@ -54,6 +54,11 @@ tally-assist = { path = "crates/tally-assist", version = "0.1.0" }
 tauri = "=2.12.4"
 tauri-build = "=2.7.3"
 tauri-plugin-dialog = "=2.8.3"
+# macOS only: the window's "document edited" dot (`closing.rs`), through the
+# safe objc2 bindings Tauri's own tao already links (same versions as Cargo.lock).
+objc2 = { version = "=0.6.5", default-features = false, features = ["std"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow"] }
 
 # Libraries
 serde = { version = "=1.0.229", features = ["derive", "rc"] }

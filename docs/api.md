@@ -281,6 +281,7 @@ and their args from the rule provider:
 |---|---|---|
 | `doc-changed` | `DocChangedEvent { doc, result: ApplyResult }` | `onDocChanged(cb)` |
 | `menu-action` | `MenuActionEvent { id: string }` | `onMenuAction(cb)` |
+| `close-requested` | `{ kind: "window" \| "quit" }` | `onCloseRequested(cb)` (shell; `closing.rs`) |
 
 Menu ids are `CommandRegistry` command ids (`packages/app/src/commands.ts`); the
 native menu (`apps/desktop/src-tauri/src/menu.rs`) lists them, and
@@ -470,6 +471,23 @@ stand-ins).
 | `ui_strings` | `lang` | `{ key: text }` | The flat UI table of a locale (the app ships copies under `packages/app/src/i18n/`). |
 | `localized_function_names` | `lang` | `[canonical, localized][]` | The function-name table of a locale (the app ships a generated copy, `functionNames.json`). |
 | `clear_recent` | — | `void` | File ▸ Open Recent ▸ Clear Menu. |
+
+### Unsaved-changes guard (`closing.rs`)
+
+Every UI path that replaces or closes the document runs
+`AppController.confirmUnsaved()` (`packages/app/src/unsaved.ts`): when the
+document is dirty it asks Save / Don't Save / Cancel. The shell only needs the
+dirty flag, so window close and quit can be guarded without the service lock.
+
+| Tauri command | Arguments | Returns | What it does |
+|---|---|---|---|
+| `set_document_edited` | `edited` | `void` | Records the dirty state (sent whenever it changes) and, on macOS, sets the window's "document edited" dot (`-[NSWindow setDocumentEdited:]` via the safe `objc2-app-kit` binding). |
+| `confirm_close` | `quit` | `void` | The save prompt resolved with Save or Don't Save: marks the close confirmed and destroys the main window (`quit: false`) or exits (`quit: true`). |
+
+While edited, `WindowEvent::CloseRequested` (main window) and
+`RunEvent::ExitRequested` are prevented and `close-requested` is emitted; the
+app menu's Quit (⌘Q) is a custom item (`app-quit`) handled the same way, since
+the predefined Quit (`terminate:`) cannot be intercepted.
 
 The native menu is built in the UI language from `prefs.json` at startup
 (`menu::build` → `menu::build_localized`). Function-name localisation is

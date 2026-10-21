@@ -383,6 +383,14 @@ fn submenu<R: Runtime>(
     .build()
 }
 
+/// The app menu's Quit label (`app.quit`, "Quit Tally").
+fn quit_label(locale: Locale) -> String {
+    if locale == Locale::En || !tally_l10n::has_ui_key("app.quit") {
+        return "Quit Tally".to_owned();
+    }
+    tally_l10n::t(locale, "app.quit").to_owned()
+}
+
 /// Builds the application menu in the UI language stored in the prefs.
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     build_localized(app, l10n::current_locale(app))
@@ -426,7 +434,13 @@ pub fn build_localized<R: Runtime>(app: &AppHandle<R>, locale: Locale) -> tauri:
             .hide_others()
             .show_all()
             .separator()
-            .quit()
+            // Not the predefined Quit (`terminate:` bypasses the unsaved-changes
+            // guard): `on_event` routes it to `closing::request_quit`.
+            .item(
+                &MenuItemBuilder::with_id(crate::closing::QUIT_ID, quit_label(locale))
+                    .accelerator("CmdOrCtrl+Q")
+                    .build(app)?,
+            )
             .build()?;
         menu = menu.item(&app_menu);
     }
@@ -461,7 +475,9 @@ pub fn build_localized<R: Runtime>(app: &AppHandle<R>, locale: Locale) -> tauri:
 /// Forwards custom items to the webview.
 pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let id = event.id().as_ref();
-    if custom_ids().contains(&id) {
+    if id == crate::closing::QUIT_ID {
+        crate::closing::request_quit(app);
+    } else if custom_ids().contains(&id) {
         emit_menu_action(app, id);
     }
 }
@@ -469,6 +485,14 @@ pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quit_is_a_guarded_custom_item() {
+        assert_eq!(quit_label(Locale::En), "Quit Tally");
+        assert_eq!(quit_label(Locale::De), "Tally beenden");
+        // Handled in Rust (closing::request_quit), never forwarded to the webview.
+        assert!(!custom_ids().contains(&crate::closing::QUIT_ID));
+    }
 
     #[test]
     fn ids_are_namespaced() {

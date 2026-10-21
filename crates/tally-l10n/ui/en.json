@@ -236,6 +236,8 @@
   "dialog.no": "No",
   "dialog.save": "Save",
   "dialog.dontSave": "Don't Save",
+  "dialog.saveChanges.title": "Do you want to save the changes you made to “{name}”?",
+  "dialog.saveChanges.detail": "Your changes will be lost if you don't save them.",
   "dialog.delete": "Delete",
   "dialog.rename": "Rename",
   "dialog.insert": "Insert",

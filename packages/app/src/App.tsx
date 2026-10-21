@@ -29,6 +29,7 @@ import { GridHost } from "./components/GridHost";
 import { SheetTabs } from "./components/SheetTabs";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
+import { SavePrompt } from "./components/SavePrompt";
 import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
 import { ChartEditorPanel } from "./charts/ChartEditorPanel";
@@ -136,6 +137,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
         <ShortcutsModal />
         <PrintPreview />
         <W56Chrome />
+        <SavePrompt />
         <Toasts />
         {about ? (
           <div className={styles.aboutOverlay} onMouseDown={() => setAbout(false)}>

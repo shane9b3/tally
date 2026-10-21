@@ -190,6 +190,9 @@ export const COMMANDS = {
   newFromUserTemplate: "new_from_user_template",
   setUiLanguage: "set_ui_language",
   clearRecent: "clear_recent",
+  // Unsaved-changes guard: apps/desktop/src-tauri/src/closing.rs
+  setDocumentEdited: "set_document_edited",
+  confirmClose: "confirm_close",
 } as const;
 
 /**
@@ -231,8 +234,11 @@ export const V4_METHODS = [
 /** The W5-6 shell commands (prefs, autosave, templates, UI language); `w56shell.test.ts` covers them. */
 export const W56_SHELL_COMMANDS = ["getPrefs", "setPrefs", "autosave", "listRecovery", "recoverSnapshot", "discardRecovery", "saveAsTemplate", "listUserTemplates", "newFromUserTemplate", "setUiLanguage", "clearRecent"] as const satisfies readonly (keyof typeof COMMANDS)[];
 
+/** The unsaved-changes guard's shell commands (closing.rs); `unsaved.test.ts` covers them. */
+export const CLOSE_SHELL_COMMANDS = ["setDocumentEdited", "confirmClose"] as const satisfies readonly (keyof typeof COMMANDS)[];
+
 /** Event names, exactly as in docs/api.md. */
-export const EVENTS = { docChanged: "doc-changed", menuAction: "menu-action" } as const;
+export const EVENTS = { docChanged: "doc-changed", menuAction: "menu-action", closeRequested: "close-requested" } as const;
 
 /** Normalises any rejection into an {@link ApiError}. */
 export function toApiError(e: unknown): ApiError {
@@ -633,6 +639,23 @@ export class TauriClient implements EngineClientV4, ShellClient {
 
   clearRecent(): Promise<void> {
     return this.call(COMMANDS.clearRecent);
+  }
+
+  // -- unsaved-changes guard (closing.rs) -------------------------------------
+
+  /** `set_document_edited`: the dirty state for the close/quit guard and the macOS "edited" dot. */
+  setDocumentEdited(edited: boolean): Promise<void> {
+    return this.call(COMMANDS.setDocumentEdited, { edited });
+  }
+
+  /** `confirm_close`: the save prompt resolved; close the window (`quit: false`) or quit. */
+  confirmClose(quit: boolean): Promise<void> {
+    return this.call(COMMANDS.confirmClose, { quit });
+  }
+
+  /** `close-requested { kind }`: a window close or quit is waiting for the save prompt. */
+  onCloseRequested(cb: (kind: "window" | "quit") => void): Unsubscribe {
+    return this.subscribe<{ kind: "window" | "quit" }>(EVENTS.closeRequested, (e) => cb(e.kind));
   }
 
   // -- events -----------------------------------------------------------------

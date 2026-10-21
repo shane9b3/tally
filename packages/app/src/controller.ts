@@ -70,6 +70,7 @@ import { detectSumRange, sumFormula, sumScanRanges } from "./sumRange";
 import { V3Features } from "./features";
 import { useV3Store } from "./stores/v3Store";
 import { W5Features } from "./objects/w5Features";
+import { guardDecision, proceedAfter, useSavePromptStore, type CloseKind, type CloseShell } from "./unsaved";
 import { W56Features } from "./data/w56";
 
 export interface ControllerOptions {
@@ -115,6 +116,10 @@ export class AppController {
   private readonly offs: (() => void)[] = [];
   /** The last internal copy (context-menu paste when the system clipboard is unreadable). */
   private lastCopy: { token: string; tsv: string } | null = null;
+  /** The unsaved-changes guard is running (prompt open or its Save in progress). */
+  private guarding = false;
+  /** The dirty state last reported to the shell (`set_document_edited`). */
+  private reportedEdited: boolean | null = null;
 
   /** v0.3 features (conditional formatting, validation, notes, links, protection, page setup…). */
   readonly v3: V3Features;
@@ -154,7 +159,10 @@ export class AppController {
         }
       }),
       this.w56.attach(),
+      useDocStore.subscribe(() => this.syncDocumentEdited()),
+      this.closeShell.onCloseRequested?.((kind) => void this.closeRequested(kind)) ?? (() => undefined),
     );
+    this.syncDocumentEdited();
     return () => {
       this.offs.splice(0).forEach((f) => f());
       useDocStore.getState().source?.dispose();
@@ -957,7 +965,74 @@ export class AppController {
 
   // -- files ----------------------------------------------------------------------
 
+  // -- unsaved-changes guard (unsaved.ts) -------------------------------------------
+
+  private get closeShell(): CloseShell {
+    return this.shell as unknown as CloseShell;
+  }
+
+  /** Mirrors the dirty state to the shell (macOS "edited" dot, close/quit guard) when it changes. */
+  private syncDocumentEdited(): void {
+    const edited = useDocStore.getState().info?.dirty ?? false;
+    if (edited === this.reportedEdited || !this.closeShell.setDocumentEdited) return;
+    this.reportedEdited = edited;
+    this.closeShell.setDocumentEdited(edited).catch((e: unknown) => console.warn("tally: set_document_edited", e));
+  }
+
+  /**
+   * Run before anything replaces or closes the current document. A clean
+   * document resolves `true` at once; a dirty one opens the save prompt:
+   * Save (Save As for an untitled document) resolves `true` once saved and
+   * `false` if that dialog is cancelled or the save fails; Don't Save
+   * resolves `true`; Cancel (and Escape) `false`. A request while the
+   * guard is already running resolves `false`.
+   */
+  confirmUnsaved = async (): Promise<boolean> => {
+    const info = this.info;
+    if (guardDecision(info) === "proceed" || !info) return true;
+    if (this.guarding) return false;
+    this.guarding = true;
+    try {
+      const choice = await useSavePromptStore.getState().ask(info.title);
+      return proceedAfter(choice, choice === "save" && (await this.saveForGuard()));
+    } finally {
+      this.guarding = false;
+    }
+  };
+
+  /** Save for the guard: the file's own Save, or the Save As dialog when untitled. */
+  private async saveForGuard(): Promise<boolean> {
+    const info = this.info;
+    if (!info) return true;
+    try {
+      const res = await this.shell.saveWithDialog(info.doc, false, null);
+      useDocStore.getState().setInfo(res);
+      return !res.dirty;
+    } catch (e) {
+      this.notifyError(e);
+      return false;
+    }
+  }
+
+  /**
+   * The desktop shell held back a window close or quit (`close-requested`):
+   * run the guard, then close/quit for real. Don't Save closes the document
+   * first so its autosave snapshot is removed, as an in-app close does.
+   */
+  closeRequested = async (kind: CloseKind): Promise<boolean> => {
+    if (!(await this.confirmUnsaved())) return false;
+    const info = this.info;
+    if (info?.dirty) await this.client.close(info.doc).catch(() => undefined);
+    try {
+      await this.closeShell.confirmClose?.(kind === "quit");
+    } catch (e) {
+      this.notifyError(e);
+    }
+    return true;
+  };
+
   newWorkbook = async (): Promise<void> => {
+    if (!(await this.confirmUnsaved())) return;
     try {
       this.load(await this.client.newWorkbook(null));
     } catch (e) {
@@ -966,6 +1041,7 @@ export class AppController {
   };
 
   newFromTemplate = async (id: string): Promise<void> => {
+    if (!(await this.confirmUnsaved())) return;
     try {
       this.load(await this.client.newWorkbook(id));
     } catch (e) {
@@ -974,6 +1050,7 @@ export class AppController {
   };
 
   openDialog = async (): Promise<void> => {
+    if (!(await this.confirmUnsaved())) return;
     try {
       const info = await this.shell.openDialog();
       if (info) this.load(info);
@@ -983,6 +1060,7 @@ export class AppController {
   };
 
   openRecent = async (path: string): Promise<void> => {
+    if (!(await this.confirmUnsaved())) return;
     try {
       this.load(await this.client.open(path));
     } catch (e) {
@@ -1002,6 +1080,7 @@ export class AppController {
     }
   };
 
+  /** File ▸ Close (⌘W): replaces the document with a blank one (guarded in `newWorkbook`). */
   closeDocument = async (): Promise<void> => {
     await this.newWorkbook();
   };

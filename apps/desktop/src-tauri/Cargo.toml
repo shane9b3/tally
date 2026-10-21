@@ -31,6 +31,12 @@ tally-assist.workspace = true
 tally-l10n.workspace = true
 zip.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The red close button's "document edited" dot (closing.rs); safe API only.
+objc2.workspace = true
+objc2-foundation.workspace = true
+objc2-app-kit.workspace = true
+
 [lints]
 workspace = true
 

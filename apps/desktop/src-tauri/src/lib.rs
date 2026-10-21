@@ -7,6 +7,7 @@
 
 mod assist;
 mod autosave;
+mod closing;
 mod commands;
 mod commands_v4;
 mod dialogs;
@@ -38,8 +39,10 @@ pub fn run() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new(service))
+        .manage(closing::CloseState::default())
         .menu(menu::build)
         .on_menu_event(menu::on_event)
+        .on_window_event(closing::on_window_event)
         .register_uri_scheme_protocol(print::PRINT_SCHEME, print::protocol)
         .setup(|app| {
             let recent = files::load_recent(app.handle());
@@ -139,10 +142,16 @@ pub fn run() {
             l10n::ui_strings,
             l10n::localized_function_names,
             files::clear_recent,
+            // Unsaved-changes guard and the macOS "edited" dot.
+            closing::set_document_edited,
+            closing::confirm_close,
         ])
-        .run(tauri::generate_context!());
-    if let Err(e) = result {
-        eprintln!("tally: failed to start: {e}");
-        std::process::exit(1);
+        .build(tauri::generate_context!());
+    match result {
+        Ok(app) => app.run(|handle, event| closing::on_run_event(handle, &event)),
+        Err(e) => {
+            eprintln!("tally: failed to start: {e}");
+            std::process::exit(1);
+        }
     }
 }

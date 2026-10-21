@@ -236,6 +236,8 @@
   "dialog.no": "Non",
   "dialog.save": "Enregistrer",
   "dialog.dontSave": "Ne pas enregistrer",
+  "dialog.saveChanges.title": "Voulez-vous enregistrer les modifications apportées à « {name} » ?",
+  "dialog.saveChanges.detail": "Vos modifications seront perdues si vous ne les enregistrez pas.",
   "dialog.delete": "Supprimer",
   "dialog.rename": "Renommer",
   "dialog.insert": "Insérer",

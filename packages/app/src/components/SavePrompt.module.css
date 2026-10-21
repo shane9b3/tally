@@ -1,0 +1,8 @@
+/* Above every other dialog: the prompt can be raised from one (e.g. Recover). */
+.overlay {
+  z-index: 90;
+}
+
+.title {
+  line-height: 1.35;
+}
