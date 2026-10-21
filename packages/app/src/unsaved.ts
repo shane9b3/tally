@@ -9,7 +9,7 @@
  * The decision logic is pure and exported for tests; the prompt itself is a
  * small zustand store that `SavePrompt` (components/SavePrompt.tsx) renders.
  */
-import type { WorkbookInfo } from "@tally/bridge";
+import type { DocId, WorkbookInfo } from "@tally/bridge";
 import { create } from "zustand";
 
 /** The user's answer to the save prompt. */
@@ -37,8 +37,8 @@ export type CloseKind = "window" | "quit";
 
 /** Optional desktop-shell hooks (`TauriClient`; the browser has none). */
 export interface CloseShell {
-  /** `set_document_edited`: the macOS "edited" dot and the shell's close guard flag. */
-  setDocumentEdited?(edited: boolean): Promise<void>;
+  /** `set_document_edited`: the macOS "edited" dot, the shell's close guard flag and the document it snapshots on exit. */
+  setDocumentEdited?(edited: boolean, doc: DocId | null): Promise<void>;
   /** `close-requested`: the shell held back a window close / quit because the document is edited. */
   onCloseRequested?(cb: (kind: CloseKind) => void): () => void;
   /** `confirm_close`: the guard resolved; close the window or quit for real. */

@@ -2,6 +2,7 @@
  * The unsaved-changes guard in the browser (MockClient): editing a cell and
  * then starting from a sidebar template asks Save / Don't Save / Cancel;
  * Cancel (and Escape) keep the edit, Don't Save replaces the workbook.
+ * Typing not yet committed with Enter is committed first (as in AOO).
  */
 import { expect, test, type Page } from "@playwright/test";
 
@@ -68,6 +69,24 @@ test("editing then picking a sidebar template asks to save; Cancel keeps the edi
   await expect(prompt).toBeHidden();
   await expect.poll(() => page.evaluate(() => window.__tally?.controller.info?.title)).not.toBe(title);
   expect(await page.evaluate(() => window.__tally?.controller.info?.dirty)).toBe(false);
+});
+
+test("typing without Enter, then picking a sidebar template, commits the typing and asks", async ({ page }) => {
+  await clickCell(page, 0, 0);
+  await page.keyboard.type("5678");
+  // Still editing: nothing is in the cell yet.
+  expect(await page.evaluate(() => window.__tally?.controller.pendingEdit)).toBe(true);
+  expect(await a1(page)).not.toBe("5678");
+
+  // Clicking the sidebar blurs the editor without ending the edit; the guard commits it.
+  await page.getByRole("button", { name: "Monthly budget" }).click();
+  const prompt = page.getByTestId("save-prompt");
+  await expect(prompt).toBeVisible();
+  await page.getByTestId("save-prompt-cancel").click();
+  await expect(prompt).toBeHidden();
+  expect(await a1(page)).toBe("5678");
+  expect(await page.evaluate(() => window.__tally?.controller.pendingEdit)).toBe(false);
+  expect(await page.evaluate(() => window.__tally?.controller.info?.dirty)).toBe(true);
 });
 
 test("a clean workbook is replaced without asking", async ({ page }) => {

@@ -643,9 +643,12 @@ export class TauriClient implements EngineClientV4, ShellClient {
 
   // -- unsaved-changes guard (closing.rs) -------------------------------------
 
-  /** `set_document_edited`: the dirty state for the close/quit guard and the macOS "edited" dot. */
-  setDocumentEdited(edited: boolean): Promise<void> {
-    return this.call(COMMANDS.setDocumentEdited, { edited });
+  /**
+   * `set_document_edited`: the dirty state for the close/quit guard and the macOS "edited" dot,
+   * with the document's id so the shell can write a last autosave snapshot on a Dock Quit.
+   */
+  setDocumentEdited(edited: boolean, doc: DocId | null): Promise<void> {
+    return this.call(COMMANDS.setDocumentEdited, { edited, doc });
   }
 
   /** `confirm_close`: the save prompt resolved; close the window (`quit: false`) or quit. */

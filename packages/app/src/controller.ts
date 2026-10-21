@@ -11,6 +11,7 @@ import {
   type CellPos,
   type CellView,
   type ColumnFilter,
+  type DocId,
   type EngineClientV3,
   type FileFormat,
   type FilterOp,
@@ -62,7 +63,7 @@ import { useDataStore } from "./stores/dataStore";
 import { applyCompletion, applyPoint, assistFor, assistKey } from "./formulaEdit";
 import { chipColorsFor } from "./palette";
 import { useDocStore } from "./stores/docStore";
-import { useEditStore } from "./stores/editStore";
+import { isPendingEdit, useEditStore } from "./stores/editStore";
 import { useFunctionsStore } from "./stores/functionsStore";
 import { fromSelectionDto, selectionRanges, toSelectionDto, useSelectionStore } from "./stores/selectionStore";
 import { toastWarnings, useUiStore } from "./stores/uiStore";
@@ -113,13 +114,20 @@ export class AppController {
   private infoSeq = 0;
   /** The committed input of the cell being edited (skip no-op commits). */
   private editOriginal: string | null = null;
+  /** Bumped by every startEdit: a late `cellEditInfo` reply only fills in its own session. */
+  private editSession = 0;
   private readonly offs: (() => void)[] = [];
   /** The last internal copy (context-menu paste when the system clipboard is unreadable). */
   private lastCopy: { token: string; tsv: string } | null = null;
   /** The unsaved-changes guard is running (prompt open or its Save in progress). */
   private guarding = false;
-  /** The dirty state last reported to the shell (`set_document_edited`). */
+  /** The edited state and document last reported to the shell (`set_document_edited`). */
   private reportedEdited: boolean | null = null;
+  private reportedDoc: DocId | null = null;
+  /** Typing commits in flight (still "edited" until the engine marks the doc dirty). */
+  private committing = 0;
+  /** The last typing commit's apply (the guard waits for it before reading `dirty`). */
+  private lastCommit: Promise<unknown> = Promise.resolve();
 
   /** v0.3 features (conditional formatting, validation, notes, links, protection, page setup…). */
   readonly v3: V3Features;
@@ -160,6 +168,7 @@ export class AppController {
       }),
       this.w56.attach(),
       useDocStore.subscribe(() => this.syncDocumentEdited()),
+      useEditStore.subscribe(() => this.syncDocumentEdited()),
       this.closeShell.onCloseRequested?.((kind) => void this.closeRequested(kind)) ?? (() => undefined),
     );
     this.syncDocumentEdited();
@@ -472,6 +481,7 @@ export class AppController {
     const active = store.active;
     const known = active && active.sheet === this.sheet && active.cell.r === cell.r && active.cell.c === cell.c ? active.input : null;
     this.editOriginal = known;
+    const session = ++this.editSession;
     if (seed !== undefined) {
       store.start(cell, seed, origin);
       return;
@@ -483,8 +493,11 @@ export class AppController {
     this.client.cellEditInfo(info.doc, this.sheet, cell.r, cell.c).then(
       (res) => {
         const cur = useEditStore.getState().edit;
+        if (session !== this.editSession || !cur || cur.cell.r !== cell.r || cur.cell.c !== cell.c) return;
         this.editOriginal = this.w56.displayText(res.input);
-        if (cur && cur.cell.r === cell.r && cur.cell.c === cell.c && cur.text === "") useEditStore.getState().change(this.editOriginal);
+        if (cur.text === "") useEditStore.getState().change(this.editOriginal);
+        // The original decides whether the session counts as edited.
+        this.syncDocumentEdited();
       },
       () => undefined,
     );
@@ -500,36 +513,51 @@ export class AppController {
     this.w56.onEditChange(text);
   };
 
-  /** Commits the edit. The grid moves its own selection; the formula bar asks us to. */
-  commitEdit = async (move: CommitMove): Promise<void> => {
+  /**
+   * Commits the edit. The grid moves its own selection; the formula bar asks
+   * us to. Resolves `false` when the engine refused the input (a validation
+   * Stop, a locked cell) or the apply failed.
+   */
+  commitEdit = async (move: CommitMove): Promise<boolean> => {
     const { edit, origin } = useEditStore.getState();
-    if (!edit) return;
-    useEditStore.getState().end();
-    const sheet = this.sheet;
-    const unchanged = this.editOriginal !== null && edit.text === this.editOriginal;
-    // Editing `{=…}` inside an array block re-enters the whole block.
-    const active = useEditStore.getState().active;
-    const block = active && active.cell.r === edit.cell.r && active.cell.c === edit.cell.c ? active.arrayRange : null;
-    const arrayOp = block && edit.text.trim().startsWith("{=") ? arrayFormulaOp(sheet, block, edit.text) : null;
-    // apply() builds the transaction synchronously, so selectionBefore is the pre-move selection.
-    const pending = unchanged
-      ? null
-      : arrayOp
-        ? this.apply("Array formula", [arrayOp])
-        : this.apply("Typing", this.typingOps(sheet, edit.cell, edit.text));
-    if (origin === "bar") {
-      if (move !== "none") {
-        const [dr, dc] = MOVES[move];
-        const next = {
-          r: Math.min(LAST_ROW, Math.max(0, edit.cell.r + dr)),
-          c: Math.min(LAST_COL, Math.max(0, edit.cell.c + dc)),
-        };
-        useSelectionStore.getState().setSelection(cellSelection(next));
-        this.grid?.scrollCellIntoView(next);
+    if (!edit) return true;
+    // Counted before end() so the shell's "edited" flag does not blink off.
+    this.committing++;
+    try {
+      useEditStore.getState().end();
+      const sheet = this.sheet;
+      const unchanged = this.editOriginal !== null && edit.text === this.editOriginal;
+      // Editing `{=…}` inside an array block re-enters the whole block.
+      const active = useEditStore.getState().active;
+      const block = active && active.cell.r === edit.cell.r && active.cell.c === edit.cell.c ? active.arrayRange : null;
+      const arrayOp = block && edit.text.trim().startsWith("{=") ? arrayFormulaOp(sheet, block, edit.text) : null;
+      // apply() builds the transaction synchronously, so selectionBefore is the pre-move selection.
+      const pending = unchanged
+        ? null
+        : arrayOp
+          ? this.apply("Array formula", [arrayOp])
+          : this.apply("Typing", this.typingOps(sheet, edit.cell, edit.text));
+      if (pending) this.lastCommit = pending;
+      if (origin === "bar") {
+        if (move !== "none") {
+          const [dr, dc] = MOVES[move];
+          const next = {
+            r: Math.min(LAST_ROW, Math.max(0, edit.cell.r + dr)),
+            c: Math.min(LAST_COL, Math.max(0, edit.cell.c + dc)),
+          };
+          useSelectionStore.getState().setSelection(cellSelection(next));
+          this.grid?.scrollCellIntoView(next);
+        }
+        this.focusGrid();
       }
-      this.focusGrid();
+      const res = await pending;
+      // Only a refusal of the input itself (op 0) fails the commit: the
+      // trailing autoFitRows may be refused (protected sheet) while the input lands.
+      return unchanged || (res !== null && !res.errors.some((e) => e.opIndex === 0));
+    } finally {
+      this.committing--;
+      this.syncDocumentEdited();
     }
-    await pending;
   };
 
   /**
@@ -971,12 +999,40 @@ export class AppController {
     return this.shell as unknown as CloseShell;
   }
 
-  /** Mirrors the dirty state to the shell (macOS "edited" dot, close/quit guard) when it changes. */
+  /** Whether the open edit session holds typed text not yet in the document. */
+  get pendingEdit(): boolean {
+    return isPendingEdit(useEditStore.getState().edit, this.editOriginal);
+  }
+
+  /**
+   * Mirrors the edited state to the shell (macOS "edited" dot, close/quit
+   * guard) when it or the document changes: dirty, or uncommitted typing in
+   * the cell editor / formula bar (or its commit still in flight).
+   */
   private syncDocumentEdited(): void {
-    const edited = useDocStore.getState().info?.dirty ?? false;
-    if (edited === this.reportedEdited || !this.closeShell.setDocumentEdited) return;
+    const info = useDocStore.getState().info;
+    const edited = (info?.dirty ?? false) || this.pendingEdit || this.committing > 0;
+    const doc = info?.doc ?? null;
+    if ((edited === this.reportedEdited && doc === this.reportedDoc) || !this.closeShell.setDocumentEdited) return;
     this.reportedEdited = edited;
-    this.closeShell.setDocumentEdited(edited).catch((e: unknown) => console.warn("tally: set_document_edited", e));
+    this.reportedDoc = doc;
+    this.closeShell.setDocumentEdited(edited, doc).catch((e: unknown) => console.warn("tally: set_document_edited", e));
+  }
+
+  /**
+   * The guard's first step (as in AOO, closing while editing commits the
+   * input): typed text is committed; an unchanged edit session just ends.
+   * Resolves `false` when the commit was refused (the Stop alert is up) or
+   * an editor is still open, so the replace/close aborts.
+   */
+  private async commitPendingEdit(): Promise<boolean> {
+    if (!useEditStore.getState().edit) return true;
+    if (!this.pendingEdit) {
+      this.cancelEdit();
+      return true;
+    }
+    if (!(await this.commitEdit("none"))) return false;
+    return !useEditStore.getState().edit;
   }
 
   /**
@@ -985,14 +1041,18 @@ export class AppController {
    * Save (Save As for an untitled document) resolves `true` once saved and
    * `false` if that dialog is cancelled or the save fails; Don't Save
    * resolves `true`; Cancel (and Escape) `false`. A request while the
-   * guard is already running resolves `false`.
+   * guard is already running resolves `false`. Uncommitted typing is
+   * committed first (`commitPendingEdit`); a refused commit resolves `false`.
    */
   confirmUnsaved = async (): Promise<boolean> => {
-    const info = this.info;
-    if (guardDecision(info) === "proceed" || !info) return true;
     if (this.guarding) return false;
     this.guarding = true;
     try {
+      if (!(await this.commitPendingEdit())) return false;
+      // An Enter just before ⌘W/⌘Q: its apply has to land before `dirty` is read.
+      await this.lastCommit;
+      const info = this.info;
+      if (guardDecision(info) === "proceed" || !info) return true;
       const choice = await useSavePromptStore.getState().ask(info.title);
       return proceedAfter(choice, choice === "save" && (await this.saveForGuard()));
     } finally {

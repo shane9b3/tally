@@ -55,6 +55,13 @@ pub trait DocumentService {
         self.open(path)
     }
 
+    /// Whether `doc` has unsaved changes (`WorkbookInfo.dirty`), for the
+    /// shell's exit snapshot, which must not copy a clean document.
+    fn is_dirty(&self, doc: DocId) -> Result<bool> {
+        let _ = doc;
+        Err(ApiError::unsupported("the dirty flag is not available"))
+    }
+
     /// Writes a copy of `doc` to `path` in `format` without changing the
     /// document's path, title or dirty flag (autosave, Save as Template).
     fn save_copy(&self, doc: DocId, path: &Path, format: FileFormat) -> Result<()> {

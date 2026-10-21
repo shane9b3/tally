@@ -8,17 +8,23 @@
 //! `list_recovery`, and `recover_snapshot` opens it as an untitled, dirty
 //! workbook.
 //!
+//! On the final exit (`RunEvent::Exit`, which also covers the Dock's Quit and
+//! log-out) `closing.rs` writes one more snapshot of an edited document the
+//! user did not answer for, through `try_with_service` (bounded wait).
+//!
 //! Snapshots are written with the engine's `save_copy`, which leaves the
 //! document's path, title and dirty flag alone; a recovered snapshot is
 //! opened with `open_untitled(path, dirty: true)`.
 
 use std::collections::HashMap;
 use std::fs;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, TryLockError};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tally_api::{ApiError, DocId, FileFormat, WorkbookInfo};
+use tally_api::{ApiError, DocId, DocumentService, FileFormat, WorkbookInfo};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::commands::{blocking, with_service, CmdResult};
@@ -135,15 +141,41 @@ pub fn write_snapshot<R: Runtime>(
     st: &AppState,
     doc: DocId,
 ) -> CmdResult<Snapshot> {
+    let snap = write_snapshot_by(app, st, doc, false, |save| with_service(st, save))?;
+    snap.ok_or_else(|| ApiError::new(ApiError::INTERNAL, "no snapshot written"))
+}
+
+/// Like [`write_snapshot`], with the way of reaching the engine supplied:
+/// `run` gets the `save_copy` step and runs it against the service. With
+/// `only_if_dirty` the step first asks the engine whether `doc` has unsaved
+/// changes and returns `Ok(None)` (nothing written) when it is clean.
+pub fn write_snapshot_by<R: Runtime>(
+    app: &AppHandle<R>,
+    st: &AppState,
+    doc: DocId,
+    only_if_dirty: bool,
+    run: impl FnOnce(&mut dyn FnMut(&mut dyn DocumentService) -> CmdResult<()>) -> CmdResult<()>,
+) -> CmdResult<Option<Snapshot>> {
     let folder = dir(app)?;
-    fs::create_dir_all(&folder).map_err(|e| io_err("creating the autosave dir", &e))?;
     let original = lock(&st.paths).get(&doc.0).cloned();
     let title = original.as_ref().and_then(|p| p.file_name()).map_or_else(
         || "Untitled".to_owned(),
         |n| n.to_string_lossy().into_owned(),
     );
     let path = folder.join(format!("s{}-{}", session(), snapshot_name(doc, &title)));
-    with_service(st, |s| s.save_copy(doc, &path, FileFormat::Ods))?;
+    let mut written = false;
+    run(&mut |s| {
+        if only_if_dirty && !s.is_dirty(doc)? {
+            return Ok(());
+        }
+        fs::create_dir_all(&folder).map_err(|e| io_err("creating the autosave dir", &e))?;
+        s.save_copy(doc, &path, FileFormat::Ods)?;
+        written = true;
+        Ok(())
+    })?;
+    if !written {
+        return Ok(None);
+    }
     let snap = Snapshot {
         path: path.display().to_string(),
         title,
@@ -157,7 +189,32 @@ pub fn write_snapshot<R: Runtime>(
     if let Some(old) = lock(recovered()).remove(&doc.0) {
         remove_files(&old);
     }
-    Ok(snap)
+    Ok(Some(snap))
+}
+
+/// Runs `f` on the service, waiting for its lock no longer than until
+/// `deadline` (`try_lock` in a short retry loop): for the exit path, which
+/// must not hang on a busy or hung engine.
+pub fn try_with_service(
+    st: &AppState,
+    deadline: Instant,
+    f: &mut dyn FnMut(&mut dyn DocumentService) -> CmdResult<()>,
+) -> CmdResult<()> {
+    let mut guard = loop {
+        match st.service.try_lock() {
+            Ok(g) => break g,
+            Err(TryLockError::Poisoned(p)) => break p.into_inner(),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(TryLockError::WouldBlock) => {
+                return Err(ApiError::new(ApiError::INTERNAL, "the engine is busy"));
+            }
+        }
+    };
+    let svc: &mut dyn DocumentService = guard.as_mut();
+    catch_unwind(AssertUnwindSafe(|| f(svc)))
+        .unwrap_or_else(|_| Err(ApiError::new(ApiError::INTERNAL, "the engine failed")))
 }
 
 /// Deletes this session's snapshot of `doc` (a clean close or a real save), and the
@@ -255,6 +312,28 @@ pub async fn discard_recovery(app: AppHandle, path: String) -> CmdResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn try_with_service_gives_up_when_the_engine_stays_locked() {
+        let st = AppState::new(Box::new(crate::assist::build_service()));
+        let held = lock(&st.service);
+        let soon = Instant::now() + Duration::from_millis(60);
+        let r = try_with_service(&st, soon, &mut |_| Ok(()));
+        assert!(r.is_err());
+        drop(held);
+        let r = try_with_service(&st, Instant::now() + Duration::from_millis(60), &mut |_| {
+            Ok(())
+        });
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn engine_reports_clean_and_dirty_documents() {
+        let mut svc = crate::assist::build_service();
+        let info = svc.new_workbook(None).unwrap();
+        assert_eq!(svc.is_dirty(info.doc).unwrap(), info.dirty);
+        assert!(svc.is_dirty(DocId(9_999)).is_err());
+    }
 
     #[test]
     fn snapshot_names_are_safe_and_unique_per_doc() {

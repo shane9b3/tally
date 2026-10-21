@@ -481,13 +481,22 @@ dirty flag, so window close and quit can be guarded without the service lock.
 
 | Tauri command | Arguments | Returns | What it does |
 |---|---|---|---|
-| `set_document_edited` | `edited` | `void` | Records the dirty state (sent whenever it changes) and, on macOS, sets the window's "document edited" dot (`-[NSWindow setDocumentEdited:]` via the safe `objc2-app-kit` binding). |
+| `set_document_edited` | `edited, doc: DocId \| null` | `void` | Synchronous command (main thread, in call order). Records the dirty state and the document's id (sent whenever either changes; both live in atomics, outside the service mutex) and, on macOS, sets the window's "document edited" dot (`-[NSWindow setDocumentEdited:]` via the safe `objc2-app-kit` binding). |
 | `confirm_close` | `quit` | `void` | The save prompt resolved with Save or Don't Save: marks the close confirmed and destroys the main window (`quit: false`) or exits (`quit: true`). |
 
 While edited, `WindowEvent::CloseRequested` (main window) and
 `RunEvent::ExitRequested` are prevented and `close-requested` is emitted; the
 app menu's Quit (⌘Q) is a custom item (`app-quit`) handled the same way, since
 the predefined Quit (`terminate:`) cannot be intercepted.
+
+The Dock's Quit, log-out and shutdown (`terminate:`) cannot be vetoed, but tao
+turns `applicationWillTerminate` into `RunEvent::Exit`: if the document is
+edited and the user did not answer the prompt (no `confirm_close`), the shell
+writes a last autosave snapshot of `doc` there (same code path as
+`autosave_snapshot`), only if the engine reports the document dirty, waiting at most about 1.5 s for
+the engine lock (the write itself is not time-bounded), and skips it with a log line otherwise. The next launch offers it through
+`list_recovery`. When the main window is destroyed, the shell also destroys any
+other webview window (a File ▸ Print preview) and exits.
 
 The native menu is built in the UI language from `prefs.json` at startup
 (`menu::build` → `menu::build_localized`). Function-name localisation is

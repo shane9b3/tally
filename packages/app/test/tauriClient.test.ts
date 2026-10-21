@@ -1,4 +1,4 @@
-import type { Transaction } from "@tally/bridge";
+import type { DocId, Transaction } from "@tally/bridge";
 import { describe, expect, it, vi } from "vitest";
 import { COMMANDS, TauriClient, V4_METHODS, W56_SHELL_COMMANDS, CLOSE_SHELL_COMMANDS, type InvokeArgs, type TauriEvent } from "@tally/bridge/tauri";
 
@@ -22,6 +22,16 @@ function fake(result: unknown = null) {
 }
 
 describe("TauriClient", () => {
+  it("sends the edited flag with the document id (null when there is none)", async () => {
+    const { client, calls } = fake();
+    await client.setDocumentEdited(true, 3 as DocId);
+    await client.setDocumentEdited(false, null);
+    expect(calls).toEqual([
+      { cmd: "set_document_edited", args: { edited: true, doc: 3 } },
+      { cmd: "set_document_edited", args: { edited: false, doc: null } },
+    ]);
+  });
+
   it("uses the docs/api.md command names and camelCase arguments", async () => {
     const { client, calls } = fake();
     const sel = { sheet: 1, ranges: [{ r0: 0, c0: 0, r1: 0, c1: 2 }], active: { r: 0, c: 0 } };

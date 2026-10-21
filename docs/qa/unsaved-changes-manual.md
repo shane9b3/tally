@@ -26,7 +26,14 @@ the **release build** (`pnpm --filter tally-desktop tauri build`, then open
 | 15 | Switch Tools ▸ Options ▸ Language to Deutsch, edit, ⌘Q. | Menu item reads "Tally beenden"; the prompt reads "Möchten Sie die Änderungen an „…“ speichern?" with Nicht speichern / Abbrechen / Speichern. |
 | 16 | Windows/Linux build (if available): edit, click the title-bar ✕ / Alt+F4. | Same prompt; Cancel keeps the window. No dot (macOS only). |
 
+| 17 | Choose File ▸ Print so the print window opens. Close nothing; in the main window edit a cell, click the red button, choose Don't Save. | The main window and the print window both close and the app exits (no orphan print window in the Dock / Cmd-Tab). |
+| 18 | Relaunch with a clean document, open the print window again, click the main window's red button. | Both windows close and the app exits; no prompt. |
+| 19 | Edit a cell (do not save), then run `osascript -e 'quit app "Tally"'` (same path as the Dock's Quit). Relaunch. | The app quits without the prompt; recovery offers the document with the edit. |
+
 Known limitation: the Dock's Quit and log-out/shutdown send
 `-[NSApp terminate:]` directly, which tao does not let the app veto, so they
-quit without the prompt. The autosave snapshot (Tools ▸ Options ▸ AutoRecovery)
-is kept in that case and offered on the next launch.
+quit without the prompt. The shell writes a fresh autosave snapshot of the
+edited document on that exit (`RunEvent::Exit`; only if the engine reports unsaved
+changes; the wait for the engine lock is capped at about 1.5 s, the write itself
+is not; skipped if the engine stays busy, in which case the last periodic snapshot from Tools ▸
+Options ▸ AutoRecovery remains) and offers it on the next launch (row 19).

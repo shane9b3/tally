@@ -74,6 +74,16 @@ function isSmallStep(a: string, b: string): boolean {
   return s.slice(i) === l.slice(i + 1) && !/[\s=+\-*/^&(),;:<>]/.test(ch);
 }
 
+/**
+ * Pure: whether an edit session holds typed text not yet in the document
+ * (its text differs from the cell's committed input, `original`; an unknown
+ * original counts as empty). The unsaved-changes guard commits such an edit
+ * first, and the shell's "edited" flag counts it.
+ */
+export function isPendingEdit(edit: Pick<EditState, "text"> | null | undefined, original: string | null): boolean {
+  return edit != null && edit.text !== (original ?? "");
+}
+
 export const useEditStore = create<EditStoreState>()((set, get) => ({
   edit: null,
   origin: null,

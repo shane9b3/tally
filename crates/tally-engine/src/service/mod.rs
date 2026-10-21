@@ -396,6 +396,10 @@ impl DocumentService for EngineService {
         Ok(info)
     }
 
+    fn is_dirty(&self, doc: DocId) -> Result<bool> {
+        Ok(self.document(doc)?.dirty)
+    }
+
     fn save_copy(&self, doc: DocId, path: &Path, format: FileFormat) -> Result<()> {
         self.write_doc(doc, path, format)
     }
