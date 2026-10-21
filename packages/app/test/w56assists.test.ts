@@ -3,7 +3,7 @@
  * Wizard argument model and the display-level function-name localisation.
  */
 import { describe, expect, it } from "vitest";
-import { applyAutoCorrect, applyReplacementTable, capitalizeSentences, fixOrdinals, fixTwoInitialCapitals, isPlainText, replaceDashes, smartQuotes } from "../src/autocorrect/autocorrect";
+import { applyAutoCorrect, applyAutoCorrectToEdit, applyReplacementTable, capitalizeSentences, fixOrdinals, fixTwoInitialCapitals, isPlainText, replaceDashes, smartQuotes } from "../src/autocorrect/autocorrect";
 import { REPLACEMENTS } from "../src/autocorrect/replacements";
 import { completionFor, ghostSuffix, matchingItems, wantsCompletion } from "../src/autocorrect/autoinput";
 import { DEFAULT_AUTOCORRECT } from "../src/options/prefs";
@@ -131,5 +131,41 @@ describe("display-level function names", () => {
     expect(mapFunctionNames("=A1.SUM(1)", () => "X")).toBe("=A1.SUM(1)");
     const fns = localizeFunctions("de", [{ name: "SUM", category: "Mathematical", signature: "SUM(number1, …)", description: "", params: [], example: "" }, { name: "MAX", category: "Statistical", signature: "MAX(a)", description: "", params: [], example: "" }]);
     expect(fns.map((f) => f.signature)).toEqual(["SUMME(number1, …)", "MAX(a)"]);
+  });
+});
+
+describe("localized number literals and quoted names (review 4 H15/M41)", () => {
+  it("swaps the decimal separator in numeric literals only", () => {
+    expect(toCanonicalFormula("de", "=SUMME(1;1,5)")).toBe("=SUM(1;1.5)");
+    expect(toCanonicalFormula("fr", "=ARRONDI(2,345;2)")).toBe("=ROUND(2.345;2)");
+    expect(toCanonicalFormula("es", '=SUMA(A1;12,25)&"1,5"')).toBe('=SUM(A1;12.25)&"1,5"');
+    expect(toDisplayFormula("de", "=SUM(1;1.5)")).toBe("=SUMME(1;1,5)");
+    expect(toDisplayFormula("de", '=SUM(A1;2.5)&"1.5"')).toBe('=SUMME(A1;2,5)&"1.5"');
+    expect(toCanonicalFormula("de", "=SUMME(10;20)")).toBe("=SUM(10;20)");
+    expect(toDisplayFormula(null, "=SUM(1;1.5)")).toBe("=SUM(1;1.5)");
+  });
+  it("leaves quoted sheet names and strings alone", () => {
+    expect(toCanonicalFormula("de", "='Summe (2024)'.A1*2")).toBe("='Summe (2024)'.A1*2");
+    expect(toDisplayFormula("de", "='Sum (1.5)'.A1+SUM(1.5)")).toBe("='Sum (1.5)'.A1+SUMME(1,5)");
+    expect(toCanonicalFormula("de", "='It''s 1,5'.A1+SUMME(1,5)")).toBe("='It''s 1,5'.A1+SUM(1.5)");
+  });
+});
+
+describe("AutoCorrect scope (review 4 M42/M43)", () => {
+  it("only corrects newly typed text, not what was already in the cell", () => {
+    expect(applyAutoCorrectToEdit("iPhone and eBay", "iPhone and eBay sale", DEFAULT_AUTOCORRECT)).toBe("iPhone and eBay sale");
+    expect(applyAutoCorrectToEdit("MHz clock", "MHz clock teh", DEFAULT_AUTOCORRECT)).toBe("MHz clock the");
+    expect(applyAutoCorrectToEdit("hello world", "hello world", DEFAULT_AUTOCORRECT)).toBe("hello world");
+    expect(applyAutoCorrectToEdit(null, "teh cat sat", DEFAULT_AUTOCORRECT)).toBe("The cat sat");
+  });
+  it("does not capitalise a lone word", () => {
+    expect(applyAutoCorrect("hello", DEFAULT_AUTOCORRECT)).toBe("hello");
+    expect(applyAutoCorrect("hello there", DEFAULT_AUTOCORRECT)).toBe("Hello there");
+  });
+  it("handles non-ASCII letters and the exception list", () => {
+    expect(fixTwoInitialCapitals("ÄRGer")).toBe("ÄRGer");
+    expect(fixTwoInitialCapitals("ÉCole")).toBe("École");
+    expect(fixTwoInitialCapitals("CDs IDs MHz")).toBe("CDs IDs MHz");
+    expect(capitalizeSentences("ça marche. élan vital")).toBe("Ça marche. Élan vital");
   });
 });

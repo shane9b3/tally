@@ -738,7 +738,11 @@ overwrite: boolean, } | { "type": "refreshPivot",
 /**
  * Id.
  */
-id: number, } | { "type": "deletePivot", 
+id: number, 
+/**
+ * Overwrite non-empty cells outside the previous output.
+ */
+overwrite?: boolean, } | { "type": "deletePivot", 
 /**
  * Id.
  */

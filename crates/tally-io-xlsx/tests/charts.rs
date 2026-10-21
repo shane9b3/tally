@@ -431,14 +431,14 @@ fn roundtrip_images() {
             height_hmm: 1500,
         },
         mime: "image/png".into(),
-        bytes: PNG.to_vec(),
+        bytes: PNG.into(),
     }];
     let (back, warnings) = round_trip(&wb);
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(back.sheets[0].images.len(), 1);
     let img = &back.sheets[0].images[0];
     assert_eq!(img.mime, "image/png");
-    assert_eq!(img.bytes, PNG);
+    assert_eq!(&*img.bytes, PNG);
     assert_eq!((img.anchor.row, img.anchor.col), (3, 3));
     assert!((i64::from(img.anchor.width_hmm) - 2000).abs() < 60);
     assert_eq!(back.sheets[0].charts.len(), 1);
@@ -558,7 +558,7 @@ fn reads_excel_fixture() {
     assert_eq!(pie.anchor.row, 20000 / 529);
 
     assert_eq!(s.images.len(), 1);
-    assert_eq!(s.images[0].bytes, PNG);
+    assert_eq!(&*s.images[0].bytes, PNG);
     assert_eq!((s.images[0].anchor.row, s.images[0].anchor.col), (1, 14));
     assert!(
         wb.warnings.iter().any(|w| w.contains("skipped")),

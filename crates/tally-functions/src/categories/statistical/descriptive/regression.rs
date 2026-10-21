@@ -90,10 +90,22 @@ def!(
     "Extrapolates a future value along a linear trend."
 );
 
+/// The data of argument `i` as one matrix: a reference union
+/// (`A1:A2~C1:C2`) is not a matrix and gives Err:502, as AOO's
+/// `GetMatrix` (sc/source/core/tool/interpr5.cxx:515-519, reached from
+/// `CalculatePearsonCovar`, interpr3.cxx:3955-3960; correctness review 4,
+/// M37).
+fn matrix_data(a: &mut Args, i: usize) -> Result<super::util::Data, ErrorKind> {
+    if a.any(i).areas().is_some_and(|areas| areas.len() > 1) {
+        return Err(ErrorKind::InvalidArgument);
+    }
+    data(a, i)
+}
+
 /// The numeric pairs of arguments `i` and `j`.
 fn pairs(a: &mut Args, i: usize, j: usize) -> Result<(Vec<f64>, Vec<f64>), ErrorKind> {
-    let d1 = data(a, i)?;
-    let d2 = data(a, j)?;
+    let d1 = matrix_data(a, i)?;
+    let d2 = matrix_data(a, j)?;
     if (d1.rows, d1.cols) != (d2.rows, d2.cols) {
         return Err(ErrorKind::NA);
     }
@@ -308,6 +320,35 @@ mod tests {
         assert_eq!(
             call(&mut c, "COVAR", vec![z.clone(), z]),
             Value::Error(ErrorKind::Div0)
+        );
+    }
+
+    /// Correctness review 4, M37: a reference union is not a matrix.
+    #[cfg(feature = "ref-union")]
+    #[test]
+    fn unions_are_rejected() {
+        let mut c = sheet();
+        let (EvalValue::Range(a), EvalValue::Range(b)) = (c.range(0, "A1:A2"), c.range(0, "B1:B2"))
+        else {
+            panic!("ranges");
+        };
+        let y = c.range(0, "A1:A4");
+        for f in ["CORREL", "PEARSON", "COVAR", "SLOPE"] {
+            let u = EvalValue::union(vec![a, b]);
+            assert_eq!(
+                call(&mut c, f, vec![u, y.clone()]),
+                Value::Error(ErrorKind::InvalidArgument),
+                "{f}"
+            );
+        }
+        let u = EvalValue::union(vec![a, b]);
+        assert_eq!(
+            call(
+                &mut c,
+                "FORECAST",
+                vec![EvalValue::number(1.0), y.clone(), u]
+            ),
+            Value::Error(ErrorKind::InvalidArgument)
         );
     }
 }

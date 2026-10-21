@@ -35,7 +35,7 @@ pub use locale::{
     locale_by_tag, DateOrder, Locale, DE_DE, EN_GB, EN_US, ES_ES, FR_FR, JA_JP, LOCALES,
 };
 pub use parse_format::{parse_format, parse_format_with_locale, print_format, FormatError};
-pub use precision::{display_decimals, display_decimals_of};
+pub use precision::{display_decimals, display_decimals_for, display_decimals_of};
 pub use recognize::{
     parse_number_unambiguous, parse_number_unambiguous_with, recognize_input, recognize_input_with,
     RecognizeContext, Recognized,

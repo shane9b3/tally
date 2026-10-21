@@ -52,9 +52,31 @@ pub fn check_name(name: &str) -> Result<String, ApiError> {
             "a template name has 1 to {MAX_NAME_CHARS} characters"
         )));
     }
+    // Bidi overrides, zero-width and BOM characters (category Cf) spoof the template list.
+    let format_char = |c: char| matches!(c, '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}');
+    let stem = n
+        .split('.')
+        .next()
+        .unwrap_or(n)
+        .trim_end()
+        .to_ascii_uppercase();
+    let reserved = matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ["COM", "LPT"].iter().any(|p| {
+        stem.strip_prefix(p)
+            .is_some_and(|d| d.len() == 1 && d.as_bytes()[0].is_ascii_digit())
+    });
+    if reserved || n.ends_with(' ') || n.ends_with('.') {
+        return Err(ApiError::invalid_argument(
+            "that template name is reserved by the operating system",
+        ));
+    }
     if n.starts_with('.')
         || n.chars().any(|c| {
-            c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+            c.is_control()
+                || format_char(c)
+                || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
         })
     {
         return Err(ApiError::invalid_argument(
@@ -165,7 +187,7 @@ pub fn list<R: Runtime>(app: &AppHandle<R>) -> Vec<TemplateInfo> {
             Some(TemplateInfo {
                 id: format!("{PREFIX}{stem}"),
                 title: stem,
-                description: e.path().display().to_string(),
+                description: String::new(),
             })
         })
         .collect();
@@ -236,6 +258,25 @@ mod tests {
         assert!(check_name("a/b").is_err());
         assert!(check_name(".hidden").is_err());
         assert!(check_name(&"x".repeat(81)).is_err());
+    }
+
+    #[test]
+    fn device_names_and_spoofing_characters_are_refused() {
+        for bad in [
+            "CON",
+            "nul",
+            "COM1",
+            "lpt9",
+            "Aux.txt",
+            "a\u{202E}b",
+            "a\u{200B}b",
+            "\u{FEFF}x",
+            "name.",
+        ] {
+            assert!(check_name(bad).is_err(), "{bad:?}");
+        }
+        assert!(check_name("Console").is_ok());
+        assert!(check_name("COM10").is_ok());
     }
 
     #[test]

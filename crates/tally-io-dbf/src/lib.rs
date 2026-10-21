@@ -1,13 +1,16 @@
-//! dBase (`.dbf`) import and export (wave 5, W5-3): dBase III/IV and
-//! FoxPro-compatible tables with the field types `C` (text), `N`/`F`
-//! (numbers), `D` (dates, `YYYYMMDD`), `L` (logicals) and `M`/`B`/`G`
-//! (memos and binaries, ignored: the cells stay empty). The first row of
-//! the sheet holds the field names, as AOO imports a table.
+//! dBase (`.dbf`) import and export (wave 5, W5-3): dBase III/IV/7,
+//! FoxPro and Visual FoxPro tables with the field types `C`/`V` (text),
+//! `N`/`F` (numbers), `D` (dates, `YYYYMMDD`), `L` (logicals), the
+//! FoxPro binary types `Y` (currency), `I` (integer), `B` (Visual FoxPro
+//! double) and `T` (date-time), and `M`/`G` (memos and binaries,
+//! ignored: the cells stay empty). The first row of the sheet holds the
+//! field names with AOO's type descriptors (`NAME,C,12`, `PRICE,N,10,2`,
+//! `OK,L`, `DAY,D`), as AOO imports a table; export reads them back.
 //!
 //! Text is decoded with the code page named by the header's language
 //! driver id (cp437, cp850, cp852, cp866, windows-125x, …) unless
-//! [`DbfOptions::encoding`] overrides it; the default for an unknown id is
-//! windows-1252. Export writes a dBase III header, infers each column's
+//! [`DbfOptions::encoding`] overrides it; the default for no or an unknown
+//! id is IBM 850, as in AOO. Export writes a dBase III header, infers each column's
 //! type from its values (numbers → `N` with the widest decimals, dates →
 //! `D`, booleans → `L`, else `C` up to 254 characters) and encodes text in
 //! the chosen code page (unencodable characters become `?`).
@@ -86,7 +89,8 @@ pub enum DbfError {
 
 /// dBase version bytes this reader accepts.
 const VERSIONS: &[u8] = &[
-    0x02, 0x03, 0x04, 0x05, 0x07, 0x30, 0x31, 0x43, 0x7B, 0x83, 0x8B, 0x8E, 0xCB, 0xE5, 0xF5, 0xFB,
+    0x02, 0x03, 0x04, 0x05, 0x07, 0x30, 0x31, 0x32, 0x43, 0x7B, 0x83, 0x8B, 0x8E, 0xCB, 0xE5, 0xF5,
+    0xFB,
 ];
 
 /// `true` if `bytes` look like a dBase table (version byte, plausible
@@ -97,10 +101,16 @@ pub fn sniff_is_dbf(bytes: &[u8]) -> bool {
     }
     let header_len = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
     let record_len = u16::from_le_bytes([bytes[10], bytes[11]]) as usize;
-    header_len >= 33
-        && (header_len - 1).is_multiple_of(32)
-        && record_len >= 1
-        && header_len <= bytes.len()
+    // Visual FoxPro (0x30-0x32) appends a 263-byte backlink after the
+    // field terminator (correctness review 4, M32).
+    let fields_ok = (header_len - 1).is_multiple_of(32)
+        || (is_vfp(bytes[0]) && header_len >= 33 + 263 && (header_len - 264).is_multiple_of(32));
+    header_len >= 33 && fields_ok && record_len >= 1 && header_len <= bytes.len()
+}
+
+/// Visual FoxPro version bytes.
+fn is_vfp(version: u8) -> bool {
+    matches!(version, 0x30..=0x32)
 }
 
 /// A text encoding: one of `encoding_rs`'s, or an OEM code page table.
@@ -169,7 +179,10 @@ pub fn encoding_for_driver(id: u8) -> Enc {
         0xCA => "windows-1254",
         0xCB => "windows-1253",
         0xCC => "windows-1257",
-        _ => "windows-1252",
+        // No or an unknown language driver: AOO's dBase import defaults to
+        // IBM 850 (sc/source/ui/docshell/docsh.cxx:1247-1253; correctness
+        // review 4, M34).
+        _ => return Enc::Oem(&oem::CP850, "cp850", 0x02),
     };
     Enc::Rs(Encoding::for_label(label.as_bytes()).unwrap_or(encoding_rs::WINDOWS_1252))
 }
@@ -187,6 +200,24 @@ struct Field {
     kind: u8,
     len: usize,
     decimals: u8,
+    /// A FoxPro system field (`_NullFlags`): read past, not shown.
+    system: bool,
+}
+
+impl Field {
+    /// The header text AOO writes for a field: `NAME,C,12`, `NAME,N,10,2`,
+    /// `NAME,L`, `NAME,D`, `NAME,M` (sc/source/ui/docshell/docsh8.cxx:
+    /// 320-351; correctness review 4, M35). Other types keep the name.
+    fn header(&self) -> String {
+        match self.kind {
+            b'C' | b'V' => format!("{},C,{}", self.name, self.len),
+            b'N' | b'F' => format!("{},N,{},{}", self.name, self.len, self.decimals),
+            b'L' => format!("{},L", self.name),
+            b'D' => format!("{},D", self.name),
+            b'M' => format!("{},M", self.name),
+            _ => self.name.clone(),
+        }
+    }
 }
 
 /// Reads a dBase table into one sheet (field names in the first row).
@@ -228,6 +259,7 @@ pub fn read_dbf(
             kind,
             len,
             decimals: d[17],
+            system: is_vfp(bytes[0]) && (d[18] & 0x01 != 0 || kind == b'0'),
         });
         pos += 32;
         if fields.len() > limits.max_fields {
@@ -271,17 +303,26 @@ pub fn read_dbf(
         name: String::new(),
         ..SheetData::default()
     };
-    for (c, f) in fields.iter().enumerate() {
-        if c as u32 >= MAX_COLS {
-            break;
+    // Sheet column of each field (system fields have none).
+    let mut cols: Vec<Option<u32>> = Vec::with_capacity(fields.len());
+    let mut next_col = 0u32;
+    for f in &fields {
+        if f.system || next_col >= MAX_COLS {
+            cols.push(None);
+            continue;
         }
         sheet.cells.push(CellData {
             row: 0,
-            col: c as u32,
-            content: CellContentData::Value(Value::text(f.name.as_str())),
+            col: next_col,
+            content: CellContentData::Value(Value::text(f.header().as_str())),
             style: None,
         });
+        cols.push(Some(next_col));
+        next_col += 1;
     }
+    let vfp = is_vfp(bytes[0]);
+    let dbase7 = bytes[0] == 0x04;
+    let mut datetime_style: Option<u32> = None;
     let mut row = 1u32;
     let epoch = DateEpoch::D1899;
     for i in 0..n {
@@ -294,12 +335,12 @@ pub fn read_dbf(
             break;
         }
         let mut off = 1;
-        for (c, f) in fields.iter().enumerate() {
+        for (f, col) in fields.iter().zip(&cols) {
             let raw = &rec[off..off + f.len];
             off += f.len;
-            if c as u32 >= MAX_COLS {
+            let Some(col) = *col else {
                 continue;
-            }
+            };
             let (value, style) = match f.kind {
                 b'C' | b'V' => {
                     let s = enc.decode(raw);
@@ -308,6 +349,51 @@ pub fn read_dbf(
                         continue;
                     }
                     (Value::text(t), None)
+                }
+                // FoxPro currency: a little-endian i64 in 1/10,000
+                // (correctness review 4, M33).
+                b'Y' if f.len == 8 => {
+                    let v = i64::from_le_bytes(raw.try_into().unwrap_or([0; 8]));
+                    (Value::Number(v as f64 / 10_000.0), None)
+                }
+                // FoxPro integer (little-endian); dBase 7 long (big-endian,
+                // sign bit flipped).
+                b'I' if f.len == 4 => {
+                    let b: [u8; 4] = raw.try_into().unwrap_or([0; 4]);
+                    let v = if dbase7 {
+                        (u32::from_be_bytes(b) ^ 0x8000_0000) as i32
+                    } else {
+                        i32::from_le_bytes(b)
+                    };
+                    (Value::Number(f64::from(v)), None)
+                }
+                // Visual FoxPro double.
+                b'B' if vfp && f.len == 8 => {
+                    let v = f64::from_le_bytes(raw.try_into().unwrap_or([0; 8]));
+                    if !v.is_finite() {
+                        continue;
+                    }
+                    (Value::Number(v), None)
+                }
+                // Visual FoxPro date-time: Julian day number and
+                // milliseconds since midnight.
+                b'T' if f.len == 8 => {
+                    let jdn = i32::from_le_bytes(raw[..4].try_into().unwrap_or([0; 4]));
+                    let ms = i32::from_le_bytes(raw[4..].try_into().unwrap_or([0; 4]));
+                    if jdn <= 0 {
+                        continue;
+                    }
+                    // JDN 2415019 is 1899-12-30, serial 0 in D1899.
+                    let serial = f64::from(jdn - 2_415_019)
+                        + f64::from(ms.clamp(0, 86_400_000)) / 86_400_000.0;
+                    let st = *datetime_style.get_or_insert_with(|| {
+                        styles.push(StyleData {
+                            number_format: Some("YYYY-MM-DD HH:MM:SS".into()),
+                            ..StyleData::default()
+                        });
+                        (styles.len() - 1) as u32
+                    });
+                    (Value::Number(serial), Some(st))
                 }
                 b'N' | b'F' | b'Y' => {
                     let s = String::from_utf8_lossy(raw);
@@ -360,7 +446,7 @@ pub fn read_dbf(
             };
             sheet.cells.push(CellData {
                 row,
-                col: c as u32,
+                col,
                 content: CellContentData::Value(value),
                 style,
             });
@@ -407,8 +493,29 @@ fn field_name(text: &str, index: usize, used: &mut Vec<String>) -> String {
     n
 }
 
+/// A declared field type with its optional width and precision.
+type Descriptor = (u8, Option<usize>, Option<usize>);
+
+/// Splits an AOO header text `NAME[,T[,W[,P]]]` into the name and the
+/// declared type (`L`, `D`, `M`, `C`, `N`), width and precision.
+fn parse_descriptor(text: &str) -> (&str, Option<Descriptor>) {
+    let mut parts = text.split(',');
+    let name = parts.next().unwrap_or("");
+    let Some(t) = parts.next() else {
+        return (name, None);
+    };
+    let kind = t.trim().to_ascii_uppercase().bytes().next();
+    let Some(kind @ (b'L' | b'D' | b'M' | b'C' | b'N')) = kind else {
+        return (text, None);
+    };
+    let num = |p: Option<&str>| p.and_then(|v| v.trim().parse::<usize>().ok());
+    let w = num(parts.next());
+    let p = num(parts.next());
+    (name, Some((kind, w, p)))
+}
+
 /// Writes the first sheet of the workbook as a dBase III table: the first
-/// row supplies the field names.
+/// row supplies the field names (with AOO's optional type descriptors).
 pub fn write_dbf(data: &WorkbookData, opts: &DbfOptions) -> Result<Vec<u8>, DbfError> {
     let Some(sheet) = data
         .sheets
@@ -533,8 +640,38 @@ pub fn write_dbf(data: &WorkbookData, opts: &DbfOptions) -> Result<Vec<u8>, DbfE
                 _ => String::new(),
             })
             .unwrap_or_default();
-        let name = field_name(&header, c as usize, &mut used);
-        let (kind, len, dec) = match kinds[c as usize] {
+        // AOO header descriptors: `NAME,C,12`, `NAME,N,10,2`, `NAME,L`,
+        // `NAME,D` (sc/source/ui/docshell/docsh8.cxx:445-490).
+        let (header_name, declared) = parse_descriptor(&header);
+        let name = field_name(header_name, c as usize, &mut used);
+        let inferred = kinds[c as usize];
+        let kind_of = match declared.as_ref().map(|d| d.0) {
+            Some(b'C') | Some(b'M') => ColKind::Text,
+            Some(b'N') => ColKind::Number,
+            Some(b'D') => ColKind::Date,
+            Some(b'L') => ColKind::Logical,
+            _ => inferred,
+        };
+        if let Some((k, w, p)) = declared {
+            let clamp_w = |w: usize, max: usize| w.clamp(1, max);
+            match k {
+                b'C' | b'M' => {
+                    if let Some(w) = w {
+                        fields.push((name, b'C', clamp_w(w, 254), 0));
+                        continue;
+                    }
+                }
+                b'N' => {
+                    if let Some(w) = w {
+                        let dec = p.unwrap_or(0).min(15) as u8;
+                        fields.push((name, b'N', clamp_w(w, 20), dec));
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let (kind, len, dec) = match kind_of {
             ColKind::Date => (b'D', 8, 0),
             ColKind::Logical => (b'L', 1, 0),
             ColKind::Number => {
@@ -583,6 +720,9 @@ pub fn write_dbf(data: &WorkbookData, opts: &DbfOptions) -> Result<Vec<u8>, DbfE
             let mut field = vec![b' '; *len];
             match (kind, cell) {
                 (_, None) => {}
+                // A declared type the value does not fit stays blank.
+                (b'N', Some(s)) if s.parse::<f64>().is_err() => {}
+                (b'D', Some(s)) if s.len() != 8 || !s.bytes().all(|b| b.is_ascii_digit()) => {}
                 (b'N', Some(s)) => {
                     let n: f64 = s.parse().unwrap_or(0.0);
                     let text = format!(
@@ -689,7 +829,21 @@ mod tests {
                 })
                 .unwrap_or(Value::Empty)
         };
-        assert_eq!(get(0, 0), Value::text("NAME"));
+        // AOO type descriptors (docsh8.cxx:320-351).
+        assert_eq!(get(0, 0), Value::text("NAME,C,14"));
+        assert_eq!(get(0, 1), Value::text("AMOUNT,N,7,2"));
+        assert_eq!(get(0, 2), Value::text("WHEN,D"));
+        assert_eq!(get(0, 3), Value::text("OK,L"));
+        // Re-exporting the imported sheet keeps names and types.
+        let again = write_dbf(&back, &DbfOptions::default()).unwrap();
+        assert_eq!(&again[32..36], b"NAME");
+        assert_eq!(again[32 + 11], b'C');
+        assert_eq!(again[32 + 16], 14);
+        assert_eq!(&again[64..70], b"AMOUNT");
+        assert_eq!(
+            (again[64 + 11], again[64 + 16], again[64 + 17]),
+            (b'N', 7, 2)
+        );
         assert_eq!(get(1, 0), Value::text("Müller & Söhne"));
         assert_eq!(get(1, 1), Value::Number(1234.5));
         assert_eq!(get(2, 1), Value::Number(-7.25));

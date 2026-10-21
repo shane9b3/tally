@@ -11,8 +11,9 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Seek};
+use std::sync::Arc;
 
-use tally_model::{ChartAnchorData, DimRun, ImageData, SheetData};
+use tally_model::{ChartAnchorData, ChartData, DimRun, ImageData, SheetData};
 use tally_types::{MAX_COLS, MAX_ROWS};
 
 use crate::archive::Package;
@@ -29,8 +30,9 @@ pub(crate) const MAX_IMAGES_PER_SHEET: usize = 1_000;
 pub(crate) const MAX_CHART_XML: u64 = 16 * 1024 * 1024;
 /// Largest picture read.
 pub(crate) const MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
-/// Most picture bytes per document.
-pub(crate) const MAX_TOTAL_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
+/// Most picture bytes per document, counted once per anchor that shows a
+/// picture (the bytes themselves are read and stored once).
+pub(crate) const MAX_TOTAL_IMAGE_BYTES: u64 = tally_model::MAX_TOTAL_IMAGE_BYTES as u64;
 /// Most objects read per drawing part.
 const MAX_OBJECTS: usize = 4_000;
 
@@ -287,13 +289,61 @@ pub(crate) fn to_anchor(obj: &DrawingObject, sheet: &SheetData) -> ChartAnchorDa
     }
 }
 
-/// Document-wide counters of the objects read.
-#[derive(Default)]
+/// A media part: media type and shared bytes.
+type Picture = (String, Arc<[u8]>);
+
+/// Document-wide counters of the objects read, and the parts already
+/// loaded (each media part is read once and shared by every anchor that
+/// shows it; each chart part is parsed once per sheet).
 pub(crate) struct ObjectBudget {
     pub charts: usize,
+    /// Picture bytes referenced so far (every anchor counts its picture).
     pub image_bytes: u64,
     pub capped: bool,
     pub skipped: usize,
+    /// What remains of [`tally_model::MAX_LITERAL_POINTS`].
+    pub literal_budget: usize,
+    /// Some chart lost its literal values to the budget.
+    pub literal_dropped: bool,
+    /// What remains of [`tally_model::MAX_SERIES_PER_DOCUMENT`].
+    pub series_budget: usize,
+    /// Some chart lost series to that budget.
+    pub series_cut: bool,
+    /// Media part → (media type, bytes); `None`: unreadable or not PNG/JPEG.
+    media: HashMap<String, Option<Picture>>,
+    /// (chart part, sheet tab) → the parsed chart.
+    parsed: HashMap<(String, u32), Option<ChartData>>,
+}
+
+impl Default for ObjectBudget {
+    fn default() -> Self {
+        Self {
+            charts: 0,
+            image_bytes: 0,
+            capped: false,
+            skipped: 0,
+            literal_budget: tally_model::MAX_LITERAL_POINTS,
+            literal_dropped: false,
+            series_budget: tally_model::MAX_SERIES_PER_DOCUMENT,
+            series_cut: false,
+            media: HashMap::new(),
+            parsed: HashMap::new(),
+        }
+    }
+}
+
+impl ObjectBudget {
+    /// Charges a further copy of a shared chart's literal points, or
+    /// drops its literal values when the budget is spent.
+    fn charge_copy(&mut self, c: &mut ChartData) {
+        let n = c.literal_points();
+        if n > self.literal_budget {
+            c.drop_literals();
+            self.literal_dropped = true;
+        } else {
+            self.literal_budget -= n;
+        }
+    }
 }
 
 /// Loads the charts and pictures of a sheet's drawing part into `sheet`.
@@ -328,7 +378,6 @@ pub(crate) fn attach<R: Read + Seek>(
         .filter(|r| !r.external)
         .map(|r| (r.id.as_str(), r))
         .collect();
-    let mut media: HashMap<String, (String, Vec<u8>)> = HashMap::new();
     for obj in objs {
         let anchor = to_anchor(&obj, sheet);
         match &obj.kind {
@@ -341,21 +390,41 @@ pub(crate) fn attach<R: Read + Seek>(
                     objects.capped = true;
                     continue;
                 }
-                let mut warnings = Vec::new();
-                let parsed = pkg.with_entry(&rel.target, MAX_CHART_XML, |r| {
-                    crate::chart_read::parse_chart(
-                        &mut XmlReader::new(r, xl),
-                        names,
-                        tab,
-                        &mut warnings,
-                    )
-                })?;
-                for w in warnings {
-                    budget.warn(w);
-                }
-                match parsed.flatten() {
+                let key = (rel.target.clone(), tab);
+                let parsed = if let Some(p) = objects.parsed.get(&key) {
+                    p.clone().map(|mut c| {
+                        objects.charge_copy(&mut c);
+                        c
+                    })
+                } else {
+                    let mut warnings = Vec::new();
+                    let mut literal_budget = objects.literal_budget;
+                    let p = pkg
+                        .with_entry(&rel.target, MAX_CHART_XML, |r| {
+                            crate::chart_read::parse_chart(
+                                &mut XmlReader::new(r, xl),
+                                names,
+                                tab,
+                                &mut warnings,
+                                &mut literal_budget,
+                            )
+                        })?
+                        .flatten();
+                    objects.literal_budget = literal_budget;
+                    for w in warnings {
+                        budget.warn(w);
+                    }
+                    objects.parsed.insert(key, p.clone());
+                    p
+                };
+                match parsed {
                     Some(mut c) => {
                         objects.charts += 1;
+                        if c.series.len() > objects.series_budget {
+                            c.series.truncate(objects.series_budget);
+                            objects.series_cut = true;
+                        }
+                        objects.series_budget -= c.series.len();
                         c.anchor = anchor;
                         c.name = if obj.name.is_empty() {
                             format!("Chart {}", objects.charts)
@@ -376,36 +445,42 @@ pub(crate) fn attach<R: Read + Seek>(
                     objects.capped = true;
                     continue;
                 }
-                let (mime, bytes) = match media.get(&rel.target) {
+                if objects.image_bytes >= MAX_TOTAL_IMAGE_BYTES {
+                    objects.capped = true;
+                    continue;
+                }
+                let picture = match objects.media.get(&rel.target) {
                     Some(m) => m.clone(),
                     None => {
-                        if objects.image_bytes >= MAX_TOTAL_IMAGE_BYTES {
-                            objects.capped = true;
-                            continue;
-                        }
                         let bytes = pkg.with_entry(&rel.target, MAX_IMAGE_BYTES, |r| {
                             let mut v = Vec::new();
                             r.read_to_end(&mut v)?;
                             Ok(v)
                         })?;
-                        let Some(bytes) = bytes else {
-                            objects.skipped += 1;
-                            continue;
-                        };
-                        let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-                            "image/png"
-                        } else if bytes.starts_with(b"\xff\xd8\xff") {
-                            "image/jpeg"
-                        } else {
-                            objects.skipped += 1;
-                            continue;
-                        };
-                        objects.image_bytes += bytes.len() as u64;
-                        let m = (mime.to_string(), bytes);
-                        media.insert(rel.target.clone(), m.clone());
+                        let m = bytes.and_then(|bytes| {
+                            let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+                                "image/png"
+                            } else if bytes.starts_with(b"\xff\xd8\xff") {
+                                "image/jpeg"
+                            } else {
+                                return None;
+                            };
+                            Some((mime.to_string(), Arc::<[u8]>::from(bytes)))
+                        });
+                        objects.media.insert(rel.target.clone(), m.clone());
                         m
                     }
                 };
+                let Some((mime, bytes)) = picture else {
+                    objects.skipped += 1;
+                    continue;
+                };
+                // Every reference counts against the document total.
+                if objects.image_bytes + bytes.len() as u64 > MAX_TOTAL_IMAGE_BYTES {
+                    objects.capped = true;
+                    continue;
+                }
+                objects.image_bytes += bytes.len() as u64;
                 sheet.images.push(ImageData {
                     name: obj.name.clone(),
                     anchor,

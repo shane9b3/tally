@@ -75,7 +75,12 @@ fn getpivotdata(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue 
             }
             (field, filters)
         };
-        match a.ctx().pivot_data(at, &field, &filters) {
+        let hit = if excel_form {
+            a.ctx().pivot_data_excel(at, &field, &filters)
+        } else {
+            a.ctx().pivot_data(at, &field, &filters)
+        };
+        match hit {
             Some(Value::Error(e)) => Err(e),
             Some(v) => Ok(v),
             None => Err(ErrorKind::Ref),

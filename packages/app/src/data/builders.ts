@@ -357,7 +357,7 @@ export function multipleOperationsOps(sheet: number, range: RangeDto, st: MultiO
     // Values down the first column; results in the next column(s), one per formula cell.
     const nF = formula.c1 - formula.c0 + 1;
     for (let r = range.r0; r <= range.r1; r++) {
-      for (let k = 0; k < nF; k++) {
+      for (let k = 0; k < nF && range.c0 + 1 + k <= range.c1; k++) {
         const fk = cellRef({ r: formula.r0, c: formula.c0 + k });
         ops.push({ type: "setCellInput", sheet, r, c: range.c0 + 1 + k, input: `=MULTIPLE.OPERATIONS(${fk};${cellRef(colInput)};${rel({ r, c: range.c0 })})` });
       }
@@ -366,7 +366,7 @@ export function multipleOperationsOps(sheet: number, range: RangeDto, st: MultiO
   }
   const nF = formula.r1 - formula.r0 + 1;
   for (let c = range.c0; c <= range.c1; c++) {
-    for (let k = 0; k < nF; k++) {
+    for (let k = 0; k < nF && range.r0 + 1 + k <= range.r1; k++) {
       const fk = cellRef({ r: formula.r0 + k, c: formula.c0 });
       ops.push({ type: "setCellInput", sheet, r: range.r0 + 1 + k, c, input: `=MULTIPLE.OPERATIONS(${fk};${cellRef(rowInput as CellPos)};${rel({ r: range.r0, c })})` });
     }

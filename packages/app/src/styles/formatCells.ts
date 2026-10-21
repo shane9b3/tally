@@ -81,6 +81,9 @@ export interface FormatCellsState {
   hiddenFormula: boolean;
 }
 
+/** Fully transparent: clears a fill / resets the font colour to Automatic. */
+export const NO_COLOR = 0xffffff00;
+
 export const DEFAULT_BORDER_COLOR = 0x1f2937ff;
 
 /** The dialog state for the active cell's style. */
@@ -163,8 +166,9 @@ export function patchFromState(st: FormatCellsState, base: StyleDto | undefined)
     strike: diff(st.strike, b.strike),
     fontFamily: st.fontFamily === "" ? (b.fontFamily === "" ? null : "") : diff(st.fontFamily, b.fontFamily),
     fontSizePt: diff(st.fontSizePt, b.fontSizePt),
-    color: diff(st.color, b.color),
-    fill: diff(st.fill, b.fill),
+    // StylePatch has no "clear": an alpha-0 colour/fill is the engine-visible "Automatic" / "No fill".
+    color: st.color === null && b.color !== null ? NO_COLOR : diff(st.color, b.color),
+    fill: st.fill === null && b.fill !== null ? NO_COLOR : diff(st.fill, b.fill),
     hAlign: diff(st.hAlign, b.hAlign),
     vAlign: diff(st.vAlign, b.vAlign),
     wrap: diff(st.wrap, b.wrap),

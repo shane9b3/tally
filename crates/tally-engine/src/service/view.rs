@@ -718,6 +718,21 @@ impl LabelSource for HeaderLabels<'_> {
 }
 
 /// The text to edit for a constant.
+/// The input string of a cell as AOO's `ScCellFormat::GetInputString`
+/// gives it: the edit text of the value (of the result, for a formula),
+/// not the displayed text (used by the standard filter's text
+/// conditions, correctness review 4, M3).
+pub(crate) fn input_string(wb: &Workbook, addr: tally_types::CellAddr) -> String {
+    let Some(s) = wb.sheet(addr.sheet) else {
+        return String::new();
+    };
+    let v = wb.value(addr);
+    if v.is_empty() {
+        return String::new();
+    }
+    edit_text(wb, &v, wb.styles.get(s.style(addr.row, addr.col)))
+}
+
 fn edit_text(wb: &Workbook, v: &Value, st: &StyleEntry) -> String {
     match v {
         Value::Empty => String::new(),

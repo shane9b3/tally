@@ -13,6 +13,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{BufRead, Read, Seek, Write};
+use std::sync::Arc;
 
 use tally_model::{ChartAnchorData, ChartData, DimRun, ImageData, SheetData, WorkbookData};
 use zip::write::SimpleFileOptions;
@@ -34,8 +35,9 @@ pub(crate) const MAX_IMAGES_PER_SHEET: usize = 1_000;
 pub(crate) const MAX_OBJECT_XML: u64 = 16 * 1024 * 1024;
 /// Largest picture read.
 pub(crate) const MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
-/// Most picture bytes read per document.
-pub(crate) const MAX_TOTAL_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
+/// Most picture bytes per document, counted once per frame that shows a
+/// picture (the bytes themselves are read and stored once).
+pub(crate) const MAX_TOTAL_IMAGE_BYTES: u64 = tally_model::MAX_TOTAL_IMAGE_BYTES as u64;
 
 thread_local! {
     /// Per sheet (by tab): the number of the sheet's first chart object,
@@ -491,6 +493,9 @@ fn cell_at(runs: &[DimRun], default: u32, pos: u32, limit: u32) -> (u32, u32) {
     (i, p as u32)
 }
 
+/// A picture read from `Pictures/`: media type and shared bytes.
+type Picture = (String, Arc<[u8]>);
+
 /// Loads the objects the frames refer to: chart objects through the
 /// hardened reader, pictures from `Pictures/`. Non-chart objects are
 /// skipped and counted in the warnings.
@@ -509,8 +514,18 @@ pub(crate) fn attach_objects<R: Read + Seek>(
     let mut charts = 0usize;
     let mut skipped = 0usize;
     let mut capped = false;
+    // Picture bytes referenced so far (every frame counts its picture).
     let mut image_bytes: u64 = 0;
-    let mut pictures: HashMap<String, (String, Vec<u8>)> = HashMap::new();
+    // Each picture entry is read once; frames share its bytes. `None`:
+    // unreadable or not PNG/JPEG.
+    let mut pictures: HashMap<String, Option<Picture>> = HashMap::new();
+    // Each chart object is parsed once per sheet (references to the own
+    // sheet depend on it); further frames clone the result.
+    let mut objects: HashMap<(String, u32), Option<ChartData>> = HashMap::new();
+    let mut literal_budget = tally_model::MAX_LITERAL_POINTS;
+    let mut literal_dropped = false;
+    let mut series_budget = tally_model::MAX_SERIES_PER_DOCUMENT;
+    let mut series_cut = false;
     let mut warnings = Vec::new();
     for pf in frames {
         let Some(sheet) = wb.sheets.get_mut(pf.tab as usize) else {
@@ -558,21 +573,45 @@ pub(crate) fn attach_objects<R: Read + Seek>(
                     capped = true;
                     continue;
                 }
-                let look = crate::chart::SheetLookup {
-                    names: &names,
-                    own: pf.tab,
+                let key = (dir.clone(), pf.tab);
+                let parsed = if let Some(p) = objects.get(&key) {
+                    // A shared object: the copy's literal points count again.
+                    p.clone().map(|mut c| {
+                        let n = c.literal_points();
+                        if n > literal_budget {
+                            c.drop_literals();
+                            literal_dropped = true;
+                        } else {
+                            literal_budget -= n;
+                        }
+                        c
+                    })
+                } else {
+                    let look = crate::chart::SheetLookup {
+                        names: &names,
+                        own: pf.tab,
+                    };
+                    let p = pkg
+                        .with_entry(&format!("{dir}/content.xml"), MAX_OBJECT_XML, |r| {
+                            crate::chart::parse_content_xml(
+                                &mut XmlReader::new(r, xl),
+                                &look,
+                                &mut warnings,
+                                &mut literal_budget,
+                            )
+                        })?
+                        .flatten();
+                    objects.insert(key, p.clone());
+                    p
                 };
-                let parsed =
-                    pkg.with_entry(&format!("{dir}/content.xml"), MAX_OBJECT_XML, |r| {
-                        crate::chart::parse_content_xml(
-                            &mut XmlReader::new(r, xl),
-                            &look,
-                            &mut warnings,
-                        )
-                    })?;
-                match parsed.flatten() {
+                match parsed {
                     Some(mut c) => {
                         charts += 1;
+                        if c.series.len() > series_budget {
+                            c.series.truncate(series_budget);
+                            series_cut = true;
+                        }
+                        series_budget -= c.series.len();
                         c.name = if pf.frame.name.is_empty() {
                             dir.clone()
                         } else {
@@ -593,31 +632,37 @@ pub(crate) fn attach_objects<R: Read + Seek>(
                     capped = true;
                     continue;
                 }
-                let (mime, bytes) = match pictures.get(&entry) {
+                if image_bytes >= MAX_TOTAL_IMAGE_BYTES {
+                    capped = true;
+                    continue;
+                }
+                let picture = match pictures.get(&entry) {
                     Some(p) => p.clone(),
                     None => {
-                        if image_bytes >= MAX_TOTAL_IMAGE_BYTES {
-                            capped = true;
-                            continue;
-                        }
-                        let Some(bytes) = pkg.read_small(&entry, MAX_IMAGE_BYTES)? else {
-                            skipped += 1;
-                            continue;
-                        };
-                        let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-                            "image/png"
-                        } else if bytes.starts_with(b"\xff\xd8\xff") {
-                            "image/jpeg"
-                        } else {
-                            skipped += 1;
-                            continue;
-                        };
-                        image_bytes += bytes.len() as u64;
-                        let p = (mime.to_string(), bytes);
+                        let p = pkg.read_small(&entry, MAX_IMAGE_BYTES)?.and_then(|bytes| {
+                            let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+                                "image/png"
+                            } else if bytes.starts_with(b"\xff\xd8\xff") {
+                                "image/jpeg"
+                            } else {
+                                return None;
+                            };
+                            Some((mime.to_string(), Arc::<[u8]>::from(bytes)))
+                        });
                         pictures.insert(entry.clone(), p.clone());
                         p
                     }
                 };
+                let Some((mime, bytes)) = picture else {
+                    skipped += 1;
+                    continue;
+                };
+                // Every reference counts against the document total.
+                if image_bytes + bytes.len() as u64 > MAX_TOTAL_IMAGE_BYTES {
+                    capped = true;
+                    continue;
+                }
+                image_bytes += bytes.len() as u64;
                 sheet.images.push(ImageData {
                     name: pf.frame.name.clone(),
                     anchor,
@@ -638,6 +683,20 @@ pub(crate) fn attach_objects<R: Read + Seek>(
             "Only the first {MAX_CHARTS} charts and {MAX_IMAGES_PER_SHEET} pictures per sheet (256 MiB in all) were read."
         ));
     }
+    if series_cut {
+        warnings.push(format!(
+            "Charts past {} series per document were read without their extra series.",
+            tally_model::MAX_SERIES_PER_DOCUMENT
+        ));
+    }
+    if literal_dropped {
+        warnings.push(format!(
+            "Chart cached values past {} points per document were not read.",
+            tally_model::MAX_LITERAL_POINTS
+        ));
+    }
+    let mut seen = HashSet::new();
+    warnings.retain(|w| seen.insert(w.clone()));
     wb.warnings.extend(warnings);
     Ok(())
 }

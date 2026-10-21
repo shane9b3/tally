@@ -64,7 +64,16 @@ pub struct RecalcReport {
     pub incomplete: bool,
     /// Formulas left unevaluated because the budget ran out.
     pub skipped: usize,
+    /// Evaluations spent iterating cyclic components (bounded by
+    /// [`MAX_ITERATION_EVALS`] per recalc).
+    pub iteration_evaluations: u64,
 }
+
+/// Most formula evaluations one recalc spends iterating cyclic components
+/// (all components and steps together). Past it the remaining components
+/// do not converge (Err:523), so a file asking for 32,767 steps over a
+/// large cycle cannot hold the engine for minutes (security review 4, H2).
+pub const MAX_ITERATION_EVALS: u64 = 20_000_000;
 
 /// Limits for one recalculation (the recalc watchdog, plan §5.4 item 8).
 ///
@@ -126,6 +135,7 @@ pub fn recalc(wb: &mut Workbook) -> RecalcReport {
 /// [`recalc`] within `budget`.
 pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
     wb.table_op_calls = 0;
+    wb.table_op_work = 0;
     let pending = std::mem::take(&mut wb.pending);
     let mut dirty: Vec<FormulaCellId> = Vec::new();
     for id in pending.dirty {
@@ -144,6 +154,24 @@ pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
     }
     let mut seed_cells: Vec<CellAddr> = pending.cells.clone();
     let mut seed_ranges: Vec<CellRange> = pending.ranges.clone();
+    if wb.settings.precision_as_shown && !pending.display_only.is_empty() {
+        // Precision as shown: a number-format change changes the values
+        // formulas read and the rounding of formula results, so the
+        // re-formatted formulas and the dependents of the re-formatted
+        // cells are recalculated (AOO broadcasts the format change,
+        // sc/source/core/data/documen8.cxx:419; correctness review 4, H11).
+        let mut found = Vec::new();
+        for r in &pending.display_only {
+            formulas_in(wb, r, &mut found);
+            seed_ranges.push(*r);
+        }
+        for id in found {
+            if let Some(f) = wb.formulas.get_mut(id) {
+                f.state = CellState::Dirty;
+                dirty.push(id);
+            }
+        }
+    }
     for id in &dirty {
         if let Some(f) = wb.formulas.get(*id) {
             match f.array_range() {
@@ -209,7 +237,7 @@ pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
                         }
                     }
                 }
-                iterate_scc(wb, &scc.members, iter, now, &mut report);
+                iterate_scc(wb, &scc.members, iter, now, budget, &mut report);
                 continue;
             }
         }
@@ -277,6 +305,7 @@ fn iterate_scc(
     members: &[FormulaCellId],
     iter: IterSettings,
     now: f64,
+    budget: &RecalcBudget,
     report: &mut RecalcReport,
 ) {
     // Seed: the previous values; circular/non-converged errors start at 0.
@@ -293,6 +322,13 @@ fn iterate_scc(
     let set: Arc<HashSet<FormulaCellId>> = Arc::new(members.iter().copied().collect());
     let mut converged = false;
     for _round in 0..iter.steps.max(1) {
+        let n = members.len() as u64;
+        if report.iteration_evaluations.saturating_add(n) > MAX_ITERATION_EVALS
+            || budget.exhausted(report.evaluated)
+        {
+            break;
+        }
+        report.iteration_evaluations += n;
         let before: Vec<Value> = members
             .iter()
             .map(|id| {
@@ -343,6 +379,27 @@ fn iterate_scc(
                 f.array_result = None;
                 f.state = CellState::Clean;
                 report.circular += 1;
+            }
+        }
+    }
+}
+
+/// Every formula cell inside `range`.
+fn formulas_in(wb: &Workbook, range: &CellRange, out: &mut Vec<FormulaCellId>) {
+    let Some(sheet) = wb.sheet(range.sheet) else {
+        return;
+    };
+    if sheet.columns.is_empty() {
+        return;
+    }
+    let c1 = range.c1.min(sheet.columns.len().saturating_sub(1) as u32);
+    for c in range.c0..=c1 {
+        let Some(col) = sheet.column(c) else {
+            continue;
+        };
+        for r in col.formula_rows.range(range.r0..=range.r1) {
+            if let Some(id) = col.cells_get(*r).and_then(CellContent::formula_id) {
+                out.push(id);
             }
         }
     }
@@ -579,6 +636,8 @@ pub struct CalcCtx<'w> {
     /// `MULTIPLE.OPERATIONS` calls of a read-only context (the workbook's
     /// own counter is used when it is writable).
     local_table_ops: u32,
+    /// `MULTIPLE.OPERATIONS` sandbox work of a read-only context.
+    local_table_work: u64,
 }
 
 impl<'w> CalcCtx<'w> {
@@ -598,6 +657,7 @@ impl<'w> CalcCtx<'w> {
             iter_set: None,
             precision,
             local_table_ops: 0,
+            local_table_work: 0,
         }
     }
 
@@ -625,7 +685,24 @@ impl<'w> CalcCtx<'w> {
             circular: 0,
             iter_set: None,
             local_table_ops: 0,
+            local_table_work: 0,
         }
+    }
+
+    /// Charges `n` units of `MULTIPLE.OPERATIONS` sandbox work to this
+    /// recalc; `false` once [`MAX_TABLE_OP_WORK`] is exceeded.
+    fn charge_table_op_work(&mut self, n: u64) -> bool {
+        let total = match self.wb_mut() {
+            Some(wb) => {
+                wb.table_op_work = wb.table_op_work.saturating_add(n);
+                wb.table_op_work
+            }
+            None => {
+                self.local_table_work = self.local_table_work.saturating_add(n);
+                self.local_table_work
+            }
+        };
+        total <= MAX_TABLE_OP_WORK
     }
 
     fn wb_mut(&mut self) -> Option<&mut Workbook> {
@@ -912,12 +989,12 @@ fn normalize_cell_value(v: Value) -> Value {
 }
 
 /// `n` rounded to the decimals the cell's number format shows ("precision
-/// as shown"); `General`, dates, scientific and fraction formats keep the
-/// full value.
+/// as shown"); `General`, dates and fraction formats keep the full value,
+/// scientific formats round to the mantissa's decimals.
 fn shown_number(wb: &Workbook, addr: CellAddr, n: f64) -> f64 {
     let id = wb.style_at(addr);
     let st = wb.styles.get(id);
-    match tally_numfmt::display_decimals_of(&st.format) {
+    match tally_numfmt::display_decimals_for(&st.format, n) {
         Some(d) => crate::calcsettings::round_to_decimals(n, d),
         None => n,
     }
@@ -1070,7 +1147,7 @@ impl EvalContext for CalcCtx<'_> {
                 match v {
                     Value::Number(n) => {
                         let st = wb.styles.get(sheet.style(r, c));
-                        tally_numfmt::display_decimals_of(&st.format)
+                        tally_numfmt::display_decimals_for(&st.format, *n)
                             .map(|d| Value::Number(crate::calcsettings::round_to_decimals(*n, d)))
                     }
                     _ => None,
@@ -1217,8 +1294,8 @@ impl EvalContext for CalcCtx<'_> {
             return Some(Value::Error(ErrorKind::FormulaOverflow));
         }
         self.wb.formula_at(formula)?;
-        let mut sub = SubCtx::new(self, subs);
-        Some(sub.eval_cell(formula, false))
+        let mut sub = SubCtx::new(self, subs, 0);
+        Some(sub.run(formula))
     }
 
     fn pivot_data(
@@ -1227,12 +1304,31 @@ impl EvalContext for CalcCtx<'_> {
         field: &str,
         filters: &[(String, String)],
     ) -> Option<Value> {
-        crate::pivot::pivot_data(&self.wb, at, field, filters)
+        crate::pivot::pivot_data(&self.wb, at, field, filters, false)
+    }
+
+    fn pivot_data_excel(
+        &mut self,
+        at: CellAddr,
+        words: &str,
+        filters: &[(String, String)],
+    ) -> Option<Value> {
+        crate::pivot::pivot_data(&self.wb, at, words, filters, true)
     }
 }
 
-/// Most formulas the `MULTIPLE.OPERATIONS` sandbox recomputes per call.
+/// Most formulas the `MULTIPLE.OPERATIONS` sandbox recomputes per call;
+/// a larger dependency cone gives Err:512 instead of a partial sandbox
+/// (security review 4, LOW-P10).
 const MAX_SUB_AFFECTED: usize = 200_000;
+/// `MULTIPLE.OPERATIONS` sandbox work per recalc, all calls together:
+/// formulas found by the dependency walks, formulas re-evaluated and
+/// sandbox entries scanned by range reads. Past it the calls give Err:512
+/// (security review 4, H3: 300 calls over 199k formulas took 23 s per
+/// edit, 10,000 about 15 min).
+pub const MAX_TABLE_OP_WORK: u64 = 20_000_000;
+/// Deepest nesting of `MULTIPLE.OPERATIONS` inside a sandbox.
+const MAX_TABLE_OP_NESTING: u32 = 8;
 /// Largest range the sandbox iterates cell by cell.
 const MAX_SUB_RANGE_CELLS: u64 = 1 << 20;
 /// Deepest nesting of sandbox re-evaluations.
@@ -1247,6 +1343,15 @@ struct SubCtx<'a, 'w> {
     subs: Vec<(CellAddr, Value)>,
     /// Anchors of the formulas depending on the inputs.
     affected: HashSet<CellAddr>,
+    /// The extents of the affected formulas, and their bounding box per
+    /// sheet (for [`Self::touches`]).
+    extents: Vec<CellRange>,
+    bounds: HashMap<SheetId, CellRange>,
+    /// The dependency cone exceeded [`MAX_SUB_AFFECTED`] or the recalc's
+    /// [`MAX_TABLE_OP_WORK`] ran out: the call gives Err:512.
+    over: bool,
+    /// `MULTIPLE.OPERATIONS` nesting level of this sandbox.
+    nest: u32,
     memo: HashMap<CellAddr, Value>,
     arrays: HashMap<CellAddr, Value>,
     in_progress: HashSet<CellAddr>,
@@ -1255,16 +1360,27 @@ struct SubCtx<'a, 'w> {
 }
 
 impl<'a, 'w> SubCtx<'a, 'w> {
-    fn new(inner: &'a mut CalcCtx<'w>, subs: &[(CellAddr, Value)]) -> Self {
+    fn new(inner: &'a mut CalcCtx<'w>, subs: &[(CellAddr, Value)], nest: u32) -> Self {
         // The formulas reachable from the inputs through the reverse index.
         let mut affected: HashSet<CellAddr> = HashSet::new();
+        let mut extents: Vec<CellRange> = Vec::new();
+        let mut bounds: HashMap<SheetId, CellRange> = HashMap::new();
         let mut frontier: Vec<CellRange> =
             subs.iter().map(|(a, _)| CellRange::single(*a)).collect();
         let mut found: Vec<FormulaCellId> = Vec::new();
         let mut seen: HashSet<FormulaCellId> = HashSet::new();
-        while !frontier.is_empty() && affected.len() < MAX_SUB_AFFECTED {
+        let mut over = false;
+        while !frontier.is_empty() {
+            if affected.len() >= MAX_SUB_AFFECTED {
+                over = true;
+                break;
+            }
             found.clear();
             inner.wb.deps.dependents_of(&frontier, &mut found);
+            if !inner.charge_table_op_work(found.len() as u64 + 1) {
+                over = true;
+                break;
+            }
             let mut next = Vec::new();
             for id in found.drain(..) {
                 if !seen.insert(id) {
@@ -1272,7 +1388,21 @@ impl<'a, 'w> SubCtx<'a, 'w> {
                 }
                 if let Some(f) = inner.wb.formulas.get(id) {
                     affected.insert(f.addr);
-                    next.push(f.extent());
+                    let e = f.extent();
+                    extents.push(e);
+                    bounds
+                        .entry(e.sheet)
+                        .and_modify(|b| {
+                            *b = CellRange::new(
+                                e.sheet,
+                                b.r0.min(e.r0),
+                                b.c0.min(e.c0),
+                                b.r1.max(e.r1),
+                                b.c1.max(e.c1),
+                            );
+                        })
+                        .or_insert(e);
+                    next.push(e);
                 }
             }
             frontier = next;
@@ -1282,6 +1412,10 @@ impl<'a, 'w> SubCtx<'a, 'w> {
             inner,
             subs: subs.to_vec(),
             affected,
+            extents,
+            bounds,
+            over,
+            nest,
             memo: HashMap::new(),
             arrays: HashMap::new(),
             in_progress: HashSet::new(),
@@ -1290,16 +1424,36 @@ impl<'a, 'w> SubCtx<'a, 'w> {
         }
     }
 
-    fn touches(&self, range: &CellRange) -> bool {
-        self.subs.iter().any(|(a, _)| range.contains(*a))
-            || self.affected.iter().any(|a| {
-                range.contains(*a)
-                    || self
-                        .inner
-                        .wb
-                        .formula_at(*a)
-                        .is_some_and(|(_, f)| f.extent().intersects(range))
-            })
+    /// The value of `formula` in the sandbox, or Err:512 when the sandbox
+    /// is incomplete or over budget.
+    fn run(&mut self, formula: CellAddr) -> Value {
+        if self.over {
+            return Value::Error(ErrorKind::FormulaOverflow);
+        }
+        let v = self.eval_cell(formula, false);
+        if self.over {
+            return Value::Error(ErrorKind::FormulaOverflow);
+        }
+        v
+    }
+
+    /// `true` if a read of `range` sees a substituted or recomputed cell.
+    fn touches(&mut self, range: &CellRange) -> bool {
+        if self.subs.iter().any(|(a, _)| range.contains(*a)) {
+            return true;
+        }
+        if !self
+            .bounds
+            .get(&range.sheet)
+            .is_some_and(|b| b.intersects(range))
+        {
+            return false;
+        }
+        if !self.inner.charge_table_op_work(self.extents.len() as u64) {
+            self.over = true;
+            return false;
+        }
+        self.extents.iter().any(|e| e.intersects(range))
     }
 
     /// The value of `addr` inside the sandbox.
@@ -1360,7 +1514,12 @@ impl<'a, 'w> SubCtx<'a, 'w> {
             return f.cached.clone();
         }
         let formula = f.formula.clone();
-        let env = if f.has_names {
+        let has_names = f.has_names;
+        if self.over || !self.inner.charge_table_op_work(1) {
+            self.over = true;
+            return Value::Error(ErrorKind::FormulaOverflow);
+        }
+        let env = if has_names {
             EvalEnv::new(
                 crate::names::collect_names(&self.inner.wb.names, &formula.expr, addr.sheet).0,
             )
@@ -1477,9 +1636,28 @@ impl EvalContext for SubCtx<'_, '_> {
         self.inner.filtered_row(sheet, row)
     }
 
-    fn table_op(&mut self, _formula: CellAddr, _subs: &[(CellAddr, Value)]) -> Option<Value> {
-        // No nested what-if tables.
-        None
+    /// A nested `MULTIPLE.OPERATIONS`: a sandbox in which both this
+    /// sandbox's substitutions and the inner ones (which win) are in
+    /// effect, as AOO's table-op stack does (sc/source/core/tool/
+    /// interpr4.cxx:2984-3075; correctness review 4, M31).
+    fn table_op(&mut self, formula: CellAddr, subs: &[(CellAddr, Value)]) -> Option<Value> {
+        if self.nest + 1 > MAX_TABLE_OP_NESTING {
+            return Some(Value::Error(ErrorKind::FormulaOverflow));
+        }
+        self.inner.wb.formula_at(formula)?;
+        let mut combined: Vec<(CellAddr, Value)> = subs.to_vec();
+        for (a, v) in &self.subs {
+            if !combined.iter().any(|(b, _)| b == a) {
+                combined.push((*a, v.clone()));
+            }
+        }
+        let nest = self.nest + 1;
+        let mut sub = SubCtx::new(&mut *self.inner, &combined, nest);
+        let v = sub.run(formula);
+        if sub.over {
+            self.over = true;
+        }
+        Some(v)
     }
 
     fn pivot_data(
@@ -1489,6 +1667,15 @@ impl EvalContext for SubCtx<'_, '_> {
         filters: &[(String, String)],
     ) -> Option<Value> {
         self.inner.pivot_data(at, field, filters)
+    }
+
+    fn pivot_data_excel(
+        &mut self,
+        at: CellAddr,
+        words: &str,
+        filters: &[(String, String)],
+    ) -> Option<Value> {
+        self.inner.pivot_data_excel(at, words, filters)
     }
 }
 

@@ -15,31 +15,46 @@ Accepted forms (AOO `ScGetPivotData`, `sc/source/core/tool/interpr2.cxx`):
 | Form | Call |
 |---|---|
 | AOO: `GETPIVOTDATA(data_field; pivot_table [; field; item]…)` | `pivot_data(top_left(pivot_table), data_field, [(field, item), …])` |
-| Excel 2000: `GETPIVOTDATA(pivot_table; "constraints")` | `pivot_data(top_left(pivot_table), <bare words of constraints>, [<bracketed pairs>])` |
+| Excel 2000: `GETPIVOTDATA(pivot_table; "constraints")` | `pivot_data_excel(top_left(pivot_table), <bare words of constraints>, [<bracketed pairs>])` |
 
 - `at` is the **top-left cell of the reference**. AOO looks for the
-  DataPilot table whose output contains the reference; the engine should
-  find the pivot whose output range contains `at`.
-- `field` is the data field text as typed (`"Sales"`, `"Sum - Sales"`).
-  In the Excel form it is every word outside `Field[Item]` groups, joined
-  by single spaces: AOO (`ScDPObject::ParseFilters`) matches that text
-  greedily against the data field names and, for any remaining words,
-  the item names of all fields; a single data field may be omitted. The
-  engine resolves `field` the same way, which also handles the AOO form
-  (an exact data field name matches first).
-- `filters` are `(field name, item text)` pairs. Numeric items arrive in
-  General format (`2026`), booleans as `TRUE`/`FALSE`; the engine compares
-  against the item's display text.
-- Return `Some(value)` for a hit, `Some(Value::Error(..))` to surface a
-  specific error, `None` for "no pivot here / unknown field or item",
-  which the function reports as `#REF!`.
+  DataPilot table whose output contains the reference; the engine finds
+  the pivot whose output range contains `at`.
+- AOO form: `field` must name a data field, by its caption (`Sum -
+  Sales`) or its source name (`Sales`), case-insensitively (AOO
+  `lcl_IsNamedDataField`, `dpoutput.cxx:1370`); an item name there is
+  `#REF!`.
+- Excel form (`pivot_data_excel`, which defaults to `pivot_data`):
+  `words` is every word outside `Field[Item]` groups, joined by single
+  spaces. As AOO `ScDPObject::ParseFilters` (`dpobject.cxx:1320-1530`),
+  from left to right the longest word run that names a data field is
+  taken, else the longest run naming an item of exactly one field (it
+  becomes a filter; the same name in several fields is `#REF!`); a
+  single data field may be omitted (`GETPIVOTDATA(K1;"East")`).
+- `filters` are `(field name, item text)` pairs, matched
+  case-insensitively against the field's display or source name and the
+  item's caption. Numeric items arrive in General format (`2026`),
+  booleans as `TRUE`/`FALSE`. A caption shared by two shown items
+  (`1.2` and `1.4` formatted `0`) is ambiguous: `#REF!`.
+- A page field may be filtered only by its selected item; at `- all -`
+  any filter on it is `#REF!` (`lcl_CheckPageField`,
+  `dpoutput.cxx:1388-1410`).
+- The value is the **displayed** result ("show as" applied,
+  `dpoutput.cxx:1820-1828`); an empty result is 0; an error result is
+  `#REF!` (`:1820`).
+- Return `Some(value)` for a hit, `None` for "no pivot here / unknown
+  field or item / no such cell / error result", which the function
+  reports as `#REF!`.
 - Before the call the function already answered: odd argument counts
   (`#REF!`), a non-reference table argument (`#REF!`), unbalanced
   brackets in the constraint string (`#REF!`), argument errors (propagated),
   and arity (`Err:511` below 2, `Err:504` above 30).
+- The engine answers from an index built with the output (item caption
+  hash → item, item path → output line), so a call costs O(fields).
 
 Mock: `MockEvalContext::set_pivot_data(|at, field, filters| …)`; every
-request is also recorded in `pivot_calls`.
+request (both forms, through the default `pivot_data_excel`) is also
+recorded in `pivot_calls`.
 
 ## MULTIPLE.OPERATIONS → `EvalContext::table_op(formula, subs)`
 

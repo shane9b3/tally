@@ -125,12 +125,25 @@ fn bracket_references(body: &str) -> String {
             out.extend(&chars[start..i]);
             continue;
         }
-        if c == '\'' {
+        if c == '\'' || (c == '$' && chars.get(i + 1) == Some(&'\'')) {
             // Quoted sheet name: 'My Sheet'.A1 → [My Sheet.A1] is not
             // valid OpenFormula, so keep the quotes: ['My Sheet'.A1].
+            // `''` inside the quotes is an escaped quote (correctness
+            // review 4, M27: `'Bob''s'.A1` was split at the first `''`);
+            // a leading `$` (absolute sheet) stays inside the brackets.
             let start = i;
+            if c == '$' {
+                i += 1;
+            }
             i += 1;
-            while i < chars.len() && chars[i] != '\'' {
+            while i < chars.len() {
+                if chars[i] == '\'' {
+                    if chars.get(i + 1) == Some(&'\'') {
+                        i += 2;
+                        continue;
+                    }
+                    break;
+                }
                 i += 1;
             }
             i += 1;
@@ -217,7 +230,10 @@ fn bracket_references(body: &str) -> String {
 }
 
 /// `A1`, `$B$2`, `Sheet1.A1`, `$Sheet1.$A$1` (the part after the last
-/// `.` must be a cell address).
+/// `.` must be a cell address of OOo 1.x's grid: columns A–IV, rows
+/// 1–32,000). `TAX1` or `ABC12` are names there, not references
+/// (correctness review 4, H13); the engine aliases names that read as
+/// references in Tally's 16,384-column grid, so they still resolve.
 fn is_cell_or_range(token: &str) -> bool {
     let cell = token.rsplit('.').next().unwrap_or(token);
     let cell = cell.strip_prefix('$').unwrap_or(cell);
@@ -227,11 +243,22 @@ fn is_cell_or_range(token: &str) -> bool {
         .collect();
     let rest = &cell[letters.len()..];
     let rest = rest.strip_prefix('$').unwrap_or(rest);
-    !letters.is_empty()
-        && letters.len() <= 3
-        && !rest.is_empty()
-        && rest.chars().all(|c| c.is_ascii_digit())
+    if letters.is_empty()
+        || letters.len() > 2
+        || rest.is_empty()
+        || !rest.chars().all(|c| c.is_ascii_digit())
+    {
+        return false;
+    }
+    let col = letters.bytes().fold(0u32, |a, b| {
+        a * 26 + u32::from(b.to_ascii_uppercase() - b'A' + 1)
+    });
+    let row = rest.parse::<u32>().unwrap_or(0);
+    col <= 256 && (1..=OOO1_MAX_ROWS).contains(&row)
 }
+
+/// Rows of an OOo 1.x sheet.
+const OOO1_MAX_ROWS: u32 = 32_000;
 
 #[cfg(test)]
 mod tests {
@@ -248,6 +275,19 @@ mod tests {
         assert_eq!(map_formula("=SUM([.A1:.A2])"), "oooc:=SUM([.A1:.A2])");
         assert_eq!(map_formula("of:=[.A1]"), "of:=[.A1]");
         assert_eq!(map_formula("=1.5+2"), "oooc:=1.5+2");
+        // Correctness review 4: names past column IV / row 32000 (H13),
+        // `''` in quoted sheet names (M27).
+        assert_eq!(map_formula("=TAX1*2"), "oooc:=TAX1*2");
+        assert_eq!(
+            map_formula("=IV1+IW1+A32000+A32001"),
+            "oooc:=[.IV1]+IW1+[.A32000]+A32001"
+        );
+        assert_eq!(map_formula("='Bob''s'.A1+1"), "oooc:=['Bob''s'.A1]+1");
+        assert_eq!(map_formula("=$'Bob''s'.$A$1"), "oooc:=[$'Bob''s'.$A$1]");
+        assert_eq!(
+            map_formula("=SUM('My Sheet'.A1:A2)"),
+            "oooc:=SUM(['My Sheet'.A1:.A2])"
+        );
     }
 
     #[test]

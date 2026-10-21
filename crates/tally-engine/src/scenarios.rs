@@ -43,15 +43,62 @@ pub const MAX_SCENARIOS: usize = 1_000;
 /// Most cells one scenario may hold.
 pub const MAX_SCENARIO_CELLS: u64 = 1_000_000;
 
+/// Most cells the ranges of all scenarios of a document may cover
+/// (security review 4, MEDIUM-T7: the per-scenario cap × 1,000 scenarios
+/// allowed 1G stored cells, about 120 MB per 1M-cell scenario).
+pub const MAX_SCENARIO_CELLS_PER_DOC: u64 = 2_000_000;
+
+fn area(ranges: &[CellRangeLocal]) -> u64 {
+    ranges
+        .iter()
+        .map(|r| (u64::from(r.r1 - r.r0) + 1) * (u64::from(r.c1 - r.c0) + 1))
+        .sum()
+}
+
+/// The cells covered by every scenario of the document, without scenario
+/// `except` (`(sheet, id)`).
+fn doc_area(wb: &Workbook, except: Option<(SheetId, u32)>) -> u64 {
+    wb.sheets
+        .iter()
+        .flat_map(|s| {
+            s.meta
+                .scenarios
+                .iter()
+                .filter(move |sc| except != Some((s.id, sc.id)))
+        })
+        .map(|sc| area(&sc.data.ranges))
+        .sum()
+}
+
+fn check_doc_budget(
+    wb: &Workbook,
+    except: Option<(SheetId, u32)>,
+    cells: u64,
+) -> Result<(), ApiError> {
+    if doc_area(wb, except).saturating_add(cells) > MAX_SCENARIO_CELLS_PER_DOC {
+        return Err(ApiError::invalid_argument(format!(
+            "the scenarios of a document may cover at most {MAX_SCENARIO_CELLS_PER_DOC} cells"
+        )));
+    }
+    Ok(())
+}
+
 /// Loads a sheet's scenarios from the interchange model.
 pub fn from_data(wb: &mut Workbook, sheet: SheetId, scenarios: &[ScenarioData]) {
+    let mut budget = MAX_SCENARIO_CELLS_PER_DOC.saturating_sub(doc_area(wb, None));
     let Some(s) = wb.sheet_mut(sheet) else {
         return;
     };
     for sc in scenarios.iter().take(MAX_SCENARIOS) {
-        let id = s.meta.alloc_id();
         let mut data = sc.clone();
         data.ranges.retain(|r| r.r0 <= r.r1 && r.c0 <= r.c1);
+        // Files get the document budget too (later scenarios are dropped).
+        let a = area(&data.ranges);
+        if a > budget || data.cells.len() as u64 > a {
+            continue;
+        }
+        budget -= a;
+        let id = s.meta.alloc_id();
         std::sync::Arc::make_mut(&mut s.meta.scenarios)
             .push(std::sync::Arc::new(Scenario { id, data }));
     }
@@ -243,6 +290,7 @@ pub fn create(
             "the scenario ranges are too large",
         ));
     }
+    check_doc_budget(wb, None, cells)?;
     let count = wb.sheet(sheet).map_or(0, |s| s.meta.scenarios.len());
     if count >= MAX_SCENARIOS {
         return Err(ApiError::invalid_argument(format!(
@@ -293,6 +341,13 @@ pub fn update(
     check_sheet(wb, sheet)?;
     check_dto(dto)?;
     let ranges = ranges_of(sheet, dto)?;
+    let cells: u64 = ranges.iter().map(|r| r.cell_count()).sum();
+    if cells > MAX_SCENARIO_CELLS {
+        return Err(ApiError::invalid_argument(
+            "the scenario ranges are too large",
+        ));
+    }
+    check_doc_budget(wb, Some((sheet, id)), cells)?;
     with_meta(wb, sheet, fx, |_, meta| {
         let list = Arc::make_mut(&mut meta.scenarios);
         let pos = list

@@ -473,7 +473,7 @@ fn roundtrip_images() {
             height_hmm: 1500,
         },
         mime: "image/png".into(),
-        bytes: PNG.to_vec(),
+        bytes: PNG.into(),
     };
     wb.sheets[0].images = vec![
         img.clone(),
@@ -588,7 +588,7 @@ fn reads_libreoffice_fixture() {
 
     assert_eq!(s.images.len(), 1);
     assert_eq!(s.images[0].mime, "image/png");
-    assert_eq!(s.images[0].bytes, PNG);
+    assert_eq!(&*s.images[0].bytes, PNG);
     assert_eq!((s.images[0].anchor.row, s.images[0].anchor.col), (1, 5));
     // The Math object is skipped and counted.
     assert!(

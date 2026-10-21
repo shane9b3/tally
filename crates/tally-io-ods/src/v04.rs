@@ -38,32 +38,12 @@ pub(crate) fn write_shapes(s: &mut String, sheet: &SheetData, tab: usize) {
     let _ = (s, sheet, tab);
 }
 
-/// Opens every column/row group that starts at index `i`
-/// (`<table:table-column-group table:display="false|true">`, outermost
-/// first).
-///
-/// TODO(W5-2): emit the open tags; `write.rs` already stops repeated
-/// runs at group boundaries.
-pub(crate) fn write_group_starts(s: &mut String, groups: &[OutlineGroupData], i: u32, rows: bool) {
-    crate::tools::write_group_starts(s, groups, i, rows);
-}
-
-/// Closes every column/row group that ends at index `i` (innermost
-/// first).
-///
-/// TODO(W5-2): emit the close tags.
-pub(crate) fn write_group_ends(s: &mut String, groups: &[OutlineGroupData], i: u32, rows: bool) {
-    crate::tools::write_group_ends(s, groups, i, rows);
-}
-
-/// The group boundaries after `i` (starts and `end + 1`), so repeated
-/// column/row runs stop there. Returns `None` when no boundary follows.
-pub(crate) fn next_group_boundary(groups: &[OutlineGroupData], i: u32) -> Option<u32> {
-    groups
-        .iter()
-        .flat_map(|g| [g.start, g.end.saturating_add(1)])
-        .filter(|b| *b > i)
-        .min()
+/// The column/row group walker of a sheet (opens and closes
+/// `<table:table-column-group>`/`<table:table-row-group
+/// table:display="false|true">` in index order; `write.rs` also stops
+/// repeated runs at its boundaries).
+pub(crate) fn group_walk(groups: &[OutlineGroupData], rows: bool) -> crate::tools::GroupWalk<'_> {
+    crate::tools::GroupWalk::new(groups, rows)
 }
 
 /// Writes the `draw:frame` elements of the charts and pictures anchored
@@ -190,10 +170,11 @@ mod tests {
                 collapsed: true,
             },
         ];
-        assert_eq!(next_group_boundary(&g, 0), Some(2));
-        assert_eq!(next_group_boundary(&g, 2), Some(3));
-        assert_eq!(next_group_boundary(&g, 3), Some(5));
-        assert_eq!(next_group_boundary(&g, 5), Some(6));
-        assert_eq!(next_group_boundary(&g, 6), None);
+        let mut w = group_walk(&g, true);
+        assert_eq!(w.next_boundary(0), Some(2));
+        assert_eq!(w.next_boundary(2), Some(3));
+        assert_eq!(w.next_boundary(3), Some(5));
+        assert_eq!(w.next_boundary(5), Some(6));
+        assert_eq!(w.next_boundary(6), None);
     }
 }

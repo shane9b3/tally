@@ -97,9 +97,81 @@ pub fn write_pdf_atomically(target: &Path, bytes: &[u8]) -> CmdResult<()> {
     Ok(())
 }
 
-/// The path of the temporary PDF opened in the system viewer (non-macOS).
-pub fn temp_pdf_path(job: u32) -> PathBuf {
-    std::env::temp_dir().join(format!("tally-print-{}-{job}.pdf", std::process::id()))
+/// How long a temporary PDF handed to a viewer stays on disk.
+const TEMP_PDF_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// This process's private temp directory (mode 0700, unpredictable name),
+/// created on first use.
+fn private_temp_dir() -> CmdResult<PathBuf> {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    if let Some(d) = DIR.get() {
+        if d.is_dir() {
+            return Ok(d.clone());
+        }
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("tally-print-{}-{nanos:x}", std::process::id()));
+    let mut b = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+    b.create(&dir)
+        .map_err(|e| io_err("creating the print temp dir", &e))?;
+    // A second call after the dir vanished replaces nothing (OnceLock): return the fresh one.
+    let _ = DIR.set(dir.clone());
+    Ok(DIR.get().cloned().unwrap_or(dir))
+}
+
+/// Writes a temporary PDF for a viewer: private directory, `create_new`
+/// with mode 0600, an unpredictable name, and deletion after
+/// {@link TEMP_PDF_TTL}. Older leftovers of this process are purged first.
+pub fn write_temp_pdf(job: u32, bytes: &[u8]) -> CmdResult<PathBuf> {
+    use std::io::Write;
+    let dir = private_temp_dir()?;
+    purge_old(&dir, TEMP_PDF_TTL);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let path = dir.join(format!("print-{job}-{nanos:x}.pdf"));
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut f = opts
+        .open(&path)
+        .map_err(|e| io_err("writing the PDF", &e))?;
+    if let Err(e) = f.write_all(bytes).and_then(|()| f.flush()) {
+        let _ = std::fs::remove_file(&path);
+        return Err(io_err("writing the PDF", &e));
+    }
+    let doomed = path.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(TEMP_PDF_TTL);
+        let _ = std::fs::remove_file(&doomed);
+        if let Some(d) = doomed.parent() {
+            let _ = std::fs::remove_dir(d);
+        }
+    });
+    Ok(path)
+}
+
+/// Deletes files in `dir` last modified more than `ttl` ago.
+fn purge_old(dir: &Path, ttl: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > ttl);
+        if old {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 /// Parses the path of a `tally-print://localhost/<job>.pdf` request.
@@ -245,8 +317,7 @@ fn print_in_window(app: &AppHandle, job: u32, bytes: Vec<u8>) -> CmdResult<()> {
 
 /// macOS fallback for `wb_print`: the PDF in Preview (`open -a Preview`).
 fn open_in_preview(job: u32, bytes: &[u8]) -> CmdResult<()> {
-    let path = temp_pdf_path(job);
-    write_pdf_atomically(&path, bytes)?;
+    let path = write_temp_pdf(job, bytes)?;
     let status = std::process::Command::new("/usr/bin/open")
         .arg("-a")
         .arg("Preview")
@@ -265,8 +336,7 @@ fn open_in_preview(job: u32, bytes: &[u8]) -> CmdResult<()> {
 
 /// Writes the PDF to the temp dir and opens it with the OS default viewer.
 fn open_in_viewer(job: u32, bytes: &[u8]) -> CmdResult<()> {
-    let path = temp_pdf_path(job);
-    write_pdf_atomically(&path, bytes)?;
+    let path = write_temp_pdf(job, bytes)?;
     let (program, args) =
         crate::links::launcher_argv(&path.to_string_lossy(), std::env::consts::OS);
     let status = std::process::Command::new(program)
@@ -312,6 +382,28 @@ mod tests {
             job_of_path("/3.pdf"),
             job_of_path(&print_url(3)[print_url(3).find("/3").unwrap()..])
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temp_pdfs_are_private_unpredictable_and_purged() {
+        use std::os::unix::fs::PermissionsExt;
+        let a = write_temp_pdf(1, b"%PDF-1.7\n").unwrap();
+        let b = write_temp_pdf(1, b"%PDF-1.7\n").unwrap();
+        assert_ne!(a, b, "names must not repeat");
+        let mode = std::fs::metadata(&a).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let dmode = std::fs::metadata(a.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(dmode, 0o700);
+        assert!(!a.to_string_lossy().ends_with("tally-print-1.pdf"));
+        purge_old(a.parent().unwrap(), std::time::Duration::ZERO);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        purge_old(a.parent().unwrap(), std::time::Duration::ZERO);
+        assert!(!a.exists() && !b.exists());
     }
 
     #[test]

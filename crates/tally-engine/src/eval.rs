@@ -611,6 +611,14 @@ impl EvalContext for ArrayCtx<'_> {
     ) -> Option<Value> {
         self.inner.pivot_data(at, field, filters)
     }
+    fn pivot_data_excel(
+        &mut self,
+        at: CellAddr,
+        words: &str,
+        filters: &[(String, String)],
+    ) -> Option<Value> {
+        self.inner.pivot_data_excel(at, words, filters)
+    }
 }
 
 // ---------------------------------------------------------------------------

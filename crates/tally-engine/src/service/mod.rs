@@ -63,6 +63,8 @@ pub struct EngineService {
     open_time_limit: Option<Duration>,
     /// Prepared print jobs (an LRU of [`crate::print::JOB_LRU`]).
     print_jobs: print::JobCache,
+    /// `chart_data` responses per document version (`charts.rs`).
+    chart_cache: std::sync::Mutex<charts::ChartDataCache>,
 }
 
 impl Default for EngineService {
@@ -97,6 +99,7 @@ impl EngineService {
             open_max_evaluated: RecalcBudget::OPEN_MAX_CELLS,
             open_time_limit: Some(RecalcBudget::OPEN_TIME_LIMIT),
             print_jobs: print::JobCache::default(),
+            chart_cache: std::sync::Mutex::default(),
         }
     }
 
@@ -147,6 +150,9 @@ impl EngineService {
 
     /// A document, mutably.
     pub fn document_mut(&mut self, doc: DocId) -> Result<&mut Document> {
+        if let Ok(cache) = self.chart_cache.get_mut() {
+            cache.forget(doc.0);
+        }
         self.docs.get_mut(&doc.0).ok_or_else(|| not_found_doc(doc))
     }
 
@@ -395,6 +401,9 @@ impl DocumentService for EngineService {
     }
 
     fn close(&mut self, doc: DocId) -> Result<()> {
+        if let Ok(cache) = self.chart_cache.get_mut() {
+            cache.forget(doc.0);
+        }
         self.docs
             .remove(&doc.0)
             .map(|_| ())

@@ -12,8 +12,10 @@
 //! document's path, title and dirty flag alone; a recovered snapshot is
 //! opened with `open_untitled(path, dirty: true)`.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use tally_api::{ApiError, DocId, FileFormat, WorkbookInfo};
@@ -23,6 +25,37 @@ use crate::commands::{blocking, with_service, CmdResult};
 use crate::state::{lock, AppState};
 
 const DIR: &str = "autosave";
+
+/// A key unique to this process run (pid + launch time). `DocId`s restart at 1
+/// in every process, so snapshot files carry the session key: another
+/// instance or a later launch can neither overwrite nor delete them.
+fn session() -> &'static str {
+    static SESSION: OnceLock<String> = OnceLock::new();
+    SESSION.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        format!("{:x}{:x}", std::process::id(), nanos & 0xffff_ffff_ffff)
+    })
+}
+
+/// Snapshots of recovered documents that are still open (doc id → snapshot):
+/// kept on disk until the recovered document is saved, autosaved or closed,
+/// so a second crash right after recovery loses nothing.
+fn recovered() -> &'static Mutex<HashMap<u32, PathBuf>> {
+    static MAP: OnceLock<Mutex<HashMap<u32, PathBuf>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remove_files(snapshot: &Path) {
+    let _ = fs::remove_file(snapshot);
+    let _ = fs::remove_file(snapshot.with_extension("json"));
+}
+
+/// The prefix of this session's snapshot files of `doc`.
+fn session_prefix(doc: DocId) -> String {
+    format!("s{}-doc-{}-", session(), doc.0)
+}
 
 /// Sidecar of a snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,7 +142,7 @@ pub fn write_snapshot<R: Runtime>(
         || "Untitled".to_owned(),
         |n| n.to_string_lossy().into_owned(),
     );
-    let path = folder.join(snapshot_name(doc, &title));
+    let path = folder.join(format!("s{}-{}", session(), snapshot_name(doc, &title)));
     with_service(st, |s| s.save_copy(doc, &path, FileFormat::Ods))?;
     let snap = Snapshot {
         path: path.display().to_string(),
@@ -120,13 +153,21 @@ pub fn write_snapshot<R: Runtime>(
     let side = serde_json::to_string_pretty(&snap)
         .map_err(|e| ApiError::new(ApiError::INTERNAL, e.to_string()))?;
     fs::write(path.with_extension("json"), side).map_err(|e| io_err("writing the sidecar", &e))?;
+    // The document now has its own snapshot: the recovered one is superseded.
+    if let Some(old) = lock(recovered()).remove(&doc.0) {
+        remove_files(&old);
+    }
     Ok(snap)
 }
 
-/// Deletes the snapshot of `doc` (a clean close or a real save).
+/// Deletes this session's snapshot of `doc` (a clean close or a real save), and the
+/// recovered snapshot it was opened from. Other sessions' files are never touched.
 pub fn remove_snapshot<R: Runtime>(app: &AppHandle<R>, doc: DocId) {
+    if let Some(old) = lock(recovered()).remove(&doc.0) {
+        remove_files(&old);
+    }
     let Ok(folder) = dir(app) else { return };
-    let prefix = format!("doc-{}-", doc.0);
+    let prefix = session_prefix(doc);
     if let Ok(entries) = fs::read_dir(&folder) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
@@ -151,7 +192,10 @@ pub fn list<R: Runtime>(app: &AppHandle<R>) -> Vec<RecoveryFile> {
         .filter_map(|e| {
             let text = fs::read_to_string(e.path()).ok()?;
             let snap: Snapshot = serde_json::from_str(&text).ok()?;
-            Path::new(&snap.path).is_file().then_some(RecoveryFile {
+            let in_use = fs::canonicalize(&snap.path)
+                .ok()
+                .is_some_and(|c| lock(recovered()).values().any(|v| *v == c));
+            (!in_use && Path::new(&snap.path).is_file()).then_some(RecoveryFile {
                 path: snap.path,
                 title: snap.title,
                 saved_at: snap.saved_at,
@@ -193,8 +237,8 @@ pub async fn recover_snapshot(app: AppHandle, path: String) -> CmdResult<Workboo
     blocking(app, move |_, st| {
         let info = with_service(st, |s| s.open_untitled(&canon, true))?;
         lock(&st.paths).remove(&info.doc.0);
-        let _ = fs::remove_file(&canon);
-        let _ = fs::remove_file(canon.with_extension("json"));
+        // Keep the snapshot until the recovered document is saved, autosaved or closed.
+        lock(recovered()).insert(info.doc.0, canon);
         Ok(info)
     })
     .await
@@ -204,8 +248,7 @@ pub async fn recover_snapshot(app: AppHandle, path: String) -> CmdResult<Workboo
 #[tauri::command]
 pub async fn discard_recovery(app: AppHandle, path: String) -> CmdResult<()> {
     let canon = check_inside(&app, Path::new(&path))?;
-    let _ = fs::remove_file(&canon);
-    let _ = fs::remove_file(canon.with_extension("json"));
+    remove_files(&canon);
     Ok(())
 }
 
@@ -222,6 +265,32 @@ mod tests {
             "doc-5-....etcpasswd.ods"
         );
         assert!(snapshot_name(DocId(6), &"x".repeat(200)).len() < 100);
+    }
+
+    #[test]
+    fn session_keys_are_stable_and_prefix_session_files() {
+        assert_eq!(session(), session());
+        let p = session_prefix(DocId(7));
+        assert!(p.starts_with('s') && p.ends_with("-doc-7-"));
+        // Doc 7 must not match doc 70's files.
+        assert!(!format!("{}0-Book.ods", p.trim_end_matches("7-")).starts_with(&p));
+        // A file from another session never matches this session's prefix.
+        assert!(!"s1-doc-7-Book.ods".starts_with(&p));
+        assert!(!"doc-7-Book.ods".starts_with(&p));
+    }
+
+    #[test]
+    fn recovered_snapshots_are_tracked_until_superseded() {
+        let dir = std::env::temp_dir().join(format!("tally-rec-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("old.ods");
+        fs::write(&f, b"x").unwrap();
+        fs::write(f.with_extension("json"), b"{}").unwrap();
+        lock(recovered()).insert(9_999, f.clone());
+        let taken = lock(recovered()).remove(&9_999).unwrap();
+        remove_files(&taken);
+        assert!(!f.exists() && !f.with_extension("json").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

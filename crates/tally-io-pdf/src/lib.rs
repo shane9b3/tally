@@ -48,6 +48,14 @@ pub const MAX_ITEMS: usize = 5_000_000;
 pub const MAX_SVG_BYTES: usize = 4 * 1024 * 1024;
 /// Longest text drawn for one item (characters); the rest is cut.
 pub const MAX_TEXT_CHARS: usize = 4096;
+/// Most pixels one [`rasterize`] call renders; a larger page is rendered
+/// at a lower resolution (security review 4, M4: a 10 m page took 867 MB
+/// at 72 dpi).
+pub const MAX_RASTER_PIXELS: f32 = 40_000_000.0;
+/// Largest side of a raster image embedded in a chart SVG (pixels).
+pub const MAX_SVG_IMAGE_SIDE: u32 = 8192;
+/// Most pixels of a raster image embedded in a chart SVG.
+pub const MAX_SVG_IMAGE_PIXELS: u64 = 16_000_000;
 /// Most lines one wrapped text item produces.
 const MAX_LINES: usize = 1000;
 /// Most system faces scanned for a missing glyph.
@@ -194,8 +202,9 @@ pub enum Item {
     Svg {
         /// Area.
         rect: Rect,
-        /// The SVG text.
-        svg: String,
+        /// The SVG text, shared by every item that draws the same chart
+        /// (security review 4, M6: it was copied per page).
+        svg: Arc<str>,
     },
 }
 
@@ -939,13 +948,115 @@ fn draw_text(
     }
 }
 
+/// usvg's `data:` resolver, refusing SVGZ and raster images over
+/// [`MAX_SVG_IMAGE_SIDE`] / [`MAX_SVG_IMAGE_PIXELS`] (or of unknown size).
+fn data_image_resolver() -> usvg::ImageHrefDataResolverFn<'static> {
+    let default = usvg::ImageHrefResolver::default_data_resolver();
+    Box::new(move |mime: &str, data: Arc<Vec<u8>>, o: &usvg::Options| {
+        if data.starts_with(&[0x1f, 0x8b]) {
+            return None;
+        }
+        let kind = default(mime, data, o)?;
+        let raster = match &kind {
+            usvg::ImageKind::JPEG(d)
+            | usvg::ImageKind::PNG(d)
+            | usvg::ImageKind::GIF(d)
+            | usvg::ImageKind::WEBP(d) => Some(d.clone()),
+            _ => None,
+        };
+        if let Some(d) = raster {
+            let (w, h) = image_size(&d)?;
+            if w == 0
+                || h == 0
+                || w > MAX_SVG_IMAGE_SIDE
+                || h > MAX_SVG_IMAGE_SIDE
+                || u64::from(w) * u64::from(h) > MAX_SVG_IMAGE_PIXELS
+            {
+                return None;
+            }
+        }
+        Some(kind)
+    })
+}
+
+fn be16(d: &[u8], i: usize) -> Option<u32> {
+    Some(u32::from(u16::from_be_bytes([*d.get(i)?, *d.get(i + 1)?])))
+}
+
+fn le16(d: &[u8], i: usize) -> Option<u32> {
+    Some(u32::from(u16::from_le_bytes([*d.get(i)?, *d.get(i + 1)?])))
+}
+
+fn le24(d: &[u8], i: usize) -> Option<u32> {
+    Some(u32::from(*d.get(i)?) | u32::from(*d.get(i + 1)?) << 8 | u32::from(*d.get(i + 2)?) << 16)
+}
+
+/// `(width, height)` of a PNG, GIF, JPEG or WebP from its header.
+fn image_size(d: &[u8]) -> Option<(u32, u32)> {
+    if d.starts_with(b"\x89PNG\r\n\x1a\n") {
+        let w = u32::from_be_bytes(d.get(16..20)?.try_into().ok()?);
+        let h = u32::from_be_bytes(d.get(20..24)?.try_into().ok()?);
+        return Some((w, h));
+    }
+    if d.starts_with(b"GIF8") {
+        return Some((le16(d, 6)?, le16(d, 8)?));
+    }
+    if d.starts_with(&[0xFF, 0xD8]) {
+        // Walk the JPEG markers to the first start-of-frame.
+        let mut i = 2;
+        while i + 4 <= d.len() {
+            if d[i] != 0xFF {
+                return None;
+            }
+            let m = d[i + 1];
+            if m == 0xFF {
+                i += 1;
+                continue;
+            }
+            if matches!(m, 0xD8 | 0x01 | 0xD0..=0xD7) {
+                i += 2;
+                continue;
+            }
+            let len = be16(d, i + 2)? as usize;
+            if matches!(m, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) {
+                return Some((be16(d, i + 7)?, be16(d, i + 5)?));
+            }
+            if len < 2 {
+                return None;
+            }
+            i += 2 + len;
+        }
+        return None;
+    }
+    if d.len() >= 30 && &d[0..4] == b"RIFF" && &d[8..12] == b"WEBP" {
+        return match &d[12..16] {
+            b"VP8 " => Some((le16(d, 26)? & 0x3FFF, le16(d, 28)? & 0x3FFF)),
+            b"VP8L" => {
+                let b = u32::from_le_bytes(d.get(21..25)?.try_into().ok()?);
+                Some(((b & 0x3FFF) + 1, ((b >> 14) & 0x3FFF) + 1))
+            }
+            b"VP8X" => Some((le24(d, 24)? + 1, le24(d, 27)? + 1)),
+            _ => None,
+        };
+    }
+    None
+}
+
 fn draw_svg(surface: &mut Surface<'_>, rect: &Rect, svg: &str, opts: &PdfOptions) -> Option<()> {
     if svg.len() > MAX_SVG_BYTES {
         return None;
     }
+    // Only `data:` images, of bounded dimensions (security review 4, H15:
+    // usvg's default resolver read any local path, `/dev/zero` and FIFOs
+    // included). No resources directory, no SVGZ (unbounded inflate).
     let options = usvg::Options {
         fontdb: svg_db(opts.system_fonts),
         font_family: "Inter".into(),
+        resources_dir: None,
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_data: data_image_resolver(),
+            resolve_string: Box::new(|_, _| None),
+        },
         ..usvg::Options::default()
     };
     let tree = usvg::Tree::from_str(svg, &options).ok()?;
@@ -1070,7 +1181,20 @@ pub fn measure_text(text: &str, font: &FontSpec, system_fonts: bool) -> f32 {
     measure(fonts, primary, text, font.size_pt.clamp(1.0, 400.0))
 }
 
-/// Rasterizes page `page` (0-based) of a PDF to PNG at `dpi`.
+/// The pixels-per-point scale [`rasterize`] uses for a `w × h` pt page at
+/// `dpi` (18–600): lowered so the image has at most [`MAX_RASTER_PIXELS`]
+/// pixels.
+pub fn raster_scale(w: f32, h: f32, dpi: u32) -> f32 {
+    let mut scale = (dpi.clamp(18, 600) as f32) / 72.0;
+    let px = w.max(1.0) * h.max(1.0) * scale * scale;
+    if px > MAX_RASTER_PIXELS {
+        scale *= (MAX_RASTER_PIXELS / px).sqrt();
+    }
+    scale
+}
+
+/// Rasterizes page `page` (0-based) of a PDF to PNG at `dpi`; pages over
+/// [`MAX_RASTER_PIXELS`] are rendered at a lower resolution.
 pub fn rasterize(pdf: &[u8], page: usize, dpi: u32) -> Result<Vec<u8>, PdfError> {
     use hayro::hayro_interpret::InterpreterSettings;
     use hayro::hayro_syntax::Pdf;
@@ -1078,7 +1202,8 @@ pub fn rasterize(pdf: &[u8], page: usize, dpi: u32) -> Result<Vec<u8>, PdfError>
     let doc = Pdf::new(pdf.to_vec()).map_err(|e| PdfError::Read(format!("{e:?}")))?;
     let pages = doc.pages();
     let p = pages.get(page).ok_or(PdfError::NoPage(page))?;
-    let scale = (dpi.clamp(18, 600) as f32) / 72.0;
+    let (w, h) = p.render_dimensions();
+    let scale = raster_scale(w, h, dpi);
     let settings = RenderSettings {
         x_scale: scale,
         y_scale: scale,
@@ -1122,6 +1247,25 @@ mod tests {
         let broken = wrap_paragraph(&mut fonts, 0, "abcdefghijklmnopqrstuvwxyz", 10.0, 30.0);
         assert!(broken.len() >= 2);
         assert!(fonts.faces[1].has('A'));
+    }
+
+    #[test]
+    fn svg_images_are_data_only_and_bounded() {
+        // Security review 4, H15.
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend_from_slice(&100_000u32.to_be_bytes());
+        png.extend_from_slice(&100_000u32.to_be_bytes());
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+        assert_eq!(image_size(&png), Some((100_000, 100_000)));
+        let opts = usvg::Options::default();
+        let r = data_image_resolver();
+        assert!(r("image/png", Arc::new(png.clone()), &opts).is_none());
+        png[16..20].copy_from_slice(&16u32.to_be_bytes());
+        png[20..24].copy_from_slice(&16u32.to_be_bytes());
+        assert!(r("image/png", Arc::new(png), &opts).is_some());
+        assert_eq!(image_size(b"GIF89a\x10\x00\x20\x00"), Some((16, 32)));
+        assert!(r("image/svg+xml", Arc::new(vec![0x1f, 0x8b, 8, 0]), &opts).is_none());
+        assert!(r("image/png", Arc::new(b"junk".to_vec()), &opts).is_none());
     }
 
     #[test]

@@ -248,23 +248,7 @@ fn check_sort(
         }
         CellRange::new(range.sheet, r0, range.c0, range.r1, range.c1)
     };
-    let sheet = wb
-        .sheet(range.sheet)
-        .ok_or_else(|| ApiError::not_found("no sheet"))?;
-    if sheet
-        .meta
-        .merges
-        .iter()
-        .any(|m| CellRange::new(range.sheet, m.r0, m.c0, m.r1, m.c1).intersects(&data))
-    {
-        return Err(ApiError::new(
-            MERGED,
-            "A range containing merged cells cannot be sorted.",
-        ));
-    }
-    if !wb.array_blocks_in(&data).is_empty() {
-        return Err(array_block_error());
-    }
+    check_movable(wb, &data)?;
     Ok(Some(data))
 }
 
@@ -350,7 +334,45 @@ pub fn sort_range_with(
     if perm.iter().enumerate().all(|(i, p)| i as u32 == *p) {
         return Ok(Vec::new());
     }
-    let sheet = range.sheet;
+    Ok(permute_data(wb, data, &perm, ltr, include_formats))
+}
+
+/// Refuses an area holding merges or array blocks (rows cannot move
+/// whole through them).
+pub(crate) fn check_movable(wb: &Workbook, data: &CellRange) -> Result<(), ApiError> {
+    let sheet = wb
+        .sheet(data.sheet)
+        .ok_or_else(|| ApiError::not_found("no sheet"))?;
+    if sheet
+        .meta
+        .merges
+        .iter()
+        .any(|m| CellRange::new(data.sheet, m.r0, m.c0, m.r1, m.c1).intersects(data))
+    {
+        return Err(ApiError::new(
+            MERGED,
+            "A range containing merged cells cannot be sorted.",
+        ));
+    }
+    if !wb.array_blocks_in(data).is_empty() {
+        return Err(array_block_error());
+    }
+    Ok(())
+}
+
+/// Moves the lanes (rows, or columns when `ltr`) of `data` so that
+/// destination lane `i` holds source lane `perm[i]`: contents (formula
+/// ASTs unchanged, as `ScColumn::SwapRow`), notes, links and (with
+/// `include_formats`) styles. One snapshot of `data` for undo. Shared by
+/// sorting and Remove Duplicates.
+pub(crate) fn permute_data(
+    wb: &mut Workbook,
+    data: CellRange,
+    perm: &[u32],
+    ltr: bool,
+    include_formats: bool,
+) -> Vec<Change> {
+    let sheet = data.sheet;
     let snap = capture_range(wb, data, true, true);
     let n = perm.len() as u32;
     // Notes and hyperlinks travel with their lanes.
@@ -378,10 +400,10 @@ pub fn sort_range_with(
             }
             if which == 0 {
                 let map = std::sync::Arc::make_mut(&mut s.meta.notes);
-                permute_lanes(map, &data, &perm, ltr);
+                permute_lanes(map, &data, perm, ltr);
             } else {
                 let map = std::sync::Arc::make_mut(&mut s.meta.links);
-                permute_lanes(map, &data, &perm, ltr);
+                permute_lanes(map, &data, perm, ltr);
             }
         }
     }
@@ -445,7 +467,7 @@ pub fn sort_range_with(
     wb.pending.ranges.push(data);
     let mut out: Vec<Change> = meta.into_iter().collect();
     out.push(Change::Range(snap));
-    Ok(out)
+    out
 }
 
 /// Permutes the entries of a `(row, col)` map inside `data` by lanes.

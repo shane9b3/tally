@@ -678,6 +678,14 @@ pub fn apply_auto_format(
     if range.cell_count() > crate::ops::MAX_OP_CELLS {
         return Err(ApiError::invalid_argument("the range is too large"));
     }
+    // AOO offers AutoFormat for at least 3 × 3 cells
+    // (`sc/source/ui/view/cellsh3.cxx:849-850`).
+    if range.rows() < 3 || range.cols() < 3 {
+        return Err(ApiError::invalid_argument(
+            "AutoFormat needs a range of at least 3 × 3 cells",
+        ));
+    }
+    let is_default = p.name == "Default";
     let snap = crate::undo::capture_range(wb, range, false, true);
     let line = |style: BorderStyle| BorderLine {
         style,
@@ -694,7 +702,9 @@ pub fn apply_auto_format(
             let header = dr == 0;
             let total = rows > 1 && dr == rows - 1;
             let label = cols > 1 && dc == 0 && !header;
-            let (fill, color, bold) = if header {
+            let (fill, color, bold) = if is_default {
+                default_preset_cell(header, total, dc == 0, dc == cols - 1)
+            } else if header {
                 (p.header_fill, p.header_color, p.header_bold)
             } else if total {
                 (
@@ -718,6 +728,9 @@ pub fn apply_auto_format(
                     if let Some(f) = p.font {
                         d.font.family = Some(f.to_string());
                     }
+                    if is_default {
+                        d.font.size_pt = Some(10.0);
+                    }
                 }
                 if options.alignment {
                     d.align.h = if header {
@@ -740,10 +753,97 @@ pub fn apply_auto_format(
             });
         }
     }
+    let mut out = vec![Change::Range(snap)];
     if options.autofit {
+        // Optimal column widths and row heights for the range
+        // (`ScDocFunc::AutoFormat` with `bSize`, `docfunc.cxx:3742-3758`).
+        out.extend(fit_range(wb, range));
         fx.layout(sheet);
     }
-    Ok(vec![Change::Range(snap)])
+    Ok(out)
+}
+
+/// AOO's built-in "Default" AutoFormat (`ScAutoFormat::ScAutoFormat`,
+/// `sc/source/core/tool/autoform.cxx:939-991`): white on blue header
+/// row, white on gray 70 % left column, black on gray 20 % right column
+/// and bottom row, black on white body, 10 pt, thin black borders.
+fn default_preset_cell(
+    header: bool,
+    bottom: bool,
+    left: bool,
+    right: bool,
+) -> (Option<u32>, Option<u32>, bool) {
+    const BLUE: u32 = 0x0000_80ff; // COL_BLUE
+    const WHITE: u32 = 0xffff_ffff;
+    const BLACK: u32 = 0x0000_00ff;
+    const GRAY70: u32 = 0x4d4d_4dff;
+    const GRAY20: u32 = 0xcccc_ccff;
+    if header {
+        (Some(BLUE), Some(WHITE), false)
+    } else if left {
+        (Some(GRAY70), Some(WHITE), false)
+    } else if right || bottom {
+        (Some(GRAY20), Some(BLACK), false)
+    } else {
+        (Some(WHITE), Some(BLACK), false)
+    }
+}
+
+/// Sets the optimal widths of the range's columns and heights of its
+/// rows; returns the undo entries.
+fn fit_range(wb: &mut Workbook, range: CellRange) -> Vec<Change> {
+    let Some(s) = wb.sheet(range.sheet) else {
+        return Vec::new();
+    };
+    let out = vec![
+        Change::ColDims {
+            sheet: range.sheet,
+            dims: s.col_dims.clone(),
+        },
+        Change::RowDims {
+            sheet: range.sheet,
+            dims: s.row_dims.clone(),
+        },
+    ];
+    let widths: Vec<(u32, f32)> = (range.c0..=range.c1)
+        .filter_map(|c| {
+            Some((
+                c,
+                crate::autofit::needed_width_px(wb, s, c, range.r0, range.r1)?,
+            ))
+        })
+        .collect();
+    let mut heights: Vec<(u32, f32)> = Vec::new();
+    if let Some(s) = wb.sheet_mut(range.sheet) {
+        for (c, w) in widths {
+            s.col_dims.set(c, c, crate::units::px_to_hmm(w), false);
+        }
+    }
+    if let Some(s) = wb.sheet(range.sheet) {
+        use crate::storage::ColumnStore;
+        // Rows with content in the range (the others keep their height).
+        let mut rows: Vec<u32> = Vec::new();
+        for c in range.c0..=range.c1 {
+            if let Some(col) = s.column(c) {
+                rows.extend(col.cells.iter_range(range.r0, range.r1).map(|(r, _)| r));
+            }
+        }
+        rows.sort_unstable();
+        rows.dedup();
+        for r in rows {
+            let h = crate::autofit::needed_height_px(wb, s, r)
+                .unwrap_or(crate::units::DEFAULT_ROW_HEIGHT_PX);
+            heights.push((r, h));
+        }
+    }
+    if let Some(s) = wb.sheet_mut(range.sheet) {
+        for (r, h) in heights {
+            if !s.row_dims.is_hidden(r) {
+                s.row_dims.set(r, r, crate::units::px_to_hmm(h), false);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

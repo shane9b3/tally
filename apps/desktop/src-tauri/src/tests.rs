@@ -1491,7 +1491,8 @@ mod wave5 {
 
         let dbf = open_path(&st, &repo("tests/fixtures/dbf/customers.dbf"))?;
         let v = cells(&st, dbf.doc, dbf.sheets[0].id, range(0, 0, 1, 1))?;
-        assert_eq!(text_at(&v, 0, 0), "NAME");
+        // AOO-style header descriptor (name,type,length), see review-4 M35.
+        assert_eq!(text_at(&v, 0, 0), "NAME,C,12");
         assert_eq!(text_at(&v, 1, 0), "Müller & Co");
         assert_eq!(cell(&v, 1, 1).and_then(number), Some(1234.5));
 

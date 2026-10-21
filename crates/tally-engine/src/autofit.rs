@@ -131,6 +131,33 @@ pub fn needed_height_px(wb: &Workbook, sheet: &Sheet, row: u32) -> Option<f32> {
     best.map(|h| h.max(DEFAULT_ROW_HEIGHT_PX).round())
 }
 
+/// The optimal width of column `col` over rows `r0..=r1` (the widest
+/// unwrapped text plus padding, as AOO's `GetOptimalColWidth`), or `None`
+/// when no cell there has text.
+pub fn needed_width_px(wb: &Workbook, sheet: &Sheet, col: u32, r0: u32, r1: u32) -> Option<f32> {
+    let column = sheet.column(col)?;
+    let mut best: Option<f32> = None;
+    for (row, _) in column.cells.iter_range(r0, r1) {
+        if sheet.is_merge_covered(row, col) || sheet.merge_at(row, col).is_some() {
+            continue;
+        }
+        let style_id = column.styles.get(row);
+        let st = wb.styles.get(style_id);
+        let text = cell_text(wb, CellAddr::new(sheet.id, row, col), style_id);
+        if text.is_empty() {
+            continue;
+        }
+        let size_px = pt_to_px(st.data.font.size_pt.unwrap_or(DEFAULT_FONT_SIZE_PT));
+        let w = text
+            .split('\n')
+            .map(|l| text_width_px(l, size_px, st.data.font.bold))
+            .fold(0.0f32, f32::max)
+            + H_PADDING_PX;
+        best = Some(best.map_or(w, |b: f32| b.max(w)));
+    }
+    best.map(|w| w.ceil().min(4000.0))
+}
+
 fn cell_text(wb: &Workbook, addr: CellAddr, style: StyleId) -> String {
     let v = wb.value(addr);
     match v {

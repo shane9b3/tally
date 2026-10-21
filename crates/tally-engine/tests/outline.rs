@@ -58,9 +58,9 @@ fn outline_nesting_and_levels() {
     let o = f.svc.sheet_layout(f.doc, f.sheet).unwrap().outline.unwrap();
     assert_eq!(o.rows.len(), 2);
     assert_eq!(o.row_levels, 2);
-    // Eight levels at most.
+    // Seven levels at most (AOO `SC_OL_MAXDEPTH`, correctness review 4, M5).
     let mut g = Fixture::new();
-    for i in 0..8u32 {
+    for i in 0..7u32 {
         assert!(group(&mut g, OutlineAxis::Cols, i, 30 - i)
             .errors
             .is_empty());

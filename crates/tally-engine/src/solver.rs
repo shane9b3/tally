@@ -28,6 +28,11 @@ use crate::workbook::Workbook;
 
 /// Most sandbox recalculations per request.
 pub const MAX_EVALS: u32 = 10_000;
+/// Longest run accepted (`timeout_ms` is clamped to it; security review 4,
+/// H4). The deadline covers sampling the model too.
+pub const MAX_TIMEOUT_MS: u32 = 60_000;
+/// Most branch-and-bound nodes (`max_iterations` is clamped to it).
+pub const MAX_ITERATIONS: u32 = 100_000;
 /// Most variable cells.
 pub const MAX_VARIABLES: usize = 200;
 /// Most constraint rows (after expanding ranges).
@@ -46,6 +51,9 @@ struct Probe {
     /// `(lhs cell, rhs cell or constant)` per constraint row.
     rows: Vec<(CellAddr, Rhs)>,
     evals: u32,
+    /// The request's deadline; sampling past it fails with `timed_out`.
+    deadline: Instant,
+    timed_out: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -74,6 +82,16 @@ impl Probe {
     }
 
     fn sample(&mut self, x: &[f64]) -> Result<Sample, ApiError> {
+        if Instant::now() >= self.deadline {
+            self.timed_out = true;
+            return Err(ApiError::unsupported("the solver ran out of time"));
+        }
+        self.sample_now(x)
+    }
+
+    /// [`Self::sample`] without the deadline (the final evaluation of the
+    /// result).
+    fn sample_now(&mut self, x: &[f64]) -> Result<Sample, ApiError> {
         if self.evals >= MAX_EVALS {
             return Err(ApiError::unsupported(format!(
                 "the solver stopped after {MAX_EVALS} evaluations"
@@ -500,40 +518,58 @@ struct Bb {
     unbounded: bool,
 }
 
-fn branch(model: &Model, lp: Lp, bb: &mut Bb) {
-    if bb.nodes >= bb.max_nodes || Instant::now() >= bb.deadline {
-        bb.limit_hit = true;
-        return;
-    }
-    bb.nodes += 1;
-    let remaining = bb.max_nodes.saturating_sub(bb.pivots).max(1_000);
-    match simplex(&lp, remaining, bb.deadline) {
-        LpOutcome::Infeasible => {}
-        LpOutcome::Unbounded => bb.unbounded = true,
-        LpOutcome::Limit => bb.limit_hit = true,
-        LpOutcome::Optimal { y, value, pivots } => {
-            bb.pivots += pivots;
-            if bb.best.as_ref().is_some_and(|(b, _)| value >= *b - 1e-12) {
+/// Deepest branch-and-bound path (a deeper node counts as hitting the
+/// limit).
+pub const MAX_BB_DEPTH: usize = 1_000;
+
+/// Depth-first branch and bound on the LP relaxation, iterative with an
+/// explicit stack of nodes (security review 4, H4: it recursed and cloned
+/// the LP per level). A node is the list of bounds `(variable, rel,
+/// value)` added to the model's LP, so the stack holds no LP copies.
+fn branch(model: &Model, bb: &mut Bb) {
+    let mut stack: Vec<Vec<(usize, Rel, f64)>> = vec![Vec::new()];
+    while let Some(bounds) = stack.pop() {
+        if bb.nodes >= bb.max_nodes || Instant::now() >= bb.deadline {
+            bb.limit_hit = true;
+            return;
+        }
+        bb.nodes += 1;
+        let mut lp = model.lp.clone();
+        for &(i, rel, v) in &bounds {
+            let (row, rel, b) = model.bound_row(i, rel, v);
+            lp.a.push(row);
+            lp.rel.push(rel);
+            lp.b.push(b);
+        }
+        let remaining = bb.max_nodes.saturating_sub(bb.pivots).max(1_000);
+        match simplex(&lp, remaining, bb.deadline) {
+            LpOutcome::Infeasible => {}
+            LpOutcome::Unbounded => {
+                bb.unbounded = true;
                 return;
             }
-            let x = model.x_of(&y);
-            let frac = x
-                .iter()
-                .enumerate()
-                .find(|(i, v)| model.integer[*i] && (*v - v.round()).abs() > bb.eps.max(1e-9));
-            match frac {
-                None => bb.best = Some((value, x)),
-                Some((i, v)) => {
-                    let floor = v.floor();
-                    for (rel, bound) in [(Rel::Le, floor), (Rel::Ge, floor + 1.0)] {
-                        let (row, rel, b) = model.bound_row(i, rel, bound);
-                        let mut child = lp.clone();
-                        child.a.push(row);
-                        child.rel.push(rel);
-                        child.b.push(b);
-                        branch(model, child, bb);
-                        if bb.unbounded {
-                            return;
+            LpOutcome::Limit => bb.limit_hit = true,
+            LpOutcome::Optimal { y, value, pivots } => {
+                bb.pivots += pivots;
+                if bb.best.as_ref().is_some_and(|(b, _)| value >= *b - 1e-12) {
+                    continue;
+                }
+                let x = model.x_of(&y);
+                let frac = x
+                    .iter()
+                    .enumerate()
+                    .find(|(i, v)| model.integer[*i] && (*v - v.round()).abs() > bb.eps.max(1e-9));
+                match frac {
+                    None => bb.best = Some((value, x)),
+                    Some(_) if bounds.len() >= MAX_BB_DEPTH => bb.limit_hit = true,
+                    Some((i, v)) => {
+                        let floor = v.floor();
+                        // The `≤ floor` child is explored first, as the
+                        // recursion did: push it last.
+                        for (rel, bound) in [(Rel::Ge, floor + 1.0), (Rel::Le, floor)] {
+                            let mut child = bounds.clone();
+                            child.push((i, rel, bound));
+                            stack.push(child);
                         }
                     }
                 }
@@ -542,8 +578,45 @@ fn branch(model: &Model, lp: Lp, bb: &mut Bb) {
     }
 }
 
+/// A result that leaves the variables at their current values.
+fn unchanged(
+    wb: &Workbook,
+    objective: CellAddr,
+    vars: &[CellAddr],
+    x0: &[f64],
+    status: SolverStatus,
+    iterations: u32,
+) -> SolverResult {
+    SolverResult {
+        status,
+        objective: match wb.value(objective) {
+            Value::Number(n) => n,
+            _ => 0.0,
+        },
+        values: vars
+            .iter()
+            .zip(x0)
+            .map(|(a, v)| SolverValue {
+                cell: tally_api::SheetCell {
+                    sheet: a.sheet,
+                    r: a.row,
+                    c: a.col,
+                },
+                value: *v,
+            })
+            .collect(),
+        iterations,
+    }
+}
+
 /// Runs the solver.
 pub fn solve(wb: &Workbook, req: &SolverRequest) -> Result<SolverResult, ApiError> {
+    // The deadline starts now and covers sampling the model as well as the
+    // search (security review 4, H4: 31 s against a 10 s timeout).
+    let timeout = Duration::from_millis(u64::from(req.options.timeout_ms.clamp(1, MAX_TIMEOUT_MS)));
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
     let objective = check_cell(wb, req.objective.sheet, req.objective.r, req.objective.c)?;
     if wb.formula_at(objective).is_none() {
         return Err(ApiError::invalid_argument(
@@ -638,8 +711,24 @@ pub fn solve(wb: &Workbook, req: &SolverRequest) -> Result<SolverResult, ApiErro
         objective,
         rows,
         evals: 0,
+        deadline,
+        timed_out: false,
     };
-    let Some(lin) = linearize(&mut probe, &x0)? else {
+    let lin = match linearize(&mut probe, &x0) {
+        Ok(l) => l,
+        Err(_) if probe.timed_out => {
+            return Ok(unchanged(
+                wb,
+                objective,
+                &vars,
+                &x0,
+                SolverStatus::Limit,
+                probe.evals,
+            ));
+        }
+        Err(e) => return Err(e),
+    };
+    let Some(lin) = lin else {
         let objective = match wb.value(objective) {
             Value::Number(n) => n,
             _ => 0.0,
@@ -740,11 +829,7 @@ pub fn solve(wb: &Workbook, req: &SolverRequest) -> Result<SolverResult, ApiErro
         constant,
         sign,
     };
-    let max_nodes = req.options.max_iterations.max(1);
-    let timeout = Duration::from_millis(u64::from(req.options.timeout_ms.max(1)));
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .unwrap_or_else(Instant::now);
+    let max_nodes = req.options.max_iterations.clamp(1, MAX_ITERATIONS);
     let mut bb = Bb {
         nodes: 0,
         pivots: 0,
@@ -755,7 +840,7 @@ pub fn solve(wb: &Workbook, req: &SolverRequest) -> Result<SolverResult, ApiErro
         limit_hit: false,
         unbounded: false,
     };
-    branch(&model, model.lp.clone(), &mut bb);
+    branch(&model, &mut bb);
     let iterations = bb.nodes.saturating_add(bb.pivots);
     let (status, x) = match (bb.best.take(), bb.unbounded, bb.limit_hit) {
         (_, true, _) => (SolverStatus::Unbounded, x0.clone()),
@@ -784,7 +869,7 @@ pub fn solve(wb: &Workbook, req: &SolverRequest) -> Result<SolverResult, ApiErro
             }
         })
         .collect();
-    let objective_value = match probe.sample(&x) {
+    let objective_value = match probe.sample_now(&x) {
         Ok(s) => s.objective,
         Err(_) => model.constant + model.sign * 0.0,
     };

@@ -526,7 +526,7 @@ export class AppController {
    * the row when the cell wraps or the text has line breaks (one undo step).
    */
   typingOps(sheet: number, cell: CellPos, text: string): Op[] {
-    const ops: Op[] = [{ type: "setCellInput", sheet, r: cell.r, c: cell.c, input: this.w56.commitText(text) }];
+    const ops: Op[] = [{ type: "setCellInput", sheet, r: cell.r, c: cell.c, input: this.w56.commitText(text, this.editOriginal) }];
     const source = useDocStore.getState().source;
     const view = source?.getCell(cell.r, cell.c);
     const wraps = source?.getStyle(drawStyleId(view))?.wrap ?? false;

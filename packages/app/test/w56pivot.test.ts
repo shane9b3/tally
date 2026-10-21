@@ -126,3 +126,18 @@ describe("mock DataPilot", () => {
     expect(nav.sheets.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("pivot layout round trip (review 4 H14)", () => {
+  it("keeps the field grouping when a layout is edited and sent back", () => {
+    let st = emptyLayout({ type: "range", sheet: 1, range: { r0: 0, c0: 0, r1: 4, c1: 2 } }, { r0: 0, c0: 0, r1: 4, c1: 2 }, 1);
+    st = addField(st, FIELDS[2]!, "data");
+    st = addField(st, FIELDS[0]!, "row");
+    const group = { type: "numeric", start: 0, end: 100, step: 10 } as never;
+    const dto = toPivotDto(st, 1);
+    dto.rowFields[0]!.group = group;
+    const back = toPivotDto(fromPivotDto(dto, FIELDS), 1);
+    expect(back.rowFields[0]!.group).toEqual(group);
+    const moved = toPivotDto(moveField(fromPivotDto(dto, FIELDS), 0, "row", "col"), 1);
+    expect(moved.colFields[0]!.group).toEqual(group);
+  });
+});

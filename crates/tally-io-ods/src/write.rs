@@ -1294,6 +1294,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
     let row_breaks: std::collections::BTreeSet<u32> = sheet.row_breaks.iter().copied().collect();
 
     // Columns.
+    let mut col_walk = crate::v04::group_walk(&sheet.col_groups, false);
     let max_cell_col = cells.iter().map(|c| c.col).max();
     let max_run_col = cols.iter().map(|r| r.end).max();
     let max_style_col = col_default
@@ -1303,6 +1304,9 @@ pub(crate) fn write_sheet<W: Write + Seek>(
         .chain(merges.iter().map(|m| m.c1))
         .chain(col_breaks.iter().copied())
         .chain(repeat_cols.map(|r| r.1))
+        // Groups past the data are written too, so they are closed and
+        // kept (correctness review 4, H1).
+        .chain(col_walk.last_index())
         .max();
     let end_col = max_cell_col
         .max(max_run_col)
@@ -1316,7 +1320,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
                 s.push_str("<table:table-header-columns>");
             }
         }
-        crate::v04::write_group_starts(s, &sheet.col_groups, c, false);
+        col_walk.open(s, c);
         let (run, next) = run_at(&cols, c);
         let (width, hidden, mut stop) = match run {
             Some(r) => (r.size_hmm, r.hidden, r.end.saturating_add(1).min(end_col)),
@@ -1340,7 +1344,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
                 }
             }
         }
-        if let Some(b) = crate::v04::next_group_boundary(&sheet.col_groups, c) {
+        if let Some(b) = col_walk.next_boundary(c) {
             stop = stop.min(b);
         }
         let default = col_default.get(&c).copied();
@@ -1366,7 +1370,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
             None => s.push_str(r#" table:default-cell-style-name="Default"/>"#),
         }
         c += n;
-        crate::v04::write_group_ends(s, &sheet.col_groups, c.saturating_sub(1), false);
+        col_walk.close(s, c.saturating_sub(1));
         if let Some((_, b)) = repeat_cols {
             if c == b.saturating_add(1) {
                 s.push_str("</table:table-header-columns>");
@@ -1374,7 +1378,10 @@ pub(crate) fn write_sheet<W: Write + Seek>(
         }
     }
 
+    col_walk.close_all(s);
+
     // Rows.
+    let mut row_walk = crate::v04::group_walk(&sheet.row_groups, true);
     let max_cell_row = cells.last().map(|c| c.row);
     let max_run_row = rows.iter().map(|r| r.end).max();
     let max_style_row = vruns
@@ -1384,6 +1391,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
         .chain(filtered.last().map(|f| f.1))
         .chain(row_breaks.iter().copied())
         .chain(repeat_rows.map(|r| r.1))
+        .chain(row_walk.last_index())
         .max();
     let end_row = max_cell_row
         .max(max_run_row)
@@ -1405,7 +1413,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
                 s.push_str("<table:table-header-rows>");
             }
         }
-        crate::v04::write_group_starts(s, &sheet.row_groups, r, true);
+        row_walk.open(s, r);
         active.retain(|a| a.end_row >= r);
         while vi < vruns.len() && vruns[vi].start_row <= r {
             let run = vruns[vi];
@@ -1508,7 +1516,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
             ci += 1;
         }
         let row_cells = &cells[row_start..ci];
-        let next_group = crate::v04::next_group_boundary(&sheet.row_groups, r).unwrap_or(u32::MAX);
+        let next_group = row_walk.next_boundary(r).unwrap_or(u32::MAX);
         let n = if row_cells.is_empty() && !brk {
             let next_cell = cells.get(ci).map_or(end_row, |c| c.row);
             next_cell
@@ -1536,7 +1544,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
             s.push_str("</table:table-row>");
         }
         r += n;
-        crate::v04::write_group_ends(s, &sheet.row_groups, r.saturating_sub(1), true);
+        row_walk.close(s, r.saturating_sub(1));
         if let Some((_, b)) = repeat_rows {
             if r == b.saturating_add(1) {
                 s.push_str("</table:table-header-rows>");
@@ -1546,6 +1554,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
             flush(s, zip)?;
         }
     }
+    row_walk.close_all(s);
     let local: Vec<&NameData> = data
         .names
         .iter()

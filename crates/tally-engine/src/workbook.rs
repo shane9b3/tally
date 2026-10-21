@@ -210,6 +210,9 @@ pub struct Workbook {
     /// `MULTIPLE.OPERATIONS` sandbox evaluations in the current recalc
     /// (capped at [`crate::tools::MAX_TABLE_OPS`]).
     pub table_op_calls: u32,
+    /// `MULTIPLE.OPERATIONS` sandbox work in the current recalc (capped at
+    /// `recalc::MAX_TABLE_OP_WORK`, security review 4, H3).
+    pub table_op_work: u64,
 }
 
 impl Default for Workbook {
@@ -250,6 +253,7 @@ impl Workbook {
             custom_sort_lists: Vec::new(),
             external_links: Vec::new(),
             table_op_calls: 0,
+            table_op_work: 0,
         }
     }
 

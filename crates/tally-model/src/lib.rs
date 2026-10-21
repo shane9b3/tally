@@ -1695,7 +1695,7 @@ mod tests {
                         ..ChartAnchorData::default()
                     },
                     mime: "image/png".into(),
-                    bytes: vec![0x89, 0x50, 0x4e, 0x47],
+                    bytes: vec![0x89, 0x50, 0x4e, 0x47].into(),
                 }],
                 pivots: vec![PivotData {
                     name: "DataPilot1".into(),

@@ -47,7 +47,7 @@ import { useFunctionsStore } from "../stores/functionsStore";
 import { useSelectionStore, selectionRanges } from "../stores/selectionStore";
 import { useUiStore } from "../stores/uiStore";
 import { useV3Store } from "../stores/v3Store";
-import { applyAutoCorrect } from "../autocorrect/autocorrect";
+import { applyAutoCorrectToEdit } from "../autocorrect/autocorrect";
 import { ghostSuffix, wantsCompletion } from "../autocorrect/autoinput";
 import { formulaLangOf, localizeFunctions, toCanonicalFormula, toDisplayFormula, type FormulaLang } from "../i18n/formulaNames";
 import { setUiLanguage as installUiLanguage } from "../i18n/locales";
@@ -966,9 +966,9 @@ export class W56Features {
   // -- editing assists: AutoCorrect, AutoInput, localized names ----------------------------
 
   /** The committed input: localized function names → canonical, then AutoCorrect. */
-  commitText(text: string): string {
+  commitText(text: string, original: string | null = null): string {
     const canonical = toCanonicalFormula(this.lang, text);
-    return applyAutoCorrect(canonical, this.store.prefs.autoCorrect);
+    return applyAutoCorrectToEdit(original === null ? null : toCanonicalFormula(this.lang, original), canonical, this.store.prefs.autoCorrect);
   }
 
   /** Canonical input → what the editor and formula bar show. */

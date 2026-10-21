@@ -7,8 +7,10 @@
 //! formulas registered in the reverse index as reading the cell (an array
 //! formula's whole block counts as one target). A target is flagged
 //! `error` when any of its cells holds an error value (the red arrow).
-//! [`error_source`] follows the error precedents of an error cell until it
-//! reaches one whose own precedents are error-free (AOO "Trace Error").
+//! [`error_source`] follows every error precedent of an error cell until
+//! it reaches cells whose own precedents are error-free (AOO "Trace
+//! Error"). Error flags scan at most [`MAX_ERROR_SCAN_PER_QUERY`] stored
+//! cells per query.
 
 use std::collections::HashSet;
 
@@ -27,6 +29,10 @@ pub const MAX_TRACES: usize = 10_000;
 const MAX_ERROR_SCAN: u64 = 1_000_000;
 /// Deepest error-source chain followed.
 const MAX_ERROR_DEPTH: usize = 1_000;
+/// Most stored cells one query scans for error values, all targets
+/// together; past it targets are reported without the error flag
+/// (security review 4, LOW-P11: 427 overlapping 1M-row ranges took 17 s).
+pub const MAX_ERROR_SCAN_PER_QUERY: u64 = 5_000_000;
 
 fn check(wb: &Workbook, sheet: SheetId, r: u32, c: u32) -> Result<CellAddr, ApiError> {
     if wb.sheet(sheet).is_none() {
@@ -38,35 +44,13 @@ fn check(wb: &Workbook, sheet: SheetId, r: u32, c: u32) -> Result<CellAddr, ApiE
     Ok(CellAddr::new(sheet, r, c))
 }
 
-/// `true` if any cell of `range` holds an error value.
-fn has_error(wb: &Workbook, range: &CellRange) -> bool {
-    let Some(s) = wb.sheet(range.sheet) else {
-        return false;
-    };
-    if range.is_single() {
-        return matches!(wb.value(range.start()), Value::Error(_));
-    }
-    if range.cell_count() > MAX_ERROR_SCAN {
-        return false;
-    }
-    let c1 = range.c1.min(s.columns.len().saturating_sub(1) as u32);
-    if s.columns.is_empty() {
-        return false;
-    }
-    for c in range.c0..=c1 {
-        let Some(col) = s.column(c) else {
-            continue;
-        };
-        for (r, _) in col.cells.iter_range(range.r0, range.r1) {
-            if matches!(wb.value(CellAddr::new(range.sheet, r, c)), Value::Error(_)) {
-                return true;
-            }
-        }
-    }
-    false
+/// `true` if any cell of `range` holds an error value. `budget` counts
+/// the stored cells scanned by one query.
+fn has_error(wb: &Workbook, range: &CellRange, budget: &mut u64) -> bool {
+    first_error_cell(wb, range, budget).is_some()
 }
 
-fn trace(wb: &Workbook, range: CellRange) -> TraceDto {
+fn trace(wb: &Workbook, range: CellRange, budget: &mut u64) -> TraceDto {
     TraceDto {
         sheet: range.sheet,
         range: RangeDto {
@@ -75,7 +59,7 @@ fn trace(wb: &Workbook, range: CellRange) -> TraceDto {
             r1: range.r1,
             c1: range.c1,
         },
-        error: has_error(wb, &range),
+        error: has_error(wb, &range, budget),
     }
 }
 
@@ -114,9 +98,10 @@ pub fn precedents(
     c: u32,
 ) -> Result<Vec<TraceDto>, ApiError> {
     let addr = check(wb, sheet, r, c)?;
+    let mut budget = MAX_ERROR_SCAN_PER_QUERY;
     Ok(precedent_ranges(wb, addr)
         .into_iter()
-        .map(|range| trace(wb, range))
+        .map(|range| trace(wb, range, &mut budget))
         .collect())
 }
 
@@ -133,6 +118,7 @@ pub fn dependents(
     // Name users: a formula reading a name that covers the cell.
     let mut seen: HashSet<FormulaCellId> = HashSet::new();
     let mut out = Vec::new();
+    let mut budget = MAX_ERROR_SCAN_PER_QUERY;
     for id in ids {
         if !seen.insert(id) {
             continue;
@@ -143,7 +129,7 @@ pub fn dependents(
         if f.addr == addr {
             continue;
         }
-        out.push(trace(wb, f.extent()));
+        out.push(trace(wb, f.extent(), &mut budget));
         if out.len() >= MAX_TRACES {
             break;
         }
@@ -152,46 +138,66 @@ pub fn dependents(
     Ok(out)
 }
 
-/// Trace Error: for an error cell, the precedent chain down to the cell
-/// where the error originates (the last cell holding an error whose own
-/// precedents hold none). Empty when the cell holds no error or is the
-/// origin itself.
+/// Trace Error: for an error cell, every precedent that holds an error,
+/// followed through the first error cell of each such precedent down to
+/// the cells where the errors originate (depth first, as AOO's
+/// `ScDetectiveFunc::InsertErrorLevel`, sc/source/ui/docshell/detfunc.cxx:
+/// 1016-1040, which follows every erroneous reference; correctness review
+/// 4, M38: only the first one was followed). Empty when the cell holds no
+/// error or is an origin itself. At most [`MAX_TRACES`] arrows.
 pub fn error_source(
     wb: &Workbook,
     sheet: SheetId,
     r: u32,
     c: u32,
 ) -> Result<Vec<TraceDto>, ApiError> {
-    let mut addr = check(wb, sheet, r, c)?;
+    let addr = check(wb, sheet, r, c)?;
     if !matches!(wb.value(addr), Value::Error(_)) {
         return Ok(Vec::new());
     }
     let mut chain = Vec::new();
     let mut visited: HashSet<CellAddr> = HashSet::new();
-    for _ in 0..MAX_ERROR_DEPTH {
-        if !visited.insert(addr) {
-            break;
+    let mut budget = MAX_ERROR_SCAN_PER_QUERY;
+    // (cell, depth); children are pushed in reverse so the first
+    // precedent is explored first.
+    let mut stack: Vec<(CellAddr, usize)> = vec![(addr, 0)];
+    while let Some((at, depth)) = stack.pop() {
+        if depth >= MAX_ERROR_DEPTH || !visited.insert(at) {
+            continue;
         }
-        let Some(next) = precedent_ranges(wb, addr)
-            .into_iter()
-            .find(|p| has_error(wb, p))
-        else {
-            break;
-        };
-        chain.push(trace(wb, next));
-        // Continue from the first error cell of that precedent.
-        let Some(cell) = first_error_cell(wb, &next) else {
-            break;
-        };
-        addr = cell;
+        let mut next: Vec<CellAddr> = Vec::new();
+        for p in precedent_ranges(wb, at) {
+            let Some(cell) = first_error_cell(wb, &p, &mut budget) else {
+                continue;
+            };
+            chain.push(TraceDto {
+                sheet: p.sheet,
+                range: RangeDto {
+                    r0: p.r0,
+                    c0: p.c0,
+                    r1: p.r1,
+                    c1: p.c1,
+                },
+                error: true,
+            });
+            if chain.len() >= MAX_TRACES {
+                return Ok(chain);
+            }
+            next.push(cell);
+        }
+        for cell in next.into_iter().rev() {
+            stack.push((cell, depth + 1));
+        }
     }
     Ok(chain)
 }
 
-fn first_error_cell(wb: &Workbook, range: &CellRange) -> Option<CellAddr> {
+/// The first cell of `range` holding an error value, scanning at most
+/// `budget` stored cells (decremented).
+fn first_error_cell(wb: &Workbook, range: &CellRange, budget: &mut u64) -> Option<CellAddr> {
     let s = wb.sheet(range.sheet)?;
     if range.is_single() {
-        return Some(range.start());
+        return matches!(wb.value(range.start()), Value::Error(_)).then(|| range.start());
     }
     if range.cell_count() > MAX_ERROR_SCAN || s.columns.is_empty() {
         return None;
@@ -202,6 +208,10 @@ fn first_error_cell(wb: &Workbook, range: &CellRange) -> Option<CellAddr> {
             continue;
         };
         for (r, _) in col.cells.iter_range(range.r0, range.r1) {
+            if *budget == 0 {
+                return None;
+            }
+            *budget -= 1;
             let a = CellAddr::new(range.sheet, r, c);
             if matches!(wb.value(a), Value::Error(_)) {
                 return Some(a);
@@ -240,6 +250,16 @@ mod tests {
         assert_eq!(e.len(), 2, "{e:?}");
         assert_eq!(e[1].range.c0, 1, "B1 is the origin");
         assert!(error_source(&wb, 1, 0, 0).unwrap().is_empty());
+        // Correctness review 4, M38: every error precedent is followed.
+        let mut wb = Workbook::new();
+        wb.set_input(a("A1"), "=1/0");
+        wb.set_input(a("A2"), "=NA()");
+        wb.set_input(a("A3"), "=A2");
+        wb.set_input(a("B1"), "=A1+A3");
+        recalc(&mut wb);
+        let e = error_source(&wb, 1, 0, 1).unwrap();
+        let cells: Vec<(u32, u32)> = e.iter().map(|t| (t.range.r0, t.range.c0)).collect();
+        assert_eq!(cells, vec![(0, 0), (2, 0), (1, 0)], "{e:?}");
         assert!(precedents(&wb, 99, 0, 0).is_err());
     }
 }

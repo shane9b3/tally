@@ -25,8 +25,20 @@ pub(crate) fn write_charts(
     resolver: &crate::formula::XlsxResolver,
     report: &mut dyn Warn,
 ) -> Result<(), XlsxError> {
-    let _ = sheet_index;
-    crate::chart_write::write_charts(ws, sheet, resolver, report)
+    if sheet_index == 0 {
+        crate::chart_write::begin_save();
+    }
+    let before = crate::chart_write::uncached_ranges();
+    crate::chart_write::write_charts(ws, sheet, resolver, report)?;
+    let uncached = crate::chart_write::uncached_ranges() - before;
+    if uncached > 0 {
+        report.warn(format!(
+            "{uncached} long chart range(s) on sheet {:?} were saved without cached values; \
+             spreadsheet applications recompute them from the cells.",
+            sheet.name
+        ));
+    }
+    Ok(())
 }
 
 /// Writes the sheet's pictures (`insert_image_with_offset`).

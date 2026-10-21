@@ -511,10 +511,11 @@ fn autoinput_offers_first_alphabetical_match() {
     let all = f.svc.autocomplete(f.doc, f.sheet, 3, 0, "").unwrap();
     assert_eq!(all.items.len(), 3);
     assert!(all.completion.is_none());
-    // Another block: a gap row.
+    // The whole column counts, not only the block around the cell (AOO
+    // `ScColumn::GetDataEntries`; correctness review 4, M44).
     f.set("A6", "Cherry");
     let a = f.svc.autocomplete(f.doc, f.sheet, 7, 0, "A").unwrap();
-    assert!(a.completion.is_none());
+    assert_eq!(a.completion.as_deref(), Some("Apple"));
 }
 
 #[test]

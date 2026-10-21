@@ -305,6 +305,18 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
             objects.skipped
         ));
     }
+    if objects.series_cut {
+        budget.warn(format!(
+            "Charts past {} series per document were read without their extra series.",
+            tally_model::MAX_SERIES_PER_DOCUMENT
+        ));
+    }
+    if objects.literal_dropped {
+        budget.warn(format!(
+            "Chart cached values past {} points per document were not read.",
+            tally_model::MAX_LITERAL_POINTS
+        ));
+    }
     if objects.capped {
         budget.warn(format!(
             "Only the first {} charts and {} pictures per sheet (256 MiB in all) were read.",

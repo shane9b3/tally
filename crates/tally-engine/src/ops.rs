@@ -70,7 +70,7 @@ pub fn op_cost(wb: &Workbook, op: &Op) -> u64 {
         }
         Op::FillRange { target, .. } => area(target),
         Op::ReplaceAll { .. } => crate::find::MAX_REPLACE as u64,
-        _ => 1,
+        _ => crate::tools::tool_op_cost(wb, op).unwrap_or(1),
     };
     cost.max(1)
 }
@@ -948,10 +948,10 @@ fn apply_op_inner(
                 return Err(ApiError::invalid_argument("too many names"));
             }
             let def = wb.parse_name_expr(refers_to, *scope)?;
-            let inv = names_snapshot(wb);
+            let inv = crate::undo::names_snapshot_tx(wb, fx);
             wb.names.define(name, *scope, def);
             wb.refresh_name_dependents(&crate::names::name_key(name));
-            Ok(vec![inv])
+            Ok(inv.into_iter().collect())
         }
         Op::DeleteName { name, scope } => {
             crate::protection::check_structure(wb)?;
@@ -960,10 +960,10 @@ fn apply_op_inner(
                 .lookup(name, *scope)
                 .filter(|id| wb.names.get(*id).is_some_and(|e| e.def.is_some()))
                 .ok_or_else(|| ApiError::not_found(format!("no name {name:?}")))?;
-            let inv = names_snapshot(wb);
+            let inv = crate::undo::names_snapshot_tx(wb, fx);
             wb.names.undefine(id);
             wb.refresh_name_dependents(&crate::names::name_key(name));
-            Ok(vec![inv])
+            Ok(inv.into_iter().collect())
         }
         Op::SetArrayFormula {
             sheet,

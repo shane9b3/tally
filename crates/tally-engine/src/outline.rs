@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use tally_api::{ApiError, OutlineAxis, OutlineDto, OutlineGroupDto, RangeDto};
 use tally_model::OutlineGroupData;
-use tally_types::{CellRange, SheetId, MAX_COLS, MAX_ROWS};
+use tally_types::{CellAddr, CellRange, SheetId, MAX_COLS, MAX_ROWS};
 
 use crate::ops::check_sheet;
 use crate::ops_v03::with_meta;
@@ -31,8 +31,10 @@ use crate::structure::{span_after, Shape};
 use crate::undo::{Change, Effects};
 use crate::workbook::Workbook;
 
-/// Deepest outline level (AOO and Excel).
-pub const MAX_LEVELS: u8 = 8;
+/// Deepest outline level: AOO `SC_OL_MAXDEPTH` (`sc/inc/olinetab.hxx:31`,
+/// enforced in `ScOutlineArray::Insert`, `olinetab.cxx:240-243`); Excel's
+/// limit is also 7 (correctness review 4, M5).
+pub const MAX_LEVELS: u8 = 7;
 
 /// Most groups per axis and sheet.
 pub const MAX_GROUPS: usize = 100_000;
@@ -105,8 +107,30 @@ pub fn reapply(wb: &mut Workbook, sheet: SheetId) -> bool {
     changed
 }
 
-/// Inserts a group into `groups` with AOO nesting rules; returns the
-/// group's level.
+/// The index range of the groups of `level` in a sorted list.
+fn level_range(groups: &[OutlineGroupData], level: u8) -> std::ops::Range<usize> {
+    groups.partition_point(|g| g.level < level)..groups.partition_point(|g| g.level <= level)
+}
+
+/// The groups of one level (sorted by start, disjoint) that overlap
+/// `start..=end`, as indices into `groups`.
+fn overlapping(
+    groups: &[OutlineGroupData],
+    level: u8,
+    start: u32,
+    end: u32,
+) -> std::ops::Range<usize> {
+    let r = level_range(groups, level);
+    let slice = &groups[r.clone()];
+    let a = slice.partition_point(|g| g.end < start);
+    let b = slice.partition_point(|g| g.start <= end);
+    r.start + a..r.start + b.max(a)
+}
+
+/// Inserts a group into `groups` (sorted by `(level, start, end)`) with
+/// AOO nesting rules; returns the group's level. Binary searches per
+/// level, so building a large outline is not quadratic (security review
+/// 4, HIGH-T5).
 pub fn insert_group(
     groups: &mut Vec<OutlineGroupData>,
     start: u32,
@@ -117,31 +141,25 @@ pub fn insert_group(
             "at most {MAX_GROUPS} groups per sheet"
         )));
     }
+    let deepest = groups.last().map_or(0, |g| g.level);
     let mut level: u8 = 1;
-    for g in groups.iter() {
-        let contains = g.start <= start && end <= g.end;
-        let inside = start <= g.start && g.end <= end;
-        if contains && inside {
-            // Identical range: nest the new group inside the old one.
-            level = level.max(g.level + 1);
-        } else if contains {
-            level = level.max(g.level + 1);
-        } else if inside {
-            // Pushed deeper below.
-        } else if g.end < start || end < g.start {
-            // Disjoint.
-        } else {
-            return Err(ApiError::invalid_argument(
-                "the group would partially overlap another group",
-            ));
+    let mut deepest_inside: u8 = 0;
+    for l in 1..=deepest {
+        for g in &groups[overlapping(groups, l, start, end)] {
+            let contains = g.start <= start && end <= g.end;
+            let inside = start <= g.start && g.end <= end;
+            if contains {
+                // Also an identical range: nest the new group inside.
+                level = level.max(g.level + 1);
+            } else if inside {
+                deepest_inside = deepest_inside.max(g.level);
+            } else {
+                return Err(ApiError::invalid_argument(
+                    "the group would partially overlap another group",
+                ));
+            }
         }
     }
-    let deepest_inside = groups
-        .iter()
-        .filter(|g| start <= g.start && g.end <= end && !(g.start == start && g.end == end))
-        .map(|g| g.level)
-        .max()
-        .unwrap_or(0);
     // Groups inside the new one move one level deeper; levels are counted
     // from the new group's level.
     if level > MAX_LEVELS || deepest_inside.saturating_add(1) > MAX_LEVELS {
@@ -149,24 +167,30 @@ pub fn insert_group(
             "at most {MAX_LEVELS} outline levels"
         )));
     }
-    for g in groups.iter_mut() {
-        let inside = start <= g.start && g.end <= end && !(g.start == start && g.end == end);
-        if inside && g.level >= level {
-            g.level += 1;
-            if g.level > MAX_LEVELS {
-                return Err(ApiError::invalid_argument(format!(
-                    "at most {MAX_LEVELS} outline levels"
-                )));
-            }
-        }
+    let inside: Vec<usize> = (level..=deepest)
+        .flat_map(|l| overlapping(groups, l, start, end))
+        .filter(|i| {
+            let g = &groups[*i];
+            start <= g.start && g.end <= end && !(g.start == start && g.end == end)
+        })
+        .collect();
+    let pushed = !inside.is_empty();
+    for i in inside {
+        groups[i].level += 1;
     }
-    groups.push(OutlineGroupData {
+    let g = OutlineGroupData {
         start,
         end,
         level,
         collapsed: false,
-    });
-    sort_groups(groups);
+    };
+    if pushed {
+        groups.push(g);
+        sort_groups(groups);
+    } else {
+        let at = groups.partition_point(|x| (x.level, x.start, x.end) < (level, start, end));
+        groups.insert(at, g);
+    }
     Ok(level)
 }
 
@@ -346,41 +370,144 @@ pub fn clear(
     Ok(finish(wb, sheet, fx, ch))
 }
 
-/// Detected row and column spans.
-pub type DetectedGroups = (Vec<(u32, u32)>, Vec<(u32, u32)>);
+/// The single range a formula refers to, as AOO's
+/// `ScFormulaCell::HasRefListExpressibleAsOneReference`
+/// (`sc/source/core/data/cell2.cxx:665-713`): exactly one reference, or
+/// several references that are the only arguments of one function and
+/// tile one rectangle (`lcl_refListFormsOneRange`, `cell2.cxx:333-380`).
+pub fn single_reference(f: &tally_formula::Formula, origin: CellAddr) -> Option<CellRange> {
+    use tally_formula::{Expr, ResolvedRef};
+    let mut refs = Vec::new();
+    f.expr.walk_refs(|r| refs.push(r.resolve(origin)));
+    let rect = |r: &ResolvedRef| match r {
+        ResolvedRef::Range(c) => Some(*c),
+        _ => None,
+    };
+    if refs.len() == 1 {
+        return rect(&refs[0]);
+    }
+    if refs.len() < 2 {
+        return None;
+    }
+    // One call holds every reference, and only references.
+    let mut ok = false;
+    f.expr.walk(|e| {
+        if let Expr::Call { args, .. } = e {
+            if args.len() == refs.len()
+                && args.iter().all(|a| {
+                    let mut a = a;
+                    while let Expr::Paren(x) = a {
+                        a = x;
+                    }
+                    matches!(a, Expr::Ref(_))
+                })
+            {
+                ok = true;
+            }
+        }
+    });
+    if !ok {
+        return None;
+    }
+    let mut rs: Vec<CellRange> = refs.iter().map(rect).collect::<Option<_>>()?;
+    let sheet = rs[0].sheet;
+    if rs.iter().any(|r| r.sheet != sheet) {
+        return None;
+    }
+    let same_rows = rs.iter().all(|r| r.r0 == rs[0].r0 && r.r1 == rs[0].r1);
+    let same_cols = rs.iter().all(|r| r.c0 == rs[0].c0 && r.c1 == rs[0].c1);
+    if same_rows {
+        rs.sort_by_key(|r| r.c0);
+        if rs
+            .windows(2)
+            .all(|w| w[0].c1.checked_add(1) == Some(w[1].c0))
+        {
+            let last = rs[rs.len() - 1];
+            return Some(CellRange::new(sheet, rs[0].r0, rs[0].c0, last.r1, last.c1));
+        }
+    } else if same_cols {
+        rs.sort_by_key(|r| r.r0);
+        if rs
+            .windows(2)
+            .all(|w| w[0].r1.checked_add(1) == Some(w[1].r0))
+        {
+            let last = rs[rs.len() - 1];
+            return Some(CellRange::new(sheet, rs[0].r0, rs[0].c0, last.r1, last.c1));
+        }
+    }
+    None
+}
 
-/// The groups AutoOutline detects in `range`: a formula whose reference
-/// covers a contiguous run of cells directly above it (same column) makes
-/// a row group of those rows; one covering cells directly to its left
-/// (same row) makes a column group (AOO `ScTable::DoAutoOutline`).
-pub fn detect_groups(wb: &Workbook, range: &CellRange) -> DetectedGroups {
-    let mut rows: Vec<(u32, u32)> = Vec::new();
-    let mut cols: Vec<(u32, u32)> = Vec::new();
+fn sign(a: u32, b: u32) -> std::cmp::Ordering {
+    a.cmp(&b)
+}
+
+/// Builds the outline AOO's `ScTable::DoAutoOutline` builds for `range`
+/// (`sc/source/core/data/table2.cxx:3055-3131`) into empty row and column
+/// lists:
+/// - rows, top to bottom: the first formula of the row (left to right)
+///   whose single reference ([`single_reference`]) lies in its own
+///   column, entirely above or entirely below it, inserts a row group
+///   over the referenced rows (the `DiffSign` rule);
+/// - columns, left to right: the first formula of the column (top to
+///   bottom) whose reference lies in its own row, entirely left or right
+///   of it, inserts a column group.
+///
+/// A group that cannot be inserted (partial overlap, too deep) is
+/// skipped and the next formula of the row/column is tried.
+pub fn auto_groups(
+    wb: &Workbook,
+    range: &CellRange,
+) -> (Vec<OutlineGroupData>, Vec<OutlineGroupData>) {
+    let mut cells: Vec<(u32, u32, CellRange)> = Vec::new();
     for (_, f) in &wb.formulas {
         let a = f.addr;
-        if a.sheet != range.sheet || !range.contains(a) {
+        if a.sheet != range.sheet || !range.contains(a) || f.invalid_text.is_some() {
             continue;
         }
-        for p in &f.precedents {
-            if p.sheet != a.sheet {
-                continue;
-            }
-            if p.c0 == a.col && p.c1 == a.col && p.r1.checked_add(1) == Some(a.row) && p.r0 < p.r1 {
-                rows.push((p.r0, p.r1));
-            }
-            if p.r0 == a.row && p.r1 == a.row && p.c1.checked_add(1) == Some(a.col) && p.c0 < p.c1 {
-                cols.push((p.c0, p.c1));
+        if let Some(r) = single_reference(&f.formula, a) {
+            if r.sheet == a.sheet {
+                cells.push((a.row, a.col, r));
             }
         }
     }
-    rows.sort_unstable();
-    rows.dedup();
-    cols.sort_unstable();
-    cols.dedup();
+    let mut rows: Vec<OutlineGroupData> = Vec::new();
+    cells.sort_unstable_by_key(|(r, c, _)| (*r, *c));
+    let mut done: Option<u32> = None;
+    for (row, col, r) in &cells {
+        if done == Some(*row) {
+            continue;
+        }
+        if r.c0 == *col
+            && r.c1 == *col
+            && sign(r.r0, *row) == sign(r.r1, *row)
+            && insert_group(&mut rows, r.r0, r.r1).is_ok()
+        {
+            done = Some(*row);
+        }
+    }
+    let mut cols: Vec<OutlineGroupData> = Vec::new();
+    cells.sort_unstable_by_key(|(r, c, _)| (*c, *r));
+    let mut done: Option<u32> = None;
+    for (row, col, r) in &cells {
+        if done == Some(*col) {
+            continue;
+        }
+        if r.r0 == *row
+            && r.r1 == *row
+            && sign(r.c0, *col) == sign(r.c1, *col)
+            && insert_group(&mut cols, r.c0, r.c1).is_ok()
+        {
+            done = Some(*col);
+        }
+    }
     (rows, cols)
 }
 
-/// `Op::AutoOutline`.
+/// `Op::AutoOutline`: like AOO (`ScOutlineDocFunc::AutoOutline`,
+/// `sc/source/ui/docshell/olinefun.cxx:300-324`) the existing outline is
+/// removed first (its rows/columns shown), then rebuilt from the
+/// formulas ([`auto_groups`]).
 pub fn auto_outline(
     wb: &mut Workbook,
     sheet: SheetId,
@@ -390,35 +517,19 @@ pub fn auto_outline(
     check_sheet(wb, sheet)?;
     check_sheet_action(wb, sheet, |p| p.format_cells)?;
     let range = match range {
-        Some(r) => crate::ops::to_range(sheet, &r)?,
-        None => match wb.sheet(sheet).and_then(|s| s.used_range()) {
-            Some(r) => r,
-            None => return Ok(Vec::new()),
-        },
+        Some(r) => Some(crate::ops::to_range(sheet, &r)?),
+        None => wb.sheet(sheet).and_then(|s| s.used_range()),
     };
-    let (rows, cols) = detect_groups(wb, &range);
-    if rows.is_empty() && cols.is_empty() {
-        return Ok(Vec::new());
-    }
+    let (rows, cols) = match &range {
+        Some(r) => auto_groups(wb, r),
+        None => (Vec::new(), Vec::new()),
+    };
     let ch = with_meta(wb, sheet, fx, |_, meta| {
-        // Widest first, so inner groups nest under outer ones.
-        let mut rows = rows;
-        rows.sort_by_key(|(a, b)| (std::cmp::Reverse(b - a), *a));
-        for (a, b) in rows {
-            let list = groups_mut(meta, true);
-            if list.iter().any(|g| g.start == a && g.end == b) {
-                continue;
-            }
-            let _ = insert_group(list, a, b);
+        if *meta.row_groups != rows {
+            meta.row_groups = Arc::new(rows);
         }
-        let mut cols = cols;
-        cols.sort_by_key(|(a, b)| (std::cmp::Reverse(b - a), *a));
-        for (a, b) in cols {
-            let list = groups_mut(meta, false);
-            if list.iter().any(|g| g.start == a && g.end == b) {
-                continue;
-            }
-            let _ = insert_group(list, a, b);
+        if *meta.col_groups != cols {
+            meta.col_groups = Arc::new(cols);
         }
         Ok(())
     })?;
@@ -518,7 +629,7 @@ mod tests {
     #[test]
     fn level_limit() {
         let mut g = Vec::new();
-        for i in 0..8u32 {
+        for i in 0..7u32 {
             insert_group(&mut g, i, 20 - i).unwrap();
         }
         assert!(insert_group(&mut g, 9, 11).is_err());

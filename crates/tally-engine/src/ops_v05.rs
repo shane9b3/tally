@@ -29,7 +29,7 @@ pub fn apply(
             pivot,
             overwrite,
         } => crate::pivot::update(wb, *id, pivot, *overwrite, fx),
-        Op::RefreshPivot { id } => crate::pivot::refresh(wb, *id, fx),
+        Op::RefreshPivot { id, overwrite } => crate::pivot::refresh(wb, *id, *overwrite, fx),
         Op::DeletePivot { id, clear_output } => crate::pivot::delete(wb, *id, *clear_output, fx),
         Op::PivotDrillDown { id, r, c } => crate::pivot::drill_down(wb, *id, *r, *c, fx),
         Op::Group {

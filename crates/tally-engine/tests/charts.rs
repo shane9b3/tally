@@ -1000,7 +1000,7 @@ fn images_add_move_delete_with_limits() {
         f.svc.image_data(f.doc, s, id + 7).unwrap_err().code,
         "not_found"
     );
-    assert_eq!(f.data().sheets[0].images[0].bytes, PNG);
+    assert_eq!(&*f.data().sheets[0].images[0].bytes, PNG);
     round_trip(
         &mut f,
         vec![Op::MoveResizeImage {

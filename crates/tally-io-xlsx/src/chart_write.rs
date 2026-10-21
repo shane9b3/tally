@@ -5,6 +5,21 @@
 //! written flat, multi-area ranges keep their first area, asymmetric
 //! constant error bars use the positive length, variance and
 //! error-margin error bars are dropped.
+//!
+//! Cached values: rust_xlsxwriter reads every cell of every chart range
+//! into a string cache and clones it into each series that names the
+//! range. Ranges over [`MAX_CACHED_RANGE_CELLS`] cells, and every range
+//! once a save has cached [`MAX_CACHED_CELLS`] cells (counted per
+//! reference), are written as a bare reference (`('Sheet'!$B$1:$B$9)`,
+//! which the library leaves uncached); Excel and Tally recompute the
+//! values from the cells on open.
+//!
+//! The library keys objects by anchor cell and offset, so two charts (or
+//! pictures) at the same spot would overwrite each other: later ones are
+//! nudged by one pixel per collision.
+
+use std::cell::Cell;
+use std::collections::HashSet;
 
 use rust_xlsxwriter::{
     Chart, ChartDataLabel, ChartDataLabelPosition, ChartErrorBars, ChartErrorBarsDirection,
@@ -27,6 +42,26 @@ use crate::XlsxError;
 
 /// Most series written per chart.
 const MAX_SERIES: usize = 255;
+/// Largest range written with cached values.
+pub(crate) const MAX_CACHED_RANGE_CELLS: u64 = 32_000;
+/// Most cached cells per save, counted once per series reference.
+pub(crate) const MAX_CACHED_CELLS: u64 = 1_000_000;
+
+thread_local! {
+    /// (cached cells so far, ranges written uncached) of the save in
+    /// progress; reset by [`begin_save`] when the first sheet is written.
+    static CACHE_BUDGET: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+}
+
+/// Starts the cached-cell budget of a save.
+pub(crate) fn begin_save() {
+    CACHE_BUDGET.with(|b| b.set((0, 0)));
+}
+
+/// Number of ranges the save in progress wrote without cached values.
+pub(crate) fn uncached_ranges() -> u64 {
+    CACHE_BUDGET.with(|b| b.get().1)
+}
 
 fn rgb(c: u32) -> Color {
     Color::RGB(model_to_rgb(c))
@@ -41,6 +76,19 @@ fn chart_range(
     what: &str,
     report: &mut dyn Warn,
 ) -> Option<ChartRange> {
+    chart_range_refs(r, resolver, name, what, report, 1)
+}
+
+/// [`chart_range`] for a range that `refs` series will name (each clones
+/// the cache).
+fn chart_range_refs(
+    r: &ChartRangeData,
+    resolver: &XlsxResolver,
+    name: &str,
+    what: &str,
+    report: &mut dyn Warn,
+    refs: u64,
+) -> Option<ChartRange> {
     if r.invalid || r.areas.is_empty() {
         return None;
     }
@@ -51,13 +99,26 @@ fn chart_range(
     }
     let (tab, a) = &r.areas[0];
     let sheet = resolver.sheet_name(*tab)?;
-    Some(ChartRange::new_from_range(
-        &sheet,
-        a.r0,
-        u16::try_from(a.c0).ok()?,
-        a.r1,
-        u16::try_from(a.c1).ok()?,
-    ))
+    let (c0, c1) = (u16::try_from(a.c0).ok()?, u16::try_from(a.c1).ok()?);
+    let cells = u64::from(a.r1.saturating_sub(a.r0) + 1) * u64::from(c1.saturating_sub(c0) + 1);
+    let cost = cells.saturating_mul(refs.max(1));
+    let cached = CACHE_BUDGET.with(|b| {
+        let (used, uncached) = b.get();
+        if cells <= MAX_CACHED_RANGE_CELLS && used.saturating_add(cost) <= MAX_CACHED_CELLS {
+            b.set((used + cost, uncached));
+            true
+        } else {
+            b.set((used, uncached + 1));
+            false
+        }
+    });
+    if cached {
+        Some(ChartRange::new_from_range(&sheet, a.r0, c0, a.r1, c1))
+    } else {
+        // `=(...)` is passed through as written and never cached.
+        let abs = rust_xlsxwriter::utility::worksheet_range_absolute(&sheet, a.r0, c0, a.r1, c1);
+        Some(ChartRange::new_from_string(&format!("=({abs})")))
+    }
 }
 
 fn chart_type(kind: ChartKindData, c: &ChartData) -> ChartType {
@@ -395,10 +456,11 @@ pub(crate) fn build_chart(
         report.warn(format!("chart {name:?}: 3D charts are written flat"));
     }
     let mut chart = Chart::new(chart_type(kind, c));
+    let refs = c.series.len().min(MAX_SERIES) as u64;
     let categories = c
         .categories
         .as_ref()
-        .and_then(|r| chart_range(r, resolver, name, "category", report));
+        .and_then(|r| chart_range_refs(r, resolver, name, "category", report, refs));
     // Series of the main kind go into the main chart; others into one
     // combined chart per kind (Excel supports one secondary group).
     let mut series: Vec<&ChartSeriesData> = c.series.iter().take(MAX_SERIES).collect();
@@ -526,6 +588,23 @@ pub(crate) fn build_chart(
     Some(chart)
 }
 
+/// The pixel offset of an object at `(row, col)`: its own, moved right
+/// one pixel at a time while another object of the sheet already holds
+/// that exact spot (rust_xlsxwriter keeps one object per spot).
+fn free_offset(
+    taken: &mut HashSet<(u32, u16, u32, u32)>,
+    row: u32,
+    col: u16,
+    dx_hmm: u32,
+    dy_hmm: u32,
+) -> (u32, u32) {
+    let (mut dx, dy) = (hmm_to_px(dx_hmm), hmm_to_px(dy_hmm));
+    while !taken.insert((row, col, dx, dy)) {
+        dx = dx.saturating_add(1);
+    }
+    (dx, dy)
+}
+
 /// Writes the sheet's charts at their anchors.
 pub(crate) fn write_charts(
     ws: &mut Worksheet,
@@ -533,6 +612,7 @@ pub(crate) fn write_charts(
     resolver: &XlsxResolver,
     report: &mut dyn Warn,
 ) -> Result<(), XlsxError> {
+    let mut taken = HashSet::new();
     for c in &sheet.charts {
         let Some(chart) = build_chart(c, resolver, report) else {
             continue;
@@ -541,13 +621,9 @@ pub(crate) fn write_charts(
         if a.row >= tally_types::MAX_ROWS || a.col >= tally_types::MAX_COLS {
             continue;
         }
-        if let Err(e) = ws.insert_chart_with_offset(
-            a.row,
-            u16::try_from(a.col).unwrap_or(u16::MAX),
-            &chart,
-            hmm_to_px(a.dx_hmm),
-            hmm_to_px(a.dy_hmm),
-        ) {
+        let col = u16::try_from(a.col).unwrap_or(u16::MAX);
+        let (dx, dy) = free_offset(&mut taken, a.row, col, a.dx_hmm, a.dy_hmm);
+        if let Err(e) = ws.insert_chart_with_offset(a.row, col, &chart, dx, dy) {
             report.warn(format!("chart {:?} was not written: {e}", c.name));
         }
     }
@@ -560,6 +636,7 @@ pub(crate) fn write_images(
     sheet: &SheetData,
     report: &mut dyn Warn,
 ) -> Result<(), XlsxError> {
+    let mut taken = HashSet::new();
     for img in &sheet.images {
         let a = &img.anchor;
         if a.row >= tally_types::MAX_ROWS || a.col >= tally_types::MAX_COLS {
@@ -584,13 +661,9 @@ pub(crate) fn write_images(
             f64::from(hmm_to_px(a.height_hmm).max(1)),
             false,
         );
-        if let Err(e) = ws.insert_image_with_offset(
-            a.row,
-            u16::try_from(a.col).unwrap_or(u16::MAX),
-            &image,
-            hmm_to_px(a.dx_hmm),
-            hmm_to_px(a.dy_hmm),
-        ) {
+        let col = u16::try_from(a.col).unwrap_or(u16::MAX);
+        let (dx, dy) = free_offset(&mut taken, a.row, col, a.dx_hmm, a.dy_hmm);
+        if let Err(e) = ws.insert_image_with_offset(a.row, col, &image, dx, dy) {
             report.warn(format!("picture {:?} was not written: {e}", img.name));
         }
     }

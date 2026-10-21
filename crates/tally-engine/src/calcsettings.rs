@@ -8,8 +8,10 @@
 //!   iterations off a cycle stays Err:522.
 //! - **Precision as shown**: numbers are rounded to the decimals their
 //!   cell's number format displays, both when a formula reads them and
-//!   when a formula result is stored; `General` is not rounded and percent
-//!   formats add two decimals (`tally_numfmt::display_decimals`).
+//!   when a formula result is stored; `General` is not rounded, percent
+//!   formats add two decimals, scaling commas do not change the decimals
+//!   and scientific formats round to the mantissa's decimals
+//!   (`tally_numfmt::display_decimals_for`).
 //! - The op is undoable through [`Change::Settings`] and followed by a hard
 //!   recalc (every formula is marked dirty).
 
@@ -129,10 +131,12 @@ pub fn round_to_decimals(x: f64, decimals: i32) -> f64 {
     if !x.is_finite() || x.abs() >= 9.007_199_254_740_992e15 {
         return x;
     }
-    let d = decimals.clamp(-15, 15);
+    // Scientific formats can ask for many decimals (1.23E-20 → 22).
+    let d = decimals.clamp(-300, 300);
     let f = 10f64.powi(d);
     let scaled = x * f;
-    if !scaled.is_finite() {
+    if f == 0.0 || !f.is_finite() || !scaled.is_finite() || scaled.abs() >= 9.007_199_254_740_992e15
+    {
         return x;
     }
     // Round half away from zero, with a small nudge against binary

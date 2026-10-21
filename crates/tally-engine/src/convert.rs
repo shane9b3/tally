@@ -32,6 +32,9 @@ pub const MAX_MERGES_PER_SHEET: usize = 100_000;
 /// readers count block areas against their `max_cells`, 10M by default).
 pub const MAX_ARRAY_CELLS: u64 = 10_000_000;
 
+/// Most iteration steps taken from a file (AOO's default is 100).
+pub const MAX_FILE_ITERATION_STEPS: u32 = 1_000;
+
 impl Workbook {
     /// Builds a workbook from interchange data. Values are taken as they are.
     pub fn from_data(data: &WorkbookData) -> Workbook {
@@ -54,6 +57,21 @@ impl Workbook {
         let mut wb = Workbook::empty();
         wb.import_warnings = data.warnings.clone();
         wb.settings = data.settings.calc_settings.clone();
+        // Iteration steps from a file are capped (security review 4, H2;
+        // each recalc also has a total iteration budget, see
+        // `recalc::MAX_ITERATION_EVALS`). The dialog still accepts 32,767.
+        if let Some(it) = wb.settings.iterations.as_mut() {
+            if it.steps > MAX_FILE_ITERATION_STEPS {
+                wb.import_warnings.push(format!(
+                    "The file asks for {} iteration steps; {} are used.",
+                    it.steps, MAX_FILE_ITERATION_STEPS
+                ));
+                it.steps = MAX_FILE_ITERATION_STEPS;
+            }
+            if !it.min_change.is_finite() || it.min_change < 0.0 {
+                it.min_change = 0.001;
+            }
+        }
         wb.meta = data.meta.clone();
         if let Some(tag) = data.settings.locale.as_deref() {
             match tally_numfmt::locale_by_tag(tag) {

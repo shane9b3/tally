@@ -989,10 +989,15 @@ pub enum Op {
         overwrite: bool,
     },
     /// Recomputes a pivot from its source (AOO never refreshes
-    /// automatically).
+    /// automatically). When the new output grows over non-empty cells
+    /// outside the previous output, the op fails with `OpError { code:
+    /// "target_not_empty" }` unless `overwrite` (AOO STR_PIVOT_NOTEMPTY).
     RefreshPivot {
         /// Id.
         id: u32,
+        /// Overwrite non-empty cells outside the previous output.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        overwrite: bool,
     },
     /// Deletes a pivot.
     DeletePivot {
@@ -1529,6 +1534,16 @@ pub struct StylePatch {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub underline_style: Option<UnderlineStyle>,
+    /// `true` removes the background fill (applied before `fill`;
+    /// review 4, M40). A fully transparent `fill` (alpha 0) also clears.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub clear_fill: Option<bool>,
+    /// `true` resets the text colour to Automatic (applied before
+    /// `color`). A fully transparent `color` (alpha 0) also resets.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub clear_color: Option<bool>,
 }
 
 /// Border edits for [`StylePatch::borders`], relative to each target range:

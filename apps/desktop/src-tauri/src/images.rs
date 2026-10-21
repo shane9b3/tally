@@ -123,17 +123,33 @@ pub fn picked_image(name: &str, bytes: &[u8]) -> CmdResult<PickedImage> {
     })
 }
 
-/// Reads and validates a picture file (size checked before reading).
+/// Reads and validates a picture file: regular files only (no devices, FIFOs
+/// or sockets), size checked before reading, and the read itself is bounded.
 pub fn read_picture(path: &std::path::Path) -> CmdResult<PickedImage> {
-    let meta = std::fs::metadata(path)
-        .map_err(|e| ApiError::new(ApiError::IO, format!("reading the picture: {e}")))?;
+    use std::io::Read;
+    let io = |e: std::io::Error| ApiError::new(ApiError::IO, format!("reading the picture: {e}"));
+    // Stat first: opening a FIFO for reading would block.
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(ApiError::invalid_argument(
+            "the picture is not a regular file",
+        ));
+    }
     if meta.len() > MAX_IMAGE_BYTES {
         return Err(ApiError::invalid_argument(
             "the picture is larger than 16 MB",
         ));
     }
-    let bytes = std::fs::read(path)
-        .map_err(|e| ApiError::new(ApiError::IO, format!("reading the picture: {e}")))?;
+    let file = std::fs::File::open(path).map_err(io)?;
+    if !file.metadata().map_err(io)?.is_file() {
+        return Err(ApiError::invalid_argument(
+            "the picture is not a regular file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_IMAGE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -229,5 +245,23 @@ mod tests {
             picked_image("big.png", &big).unwrap_err().code,
             ApiError::INVALID_ARGUMENT
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_devices_and_directories() {
+        for p in ["/dev/zero", "/dev/null", "/tmp"] {
+            let e = read_picture(std::path::Path::new(p)).unwrap_err();
+            assert_eq!(e.code, ApiError::INVALID_ARGUMENT, "{p}");
+        }
+    }
+
+    #[test]
+    fn reads_a_regular_png_file() {
+        let path = std::env::temp_dir().join(format!("tally-img-{}.png", std::process::id()));
+        std::fs::write(&path, PNG_1X1).unwrap();
+        let p = read_picture(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(p.mime, "image/png");
     }
 }

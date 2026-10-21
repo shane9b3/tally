@@ -883,7 +883,7 @@ export class Renderer {
       ctx.clip();
     }
     this.setFont(font);
-    this.setFill(isLink && cell.color === null && style?.color == null ? theme.colors.link : textColor(cell, style, theme));
+    this.setFill(isLink && cell.color === null && (style?.color == null || (style.color & 255) === 0) ? theme.colors.link : textColor(cell, style, theme));
     ctx.textBaseline = "alphabetic";
     ctx.fillText(text, tx, ty);
     if (style?.underline || style?.strike || isLink) {
@@ -1539,7 +1539,8 @@ export function luminance(rgba: number): number {
  */
 export function textColor(cell: CellView, style: StyleDto | undefined, theme: Theme): string {
   if (cell.color !== null) return cssColor(cell.color);
-  if (style?.color != null) return cssColor(style.color);
+  // An alpha-0 colour is the "Automatic" sentinel (StylePatch cannot reset a colour to none).
+  if (style?.color != null && (style.color & 255) > 0) return cssColor(style.color);
   const fill = style?.fill;
   if (fill != null && (fill & 255) > 0) return luminance(fill) > 0.4 ? "#111827" : "#f3f4f6";
   return theme.colors.text;

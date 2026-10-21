@@ -7,9 +7,9 @@ mod common;
 
 use common::{range, Fixture};
 use tally_api::{
-    AggFn, ApiError, AutoShow, CellPos, DataLayout, DatePart, DocumentService, Op, PivotCellRole,
-    PivotDataFieldDto, PivotDto, PivotFieldDto, PivotGroupDto, PivotLayout, PivotSort, PivotSource,
-    PivotSubtotals, ShowAs, ShowAsKind,
+    AggFn, ApiError, AutoShow, BaseItem, CellPos, DataLayout, DatePart, DocumentService, Op,
+    PivotCellRole, PivotDataFieldDto, PivotDto, PivotFieldDto, PivotGroupDto, PivotLayout,
+    PivotSort, PivotSource, PivotSubtotals, ShowAs, ShowAsKind,
 };
 use tally_types::{CellAddr, Value};
 
@@ -369,7 +369,10 @@ fn pivot_refresh_after_source_edit_and_update() {
     f.set("F2", "1100");
     // AOO never refreshes automatically.
     assert_eq!(f.value("I3"), Value::Number(190.0));
-    let r = f.apply(vec![Op::RefreshPivot { id }]);
+    let r = f.apply(vec![Op::RefreshPivot {
+        id,
+        overwrite: false,
+    }]);
     assert!(r.errors.is_empty());
     assert_eq!(f.value("I3"), Value::Number(1190.0));
     // Update: fewer columns; the old output is cleared.
@@ -428,7 +431,10 @@ fn pivot_insert_rows_moves_source_and_target() {
         other => panic!("{other:?}"),
     }
     assert!(f.svc.pivot_at(f.doc, f.sheet, 4, 7).unwrap().is_some());
-    let r = f.apply(vec![Op::RefreshPivot { id: p.id }]);
+    let r = f.apply(vec![Op::RefreshPivot {
+        id: p.id,
+        overwrite: false,
+    }]);
     assert!(r.errors.is_empty());
     assert_eq!(f.value("I5"), Value::Number(190.0));
 }
@@ -486,11 +492,13 @@ fn pivot_group_months_and_numeric_step() {
         overwrite: true,
     }]);
     assert!(r.errors.is_empty(), "{:?}", r.errors);
+    // AOO `dpgroup.cxx:226-268`: the automatic end is the largest value
+    // (10), which joins the last group, shown including the end.
     assert_eq!(f.value("H2"), Value::text("0-4"));
     assert_eq!(f.value("I2"), Value::Number(1.0));
-    assert_eq!(f.value("H3"), Value::text("5-9"));
-    assert_eq!(f.value("I3"), Value::Number(2.0));
-    assert_eq!(f.value("H4"), Value::text("10-14"));
+    assert_eq!(f.value("H3"), Value::text("5-10"));
+    assert_eq!(f.value("I3"), Value::Number(3.0));
+    assert_eq!(f.value("H4"), Value::text("Total Result"));
 }
 
 #[test]
@@ -546,4 +554,635 @@ fn pivot_budget_refuses_huge_sources() {
     }]);
     assert_eq!(r.errors[0].code, ApiError::UNSUPPORTED);
     let _ = CellAddr::new(f.sheet, 0, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Correctness review 4 (H3-H7, M8-M14) and security review 4 (H7, H8, M7-M9)
+// ---------------------------------------------------------------------------
+
+fn load(f: &mut Fixture, rows: &[&[&str]]) {
+    let rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|r| r.iter().map(|c| c.to_string()).collect())
+        .collect();
+    f.apply(vec![Op::SetRangeInputs {
+        sheet: f.sheet,
+        r: 0,
+        c: 0,
+        rows,
+    }]);
+}
+
+/// A pivot over `src` at K1 with one row field (no sorting).
+fn simple(f: &Fixture, src: &str, row: u32, data_col: u32, fun: AggFn) -> PivotDto {
+    let mut p = pivot(f);
+    p.source = PivotSource::Range {
+        sheet: f.sheet,
+        range: range(src),
+    };
+    p.target = CellPos { r: 0, c: 10 };
+    p.col_fields.clear();
+    p.row_fields = vec![field(row, "")];
+    p.row_fields[0].sort = PivotSort::None;
+    p.data_fields = vec![data(data_col, fun)];
+    p
+}
+
+fn err() -> Value {
+    Value::Error(tally_types::ErrorKind::Value)
+}
+
+fn clear_pivots(f: &mut Fixture) {
+    let ids: Vec<u32> = f.svc.pivots(f.doc).unwrap().iter().map(|p| p.id).collect();
+    for id in ids {
+        f.apply(vec![Op::DeletePivot {
+            id,
+            clear_output: true,
+        }]);
+    }
+}
+
+/// H3: AOO `ScDPAggData::Update/Calculate` (`dptabres.cxx:415-597`):
+/// strings are ignored except by Count, no data is empty, TRUE is a value,
+/// errors do not stop Count and are output as #VALUE!
+/// (`dpoutput.cxx:573-575`), StDev needs two values.
+#[test]
+fn pivot_aggregates_text_bool_and_errors_as_aoo() {
+    let mut f = Fixture::new();
+    load(
+        &mut f,
+        &[
+            &["G", "V"],
+            &["txt", "a"],
+            &["txt", "b"],
+            &["bool", "TRUE"],
+            &["bool", "TRUE"],
+            &["one", "5"],
+            &["err", "=1/0"],
+            &["err", "3"],
+            &["mix", "4"],
+            &["mix", "x"],
+        ],
+    );
+    let col = |f: &Fixture| -> Vec<Value> { (2..=7).map(|r| f.value(&format!("L{r}"))).collect() };
+    let run = |f: &mut Fixture, fun: AggFn| -> Vec<Value> {
+        let p = simple(f, "A1:B10", 0, 1, fun);
+        create(f, p);
+        assert_eq!(f.value("K2"), Value::text("txt"));
+        assert_eq!(f.value("K7"), Value::text("Total Result"));
+        let v = col(f);
+        clear_pivots(f);
+        v
+    };
+    let n = Value::Number;
+    assert_eq!(
+        run(&mut f, AggFn::Sum),
+        [Value::Empty, n(2.0), n(5.0), err(), n(4.0), err()]
+    );
+    assert_eq!(
+        run(&mut f, AggFn::Count),
+        [n(2.0), n(2.0), n(1.0), n(2.0), n(2.0), n(9.0)]
+    );
+    assert_eq!(
+        run(&mut f, AggFn::CountNums),
+        [Value::Empty, n(2.0), n(1.0), err(), n(1.0), err()]
+    );
+    assert_eq!(
+        run(&mut f, AggFn::Min),
+        [Value::Empty, n(1.0), n(5.0), err(), n(4.0), err()]
+    );
+    assert_eq!(
+        run(&mut f, AggFn::Average)[0..3],
+        [Value::Empty, n(1.0), n(5.0)]
+    );
+    assert_eq!(
+        run(&mut f, AggFn::StDev)[0..3],
+        [Value::Empty, n(0.0), err()]
+    );
+}
+
+/// H4 and M8: items are identified by value or case-insensitive text
+/// (`dptablecache.cxx:265-295`); numeric captions are written as numbers
+/// (`dpoutput.cxx:619-629`); the empty item is "(empty)".
+#[test]
+fn pivot_items_by_value_and_case_insensitive_text() {
+    let mut f = Fixture::new();
+    load(
+        &mut f,
+        &[
+            &["K", "V"],
+            &["apple", "1"],
+            &["Apple", "2"],
+            &["10", "4"],
+            &["2", "8"],
+            &["'2", "16"],
+            &["", "32"],
+            &["banana", "64"],
+            &["1.2", "128"],
+            &["1.4", "256"],
+            &["TRUE", "512"],
+        ],
+    );
+    f.apply(vec![Op::SetNumberFormat {
+        sheet: f.sheet,
+        ranges: vec![range("A9:A10")],
+        code: "0".into(),
+    }]);
+    let mut p = simple(&f, "A1:B11", 0, 1, AggFn::Sum);
+    p.row_fields[0].sort = PivotSort::Name { ascending: true };
+    create(&mut f, p);
+    let got: Vec<(Value, Value)> = (2..=11)
+        .map(|r| (f.value(&format!("K{r}")), f.value(&format!("L{r}"))))
+        .collect();
+    let n = Value::Number;
+    assert_eq!(
+        got,
+        [
+            (Value::Bool(true), n(512.0)),
+            (n(1.0), n(128.0)),
+            (n(1.0), n(256.0)),
+            (n(2.0), n(8.0)),
+            (n(10.0), n(4.0)),
+            (Value::text("2"), n(16.0)),
+            (Value::text("apple"), n(3.0)),
+            (Value::text("banana"), n(64.0)),
+            (Value::text("(empty)"), n(32.0)),
+            (Value::text("Total Result"), n(1023.0)),
+        ]
+    );
+    // GETPIVOTDATA matches the item text; "1" names two items: #REF!.
+    f.set("D1", "=GETPIVOTDATA(\"V\";K1;\"K\";\"APPLE\")");
+    assert_eq!(f.value("D1"), n(3.0));
+    f.set("D2", "=GETPIVOTDATA(\"V\";K1;\"K\";1)");
+    assert!(matches!(
+        f.value("D2"),
+        Value::Error(tally_types::ErrorKind::Ref)
+    ));
+    f.set("D3", "=GETPIVOTDATA(\"V\";K1;\"K\";\"(empty)\")");
+    assert_eq!(f.value("D3"), n(32.0));
+}
+
+fn region_by_quarter(f: &Fixture, sa: ShowAs) -> PivotDto {
+    let mut p = pivot(f);
+    p.target = CellPos { r: 0, c: 10 };
+    p.data_fields[0].show_as = Some(sa);
+    p
+}
+
+fn sa(kind: ShowAsKind, base_field: Option<u32>, base_item: Option<BaseItem>) -> ShowAs {
+    ShowAs {
+        kind,
+        base_field,
+        base_item,
+    }
+}
+
+/// H5 and M10(a): reference modes on subtotals and totals
+/// (`dptabres.cxx:2330-2530`); GETPIVOTDATA returns the displayed value
+/// (`dpoutput.cxx:1820-1828`).
+#[test]
+fn pivot_show_as_totals_and_missing_bases() {
+    let mut f = fixture();
+    let n = Value::Number;
+    // Difference from the previous quarter: Q1 and the Total Result
+    // column (a total in the reference dimension) are empty; the Total
+    // Result row is computed.
+    let p = region_by_quarter(
+        &f,
+        sa(ShowAsKind::Difference, Some(3), Some(BaseItem::Previous)),
+    );
+    create(&mut f, p);
+    assert_eq!(f.value("L3"), Value::Empty);
+    assert_eq!(f.value("M3"), n(40.0));
+    assert_eq!(f.value("P3"), Value::Empty);
+    assert_eq!(f.value("M5"), n(80.0));
+    f.set(
+        "A40",
+        "=GETPIVOTDATA(\"Revenue\";K1;\"Region\";\"East\";\"Quarter\";\"Q2\")",
+    );
+    assert_eq!(f.value("A40"), n(40.0));
+    clear_pivots(&mut f);
+    // Percentage of the previous item: the first is empty, not #N/A.
+    let p = region_by_quarter(
+        &f,
+        sa(ShowAsKind::PercentOf, Some(3), Some(BaseItem::Previous)),
+    );
+    create(&mut f, p);
+    assert_eq!(f.value("L3"), Value::Empty);
+    assert!(matches!(f.value("M3"), Value::Number(x) if (x - 230.0 / 190.0).abs() < 1e-12));
+    clear_pivots(&mut f);
+    // A named base item that does not exist is an error.
+    for kind in [ShowAsKind::Difference, ShowAsKind::PercentOf] {
+        let p = region_by_quarter(
+            &f,
+            sa(kind, Some(3), Some(BaseItem::Named { name: "Q9".into() })),
+        );
+        create(&mut f, p);
+        assert_eq!(f.value("L3"), err());
+        clear_pivots(&mut f);
+    }
+    // A base field outside the layout is an error.
+    let p = region_by_quarter(&f, sa(ShowAsKind::RunningTotal, Some(1), None));
+    create(&mut f, p);
+    assert_eq!(f.value("L3"), err());
+    clear_pivots(&mut f);
+    // Region > Product, difference from Region = East: the subtotal rows
+    // are computed, the reference item itself and the grand total empty.
+    let mut p = pivot(&f);
+    p.target = CellPos { r: 0, c: 10 };
+    p.col_fields.clear();
+    p.row_fields = vec![field(0, "Region"), field(2, "Product")];
+    p.data_fields[0].show_as = Some(sa(
+        ShowAsKind::Difference,
+        Some(0),
+        Some(BaseItem::Named {
+            name: "East".into(),
+        }),
+    ));
+    create(&mut f, p);
+    assert_eq!(f.value("K5"), Value::text("East Result"));
+    assert_eq!(f.value("M2"), Value::Empty);
+    assert_eq!(f.value("M5"), Value::Empty);
+    assert_eq!(f.value("M6"), n(400.0));
+    assert_eq!(f.value("K9"), Value::text("West Result"));
+    assert_eq!(f.value("M9"), n(615.0));
+    assert_eq!(f.value("M10"), Value::Empty);
+}
+
+/// H6: AutoShow keeps members tied with the last one and the totals
+/// exclude the hidden members (`dptabres.cxx:3164-3184`,
+/// `dptabsrc.cxx:986-995`).
+#[test]
+fn pivot_autoshow_keeps_ties_and_excludes_hidden_from_totals() {
+    let mut f = Fixture::new();
+    load(
+        &mut f,
+        &[
+            &["K", "V"],
+            &["a", "10"],
+            &["b", "5"],
+            &["c", "5"],
+            &["d", "1"],
+        ],
+    );
+    let mut p = simple(&f, "A1:B5", 0, 1, AggFn::Sum);
+    p.row_fields[0].auto_show = Some(AutoShow {
+        top: true,
+        count: 2,
+        data_field: 0,
+    });
+    p.row_fields[0].sort = PivotSort::Name { ascending: true };
+    create(&mut f, p);
+    let col: Vec<Value> = (2..=5).map(|r| f.value(&format!("K{r}"))).collect();
+    assert_eq!(
+        col,
+        [
+            Value::text("a"),
+            Value::text("b"),
+            Value::text("c"),
+            Value::text("Total Result")
+        ]
+    );
+    assert_eq!(f.value("L5"), Value::Number(20.0));
+}
+
+/// M9: no subtotals for the innermost field even when only the Data
+/// pseudo-field follows it (AOO `lcl_TestSubTotal`, `dptabsrc.cxx:229-245`).
+#[test]
+fn pivot_no_innermost_subtotals_before_data_field() {
+    let mut f = fixture();
+    let mut p = pivot(&f);
+    p.target = CellPos { r: 0, c: 10 };
+    p.col_fields.clear();
+    p.row_fields = vec![field(0, "Region"), field(2, "Product")];
+    p.data_fields = vec![data(5, AggFn::Sum), data(4, AggFn::Sum)];
+    create(&mut f, p);
+    let rows: Vec<(Value, Value, Value, Value)> = (2..=9)
+        .map(|r| {
+            (
+                f.value(&format!("K{r}")),
+                f.value(&format!("L{r}")),
+                f.value(&format!("M{r}")),
+                f.value(&format!("N{r}")),
+            )
+        })
+        .collect();
+    let t = Value::text;
+    let n = Value::Number;
+    assert_eq!(
+        rows[0],
+        (t("East"), t("Apple"), t("Sum - Revenue"), n(450.0))
+    );
+    assert_eq!(
+        rows[1],
+        (Value::Empty, Value::Empty, t("Sum - Units"), n(45.0))
+    );
+    assert_eq!(
+        rows[2],
+        (Value::Empty, t("Pear"), t("Sum - Revenue"), n(270.0))
+    );
+    assert_eq!(
+        rows[6],
+        (t("East Result"), Value::Empty, t("Sum - Revenue"), n(850.0))
+    );
+    assert_eq!(
+        rows[7],
+        (t("East Result"), Value::Empty, t("Sum - Units"), n(77.0))
+    );
+}
+
+/// M10: GETPIVOTDATA deviations (`dpoutput.cxx:1388-1410,1743-1749`).
+#[test]
+fn pivot_getpivotdata_follows_aoo() {
+    let mut f = fixture();
+    let mut p = pivot(&f);
+    p.target = CellPos { r: 0, c: 10 };
+    p.col_fields.clear();
+    p.row_fields = vec![field(0, "Region"), field(2, "Product")];
+    p.page_fields = vec![field(1, "Rep")];
+    create(&mut f, p);
+    let is_ref = |v: Value| matches!(v, Value::Error(tally_types::ErrorKind::Ref));
+    // (b) An item name is not a data field in the AOO form...
+    f.set("A40", "=GETPIVOTDATA(\"East\";K1)");
+    assert!(is_ref(f.value("A40")));
+    // ...but the Excel form may omit the single data field.
+    f.set("A41", "=GETPIVOTDATA(K1;\"East\")");
+    assert_eq!(f.value("A41"), Value::Number(850.0));
+    f.set("A42", "=GETPIVOTDATA(K1;\"Revenue East Product[Apple]\")");
+    assert_eq!(f.value("A42"), Value::Number(450.0));
+    // (c) A page field at "- all -" cannot be filtered.
+    f.set("A43", "=GETPIVOTDATA(\"Revenue\";K1;\"Rep\";\"Ann\")");
+    assert!(is_ref(f.value("A43")));
+    f.set("A44", "=GETPIVOTDATA(\"Revenue\";K1;\"Region\";\"West\")");
+    assert_eq!(f.value("A44"), Value::Number(1465.0));
+    // (d) An error result is #REF!.
+    let mut g = Fixture::new();
+    load(
+        &mut g,
+        &[&["K", "V"], &["a", "1"], &["b", "2"], &["b", "3"]],
+    );
+    let p = simple(&g, "A1:B4", 0, 1, AggFn::StDev);
+    create(&mut g, p);
+    assert_eq!(g.value("L2"), err());
+    g.set("D1", "=GETPIVOTDATA(\"V\";K1;\"K\";\"a\")");
+    assert!(is_ref(g.value("D1")));
+    g.set("D2", "=GETPIVOTDATA(\"V\";K1;\"K\";\"b\")");
+    assert!(matches!(g.value("D2"), Value::Number(x) if (x - 0.5f64.sqrt()).abs() < 1e-12));
+}
+
+/// M11 and M12: numeric and date grouping (`dpgroup.cxx`).
+#[test]
+fn pivot_numeric_and_date_grouping_follow_aoo() {
+    let mut f = Fixture::new();
+    load(
+        &mut f,
+        &[
+            &["N", "V"],
+            &["3", "1"],
+            &["7", "1"],
+            &["12", "1"],
+            &["17", "1"],
+            &["20", "1"],
+            &["30", "1"],
+            &["-4", "1"],
+        ],
+    );
+    let mut p = simple(&f, "A1:B8", 0, 1, AggFn::Count);
+    p.row_fields[0].sort = PivotSort::Name { ascending: true };
+    p.row_fields[0].group = Some(PivotGroupDto::Numeric {
+        start: Some(0.0),
+        end: Some(20.0),
+        step: 10.0,
+    });
+    create(&mut f, p);
+    let got: Vec<(Value, Value)> = (2..=5)
+        .map(|r| (f.value(&format!("K{r}")), f.value(&format!("L{r}"))))
+        .collect();
+    let t = Value::text;
+    let n = Value::Number;
+    assert_eq!(
+        got,
+        [
+            (t("<0"), n(1.0)),
+            (t("0-9"), n(2.0)),
+            (t("10-20"), n(3.0)),
+            (t(">20"), n(1.0))
+        ]
+    );
+    let mut g = Fixture::new();
+    load(
+        &mut g,
+        &[
+            &["D", "V"],
+            &["2024-01-20", "2"],
+            &["2024-02-03", "4"],
+            &["2024-04-11", "8"],
+            &["2024-12-31", "16"],
+        ],
+    );
+    let start = match g.value("A3") {
+        Value::Number(x) => x,
+        other => panic!("{other:?}"),
+    };
+    let mut p = simple(&g, "A1:B5", 0, 1, AggFn::Sum);
+    p.row_fields[0].sort = PivotSort::Name { ascending: true };
+    p.row_fields[0].group = Some(PivotGroupDto::Date {
+        start: Some(start),
+        end: Some(start + 100.0),
+        parts: vec![DatePart::Months],
+    });
+    create(&mut g, p);
+    let got: Vec<(Value, Value)> = (2..=5)
+        .map(|r| (g.value(&format!("K{r}")), g.value(&format!("L{r}"))))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (t("<02/03/2024"), n(2.0)),
+            (t("Feb"), n(4.0)),
+            (t("Apr"), n(8.0)),
+            (t(">05/13/2024"), n(16.0))
+        ]
+    );
+}
+
+/// M13: Refresh asks before overwriting cells outside the old output
+/// (`dbdocfun.cxx:1349-1371`).
+#[test]
+fn pivot_refresh_refuses_to_overwrite_without_flag() {
+    let mut f = Fixture::new();
+    load(
+        &mut f,
+        &[
+            &["K", "V"],
+            &["a", "1"],
+            &["b", "2"],
+            &["a", "3"],
+            &["a", "4"],
+        ],
+    );
+    let p = simple(&f, "A1:B5", 0, 1, AggFn::Sum);
+    let id = create(&mut f, p);
+    f.set("K5", "precious");
+    f.set("A4", "c");
+    f.set("A5", "d");
+    let r = f.apply(vec![Op::RefreshPivot {
+        id,
+        overwrite: false,
+    }]);
+    assert_eq!(r.errors[0].code, "target_not_empty");
+    assert_eq!(f.value("K5"), Value::text("precious"));
+    let r = f.apply(vec![Op::RefreshPivot {
+        id,
+        overwrite: true,
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(f.value("K5"), Value::text("d"));
+}
+
+/// M14 (engine side): captions and date groups survive an ODS round trip.
+#[test]
+fn pivot_ods_round_trip_keeps_captions_and_date_groups() {
+    let mut f = Fixture::new();
+    load(
+        &mut f,
+        &[&["D", "V"], &["2024-01-05", "1"], &["2024-03-05", "2"]],
+    );
+    let mut p = simple(&f, "A1:B3", 0, 1, AggFn::Sum);
+    p.data_fields[0].caption = Some("Rev total".into());
+    p.row_fields[0].group = Some(PivotGroupDto::Date {
+        start: Some(45292.0),
+        end: Some(45400.0),
+        parts: vec![DatePart::Months],
+    });
+    create(&mut f, p);
+    let before = f.svc.pivots(f.doc).unwrap()[0].clone();
+    let data = f.svc.document(f.doc).unwrap().wb.to_data();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    tally_io_ods::write_ods(&data, &mut bytes).unwrap();
+    bytes.set_position(0);
+    let back = tally_io_ods::read_ods(bytes, &tally_io_ods::Limits::default()).unwrap();
+    let wb = tally_engine::Workbook::from_data(&back);
+    let p = &wb.sheets[0].meta.pivots[0];
+    let after = tally_engine::pivot::to_api(wb.sheets[0].id, p);
+    assert_eq!(after.data_fields, before.data_fields);
+    assert_eq!(after.row_fields[0].group, before.row_fields[0].group);
+}
+
+/// Security H7: pivots read from files get the API's field cap.
+#[test]
+fn pivot_from_file_with_too_many_fields_is_refused() {
+    let f = fixture();
+    let mut data = f.svc.document(f.doc).unwrap().wb.to_data();
+    let field = tally_model::PivotFieldData::default();
+    data.sheets[0].pivots.push(tally_model::PivotData {
+        name: "Big".into(),
+        row_fields: vec![field; 2000],
+        data_fields: vec![tally_model::PivotDataFieldData::default(); 2000],
+        ..tally_model::PivotData::default()
+    });
+    let wb = tally_engine::Workbook::from_data(&data);
+    assert!(wb.sheets[0].meta.pivots.is_empty());
+    assert!(
+        wb.import_warnings
+            .iter()
+            .any(|w| w.contains("Big") && w.contains("4000 fields")),
+        "{:?}",
+        wb.import_warnings
+    );
+}
+
+/// Security H8: "show items without data" does not build the cross
+/// product: the axis trees are bounded by the sheet before the layout.
+#[test]
+fn pivot_show_empty_cross_product_is_refused_quickly() {
+    let mut f = Fixture::new();
+    let mut rows: Vec<Vec<String>> = vec![vec!["a".into(), "b".into(), "c".into(), "v".into()]];
+    for i in 0..1000u32 {
+        rows.push(vec![
+            format!("x{i}"),
+            format!("y{}", (i * 7) % 1000),
+            format!("z{}", (i * 13) % 1000),
+            "1".into(),
+        ]);
+    }
+    f.apply(vec![Op::SetRangeInputs {
+        sheet: f.sheet,
+        r: 0,
+        c: 0,
+        rows,
+    }]);
+    let mut p = pivot(&f);
+    p.source = PivotSource::Range {
+        sheet: f.sheet,
+        range: range("A1:D1001"),
+    };
+    p.target = CellPos { r: 0, c: 10 };
+    p.row_fields = vec![field(0, "a"), field(1, "b"), field(2, "c")];
+    p.col_fields.clear();
+    for fl in &mut p.row_fields {
+        fl.show_empty = true;
+    }
+    p.data_fields = vec![data(3, AggFn::Sum)];
+    let t = std::time::Instant::now();
+    let r = f.apply(vec![Op::CreatePivot {
+        pivot: p,
+        overwrite: true,
+    }]);
+    assert_eq!(r.errors[0].code, ApiError::UNSUPPORTED);
+    assert!(t.elapsed().as_secs() < 20, "{:?}", t.elapsed());
+}
+
+/// Security M7/M8: hidden items, manual order and AutoShow are hash or
+/// sort based, GETPIVOTDATA is indexed.
+#[test]
+fn pivot_large_options_and_getpivotdata_are_not_quadratic() {
+    let mut f = Fixture::new();
+    let n = 20_000u32;
+    let mut rows: Vec<Vec<String>> = vec![vec!["k".into(), "v".into()]];
+    for i in 0..n {
+        rows.push(vec![format!("i{i}"), format!("{}", i % 97)]);
+    }
+    f.apply(vec![Op::SetRangeInputs {
+        sheet: f.sheet,
+        r: 0,
+        c: 0,
+        rows,
+    }]);
+    let mut p = pivot(&f);
+    p.source = PivotSource::Range {
+        sheet: f.sheet,
+        range: range(&format!("A1:B{}", n + 1)),
+    };
+    p.target = CellPos { r: 0, c: 10 };
+    p.col_fields.clear();
+    p.row_fields = vec![field(0, "k")];
+    p.row_fields[0].hidden_items = (0..10_000).map(|i| format!("zz{i}")).collect();
+    p.row_fields[0].sort = PivotSort::Manual {
+        order: (0..10_000).map(|i| format!("i{i}")).collect(),
+    };
+    p.row_fields[0].auto_show = Some(AutoShow {
+        top: true,
+        count: 15_000,
+        data_field: 0,
+    });
+    p.data_fields = vec![data(1, AggFn::Sum)];
+    let t = std::time::Instant::now();
+    create(&mut f, p);
+    let formulas: Vec<Vec<String>> = (0..2000)
+        .map(|i| vec![format!("=GETPIVOTDATA(\"v\";$K$1;\"k\";\"i{i}\")")])
+        .collect();
+    f.apply(vec![Op::SetRangeInputs {
+        sheet: f.sheet,
+        r: 0,
+        c: 3,
+        rows: formulas,
+    }]);
+    // i96 (v = 96) is in the top 15,000; i0 (v = 0) is auto-hidden.
+    assert_eq!(f.value("D97"), Value::Number(96.0));
+    assert!(matches!(
+        f.value("D1"),
+        Value::Error(tally_types::ErrorKind::Ref)
+    ));
+    assert!(t.elapsed().as_secs() < 30, "{:?}", t.elapsed());
 }

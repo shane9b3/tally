@@ -55,16 +55,18 @@ pub struct NameEntry {
     pub def: Option<NameDef>,
 }
 
-/// The workbook's names.
+/// The workbook's names. Each part sits behind an `Arc` and is edited
+/// copy-on-write (the meta pattern of `ops_v03`), so an undo snapshot of
+/// the table is three pointer copies (security review 4, MEDIUM-T6).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NameTable {
-    entries: Vec<NameEntry>,
-    index: HashMap<(String, Option<SheetId>), u32>,
+    entries: Arc<Vec<NameEntry>>,
+    index: Arc<HashMap<(String, Option<SheetId>), u32>>,
     /// Lowercase alias → entry: the original spelling of an imported name
     /// that was renamed because it reads as a cell reference in Tally's
     /// 16,384-column grid (review 3, H4), so the file's formulas still
     /// resolve it.
-    aliases: HashMap<(String, Option<SheetId>), u32>,
+    aliases: Arc<HashMap<(String, Option<SheetId>), u32>>,
 }
 
 /// The dependency key of a name.
@@ -89,7 +91,7 @@ impl NameTable {
 
     /// Registers `alias` (an original spelling from a file) for `id`.
     pub fn add_alias(&mut self, alias: &str, scope: Option<SheetId>, id: NameId) {
-        self.aliases.insert((name_key(alias), scope), id.0);
+        Arc::make_mut(&mut self.aliases).insert((name_key(alias), scope), id.0);
     }
 
     /// The name visible from `sheet`: a defined sheet-scoped name first,
@@ -129,25 +131,32 @@ impl NameTable {
     /// Defines `name` in `scope` (reviving or replacing an entry).
     pub fn define(&mut self, name: &str, scope: Option<SheetId>, def: NameDef) -> NameId {
         if let Some(id) = self.lookup(name, scope) {
-            if let Some(e) = self.entries.get_mut(id.0 as usize) {
+            if let Some(e) = Arc::make_mut(&mut self.entries).get_mut(id.0 as usize) {
                 e.name = name.into();
                 e.def = Some(def);
             }
             return id;
         }
         let id = self.entries.len() as u32;
-        self.entries.push(NameEntry {
+        Arc::make_mut(&mut self.entries).push(NameEntry {
             name: name.into(),
             scope,
             def: Some(def),
         });
-        self.index.insert((name_key(name), scope), id);
+        Arc::make_mut(&mut self.index).insert((name_key(name), scope), id);
         NameId(id)
     }
 
     /// Deletes the definition of `id` (the entry stays as a tombstone).
     pub fn undefine(&mut self, id: NameId) -> bool {
-        match self.entries.get_mut(id.0 as usize) {
+        if self
+            .entries
+            .get(id.0 as usize)
+            .is_none_or(|e| e.def.is_none())
+        {
+            return false;
+        }
+        match Arc::make_mut(&mut self.entries).get_mut(id.0 as usize) {
             Some(e) if e.def.is_some() => {
                 e.def = None;
                 true
@@ -177,12 +186,21 @@ impl NameTable {
 
     /// Mutable access to every definition (structure changes, moves).
     pub fn defs_mut(&mut self) -> impl Iterator<Item = &mut NameDef> {
-        self.entries.iter_mut().filter_map(|e| e.def.as_mut())
+        Arc::make_mut(&mut self.entries)
+            .iter_mut()
+            .filter_map(|e| e.def.as_mut())
     }
 
     /// Drops the definitions scoped to `sheet` (when it is deleted).
     pub fn undefine_scope(&mut self, sheet: SheetId) {
-        for e in &mut self.entries {
+        if !self
+            .entries
+            .iter()
+            .any(|e| e.scope == Some(sheet) && e.def.is_some())
+        {
+            return;
+        }
+        for e in Arc::make_mut(&mut self.entries).iter_mut() {
             if e.scope == Some(sheet) {
                 e.def = None;
             }
@@ -332,11 +350,13 @@ pub fn validate_name(wb: &Workbook, name: &str) -> Result<(), ApiError> {
     let bad = |why: &str| Err(ApiError::invalid_argument(format!("{name:?} {why}")));
     let mut chars = name.chars();
     match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        // Letters of any script, as the formula parser reads them (AOO
+        // `SC_COMPILER_C_CHAR_NAME`; correctness review 4, M18).
+        Some(c) if c.is_alphabetic() || c == '_' => {}
         Some(_) => return bad("must start with a letter or _"),
         None => return Err(ApiError::invalid_argument("the name is empty")),
     }
-    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+    if !chars.all(|c| c.is_alphanumeric() || c == '_' || c == '.') {
         return bad("may contain only letters, digits, _ and .");
     }
     if name.len() > 255 {

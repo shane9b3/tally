@@ -10,6 +10,7 @@
 import type { ApplyResult, ChartAnchor, ChartDataDto, ChartDto, ImageDto, Op } from "@tally/bridge";
 import { PX_PER_MM, pxToAnchor, type ObjectHandle } from "@tally/grid";
 import type { AppController } from "../controller";
+import { nodeVisible } from "../charts/chartMounts";
 import { objectId, parseObjectId, useChartStore } from "../charts/chartStore";
 import { useUiStore } from "../stores/uiStore";
 import { anchorChanged, dragRect, nudgeAnchor, roundAnchor, type Rect } from "./objectDrag";
@@ -18,6 +19,11 @@ import { clientV4 } from "./shell";
 
 /** Charts whose data is fetched at once after a refresh. */
 export const DATA_FETCH_CAP = 50;
+/** Charts fetched per refresh (only those in the viewport), and requests in flight at once. */
+export const MAX_CHART_FETCH = 20;
+export const MAX_FETCHES_IN_FLIGHT = 4;
+/** Coalescing window for `chartsChanged` refreshes. */
+export const REFRESH_DEBOUNCE_MS = 120;
 /** Widest default size of an inserted picture (mm). */
 export const MAX_IMAGE_WIDTH_MM = 160;
 
@@ -60,6 +66,7 @@ export class ObjectFeatures {
       clientV4(this.ctl).images(doc, sheet).catch((): ImageDto[] => []),
     ]);
     if (seq !== this.refreshSeq || sheet !== this.ctl.sheet || this.ctl.info?.doc !== doc) return;
+    this.stale.clear();
     useChartStore.getState().setObjects(sheet, charts, images);
     void this.loadImageData(doc, sheet, images);
     await this.refreshData(charts.slice(0, DATA_FETCH_CAP).map((c) => c.id));
@@ -95,13 +102,72 @@ export class ObjectFeatures {
     );
   }
 
-  /** Re-fetches `chart_data` for charts of the active sheet. */
+  /** Chart ids whose data is stale because they were off screen when the sheet changed. */
+  private readonly stale = new Set<number>();
+  private pending = new Set<number>();
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private waiters: (() => void)[] = [];
+
+  /** Whether chart `id` intersects the primary grid's viewport (true when that cannot be told). */
+  private isVisible(id: number): boolean {
+    const grid = this.ctl.grid;
+    if (!grid) return true;
+    try {
+      const rect = grid.objectRect(objectId("chart", id));
+      return rect ? nodeVisible(rect, grid.getGeometry()) : true;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * Debounced `refreshData` for engine results: one flush per {@link REFRESH_DEBOUNCE_MS}
+   * however many `chartsChanged` arrive (a hostile file can list every chart after each edit).
+   */
+  scheduleRefresh(ids: readonly number[]): Promise<void> {
+    for (const id of ids) this.pending.add(id);
+    return new Promise((resolve) => {
+      this.waiters.push(resolve);
+      if (this.flushTimer !== null) return;
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = null;
+        const batch = [...this.pending];
+        const done = this.waiters;
+        this.pending = new Set();
+        this.waiters = [];
+        void this.refreshData(batch).finally(() => done.forEach((w) => w()));
+      }, REFRESH_DEBOUNCE_MS);
+    });
+  }
+
+  /** Fetches the data of stale charts that scrolled into view. */
+  fetchStaleVisible(): void {
+    if (this.stale.size === 0) return;
+    const ids = [...this.stale].filter((id) => this.isVisible(id));
+    if (ids.length > 0) void this.refreshData(ids);
+  }
+
+  /**
+   * Re-fetches `chart_data` for charts of the active sheet: only charts in the
+   * viewport (the rest are marked stale and fetched when they scroll in), at
+   * most {@link MAX_CHART_FETCH} per call and {@link MAX_FETCHES_IN_FLIGHT} at once.
+   */
   async refreshData(ids: readonly number[]): Promise<void> {
     const info = this.ctl.info;
     if (!info || ids.length === 0) return;
     const sheet = this.ctl.sheet;
-    await Promise.all(
-      ids.map(async (id) => {
+    const wanted: number[] = [];
+    for (const id of new Set(ids)) {
+      if (wanted.length < MAX_CHART_FETCH && this.isVisible(id)) {
+        wanted.push(id);
+        this.stale.delete(id);
+      } else this.stale.add(id);
+    }
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const id = wanted[next++];
+        if (id === undefined) return;
         try {
           const data = await clientV4(this.ctl).chartData(info.doc, sheet, id);
           if (sheet === this.ctl.sheet && useChartStore.getState().sheet === sheet) useChartStore.getState().setData(id, data);
@@ -109,8 +175,9 @@ export class ObjectFeatures {
           // Unsupported or gone: the chart shows empty.
           if (sheet === this.ctl.sheet) useChartStore.getState().setData(id, { chart: { sheet, id }, version: 0, categories: [], series: [], truncated: false, problems: [] } satisfies ChartDataDto);
         }
-      }),
-    );
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(MAX_FETCHES_IN_FLIGHT, wanted.length) }, worker));
   }
 
   /** After an engine result: re-read objects or data as the result says. */
@@ -124,10 +191,10 @@ export class ObjectFeatures {
       return;
     }
     const changed = (res.chartsChanged ?? []).filter((c) => c.sheet === sheet).map((c) => c.id);
-    if (changed.length > 0) void this.refreshData(changed);
+    if (changed.length > 0) void this.scheduleRefresh(changed);
     else if (res.changed.some((c) => c.sheet === sheet) && useChartStore.getState().charts.length > 0 && !res.chartsChanged) {
       // An engine without `chartsChanged` (the mock, older builds): refresh every chart.
-      void this.refreshData(useChartStore.getState().charts.map((c) => c.id));
+      void this.scheduleRefresh(useChartStore.getState().charts.map((c) => c.id));
     }
   }
 

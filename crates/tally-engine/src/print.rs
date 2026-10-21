@@ -33,7 +33,6 @@ use tally_model::{OrientationData, PageOrderData, PageScaleData, PageSetupData, 
 use tally_types::{CellRange, SheetId, MAX_COLS, MAX_ROWS};
 
 use crate::storage::{ColumnStore, Sheet};
-use crate::units::{px_to_hmm, DEFAULT_COL_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX};
 use crate::workbook::Workbook;
 
 /// Points per millimetre.
@@ -43,8 +42,63 @@ pub const PT_PER_MM: f32 = 72.0 / 25.4;
 pub const JOB_LRU: usize = 4;
 
 /// Most pages one layout may produce (a 1,000 × 1,000-page sheet is
-/// refused rather than paginated).
-pub const MAX_PAGES: usize = 100_000;
+/// refused rather than paginated). The same cap as the PDF renderer's
+/// (`tally_io_pdf::MAX_PAGES`), so a job that is laid out can be rendered
+/// (security review 4, M5: 100,000 here against 10,000 there).
+pub const MAX_PAGES: usize = 10_000;
+
+/// Default row height for printing when a row has no explicit height:
+/// AOO's standard row height (256 twips, 0.452 cm, the height ODS files
+/// declare; sc/inc/global.hxx:165), so a new sheet paginates 53 default
+/// rows per A4 page like AOO (correctness review 4, M22: the 24 px screen
+/// default gave 38).
+pub const PRINT_DEFAULT_ROW_HMM: u32 = 452;
+/// Default column width for printing (AOO's 2.258 cm).
+pub const PRINT_DEFAULT_COL_HMM: u32 = 2258;
+/// Row header width (printed row numbers), points.
+pub const ROW_HEADER_W_PT: f32 = 28.0;
+/// Column header height (printed column letters), points.
+pub const COL_HEADER_H_PT: f32 = 14.0;
+
+/// A run of `(index, scaled size)` items shared by all pages of a layout
+/// (security review 4, H1/H5: each page held its own copy of its rows and
+/// of the repeated rows, 801 MB for 10k pages of a 1.5 KB file).
+#[derive(Clone, Debug, Default)]
+pub struct Items {
+    all: std::sync::Arc<[(u32, u32)]>,
+    start: usize,
+    end: usize,
+}
+
+impl Items {
+    /// Items `[start, end)` of `all`.
+    pub fn slice(all: &std::sync::Arc<[(u32, u32)]>, start: usize, end: usize) -> Self {
+        let end = end.min(all.len());
+        Self {
+            all: all.clone(),
+            start: start.min(end),
+            end,
+        }
+    }
+}
+
+impl std::ops::Deref for Items {
+    type Target = [(u32, u32)];
+    fn deref(&self) -> &[(u32, u32)] {
+        &self.all[self.start..self.end]
+    }
+}
+
+impl From<Vec<(u32, u32)>> for Items {
+    fn from(v: Vec<(u32, u32)>) -> Self {
+        let end = v.len();
+        Self {
+            all: v.into(),
+            start: 0,
+            end,
+        }
+    }
+}
 
 /// Converts 1/100 mm to points.
 pub fn hmm_to_pt(hmm: u32) -> f32 {
@@ -128,8 +182,12 @@ pub fn bands(axis: &Axis, body: u32, scale: u32, skip_manual: bool) -> Vec<Band>
     let mut start = 0usize;
     let mut manual = false;
     while start < n {
-        let first_index = axis.items[start].0;
-        let with_repeat = repeat_end.is_some_and(|last| first_index > last);
+        let (first_index, first_size) = axis.items[start];
+        // The repeated span is printed only when the band's first item
+        // still fits below it; a span taller than the page is left off (it
+        // made every page hold one row, security review 4, H1).
+        let with_repeat = repeat_end.is_some_and(|last| first_index > last)
+            && repeat_size.saturating_add(scaled(first_size, scale)) <= body;
         let avail = if with_repeat {
             body.saturating_sub(repeat_size)
         } else {
@@ -169,13 +227,13 @@ pub struct PageSpec {
     /// Sheet.
     pub sheet: SheetId,
     /// Rows `(index, scaled height hmm)` on the page.
-    pub rows: Vec<(u32, u32)>,
+    pub rows: Items,
     /// Columns `(index, scaled width hmm)`.
-    pub cols: Vec<(u32, u32)>,
+    pub cols: Items,
     /// Repeated rows printed above (`(index, scaled height)`), if any.
-    pub repeat_rows: Vec<(u32, u32)>,
+    pub repeat_rows: Items,
     /// Repeated columns printed left of the page.
-    pub repeat_cols: Vec<(u32, u32)>,
+    pub repeat_cols: Items,
     /// Scale percent.
     pub scale: u32,
     /// Paper `(w, h)` hmm.
@@ -217,8 +275,18 @@ impl PageSpec {
 
     /// Content size `(w, h)` hmm including the repeated rows/columns.
     pub fn content_size(&self) -> (u32, u32) {
-        let w: u32 = self.repeat_cols.iter().chain(&self.cols).map(|c| c.1).sum();
-        let h: u32 = self.repeat_rows.iter().chain(&self.rows).map(|r| r.1).sum();
+        let w: u32 = self
+            .repeat_cols
+            .iter()
+            .chain(self.cols.iter())
+            .map(|c| c.1)
+            .sum();
+        let h: u32 = self
+            .repeat_rows
+            .iter()
+            .chain(self.rows.iter())
+            .map(|r| r.1)
+            .sum();
         (w, h)
     }
 
@@ -330,11 +398,11 @@ pub fn resolve_placeholders(
 }
 
 fn default_row_hmm() -> u32 {
-    px_to_hmm(DEFAULT_ROW_HEIGHT_PX)
+    PRINT_DEFAULT_ROW_HMM
 }
 
 fn default_col_hmm() -> u32 {
-    px_to_hmm(DEFAULT_COL_WIDTH_PX)
+    PRINT_DEFAULT_COL_HMM
 }
 
 /// Height of a row in hmm (0 when hidden or filtered).
@@ -379,13 +447,76 @@ fn chart_cells(sheet: &Sheet, anchor: &tally_model::ChartAnchorData) -> CellRang
     CellRange::new(sheet.id, anchor.row, anchor.col, r, c)
 }
 
+/// Most stored cells [`print_area`] inspects for text overflow.
+const MAX_OVERFLOW_SCAN: usize = 1_000_000;
+/// Columns left of the area's last column whose text may overflow past
+/// it.
+const OVERFLOW_SCAN_COLS: u32 = 64;
+
+/// `area` widened to the columns that left-aligned text near its right
+/// edge overflows into (AOO `ExtendPrintArea`, sc/source/ui/view/
+/// printfun.cxx:730-737; correctness review 4, M24). The text width is
+/// estimated from the character count and the font size.
+fn extend_for_overflow(wb: &Workbook, s: &Sheet, area: CellRange) -> CellRange {
+    use tally_model::HAlign as HA;
+    let mut c1 = area.c1;
+    let mut scanned = 0usize;
+    let lo = area.c1.saturating_sub(OVERFLOW_SCAN_COLS - 1).max(area.c0);
+    for c in lo..=area.c1 {
+        let Some(col) = s.column(c) else {
+            continue;
+        };
+        for (r, _) in col.cells.iter_range(area.r0, area.r1) {
+            scanned += 1;
+            if scanned > MAX_OVERFLOW_SCAN {
+                return CellRange::new(area.sheet, area.r0, area.c0, area.r1, c1);
+            }
+            let addr = tally_types::CellAddr::new(s.id, r, c);
+            let tally_types::Value::Text(t) = wb.value(addr) else {
+                continue;
+            };
+            let st = &wb.styles.get(wb.style_at(addr)).data;
+            if st.align.wrap
+                || !matches!(st.align.h, HA::General | HA::Left)
+                || s.merge_at(r, c).is_some()
+            {
+                continue;
+            }
+            let size = f64::from(st.font.size_pt.unwrap_or(10.0).clamp(1.0, 400.0));
+            let chars = t.chars().take(4096).count() as f64;
+            // pt → hmm: 2540 / 72.
+            let need = (chars * size * 0.55 * 2540.0 / 72.0) as u64;
+            let mut have = u64::from(col_width(s, c));
+            let mut cc = c;
+            while have < need && cc < MAX_COLS - 1 && cc - c < 256 {
+                if s.get(r, cc + 1).is_some() {
+                    break;
+                }
+                cc += 1;
+                have += u64::from(col_width(s, cc));
+            }
+            c1 = c1.max(cc);
+        }
+    }
+    CellRange::new(area.sheet, area.r0, area.c0, area.r1, c1)
+}
+
 /// The area a sheet prints: the print range, or the used area plus
-/// visibly formatted cells and chart bounds.
+/// visibly formatted cells, chart bounds and overflowing text, from A1
+/// (AOO starts the implicit area at the first cell, printfun.cxx:679-684;
+/// correctness review 4, M23).
 pub fn print_area(wb: &Workbook, sheet: SheetId) -> Option<CellRange> {
     let s = wb.sheet(sheet)?;
     if let Some(r) = s.meta.page_setup.print_range {
         return Some(CellRange::new(sheet, r.r0, r.c0, r.r1, r.c1));
     }
+    let area = used_print_area(wb, s, sheet)?;
+    let area = CellRange::new(sheet, 0, 0, area.r1, area.c1);
+    Some(extend_for_overflow(wb, s, area))
+}
+
+/// The used area plus formatted cells and charts.
+fn used_print_area(wb: &Workbook, s: &Sheet, sheet: SheetId) -> Option<CellRange> {
     let mut area = s.used_range();
     let mut extend = |r: CellRange| {
         area = Some(match area {
@@ -459,9 +590,19 @@ fn axis_of(
             .collect();
         (!items.is_empty()).then_some(((a, b), items))
     });
+    // A manual break before a hidden row breaks before the next visible
+    // one (AOO keeps it, sc/source/core/data/table5.cxx:212-218,250-257;
+    // correctness review 4, M25).
+    let mut breaks = BTreeSet::new();
+    for b in manual.range(lo + 1..=hi) {
+        let k = items.partition_point(|(i, _)| *i < *b);
+        if let Some((i, _)) = items.get(k) {
+            breaks.insert(*i);
+        }
+    }
     Axis {
         items,
-        manual: manual.range(lo + 1..=hi).copied().collect(),
+        manual: breaks,
         repeat,
     }
 }
@@ -471,14 +612,22 @@ fn axis_of(
 fn body_of(p: &PageSetupData) -> Body {
     let (pw, ph) = paper_hmm(p);
     let m = &p.margins;
+    // Printed row/column headers take their space from the body
+    // (AOO printfun.cxx:2953-2957; correctness review 4, M26).
+    let pt_hmm = |pt: f32| (pt * 2540.0 / 72.0).round() as u32;
+    let (hdr_w, hdr_h) = if p.print_headers {
+        (pt_hmm(ROW_HEADER_W_PT), pt_hmm(COL_HEADER_H_PT))
+    } else {
+        (0, 0)
+    };
     let header = p.header.as_ref().map(|_| (m.top, m.header));
     let footer = p
         .footer
         .as_ref()
         .map(|_| (ph.saturating_sub(m.bottom + m.footer), m.footer));
-    let body_w = pw.saturating_sub(m.left + m.right).max(1000);
+    let body_w = pw.saturating_sub(m.left + m.right + hdr_w).max(1000);
     let body_h = ph
-        .saturating_sub(m.top + m.bottom)
+        .saturating_sub(m.top + m.bottom + hdr_h)
         .saturating_sub(header.map_or(0, |h| h.1))
         .saturating_sub(footer.map_or(0, |f| f.1))
         .max(1000);
@@ -625,37 +774,51 @@ pub fn paginate_sheet(
         )));
     }
     let paper = paper_hmm(p);
+    // Scaled sizes, computed once and shared by every page.
+    let scale_all = |v: &[(u32, u32)]| -> std::sync::Arc<[(u32, u32)]> {
+        v.iter().map(|(i, h)| (*i, scaled(*h, scale))).collect()
+    };
+    let row_all = scale_all(&rows.items);
+    let col_all = scale_all(&cols.items);
+    let repeat_of = |a: &Axis| -> Items {
+        a.repeat
+            .as_ref()
+            .map(|(_, items)| {
+                let all = scale_all(items);
+                let n = all.len();
+                Items::slice(&all, 0, n)
+            })
+            .unwrap_or_default()
+    };
+    let repeat_rows_all = repeat_of(&rows);
+    let repeat_cols_all = repeat_of(&cols);
     let mut pages = Vec::new();
     let mut push = |r: &Band, c: &Band| {
-        let page_rows: Vec<(u32, u32)> = rows.items[r.start..r.end]
-            .iter()
-            .map(|(i, h)| (*i, scaled(*h, scale)))
-            .collect();
-        let page_cols: Vec<(u32, u32)> = cols.items[c.start..c.end]
-            .iter()
-            .map(|(i, w)| (*i, scaled(*w, scale)))
-            .collect();
+        let page_rows = Items::slice(&row_all, r.start, r.end);
+        let page_cols = Items::slice(&col_all, c.start, c.end);
         if suppress_empty && !band_has_content(wb, s, &page_rows, &page_cols) {
             return;
         }
-        let repeat_rows: Vec<(u32, u32)> = if r.with_repeat {
-            rows.repeat
-                .as_ref()
-                .map(|(_, items)| items.iter().map(|(i, h)| (*i, scaled(*h, scale))).collect())
-                .unwrap_or_default()
+        let repeat_rows = if r.with_repeat {
+            repeat_rows_all.clone()
         } else {
-            Vec::new()
+            Items::default()
         };
-        let repeat_cols: Vec<(u32, u32)> = if c.with_repeat {
-            cols.repeat
-                .as_ref()
-                .map(|(_, items)| items.iter().map(|(i, w)| (*i, scaled(*w, scale))).collect())
-                .unwrap_or_default()
+        let repeat_cols = if c.with_repeat {
+            repeat_cols_all.clone()
         } else {
-            Vec::new()
+            Items::default()
         };
-        let content_w: u32 = repeat_cols.iter().chain(&page_cols).map(|c| c.1).sum();
-        let content_h: u32 = repeat_rows.iter().chain(&page_rows).map(|r| r.1).sum();
+        let content_w: u32 = repeat_cols
+            .iter()
+            .chain(page_cols.iter())
+            .map(|c| c.1)
+            .sum();
+        let content_h: u32 = repeat_rows
+            .iter()
+            .chain(page_rows.iter())
+            .map(|r| r.1)
+            .sum();
         let mut x = p.margins.left;
         let mut y = p.margins.top + header_block.map_or(0, |h| h.1);
         if p.center_h && content_w < body_w {
@@ -847,14 +1010,14 @@ pub fn page_breaks(wb: &Workbook, sheet: SheetId) -> Result<PageBreaksDto, ApiEr
             let at = rows.items[b.start].0;
             row_breaks.push(BreakInfo {
                 at,
-                manual: s.meta.row_breaks.contains(&at),
+                manual: b.manual,
             });
         }
         for b in cb.iter().skip(1) {
             let at = cols.items[b.start].0;
             col_breaks.push(BreakInfo {
                 at,
-                manual: s.meta.col_breaks.contains(&at),
+                manual: b.manual,
             });
         }
     }

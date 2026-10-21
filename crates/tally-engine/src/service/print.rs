@@ -175,11 +175,20 @@ mod pdf {
 
     /// Largest chart SVG accepted (bytes).
     pub const MAX_CHART_SVG: usize = 4 * 1024 * 1024;
+    /// Most chart SVG bytes one job accepts, all charts together
+    /// (security review 4, M6: 1,000 × 4 MB were accepted).
+    pub const MAX_JOB_SVG_BYTES: usize = 32 * 1024 * 1024;
+    /// Most cell positions one job visits, all pages together (security
+    /// review 4, H5: 1 hmm rows put 24,000 × 650 cells on one page and a
+    /// 2.7 MB file took about 9 min).
+    pub const MAX_JOB_CELLS: u64 = 20_000_000;
+    /// Most cell positions on one page.
+    pub const MAX_PAGE_CELLS: u64 = 1_000_000;
     /// Header/footer and note font size.
     const HF_SIZE: f32 = 10.0;
     /// Row/column header sizes in points (when printed).
-    const COL_HEADER_H: f32 = 14.0;
-    const ROW_HEADER_W: f32 = 28.0;
+    const COL_HEADER_H: f32 = crate::print::COL_HEADER_H_PT;
+    const ROW_HEADER_W: f32 = crate::print::ROW_HEADER_W_PT;
     const GRID_COLOR: u32 = 0xc0c0c0ff;
     const HEADER_FILL: u32 = 0xeeeeeeff;
 
@@ -267,7 +276,22 @@ mod pdf {
         charts: &[ChartSvgDto],
     ) -> Result<(PrintJob, PrintLayoutDto)> {
         let wb = &doc.wb;
-        let mut svgs: HashMap<(SheetId, u32), &str> = HashMap::new();
+        // The cost of a job is the cell positions it visits: refuse
+        // oversized print areas before building anything.
+        let mut cells: u64 = 0;
+        for page in pages {
+            let n = (page.rows.len() + page.repeat_rows.len()) as u64
+                * (page.cols.len() + page.repeat_cols.len()) as u64;
+            cells = cells.saturating_add(n);
+            if n > MAX_PAGE_CELLS || cells > MAX_JOB_CELLS {
+                return Err(ApiError::unsupported(
+                    "the print area is too large to print (more than 20 million cells, or \
+                     1 million on one page); set a print range or a larger scale",
+                ));
+            }
+        }
+        let mut svgs: HashMap<(SheetId, u32), Arc<str>> = HashMap::new();
+        let mut svg_bytes = 0usize;
         for c in charts {
             if c.svg.len() > MAX_CHART_SVG {
                 warnings.push(format!(
@@ -276,7 +300,16 @@ mod pdf {
                 ));
                 continue;
             }
-            svgs.insert((c.sheet, c.id), &c.svg);
+            if svg_bytes + c.svg.len() > MAX_JOB_SVG_BYTES {
+                warnings.push(format!(
+                    "Chart {} on sheet {} was skipped: the charts of one print job may \
+                     total at most 32 MB.",
+                    c.id, c.sheet
+                ));
+                continue;
+            }
+            svg_bytes += c.svg.len();
+            svgs.insert((c.sheet, c.id), Arc::from(c.svg.as_str()));
         }
         let mut job = PrintJob {
             pages: Vec::with_capacity(pages.len()),
@@ -326,7 +359,14 @@ mod pdf {
         }
         if !note_lines.is_empty() {
             if let Some(first) = pages.first() {
-                job.pages.extend(note_pages(first, &note_lines));
+                let room = tally_io_pdf::MAX_PAGES.saturating_sub(job.pages.len());
+                let mut notes = note_pages(first, &note_lines);
+                if notes.len() > room {
+                    notes.truncate(room);
+                    warnings
+                        .push("Some notes were not printed: the job has too many pages.".into());
+                }
+                job.pages.extend(notes);
             }
         }
         let layout = PrintLayoutDto {
@@ -429,7 +469,7 @@ mod pdf {
         wb: &Workbook,
         version: u64,
         page: &PageSpec,
-        svgs: &HashMap<(SheetId, u32), &str>,
+        svgs: &HashMap<(SheetId, u32), Arc<str>>,
     ) -> (Vec<Item>, usize) {
         let mut items: Vec<Item> = Vec::new();
         let Some(sheet) = wb.sheet(page.sheet) else {
@@ -446,9 +486,9 @@ mod pdf {
             y0 += COL_HEADER_H;
         }
         let scale = page.scale as f32 / 100.0;
-        let mut row_items: Vec<(u32, u32)> = page.repeat_rows.clone();
+        let mut row_items: Vec<(u32, u32)> = page.repeat_rows.to_vec();
         row_items.extend(page.rows.iter().copied());
-        let mut col_items: Vec<(u32, u32)> = page.repeat_cols.clone();
+        let mut col_items: Vec<(u32, u32)> = page.repeat_cols.to_vec();
         col_items.extend(page.cols.iter().copied());
         let rows = positions(y0, &row_items);
         let cols = positions(x0, &col_items);
@@ -478,10 +518,21 @@ mod pdf {
                 }
             }
         }
-        let col_index: HashMap<u32, usize> =
-            cols.iter().enumerate().map(|(i, c)| (c.0, i)).collect();
-        let row_index: HashMap<u32, usize> =
-            rows.iter().enumerate().map(|(i, r)| (r.0, i)).collect();
+        // Charts are placed from the body rows and columns only, so a
+        // chart anchored in a repeated row is printed once, not on every
+        // page (security review 4, M6).
+        let col_index: HashMap<u32, usize> = cols
+            .iter()
+            .enumerate()
+            .skip(page.repeat_cols.len())
+            .map(|(i, c)| (c.0, i))
+            .collect();
+        let row_index: HashMap<u32, usize> = rows
+            .iter()
+            .enumerate()
+            .skip(page.repeat_rows.len())
+            .map(|(i, r)| (r.0, i))
+            .collect();
         let has_content = |r: u32, c: u32| {
             views.get(&(r, c)).is_some_and(|v| !v.text.is_empty()) || sheet.is_merge_covered(r, c)
         };
@@ -712,7 +763,7 @@ mod pdf {
                 let h = hmm_to_pt(a.height_hmm) * scale;
                 items.push(Item::Svg {
                     rect: Rect::new(x, y, w.max(1.0), h.max(1.0)),
-                    svg: (*svg).to_string(),
+                    svg: svg.clone(),
                 });
             }
         }

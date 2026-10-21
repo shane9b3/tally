@@ -160,6 +160,9 @@ pub struct Effects {
     /// re-recording them: undo restores the earliest state anyway, and
     /// not holding the `Arc` lets `Arc::make_mut` edit in place.
     pub meta_recorded: std::collections::HashMap<SheetId, u32>,
+    /// This transaction already holds a [`Change::Names`] snapshot (see
+    /// [`names_snapshot_tx`]).
+    pub names_recorded: bool,
     /// A protection change happened: the undo and redo stacks are cleared
     /// after the transaction (protection cannot be undone around; Excel
     /// and AOO do the same).
@@ -598,6 +601,19 @@ pub fn meta_entries(sheet: SheetId, part: MetaPart) -> Change {
 /// A snapshot of the name table (for undo).
 pub fn names_snapshot(wb: &Workbook) -> Change {
     Change::Names(Box::new(wb.names.clone()))
+}
+
+/// [`names_snapshot`] once per transaction: later ops of the transaction
+/// get `None` (undo restores the earliest table anyway), so a transaction
+/// of 10,000 `DefineName` ops keeps one copy of the table instead of
+/// 10,000 (security review 4, MEDIUM-T6). Call it only right before a
+/// mutation that cannot fail.
+pub fn names_snapshot_tx(wb: &Workbook, fx: &mut Effects) -> Option<Change> {
+    if fx.names_recorded {
+        return None;
+    }
+    fx.names_recorded = true;
+    Some(names_snapshot(wb))
 }
 
 /// `true` if the content of a cell is a formula (used by tests).

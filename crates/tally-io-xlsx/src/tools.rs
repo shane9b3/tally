@@ -72,7 +72,16 @@ pub(crate) fn write_outline(
     let mut rows: Vec<&OutlineGroupData> = sheet.row_groups.iter().collect();
     rows.sort_by_key(|g| (g.level, g.start));
     for g in rows {
-        if g.start > g.end || g.end >= MAX_ROWS || g.level > 7 {
+        if g.start > g.end || g.end >= MAX_ROWS {
+            continue;
+        }
+        if g.level > MAX_OUTLINE_LEVEL {
+            report.warn(format!(
+                "sheet {:?}: row group {}..{} skipped (more than {MAX_OUTLINE_LEVEL} levels)",
+                sheet.name,
+                g.start + 1,
+                g.end + 1
+            ));
             continue;
         }
         let r = if g.collapsed {
@@ -92,7 +101,16 @@ pub(crate) fn write_outline(
     let mut cols: Vec<&OutlineGroupData> = sheet.col_groups.iter().collect();
     cols.sort_by_key(|g| (g.level, g.start));
     for g in cols {
-        if g.start > g.end || g.end >= MAX_COLS || g.level > 7 {
+        if g.start > g.end || g.end >= MAX_COLS {
+            continue;
+        }
+        if g.level > MAX_OUTLINE_LEVEL {
+            report.warn(format!(
+                "sheet {:?}: column group {}..{} skipped (more than {MAX_OUTLINE_LEVEL} levels)",
+                sheet.name,
+                g.start + 1,
+                g.end + 1
+            ));
             continue;
         }
         let (a, b) = (
@@ -116,58 +134,77 @@ pub(crate) fn write_outline(
     Ok(())
 }
 
-/// Builds groups from per-index outline levels: for every level `k`, a
-/// maximal run of indices with level ≥ `k` is a group; it is collapsed
-/// when every index of the run is hidden or the index after it carries
-/// `collapsed`.
+/// Most groups read per axis (the engine's cap).
+const MAX_GROUPS: usize = 100_000;
+
+/// Deepest outline level (AOO `SC_OL_MAXDEPTH`, `sc/inc/olinetab.hxx:31`;
+/// Excel's limit is the same).
+pub(crate) const MAX_OUTLINE_LEVEL: u8 = 7;
+
+/// Builds groups from per-index outline levels (sorted by index): for
+/// every level `k`, a maximal run of indices with level ≥ `k` is a group;
+/// it is collapsed when every index of the run is hidden or the index
+/// after it carries `collapsed`. Linear in the number of levels per
+/// outline level (security review 4, HIGH-T5: the collapsed marker was
+/// looked up by scanning every level for every group).
 pub(crate) fn groups_from_levels(levels: &[(u32, u8, bool, bool)]) -> Vec<OutlineGroupData> {
     // levels: (index, level, hidden, collapsed-marker on this index)
     let mut out = Vec::new();
-    let max = levels.iter().map(|l| l.1).max().unwrap_or(0).min(8);
-    for k in 1..=max {
-        let mut run: Option<(u32, u32, bool)> = None; // start, end, all hidden
-        let mut i = 0;
-        while i < levels.len() {
-            let (idx, lvl, hidden, _) = levels[i];
-            let contiguous = run.is_some_and(|(_, e, _)| e + 1 == idx);
-            if lvl >= k {
-                run = match run {
-                    Some((s, _, h)) if contiguous => Some((s, idx, h && hidden)),
-                    Some((s, e, h)) => {
-                        let after_collapsed = levels.iter().any(|l| l.0 == e + 1 && l.3);
-                        out.push(OutlineGroupData {
-                            start: s,
-                            end: e,
-                            level: k,
-                            collapsed: h || after_collapsed,
-                        });
-                        let _ = s;
-                        Some((idx, idx, hidden))
-                    }
-                    None => Some((idx, idx, hidden)),
-                };
-            } else if let Some((s, e, h)) = run.take() {
-                let after_collapsed = levels.iter().any(|l| l.0 == e + 1 && l.3);
+    let max = levels
+        .iter()
+        .map(|l| l.1)
+        .max()
+        .unwrap_or(0)
+        .min(MAX_OUTLINE_LEVEL);
+    // The collapsed marker on the index right after position `last`.
+    let after_collapsed = |last: usize, end: u32| {
+        levels[last + 1..]
+            .iter()
+            .take_while(|l| l.0 <= end.saturating_add(1))
+            .any(|l| l.0 == end.saturating_add(1) && l.3)
+    };
+    'levels: for k in 1..=max {
+        // start, end, all hidden, position of the end in `levels`
+        let mut run: Option<(u32, u32, bool, usize)> = None;
+        for (i, &(idx, lvl, hidden, _)) in levels.iter().enumerate() {
+            let contiguous =
+                run.is_some_and(|(_, e, _, _)| e.checked_add(1) == Some(idx) || e == idx);
+            if lvl >= k && contiguous {
+                if let Some(r) = run.as_mut() {
+                    r.1 = idx;
+                    r.2 &= hidden;
+                    r.3 = i;
+                }
+                continue;
+            }
+            if let Some((s, e, h, last)) = run.take() {
                 out.push(OutlineGroupData {
                     start: s,
                     end: e,
                     level: k,
-                    collapsed: h || after_collapsed,
+                    collapsed: h || after_collapsed(last, e),
                 });
+                if out.len() >= MAX_GROUPS {
+                    break 'levels;
+                }
             }
-            i += 1;
+            if lvl >= k {
+                run = Some((idx, idx, hidden, i));
+            }
         }
-        if let Some((s, e, h)) = run {
-            let after_collapsed = levels.iter().any(|l| l.0 == e + 1 && l.3);
+        if let Some((s, e, h, last)) = run {
             out.push(OutlineGroupData {
                 start: s,
                 end: e,
                 level: k,
-                collapsed: h || after_collapsed,
+                collapsed: h || after_collapsed(last, e),
             });
+            if out.len() >= MAX_GROUPS {
+                break;
+            }
         }
     }
-    out.truncate(100_000);
+    out.truncate(MAX_GROUPS);
     out
 }
 
@@ -696,6 +733,12 @@ pub(crate) fn parse_cache<R: BufRead>(xr: &mut XmlReader<R>) -> Result<CacheInfo
     }
 }
 
+/// Most entries collected per field list of a pivot table part: one past
+/// the engine's field cap, so an oversized definition is still refused
+/// (with a warning) instead of being truncated silently (security review
+/// 4, H7).
+const MAX_PIVOT_LIST: usize = 257;
+
 /// Parses `xl/pivotTables/pivotTableN.xml` into a definition (the source
 /// comes from `cache`); `None` when nothing usable was found.
 pub(crate) fn parse_table<R: BufRead>(
@@ -731,6 +774,10 @@ pub(crate) fn parse_table<R: BufRead>(
                 }
                 "pivotFields" => {}
                 "pivotField" => {
+                    if field_axis.len() >= 16_384 {
+                        xr.skip()?;
+                        continue;
+                    }
                     field_axis.push(match e.attr_local("axis") {
                         Some("axisRow") => Some("row"),
                         Some("axisCol") => Some("col"),
@@ -746,7 +793,7 @@ pub(crate) fn parse_table<R: BufRead>(
                     loop {
                         match xr.next()? {
                             Ev::Start(f) => {
-                                if f.local() == "field" {
+                                if f.local() == "field" && xs.len() < MAX_PIVOT_LIST {
                                     if let Some(x) =
                                         f.attr_local("x").and_then(|v| v.trim().parse::<i64>().ok())
                                     {
@@ -769,7 +816,7 @@ pub(crate) fn parse_table<R: BufRead>(
                 "pageFields" => loop {
                     match xr.next()? {
                         Ev::Start(f) => {
-                            if f.local() == "pageField" {
+                            if f.local() == "pageField" && page_x.len() < MAX_PIVOT_LIST {
                                 if let Some(x) = f
                                     .attr_local("fld")
                                     .and_then(|v| v.trim().parse::<i64>().ok())
@@ -787,7 +834,7 @@ pub(crate) fn parse_table<R: BufRead>(
                 "dataFields" => loop {
                     match xr.next()? {
                         Ev::Start(f) => {
-                            if f.local() == "dataField" {
+                            if f.local() == "dataField" && p.data_fields.len() < MAX_PIVOT_LIST {
                                 if let Some(x) = f
                                     .attr_local("fld")
                                     .and_then(|v| v.trim().parse::<u32>().ok())
@@ -967,6 +1014,30 @@ mod tests {
         assert_eq!(
             (g[1].start, g[1].end, g[1].level, g[1].collapsed),
             (2, 3, 2, true)
+        );
+    }
+
+    #[test]
+    fn groups_from_levels_is_linear_and_capped() {
+        // 1M rows of alternating level 1 / 0 (500k one-row groups; was
+        // > 60 s, security review 4, HIGH-T5): stops at 100,000 groups.
+        let levels: Vec<(u32, u8, bool, bool)> = (0..1_000_000u32)
+            .map(|i| (i, (i % 2) as u8, false, i % 4 == 2))
+            .collect();
+        let t = std::time::Instant::now();
+        let g = groups_from_levels(&levels);
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            t.elapsed()
+        );
+        assert_eq!(g.len(), MAX_GROUPS);
+        assert!(g[0].collapsed && !g[1].collapsed);
+        // Levels deeper than 7 become 7 (SC_OL_MAXDEPTH).
+        let deep = vec![(1, 9, false, false), (2, 9, false, false)];
+        assert_eq!(
+            groups_from_levels(&deep).iter().map(|g| g.level).max(),
+            Some(MAX_OUTLINE_LEVEL)
         );
     }
 

@@ -11,9 +11,15 @@
 //! not read. Export is not supported (docs/parity-deviations.md).
 //!
 //! Hardening (docs/security.md): the file must start with the OLE2
-//! signature and be at most [`Limits::max_bytes`]; sheet, cell and text
-//! budgets are enforced while materializing; calamine's decoder runs under
-//! `catch_unwind` so a malformed stream is an error, never a crash.
+//! signature and be at most [`Limits::max_bytes`]. Before calamine runs,
+//! [`prescan`] extracts the workbook stream with strict chain walks,
+//! rebuilds a canonical compound file around it, neutralizes the record
+//! fields calamine allocates from without a bound and refuses files over
+//! the dense-area, cell, text and formula-work budgets (calamine
+//! allocates eagerly and an allocation failure aborts). Sheet, cell and
+//! text budgets are enforced again while materializing; calamine's
+//! decoder runs under `catch_unwind` so a malformed stream is an error,
+//! never a crash.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -23,6 +29,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use calamine::{Data, Reader, Xls, XlsOptions};
+
+pub mod prescan;
 use tally_model::{
     CellContentData, CellData, CellRangeLocal, DocSettings, SheetData, StyleData, WorkbookData,
 };
@@ -105,7 +113,21 @@ pub fn read_xls(bytes: &[u8], limits: &Limits) -> Result<WorkbookData, XlsError>
     if !sniff_is_xls(bytes) {
         return Err(XlsError::NotXls);
     }
-    let data = bytes.to_vec();
+    let scanned = catch_unwind(AssertUnwindSafe(|| {
+        prescan::sanitize(bytes, limits.max_sheets, limits.max_cells)
+    }));
+    let data = match scanned {
+        Ok(Ok((data, _))) => data,
+        Ok(Err(prescan::Refusal::Malformed(m))) => return Err(XlsError::Malformed(m)),
+        Ok(Err(prescan::Refusal::Budget { what, limit })) => {
+            return Err(XlsError::LimitExceeded { what, limit })
+        }
+        Err(_) => {
+            return Err(XlsError::Malformed(
+                "the compound file could not be read".into(),
+            ))
+        }
+    };
     let result = catch_unwind(AssertUnwindSafe(|| decode(data, limits)));
     match result {
         Ok(r) => r,
@@ -185,7 +207,15 @@ fn decode(data: Vec<u8>, limits: &Limits) -> Result<WorkbookData, XlsError> {
                 Data::Bool(b) => (Value::Bool(*b), None),
                 Data::Error(e) => (Value::Error(err_kind(e.clone())), None),
                 Data::DateTime(dt) => {
-                    let serial = tally_io_xlsx::excel_serial_to_tally(dt.as_f64(), date1904);
+                    // The 1900 leap-year shift applies to dates only: a
+                    // time or duration below 1 day (or any duration) keeps
+                    // its serial (correctness review 4, H10).
+                    let raw = dt.as_f64();
+                    let serial = if dt.is_duration() || raw < 1.0 {
+                        raw
+                    } else {
+                        tally_io_xlsx::excel_serial_to_tally(raw, date1904)
+                    };
                     let fmt = if dt.is_duration() {
                         "[HH]:MM:SS"
                     } else if serial.fract() == 0.0 {

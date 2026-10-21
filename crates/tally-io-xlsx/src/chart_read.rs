@@ -234,6 +234,21 @@ fn split_sheet(p: &str) -> Option<(String, &str)> {
 // Interpretation
 // ---------------------------------------------------------------------------
 
+/// The largest point index + 1 a `numLit`/`strLit` may fill: below
+/// `ptCount` when present, below [`MAX_POINTS`], and at most a small
+/// multiple of the `pt` elements present, so one `<c:pt idx="31999">`
+/// cannot make 32,000 slots.
+fn literal_limit(lit: &Node) -> usize {
+    let pts = lit.children_named("pt").take(MAX_POINTS).count();
+    let count = lit
+        .child_val("ptCount")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(MAX_POINTS);
+    MAX_POINTS
+        .min(count)
+        .min(pts.saturating_mul(4).saturating_add(64))
+}
+
 fn data_ref(node: Option<&Node>, names: &[String]) -> (ChartRangeData, Option<ChartValuesData>) {
     let Some(n) = node else {
         return (ChartRangeData::default(), None);
@@ -247,12 +262,13 @@ fn data_ref(node: Option<&Node>, names: &[String]) -> (ChartRangeData, Option<Ch
             }
             "numLit" => {
                 let mut v: Vec<Option<f64>> = Vec::new();
+                let limit = literal_limit(c);
                 for pt in c.children_named("pt").take(MAX_POINTS) {
                     let idx: usize = pt
                         .attr("idx")
                         .and_then(|i| i.parse().ok())
                         .unwrap_or(v.len());
-                    if idx >= MAX_POINTS {
+                    if idx >= limit {
                         continue;
                     }
                     while v.len() <= idx {
@@ -266,12 +282,13 @@ fn data_ref(node: Option<&Node>, names: &[String]) -> (ChartRangeData, Option<Ch
             }
             "strLit" => {
                 let mut v: Vec<String> = Vec::new();
+                let limit = literal_limit(c);
                 for pt in c.children_named("pt").take(MAX_POINTS) {
                     let idx: usize = pt
                         .attr("idx")
                         .and_then(|i| i.parse().ok())
                         .unwrap_or(v.len());
-                    if idx >= MAX_POINTS {
+                    if idx >= limit {
                         continue;
                     }
                     while v.len() <= idx {
@@ -435,6 +452,7 @@ pub(crate) fn parse_chart<R: BufRead>(
     names: &[String],
     own: u32,
     warnings: &mut Vec<String>,
+    literal_budget: &mut usize,
 ) -> Result<Option<ChartData>, XlsxError> {
     let _ = own;
     let Some(root) = read_tree(xr)? else {
@@ -773,6 +791,17 @@ pub(crate) fn parse_chart<R: BufRead>(
     c.plot_background = fill_color(plot.child("spPr"));
     let _ = parse_argb;
     let _: Option<CellRangeLocal> = None;
+    // The document's literal point budget (see `tally_model::MAX_LITERAL_POINTS`).
+    let n = c.literal_points();
+    if n > *literal_budget {
+        c.drop_literals();
+        warnings.push(format!(
+            "Chart cached values past {} points per document were not read.",
+            tally_model::MAX_LITERAL_POINTS
+        ));
+    } else {
+        *literal_budget -= n;
+    }
     Ok(Some(c))
 }
 

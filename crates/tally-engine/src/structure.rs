@@ -564,6 +564,216 @@ impl Band {
         Some(self.join(n, across))
     }
 
+    /// Where the style run `a..=b` of column `c` goes, as
+    /// `(column, first row, last row)` pieces (the part inside a deleted
+    /// block disappears).
+    pub fn run_after(&self, c: u32, a: u32, b: u32) -> Vec<(u32, u32, u32)> {
+        if !self.rows {
+            // Column shift: the run (rows inside the band) changes column.
+            return match self.cell_after(a, c) {
+                Some((_, nc)) => vec![(nc, a, b)],
+                None => Vec::new(),
+            };
+        }
+        if c < self.lo || c > self.hi {
+            return vec![(c, a, b)];
+        }
+        let max = MAX_ROWS - 1;
+        let mut out = Vec::new();
+        if a < self.at {
+            out.push((c, a, b.min(self.at - 1)));
+        }
+        let from = if self.insert {
+            self.at
+        } else {
+            self.at.saturating_add(self.count)
+        };
+        let (s0, s1) = (a.max(from), b);
+        if s0 <= s1 {
+            if self.insert {
+                if let Some(n0) = s0.checked_add(self.count).filter(|n| *n <= max) {
+                    out.push((c, n0, s1.saturating_add(self.count).min(max)));
+                }
+            } else {
+                out.push((c, s0 - self.count, s1 - self.count));
+            }
+        }
+        out
+    }
+
+    /// A rectangle after the shift: one inside the band (across) moves or
+    /// resizes along the shift like an area reference (`None`: deleted);
+    /// any other is unchanged.
+    pub fn range_after(&self, r: &CellRangeLocal) -> Option<CellRangeLocal> {
+        let (lo, hi, s0, s1) = if self.rows {
+            (r.c0, r.c1, r.r0, r.r1)
+        } else {
+            (r.r0, r.r1, r.c0, r.c1)
+        };
+        if lo < self.lo || hi > self.hi {
+            return Some(*r);
+        }
+        let (n0, n1) = span_after(&self.shape(), s0, s1)?;
+        Some(if self.rows {
+            CellRangeLocal {
+                r0: n0,
+                r1: n1,
+                ..*r
+            }
+        } else {
+            CellRangeLocal {
+                c0: n0,
+                c1: n1,
+                ..*r
+            }
+        })
+    }
+
+    /// Adjusts the ranges of a sheet's conditional formats, validations,
+    /// scenarios, database ranges, AutoFilter and standard filter (and
+    /// the rule formulas) for the shift; collections that do not change
+    /// keep their `Arc`.
+    pub fn adjust_meta(&self, meta: &mut crate::storage::SheetMeta) {
+        let ranges = |v: &[CellRangeLocal]| -> Vec<CellRangeLocal> {
+            v.iter().filter_map(|r| self.range_after(r)).collect()
+        };
+        let origin_after = |o: CellAddr| -> CellAddr {
+            match self.cell_after(o.row, o.col) {
+                Some((r, c)) if o.sheet == self.sheet => CellAddr::new(o.sheet, r, c),
+                _ => o,
+            }
+        };
+        let fexpr_after = |f: &crate::fexpr::FExpr, old: CellAddr, new: CellAddr| {
+            if f.invalid.is_some() {
+                return None;
+            }
+            let mut nf = (*f.formula).clone();
+            shift_band_refs(&mut nf, old, new, self).then(|| Arc::new(nf))
+        };
+        let mut cfs = (*meta.cond_formats).clone();
+        let mut changed = false;
+        for cf in cfs.iter_mut() {
+            let nr = ranges(&cf.ranges);
+            let no = origin_after(cf.origin);
+            let mut probe = (**cf).clone();
+            let mut fch = false;
+            for f in probe.formulas_mut() {
+                if let Some(nf) = fexpr_after(f, cf.origin, no) {
+                    f.formula = nf;
+                    fch = true;
+                }
+            }
+            if nr != cf.ranges || no != cf.origin || fch {
+                probe.ranges = nr;
+                probe.origin = no;
+                *cf = Arc::new(probe);
+                changed = true;
+            }
+        }
+        if changed {
+            cfs.retain(|cf| !cf.ranges.is_empty());
+            meta.cond_formats = Arc::new(cfs);
+        }
+        let mut vals = (*meta.validations).clone();
+        let mut changed = false;
+        for v in vals.iter_mut() {
+            let nr = ranges(&v.ranges);
+            let no = origin_after(v.origin);
+            let mut probe = (**v).clone();
+            let mut fch = false;
+            for f in probe.formulas_mut() {
+                if let Some(nf) = fexpr_after(f, v.origin, no) {
+                    f.formula = nf;
+                    fch = true;
+                }
+            }
+            if nr != v.ranges || no != v.origin || fch {
+                probe.ranges = nr;
+                probe.origin = no;
+                *v = Arc::new(probe);
+                changed = true;
+            }
+        }
+        if changed {
+            vals.retain(|v| !v.ranges.is_empty());
+            meta.validations = Arc::new(vals);
+        }
+        if meta.scenarios.iter().any(|sc| {
+            sc.data
+                .ranges
+                .iter()
+                .any(|r| self.range_after(r) != Some(*r))
+                || sc
+                    .data
+                    .cells
+                    .iter()
+                    .any(|c| self.cell_after(c.row, c.col) != Some((c.row, c.col)))
+        }) {
+            for sc in Arc::make_mut(&mut meta.scenarios).iter_mut() {
+                let sc = Arc::make_mut(sc);
+                sc.data.ranges = ranges(&sc.data.ranges);
+                sc.data.cells = sc
+                    .data
+                    .cells
+                    .iter()
+                    .filter_map(|c| {
+                        let (r, col) = self.cell_after(c.row, c.col)?;
+                        let mut c = c.clone();
+                        c.row = r;
+                        c.col = col;
+                        Some(c)
+                    })
+                    .collect();
+            }
+        }
+        if meta
+            .database_ranges
+            .iter()
+            .any(|d| self.range_after(&d.range) != Some(d.range))
+        {
+            let list = Arc::make_mut(&mut meta.database_ranges);
+            list.retain_mut(|d| match self.range_after(&d.range) {
+                Some(r) => {
+                    d.range = r;
+                    if let Some(f) = d.filter.as_mut() {
+                        f.range = r;
+                    }
+                    true
+                }
+                None => false,
+            });
+        }
+        if let Some(af) = meta.auto_filter.as_ref() {
+            match self.range_after(&af.range) {
+                Some(r) if r == af.range => {}
+                Some(r) => {
+                    let mut n = (**af).clone();
+                    if !self.rows {
+                        n.columns = n
+                            .columns
+                            .into_iter()
+                            .filter_map(|(c, f)| self.cell_after(r.r0, c).map(|(_, nc)| (nc, f)))
+                            .collect();
+                    }
+                    n.range = r;
+                    meta.auto_filter = Some(Arc::new(n));
+                }
+                None => meta.auto_filter = None,
+            }
+        }
+        if let Some(sf) = meta.standard_filter.as_ref() {
+            match self.range_after(&sf.range) {
+                Some(r) if r == sf.range => {}
+                Some(r) => {
+                    let mut n = (**sf).clone();
+                    n.range = r;
+                    meta.standard_filter = Some(Arc::new(n));
+                }
+                None => meta.standard_filter = None,
+            }
+        }
+    }
+
     /// The cells that move (from `at` on inside the band).
     pub fn moved(&self) -> CellRange {
         let max = self.shape().limit() - 1;
@@ -735,16 +945,37 @@ pub fn shift_cells(
         crate::ops::check_array_blocks(wb, &[*d])?;
         crate::ops::check_merges(wb, d)?;
     }
-    // Cheap bound: the moved area is the used part of the band.
+    // A band across the whole sheet is a row/column insertion or
+    // deletion: AOO's `ScTable::InsertRow` takes the full-row path
+    // (row heights, whole-row references) when the band spans every
+    // column (`sc/source/core/data/table2.cxx:138-142`, `253-258`;
+    // correctness review 4, M17).
+    let full = if band.rows {
+        band.lo == 0 && band.hi == MAX_COLS - 1
+    } else {
+        band.lo == 0 && band.hi == MAX_ROWS - 1
+    };
+    if full {
+        let (sheet, at, count) = (band.sheet, band.at, band.count);
+        let op = match (band.rows, band.insert) {
+            (true, true) => tally_api::Op::InsertRows { sheet, at, count },
+            (true, false) => tally_api::Op::DeleteRows { sheet, at, count },
+            (false, true) => tally_api::Op::InsertCols { sheet, at, count },
+            (false, false) => tally_api::Op::DeleteCols { sheet, at, count },
+        };
+        return crate::ops::apply_op(wb, &op, None, fx);
+    }
+    // Cheap bound: the moved area is the used part of the band. An empty
+    // band still moves its notes, links, merges and ranges (AOO
+    // `ScDocument::InsertRow` always shifts attributes and notes,
+    // `sc/source/core/data/document.cxx:826-880`; correctness review 4,
+    // H8).
     let used = wb
         .sheet(sheet)
         .and_then(|s| s.used_range())
-        .and_then(|u| u.intersect(&moved));
-    let Some(used) = used.or(deleted) else {
-        // Nothing to move: only merges/notes could be affected; handle
-        // them through the full path anyway with an empty snapshot.
-        return shift_meta_only(wb, band, fx);
-    };
+        .and_then(|u| u.intersect(&moved))
+        .or(deleted)
+        .unwrap_or_else(|| CellRange::new(sheet, moved.r0, moved.c0, moved.r0, moved.c0));
     let snap_area = CellRange::new(
         sheet,
         moved.r0,
@@ -769,17 +1000,9 @@ pub fn shift_cells(
             snap_area.c1.saturating_add(band.count).min(MAX_COLS - 1),
         )
     };
-    let names = crate::undo::names_snapshot(wb);
-    let meta = crate::undo::meta_parts(
-        wb,
-        sheet,
-        &[
-            crate::storage::MetaKind::Merges,
-            crate::storage::MetaKind::Notes,
-            crate::storage::MetaKind::Links,
-        ],
-    )
-    .ok_or_else(|| ApiError::not_found("no sheet"))?;
+    let names = crate::undo::names_snapshot_tx(wb, fx);
+    let meta = crate::undo::meta_parts(wb, sheet, BAND_META)
+        .ok_or_else(|| ApiError::not_found("no sheet"))?;
     let snap = capture_range(wb, snap_area, true, true);
 
     // 1. Formulas outside the moved block on any sheet.
@@ -859,14 +1082,17 @@ pub fn shift_cells(
     }
     if let Some(s) = wb.sheet_mut(sheet) {
         for (c, a, b, id) in styles {
-            for r in a..=b {
-                if let Some((nr, nc)) = band.cell_after(r, c) {
-                    if let Some(col) = s.column_mut(nc) {
-                        col.styles.set(nr, nr, id);
-                    }
+            for (nc, na, nb) in band.run_after(c, a, b) {
+                if let Some(col) = s.column_mut(nc) {
+                    col.styles.set(na, nb, id);
                 }
             }
         }
+        // Ranges that lie inside the band follow it (AOO
+        // `ScDocument::UpdateReference`, `documen3.cxx:882-918`:
+        // conditional formats, validations, scenarios, database ranges
+        // and the AutoFilter; correctness review 4, M15).
+        band.adjust_meta(&mut s.meta);
     }
     // 4. Notes, links and merges.
     if let Some(s) = wb.sheet_mut(sheet) {
@@ -933,32 +1159,342 @@ pub fn shift_cells(
             *merges = out;
         }
     }
+    wb.reapply_filter(sheet);
     wb.pending.ranges.push(snap_area);
     fx.layout(sheet);
-    Ok(vec![
-        names,
-        meta,
-        Change::Range(snap),
-        Change::Cells(outside),
-    ])
+    let mut out: Vec<Change> = names.into_iter().collect();
+    out.extend([meta, Change::Range(snap), Change::Cells(outside)]);
+    Ok(out)
 }
 
-/// The band shift of an empty block: only the formulas and names change.
-fn shift_meta_only(
+/// The meta a band shift changes (recorded for undo).
+const BAND_META: &[crate::storage::MetaKind] = &[
+    crate::storage::MetaKind::Merges,
+    crate::storage::MetaKind::Notes,
+    crate::storage::MetaKind::Links,
+    crate::storage::MetaKind::CondFormats,
+    crate::storage::MetaKind::Validations,
+    crate::storage::MetaKind::Scenarios,
+    crate::storage::MetaKind::DatabaseRanges,
+    crate::storage::MetaKind::AutoFilter,
+    crate::storage::MetaKind::StandardFilter,
+];
+
+// ---------------------------------------------------------------------------
+// Batched row moves (Subtotals / Remove Subtotals, security review 4,
+// HIGH-T2)
+// ---------------------------------------------------------------------------
+
+/// A monotone full-width move of the rows `r0..r0 + new.len()` of one
+/// sheet: row `r0 + i` goes to `new[i]` (`None`: deleted). Equivalent to a
+/// series of row insertions or deletions inside the block, applied in one
+/// pass ([`respace_rows`]).
+#[derive(Clone, Debug)]
+pub struct RowMap {
+    /// Sheet.
+    pub sheet: SheetId,
+    /// First row of the block.
+    pub r0: u32,
+    /// New row of each block row (strictly increasing where `Some`).
+    pub new: Vec<Option<u32>>,
+    /// Per block row: the new row of the first kept row at or after it
+    /// (`u32::MAX`: none).
+    next: Vec<u32>,
+    /// Per block row: the new row of the last kept row at or before it
+    /// (`u32::MAX`: none).
+    prev: Vec<u32>,
+}
+
+impl RowMap {
+    /// Builds the map (the `Some` entries must increase).
+    pub fn new(sheet: SheetId, r0: u32, new: Vec<Option<u32>>) -> Self {
+        let n = new.len();
+        let mut next = vec![u32::MAX; n];
+        let mut prev = vec![u32::MAX; n];
+        let mut cur = u32::MAX;
+        for i in (0..n).rev() {
+            if let Some(x) = new[i] {
+                cur = x;
+            }
+            next[i] = cur;
+        }
+        cur = u32::MAX;
+        for i in 0..n {
+            if let Some(x) = new[i] {
+                cur = x;
+            }
+            prev[i] = cur;
+        }
+        RowMap {
+            sheet,
+            r0,
+            new,
+            next,
+            prev,
+        }
+    }
+
+    /// Last row of the block.
+    pub fn r1(&self) -> u32 {
+        self.r0 + self.new.len().saturating_sub(1) as u32
+    }
+
+    fn index(&self, r: u32) -> Option<usize> {
+        let i = r.checked_sub(self.r0)? as usize;
+        (i < self.new.len()).then_some(i)
+    }
+
+    /// The last row the block's rows land on.
+    pub fn last_new(&self) -> u32 {
+        self.prev
+            .last()
+            .copied()
+            .filter(|x| *x != u32::MAX)
+            .unwrap_or(self.r0)
+    }
+
+    /// Where a row goes (`None`: deleted).
+    pub fn row(&self, r: u32) -> Option<u32> {
+        match self.index(r) {
+            Some(i) => self.new[i],
+            None => Some(r),
+        }
+    }
+
+    /// The new span of `lo..=hi` (area semantics: it shrinks to its kept
+    /// rows, grows over rows inserted inside it; `None`: nothing left).
+    pub fn span(&self, lo: u32, hi: u32) -> Option<(u32, u32)> {
+        let nlo = match self.index(lo) {
+            Some(i) => match self.next[i] {
+                u32::MAX => self.last_kept_after(),
+                x => x,
+            },
+            None => lo,
+        };
+        let nhi = match self.index(hi) {
+            Some(i) => match self.prev[i] {
+                u32::MAX => self.r0.checked_sub(1)?,
+                x => x,
+            },
+            None => hi,
+        };
+        (nlo <= nhi).then_some((nlo, nhi))
+    }
+
+    /// The row after the last kept one (where rows deleted at the end of
+    /// the block went).
+    fn last_kept_after(&self) -> u32 {
+        match self.prev.last() {
+            Some(x) if *x != u32::MAX => x + 1,
+            _ => self.r0,
+        }
+    }
+
+    /// Contiguous pieces `(src_start, src_end, dst_start)` of kept rows.
+    fn segments(&self) -> Vec<(u32, u32, u32)> {
+        let mut out: Vec<(u32, u32, u32)> = Vec::new();
+        for (i, n) in self.new.iter().enumerate() {
+            let Some(d) = *n else { continue };
+            let src = self.r0 + i as u32;
+            match out.last_mut() {
+                Some((s0, e, d0)) if *e + 1 == src && *d0 + (src - *s0) == d => *e = src,
+                _ => out.push((src, src, d)),
+            }
+        }
+        out
+    }
+}
+
+/// Style runs `(first row, last row, style)` of one column.
+type StyleRunList = Vec<(u32, u32, crate::storage::StyleId)>;
+
+/// Rewrites the references of a formula moving from `old` to `new` for a
+/// [`RowMap`]: targets on the map's sheet follow it (cells to their new
+/// row or `#REF!`, areas and whole rows per [`RowMap::span`]); all other
+/// targets stay where they are. Returns `true` if the AST changed.
+pub fn remap_row_refs(
+    f: &mut tally_formula::Formula,
+    old: CellAddr,
+    new: CellAddr,
+    map: &RowMap,
+) -> bool {
+    use tally_formula::{CellRefExpr, RefCoord, RefExpr};
+    let mut changed = false;
+    let resolve = |c: &CellRefExpr| -> Option<(u32, u32)> {
+        Some((
+            c.row.resolve(old.row, MAX_ROWS)?,
+            c.col.resolve(old.col, MAX_COLS)?,
+        ))
+    };
+    let encode = |c: &CellRefExpr, r: u32, col: u32| CellRefExpr {
+        sheet: c.sheet.clone(),
+        row: RefCoord::encode(r, c.row.abs, new.row),
+        col: RefCoord::encode(col, c.col.abs, new.col),
+    };
+    f.expr.walk_refs_mut(|r| {
+        let next = match r {
+            RefExpr::Cell(c) => {
+                let Some((row, col)) = resolve(c) else {
+                    return;
+                };
+                let on = sheet_of(&c.sheet, old.sheet) == Some(map.sheet);
+                match if on { map.row(row) } else { Some(row) } {
+                    Some(nr) => RefExpr::Cell(encode(c, nr, col)),
+                    None => RefExpr::Invalid,
+                }
+            }
+            RefExpr::Area(a, b) => {
+                let (Some((ar, ac)), Some((br, bc))) = (resolve(a), resolve(b)) else {
+                    return;
+                };
+                let sa = sheet_of(&a.sheet, old.sheet);
+                let sb = match &b.sheet {
+                    tally_formula::SheetRef::Current => sa,
+                    other => sheet_of(other, old.sheet),
+                };
+                if sa == Some(map.sheet) && sb == sa {
+                    let (r0, r1) = (ar.min(br), ar.max(br));
+                    match map.span(r0, r1) {
+                        Some((n0, n1)) => {
+                            let (na, nb) = if ar <= br { (n0, n1) } else { (n1, n0) };
+                            RefExpr::Area(encode(a, na, ac), encode(b, nb, bc))
+                        }
+                        None => RefExpr::Invalid,
+                    }
+                } else {
+                    RefExpr::Area(encode(a, ar, ac), encode(b, br, bc))
+                }
+            }
+            RefExpr::Cols { sheet, start, end } => {
+                let (Some(s), Some(e)) = (
+                    start.resolve(old.col, MAX_COLS),
+                    end.resolve(old.col, MAX_COLS),
+                ) else {
+                    return;
+                };
+                RefExpr::Cols {
+                    sheet: sheet.clone(),
+                    start: RefCoord::encode(s, start.abs, new.col),
+                    end: RefCoord::encode(e, end.abs, new.col),
+                }
+            }
+            RefExpr::Rows { sheet, start, end } => {
+                let (Some(s), Some(e)) = (
+                    start.resolve(old.row, MAX_ROWS),
+                    end.resolve(old.row, MAX_ROWS),
+                ) else {
+                    return;
+                };
+                let on = sheet_of(sheet, old.sheet) == Some(map.sheet);
+                let (ns, ne) = if on {
+                    match map.span(s.min(e), s.max(e)) {
+                        Some(x) => x,
+                        None => {
+                            *r = RefExpr::Invalid;
+                            changed = true;
+                            return;
+                        }
+                    }
+                } else {
+                    (s, e)
+                };
+                RefExpr::Rows {
+                    sheet: sheet.clone(),
+                    start: RefCoord::encode(ns, start.abs, new.row),
+                    end: RefCoord::encode(ne, end.abs, new.row),
+                }
+            }
+            RefExpr::Invalid => return,
+        };
+        if next != *r {
+            *r = next;
+            changed = true;
+        }
+    });
+    changed
+}
+
+/// Applies a [`RowMap`] in one pass: the cells (contents, styles), row
+/// heights, notes, links and single-row merges of the block move; every
+/// formula, name, rule formula and the sheet's ranges (conditional
+/// formats, validations, outline groups, database ranges, filters,
+/// scenarios, page breaks) are rewritten. Rows newly between moved rows
+/// take the style of the row above them, as an insertion does
+/// ([`crate::storage::StyleRuns::insert_rows`]). Refuses blocks holding
+/// array formulas or merges over several rows. Returns the inverse
+/// changes (one snapshot of the block).
+pub fn respace_rows(
     wb: &mut Workbook,
-    band: &Band,
+    map: &RowMap,
     fx: &mut crate::undo::Effects,
 ) -> Result<Vec<crate::undo::Change>, tally_api::ApiError> {
-    let names = crate::undo::names_snapshot(wb);
-    let moved = band.moved();
+    use crate::storage::MetaKind;
+    use crate::undo::{capture_range, clear_range_content, clear_range_styles, Change};
+    use tally_api::ApiError;
+    let sheet = map.sheet;
+    if map.new.is_empty() {
+        return Ok(Vec::new());
+    }
+    let r1 = map.r1();
+    let end = r1.max(map.last_new());
+    if end >= MAX_ROWS {
+        return Err(ApiError::invalid_argument("no room for the rows"));
+    }
+    let block = CellRange::new(sheet, map.r0, 0, end, MAX_COLS - 1);
+    let s = wb
+        .sheet(sheet)
+        .ok_or_else(|| ApiError::not_found("no sheet"))?;
+    if !wb.array_blocks_in(&block).is_empty() {
+        return Err(crate::ops::array_block_error());
+    }
+    if s.meta
+        .merges
+        .iter()
+        .any(|m| m.r0 != m.r1 && m.r1 >= map.r0 && m.r0 <= end)
+    {
+        return Err(ApiError::new(
+            crate::ops::MERGED,
+            "The rows hold cells merged over several rows.",
+        ));
+    }
+    let width = s.columns.len().saturating_sub(1) as u32;
+    let snap_area = CellRange::new(sheet, map.r0, 0, end, width);
+    let dims = Change::RowDims {
+        sheet,
+        dims: s.row_dims.clone(),
+    };
+    let meta = crate::undo::meta_parts(
+        wb,
+        sheet,
+        &[
+            MetaKind::Merges,
+            MetaKind::Notes,
+            MetaKind::Links,
+            MetaKind::CondFormats,
+            MetaKind::Validations,
+            MetaKind::RowGroups,
+            MetaKind::RowBreaks,
+            MetaKind::Scenarios,
+            MetaKind::DatabaseRanges,
+            MetaKind::AutoFilter,
+            MetaKind::StandardFilter,
+        ],
+    )
+    .ok_or_else(|| ApiError::not_found("no sheet"))?;
+    let names = crate::undo::names_snapshot_tx(wb, fx);
+    let snap = capture_range(wb, snap_area, true, true);
+    let rows_area = CellRange::new(sheet, map.r0, 0, r1, MAX_COLS - 1);
+
+    // 1. Formulas outside the block that point into it.
     let touched: Vec<(FormulaCellId, CellAddr)> = wb
         .formulas
         .iter()
         .filter(|(_, f)| {
             f.invalid_text.is_none()
+                && !(f.addr.sheet == sheet && block.contains(f.addr))
                 && f.precedents
                     .iter()
-                    .any(|p| p.sheet == band.sheet && p.intersects(&moved))
+                    .any(|p| p.sheet == sheet && p.intersects(&rows_area))
         })
         .map(|(id, f)| (id, f.addr))
         .collect();
@@ -968,15 +1504,16 @@ fn shift_meta_only(
             continue;
         };
         let mut nf = (*f.formula).clone();
-        if shift_band_refs(&mut nf, addr, addr, band) {
+        if remap_row_refs(&mut nf, addr, addr, map) {
             let old = wb.replace_formula_ast(addr, Arc::new(nf));
             outside.push((addr, old));
         }
     }
+    // 2. Names.
     let mut renamed = false;
     for def in wb.names.defs_mut() {
         let mut f = (*def.formula).clone();
-        if shift_band_refs(&mut f, def.base, def.base, band) {
+        if remap_row_refs(&mut f, def.base, def.base, map) {
             def.formula = Arc::new(f);
             renamed = true;
         }
@@ -984,6 +1521,298 @@ fn shift_meta_only(
     if renamed {
         wb.refresh_all_name_dependents();
     }
-    fx.layout(band.sheet);
-    Ok(vec![names, crate::undo::Change::Cells(outside)])
+    // 3. Cells and styles.
+    let segs = map.segments();
+    let mut styles: Vec<(u32, StyleRunList)> = Vec::new();
+    if let Some(s) = wb.sheet(sheet) {
+        for (c, col) in s.columns.iter().enumerate() {
+            let runs = col.styles.runs_in(map.r0, r1);
+            if !runs.is_empty() {
+                styles.push((c as u32, runs));
+            }
+        }
+    }
+    clear_range_content(wb, snap_area);
+    clear_range_styles(wb, snap_area);
+    for (r, c, content) in snap.contents.iter().flatten() {
+        if *r > r1 {
+            continue;
+        }
+        let Some(nr) = map.row(*r) else {
+            continue;
+        };
+        let old = CellAddr::new(sheet, *r, *c);
+        let new = CellAddr::new(sheet, nr, *c);
+        let content = match content {
+            SnapContent::Formula {
+                formula,
+                invalid_text,
+                array,
+            } => {
+                let mut nf = (**formula).clone();
+                if invalid_text.is_none() {
+                    remap_row_refs(&mut nf, old, new, map);
+                }
+                SnapContent::Formula {
+                    formula: Arc::new(nf),
+                    invalid_text: invalid_text.clone(),
+                    array: *array,
+                }
+            }
+            v @ SnapContent::Value(_) => v.clone(),
+        };
+        wb.restore_content(new, Some(content));
+    }
+    // A segment's destination extends over the rows up to the next
+    // segment (or the end of the block): those take its last row's style.
+    let seg_end = |i: usize| -> u32 {
+        match segs.get(i + 1) {
+            Some(n) => n.2 - 1,
+            None => end,
+        }
+    };
+    if let Some(s) = wb.sheet_mut(sheet) {
+        for (c, runs) in styles {
+            let Some(col) = s.column_mut(c) else { continue };
+            for (a, b, id) in runs {
+                // Segments overlapping a..=b.
+                let first = segs.partition_point(|g| g.1 < a);
+                for (i, g) in segs.iter().enumerate().skip(first) {
+                    if g.0 > b {
+                        break;
+                    }
+                    let (s0, s1) = (a.max(g.0), b.min(g.1));
+                    let d0 = g.2 + (s0 - g.0);
+                    let d1 = if s1 == g.1 {
+                        seg_end(i)
+                    } else {
+                        g.2 + (s1 - g.0)
+                    };
+                    col.styles.set(d0, d1, id);
+                }
+            }
+        }
+        // 4. Row heights.
+        let mut runs: Vec<tally_model::DimRun> = Vec::new();
+        for run in s.row_dims.runs() {
+            if run.end < map.r0 || run.start > end {
+                runs.push(run.clone());
+                continue;
+            }
+            if run.start < map.r0 {
+                runs.push(tally_model::DimRun {
+                    end: map.r0 - 1,
+                    ..run.clone()
+                });
+            }
+            if run.end > end {
+                runs.push(tally_model::DimRun {
+                    start: end + 1,
+                    ..run.clone()
+                });
+            }
+            let (a, b) = (run.start.max(map.r0), run.end.min(r1));
+            if a > b {
+                continue;
+            }
+            let first = segs.partition_point(|g| g.1 < a);
+            for g in segs.iter().skip(first) {
+                if g.0 > b {
+                    break;
+                }
+                let (s0, s1) = (a.max(g.0), b.min(g.1));
+                runs.push(tally_model::DimRun {
+                    start: g.2 + (s0 - g.0),
+                    end: g.2 + (s1 - g.0),
+                    ..run.clone()
+                });
+            }
+        }
+        runs.sort_by_key(|r| r.start);
+        s.row_dims = crate::storage::DimRuns::from_sorted(runs);
+        // 5. Notes, links, merges, page breaks.
+        if s.meta
+            .notes
+            .range((map.r0, 0)..=(r1, u32::MAX))
+            .next()
+            .is_some()
+        {
+            remap_entries(Arc::make_mut(&mut s.meta.notes), map);
+        }
+        if s.meta
+            .links
+            .range((map.r0, 0)..=(r1, u32::MAX))
+            .next()
+            .is_some()
+        {
+            remap_entries(Arc::make_mut(&mut s.meta.links), map);
+        }
+        if s.meta.merges.iter().any(|m| m.r0 >= map.r0 && m.r0 <= r1) {
+            let merges: Vec<CellRangeLocal> = s
+                .meta
+                .merges
+                .iter()
+                .filter_map(|m| {
+                    let r = map.row(m.r0)?;
+                    Some(CellRangeLocal { r0: r, r1: r, ..*m })
+                })
+                .collect();
+            s.meta.merges = Arc::new(merges);
+        }
+        if s.meta.row_breaks.range(map.r0..=r1).next().is_some() {
+            let b: std::collections::BTreeSet<u32> = s
+                .meta
+                .row_breaks
+                .iter()
+                .filter_map(|r| map.row(*r))
+                .collect();
+            s.meta.row_breaks = Arc::new(b);
+        }
+        // 6. Ranges and rule formulas of the sheet.
+        map.adjust_meta(&mut s.meta);
+    }
+    wb.reapply_filter(sheet);
+    crate::outline::reapply(wb, sheet);
+    wb.pending.ranges.push(block);
+    fx.layout(sheet);
+    let mut out: Vec<Change> = names.into_iter().collect();
+    out.extend([dims, meta, Change::Range(snap), Change::Cells(outside)]);
+    Ok(out)
+}
+
+impl RowMap {
+    fn range_after(&self, r: &CellRangeLocal) -> Option<CellRangeLocal> {
+        let (r0, r1) = self.span(r.r0, r.r1)?;
+        Some(CellRangeLocal { r0, r1, ..*r })
+    }
+
+    fn origin_after(&self, o: CellAddr) -> CellAddr {
+        if o.sheet != self.sheet {
+            return o;
+        }
+        CellAddr::new(o.sheet, self.row(o.row).unwrap_or(o.row), o.col)
+    }
+
+    /// Rewrites a sheet's ranges and rule formulas for the map.
+    fn adjust_meta(&self, meta: &mut crate::storage::SheetMeta) {
+        let ranges = |v: &[CellRangeLocal]| -> Vec<CellRangeLocal> {
+            v.iter().filter_map(|r| self.range_after(r)).collect()
+        };
+        let fexpr_after = |f: &crate::fexpr::FExpr, old: CellAddr, new: CellAddr| {
+            if f.invalid.is_some() {
+                return None;
+            }
+            let mut nf = (*f.formula).clone();
+            remap_row_refs(&mut nf, old, new, self).then(|| Arc::new(nf))
+        };
+        if !meta.cond_formats.is_empty() {
+            let mut list = (*meta.cond_formats).clone();
+            for cf in list.iter_mut() {
+                let mut p = (**cf).clone();
+                let no = self.origin_after(p.origin);
+                for f in p.formulas_mut() {
+                    if let Some(nf) = fexpr_after(f, cf.origin, no) {
+                        f.formula = nf;
+                    }
+                }
+                p.ranges = ranges(&p.ranges);
+                p.origin = no;
+                *cf = Arc::new(p);
+            }
+            list.retain(|cf| !cf.ranges.is_empty());
+            meta.cond_formats = Arc::new(list);
+        }
+        if !meta.validations.is_empty() {
+            let mut list = (*meta.validations).clone();
+            for v in list.iter_mut() {
+                let mut p = (**v).clone();
+                let no = self.origin_after(p.origin);
+                for f in p.formulas_mut() {
+                    if let Some(nf) = fexpr_after(f, v.origin, no) {
+                        f.formula = nf;
+                    }
+                }
+                p.ranges = ranges(&p.ranges);
+                p.origin = no;
+                *v = Arc::new(p);
+            }
+            list.retain(|v| !v.ranges.is_empty());
+            meta.validations = Arc::new(list);
+        }
+        if !meta.row_groups.is_empty() {
+            let mut g: Vec<tally_model::OutlineGroupData> = meta
+                .row_groups
+                .iter()
+                .filter_map(|g| {
+                    let (start, end) = self.span(g.start, g.end)?;
+                    Some(tally_model::OutlineGroupData { start, end, ..*g })
+                })
+                .collect();
+            g.sort_by_key(|g| (g.level, g.start, g.end));
+            meta.row_groups = Arc::new(g);
+        }
+        if !meta.scenarios.is_empty() {
+            for sc in Arc::make_mut(&mut meta.scenarios).iter_mut() {
+                let sc = Arc::make_mut(sc);
+                sc.data.ranges = ranges(&sc.data.ranges);
+                sc.data.cells = sc
+                    .data
+                    .cells
+                    .iter()
+                    .filter_map(|c| {
+                        let mut c = c.clone();
+                        c.row = self.row(c.row)?;
+                        Some(c)
+                    })
+                    .collect();
+            }
+        }
+        if !meta.database_ranges.is_empty() {
+            Arc::make_mut(&mut meta.database_ranges).retain_mut(|d| {
+                match self.range_after(&d.range) {
+                    Some(r) => {
+                        d.range = r;
+                        if let Some(f) = d.filter.as_mut() {
+                            f.range = r;
+                        }
+                        true
+                    }
+                    None => false,
+                }
+            });
+        }
+        if let Some(af) = meta.auto_filter.take() {
+            meta.auto_filter = self.range_after(&af.range).map(|range| {
+                let mut n = Arc::unwrap_or_clone(af);
+                n.range = range;
+                Arc::new(n)
+            });
+        }
+        if let Some(sf) = meta.standard_filter.take() {
+            meta.standard_filter = self.range_after(&sf.range).map(|range| {
+                let mut n = Arc::unwrap_or_clone(sf);
+                n.range = range;
+                Arc::new(n)
+            });
+        }
+    }
+}
+
+/// Moves the entries of a `(row, col)` map that lie in the block.
+fn remap_entries<T>(m: &mut std::collections::BTreeMap<(u32, u32), T>, map: &RowMap) {
+    let keys: Vec<(u32, u32)> = m
+        .range((map.r0, 0)..=(map.r1(), u32::MAX))
+        .map(|(k, _)| *k)
+        .collect();
+    let mut taken = Vec::with_capacity(keys.len());
+    for k in keys {
+        if let Some(v) = m.remove(&k) {
+            taken.push((k, v));
+        }
+    }
+    for ((r, c), v) in taken {
+        if let Some(nr) = map.row(r) {
+            m.insert((nr, c), v);
+        }
+    }
 }

@@ -148,7 +148,11 @@ fn dbf_import_and_export() {
     let s = info.sheets[0].id;
     assert_eq!(info.sheets[0].name, "customers");
     let wb = &svc.document(info.doc).unwrap().wb;
-    assert_eq!(wb.value(CellAddr::new(s, 0, 0)), Value::text("NAME"));
+    // AOO's header descriptors (correctness review 4, M35).
+    match wb.value(CellAddr::new(s, 0, 0)) {
+        Value::Text(t) => assert!(t.starts_with("NAME,C,"), "{t}"),
+        v => panic!("{v:?}"),
+    }
     assert_eq!(wb.value(CellAddr::new(s, 1, 0)), Value::text("Müller & Co"));
     assert_eq!(wb.value(CellAddr::new(s, 1, 1)), Value::Number(1234.5));
     assert_eq!(wb.value(CellAddr::new(s, 2, 1)), Value::Number(-7.25));

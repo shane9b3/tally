@@ -81,6 +81,21 @@ enum Tok<'a> {
     Text(&'a str),
 }
 
+/// Offset of the first `</name` (ASCII case-insensitive) in `hay`.
+fn find_end_tag(hay: &[u8], name: &str) -> Option<usize> {
+    let name = name.as_bytes();
+    let mut from = 0;
+    while let Some(i) = hay[from..].windows(2).position(|w| w == b"</") {
+        let at = from + i;
+        let tail = &hay[at + 2..];
+        if tail.len() >= name.len() && tail[..name.len()].eq_ignore_ascii_case(name) {
+            return Some(at);
+        }
+        from = at + 2;
+    }
+    None
+}
+
 /// A tolerant tokenizer: tags, closing tags and text; comments, CDATA,
 /// doctypes and processing instructions are dropped; `<script>`,
 /// `<style>` and `<template>` bodies are skipped as raw text.
@@ -106,10 +121,9 @@ impl<'a> Tokenizer<'a> {
             }
             if let Some(end_tag) = self.skip_until {
                 // Raw text element: find `</name`.
-                let rest = &self.src[self.pos..];
-                let lower = rest.to_ascii_lowercase();
-                let needle = format!("</{end_tag}");
-                match lower.find(&needle) {
+                // Linear: scan for `</` and compare the name in place
+                // (security review 4, H14; it lowercased the whole rest).
+                match find_end_tag(&self.src.as_bytes()[self.pos..], end_tag) {
                     Some(i) => {
                         self.pos += i;
                         self.skip_until = None;
@@ -342,8 +356,9 @@ struct TableBuilder {
     sheet: SheetData,
     row: i64,
     col: u32,
-    /// `(row, col) → still covered` by a rowspan.
-    covered: Vec<(u32, u32, u32)>, // (col, first_row, last_row)
+    /// Per column: the first row no longer covered by a rowspan above
+    /// (security review 4, H13: a list of spans was scanned per column).
+    covered_until: Vec<u32>,
     cell: Option<(u32, u32, u32, u32, String)>, // r, c, rowspan, colspan, text
     cells: usize,
 }
@@ -357,7 +372,7 @@ impl TableBuilder {
             },
             row: -1,
             col: 0,
-            covered: Vec::new(),
+            covered_until: Vec::new(),
             cell: None,
             cells: 0,
         }
@@ -371,17 +386,10 @@ impl TableBuilder {
 
     fn skip_covered(&mut self) {
         let r = self.row.max(0) as u32;
-        loop {
-            let c = self.col;
-            if self
-                .covered
-                .iter()
-                .any(|(cc, r0, r1)| *cc == c && *r0 <= r && r <= *r1)
-            {
-                self.col += 1;
-            } else {
-                break;
-            }
+        while (self.col as usize) < self.covered_until.len()
+            && self.covered_until[self.col as usize] > r
+        {
+            self.col += 1;
         }
     }
 
@@ -408,8 +416,15 @@ impl TableBuilder {
 
     fn text(&mut self, t: &str) {
         if let Some(c) = self.cell.as_mut() {
-            if c.4.len() < MAX_CELL_BYTES {
-                c.4.push_str(t);
+            // Cut at the cap on a char boundary (security review 4, M8:
+            // the whole token was appended once under the cap).
+            let room = MAX_CELL_BYTES.saturating_sub(c.4.len());
+            if room > 0 {
+                let mut end = t.len().min(room);
+                while !t.is_char_boundary(end) {
+                    end -= 1;
+                }
+                c.4.push_str(&t[..end]);
             }
         }
     }
@@ -439,13 +454,16 @@ impl TableBuilder {
                     c1,
                 });
                 if rs > 1 {
-                    for cc in c..=c1 {
-                        self.covered.push((cc, r + 1, r1));
+                    if self.covered_until.len() <= c1 as usize {
+                        self.covered_until.resize(c1 as usize + 1, 0);
+                    }
+                    for u in &mut self.covered_until[c as usize..=c1 as usize] {
+                        *u = (*u).max(r1 + 1);
                     }
                 }
             }
         }
-        self.col = c + cs;
+        self.col = c.saturating_add(cs);
     }
 
     fn finish(mut self) -> SheetData {
@@ -473,6 +491,7 @@ pub fn read_html(bytes: &[u8]) -> Result<(WorkbookData, Vec<String>), HtmlError>
     let mut total_cells = 0usize;
     let mut tables_seen = 0usize;
     let mut truncated = false;
+    let mut lang: Option<String> = None;
     while let Some(t) = tok.next() {
         match t {
             Tok::Open {
@@ -511,6 +530,16 @@ pub fn read_html(bytes: &[u8]) -> Result<(WorkbookData, Vec<String>), HtmlError>
                             continue;
                         }
                         b.start_cell(attrs);
+                    }
+                }
+                "html" if lang.is_none() => {
+                    lang = attr(attrs, "lang").and_then(supported_lang);
+                }
+                "meta" if lang.is_none() => {
+                    if attr(attrs, "http-equiv")
+                        .is_some_and(|v| v.trim().eq_ignore_ascii_case("content-language"))
+                    {
+                        lang = attr(attrs, "content").and_then(supported_lang);
                     }
                 }
                 "br" => {
@@ -597,13 +626,24 @@ pub fn read_html(bytes: &[u8]) -> Result<(WorkbookData, Vec<String>), HtmlError>
         seen.push(name.clone());
         s.name = name;
     }
-    Ok((
-        WorkbookData {
-            sheets,
-            ..WorkbookData::default()
-        },
-        warnings,
-    ))
+    // The document language picks the locale the engine recognizes the
+    // cell texts with (correctness review 4, M36: `1234,5` from a de-DE
+    // export came back as text). Without one the engine's default applies.
+    let mut data = WorkbookData {
+        sheets,
+        ..WorkbookData::default()
+    };
+    data.settings.locale = lang;
+    Ok((data, warnings))
+}
+
+/// The canonical tag of a supported locale for an HTML `lang` value.
+fn supported_lang(v: &str) -> Option<String> {
+    let v = v.trim();
+    if v.is_empty() || v.len() > 35 {
+        return None;
+    }
+    locale_by_tag(v).map(|l| l.tag.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -650,7 +690,10 @@ pub fn write_html(data: &WorkbookData) -> Result<String, HtmlError> {
         })
         .collect();
     let mut out = String::new();
-    out.push_str("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n");
+    out.push_str(&format!(
+        "<!DOCTYPE html>\n<html lang=\"{}\">\n<head>\n<meta charset=\"utf-8\">\n",
+        escape(locale.tag)
+    ));
     out.push_str("<meta name=\"generator\" content=\"Tally\">\n");
     if let Some(t) = &data.meta.title {
         out.push_str(&format!("<title>{}</title>\n", escape(t)));

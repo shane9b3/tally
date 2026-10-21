@@ -397,11 +397,20 @@ pub fn apply_patch(d: &mut StyleData, p: &StylePatch) {
     if let Some(v) = p.font_size_pt {
         d.font.size_pt = Some(v);
     }
+    // Clears first; a fully transparent colour (alpha byte 0 of
+    // 0xRRGGBBAA, the UI's "No fill"/"Automatic" swatch) is a clear too,
+    // so files never store the sentinel (correctness review 4, M40).
+    if p.clear_color == Some(true) {
+        d.font.color = None;
+    }
+    if p.clear_fill == Some(true) {
+        d.fill = None;
+    }
     if let Some(v) = p.color {
-        d.font.color = Some(v);
+        d.font.color = (v & 0xff != 0).then_some(v);
     }
     if let Some(v) = p.fill {
-        d.fill = Some(v);
+        d.fill = (v & 0xff != 0).then_some(v);
     }
     if let Some(v) = p.h_align {
         d.align.h = match v {

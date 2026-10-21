@@ -64,6 +64,13 @@ pub const MAX_IMAGES: usize = 1_000;
 pub const MAX_SERIES: usize = 255;
 /// Most points per series in `chart_data`.
 pub const MAX_POINTS: usize = 32_000;
+/// Most points in one `chart_data` response (categories, values, X
+/// values and sizes of every series together).
+pub const MAX_CHART_POINTS: usize = 100_000;
+/// Most cells one `chart_data` call visits, hidden ones included.
+pub const MAX_CHART_VISITS: usize = 2_000_000;
+/// Most points of a trend line in `chart_data` (evenly sampled).
+pub const MAX_TREND_POINTS: usize = 500;
 /// Most areas in one range (`~` union).
 pub const MAX_AREAS: usize = 64;
 /// Longest title, subtitle, axis title, series name or format code.
@@ -138,19 +145,68 @@ fn map_chart_ranges(c: &ChartData, map: &dyn Fn(u32) -> Option<u32>) -> ChartDat
 
 /// Loads a sheet's charts and pictures from the interchange model,
 /// allocating ids. Tab indices become sheet ids; ranges on unknown tabs
-/// become `#REF!`.
+/// become `#REF!`. Document totals hold whatever the reader did: at most
+/// [`MAX_CHARTS`] charts, [`tally_model::MAX_SERIES_PER_DOCUMENT`]
+/// series, [`tally_model::MAX_LITERAL_POINTS`] literal
+/// points (charts past it lose their literal values) and
+/// [`crate::images::MAX_TOTAL_IMAGE_BYTES`] of pictures, each counted
+/// per reference; what is dropped is reported once in the import
+/// warnings.
 pub fn from_data(wb: &mut Workbook, sheet: SheetId, charts: &[ChartData], images: &[ImageData]) {
+    if charts.is_empty() && images.is_empty() {
+        return;
+    }
     let ids: Vec<SheetId> = wb.sheets.iter().map(|s| s.id).collect();
     let tab_to_id = |t: u32| ids.get(t as usize).copied();
+    let chart_total = chart_count(wb);
+    let mut literal_total: usize = wb
+        .sheets
+        .iter()
+        .flat_map(|s| s.meta.charts.iter())
+        .map(|c| c.data.literal_points())
+        .sum();
+    let mut series_total: usize = wb
+        .sheets
+        .iter()
+        .flat_map(|s| s.meta.charts.iter())
+        .map(|c| c.data.series.len())
+        .sum();
+    let mut image_total = crate::images::total_image_bytes(wb);
+    let mut dropped = Vec::new();
     let Some(s) = wb.sheet_mut(sheet) else {
         return;
     };
-    let mut cs = Vec::with_capacity(charts.len().min(MAX_CHARTS));
-    for c in charts.iter().take(MAX_CHARTS) {
+    let room = MAX_CHARTS.saturating_sub(chart_total);
+    if charts.len() > room {
+        dropped.push(format!(
+            "Only the first {MAX_CHARTS} charts of the document were loaded."
+        ));
+    }
+    let mut cs = Vec::with_capacity(charts.len().min(room));
+    for c in charts.iter().take(room) {
         let id = s.meta.alloc_id();
         let mut data = map_chart_ranges(c, &tab_to_id);
         clamp_anchor(&mut data.anchor);
         data.series.truncate(MAX_SERIES);
+        let room = tally_model::MAX_SERIES_PER_DOCUMENT.saturating_sub(series_total);
+        if data.series.len() > room {
+            data.series.truncate(room);
+            dropped.push(format!(
+                "Charts past {} series per document were loaded without their extra series.",
+                tally_model::MAX_SERIES_PER_DOCUMENT
+            ));
+        }
+        series_total += data.series.len();
+        let n = data.literal_points();
+        if literal_total.saturating_add(n) > tally_model::MAX_LITERAL_POINTS {
+            data.drop_literals();
+            dropped.push(format!(
+                "Chart cached values past {} points per document were not loaded.",
+                tally_model::MAX_LITERAL_POINTS
+            ));
+        } else {
+            literal_total += n;
+        }
         cs.push(Arc::new(Chart { id, data }));
     }
     if !cs.is_empty() {
@@ -161,6 +217,11 @@ pub fn from_data(wb: &mut Workbook, sheet: SheetId, charts: &[ChartData], images
         if i.bytes.len() > MAX_IMAGE_BYTES || crate::images::sniff_mime(&i.bytes).is_none() {
             continue;
         }
+        if image_total.saturating_add(i.bytes.len()) > crate::images::MAX_TOTAL_IMAGE_BYTES {
+            dropped.push("Pictures past 256 MiB per document were not loaded.".to_string());
+            continue;
+        }
+        image_total += i.bytes.len();
         let id = s.meta.alloc_id();
         let mut anchor = i.anchor;
         clamp_anchor(&mut anchor);
@@ -178,6 +239,11 @@ pub fn from_data(wb: &mut Workbook, sheet: SheetId, charts: &[ChartData], images
     }
     if !is.is_empty() {
         Arc::make_mut(&mut s.meta.images).extend(is);
+    }
+    for w in dropped {
+        if !wb.import_warnings.contains(&w) {
+            wb.import_warnings.push(w);
+        }
     }
 }
 
@@ -1053,22 +1119,69 @@ struct Point {
     format: Option<Arc<str>>,
 }
 
+/// The work and size budget of one `chart_data` call: cells visited
+/// (hidden ones included) and points emitted. Once either runs out the
+/// walks stop and the response is marked `truncated`.
+pub(crate) struct DataBudget {
+    visits: usize,
+    points: usize,
+    truncated: bool,
+}
+
+impl DataBudget {
+    fn new() -> Self {
+        Self {
+            visits: MAX_CHART_VISITS,
+            points: MAX_CHART_POINTS,
+            truncated: false,
+        }
+    }
+
+    /// Charges one visited cell; `false` (and truncated) when spent.
+    fn visit(&mut self) -> bool {
+        if self.visits == 0 {
+            self.truncated = true;
+            return false;
+        }
+        self.visits -= 1;
+        true
+    }
+
+    /// How many of `n` literal points still fit (charging them).
+    fn take_points(&mut self, n: usize) -> usize {
+        let k = n.min(self.points);
+        if k < n {
+            self.truncated = true;
+        }
+        self.points -= k;
+        k
+    }
+}
+
 /// Walks the cells of a range in reading order (each area row by row),
-/// skipping hidden rows and columns unless `include_hidden`. Stops after
-/// `cap` cells and reports whether it stopped.
+/// skipping hidden rows and columns unless `include_hidden`. Emits at
+/// most `cap` cells (and what the budget's point allowance leaves);
+/// every row and column looked at is charged to the budget's visits.
+/// Areas are cut to the sheet's used range (the cells past it are
+/// empty), and an area whose columns are all hidden costs one pass over
+/// its columns. Reports whether it stopped early.
 fn walk_range(
     wb: &Workbook,
     r: &ChartRangeData,
     include_hidden: bool,
     cap: usize,
+    budget: &mut DataBudget,
     mut f: impl FnMut(CellAddr),
 ) -> bool {
+    let cap = cap.min(budget.points);
     let mut n = 0usize;
-    for (sid, a) in &r.areas {
+    let mut stopped = false;
+    'areas: for (sid, a) in r.areas.iter().take(MAX_AREAS) {
         let Some(sheet) = wb.sheet(*sid) else {
             continue;
         };
-        // A whole-column range is cut to the used rows (plus one).
+        // Long ranges are cut to the used rows and columns; short ones
+        // keep their trailing empty points (they show as categories).
         let used = sheet.used_range();
         let r1 = if a.r1 - a.r0 >= 1024 {
             used.map_or(a.r0, |u| u.r1.max(a.r0)).min(a.r1)
@@ -1080,23 +1193,46 @@ fn walk_range(
         } else {
             a.c1
         };
+        let mut cols = Vec::new();
+        for col in a.c0..=c1 {
+            if !budget.visit() {
+                stopped = true;
+                break 'areas;
+            }
+            if include_hidden || !sheet.col_hidden(col) {
+                cols.push(col);
+            }
+        }
+        if cols.is_empty() {
+            continue;
+        }
         for row in a.r0..=r1 {
+            if !budget.visit() {
+                stopped = true;
+                break 'areas;
+            }
             if !include_hidden && sheet.row_hidden(row) {
                 continue;
             }
-            for col in a.c0..=c1 {
-                if !include_hidden && sheet.col_hidden(col) {
-                    continue;
-                }
+            for &col in &cols {
                 if n >= cap {
-                    return true;
+                    stopped = true;
+                    break 'areas;
+                }
+                if !budget.visit() {
+                    stopped = true;
+                    break 'areas;
                 }
                 n += 1;
                 f(CellAddr::new(*sid, row, col));
             }
         }
     }
-    false
+    budget.points -= n;
+    if stopped {
+        budget.truncated = true;
+    }
+    stopped
 }
 
 fn point_of(wb: &Workbook, addr: CellAddr) -> Point {
@@ -1123,15 +1259,21 @@ fn resolve_points(
     wb: &Workbook,
     r: &ChartRangeData,
     include_hidden: bool,
-    truncated: &mut bool,
+    budget: &mut DataBudget,
 ) -> Vec<Point> {
     let mut out = Vec::new();
-    if walk_range(wb, r, include_hidden, MAX_POINTS, |a| {
+    walk_range(wb, r, include_hidden, MAX_POINTS, budget, |a| {
         out.push(point_of(wb, a))
-    }) {
-        *truncated = true;
-    }
+    });
     out
+}
+
+/// The literal points that fit the per-series cap and the budget.
+fn literal_take(len: usize, budget: &mut DataBudget) -> usize {
+    if len > MAX_POINTS {
+        budget.truncated = true;
+    }
+    budget.take_points(len.min(MAX_POINTS))
 }
 
 fn resolve_numbers(
@@ -1139,24 +1281,23 @@ fn resolve_numbers(
     r: Option<&ChartRangeData>,
     literal: Option<&ChartValuesData>,
     include_hidden: bool,
-    truncated: &mut bool,
+    budget: &mut DataBudget,
 ) -> Option<Vec<Option<f64>>> {
     match (r, literal) {
         (Some(r), _) if !r.is_unset() => Some(
-            resolve_points(wb, r, include_hidden, truncated)
+            resolve_points(wb, r, include_hidden, budget)
                 .into_iter()
                 .map(|p| p.value)
                 .collect(),
         ),
         (_, Some(ChartValuesData::Literal(v))) => {
-            Some(v.iter().take(MAX_POINTS).copied().collect())
+            let k = literal_take(v.len(), budget);
+            Some(v.iter().take(k).copied().collect())
         }
-        (_, Some(ChartValuesData::LiteralText(t))) => Some(
-            t.iter()
-                .take(MAX_POINTS)
-                .map(|s| s.trim().parse().ok())
-                .collect(),
-        ),
+        (_, Some(ChartValuesData::LiteralText(t))) => {
+            let k = literal_take(t.len(), budget);
+            Some(t.iter().take(k).map(|s| s.trim().parse().ok()).collect())
+        }
         _ => None,
     }
 }
@@ -1165,10 +1306,15 @@ fn series_display_name(wb: &Workbook, s: &ChartSeriesData, index: usize) -> Stri
     match &s.name {
         Some(SeriesNameData::Text(t)) => t.clone(),
         Some(SeriesNameData::Ref(r)) => {
-            let mut text = None;
-            walk_range(wb, r, true, 1, |a| {
-                text = Some(crate::service::view::display_text(wb, a))
-            });
+            // The first cell only: a budget of its own keeps the name
+            // independent of how much data the chart has.
+            let text = r
+                .areas
+                .iter()
+                .find(|(s, _)| wb.sheet(*s).is_some())
+                .map(|(s, a)| {
+                    crate::service::view::display_text(wb, CellAddr::new(*s, a.r0, a.c0))
+                });
             text.unwrap_or_else(|| format!("Series {}", index + 1))
         }
         None => format!("Series {}", index + 1),
@@ -1301,11 +1447,12 @@ pub fn trend_fit(kind: TrendKindData, xs: &[f64], ys: &[f64]) -> Option<TrendDat
 }
 
 /// Error bar `[minus, plus]` lengths per point.
-pub fn error_bar_lengths(
+pub(crate) fn error_bar_lengths(
     wb: &Workbook,
     e: &ErrorBarsData,
     values: &[Option<f64>],
     include_hidden: bool,
+    budget: &mut DataBudget,
 ) -> Vec<[f64; 2]> {
     let present: Vec<f64> = values.iter().flatten().copied().collect();
     let n = values.len();
@@ -1329,11 +1476,10 @@ pub fn error_bar_lengths(
             both(max * percent / 100.0)
         }
         ErrorBarKindData::Range { plus, minus } => {
-            let mut t = false;
             let p =
-                resolve_numbers(wb, Some(plus), None, include_hidden, &mut t).unwrap_or_default();
+                resolve_numbers(wb, Some(plus), None, include_hidden, budget).unwrap_or_default();
             let m =
-                resolve_numbers(wb, Some(minus), None, include_hidden, &mut t).unwrap_or_default();
+                resolve_numbers(wb, Some(minus), None, include_hidden, budget).unwrap_or_default();
             (0..n)
                 .map(|i| {
                     [
@@ -1352,11 +1498,23 @@ pub fn error_bar_lengths(
     out
 }
 
-/// Resolves a chart's data from the cached cell values (no recalculation).
+/// At most `max` of `points`, evenly spaced, keeping the first and last.
+fn sample_points(points: Vec<[f64; 2]>, max: usize) -> Vec<[f64; 2]> {
+    let n = points.len();
+    if n <= max || max < 2 {
+        return points;
+    }
+    (0..max).map(|i| points[i * (n - 1) / (max - 1)]).collect()
+}
+
+/// Resolves a chart's data from the cached cell values (no recalculation),
+/// within [`MAX_CHART_VISITS`] visited cells and [`MAX_CHART_POINTS`]
+/// points (`truncated` past either; the series that did not fit are
+/// left out).
 pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) -> ChartDataDto {
     let c = &chart.data;
     let hidden = c.include_hidden;
-    let mut truncated = false;
+    let mut budget = DataBudget::new();
     let mut problems = Vec::new();
     let mut categories: Vec<String> = match (&c.categories, &c.literal_categories) {
         (Some(r), _) if !r.is_unset() => {
@@ -1364,16 +1522,19 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
                 problems.push("the category range is invalid (#REF!)".into());
                 Vec::new()
             } else {
-                resolve_points(wb, r, hidden, &mut truncated)
+                resolve_points(wb, r, hidden, &mut budget)
                     .into_iter()
                     .map(|p| p.label)
                     .collect()
             }
         }
-        (_, Some(ChartValuesData::LiteralText(t))) => t.iter().take(MAX_POINTS).cloned().collect(),
+        (_, Some(ChartValuesData::LiteralText(t))) => {
+            let k = literal_take(t.len(), &mut budget);
+            t.iter().take(k).cloned().collect()
+        }
         (_, Some(ChartValuesData::Literal(v))) => v
             .iter()
-            .take(MAX_POINTS)
+            .take(literal_take(v.len(), &mut budget))
             .map(|x| {
                 x.map(|n| {
                     crate::service::view::format_with(
@@ -1391,8 +1552,8 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
     let mut series = Vec::new();
     let mut longest = 0usize;
     for (i, s) in c.series.iter().enumerate() {
-        if i >= MAX_SERIES {
-            truncated = true;
+        if i >= MAX_SERIES || budget.visits == 0 || budget.points == 0 {
+            budget.truncated = true;
             break;
         }
         let name = series_display_name(wb, s, i);
@@ -1410,21 +1571,19 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
                     None => Some(Vec::new()),
                 }
             } else {
-                Some(resolve_points(wb, &s.values, hidden, &mut truncated))
+                Some(resolve_points(wb, &s.values, hidden, &mut budget))
             };
             match pts {
                 Some(p) => p,
-                None => {
-                    resolve_numbers(wb, None, s.literal_values.as_ref(), hidden, &mut truncated)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|v| Point {
-                            value: v,
-                            label: v.map(fmt_coef).unwrap_or_default(),
-                            format: None,
-                        })
-                        .collect()
-                }
+                None => resolve_numbers(wb, None, s.literal_values.as_ref(), hidden, &mut budget)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|v| Point {
+                        value: v,
+                        label: v.map(fmt_coef).unwrap_or_default(),
+                        format: None,
+                    })
+                    .collect(),
             }
         };
         let number_format = values
@@ -1442,7 +1601,7 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
                 problems.push(format!("series {name:?}: the X range is invalid (#REF!)"));
                 None
             }
-            r => resolve_numbers(wb, r.as_ref(), s.literal_x.as_ref(), hidden, &mut truncated),
+            r => resolve_numbers(wb, r.as_ref(), s.literal_x.as_ref(), hidden, &mut budget),
         };
         let sizes = match &s.sizes {
             Some(r) if range_is_invalid(wb, r) => {
@@ -1456,7 +1615,7 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
                 r.as_ref(),
                 s.literal_sizes.as_ref(),
                 hidden,
-                &mut truncated,
+                &mut budget,
             ),
         };
         let trend = s.trend.as_ref().and_then(|t| {
@@ -1474,12 +1633,15 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
                 xs.push(xv);
                 ys.push(*y);
             }
-            trend_fit(t.kind, &xs, &ys)
+            trend_fit(t.kind, &xs, &ys).map(|mut fit| {
+                fit.points = sample_points(fit.points, MAX_TREND_POINTS);
+                fit
+            })
         });
         let errors = s
             .error_bars
             .as_ref()
-            .map(|e| error_bar_lengths(wb, e, &values, hidden));
+            .map(|e| error_bar_lengths(wb, e, &values, hidden, &mut budget));
         let present: Vec<f64> = values.iter().flatten().copied().collect();
         let mean = (s.mean_line && !present.is_empty())
             .then(|| present.iter().sum::<f64>() / present.len() as f64);
@@ -1507,7 +1669,7 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
         version,
         categories,
         series,
-        truncated,
+        truncated: budget.truncated,
         problems,
     }
 }
@@ -1561,14 +1723,21 @@ pub fn current_region(wb: &Workbook, sheet: SheetId, row: u32, col: u32) -> Cell
     CellRange::new(sheet, r0, c0, r1, c1)
 }
 
-fn is_text(wb: &Workbook, a: CellAddr) -> bool {
-    matches!(wb.value(a), Value::Text(_))
+/// AOO's `lcl_hasValueDataButNoDates` (`chartpos.cxx`): the cell holds a
+/// number (or boolean) that is not formatted as a date or time. Such a
+/// cell cannot be a label; text, blanks, errors and dates can.
+fn is_plain_value(wb: &Workbook, a: CellAddr) -> bool {
+    matches!(wb.value(a), Value::Number(_) | Value::Bool(_))
+        && !wb.styles.get(wb.style_at(a)).format.is_date()
 }
 
 /// A chart proposal for a selection: the data region, the label
-/// heuristics (a text first row names the series, a text first column
-/// holds the categories, more rows than columns means series in columns)
-/// and an anchor to the right of the region at 16 × 9 cm.
+/// heuristics of AOO's `ScChartPositioner::CheckColRowHeaders` (the
+/// first row names the series when none of its cells, the corner
+/// included, is a non-date number; likewise the first column holds the
+/// categories; dates and blanks count as labels), more rows than columns
+/// means series in columns, and an anchor to the right of the region at
+/// 16 × 9 cm.
 pub fn suggest(
     wb: &Workbook,
     sheet: SheetId,
@@ -1590,20 +1759,14 @@ pub fn suggest(
     let cols = region.cols();
     let series_in_rows = cols > rows;
     let cell = |r: u32, c: u32| CellAddr::new(sheet, r, c);
-    // Label heuristics: every cell of the first row (past the corner) is text,
-    // and there is more than one row (otherwise nothing to plot).
-    let first_row_label = rows > 1
-        && (region.c0..=region.c1)
-            .skip(1)
-            .all(|c| is_text(wb, cell(region.r0, c)))
-        && (region.c0..=region.c1).skip(1).count() > 0
-        || (rows > 1 && cols == 1 && is_text(wb, cell(region.r0, region.c0)));
-    let first_col_label = cols > 1
-        && (region.r0..=region.r1)
-            .skip(1)
-            .all(|r| is_text(wb, cell(r, region.c0)))
-        && (region.r0..=region.r1).skip(1).count() > 0
-        || (cols > 1 && rows == 1 && is_text(wb, cell(region.r0, region.c0)));
+    // Label heuristics (chartpos.cxx): no cell of the first row / column,
+    // the corner included, holds a plain number. A single row or column
+    // keeps its cells as data in that direction (otherwise nothing is
+    // left to plot). The scans stop at the first number.
+    let first_row_label =
+        rows > 1 && (region.c0..=region.c1).all(|c| !is_plain_value(wb, cell(region.r0, c)));
+    let first_col_label =
+        cols > 1 && (region.r0..=region.r1).all(|r| !is_plain_value(wb, cell(r, region.c0)));
     let range = ChartRangeData {
         areas: vec![(
             sheet,
@@ -1951,6 +2114,29 @@ pub fn move_block(wb: &mut Workbook, from: &CellRange, dr: i64, dc: i64) {
             }
         }
     }
+}
+
+/// Number of chart series in the whole document (for
+/// [`tally_model::MAX_SERIES_PER_DOCUMENT`]).
+pub fn series_count(wb: &Workbook) -> usize {
+    wb.sheets
+        .iter()
+        .flat_map(|s| s.meta.charts.iter())
+        .map(|c| c.data.series.len())
+        .sum()
+}
+
+/// Refuses a chart change that would take the document past
+/// [`tally_model::MAX_SERIES_PER_DOCUMENT`]: `others` is the series count
+/// of every chart but the one changed, `new` the changed chart's.
+pub fn check_series_budget(others: usize, new: usize) -> Result<(), ApiError> {
+    if others.saturating_add(new) > tally_model::MAX_SERIES_PER_DOCUMENT {
+        return Err(ApiError::invalid_argument(format!(
+            "a document may hold at most {} chart series",
+            tally_model::MAX_SERIES_PER_DOCUMENT
+        )));
+    }
+    Ok(())
 }
 
 /// Number of charts in the whole document (for the `AddChart` limit);

@@ -1158,10 +1158,20 @@ fn parse_local_table<R: BufRead>(xml: &mut XmlReader<R>) -> Result<LocalTable, O
             },
             Ev::End if xml.depth() < d => break,
             Ev::End => {
-                if let Some(r) = row.take_if(|_| xml.depth() == d + 1 || xml.depth() == d + 2) {
+                if let Some(mut r) = row.take_if(|_| xml.depth() == d + 1 || xml.depth() == d + 2) {
                     if in_header && t.header.is_empty() {
                         t.header = r.iter().map(value_text).collect();
                     } else if t.rows.len() < MAX_LOCAL_ROWS {
+                        // Only real values are kept: trailing empty cells
+                        // are dropped and an empty row holds no allocation.
+                        while matches!(r.last(), Some(Value::Empty)) {
+                            r.pop();
+                        }
+                        if r.is_empty() {
+                            r = Vec::new();
+                        } else {
+                            r.shrink_to_fit();
+                        }
                         t.rows.push(r);
                     }
                 }
@@ -1169,6 +1179,10 @@ fn parse_local_table<R: BufRead>(xml: &mut XmlReader<R>) -> Result<LocalTable, O
             Ev::Eof => break,
             _ => {}
         }
+    }
+    // Trailing empty rows carry no data.
+    while t.rows.last().is_some_and(Vec::is_empty) {
+        t.rows.pop();
     }
     Ok(t)
 }
@@ -1201,10 +1215,14 @@ struct RawSeries {
 
 /// Reads an object `content.xml` into a chart. `look` resolves sheet
 /// names; `anchor` supplies the placement from the frame.
+/// `literal_budget` is what remains of the document's
+/// [`tally_model::MAX_LITERAL_POINTS`]: the `local-table` values taken
+/// are subtracted, and series past it keep no cached values.
 pub(crate) fn parse_content_xml<R: BufRead>(
     xml: &mut XmlReader<R>,
     look: &SheetLookup<'_>,
     warnings: &mut Vec<String>,
+    literal_budget: &mut usize,
 ) -> Result<Option<ChartData>, OdsError> {
     let mut styles: HashMap<String, ChartStyle> = HashMap::new();
     let mut c = ChartData::default();
@@ -1489,6 +1507,7 @@ pub(crate) fn parse_content_xml<R: BufRead>(
     c.categories = categories.filter(|r| !r.is_unset() || r.invalid);
     // Series.
     let local = local.unwrap_or_default();
+    let mut literal_dropped = false;
     let mut first_bar_volume = false;
     for (i, raw) in series.into_iter().enumerate() {
         let st = raw.style.as_ref().and_then(|n| styles.get(n));
@@ -1497,16 +1516,20 @@ pub(crate) fn parse_content_xml<R: BufRead>(
             sv.values = parse_range_address(a, look);
         }
         if sv.values.is_unset() {
-            // Cached values from the local table (column i + 1).
-            let col: Vec<Option<f64>> = local
-                .rows
-                .iter()
-                .map(|r| match r.get(i + 1) {
-                    Some(Value::Number(n)) => Some(*n),
-                    _ => None,
-                })
-                .collect();
-            if !col.is_empty() {
+            // Cached values from the local table (column i + 1), one per
+            // row up to the last non-empty row.
+            let len = local.rows.len();
+            if len > *literal_budget {
+                literal_dropped = true;
+            } else if len > 0 {
+                *literal_budget -= len;
+                let col: Vec<Option<f64>> = local.rows[..len]
+                    .iter()
+                    .map(|r| match r.get(i + 1) {
+                        Some(Value::Number(n)) => Some(*n),
+                        _ => None,
+                    })
+                    .collect();
                 sv.literal_values = Some(ChartValuesData::Literal(col));
             }
         }
@@ -1666,9 +1689,20 @@ pub(crate) fn parse_content_xml<R: BufRead>(
             .iter()
             .map(|r| r.first().map(value_text).unwrap_or_default())
             .collect();
-        if cats.iter().any(|t| !t.is_empty()) {
+        if !cats.iter().any(|t| !t.is_empty()) {
+            // No category text: nothing to keep.
+        } else if cats.len() > *literal_budget {
+            literal_dropped = true;
+        } else {
+            *literal_budget -= cats.len();
             c.literal_categories = Some(ChartValuesData::LiteralText(cats));
         }
+    }
+    if literal_dropped {
+        warnings.push(format!(
+            "Chart cached values past {} points per document were not read.",
+            tally_model::MAX_LITERAL_POINTS
+        ));
     }
     if ring && c.hole.is_none() {
         c.hole = Some(0.5);

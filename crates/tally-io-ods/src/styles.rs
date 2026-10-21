@@ -269,6 +269,33 @@ impl StyleSheet {
         index
     }
 
+    /// `index` (or the default look) with `code` as its number format when
+    /// it has none: a typed cell value (`date`, `time`, `percentage`,
+    /// `currency`) without a data style gets the type's standard format,
+    /// as AOO's `ScXMLImport::SetType` does (sc/source/filter/xml/
+    /// xmlimprt.cxx:2343-2387; correctness review 4, M28).
+    pub fn with_standard_format(&mut self, index: Option<u32>, code: &str) -> Option<u32> {
+        let mut data = match index {
+            Some(i) => self.styles.get(i as usize).cloned().unwrap_or_default(),
+            None => StyleData::default(),
+        };
+        if data.number_format.is_some() {
+            return index;
+        }
+        data.number_format = Some(code.to_string());
+        let key = format!("{}|std", style_key(&data));
+        if let Some(&i) = self.dedup.get(&key) {
+            return Some(i);
+        }
+        let i = self.styles.len() as u32;
+        self.styles.push(data);
+        self.dedup.insert(key, i);
+        if let Some(maps) = index.and_then(|o| self.style_maps.get(&o).cloned()) {
+            self.style_maps.insert(i, maps);
+        }
+        Some(i)
+    }
+
     fn build(&self, name: &str) -> StyleData {
         // Collect the parent chain (leaf first), stopping at the root
         // "Default" style, which defines the baseline look.

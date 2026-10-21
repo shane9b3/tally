@@ -83,6 +83,9 @@ struct CellParsed {
     link: Option<String>,
     /// `draw:frame`s anchored in the cell (W5-1).
     frames: Vec<crate::frame::RawFrame>,
+    /// The standard number format of a typed value (`date`, `time`,
+    /// `percentage`, `currency`), used when the cell style has none.
+    std_format: Option<String>,
 }
 
 struct Run {
@@ -214,7 +217,7 @@ pub(crate) fn parse_content<R: BufRead>(
                     parse_database_ranges(xml, &mut out.sheets)?;
                 }
                 "table:data-pilot-tables" if out.is_spreadsheet => {
-                    crate::tools::parse_pivot_tables(xml, &mut out.sheets)?;
+                    crate::tools::parse_pivot_tables(xml, &mut out.sheets, p.epoch)?;
                 }
                 _ => xml.skip()?,
             },
@@ -453,6 +456,7 @@ impl Parser<'_> {
         sheet.links.sort_by_key(|l| (l.row, l.col));
         sheet.row_breaks.sort_unstable();
         sheet.row_breaks.dedup();
+        crate::tools::sort_groups(&mut sheet);
         Ok((sheet, extra))
     }
 
@@ -703,7 +707,10 @@ impl Parser<'_> {
                     None
                 }
             });
-            let style = name.and_then(|n| self.styles.resolve(&n));
+            let mut style = name.and_then(|n| self.styles.resolve(&n));
+            if let Some(code) = run.cell.std_format.as_deref() {
+                style = self.styles.with_standard_format(style, code);
+            }
             if !non_empty {
                 let Some(st) = style else {
                     continue;
@@ -887,6 +894,25 @@ impl Parser<'_> {
         if matches!(value, Value::Number(n) if !n.is_finite()) {
             value = Value::Empty;
         }
+        let std_format = match (vt, &value) {
+            (Some("date"), Value::Number(n)) if n.fract() != 0.0 => {
+                Some("YYYY-MM-DD HH:MM:SS".into())
+            }
+            (Some("date"), Value::Number(_)) => Some("YYYY-MM-DD".into()),
+            (Some("time"), Value::Number(_)) => Some("HH:MM:SS".into()),
+            (Some("percentage"), Value::Number(_)) => Some("0%".into()),
+            (Some("currency"), Value::Number(_)) => Some(match e.attr("office:currency") {
+                Some(c)
+                    if !c.is_empty()
+                        && c.len() <= 8
+                        && c.chars().all(|c| c.is_ascii_alphabetic()) =>
+                {
+                    format!("#,##0.00 [${c}]")
+                }
+                _ => "#,##0.00".into(),
+            }),
+            _ => None,
+        };
         let content = match formula {
             Some(text) => CellContentData::Formula {
                 text,
@@ -895,6 +921,7 @@ impl Parser<'_> {
             None => CellContentData::Value(value),
         };
         Ok(CellParsed {
+            std_format,
             repeat,
             content,
             style: e

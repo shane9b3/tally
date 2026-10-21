@@ -117,6 +117,17 @@ export function percentStack(values: (number | null)[][]): (number | null)[][] {
   return values.map((v) => v.map((y, i) => (y === null ? null : totals[i] ? (Math.abs(y) / (totals[i] ?? 1)) * 100 * Math.sign(y || 1) : 0)));
 }
 
+/** Percent stacking per value axis: the primary and secondary series each sum to 100 on their own. */
+export function percentStackByAxis(values: (number | null)[][], axis: readonly number[]): (number | null)[][] {
+  const out: (number | null)[][] = values.map(() => []);
+  for (const a of new Set(axis)) {
+    const idx = values.map((_, i) => i).filter((i) => axis[i] === a);
+    const stacked = percentStack(idx.map((i) => values[i] ?? []));
+    idx.forEach((i, k) => (out[i] = stacked[k] ?? []));
+  }
+  return out;
+}
+
 type LabelPosition = "inside" | "top" | "bottom" | "left" | "right";
 
 /** Pie label placement for an AOO placement. */
@@ -395,7 +406,7 @@ export function toEchartsOption(chart: ChartDto, data: ChartDataDto, theme: Char
 function cartesianOption(chart: ChartDto, data: ChartDataDto, categories: readonly string[], theme: ChartTheme): EChartsOption {
   const horizontal = chart.kind === "bar";
   const stacked = chart.stacking !== "none";
-  const values = chart.stacking === "percent" ? percentStack(data.series.map((s) => s.values)) : data.series.map((s) => s.values);
+  const values = chart.stacking === "percent" ? percentStackByAxis(data.series.map((s) => s.values), data.series.map((_, i) => (chart.series[i]?.secondaryAxis ? 1 : 0))) : data.series.map((s) => s.values);
   const series: AnySeries[] = [];
   const secondary = chart.series.some((s) => s.secondaryAxis);
   data.series.forEach((d, i) => {

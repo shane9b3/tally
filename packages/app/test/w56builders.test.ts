@@ -123,7 +123,7 @@ describe("sort options, multiple operations, sheets", () => {
   });
   it("writes MULTIPLE.OPERATIONS formulas for one- and two-variable tables", () => {
     const cell = (s: string) => (s === "B1" ? { r: 0, c: 1 } : s === "B2" ? { r: 1, c: 1 } : null);
-    const one = multipleOperationsOps(1, { r0: 3, c0: 0, r1: 5, c1: 0 }, { formulas: "B4", rowInput: "", colInput: "B1" }, cell);
+    const one = multipleOperationsOps(1, { r0: 3, c0: 0, r1: 5, c1: 1 }, { formulas: "B4", rowInput: "", colInput: "B1" }, cell);
     expect(one).toEqual([
       { type: "setCellInput", sheet: 1, r: 3, c: 1, input: "=MULTIPLE.OPERATIONS($B$4;$B$1;A4)" },
       { type: "setCellInput", sheet: 1, r: 4, c: 1, input: "=MULTIPLE.OPERATIONS($B$4;$B$1;A5)" },
@@ -134,6 +134,12 @@ describe("sort options, multiple operations, sheets", () => {
       { type: "setCellInput", sheet: 1, r: 4, c: 1, input: "=MULTIPLE.OPERATIONS($B$4;$B$2;A5;$B$1;B4)" },
       { type: "setCellInput", sheet: 1, r: 4, c: 2, input: "=MULTIPLE.OPERATIONS($B$4;$B$2;A5;$B$1;C4)" },
     ]);
+    // Never writes outside the selection (review 4 M39): three formula cells, one result column.
+    const clipped = multipleOperationsOps(1, { r0: 1, c0: 0, r1: 2, c1: 1 }, { formulas: "B1:D1", rowInput: "", colInput: "B1" }, cell) as { c: number }[];
+    expect(clipped.every((o) => o.c <= 1)).toBe(true);
+    expect(clipped).toHaveLength(2);
+    const clippedRow = multipleOperationsOps(1, { r0: 0, c0: 0, r1: 1, c1: 2 }, { formulas: "B1:B3", rowInput: "B1", colInput: "" }, cell) as { r: number }[];
+    expect(clippedRow.every((o) => o.r <= 1)).toBe(true);
     expect(multipleOperationsOps(1, { r0: 0, c0: 0, r1: 1, c1: 1 }, { formulas: "", rowInput: "", colInput: "" }, cell)).toMatch(/formula cell/);
     expect(multipleOperationsOps(1, { r0: 0, c0: 0, r1: 1, c1: 1 }, { formulas: "B4", rowInput: "", colInput: "" }, cell)).toMatch(/input cell/);
   });

@@ -51,6 +51,8 @@ export interface LayoutField {
   layout: PivotLayout;
   emptyLineAfter: boolean;
   autoShow: { top: boolean; count: number; dataField: number } | null;
+  /** Field grouping, carried through an edit unchanged (never edited in the layout dialog). */
+  group?: PivotFieldDto["group"];
 }
 
 export interface LayoutDataField {
@@ -154,11 +156,11 @@ export function layoutError(st: PivotLayoutState): string | null {
 }
 
 function toField(f: LayoutField): PivotFieldDto {
-  return { sourceCol: f.sourceCol, name: f.name, subtotals: f.subtotals, showEmpty: f.showEmpty, sort: f.sort, hiddenItems: [...f.hiddenItems], pageItem: f.pageItem, layout: f.layout, emptyLineAfter: f.emptyLineAfter, autoShow: f.autoShow ? { ...f.autoShow } : null, group: null };
+  return { sourceCol: f.sourceCol, name: f.name, subtotals: f.subtotals, showEmpty: f.showEmpty, sort: f.sort, hiddenItems: [...f.hiddenItems], pageItem: f.pageItem, layout: f.layout, emptyLineAfter: f.emptyLineAfter, autoShow: f.autoShow ? { ...f.autoShow } : null, group: f.group ?? null };
 }
 
 function fromField(f: PivotFieldDto): LayoutField {
-  return { sourceCol: f.sourceCol, name: f.name, subtotals: f.subtotals, showEmpty: f.showEmpty, sort: f.sort, hiddenItems: [...f.hiddenItems], pageItem: f.pageItem, layout: f.layout, emptyLineAfter: f.emptyLineAfter, autoShow: f.autoShow ? { ...f.autoShow } : null };
+  return { sourceCol: f.sourceCol, name: f.name, subtotals: f.subtotals, showEmpty: f.showEmpty, sort: f.sort, hiddenItems: [...f.hiddenItems], pageItem: f.pageItem, layout: f.layout, emptyLineAfter: f.emptyLineAfter, autoShow: f.autoShow ? { ...f.autoShow } : null, group: f.group ?? null };
 }
 
 function toDataField(f: LayoutDataField): PivotDataFieldDto {

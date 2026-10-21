@@ -355,6 +355,28 @@ impl DimRuns {
         d
     }
 
+    /// Builds from runs sorted by start and not overlapping (equal
+    /// neighbours are merged); linear.
+    pub fn from_sorted(runs: Vec<tally_model::DimRun>) -> Self {
+        let mut merged: Vec<tally_model::DimRun> = Vec::with_capacity(runs.len());
+        for r in runs {
+            if r.start > r.end {
+                continue;
+            }
+            if let Some(last) = merged.last_mut() {
+                if last.end.checked_add(1) == Some(r.start)
+                    && last.size_hmm == r.size_hmm
+                    && last.hidden == r.hidden
+                {
+                    last.end = r.end;
+                    continue;
+                }
+            }
+            merged.push(r);
+        }
+        DimRuns { runs: merged }
+    }
+
     /// The runs, sorted and non-overlapping.
     pub fn runs(&self) -> &[tally_model::DimRun] {
         &self.runs

@@ -197,7 +197,16 @@ pub fn meta_op_cost(op: &Op) -> Option<u64> {
         | Op::UnprotectDocument { .. }
         | Op::SetPageSetup { .. }
         | Op::SetPageBreak { .. }
-        | Op::SetDocumentProperties { .. } => Some(0),
+        | Op::SetDocumentProperties { .. }
+        // Names count too (security review 4, MEDIUM-T6).
+        | Op::DefineName { .. }
+        | Op::DeleteName { .. }
+        // Outline and scenario edits are meta edits as well (HIGH-T5,
+        // MEDIUM-T7).
+        | Op::Group { .. }
+        | Op::Ungroup { .. }
+        | Op::CreateScenario { .. }
+        | Op::UpdateScenario { .. } => Some(0),
         _ => None,
     }
 }

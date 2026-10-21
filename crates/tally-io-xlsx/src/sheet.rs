@@ -513,7 +513,9 @@ impl State<'_, '_> {
             };
             push_run(&mut self.out.col_widths, c0, c1, hmm, hidden);
         }
-        let level = attr_u32(e, "outlineLevel").unwrap_or(0).min(8) as u8;
+        let level = attr_u32(e, "outlineLevel")
+            .unwrap_or(0)
+            .min(u32::from(crate::tools::MAX_OUTLINE_LEVEL)) as u8;
         let collapsed = e.attr_local("collapsed").is_some_and(parse_bool);
         if (level > 0 || collapsed) && self.col_levels.len() < 100_000 {
             for c in c0..=c1.min(c0 + 16_383) {
@@ -551,7 +553,9 @@ impl State<'_, '_> {
                 .unwrap_or(self.default_row_hmm);
             push_run(&mut self.out.row_heights, row, row, size, hidden);
         }
-        let level = attr_u32(e, "outlineLevel").unwrap_or(0).min(8) as u8;
+        let level = attr_u32(e, "outlineLevel")
+            .unwrap_or(0)
+            .min(u32::from(crate::tools::MAX_OUTLINE_LEVEL)) as u8;
         let collapsed = e.attr_local("collapsed").is_some_and(parse_bool);
         if (level > 0 || collapsed) && self.row_levels.len() < 1_000_000 {
             self.row_levels.push((row, level, hidden, collapsed));

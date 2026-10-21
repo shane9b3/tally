@@ -260,6 +260,21 @@ pub trait EvalContext {
         let _ = (at, field, filters);
         None
     }
+
+    /// GETPIVOTDATA, Excel 2000 form: like [`EvalContext::pivot_data`],
+    /// but `words` (the constraint text outside `Field[Item]` groups) may
+    /// mix a data field name with item names, and a single data field may
+    /// be omitted (AOO `ScDPObject::ParseFilters`). In the AOO form
+    /// `field` must name a data field. The default delegates to
+    /// `pivot_data`.
+    fn pivot_data_excel(
+        &mut self,
+        at: CellAddr,
+        words: &str,
+        filters: &[(String, String)],
+    ) -> Option<Value> {
+        self.pivot_data(at, words, filters)
+    }
 }
 
 /// The arguments of one call, evaluated on demand by the engine.

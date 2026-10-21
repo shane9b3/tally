@@ -141,8 +141,8 @@ test("subtotals dialog records the groups; text to columns previews the split", 
   await clickCell(page, 20, 0);
   await run(page, "data.textToColumns");
   const t2c = page.getByTestId("text-to-columns");
-  // AutoCorrect capitalised the sentence start on commit.
-  await expect(t2c.getByTestId("t2c-preview")).toContainText("North");
+  // A lone word has no delimiter typed after it: AutoCorrect leaves it alone (review 4 M42).
+  await expect(t2c.getByTestId("t2c-preview")).toContainText("north");
   await expect(t2c.getByTestId("t2c-preview").locator("tbody td")).toHaveCount(3);
   await t2c.getByTestId("t2c-semicolon").uncheck();
   await expect(t2c.getByTestId("t2c-preview").locator("tbody td")).toHaveCount(1);

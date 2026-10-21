@@ -22,6 +22,15 @@ describe("Format Cells", () => {
     expect(formatCellsError({ ...st, fontSizePt: 0 })).toMatch(/Font size/);
     expect(formatCellsError(st)).toBeNull();
   });
+  it("clears a fill and resets the font colour with the alpha-0 sentinel (review 4 M40)", () => {
+    const coloured: StyleDto = { ...base, fill: 0xff0000ff, color: 0x00ff00ff };
+    const st = { ...stateFromStyle(coloured), fill: null, color: null };
+    const patch = patchFromState(st, coloured);
+    expect(patchIsEmpty(patch)).toBe(false);
+    expect(patch.fill! & 255).toBe(0);
+    expect(patch.color! & 255).toBe(0);
+    expect(patchIsEmpty(patchFromState(stateFromStyle(base), base))).toBe(true);
+  });
   it("toggles border edges (set → removed → unchanged) and presets include the diagonals", () => {
     let st = stateFromStyle(base);
     st = toggleEdge(st, "diagonalDown");

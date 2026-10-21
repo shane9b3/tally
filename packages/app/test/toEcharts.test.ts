@@ -6,7 +6,7 @@
  */
 import type { ChartDataDto, ChartDto, ChartSeriesDto } from "@tally/bridge";
 import { describe, expect, it } from "vitest";
-import { AOO_PALETTE, cssColor, DEFAULT_AXIS, LIGHT_CHART_THEME, paletteColor, percentStack, stockRoles, toEchartsOption, type EChartsOption } from "../src/charts/toEcharts";
+import { AOO_PALETTE, cssColor, DEFAULT_AXIS, LIGHT_CHART_THEME, paletteColor, percentStack, percentStackByAxis, stockRoles, toEchartsOption, type EChartsOption } from "../src/charts/toEcharts";
 
 function series(values: string, extra: Partial<ChartSeriesDto> = {}): ChartSeriesDto {
   return { name: null, values, xValues: null, sizes: null, kind: null, secondaryAxis: false, color: null, marker: null, labels: { value: false, percent: false, category: false, seriesName: false, position: "auto" }, trend: null, errorBars: null, meanLine: false, ...extra };
@@ -211,5 +211,14 @@ describe("toEchartsOption properties", () => {
     expect(label.show).toBe(true);
     expect(label.position).toBe("inside");
     expect(label.formatter({ dataIndex: 1, seriesName: "North" })).toBe("North Feb 20");
+  });
+});
+
+describe("percent stacking per axis (review 4 M45)", () => {
+  it("normalises primary and secondary series separately", () => {
+    const out = percentStackByAxis([[50, 50], [50, 150], [1000, 10]], [0, 0, 1]);
+    expect(out[0]).toEqual([50, 25]);
+    expect(out[1]).toEqual([50, 75]);
+    expect(out[2]).toEqual([100, 100]);
   });
 });

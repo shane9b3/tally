@@ -42,26 +42,59 @@ export function canonicalName(lang: FormulaLang, name: string): string | null {
 
 /**
  * Rewrites the function names of a formula (identifiers followed by `(`,
- * outside string literals) with `map`; anything `map` does not know stays.
+ * outside string literals and `'quoted sheet names'`) with `map`; anything
+ * `map` does not know stays. With `numberSep`, the decimal separator of
+ * numeric literals (`1,5` / `1.5`) is swapped `from` -> `to` as well.
  */
-export function mapFunctionNames(formula: string, map: (name: string) => string | null): string {
+export function mapFunctionNames(formula: string, map: (name: string) => string | null, numberSep?: { from: string; to: string }): string {
   if (!formula.startsWith("=")) return formula;
   let out = "";
   let i = 0;
+  const skipQuoted = (q: string): void => {
+    // Doubled quotes escape the quote character inside both literal kinds.
+    let j = i + 1;
+    for (;;) {
+      const end = formula.indexOf(q, j);
+      if (end < 0) {
+        j = formula.length;
+        break;
+      }
+      if (formula[end + 1] === q) {
+        j = end + 2;
+        continue;
+      }
+      j = end + 1;
+      break;
+    }
+    out += formula.slice(i, j);
+    i = j;
+  };
   while (i < formula.length) {
     const ch = formula[i] ?? "";
-    if (ch === '"') {
-      const end = formula.indexOf('"', i + 1);
-      const stop = end < 0 ? formula.length : end + 1;
-      out += formula.slice(i, stop);
-      i = stop;
+    if (ch === '"' || ch === "'") {
+      skipQuoted(ch);
       continue;
     }
-    const m = /^[A-Za-z_][A-Za-z0-9_.À-ÖØ-öø-ÿÑñ]*(?=\s*\()/.exec(formula.slice(i));
-    if (m && (i === 0 || !/[A-Za-z0-9_.$]/.test(formula[i - 1] ?? "")) && !/^[A-Za-z]{1,3}\d+\./.test(m[0])) {
+    const prev = i === 0 ? "" : (formula[i - 1] ?? "");
+    const m = /^[\p{L}_][\p{L}\p{N}_.]*(?=\s*\()/u.exec(formula.slice(i));
+    if (m && !/[\p{L}\p{N}_.$]/u.test(prev) && !/^[A-Za-z]{1,3}\d+\./.test(m[0])) {
       const name = m[0];
       out += map(name) ?? name;
       i += name.length;
+      continue;
+    }
+    if (numberSep && /\d/.test(ch) && !/[\p{L}\p{N}_.$]/u.test(prev)) {
+      const from = numberSep.from === "." ? "\\." : numberSep.from;
+      const n = new RegExp(`^\\d+${from}\\d+`).exec(formula.slice(i));
+      if (n) {
+        out += n[0].replace(numberSep.from, numberSep.to);
+        i += n[0].length;
+        continue;
+      }
+      // A plain integer: consume it whole so its tail digits are not mistaken for a start.
+      const d = /^\d+/.exec(formula.slice(i))![0];
+      out += d;
+      i += d.length;
       continue;
     }
     out += ch;
@@ -70,16 +103,16 @@ export function mapFunctionNames(formula: string, map: (name: string) => string 
   return out;
 }
 
-/** Canonical formula → the locale's display spelling. */
+/** Canonical formula → the locale's display spelling (names and decimal comma). */
 export function toDisplayFormula(lang: FormulaLang | null, formula: string): string {
   if (!lang) return formula;
-  return mapFunctionNames(formula, (n) => (TABLES[lang][n.toUpperCase()] ? localizedName(lang, n) : null));
+  return mapFunctionNames(formula, (n) => (TABLES[lang][n.toUpperCase()] ? localizedName(lang, n) : null), { from: ".", to: "," });
 }
 
-/** Display spelling → the canonical formula the engine parses. */
+/** Display spelling → the canonical formula the engine parses (`;` arguments, `.` decimals). */
 export function toCanonicalFormula(lang: FormulaLang | null, formula: string): string {
   if (!lang) return formula;
-  return mapFunctionNames(formula, (n) => canonicalName(lang, n));
+  return mapFunctionNames(formula, (n) => canonicalName(lang, n), { from: ",", to: "." });
 }
 
 /** The function list with localized names and signatures (for the autocomplete and the wizard). */

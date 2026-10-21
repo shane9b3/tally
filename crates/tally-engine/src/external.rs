@@ -75,13 +75,17 @@ pub fn classify_formula(text: &str) -> Option<(ExternalLinkKind, Option<String>)
         .strip_prefix("of:")
         .or_else(|| t.strip_prefix("oooc:"))
         .unwrap_or(t);
+    // String literals are not code (correctness review 4, H12:
+    // `="Call DDE(x) later"` became #N/A after a reload): the scans below
+    // run on a copy with every literal's contents blanked, byte for byte.
+    let code = mask_string_literals(body);
     // DDE("server";"topic";"item")
-    if let Some(topic) = dde_topic(body) {
+    if let Some(topic) = dde_topic(&code, body) {
         return Some((ExternalLinkKind::Dde, topic));
     }
     // ODF: ['file:///a.ods'#$Sheet1.A1], ['http://…'#$S.A1]; also the
     // UI spelling 'file:///a.ods'#$Sheet1.A1 without brackets.
-    if let Some(target) = odf_external_target(body) {
+    if let Some(target) = odf_external_target(&code) {
         return Some((ExternalLinkKind::ExternalReference, Some(target)));
     }
     // Excel: [1]Sheet1!A1, '[Book.xlsx]Sheet 1'!A1, [Book.xlsx]Sheet1!A1
@@ -91,8 +95,58 @@ pub fn classify_formula(text: &str) -> Option<(ExternalLinkKind, Option<String>)
     None
 }
 
-fn dde_topic(body: &str) -> Option<Option<String>> {
-    let upper = body.to_ascii_uppercase();
+/// `body` with the contents of every `"…"` literal (`""` escapes a quote)
+/// replaced by spaces; quoted names (`'…'`, `''` escapes) are kept. The
+/// result has the same byte offsets as `body`.
+fn mask_string_literals(body: &str) -> String {
+    let b = body.as_bytes();
+    let mut out = b.to_vec();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'"' => {
+                i += 1;
+                while i < b.len() {
+                    if b[i] == b'"' {
+                        if b.get(i + 1) == Some(&b'"') {
+                            out[i] = b' ';
+                            out[i + 1] = b' ';
+                            i += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    out[i] = b' ';
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'\'' => {
+                i += 1;
+                while i < b.len() {
+                    if b[i] == b'\'' {
+                        if b.get(i + 1) == Some(&b'\'') {
+                            i += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    // Only ASCII bytes inside literals were replaced, by ASCII spaces;
+    // multi-byte characters inside literals were replaced byte by byte.
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Finds `DDE(` in `code` (literals masked); the server and topic are
+/// read from the same offsets of `body`.
+fn dde_topic(code: &str, body: &str) -> Option<Option<String>> {
+    let upper = code.to_ascii_uppercase();
     let mut from = 0;
     while let Some(i) = upper[from..].find("DDE(") {
         let at = from + i;
@@ -317,6 +371,21 @@ mod tests {
         assert_eq!(ext("=\"[1]Sheet1!A1\""), None, "inside a string");
         assert_eq!(ext("=ADDE(1)"), None);
         assert_eq!(ext("='It''s'.A1"), None);
+        // Correctness review 4, H12: literals are not code.
+        assert_eq!(ext("of:=\"Call DDE(x) later\""), None);
+        assert_eq!(ext("of:=\"see 'file:///etc/a.ods'#$S.A1\""), None);
+        assert_eq!(ext("of:=\"a \"\"DDE(\"\" b\"&[.A1]"), None);
+        assert_eq!(
+            ext("of:=\"x\"&DDE(\"s\";\"t\";\"i\")").map(|k| k.0),
+            Some(ExternalLinkKind::Dde)
+        );
+        assert_eq!(
+            ext("of:=\"é\"&['file:///a.ods'#$S.A1]"),
+            Some((
+                ExternalLinkKind::ExternalReference,
+                Some("file:///a.ods".into())
+            ))
+        );
     }
 
     #[test]

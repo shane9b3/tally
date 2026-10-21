@@ -8,8 +8,20 @@ use tally_types::SheetId;
 use crate::charts::{anchor_from_api, anchor_to_api, Image, MAX_IMAGE_BYTES};
 use crate::workbook::Workbook;
 
-/// Most picture bytes per document (all sheets).
-pub const MAX_TOTAL_IMAGE_BYTES: usize = 256 * 1024 * 1024;
+/// Most picture bytes per document (all sheets), counted once per
+/// picture reference: the readers share one copy of the bytes between
+/// the frames that show a picture, but every picture the document lists
+/// is encoded, sent and saved on its own.
+pub const MAX_TOTAL_IMAGE_BYTES: usize = tally_model::MAX_TOTAL_IMAGE_BYTES;
+
+/// Picture bytes the document references (every picture of every sheet).
+pub fn total_image_bytes(wb: &Workbook) -> usize {
+    wb.sheets
+        .iter()
+        .flat_map(|s| s.meta.images.iter())
+        .map(|i| i.data.bytes.len())
+        .sum()
+}
 
 /// The media type the bytes announce (`image/png`, `image/jpeg`), or
 /// `None` for anything else.
@@ -52,12 +64,7 @@ pub fn bytes_from_api(image: &ImageDto) -> Result<(Vec<u8>, String), ApiError> {
 /// A picture from the API (bytes decoded and checked, anchor validated).
 pub fn from_api(wb: &Workbook, sheet: SheetId, image: &ImageDto) -> Result<Image, ApiError> {
     let (bytes, mime) = bytes_from_api(image)?;
-    let total: usize = wb
-        .sheets
-        .iter()
-        .flat_map(|s| s.meta.images.iter())
-        .map(|i| i.data.bytes.len())
-        .sum();
+    let total = total_image_bytes(wb);
     if total.saturating_add(bytes.len()) > MAX_TOTAL_IMAGE_BYTES {
         return Err(ApiError::invalid_argument(
             "the document already holds 256 MiB of pictures",
@@ -70,7 +77,7 @@ pub fn from_api(wb: &Workbook, sheet: SheetId, image: &ImageDto) -> Result<Image
             name: image.name.chars().take(64).collect(),
             anchor: anchor_from_api(&image.anchor)?,
             mime,
-            bytes,
+            bytes: bytes.into(),
         },
     })
 }

@@ -18,11 +18,21 @@
 //! - one row per row-field item combination, `<item> Result` subtotal
 //!   rows after the children of an outer item, `Total Result` at the end;
 //!   the same across the columns.
-//! - Aggregation: Count = non-empty, CountNums = numbers, StDev/Var with
-//!   fewer than two numbers = `#DIV/0!`; item order numbers before text,
-//!   case-insensitive.
+//! - Aggregation as AOO `ScDPAggData` (`dptabres.cxx:415-597`): Count
+//!   counts strings and errors, every other function ignores strings, is
+//!   an error after an error value and empty without values; StDev/Var
+//!   need two values; errors are output as `#VALUE!`. Items are
+//!   identified by value (numbers, dates, booleans) or case-insensitive
+//!   text; numbers sort before text, the empty item `(empty)` last.
+//! - Budgets: at most [`MAX_FIELDS`] fields (also for pivots read from
+//!   files), [`MAX_AGG_WORK`] aggregation updates, [`MAX_OUTPUT_CELLS`]
+//!   result cells; the row and column trees are bounded by the sheet size
+//!   before the output is laid out.
 
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Arc;
 
 use tally_api::{
@@ -36,18 +46,20 @@ use tally_model::{
     PivotSourceData, PivotSubtotalsData, ShowAsData, ShowAsKindData,
 };
 use tally_numfmt::date::ymd_from_serial;
-use tally_types::{CellAddr, CellRange, ErrorKind, SheetId, Value, MAX_COLS, MAX_ROWS};
+use tally_numfmt::{recognize_input_with, Locale, RecognizeContext};
+use tally_types::{CellAddr, CellRange, DateEpoch, ErrorKind, SheetId, Value, MAX_COLS, MAX_ROWS};
 
 use crate::ops::{check_sheet, map_styles, to_range};
 use crate::ops_v03::with_meta;
 use crate::protection::check_edit;
 use crate::service::view::display_text;
 use crate::structure::{point_after, span_after, Shape};
-use crate::tools::{agg_caption, agg_to_api, agg_to_model, Agg};
+use crate::tools::{agg_caption, agg_to_api, agg_to_model};
 use crate::undo::{capture_range, clear_range_content, clear_range_styles, Change, Effects};
 use crate::workbook::Workbook;
 
-/// One cell of a written output, with its role.
+/// One label cell of a written output (headers, items, totals), with
+/// its role. Data cells are described by [`Grid`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutCell {
     /// Row.
@@ -60,19 +72,88 @@ pub struct OutCell {
     pub field: Option<u32>,
     /// Item text, if any.
     pub item: Option<String>,
-    /// For data cells: the row items, column items and data field.
-    pub key: Option<(Vec<String>, Vec<String>, u32)>,
 }
 
-/// The lookup table of a computed pivot (GETPIVOTDATA and drill-down).
+/// One row or column line of the data area.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GridLine {
+    /// The row or column tree node of the line.
+    pub node: u32,
+    /// A subtotal or the grand total.
+    pub total: bool,
+    /// A blank spacer line.
+    pub blank: bool,
+    /// Index into the lookup's value grid.
+    pub line: u32,
+}
+
+/// The data area of a written output: the sheet row/column of every line.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Grid {
+    /// `(sheet row, line)`, ascending.
+    pub rows: Vec<(u32, GridLine)>,
+    /// `(sheet column, line)`, ascending.
+    pub cols: Vec<(u32, GridLine)>,
+}
+
+/// One axis field of the lookup.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FieldLookup {
+    /// Lowercased display name and source name.
+    pub names: (String, String),
+    /// Hash of the lowercased item caption → item index.
+    pub by_text: FxMap<u64, u32>,
+    /// Captions shared by several items → all of them.
+    pub dups: FxMap<u64, Vec<u32>>,
+    /// Hashes of the item identities (drill-down).
+    pub keys: Vec<u64>,
+}
+
+/// One axis of the lookup: the tree of item paths and the line of every
+/// node.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AxisLookup {
+    /// Fields per level.
+    pub fields: Vec<FieldLookup>,
+    /// Parent of every node (node 0 is the root).
+    pub parent: Vec<u32>,
+    /// Item of every node.
+    pub item: Vec<u32>,
+    /// `(parent, item)` → node.
+    pub edges: FxMap<(u32, u32), u32>,
+    /// `(node, data field or u16::MAX)` → line.
+    pub line_of: FxMap<(u32, u16), u32>,
+}
+
+/// A page field of the lookup.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PageLookup {
+    /// Lowercased display name and source name.
+    pub names: (String, String),
+    /// Lowercased selected item.
+    pub selected: Option<String>,
+}
+
+/// The lookup table of a computed pivot (GETPIVOTDATA and drill-down):
+/// indexed by item name, so one call costs O(fields).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Lookup {
-    /// `(row items, column items, data field index)` → value.
-    pub values: HashMap<(Vec<String>, Vec<String>, u32), Value>,
-    /// Field names in source column order.
-    pub field_names: Vec<String>,
-    /// Data field captions.
-    pub captions: Vec<String>,
+    /// Lowercased data field captions and source names.
+    pub df_names: Vec<(String, String)>,
+    /// Row axis.
+    pub rows: AxisLookup,
+    /// Column axis.
+    pub cols: AxisLookup,
+    /// Page fields.
+    pub pages: Vec<PageLookup>,
+    /// Displayed values, row line × column line.
+    pub values: Vec<Res>,
+    /// Column lines.
+    pub ncols: usize,
+    /// The Data pseudo-field is on the rows / columns.
+    pub data_rows: bool,
+    /// See `data_rows`.
+    pub data_cols: bool,
 }
 
 /// A pivot table with its sheet-local id (stored on its target sheet).
@@ -82,8 +163,10 @@ pub struct PivotTable {
     pub id: u32,
     /// The definition.
     pub data: PivotData,
-    /// The roles of the last written output (empty after a load).
+    /// The label roles of the last written output (empty after a load).
     pub cells: Arc<Vec<OutCell>>,
+    /// The data area of the last written output.
+    pub grid: Arc<Grid>,
     /// The values of the last computation (for GETPIVOTDATA).
     pub lookup: Arc<Lookup>,
 }
@@ -94,6 +177,7 @@ impl PivotTable {
             id,
             data,
             cells: Arc::new(Vec::new()),
+            grid: Arc::new(Grid::default()),
             lookup: Arc::new(Lookup::default()),
         }
     }
@@ -107,6 +191,26 @@ pub const MAX_SOURCE_CELLS: u64 = 10_000_000;
 pub const MAX_ITEMS: usize = 10_000;
 /// Most output cells.
 pub const MAX_OUTPUT_CELLS: u64 = 4_000_000;
+/// Most fields (row, column, page and data) of one pivot.
+pub const MAX_FIELDS: usize = 256;
+/// Most distinct items of all columns of one source read.
+pub const MAX_CACHE_ITEMS: usize = 2_000_000;
+
+/// Why a definition read from a file is refused, if it is.
+fn file_definition_error(p: &PivotData) -> Option<String> {
+    let fields =
+        p.row_fields.len() + p.col_fields.len() + p.page_fields.len() + p.data_fields.len();
+    if fields > MAX_FIELDS {
+        return Some(format!("it has {fields} fields (at most {MAX_FIELDS})"));
+    }
+    if p.data_fields.is_empty() {
+        return Some("it has no data field".into());
+    }
+    if p.target.0 >= MAX_ROWS || p.target.1 >= MAX_COLS {
+        return Some("its target is outside the grid".into());
+    }
+    None
+}
 
 /// Loads a sheet's pivots from the interchange model. Range sources name
 /// their sheet by tab index in the file and by [`SheetId`] in the engine
@@ -118,13 +222,37 @@ pub fn from_data(wb: &mut Workbook, sheet: SheetId, pivots: &[PivotData]) {
     let Some(s) = wb.sheet_mut(sheet) else {
         return;
     };
+    let mut warnings = Vec::new();
     for p in pivots.iter().take(MAX_PIVOTS) {
+        // Definitions from files get the API's checks (security review 4,
+        // H7): too many fields would make every refresh allocate without
+        // bound.
+        if let Some(why) = file_definition_error(p) {
+            warnings.push(format!("Pivot table {:?} was not loaded: {why}.", p.name));
+            continue;
+        }
         let id = s.meta.alloc_id();
         let mut data = p.clone();
+        for f in data
+            .row_fields
+            .iter_mut()
+            .chain(data.col_fields.iter_mut())
+            .chain(data.page_fields.iter_mut())
+        {
+            f.hidden_items.truncate(MAX_ITEMS);
+            if let PivotSortData::Manual { order } = &mut f.sort {
+                order.truncate(MAX_ITEMS);
+            }
+        }
         if let PivotSourceData::Range { sheet, .. } = &mut data.source {
             *sheet = ids.get(*sheet as usize).copied().unwrap_or(u32::MAX);
         }
         Arc::make_mut(&mut s.meta.pivots).push(Arc::new(PivotTable::new(id, data)));
+    }
+    for w in warnings {
+        if !wb.import_warnings.contains(&w) {
+            wb.import_warnings.push(w);
+        }
     }
 }
 
@@ -423,9 +551,25 @@ pub fn from_api(wb: &Workbook, dto: &PivotDto) -> Result<PivotData, ApiError> {
         return Err(ApiError::invalid_argument("a pivot needs a data field"));
     }
     if dto.row_fields.len() + dto.col_fields.len() + dto.page_fields.len() + dto.data_fields.len()
-        > 256
+        > MAX_FIELDS
     {
         return Err(ApiError::invalid_argument("too many fields"));
+    }
+    for f in dto
+        .row_fields
+        .iter()
+        .chain(&dto.col_fields)
+        .chain(&dto.page_fields)
+    {
+        let manual = match &f.sort {
+            PivotSort::Manual { order } => order.len(),
+            _ => 0,
+        };
+        if f.hidden_items.len() > MAX_ITEMS || manual > MAX_ITEMS {
+            return Err(ApiError::invalid_argument(format!(
+                "at most {MAX_ITEMS} hidden or ordered items per field"
+            )));
+        }
     }
     Ok(PivotData {
         name: dto.name.trim().to_string(),
@@ -541,51 +685,275 @@ fn api_source_range(wb: &Workbook, src: &PivotSource) -> Result<CellRange, ApiEr
     }
 }
 
+/// AOO's caption of the empty item (`STR_EMPTYDATA`, `globstr.src`;
+/// `dptabres.cxx:1414-1415`).
+pub const EMPTY_CAPTION: &str = "(empty)";
+
+/// A small, fast hasher for the integer keys of the pivot maps (node ids,
+/// item indices).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fx(u64);
+
+impl Fx {
+    fn add(&mut self, w: u64) {
+        self.0 = (self.0.rotate_left(5) ^ w).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+impl Hasher for Fx {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.add(u64::from(*b));
+        }
+    }
+    fn write_u16(&mut self, i: u16) {
+        self.add(u64::from(i));
+    }
+    fn write_u32(&mut self, i: u32) {
+        self.add(u64::from(i));
+    }
+    fn write_u64(&mut self, i: u64) {
+        self.add(i);
+    }
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64);
+    }
+}
+
+/// A hash map with [`Fx`].
+pub type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<Fx>>;
+
+/// The identity of an item. AOO `ScDPItemData::Compare`
+/// (`dptablecache.cxx:265-295`): values compare by value (TRUE is the
+/// value 1), strings case-insensitively (`global.cxx:1993`), and a value
+/// never equals a string; group items compare by their name.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ItemKey {
+    /// The empty item.
+    Empty,
+    /// A value: the bits of the value rounded to 15 significant digits
+    /// (AOO compares values with `approxEqual`).
+    Num(u64),
+    /// A string, lowercased.
+    Text(String),
+    /// A numeric or date group, by name.
+    Group(String),
+}
+
 /// One distinct item of a field.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
-    /// Display text.
+    /// Caption: the display text of the first occurrence, `(empty)`, or
+    /// the group name.
     pub text: String,
-    /// Numeric value (numbers and dates), for ordering and grouping.
+    /// Value (numbers, dates, booleans) or the sort value of a group.
     pub num: Option<f64>,
+    /// The empty item (sorted last).
+    pub empty: bool,
+    /// The caption is written as a number (AOO
+    /// `MemberResultFlags::NUMERIC`, `dpoutput.cxx:619-629`): ungrouped
+    /// values only (`dptabres.cxx:1390-1395`).
+    pub numeric: bool,
+    /// Identity.
+    pub key: ItemKey,
 }
 
-/// The source read once: field names, per field the distinct items, per
-/// row the item index of every field and the values of every column.
+/// A source value as the aggregation sees it (AOO `ScDPValueData`): TRUE
+/// and FALSE are values, as in the DataPilot cache.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Cv {
+    /// An empty cell (ignored by every function).
+    Empty,
+    /// A value.
+    Num(f64),
+    /// A string (counted by Count only).
+    Str,
+    /// An error (counted by Count; an error for every other function).
+    Err,
+}
+
+/// The source read once, column-major: field names, per needed column the
+/// distinct items and the item of every kept row, per data column the
+/// values.
 pub struct Cache {
     /// Field names (header row).
     pub names: Vec<String>,
-    /// Items per field.
+    /// Items per column (empty for columns no field uses).
     pub items: Vec<Vec<Item>>,
-    /// Per row: item index per field.
-    pub rows: Vec<Vec<u32>>,
-    /// Per row and column: the value (for the data fields).
-    pub values: Vec<Vec<Value>>,
+    /// Per column and row: the item index.
+    pub item_of: Vec<Vec<u32>>,
+    /// Per column and row: the value (data columns only).
+    pub values: Vec<Vec<Cv>>,
     /// Source row numbers (for drill-down).
     pub source_rows: Vec<u32>,
 }
 
-fn item_order(a: &Item, b: &Item) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    match (a.text.is_empty(), b.text.is_empty()) {
+/// Rounds to 15 significant digits (AOO `rtl::math::approxValue`).
+fn round15(x: f64) -> f64 {
+    if x == 0.0 {
+        return 0.0;
+    }
+    if !x.is_finite() {
+        return x;
+    }
+    format!("{x:.14e}").parse().unwrap_or(x)
+}
+
+fn text_key(i: &Item) -> Cow<'_, str> {
+    match &i.key {
+        ItemKey::Text(t) => Cow::Borrowed(t.as_str()),
+        _ => Cow::Owned(i.text.to_lowercase()),
+    }
+}
+
+/// Item order: values before strings (case-insensitive), the empty item
+/// last (AOO `ScDPItemData::Compare`).
+fn item_order(a: &Item, b: &Item) -> Ordering {
+    match (a.empty, b.empty) {
         (true, false) => return Ordering::Greater,
         (false, true) => return Ordering::Less,
+        (true, true) => return Ordering::Equal,
         _ => {}
     }
     match (a.num, b.num) {
         (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
-        (None, None) => a
-            .text
-            .to_lowercase()
-            .cmp(&b.text.to_lowercase())
+        (None, None) => text_key(a)
+            .cmp(&text_key(b))
             .then_with(|| a.text.cmp(&b.text)),
     }
 }
 
+/// Distinct items of one column, keyed by identity, with fast paths for
+/// exact repeats.
+#[derive(Default)]
+struct ItemIndex {
+    exact_num: FxMap<u64, u32>,
+    num: FxMap<u64, u32>,
+    exact_text: HashMap<Arc<str>, u32>,
+    text: HashMap<String, u32>,
+    empty: Option<u32>,
+}
+
+impl ItemIndex {
+    fn push(items: &mut Vec<Item>, item: Item) -> u32 {
+        items.push(item);
+        (items.len() - 1) as u32
+    }
+
+    fn empty(&mut self, items: &mut Vec<Item>) -> u32 {
+        *self.empty.get_or_insert_with(|| {
+            Self::push(
+                items,
+                Item {
+                    text: EMPTY_CAPTION.to_string(),
+                    num: None,
+                    empty: true,
+                    numeric: false,
+                    key: ItemKey::Empty,
+                },
+            )
+        })
+    }
+
+    fn text_item(&mut self, items: &mut Vec<Item>, text: String) -> u32 {
+        let lower = text.to_lowercase();
+        if let Some(i) = self.text.get(&lower) {
+            return *i;
+        }
+        let i = Self::push(
+            items,
+            Item {
+                text,
+                num: None,
+                empty: false,
+                numeric: false,
+                key: ItemKey::Text(lower.clone()),
+            },
+        );
+        self.text.insert(lower, i);
+        i
+    }
+
+    fn get(&mut self, items: &mut Vec<Item>, wb: &Workbook, a: CellAddr, v: &Value) -> u32 {
+        match v {
+            Value::Empty => self.empty(items),
+            Value::Number(_) | Value::Bool(_) => {
+                let n = match v {
+                    Value::Number(n) => *n,
+                    Value::Bool(b) => f64::from(u8::from(*b)),
+                    _ => 0.0,
+                };
+                let bits = n.to_bits();
+                if let Some(i) = self.exact_num.get(&bits) {
+                    return *i;
+                }
+                let k = round15(n).to_bits();
+                let i = match self.num.get(&k) {
+                    Some(i) => *i,
+                    None => {
+                        let i = Self::push(
+                            items,
+                            Item {
+                                text: display_text(wb, a),
+                                num: Some(n),
+                                empty: false,
+                                numeric: true,
+                                key: ItemKey::Num(k),
+                            },
+                        );
+                        self.num.insert(k, i);
+                        i
+                    }
+                };
+                self.exact_num.insert(bits, i);
+                i
+            }
+            Value::Text(t) => {
+                if t.is_empty() {
+                    return self.empty(items);
+                }
+                if let Some(i) = self.exact_text.get(t) {
+                    return *i;
+                }
+                let i = self.text_item(items, t.to_string());
+                self.exact_text.insert(t.clone(), i);
+                i
+            }
+            Value::Error(_) | Value::Array(_) => {
+                let t = display_text(wb, a);
+                self.text_item(items, t)
+            }
+        }
+    }
+}
+
+fn cv_of(v: &Value) -> Cv {
+    match v {
+        Value::Empty => Cv::Empty,
+        Value::Number(n) => Cv::Num(*n),
+        Value::Bool(b) => Cv::Num(f64::from(u8::from(*b))),
+        Value::Text(t) if t.is_empty() => Cv::Empty,
+        Value::Text(_) | Value::Array(_) => Cv::Str,
+        Value::Error(_) => Cv::Err,
+    }
+}
+
 /// Reads the source (header row = field names) with `ignore_empty_rows`.
-pub fn read_source(wb: &Workbook, src: &CellRange, ignore_empty: bool) -> Result<Cache, ApiError> {
+/// Only the columns flagged in `need_items` get items and only those in
+/// `need_values` keep their values; display texts are formatted once per
+/// distinct item.
+pub fn read_source(
+    wb: &Workbook,
+    src: &CellRange,
+    ignore_empty: bool,
+    need_items: &[bool],
+    need_values: &[bool],
+) -> Result<Cache, ApiError> {
     if src.cell_count() > MAX_SOURCE_CELLS {
         return Err(ApiError::unsupported(format!(
             "the pivot source has more than {MAX_SOURCE_CELLS} cells"
@@ -608,57 +976,87 @@ pub fn read_source(wb: &Workbook, src: &CellRange, ignore_empty: bool) -> Result
         };
         names.push(t);
     }
+    let want_items = |fi: usize| need_items.get(fi).copied().unwrap_or(false);
+    let want_values = |fi: usize| need_values.get(fi).copied().unwrap_or(false);
     let mut items: Vec<Vec<Item>> = vec![Vec::new(); ncols];
-    let mut index: Vec<HashMap<String, u32>> = vec![HashMap::new(); ncols];
-    let mut rows: Vec<Vec<u32>> = Vec::new();
-    let mut values: Vec<Vec<Value>> = Vec::new();
+    let mut index: Vec<ItemIndex> = (0..ncols).map(|_| ItemIndex::default()).collect();
+    let mut item_of: Vec<Vec<u32>> = vec![Vec::new(); ncols];
+    let mut values: Vec<Vec<Cv>> = vec![Vec::new(); ncols];
     let mut source_rows = Vec::new();
+    let mut row: Vec<Value> = Vec::with_capacity(ncols);
+    let mut total_items = 0usize;
     for r in src.r0 + 1..=src.r1 {
-        let mut row_items = Vec::with_capacity(ncols);
-        let mut row_values = Vec::with_capacity(ncols);
+        row.clear();
         let mut all_empty = true;
         for (fi, c) in (src.c0..=src.c1).enumerate() {
-            let a = CellAddr::new(sheet, r, c);
-            let v = wb.value(a);
-            all_empty &= v.is_empty();
-            let text = if v.is_empty() {
-                String::new()
+            let v = if ignore_empty || want_items(fi) || want_values(fi) {
+                wb.value(CellAddr::new(sheet, r, c))
             } else {
-                display_text(wb, a)
+                Value::Empty
             };
-            let idx = match index[fi].get(&text) {
-                Some(i) => *i,
-                None => {
-                    let i = items[fi].len() as u32;
-                    items[fi].push(Item {
-                        text: text.clone(),
-                        num: match v {
-                            Value::Number(n) => Some(n),
-                            Value::Bool(b) => Some(f64::from(u8::from(b))),
-                            _ => None,
-                        },
-                    });
-                    index[fi].insert(text, i);
-                    i
-                }
-            };
-            row_items.push(idx);
-            row_values.push(v);
+            all_empty &= v.is_empty();
+            row.push(v);
         }
         if ignore_empty && all_empty {
             continue;
         }
-        rows.push(row_items);
-        values.push(row_values);
+        for (fi, v) in row.iter().enumerate() {
+            if want_items(fi) {
+                let a = CellAddr::new(sheet, r, src.c0 + fi as u32);
+                let before = items[fi].len();
+                let i = index[fi].get(&mut items[fi], wb, a, v);
+                item_of[fi].push(i);
+                total_items += items[fi].len() - before;
+                if total_items > MAX_CACHE_ITEMS {
+                    return Err(ApiError::unsupported(format!(
+                        "the pivot source has more than {MAX_CACHE_ITEMS} distinct items"
+                    )));
+                }
+            }
+            if want_values(fi) {
+                values[fi].push(cv_of(v));
+            }
+        }
         source_rows.push(r);
     }
     Ok(Cache {
         names,
         items,
-        rows,
+        item_of,
         values,
         source_rows,
     })
+}
+
+/// The columns a definition needs items (axis and page fields) and
+/// values (data fields) of.
+fn needs(p: &PivotData, ncols: usize) -> (Vec<bool>, Vec<bool>) {
+    let mut items = vec![false; ncols];
+    let mut values = vec![false; ncols];
+    for f in p
+        .row_fields
+        .iter()
+        .chain(&p.col_fields)
+        .chain(&p.page_fields)
+    {
+        if let Some(x) = items.get_mut(f.source_col as usize) {
+            *x = true;
+        }
+    }
+    for d in &p.data_fields {
+        if let Some(x) = values.get_mut(d.source_col as usize) {
+            *x = true;
+        }
+    }
+    (items, values)
+}
+
+/// Reads the source of a definition.
+fn read_for(wb: &Workbook, p: &PivotData) -> Result<(CellRange, Cache), ApiError> {
+    let src = source_range(wb, &p.source)?;
+    let (items, values) = needs(p, src.cols() as usize);
+    let cache = read_source(wb, &src, p.ignore_empty_rows, &items, &values)?;
+    Ok((src, cache))
 }
 
 /// `pivot_field_items`.
@@ -667,19 +1065,22 @@ pub fn field_items(
     source: &PivotSource,
 ) -> Result<Vec<PivotFieldItemsDto>, ApiError> {
     let src = api_source_range(wb, source)?;
-    let cache = read_source(wb, &src, false)?;
-    let mut out = Vec::with_capacity(cache.names.len());
-    for (fi, name) in cache.names.iter().enumerate() {
+    let ncols = src.cols() as usize;
+    let mut out = Vec::with_capacity(ncols);
+    // One column at a time: the items budget applies per column and only
+    // one column's items are held.
+    for fi in 0..ncols {
+        let mut need = vec![false; ncols];
+        need[fi] = true;
+        let cache = read_source(wb, &src, false, &need, &[])?;
+        let name = &cache.names[fi];
         let mut counts: Vec<u32> = vec![0; cache.items[fi].len()];
-        for row in &cache.rows {
-            counts[row[fi] as usize] += 1;
+        for it in &cache.item_of[fi] {
+            counts[*it as usize] += 1;
         }
         let mut order: Vec<usize> = (0..cache.items[fi].len()).collect();
         order.sort_by(|a, b| item_order(&cache.items[fi][*a], &cache.items[fi][*b]));
-        let non_empty: Vec<&Item> = cache.items[fi]
-            .iter()
-            .filter(|i| !i.text.is_empty())
-            .collect();
+        let non_empty: Vec<&Item> = cache.items[fi].iter().filter(|i| !i.empty).collect();
         let numeric = !non_empty.is_empty() && non_empty.iter().all(|i| i.num.is_some());
         let date = numeric
             && (src.r0 + 1..=src.r1).take(64).all(|r| {
@@ -707,205 +1108,608 @@ pub fn field_items(
 }
 
 // ---------------------------------------------------------------------------
-// Grouping
+// Grouping (AOO dpgroup.cxx)
 // ---------------------------------------------------------------------------
 
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
+/// Locale and epoch for group names.
+#[derive(Clone, Copy)]
+struct Gx {
+    epoch: DateEpoch,
+    locale: &'static Locale,
+}
+
+/// `rtl::math::approxEqual`.
+fn approx_eq(a: f64, b: f64) -> bool {
+    if a == b {
+        return true;
+    }
+    (a - b).abs() < a.abs() * (1.0 / (16_777_216.0 * 16_777_216.0))
+}
+
+/// `rtl::math::approxFloor`.
+fn approx_floor(x: f64) -> f64 {
+    round15(x).floor()
+}
+
+fn is_integer(x: f64) -> bool {
+    approx_eq(x, approx_floor(x))
+}
+
+/// A number as `rtl::math::doubleToUString(.., Automatic, Max, .., true)`.
 fn fmt_num(n: f64) -> String {
-    if n.fract() == 0.0 && n.abs() < 1e15 {
-        format!("{}", n as i64)
+    let r = round15(n);
+    if r == 0.0 {
+        "0".into()
     } else {
-        format!("{n}")
+        format!("{r}")
     }
 }
 
-/// The grouped item of a value.
-fn group_item(g: &PivotGroupData, item: &Item, epoch: tally_types::DateEpoch) -> Item {
-    let Some(n) = item.num else {
-        return item.clone();
-    };
-    match g {
-        PivotGroupData::Numeric { start, end, step } => {
-            let step = if *step > 0.0 && step.is_finite() {
-                *step
+/// A date as the standard date format's input-line string
+/// (`lcl_AppendDateStr`, `dpgroup.cxx:153-159`).
+fn date_str(serial: f64, gx: Gx) -> String {
+    match tally_numfmt::parse_format(gx.locale.short_date) {
+        Ok(ast) => {
+            tally_numfmt::format_value_with(
+                &Value::Number(serial.floor()),
+                &ast,
+                gx.locale,
+                None,
+                gx.epoch,
+            )
+            .text
+        }
+        Err(_) => fmt_num(serial),
+    }
+}
+
+/// `ScDPNumGroupInfo` after `ScDPNumGroupDimension::GetNumEntries`
+/// (`dpgroup.cxx:934-1016`): automatic start/end from the source values,
+/// non-integer detection, date rounding.
+struct NumInfo {
+    start: f64,
+    end: f64,
+    step: f64,
+    auto_end: bool,
+    dates: bool,
+    non_integer: bool,
+}
+
+impl NumInfo {
+    fn new(start: Option<f64>, end: Option<f64>, step: f64, dates: bool, src: &[Item]) -> Self {
+        let step = if step > 0.0 && step.is_finite() {
+            step
+        } else {
+            1.0
+        };
+        let mut non_integer = start.is_some_and(|s| !is_integer(s))
+            || end.is_some_and(|e| !is_integer(e))
+            || !is_integer(step);
+        let mut min = 0.0f64;
+        let mut max = 0.0f64;
+        let mut first = true;
+        for it in src.iter().filter(|i| !i.empty) {
+            let Some(v) = it.num else { continue };
+            if first {
+                min = v;
+                max = v;
+                first = false;
             } else {
-                1.0
-            };
-            let s = start.unwrap_or(0.0);
-            if let Some(e) = end {
-                if n > *e {
-                    return Item {
-                        text: format!(">{}", fmt_num(*e)),
-                        num: Some(f64::INFINITY),
-                    };
-                }
+                min = min.min(v);
+                max = max.max(v);
             }
-            if n < s {
-                return Item {
-                    text: format!("<{}", fmt_num(s)),
-                    num: Some(f64::NEG_INFINITY),
-                };
-            }
-            let k = ((n - s) / step).floor();
-            let lo = s + k * step;
-            let hi = lo + step;
-            let text = if step.fract() == 0.0 && lo.fract() == 0.0 {
-                format!("{}-{}", fmt_num(lo), fmt_num(hi - 1.0))
-            } else {
-                format!("{}-{}", fmt_num(lo), fmt_num(hi))
-            };
-            Item {
-                text,
-                num: Some(lo),
+            if !non_integer && !is_integer(v) {
+                non_integer = true;
             }
         }
-        PivotGroupData::Date { parts, .. } => {
-            let Some((y, m, d)) = ymd_from_serial(epoch, n) else {
-                return item.clone();
-            };
-            let frac = n.fract();
-            let secs = (frac * 86_400.0).round() as u32;
-            let (hh, mm, ss) = (secs / 3600, (secs / 60) % 60, secs % 60);
-            let mut text_parts: Vec<String> = Vec::new();
-            let mut key = 0.0;
-            let mut ordered = parts.clone();
-            ordered.sort_by_key(|p| match p {
-                DatePartData::Years => 0,
-                DatePartData::Quarters => 1,
-                DatePartData::Months => 2,
-                DatePartData::Days(_) => 3,
-                DatePartData::Hours => 4,
-                DatePartData::Minutes => 5,
-                DatePartData::Seconds => 6,
-            });
-            ordered.dedup();
-            for p in &ordered {
-                match p {
-                    DatePartData::Years => {
-                        text_parts.push(y.to_string());
-                        key = key * 10_000.0 + f64::from(y);
-                    }
-                    DatePartData::Quarters => {
-                        let q = (m - 1) / 3 + 1;
-                        text_parts.push(format!("Q{q}"));
-                        key = key * 10.0 + f64::from(q);
-                    }
-                    DatePartData::Months => {
-                        text_parts.push(MONTHS[(m - 1) as usize].to_string());
-                        key = key * 100.0 + f64::from(m);
-                    }
-                    DatePartData::Days(step) => {
-                        let step = (*step).max(1);
-                        if step == 1 {
-                            text_parts.push(format!("{y:04}-{m:02}-{d:02}"));
-                            key = key * 1_000_000.0 + n.floor();
-                        } else {
-                            let base = n.floor();
-                            let k = (base / f64::from(step)).floor() * f64::from(step);
-                            let (ky, km, kd) = ymd_from_serial(epoch, k).unwrap_or((y, m, d));
-                            text_parts.push(format!("{ky:04}-{km:02}-{kd:02}"));
-                            key = key * 1_000_000.0 + k;
-                        }
-                    }
-                    DatePartData::Hours => {
-                        text_parts.push(format!("{hh:02}"));
-                        key = key * 100.0 + f64::from(hh);
-                    }
-                    DatePartData::Minutes => {
-                        text_parts.push(format!(":{mm:02}"));
-                        key = key * 100.0 + f64::from(mm);
-                    }
-                    DatePartData::Seconds => {
-                        text_parts.push(format!(":{ss:02}"));
-                        key = key * 100.0 + f64::from(ss);
-                    }
+        if dates {
+            non_integer = false;
+            min = approx_floor(min);
+            max = approx_floor(max) + 1.0;
+        }
+        Self {
+            start: start.filter(|s| s.is_finite()).unwrap_or(min),
+            end: end.filter(|e| e.is_finite()).unwrap_or(max),
+            step,
+            auto_end: end.is_none(),
+            dates,
+            non_integer,
+        }
+    }
+
+    /// `lcl_GetNumGroupName` (`dpgroup.cxx:161-200`).
+    fn name(&self, lo: f64, gx: Gx) -> String {
+        let mut hi = lo + self.step;
+        if !self.non_integer && (self.dates || !approx_eq(hi, self.end)) {
+            hi -= 1.0;
+        }
+        if hi > self.end && !self.auto_end {
+            hi = self.end;
+        }
+        if self.dates {
+            format!("{} - {}", date_str(lo, gx), date_str(hi, gx))
+        } else {
+            format!("{}-{}", fmt_num(lo), fmt_num(hi))
+        }
+    }
+
+    fn special(&self, v: f64, first: bool, gx: Gx) -> String {
+        let c = if first { '<' } else { '>' };
+        if self.dates {
+            format!("{c}{}", date_str(v, gx))
+        } else {
+            format!("{c}{}", fmt_num(v))
+        }
+    }
+
+    /// `lcl_GetNumGroupForValue` (`dpgroup.cxx:226-268`): the group name
+    /// and its sort value.
+    fn group(&self, v: f64, gx: Gx) -> (String, f64) {
+        if v < self.start && !approx_eq(v, self.start) {
+            return (self.special(self.start, true, gx), self.start - self.step);
+        }
+        if v > self.end && !approx_eq(v, self.end) {
+            return (self.special(self.end, false, gx), self.end + self.step);
+        }
+        let mut div = approx_floor((v - self.start) / self.step);
+        let mut gs = self.start + div * self.step;
+        if approx_eq(gs, self.end) && !approx_eq(gs, self.start) {
+            if self.dates {
+                return (self.special(self.end, false, gx), self.end + self.step);
+            }
+            // A group of only the end value joins the previous group.
+            div -= 1.0;
+            gs = self.start + div * self.step;
+        }
+        (self.name(gs, gx), gs)
+    }
+}
+
+/// The date-part group of a value (`lcl_GetDatePartValue`,
+/// `lcl_GetDateGroupName`, `dpgroup.cxx:439-536`): `<start` / `>end` for
+/// values outside explicit limits, else the parts' names joined.
+fn date_part_group(
+    parts: &[DatePartData],
+    start: Option<f64>,
+    end: Option<f64>,
+    n: f64,
+    gx: Gx,
+) -> Option<(String, f64)> {
+    if let Some(s) = start.filter(|s| s.is_finite()) {
+        if n < s && !approx_eq(n, s) {
+            return Some((format!("<{}", date_str(s, gx)), f64::NEG_INFINITY));
+        }
+    }
+    if let Some(e) = end.filter(|e| e.is_finite()) {
+        if n > e && !approx_eq(n, e) {
+            return Some((format!(">{}", date_str(e, gx)), f64::INFINITY));
+        }
+    }
+    let (y, m, d) = ymd_from_serial(gx.epoch, n)?;
+    let secs = ((n - approx_floor(n)) * 86_400.0 + 0.5).floor() as u32;
+    let (hh, mm, ss) = (secs / 3600, (secs / 60) % 60, secs % 60);
+    let mut ordered = parts.to_vec();
+    ordered.sort_by_key(|p| match p {
+        DatePartData::Years => 0,
+        DatePartData::Quarters => 1,
+        DatePartData::Months => 2,
+        DatePartData::Days(_) => 3,
+        DatePartData::Hours => 4,
+        DatePartData::Minutes => 5,
+        DatePartData::Seconds => 6,
+    });
+    ordered.dedup_by(|a, b| std::mem::discriminant(a) == std::mem::discriminant(b));
+    let mut text_parts: Vec<String> = Vec::new();
+    let mut key = 0.0;
+    for p in &ordered {
+        match p {
+            DatePartData::Years => {
+                text_parts.push(y.to_string());
+                key = key * 100_000.0 + f64::from(y);
+            }
+            DatePartData::Quarters => {
+                let q = (m - 1) / 3 + 1;
+                text_parts.push(format!("Q{q}"));
+                key = key * 10.0 + f64::from(q);
+            }
+            DatePartData::Months => {
+                text_parts.push(MONTHS[(m - 1) as usize % 12].to_string());
+                key = key * 100.0 + f64::from(m);
+            }
+            DatePartData::Days(_) => {
+                // Day of the year, 1..366 counted as in a leap year; the
+                // name is `DD-MMM` (NF_DATE_SYS_DDMMM).
+                let jan1 = tally_numfmt::date::serial_from_ymd(gx.epoch, y, 1, 1).unwrap_or(n);
+                let mut doy = (approx_floor(n) - jan1) + 1.0;
+                if doy >= 60.0 && !tally_numfmt::date::is_leap_year(i64::from(y)) {
+                    doy += 1.0;
                 }
+                text_parts.push(format!("{d:02}-{}", MONTHS[(m - 1) as usize % 12]));
+                key = key * 1000.0 + doy;
             }
-            if text_parts.is_empty() {
-                return item.clone();
+            DatePartData::Hours => {
+                text_parts.push(format!("{hh:02}"));
+                key = key * 100.0 + f64::from(hh);
             }
-            Item {
-                text: text_parts.join(" ").replace(" :", ":"),
-                num: Some(key),
+            DatePartData::Minutes => {
+                text_parts.push(format!(":{mm:02}"));
+                key = key * 100.0 + f64::from(mm);
+            }
+            DatePartData::Seconds => {
+                text_parts.push(format!(":{ss:02}"));
+                key = key * 100.0 + f64::from(ss);
             }
         }
     }
+    if text_parts.is_empty() {
+        return None;
+    }
+    Some((text_parts.join(" ").replace(" :", ":"), key))
+}
+
+/// The grouped items of a field and, per source item, its group.
+/// Strings and the empty item stay as they are.
+fn group_items(g: &PivotGroupData, src: &[Item], gx: Gx) -> (Vec<Item>, Vec<u32>) {
+    let mut out: Vec<Item> = Vec::new();
+    let mut index: HashMap<ItemKey, u32> = HashMap::new();
+    fn add(out: &mut Vec<Item>, index: &mut HashMap<ItemKey, u32>, it: Item) -> u32 {
+        if let Some(i) = index.get(&it.key) {
+            return *i;
+        }
+        let i = out.len() as u32;
+        index.insert(it.key.clone(), i);
+        out.push(it);
+        i
+    }
+    let group = |name: String, sort: f64| Item {
+        text: name.clone(),
+        num: Some(sort),
+        empty: false,
+        numeric: false,
+        key: ItemKey::Group(name),
+    };
+    // Days alone with a step: numeric grouping of date values (AOO
+    // `dbfunc3.cxx:1083-1093`).
+    let num_info = match g {
+        PivotGroupData::Numeric { start, end, step } => {
+            Some(NumInfo::new(*start, *end, *step, false, src))
+        }
+        PivotGroupData::Date { start, end, parts } => match parts.as_slice() {
+            [DatePartData::Days(n)] if *n >= 2 => {
+                Some(NumInfo::new(*start, *end, f64::from(*n), true, src))
+            }
+            _ => None,
+        },
+    };
+    let map = src
+        .iter()
+        .map(|it| {
+            let Some(v) = it.num.filter(|_| !it.empty) else {
+                return add(&mut out, &mut index, it.clone());
+            };
+            let grouped = match (&num_info, g) {
+                (Some(info), _) => {
+                    let (name, sort) = info.group(v, gx);
+                    Some(group(name, sort))
+                }
+                (None, PivotGroupData::Date { start, end, parts }) => {
+                    date_part_group(parts, *start, *end, v, gx).map(|(n, s)| group(n, s))
+                }
+                (None, PivotGroupData::Numeric { .. }) => None,
+            };
+            add(&mut out, &mut index, grouped.unwrap_or_else(|| it.clone()))
+        })
+        .collect();
+    (out, map)
 }
 
 // ---------------------------------------------------------------------------
 // Computation
 // ---------------------------------------------------------------------------
 
-/// An axis field after grouping: its items in display order and, per
-/// source row, the item index.
-struct AxisField {
+/// A result cell: empty, a value or an error (AOO
+/// `SC_DPAGG_RESULT_EMPTY/VALID/ERROR`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Res {
+    /// No data.
+    Empty,
+    /// A value.
+    Num(f64),
+    /// An error (output as `#VALUE!`, `dpoutput.cxx:573-575`).
+    Err,
+}
+
+impl Res {
+    fn value(self) -> Value {
+        match self {
+            Res::Empty => Value::Empty,
+            Res::Num(n) => Value::Number(n),
+            Res::Err => Value::Error(ErrorKind::Value),
+        }
+    }
+    fn num_or_zero(self) -> f64 {
+        match self {
+            Res::Num(n) => n,
+            _ => 0.0,
+        }
+    }
+}
+
+/// The running aggregate of one result cell, able to answer every
+/// function (AOO `ScDPAggData::Update/Calculate`, `dptabres.cxx:415-597`).
+#[derive(Clone, Copy, Debug, Default)]
+struct Acc {
+    /// Non-empty values, strings and errors (Count = CNT2).
+    all: u64,
+    /// Values.
+    n: u64,
+    /// An error was seen.
+    err: bool,
+    sum: f64,
+    prod: f64,
+    min: f64,
+    max: f64,
+    mean: f64,
+    m2: f64,
+}
+
+impl Acc {
+    fn push(&mut self, v: Cv) {
+        match v {
+            Cv::Empty => {}
+            Cv::Str => self.all += 1,
+            Cv::Err => {
+                self.all += 1;
+                self.err = true;
+            }
+            Cv::Num(x) => {
+                self.all += 1;
+                self.n += 1;
+                self.sum += x;
+                if self.n == 1 {
+                    self.prod = x;
+                    self.min = x;
+                    self.max = x;
+                } else {
+                    self.prod *= x;
+                    self.min = self.min.min(x);
+                    self.max = self.max.max(x);
+                }
+                let delta = x - self.mean;
+                self.mean += delta / self.n as f64;
+                self.m2 += delta * (x - self.mean);
+            }
+        }
+    }
+
+    /// The result for `f`: Count counts strings and errors; every other
+    /// function ignores strings, is an error after an error value, and
+    /// is empty without values; StDev/Var need two values.
+    fn result(&self, f: AggFnData) -> Res {
+        let fin = |x: f64| {
+            if x.is_finite() {
+                Res::Num(x)
+            } else {
+                Res::Err
+            }
+        };
+        if f == AggFnData::Count {
+            return if self.all == 0 {
+                Res::Empty
+            } else {
+                Res::Num(self.all as f64)
+            };
+        }
+        if self.err {
+            return Res::Err;
+        }
+        if self.n == 0 {
+            return Res::Empty;
+        }
+        let n = self.n as f64;
+        match f {
+            AggFnData::Count | AggFnData::CountNums => Res::Num(n),
+            AggFnData::Sum => fin(self.sum),
+            AggFnData::Product => fin(self.prod),
+            AggFnData::Average => fin(self.sum / n),
+            AggFnData::Max => fin(self.max),
+            AggFnData::Min => fin(self.min),
+            AggFnData::StDev if self.n < 2 => Res::Err,
+            AggFnData::Var if self.n < 2 => Res::Err,
+            AggFnData::StDev => fin((self.m2 / (n - 1.0)).max(0.0).sqrt()),
+            AggFnData::Var => fin(self.m2 / (n - 1.0)),
+            AggFnData::StDevP => fin((self.m2 / n).max(0.0).sqrt()),
+            AggFnData::VarP => fin(self.m2 / n),
+        }
+    }
+}
+
+/// An axis or page field after grouping.
+struct AxisField<'a> {
     source_col: usize,
     name: String,
-    items: Vec<Item>,
-    row_item: Vec<u32>,
-    def: PivotFieldData,
+    items: Cow<'a, [Item]>,
+    /// Per source row: the item index.
+    item_of: Cow<'a, [u32]>,
+    def: &'a PivotFieldData,
+    /// Per item: hidden by the definition.
+    hidden: Vec<bool>,
+    /// Per item: position in the manual order.
+    manual: Option<Vec<usize>>,
 }
 
-/// A node of the row or column tree.
-struct Node {
-    /// Item index per level, root = empty.
-    key: Vec<u32>,
-    children: Vec<Node>,
+/// The tree of item paths of one axis: node 0 is the root, every other
+/// node one item under its parent.
+#[derive(Clone, Debug)]
+struct Trie {
+    parent: Vec<u32>,
+    item: Vec<u32>,
+    level: Vec<u16>,
+    edges: FxMap<(u32, u32), u32>,
 }
 
-struct Computed {
-    row_fields: Vec<AxisField>,
-    col_fields: Vec<AxisField>,
-    /// `(row key, col key, data field)` → aggregation.
-    cells: HashMap<(Vec<u32>, Vec<u32>, usize), Agg>,
-    row_tree: Node,
-    col_tree: Node,
-    /// Source rows kept after the page filters.
-    kept: Vec<usize>,
+/// Child lists of every node in one flat vector (compressed rows).
+#[derive(Clone, Debug, Default)]
+struct Csr {
+    start: Vec<u32>,
+    len: Vec<u32>,
+    flat: Vec<u32>,
 }
 
-fn axis_field(
-    cache: &Cache,
-    f: &PivotFieldData,
-    epoch: tally_types::DateEpoch,
-) -> Result<AxisField, ApiError> {
+impl Csr {
+    fn get(&self, n: u32) -> &[u32] {
+        match (self.start.get(n as usize), self.len.get(n as usize)) {
+            (Some(s), Some(l)) => &self.flat[*s as usize..(*s + *l) as usize],
+            _ => &[],
+        }
+    }
+}
+
+impl Trie {
+    fn new() -> Self {
+        Self {
+            parent: vec![u32::MAX],
+            item: vec![u32::MAX],
+            level: vec![0],
+            edges: FxMap::default(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.parent.len()
+    }
+
+    fn child(&self, p: u32, it: u32) -> Option<u32> {
+        self.edges.get(&(p, it)).copied()
+    }
+
+    fn child_or_insert(&mut self, p: u32, it: u32) -> u32 {
+        if let Some(n) = self.child(p, it) {
+            return n;
+        }
+        let n = self.parent.len() as u32;
+        let lvl = self.level[p as usize] + 1;
+        self.parent.push(p);
+        self.item.push(it);
+        self.level.push(lvl);
+        self.edges.insert((p, it), n);
+        n
+    }
+
+    fn level(&self, n: u32) -> usize {
+        self.level[n as usize] as usize
+    }
+
+    fn path(&self, mut n: u32) -> Vec<u32> {
+        let mut v = Vec::with_capacity(self.level(n));
+        while n != 0 {
+            v.push(self.item[n as usize]);
+            n = self.parent[n as usize];
+        }
+        v.reverse();
+        v
+    }
+
+    /// The children of every node, in creation order.
+    fn kids(&self) -> Csr {
+        let n = self.len();
+        let mut len = vec![0u32; n];
+        for p in self.parent.iter().skip(1) {
+            len[*p as usize] += 1;
+        }
+        let mut start = vec![0u32; n];
+        let mut acc = 0u32;
+        for (s, l) in start.iter_mut().zip(&len) {
+            *s = acc;
+            acc += l;
+        }
+        let mut fill = start.clone();
+        let mut flat = vec![0u32; acc as usize];
+        for (c, p) in self.parent.iter().enumerate().skip(1) {
+            let f = &mut fill[*p as usize];
+            flat[*f as usize] = c as u32;
+            *f += 1;
+        }
+        Csr { start, len, flat }
+    }
+
+    fn ancestor(&self, mut n: u32, level: usize) -> u32 {
+        while self.level(n) > level {
+            n = self.parent[n as usize];
+        }
+        n
+    }
+}
+
+/// One axis: its fields, the tree and the display children per node.
+struct Axis<'a> {
+    fields: Vec<AxisField<'a>>,
+    trie: Trie,
+    disp: Csr,
+}
+
+type Cells = FxMap<(u32, u32, u16), Acc>;
+
+struct Computed<'a> {
+    rows: Axis<'a>,
+    cols: Axis<'a>,
+    pages: Vec<AxisField<'a>>,
+    /// `(row node, col node, data field)` → aggregate.
+    cells: Cells,
+    /// Source rows kept after page filters, hidden and auto-hidden items.
+    kept: Vec<u32>,
+}
+
+/// Most row × field updates of one aggregation.
+const MAX_AGG_WORK: u64 = 100_000_000;
+/// Most nodes of one axis tree (with AutoShow, before members are hidden).
+const MAX_NODES: usize = 4_000_000;
+
+fn axis_field<'a>(
+    cache: &'a Cache,
+    f: &'a PivotFieldData,
+    gx: Gx,
+) -> Result<AxisField<'a>, ApiError> {
     let sc = f.source_col as usize;
     if sc >= cache.names.len() {
         return Err(ApiError::invalid_argument(format!(
             "field column {sc} is outside the source"
         )));
     }
-    let (items, row_item) = match &f.group {
+    let (items, item_of): (Cow<'a, [Item]>, Cow<'a, [u32]>) = match &f.group {
         None => (
-            cache.items[sc].clone(),
-            cache.rows.iter().map(|r| r[sc]).collect(),
+            Cow::Borrowed(&cache.items[sc][..]),
+            Cow::Borrowed(&cache.item_of[sc][..]),
         ),
         Some(g) => {
-            let mut items: Vec<Item> = Vec::new();
-            let mut index: HashMap<String, u32> = HashMap::new();
-            let map: Vec<u32> = cache.items[sc]
-                .iter()
-                .map(|it| {
-                    let gi = group_item(g, it, epoch);
-                    match index.get(&gi.text) {
-                        Some(i) => *i,
-                        None => {
-                            let i = items.len() as u32;
-                            index.insert(gi.text.clone(), i);
-                            items.push(gi);
-                            i
-                        }
-                    }
-                })
-                .collect();
-            (
-                items,
-                cache.rows.iter().map(|r| map[r[sc] as usize]).collect(),
+            let (items, map) = group_items(g, &cache.items[sc], gx);
+            let of: Vec<u32> = cache.item_of[sc].iter().map(|i| map[*i as usize]).collect();
+            (Cow::Owned(items), Cow::Owned(of))
+        }
+    };
+    let hidden_names: HashSet<&str> = f.hidden_items.iter().map(String::as_str).collect();
+    let hidden: Vec<bool> = items
+        .iter()
+        .map(|i| hidden_names.contains(i.text.as_str()) || (i.empty && hidden_names.contains("")))
+        .collect();
+    let manual = match &f.sort {
+        PivotSortData::Manual { order } => {
+            let mut pos: HashMap<String, usize> = HashMap::with_capacity(order.len());
+            for (k, o) in order.iter().enumerate() {
+                pos.entry(o.to_lowercase()).or_insert(k);
+            }
+            Some(
+                items
+                    .iter()
+                    .map(|i| pos.get(text_key(i).as_ref()).copied().unwrap_or(usize::MAX))
+                    .collect(),
             )
         }
+        _ => None,
     };
     Ok(AxisField {
         source_col: sc,
@@ -915,68 +1719,196 @@ fn axis_field(
             f.name.clone()
         },
         items,
-        row_item,
-        def: f.clone(),
+        item_of,
+        def: f,
+        hidden,
+        manual,
     })
 }
 
-fn build_tree(
-    fields: &[AxisField],
-    kept: &[usize],
-    cells: &HashMap<(Vec<u32>, Vec<u32>, usize), Agg>,
-    other_axis_rows: bool,
-    data_fields: &[PivotDataFieldData],
-) -> Node {
-    fn build(
-        level: usize,
-        prefix: Vec<u32>,
-        rows: &[usize],
-        fields: &[AxisField],
-        cells: &HashMap<(Vec<u32>, Vec<u32>, usize), Agg>,
-        rows_axis: bool,
-        data_fields: &[PivotDataFieldData],
-    ) -> Node {
-        if level >= fields.len() {
-            return Node {
-                key: prefix,
-                children: Vec::new(),
-            };
+/// Aggregates every (row prefix, column prefix, data field) combination
+/// of the kept rows; prefixes are tree nodes.
+fn aggregate(
+    rows: &[AxisField<'_>],
+    cols: &[AxisField<'_>],
+    p: &PivotData,
+    cache: &Cache,
+    kept: &[u32],
+) -> Result<(Trie, Trie, Cells), ApiError> {
+    let limit = |fields: &[AxisField<'_>], sheet: u32| {
+        if fields.iter().any(|f| f.def.auto_show.is_some()) {
+            MAX_NODES
+        } else {
+            sheet as usize + 1
         }
-        let f = &fields[level];
-        let mut present: Vec<u32> = Vec::new();
-        let mut seen = vec![false; f.items.len()];
-        let mut by_item: Vec<Vec<usize>> = vec![Vec::new(); f.items.len()];
-        for &r in rows {
-            let it = f.row_item[r] as usize;
-            if !seen[it] {
-                seen[it] = true;
-                present.push(it as u32);
+    };
+    let limits = (limit(rows, MAX_ROWS), limit(cols, MAX_COLS));
+    let mut rt = Trie::new();
+    let mut ct = Trie::new();
+    let mut cells = Cells::default();
+    let mut rp: Vec<u32> = Vec::with_capacity(rows.len() + 1);
+    let mut cp: Vec<u32> = Vec::with_capacity(cols.len() + 1);
+    let dcols: Vec<&[Cv]> = p
+        .data_fields
+        .iter()
+        .map(|d| &cache.values[d.source_col as usize][..])
+        .collect();
+    for &r in kept {
+        let r = r as usize;
+        rp.clear();
+        rp.push(0);
+        let mut n = 0;
+        for f in rows {
+            n = rt.child_or_insert(n, f.item_of[r]);
+            rp.push(n);
+        }
+        cp.clear();
+        cp.push(0);
+        let mut n = 0;
+        for f in cols {
+            n = ct.child_or_insert(n, f.item_of[r]);
+            cp.push(n);
+        }
+        for (di, col) in dcols.iter().enumerate() {
+            let v = col[r];
+            for &a in &rp {
+                for &b in &cp {
+                    cells.entry((a, b, di as u16)).or_default().push(v);
+                }
             }
-            by_item[it].push(r);
         }
-        if f.def.show_empty {
-            present = (0..f.items.len() as u32).collect();
+        // Without AutoShow every node is shown, so an axis tree larger
+        // than the sheet can stop here (security review 4, H7).
+        if cells.len() as u64 > MAX_OUTPUT_CELLS || rt.len() > limits.0 || ct.len() > limits.1 {
+            return Err(ApiError::unsupported("the pivot result is too large"));
         }
-        present.retain(|i| !f.def.hidden_items.contains(&f.items[*i as usize].text));
-        // Order.
-        let total_of = |item: u32, df: usize| -> f64 {
-            let mut key = prefix.clone();
-            key.push(item);
-            let k = if rows_axis {
-                (key, Vec::new(), df)
-            } else {
-                (Vec::new(), key, df)
-            };
-            cells
-                .get(&k)
-                .map(|a| {
-                    match a.result(data_fields.get(df).map_or(AggFnData::Sum, |d| d.function)) {
-                        Value::Number(n) => n,
-                        _ => 0.0,
-                    }
-                })
-                .unwrap_or(0.0)
+    }
+    Ok((rt, ct, cells))
+}
+
+fn res_at(cells: &Cells, r: u32, c: u32, di: usize, f: AggFnData) -> Res {
+    cells
+        .get(&(r, c, di as u16))
+        .map_or(Res::Empty, |a| a.result(f))
+}
+
+/// The members AutoShow hides under each parent (AOO
+/// `ScDPResultDimension::DoAutoShow`, `dptabres.cxx:3136-3190`): the
+/// first `count` by the data field's total plus every member equal to the
+/// last included one.
+fn auto_hidden(
+    trie: &Trie,
+    fields: &[AxisField<'_>],
+    cells: &Cells,
+    p: &PivotData,
+    rows_axis: bool,
+) -> Vec<bool> {
+    let mut hidden = vec![false; trie.len()];
+    let all_kids = trie.kids();
+    for n in 0..trie.len() {
+        let lvl = trie.level[n] as usize;
+        let Some(a) = fields.get(lvl).and_then(|f| f.def.auto_show.as_ref()) else {
+            continue;
         };
+        let kids = all_kids.get(n as u32);
+        let count = a.count as usize;
+        if count == 0 || count >= kids.len() || p.data_fields.is_empty() {
+            continue;
+        }
+        let df = (a.data_field as usize).min(p.data_fields.len() - 1);
+        let fun = p.data_fields[df].function;
+        let val = |k: u32| -> Option<f64> {
+            let r = if rows_axis {
+                res_at(cells, k, 0, df, fun)
+            } else {
+                res_at(cells, 0, k, df, fun)
+            };
+            match r {
+                Res::Num(x) => Some(x),
+                _ => None,
+            }
+        };
+        let mut ranked: Vec<(u32, Option<f64>)> = kids.iter().map(|k| (*k, val(*k))).collect();
+        ranked.sort_by(|x, y| match (x.1, y.1) {
+            (Some(a1), Some(b1)) => {
+                let o = a1.partial_cmp(&b1).unwrap_or(Ordering::Equal);
+                if a.top {
+                    o.reverse()
+                } else {
+                    o
+                }
+            }
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        });
+        let mut incl = count;
+        while incl < ranked.len() && ranked[incl].1 == ranked[count - 1].1 {
+            incl += 1;
+        }
+        for (k, _) in &ranked[incl..] {
+            hidden[*k as usize] = true;
+        }
+    }
+    hidden
+}
+
+fn path_hidden(trie: &Trie, fields: &[AxisField<'_>], r: usize, hidden: &[bool]) -> bool {
+    let mut n = 0;
+    for f in fields {
+        match trie.child(n, f.item_of[r]) {
+            Some(c) => n = c,
+            None => return false,
+        }
+        if hidden[n as usize] {
+            return true;
+        }
+    }
+    false
+}
+
+/// The display children of every node: the items with data (or every
+/// visible item with "show items without data"), sorted. Creating more
+/// than `budget` nodes is refused before anything is laid out.
+fn build_display(
+    trie: &mut Trie,
+    fields: &[AxisField<'_>],
+    cells: &Cells,
+    p: &PivotData,
+    rows_axis: bool,
+    budget: usize,
+) -> Result<Csr, ApiError> {
+    let data_kids = trie.kids();
+    let mut disp = Csr::default();
+    let mut created = 0usize;
+    let mut stack: Vec<u32> = vec![0];
+    while let Some(node) = stack.pop() {
+        let lvl = trie.level(node);
+        let Some(f) = fields.get(lvl) else { continue };
+        let mut present: Vec<u32> = data_kids
+            .get(node)
+            .iter()
+            .map(|k| trie.item[*k as usize])
+            .collect();
+        if f.def.show_empty {
+            let visible = f.hidden.iter().filter(|h| !**h).count();
+            let auto_limits = f
+                .def
+                .auto_show
+                .as_ref()
+                .is_some_and(|a| (a.count as usize) < visible);
+            if !auto_limits {
+                let mut have = vec![false; f.items.len()];
+                for it in &present {
+                    have[*it as usize] = true;
+                }
+                for (it, h) in f.hidden.iter().enumerate() {
+                    if !have[it] && !*h {
+                        present.push(it as u32);
+                    }
+                }
+            }
+        }
         match &f.def.sort {
             PivotSortData::None => {}
             PivotSortData::Name { ascending } => {
@@ -993,93 +1925,68 @@ fn build_tree(
                 data_field,
                 ascending,
             } => {
-                let df = *data_field as usize;
-                present.sort_by(|a, b| {
-                    let o = total_of(*a, df)
-                        .partial_cmp(&total_of(*b, df))
-                        .unwrap_or(std::cmp::Ordering::Equal);
+                let df = (*data_field as usize).min(p.data_fields.len().saturating_sub(1));
+                let fun = p.data_fields.get(df).map_or(AggFnData::Sum, |d| d.function);
+                let mut keyed: Vec<(u32, f64)> = present
+                    .iter()
+                    .map(|it| {
+                        let v = trie.child(node, *it).map_or(0.0, |c| {
+                            if rows_axis {
+                                res_at(cells, c, 0, df, fun).num_or_zero()
+                            } else {
+                                res_at(cells, 0, c, df, fun).num_or_zero()
+                            }
+                        });
+                        (*it, v)
+                    })
+                    .collect();
+                keyed.sort_by(|a, b| {
+                    let o = a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal);
                     if *ascending {
                         o
                     } else {
                         o.reverse()
                     }
                 });
+                present = keyed.into_iter().map(|(it, _)| it).collect();
             }
-            PivotSortData::Manual { order } => {
-                let pos = |i: u32| {
-                    order
-                        .iter()
-                        .position(|o| o.eq_ignore_ascii_case(&f.items[i as usize].text))
-                        .unwrap_or(usize::MAX)
-                };
-                present.sort_by_key(|i| pos(*i));
-            }
-        }
-        if let Some(a) = &f.def.auto_show {
-            let df = a.data_field as usize;
-            let mut ranked = present.clone();
-            ranked.sort_by(|x, y| {
-                let o = total_of(*x, df)
-                    .partial_cmp(&total_of(*y, df))
-                    .unwrap_or(std::cmp::Ordering::Equal);
-                if a.top {
-                    o.reverse()
-                } else {
-                    o
+            PivotSortData::Manual { .. } => {
+                if let Some(pos) = &f.manual {
+                    present.sort_by_key(|it| pos[*it as usize]);
                 }
-            });
-            let keep: Vec<u32> = ranked.into_iter().take(a.count as usize).collect();
-            present.retain(|i| keep.contains(i));
+            }
         }
-        let children = present
-            .into_iter()
-            .map(|it| {
-                let mut key = prefix.clone();
-                key.push(it);
-                build(
-                    level + 1,
-                    key,
-                    &by_item[it as usize],
-                    fields,
-                    cells,
-                    rows_axis,
-                    data_fields,
-                )
-            })
-            .collect();
-        Node {
-            key: prefix,
-            children,
+        let first = disp.flat.len();
+        for it in present {
+            disp.flat.push(trie.child_or_insert(node, it));
+            created += 1;
+            if created > budget {
+                return Err(ApiError::unsupported("the pivot output is too large"));
+            }
         }
+        if disp.start.len() <= node as usize {
+            disp.start.resize(node as usize + 1, 0);
+            disp.len.resize(node as usize + 1, 0);
+        }
+        disp.start[node as usize] = first as u32;
+        disp.len[node as usize] = (disp.flat.len() - first) as u32;
+        stack.extend(disp.flat[first..].iter().rev().copied());
     }
-    build(
-        0,
-        Vec::new(),
-        kept,
-        fields,
-        cells,
-        other_axis_rows,
-        data_fields,
-    )
+    Ok(disp)
 }
 
-fn compute(wb: &Workbook, p: &PivotData, cache: &Cache) -> Result<Computed, ApiError> {
-    let epoch = wb.settings.date_epoch;
-    let row_fields: Vec<AxisField> = p
-        .row_fields
-        .iter()
-        .map(|f| axis_field(cache, f, epoch))
-        .collect::<Result<_, _>>()?;
-    let col_fields: Vec<AxisField> = p
-        .col_fields
-        .iter()
-        .map(|f| axis_field(cache, f, epoch))
-        .collect::<Result<_, _>>()?;
-    let page_fields: Vec<AxisField> = p
-        .page_fields
-        .iter()
-        .map(|f| axis_field(cache, f, epoch))
-        .collect::<Result<_, _>>()?;
+fn compute<'a>(
+    wb: &Workbook,
+    p: &'a PivotData,
+    cache: &'a Cache,
+) -> Result<Computed<'a>, ApiError> {
+    let gx = Gx {
+        epoch: wb.settings.date_epoch,
+        locale: wb.locale,
+    };
+    if p.data_fields.is_empty() {
+        return Err(ApiError::invalid_argument("a pivot needs a data field"));
+    }
     for d in &p.data_fields {
         if d.source_col as usize >= cache.names.len() {
             return Err(ApiError::invalid_argument(
@@ -1087,47 +1994,88 @@ fn compute(wb: &Workbook, p: &PivotData, cache: &Cache) -> Result<Computed, ApiE
             ));
         }
     }
+    let rows: Vec<AxisField<'a>> = p
+        .row_fields
+        .iter()
+        .map(|f| axis_field(cache, f, gx))
+        .collect::<Result<_, _>>()?;
+    let cols: Vec<AxisField<'a>> = p
+        .col_fields
+        .iter()
+        .map(|f| axis_field(cache, f, gx))
+        .collect::<Result<_, _>>()?;
+    let pages: Vec<AxisField<'a>> = p
+        .page_fields
+        .iter()
+        .map(|f| axis_field(cache, f, gx))
+        .collect::<Result<_, _>>()?;
     // Page filters and hidden items.
-    let kept: Vec<usize> = (0..cache.rows.len())
-        .filter(|&r| {
-            page_fields.iter().all(|pf| match &pf.def.page_item {
-                None => true,
-                Some(sel) => pf.items[pf.row_item[r] as usize].text == *sel,
-            }) && row_fields.iter().chain(&col_fields).all(|f| {
-                !f.def
-                    .hidden_items
-                    .contains(&f.items[f.row_item[r] as usize].text)
+    let page_sel: Vec<Option<Vec<bool>>> = pages
+        .iter()
+        .map(|pf| {
+            pf.def.page_item.as_ref().map(|s| {
+                pf.items
+                    .iter()
+                    .map(|i| i.text == *s || (i.empty && s.is_empty()))
+                    .collect()
             })
         })
         .collect();
-    // Aggregate every prefix combination.
-    let mut cells: HashMap<(Vec<u32>, Vec<u32>, usize), Agg> = HashMap::new();
-    for &r in &kept {
-        let rkey: Vec<u32> = row_fields.iter().map(|f| f.row_item[r]).collect();
-        let ckey: Vec<u32> = col_fields.iter().map(|f| f.row_item[r]).collect();
-        for (di, d) in p.data_fields.iter().enumerate() {
-            let v = &cache.values[r][d.source_col as usize];
-            for rl in 0..=rkey.len() {
-                for cl in 0..=ckey.len() {
-                    cells
-                        .entry((rkey[..rl].to_vec(), ckey[..cl].to_vec(), di))
-                        .or_default()
-                        .push(v);
-                }
-            }
-        }
-        if cells.len() as u64 > MAX_OUTPUT_CELLS {
-            return Err(ApiError::unsupported("the pivot result is too large"));
+    let n = cache.source_rows.len();
+    let mut kept: Vec<u32> = (0..n)
+        .filter(|&r| {
+            pages
+                .iter()
+                .zip(&page_sel)
+                .all(|(pf, sel)| sel.as_ref().is_none_or(|s| s[pf.item_of[r] as usize]))
+                && rows
+                    .iter()
+                    .chain(&cols)
+                    .all(|f| !f.hidden[f.item_of[r] as usize])
+        })
+        .map(|r| r as u32)
+        .collect();
+    let work = kept.len() as u64
+        * (rows.len() as u64 + 1)
+        * (cols.len() as u64 + 1)
+        * p.data_fields.len() as u64;
+    if work > MAX_AGG_WORK {
+        return Err(ApiError::unsupported(
+            "the pivot table is too large to compute",
+        ));
+    }
+    let (mut rt, mut ct, mut cells) = aggregate(&rows, &cols, p, cache, &kept)?;
+    // AutoShow: hide the members, then compute again without them so the
+    // totals exclude them (AOO `dptabsrc.cxx:986-995`).
+    if rows.iter().chain(&cols).any(|f| f.def.auto_show.is_some()) {
+        let rh = auto_hidden(&rt, &rows, &cells, p, true);
+        let ch = auto_hidden(&ct, &cols, &cells, p, false);
+        if rh.iter().chain(&ch).any(|h| *h) {
+            kept.retain(|&r| {
+                !path_hidden(&rt, &rows, r as usize, &rh)
+                    && !path_hidden(&ct, &cols, r as usize, &ch)
+            });
+            let (rt2, ct2, cells2) = aggregate(&rows, &cols, p, cache, &kept)?;
+            rt = rt2;
+            ct = ct2;
+            cells = cells2;
         }
     }
-    let row_tree = build_tree(&row_fields, &kept, &cells, true, &p.data_fields);
-    let col_tree = build_tree(&col_fields, &kept, &cells, false, &p.data_fields);
+    let rdisp = build_display(&mut rt, &rows, &cells, p, true, MAX_ROWS as usize)?;
+    let cdisp = build_display(&mut ct, &cols, &cells, p, false, MAX_COLS as usize)?;
     Ok(Computed {
-        row_fields,
-        col_fields,
+        rows: Axis {
+            fields: rows,
+            trie: rt,
+            disp: rdisp,
+        },
+        cols: Axis {
+            fields: cols,
+            trie: ct,
+            disp: cdisp,
+        },
+        pages,
         cells,
-        row_tree,
-        col_tree,
         kept,
     })
 }
@@ -1136,22 +2084,38 @@ fn compute(wb: &Workbook, p: &PivotData, cache: &Cache) -> Result<Computed, ApiE
 // Layout
 // ---------------------------------------------------------------------------
 
-/// One line of an axis: its key and what it is.
-#[derive(Clone, Debug)]
-struct Line {
-    /// Item index per level (shorter for subtotals and the grand total).
-    key: Vec<u32>,
-    /// Subtotal line of the item at `key.len() - 1`, with the function.
-    subtotal: Option<AggFnData>,
-    /// Grand total.
-    grand: bool,
-    /// Blank spacer line.
-    blank: bool,
-    /// Data field index when the Data pseudo-field is on this axis.
-    data_field: Option<usize>,
+/// What an axis line is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// An innermost item (or the single line of an axis without fields).
+    Detail,
+    /// The n-th subtotal of the item at the node.
+    Sub(u8),
+    /// The grand total.
+    Grand,
+    /// A blank spacer.
+    Blank,
 }
 
-fn subtotal_fns(f: &PivotFieldData, data: &[PivotDataFieldData]) -> Vec<Option<AggFnData>> {
+/// One line of an axis.
+#[derive(Clone, Copy, Debug)]
+struct Line {
+    node: u32,
+    kind: Kind,
+    /// Data field when the Data pseudo-field is on this axis.
+    df: Option<u16>,
+}
+
+impl Line {
+    fn total(&self) -> bool {
+        matches!(self.kind, Kind::Sub(_) | Kind::Grand)
+    }
+}
+
+/// Most subtotal functions per field.
+const MAX_SUBTOTAL_FNS: usize = 16;
+
+fn subtotal_fns(f: &PivotFieldData) -> Vec<Option<AggFnData>> {
     match &f.subtotals {
         PivotSubtotalsData::None => Vec::new(),
         // Auto: the data field's own function, labelled "Result".
@@ -1160,138 +2124,78 @@ fn subtotal_fns(f: &PivotFieldData, data: &[PivotDataFieldData]) -> Vec<Option<A
             if fns.is_empty() {
                 vec![None]
             } else {
-                let _ = data;
-                fns.iter().map(|f| Some(*f)).collect()
+                fns.iter()
+                    .take(MAX_SUBTOTAL_FNS)
+                    .map(|f| Some(*f))
+                    .collect()
             }
         }
     }
 }
 
-/// Flattens a tree into lines (tabular: subtotal lines after the
-/// children of outer items; the Data pseudo-field as the innermost
-/// level when it is on this axis).
-fn lines(
-    node: &Node,
-    fields: &[AxisField],
-    data: &[PivotDataFieldData],
-    data_here: bool,
-    grand: bool,
-    out: &mut Vec<Line>,
-) {
-    fn walk(
-        node: &Node,
-        fields: &[AxisField],
-        data: &[PivotDataFieldData],
-        data_here: bool,
-        out: &mut Vec<Line>,
-    ) {
-        let level = node.key.len();
-        if level == fields.len() {
-            if data_here {
-                for di in 0..data.len() {
-                    out.push(Line {
-                        key: node.key.clone(),
-                        subtotal: None,
-                        grand: false,
-                        blank: false,
-                        data_field: Some(di),
-                    });
-                }
-            } else {
+/// Flattens an axis into lines (tabular: subtotal lines after the
+/// children of an outer item; no subtotals for the innermost field, even
+/// when only the Data pseudo-field follows it, AOO `lcl_TestSubTotal`,
+/// `dptabsrc.cxx:229-245`).
+fn axis_lines(ax: &Axis<'_>, ndata: usize, data_here: bool, grand: bool) -> Vec<Line> {
+    fn push(out: &mut Vec<Line>, node: u32, kind: Kind, ndata: usize, data_here: bool) {
+        if data_here {
+            for di in 0..ndata {
                 out.push(Line {
-                    key: node.key.clone(),
-                    subtotal: None,
-                    grand: false,
-                    blank: false,
-                    data_field: None,
+                    node,
+                    kind,
+                    df: Some(di as u16),
                 });
             }
+        } else {
+            out.push(Line {
+                node,
+                kind,
+                df: None,
+            });
+        }
+    }
+    fn walk(ax: &Axis<'_>, node: u32, ndata: usize, data_here: bool, out: &mut Vec<Line>) {
+        let lvl = ax.trie.level(node);
+        if lvl == ax.fields.len() {
+            push(out, node, Kind::Detail, ndata, data_here);
             return;
         }
-        for child in &node.children {
-            walk(child, fields, data, data_here, out);
-            let f = &fields[level];
-            let inner_levels = fields.len() - level - 1;
-            // Subtotals only for outer fields (with more than one child
-            // line beneath), as AOO.
-            if inner_levels > 0 || (data_here && data.len() > 1) {
-                for fun in subtotal_fns(&f.def, data) {
-                    if data_here {
-                        for (di, d) in data.iter().enumerate() {
-                            out.push(Line {
-                                key: child.key.clone(),
-                                subtotal: Some(fun.unwrap_or(d.function)),
-                                grand: false,
-                                blank: false,
-                                data_field: Some(di),
-                            });
-                        }
-                    } else {
-                        out.push(Line {
-                            key: child.key.clone(),
-                            subtotal: Some(fun.unwrap_or(AggFnData::Sum)),
-                            grand: false,
-                            blank: false,
-                            data_field: None,
-                        });
-                    }
-                }
+        let f = &ax.fields[lvl];
+        let subs = if lvl + 1 < ax.fields.len() {
+            subtotal_fns(f.def).len()
+        } else {
+            0
+        };
+        for &child in ax.disp.get(node) {
+            walk(ax, child, ndata, data_here, out);
+            for i in 0..subs {
+                push(out, child, Kind::Sub(i as u8), ndata, data_here);
             }
             if f.def.empty_line_after {
                 out.push(Line {
-                    key: child.key.clone(),
-                    subtotal: None,
-                    grand: false,
-                    blank: true,
-                    data_field: None,
+                    node: child,
+                    kind: Kind::Blank,
+                    df: None,
                 });
             }
         }
     }
-    walk(node, fields, data, data_here, out);
-    if grand && (data_here || !fields.is_empty()) {
-        if data_here {
-            for di in 0..data.len() {
-                out.push(Line {
-                    key: Vec::new(),
-                    subtotal: None,
-                    grand: true,
-                    blank: false,
-                    data_field: Some(di),
-                });
-            }
+    let mut out = Vec::new();
+    if ax.fields.is_empty() {
+        let kind = if grand && data_here {
+            Kind::Grand
         } else {
-            out.push(Line {
-                key: Vec::new(),
-                subtotal: None,
-                grand: true,
-                blank: false,
-                data_field: None,
-            });
-        }
+            Kind::Detail
+        };
+        push(&mut out, 0, kind, ndata, data_here);
+        return out;
     }
-    if fields.is_empty() && out.is_empty() {
-        // No fields on this axis: a single total line.
-        if data_here {
-            for di in 0..data.len() {
-                out.push(Line {
-                    key: Vec::new(),
-                    subtotal: None,
-                    grand: false,
-                    blank: false,
-                    data_field: Some(di),
-                });
-            }
-        } else {
-            out.push(Line {
-                key: Vec::new(),
-                subtotal: None,
-                grand: false,
-                blank: false,
-                data_field: None,
-            });
-        }
+    walk(ax, 0, ndata, data_here, &mut out);
+    if grand {
+        push(&mut out, 0, Kind::Grand, ndata, data_here);
     }
+    out
 }
 
 /// The caption of a data field.
@@ -1309,80 +2213,119 @@ pub fn caption(d: &PivotDataFieldData, names: &[String]) -> String {
     }
 }
 
-/// The previous column line at a level: key, subtotal, grand, data field.
-type PrevCol = (Vec<u32>, Option<AggFnData>, bool, Option<usize>);
-
-/// A written output cell before the show-as pass.
-struct Out {
+/// A label cell of the output.
+struct Label {
     r: u32,
     c: u32,
-    value: Value,
+    text: String,
+    /// Written as a number (numeric item).
+    numeric: bool,
     role: PivotCellRole,
     field: Option<u32>,
     item: Option<String>,
-    key: Option<(Vec<String>, Vec<String>, u32)>,
+    /// The item is the text (not stored twice).
+    item_is_text: bool,
 }
 
 struct Layout {
-    cells: Vec<Out>,
+    labels: Vec<Label>,
     rows: u32,
     cols: u32,
-    lookup: Lookup,
+    first_data_row: u32,
+    data_col0: u32,
+    row_lines: Vec<Line>,
+    col_lines: Vec<Line>,
+    /// Displayed values, row line × column line.
+    values: Vec<Res>,
 }
 
-fn key_texts(fields: &[AxisField], key: &[u32]) -> Vec<String> {
-    key.iter()
-        .enumerate()
-        .map(|(i, it)| fields[i].items[*it as usize].text.clone())
-        .collect()
+/// The function of a subtotal line forced by custom subtotals.
+fn forced(ax: &Axis<'_>, l: &Line) -> Option<AggFnData> {
+    let Kind::Sub(i) = l.kind else { return None };
+    let lvl = ax.trie.level(l.node);
+    match &ax.fields.get(lvl.checked_sub(1)?)?.def.subtotals {
+        PivotSubtotalsData::Custom(v) if !v.is_empty() => v.get(i as usize).copied(),
+        _ => None,
+    }
 }
 
-fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed) -> Result<Layout, ApiError> {
-    let data_in_rows = p.data_fields.len() > 1 && p.data_layout == DataLayoutData::Row;
-    let data_in_cols = p.data_fields.len() > 1 && p.data_layout == DataLayoutData::Column;
-    let mut row_lines = Vec::new();
-    lines(
-        &comp.row_tree,
-        &comp.row_fields,
-        &p.data_fields,
-        data_in_rows,
-        p.row_totals,
-        &mut row_lines,
-    );
-    let mut col_lines = Vec::new();
-    lines(
-        &comp.col_tree,
-        &comp.col_fields,
-        &p.data_fields,
-        data_in_cols,
-        p.col_totals,
-        &mut col_lines,
-    );
-    let nr = comp.row_fields.len() as u32 + u32::from(data_in_rows);
-    let nc = comp.col_fields.len() as u32 + u32::from(data_in_cols);
+/// The data field and function of a cell; `None` when the row and column
+/// subtotals force different functions (AOO `ScDPAggData::Update`: no
+/// value then).
+fn cell_fn(p: &PivotData, comp: &Computed<'_>, rl: &Line, cl: &Line) -> (usize, Option<AggFnData>) {
+    let di = rl.df.or(cl.df).unwrap_or(0) as usize;
+    let own = p.data_fields[di].function;
+    let f = match (forced(&comp.rows, rl), forced(&comp.cols, cl)) {
+        (Some(a), Some(b)) if a != b => None,
+        (Some(a), _) => Some(a),
+        (_, Some(b)) => Some(b),
+        _ => Some(own),
+    };
+    (di, f)
+}
+
+fn item_text<'b, 'a>(ax: &'b Axis<'a>, node: u32) -> (&'b Item, &'b AxisField<'a>) {
+    let lvl = ax.trie.level(node) - 1;
+    let f = &ax.fields[lvl];
+    (&f.items[ax.trie.item[node as usize] as usize], f)
+}
+
+fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, ApiError> {
+    let ndata = p.data_fields.len();
+    let data_in_rows = ndata > 1 && p.data_layout == DataLayoutData::Row;
+    let data_in_cols = ndata > 1 && p.data_layout == DataLayoutData::Column;
+    let row_lines = axis_lines(&comp.rows, ndata, data_in_rows, p.row_totals);
+    let col_lines = axis_lines(&comp.cols, ndata, data_in_cols, p.col_totals);
+    let nr = comp.rows.fields.len() as u32 + u32::from(data_in_rows);
+    let nc = comp.cols.fields.len() as u32 + u32::from(data_in_cols);
     let captions: Vec<String> = p
         .data_fields
         .iter()
         .map(|d| caption(d, &cache.names))
         .collect();
-    let mut cells: Vec<Out> = Vec::new();
+    let mut cells: Vec<Label> = Vec::new();
     let mut r = 0u32;
-    let push = |cells: &mut Vec<Out>,
+    let push = |cells: &mut Vec<Label>,
                 r: u32,
                 c: u32,
-                v: Value,
+                text: &str,
                 role: PivotCellRole,
                 field: Option<u32>,
                 item: Option<String>| {
-        cells.push(Out {
+        cells.push(Label {
             r,
             c,
-            value: v,
+            text: text.to_string(),
+            numeric: false,
             role,
             field,
             item,
-            key: None,
+            item_is_text: false,
         });
+    };
+    let push_item = |cells: &mut Vec<Label>, r: u32, c: u32, it: &Item, f: &AxisField<'_>| {
+        cells.push(Label {
+            r,
+            c,
+            text: it.text.clone(),
+            numeric: it.numeric,
+            role: PivotCellRole::RowItem,
+            field: Some(f.source_col as u32),
+            item: None,
+            item_is_text: true,
+        });
+    };
+    let subtotal_text = |ax: &Axis<'_>, l: &Line| -> (String, String, u32) {
+        let (it, f) = item_text(ax, l.node);
+        let suffix = match (&f.def.subtotals, forced(ax, l)) {
+            (PivotSubtotalsData::Custom(v), Some(fun)) if !v.is_empty() => agg_caption(fun),
+            _ => "Result",
+        };
+        (
+            format!("{} {suffix}", it.text),
+            it.text.clone(),
+            f.source_col as u32,
+        )
     };
     // Filter button and page fields.
     let mut had_top = false;
@@ -1391,7 +2334,7 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed) -> Result<Layout, ApiE
             &mut cells,
             r,
             0,
-            Value::text("Filter"),
+            "Filter",
             PivotCellRole::Header,
             None,
             None,
@@ -1413,7 +2356,7 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed) -> Result<Layout, ApiE
             &mut cells,
             r,
             0,
-            Value::text(name),
+            &name,
             PivotCellRole::PageField,
             Some(pf.source_col),
             None,
@@ -1423,10 +2366,10 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed) -> Result<Layout, ApiE
             &mut cells,
             r,
             1,
-            Value::text(sel.as_str()),
+            &sel,
             PivotCellRole::PageField,
             Some(pf.source_col),
-            Some(sel),
+            Some(sel.clone()),
         );
         r += 1;
         had_top = true;
@@ -1437,7 +2380,7 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed) -> Result<Layout, ApiE
     // Header block.
     let header_rows = nc + 1;
     let top = r;
-    let corner = if p.data_fields.len() == 1 {
+    let corner = if ndata == 1 {
         captions[0].clone()
     } else {
         "Data".to_string()
@@ -1450,19 +2393,18 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed) -> Result<Layout, ApiE
         &mut cells,
         top,
         corner_col,
-        Value::text(corner.as_str()),
+        &corner,
         PivotCellRole::Header,
         None,
         None,
     );
-    // Column field names on the first header row, after the corner.
     let data_col0 = nr.max(1);
-    for (k, f) in comp.col_fields.iter().enumerate() {
+    for (k, f) in comp.cols.fields.iter().enumerate() {
         push(
             &mut cells,
             top,
             data_col0 + k as u32,
-            Value::text(f.name.as_str()),
+            &f.name,
             PivotCellRole::Header,
             Some(f.source_col as u32),
             None,
@@ -1472,21 +2414,20 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed) -> Result<Layout, ApiE
         push(
             &mut cells,
             top,
-            data_col0 + comp.col_fields.len() as u32,
-            Value::text("Data"),
+            data_col0 + comp.cols.fields.len() as u32,
+            "Data",
             PivotCellRole::Header,
             None,
             None,
         );
     }
-    // Row field names on the last header row.
     let last_header = top + header_rows - 1;
-    for (k, f) in comp.row_fields.iter().enumerate() {
+    for (k, f) in comp.rows.fields.iter().enumerate() {
         push(
             &mut cells,
             last_header,
             k as u32,
-            Value::text(f.name.as_str()),
+            &f.name,
             PivotCellRole::Header,
             Some(f.source_col as u32),
             None,
@@ -1496,478 +2437,559 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed) -> Result<Layout, ApiE
         push(
             &mut cells,
             last_header,
-            comp.row_fields.len() as u32,
-            Value::text("Data"),
+            comp.rows.fields.len() as u32,
+            "Data",
             PivotCellRole::Header,
             None,
             None,
         );
     }
+    // Size check before anything per line is built.
+    let first_data_row = top + header_rows;
+    let rows = first_data_row as u64 + row_lines.len() as u64;
+    let cols = (data_col0 as u64 + col_lines.len() as u64).max(2);
+    if rows > u64::from(MAX_ROWS) || cols > u64::from(MAX_COLS) || rows * cols > MAX_OUTPUT_CELLS {
+        return Err(ApiError::unsupported("the pivot output is too large"));
+    }
+    let (rows, cols) = (rows as u32, cols as u32);
     // Column items: level k on header row top + 1 + k; an outer item is
     // written on the first column of its span.
-    let mut prev: Vec<Option<PrevCol>> = vec![None; nc as usize];
+    let ct = &comp.cols.trie;
+    let mut prev: Option<u32> = None;
     for (ci, line) in col_lines.iter().enumerate() {
         let c = data_col0 + ci as u32;
-        if line.blank {
-            prev.iter_mut().for_each(|x| *x = None);
-            continue;
-        }
-        if line.grand {
-            let (text, role) = ("Total Result".to_string(), PivotCellRole::Total);
-            let rr = if nc == 0 { top } else { top + 1 };
-            push(
-                &mut cells,
-                rr,
-                c,
-                Value::text(text.as_str()),
-                role,
-                None,
-                None,
-            );
-            if let Some(di) = line.data_field {
+        match line.kind {
+            Kind::Blank => {
+                prev = None;
+                continue;
+            }
+            Kind::Grand => {
+                let rr = if nc == 0 { top } else { top + 1 };
                 push(
                     &mut cells,
-                    top + nc,
+                    rr,
                     c,
-                    Value::text(captions[di].as_str()),
-                    PivotCellRole::ColItem,
+                    "Total Result",
+                    PivotCellRole::Total,
                     None,
-                    Some(captions[di].clone()),
-                );
-            }
-            prev.iter_mut().for_each(|x| *x = None);
-            continue;
-        }
-        if let Some(fun) = line.subtotal {
-            let lvl = line.key.len() - 1;
-            let text = format!(
-                "{} {}",
-                comp.col_fields[lvl].items[line.key[lvl] as usize].text,
-                match comp.col_fields[lvl].def.subtotals {
-                    PivotSubtotalsData::Custom(ref v) if !v.is_empty() =>
-                        agg_caption(fun).to_string(),
-                    _ => "Result".to_string(),
-                }
-            );
-            push(
-                &mut cells,
-                top + 1 + lvl as u32,
-                c,
-                Value::text(text.as_str()),
-                PivotCellRole::Total,
-                Some(comp.col_fields[lvl].source_col as u32),
-                Some(
-                    comp.col_fields[lvl].items[line.key[lvl] as usize]
-                        .text
-                        .clone(),
-                ),
-            );
-            if let Some(di) = line.data_field {
-                push(
-                    &mut cells,
-                    top + nc,
-                    c,
-                    Value::text(captions[di].as_str()),
-                    PivotCellRole::ColItem,
                     None,
-                    Some(captions[di].clone()),
                 );
+                prev = None;
             }
-            prev.iter_mut().for_each(|x| *x = None);
-            continue;
-        }
-        for (lvl, it) in line.key.iter().enumerate() {
-            let same = prev[lvl].as_ref().is_some_and(|(k, st, g, _)| {
-                k.len() > lvl && k[..=lvl] == line.key[..=lvl] && st.is_none() && !g
-            });
-            if !same {
-                let f = &comp.col_fields[lvl];
-                let text = f.items[*it as usize].text.clone();
+            Kind::Sub(_) => {
+                let (text, item, field) = subtotal_text(&comp.cols, line);
+                let lvl = ct.level(line.node) - 1;
                 push(
                     &mut cells,
                     top + 1 + lvl as u32,
                     c,
-                    Value::text(text.as_str()),
-                    PivotCellRole::ColItem,
-                    Some(f.source_col as u32),
-                    Some(text),
+                    &text,
+                    PivotCellRole::Total,
+                    Some(field),
+                    Some(item),
                 );
+                prev = None;
             }
-            prev[lvl] = Some((line.key.clone(), line.subtotal, line.grand, line.data_field));
+            Kind::Detail => {
+                for lvl in 0..ct.level(line.node) {
+                    let anc = ct.ancestor(line.node, lvl + 1);
+                    let same = prev
+                        .is_some_and(|pn| ct.level(pn) > lvl && ct.ancestor(pn, lvl + 1) == anc);
+                    if !same {
+                        let (it, f) = item_text(&comp.cols, anc);
+                        push_item(&mut cells, top + 1 + lvl as u32, c, it, f);
+                        if let Some(l) = cells.last_mut() {
+                            l.role = PivotCellRole::ColItem;
+                        }
+                    }
+                }
+                prev = Some(line.node);
+            }
         }
-        if let Some(di) = line.data_field {
+        if let Some(di) = line.df {
+            let cap = &captions[di as usize];
             push(
                 &mut cells,
                 top + nc,
                 c,
-                Value::text(captions[di].as_str()),
+                cap,
                 PivotCellRole::ColItem,
                 None,
-                Some(captions[di].clone()),
+                Some(cap.clone()),
             );
         }
     }
-    // Row items and data.
-    let first_data_row = top + header_rows;
-    let mut lookup = Lookup {
-        values: HashMap::new(),
-        field_names: cache.names.clone(),
-        captions: captions.clone(),
-    };
-    let mut prev_row: Vec<Option<Vec<u32>>> = vec![None; nr as usize];
-    let mut rr = first_data_row;
-    let total_cols = data_col0 + col_lines.len() as u32;
-    for line in &row_lines {
-        if line.blank {
-            prev_row.iter_mut().for_each(|x| *x = None);
-            rr += 1;
-            continue;
-        }
-        // Labels.
-        if line.grand {
-            push(
-                &mut cells,
-                rr,
-                0,
-                Value::text("Total Result"),
-                PivotCellRole::Total,
-                None,
-                None,
-            );
-            if let Some(di) = line.data_field {
-                push(
-                    &mut cells,
-                    rr,
-                    nr - 1,
-                    Value::text(captions[di].as_str()),
-                    PivotCellRole::RowItem,
-                    None,
-                    Some(captions[di].clone()),
-                );
-            }
-            prev_row.iter_mut().for_each(|x| *x = None);
-        } else if let Some(fun) = line.subtotal {
-            let lvl = line.key.len() - 1;
-            let f = &comp.row_fields[lvl];
-            let item = f.items[line.key[lvl] as usize].text.clone();
-            let text = format!(
-                "{} {}",
-                item,
-                match f.def.subtotals {
-                    PivotSubtotalsData::Custom(ref v) if !v.is_empty() =>
-                        agg_caption(fun).to_string(),
-                    _ => "Result".to_string(),
-                }
-            );
-            push(
-                &mut cells,
-                rr,
-                lvl as u32,
-                Value::text(text.as_str()),
-                PivotCellRole::Total,
-                Some(f.source_col as u32),
-                Some(item),
-            );
-            if let Some(di) = line.data_field {
-                push(
-                    &mut cells,
-                    rr,
-                    nr - 1,
-                    Value::text(captions[di].as_str()),
-                    PivotCellRole::RowItem,
-                    None,
-                    Some(captions[di].clone()),
-                );
-            }
-            prev_row.iter_mut().for_each(|x| *x = None);
-        } else {
-            for (lvl, it) in line.key.iter().enumerate() {
-                let same = prev_row[lvl]
-                    .as_ref()
-                    .is_some_and(|k| k.len() > lvl && k[..=lvl] == line.key[..=lvl]);
-                if !same {
-                    let f = &comp.row_fields[lvl];
-                    let text = f.items[*it as usize].text.clone();
-                    push(
-                        &mut cells,
-                        rr,
-                        lvl as u32,
-                        Value::text(text.as_str()),
-                        PivotCellRole::RowItem,
-                        Some(f.source_col as u32),
-                        Some(text),
-                    );
-                }
-                prev_row[lvl] = Some(line.key.clone());
-            }
-            if let Some(di) = line.data_field {
-                push(
-                    &mut cells,
-                    rr,
-                    nr - 1,
-                    Value::text(captions[di].as_str()),
-                    PivotCellRole::RowItem,
-                    None,
-                    Some(captions[di].clone()),
-                );
-            }
-        }
-        // Data cells.
-        for (ci, cl) in col_lines.iter().enumerate() {
-            if cl.blank {
+    // Row items.
+    let rt = &comp.rows.trie;
+    let mut prev: Option<u32> = None;
+    for (ri, line) in row_lines.iter().enumerate() {
+        let rr = first_data_row + ri as u32;
+        match line.kind {
+            Kind::Blank => {
+                prev = None;
                 continue;
             }
-            let c = data_col0 + ci as u32;
-            let di = line.data_field.or(cl.data_field).unwrap_or(0);
-            // Subtotal lines use the custom function when one was chosen,
-            // else the data field's own function.
-            let own = p.data_fields[di].function;
-            let custom = line.subtotal.or(cl.subtotal).filter(|_| {
-                comp.row_fields
-                    .iter()
-                    .chain(&comp.col_fields)
-                    .any(|f| matches!(f.def.subtotals, PivotSubtotalsData::Custom(ref v) if !v.is_empty()))
-            });
-            let fun = custom.unwrap_or(own);
-            let v = comp
-                .cells
-                .get(&(line.key.clone(), cl.key.clone(), di))
-                .map(|a| a.result(fun))
-                .unwrap_or(Value::Empty);
-            let role = if line.grand || cl.grand || line.subtotal.is_some() || cl.subtotal.is_some()
-            {
-                PivotCellRole::Total
-            } else {
-                PivotCellRole::Data
-            };
-            let rk = key_texts(&comp.row_fields, &line.key);
-            let ck = key_texts(&comp.col_fields, &cl.key);
-            if role == PivotCellRole::Data
-                || line.grand
-                || cl.grand
-                || (line.subtotal.is_some() || cl.subtotal.is_some())
-            {
-                lookup
-                    .values
-                    .entry((rk.clone(), ck.clone(), di as u32))
-                    .or_insert_with(|| v.clone());
+            Kind::Grand => {
+                push(
+                    &mut cells,
+                    rr,
+                    0,
+                    "Total Result",
+                    PivotCellRole::Total,
+                    None,
+                    None,
+                );
+                prev = None;
             }
-            cells.push(Out {
-                r: rr,
-                c,
-                value: v,
-                role,
-                field: None,
-                item: None,
-                key: Some((rk, ck, di as u32)),
+            Kind::Sub(_) => {
+                let (text, item, field) = subtotal_text(&comp.rows, line);
+                let lvl = rt.level(line.node) - 1;
+                push(
+                    &mut cells,
+                    rr,
+                    lvl as u32,
+                    &text,
+                    PivotCellRole::Total,
+                    Some(field),
+                    Some(item),
+                );
+                prev = None;
+            }
+            Kind::Detail => {
+                for lvl in 0..rt.level(line.node) {
+                    let anc = rt.ancestor(line.node, lvl + 1);
+                    let same = prev
+                        .is_some_and(|pn| rt.level(pn) > lvl && rt.ancestor(pn, lvl + 1) == anc);
+                    if !same {
+                        let (it, f) = item_text(&comp.rows, anc);
+                        push_item(&mut cells, rr, lvl as u32, it, f);
+                    }
+                }
+                prev = Some(line.node);
+            }
+        }
+        if let Some(di) = line.df {
+            let cap = &captions[di as usize];
+            push(
+                &mut cells,
+                rr,
+                nr - 1,
+                cap,
+                PivotCellRole::RowItem,
+                None,
+                Some(cap.clone()),
+            );
+        }
+    }
+    // Data values.
+    let ncl = col_lines.len();
+    let mut values: Vec<Res> = Vec::with_capacity(row_lines.len() * ncl);
+    for rl in &row_lines {
+        for cl in &col_lines {
+            if rl.kind == Kind::Blank || cl.kind == Kind::Blank {
+                values.push(Res::Empty);
+                continue;
+            }
+            let (di, f) = cell_fn(p, comp, rl, cl);
+            values.push(match f {
+                Some(f) => res_at(&comp.cells, rl.node, cl.node, di, f),
+                None => Res::Empty,
             });
         }
-        rr += 1;
     }
-    let rows = rr;
-    let cols = total_cols.max(2);
-    if u64::from(rows) * u64::from(cols) > MAX_OUTPUT_CELLS {
-        return Err(ApiError::unsupported("the pivot output is too large"));
-    }
-    let mut layout = Layout {
-        cells,
+    show_as(p, comp, &row_lines, &col_lines, &mut values);
+    Ok(Layout {
+        labels: cells,
         rows,
         cols,
-        lookup,
-    };
-    show_as(
-        p,
-        comp,
-        &mut layout,
         first_data_row,
         data_col0,
-        &row_lines,
-        &col_lines,
-    );
-    Ok(layout)
+        row_lines,
+        col_lines,
+        values,
+    })
 }
 
-/// Applies the "show as" transformations of the data fields.
-#[allow(clippy::too_many_arguments)]
+/// How a data field's reference ("show as" relative to a base field) is
+/// resolved.
+#[derive(Clone, Copy)]
+enum Base {
+    /// The base field is not a row or column field.
+    Invalid,
+    /// Running total.
+    Running,
+    /// A named item (its index; `None`: no such item).
+    Named(Option<u32>),
+    Previous,
+    Next,
+}
+
+#[derive(Clone, Copy)]
+struct RefInfo {
+    rows_axis: bool,
+    lvl: usize,
+    base: Base,
+}
+
+fn ref_info(sa: &ShowAsData, comp: &Computed<'_>) -> RefInfo {
+    let invalid = RefInfo {
+        rows_axis: true,
+        lvl: 0,
+        base: Base::Invalid,
+    };
+    let Some(bc) = sa.base_field else {
+        return invalid;
+    };
+    let found = comp
+        .rows
+        .fields
+        .iter()
+        .position(|f| f.source_col as u32 == bc)
+        .map(|l| (true, l))
+        .or_else(|| {
+            comp.cols
+                .fields
+                .iter()
+                .position(|f| f.source_col as u32 == bc)
+                .map(|l| (false, l))
+        });
+    let Some((rows_axis, lvl)) = found else {
+        return invalid;
+    };
+    let ax = if rows_axis { &comp.rows } else { &comp.cols };
+    let base = match (sa.kind, &sa.base_item) {
+        (ShowAsKindData::RunningTotal, _) => Base::Running,
+        (_, Some(BaseItemData::Previous)) => Base::Previous,
+        (_, Some(BaseItemData::Next)) => Base::Next,
+        (_, Some(BaseItemData::Named(name))) => Base::Named(
+            ax.fields[lvl]
+                .items
+                .iter()
+                .position(|i| i.text == *name)
+                .map(|i| i as u32),
+        ),
+        (_, None) => Base::Named(None),
+    };
+    RefInfo {
+        rows_axis,
+        lvl,
+        base,
+    }
+}
+
+/// Applies the "show as" modes of the data fields to every cell, totals
+/// included (AOO `ScDPDataMember::UpdateRunningTotals`,
+/// `dptabres.cxx:2250-2580`).
 fn show_as(
     p: &PivotData,
-    comp: &Computed,
-    layout: &mut Layout,
-    first_data_row: u32,
-    data_col0: u32,
+    comp: &Computed<'_>,
     row_lines: &[Line],
     col_lines: &[Line],
+    values: &mut [Res],
 ) {
     if p.data_fields.iter().all(|d| d.show_as.is_none()) {
         return;
     }
-    let num = |v: &Value| match v {
-        Value::Number(n) => Some(*n),
-        _ => None,
-    };
-    // Index the data cells by (row line, col line).
-    let mut grid: HashMap<(usize, usize), usize> = HashMap::new();
-    let mut row_of: HashMap<u32, usize> = HashMap::new();
-    let mut rr = first_data_row;
-    for (i, l) in row_lines.iter().enumerate() {
-        row_of.insert(rr, i);
-        let _ = l;
-        rr += 1;
-    }
-    for (idx, o) in layout.cells.iter().enumerate() {
-        if o.key.is_none() {
-            continue;
+    let refs: Vec<Option<RefInfo>> = p
+        .data_fields
+        .iter()
+        .map(|d| d.show_as.as_ref().map(|sa| ref_info(sa, comp)))
+        .collect();
+    // Position of every node among its parent's display children.
+    let pos_of = |ax: &Axis<'_>| -> Vec<u32> {
+        let mut pos = vec![0u32; ax.trie.len()];
+        for n in 0..ax.trie.len() {
+            for (i, k) in ax.disp.get(n as u32).iter().enumerate() {
+                pos[*k as usize] = i as u32;
+            }
         }
-        if let Some(ri) = row_of.get(&o.r) {
-            let ci = (o.c - data_col0) as usize;
-            grid.insert((*ri, ci), idx);
-        }
-    }
-    let value_at = |layout: &Layout, ri: usize, ci: usize| -> Option<f64> {
-        grid.get(&(ri, ci))
-            .and_then(|i| num(&layout.cells[*i].value))
+        pos
     };
-    let grand_row = row_lines.iter().position(|l| l.grand);
-    let grand_col = col_lines.iter().position(|l| l.grand);
-    let mut updates: Vec<(usize, Value)> = Vec::new();
+    let rpos = pos_of(&comp.rows);
+    let cpos = pos_of(&comp.cols);
+    // Running totals so far: (node, other line, data field) → total.
+    let mut running: FxMap<(u32, u32, u16), f64> = FxMap::default();
+    let cells = &comp.cells;
+    let ncl = col_lines.len();
     for (ri, rl) in row_lines.iter().enumerate() {
         for (ci, cl) in col_lines.iter().enumerate() {
-            let Some(&idx) = grid.get(&(ri, ci)) else {
+            if rl.kind == Kind::Blank || cl.kind == Kind::Blank {
+                continue;
+            }
+            let (di, fun) = cell_fn(p, comp, rl, cl);
+            let (Some(sa), Some(info), Some(fun)) = (&p.data_fields[di].show_as, refs[di], fun)
+            else {
                 continue;
             };
-            let di = rl.data_field.or(cl.data_field).unwrap_or(0);
-            let Some(sa) = &p.data_fields[di].show_as else {
-                continue;
-            };
-            let Some(v) = num(&layout.cells[idx].value) else {
-                continue;
-            };
-            let same_df = |l: &Line| l.data_field.is_none_or(|d| d == di);
-            let row_total = grand_col
-                .filter(|_| same_df(rl))
-                .and_then(|gc| value_at(layout, ri, gc));
-            let col_total = grand_row
-                .filter(|_| same_df(cl))
-                .and_then(|gr| value_at(layout, gr, ci));
-            let grand = grand_row
-                .zip(grand_col)
-                .and_then(|(gr, gc)| value_at(layout, gr, gc));
-            let pct = |a: f64, b: Option<f64>| match b {
-                Some(b) if b != 0.0 => Value::Number(a / b),
-                _ => Value::Error(ErrorKind::Div0),
-            };
+            let idx = ri * ncl + ci;
+            let v = values[idx];
+            let own = p.data_fields[di].function;
             let out = match sa.kind {
-                ShowAsKindData::PercentOfRow => pct(v, row_total),
-                ShowAsKindData::PercentOfColumn => pct(v, col_total),
-                ShowAsKindData::PercentOfTotal => pct(v, grand),
-                ShowAsKindData::Index => match (row_total, col_total, grand) {
-                    (Some(r), Some(c), Some(g)) if r != 0.0 && c != 0.0 => {
-                        Value::Number(v * g / (r * c))
-                    }
-                    _ => Value::Error(ErrorKind::Div0),
-                },
-                ShowAsKindData::RunningTotal
-                | ShowAsKindData::Difference
-                | ShowAsKindData::PercentOf
-                | ShowAsKindData::PercentDifference => {
-                    // The base field is a row or column field; its level.
-                    let base_col = sa.base_field.unwrap_or(0);
-                    let row_lvl = comp
-                        .row_fields
-                        .iter()
-                        .position(|f| f.source_col as u32 == base_col);
-                    let col_lvl = comp
-                        .col_fields
-                        .iter()
-                        .position(|f| f.source_col as u32 == base_col);
-                    let (along_rows, lvl) = match (row_lvl, col_lvl) {
-                        (Some(l), _) => (true, l),
-                        (None, Some(l)) => (false, l),
-                        _ => continue,
-                    };
-                    let this = if along_rows { rl } else { cl };
-                    if this.grand || this.subtotal.is_some() || this.key.len() <= lvl {
-                        continue;
-                    }
-                    let fields = if along_rows {
-                        &comp.row_fields
-                    } else {
-                        &comp.col_fields
-                    };
-                    let lines_all = if along_rows { row_lines } else { col_lines };
-                    // Sibling lines: same prefix above `lvl`, same deeper key
-                    // shape (same data field), ordinary lines.
-                    let siblings: Vec<usize> = lines_all
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, l)| {
-                            !l.grand
-                                && !l.blank
-                                && l.subtotal.is_none()
-                                && l.key.len() == this.key.len()
-                                && l.key[..lvl] == this.key[..lvl]
-                                && l.key[lvl + 1..] == this.key[lvl + 1..]
-                                && l.data_field == this.data_field
-                        })
-                        .map(|(i, _)| i)
-                        .collect();
-                    let me = if along_rows { ri } else { ci };
-                    let pos = siblings.iter().position(|s| *s == me).unwrap_or(0);
-                    let get = |layout: &Layout, i: usize| {
-                        if along_rows {
-                            value_at(layout, i, ci)
-                        } else {
-                            value_at(layout, ri, i)
-                        }
-                    };
-                    if sa.kind == ShowAsKindData::RunningTotal {
-                        let sum: f64 = siblings[..=pos]
-                            .iter()
-                            .filter_map(|i| get(layout, *i))
-                            .sum();
-                        Value::Number(sum)
-                    } else {
-                        let base_idx = match &sa.base_item {
-                            Some(BaseItemData::Previous) => pos.checked_sub(1).map(|i| siblings[i]),
-                            Some(BaseItemData::Next) => siblings.get(pos + 1).copied(),
-                            Some(BaseItemData::Named(name)) => siblings.iter().copied().find(|i| {
-                                let l = &lines_all[*i];
-                                fields[lvl].items[l.key[lvl] as usize].text == *name
-                            }),
-                            None => None,
-                        };
-                        let is_base = base_idx == Some(me);
-                        match (sa.kind, base_idx.and_then(|b| get(layout, b))) {
-                            (ShowAsKindData::Difference, Some(b)) => {
-                                if is_base {
-                                    Value::Empty
-                                } else {
-                                    Value::Number(v - b)
-                                }
+                ShowAsKindData::PercentOfRow
+                | ShowAsKindData::PercentOfColumn
+                | ShowAsKindData::PercentOfTotal
+                | ShowAsKindData::Index => {
+                    let Res::Num(x) = v else { continue };
+                    let row_total =
+                        res_at(cells, rl.node, 0, di, forced(&comp.rows, rl).unwrap_or(own))
+                            .num_or_zero();
+                    let col_total =
+                        res_at(cells, 0, cl.node, di, forced(&comp.cols, cl).unwrap_or(own))
+                            .num_or_zero();
+                    let grand = res_at(cells, 0, 0, di, own).num_or_zero();
+                    let div = |t: f64| if t == 0.0 { Res::Err } else { Res::Num(x / t) };
+                    match sa.kind {
+                        ShowAsKindData::PercentOfRow => div(row_total),
+                        ShowAsKindData::PercentOfColumn => div(col_total),
+                        ShowAsKindData::PercentOfTotal => div(grand),
+                        _ => {
+                            if row_total == 0.0 || col_total == 0.0 {
+                                Res::Err
+                            } else {
+                                Res::Num(x * grand / (row_total * col_total))
                             }
-                            (ShowAsKindData::PercentOf, Some(b)) => pct(v, Some(b)),
-                            (ShowAsKindData::PercentDifference, Some(b)) => {
-                                if is_base {
-                                    Value::Empty
-                                } else {
-                                    pct(v - b, Some(b))
-                                }
-                            }
-                            (
-                                ShowAsKindData::Difference | ShowAsKindData::PercentDifference,
-                                None,
-                            ) => Value::Empty,
-                            (_, None) => Value::Error(ErrorKind::NA),
-                            _ => Value::Number(v),
                         }
                     }
                 }
+                _ => {
+                    let (ax, this, other, other_idx, pos) = if info.rows_axis {
+                        (&comp.rows, rl, cl, ci, &rpos)
+                    } else {
+                        (&comp.cols, cl, rl, ri, &cpos)
+                    };
+                    reference(
+                        sa.kind,
+                        info,
+                        ax,
+                        this,
+                        other,
+                        other_idx as u32,
+                        pos,
+                        cells,
+                        di,
+                        fun,
+                        v,
+                        &mut running,
+                    )
+                }
             };
-            updates.push((idx, out));
+            values[idx] = out;
         }
     }
-    for (idx, v) in updates {
-        layout.cells[idx].value = v;
+}
+
+/// One cell of a relative reference mode (difference, percentage,
+/// percentage difference from a base item, running total).
+#[allow(clippy::too_many_arguments)]
+fn reference(
+    kind: ShowAsKindData,
+    info: RefInfo,
+    ax: &Axis<'_>,
+    this: &Line,
+    other: &Line,
+    other_idx: u32,
+    pos: &[u32],
+    cells: &Cells,
+    di: usize,
+    fun: AggFnData,
+    v: Res,
+    running: &mut FxMap<(u32, u32, u16), f64>,
+) -> Res {
+    if matches!(info.base, Base::Invalid) {
+        // A base field outside the layout is an error (`:2409-2410`).
+        return Res::Err;
+    }
+    let lvl = info.lvl;
+    let node = this.node;
+    // A total in the reference dimension (no item at its level) is empty
+    // (`:2343-2363,2522-2525`).
+    if ax.trie.level(node) <= lvl {
+        return Res::Empty;
+    }
+    let path = ax.trie.path(node);
+    let anc = ax.trie.ancestor(node, lvl);
+    let me = ax.trie.ancestor(node, lvl + 1);
+    let suffix = &path[lvl + 1..];
+    let descend = |sib: u32| -> Option<u32> {
+        let mut n = sib;
+        for s in suffix {
+            n = ax.trie.child(n, *s)?;
+        }
+        Some(n)
+    };
+    let value_of = |n: u32| -> f64 {
+        if info.rows_axis {
+            res_at(cells, n, other.node, di, fun).num_or_zero()
+        } else {
+            res_at(cells, other.node, n, di, fun).num_or_zero()
+        }
+    };
+    let this_v = v.num_or_zero();
+    let sibs = ax.disp.get(anc);
+    let my_pos = pos[me as usize] as usize;
+    let key = |n: u32| (n, other_idx, di as u16);
+    match info.base {
+        Base::Running => {
+            // The total of the previous existing member plus this value.
+            let mut total = this_v;
+            for k in (0..my_pos).rev() {
+                if let Some(c) = descend(sibs[k]) {
+                    total += running.get(&key(c)).copied().unwrap_or_else(|| value_of(c));
+                    break;
+                }
+            }
+            running.insert(key(node), total);
+            Res::Num(total)
+        }
+        Base::Previous | Base::Next => {
+            let found = if matches!(info.base, Base::Previous) {
+                (0..my_pos).rev().find_map(|k| descend(sibs[k]))
+            } else {
+                (my_pos + 1..sibs.len()).find_map(|k| descend(sibs[k]))
+            };
+            match found {
+                // Previous/next not found: empty (`:2540-2542`).
+                None => Res::Empty,
+                Some(b) => relative(kind, this_v, value_of(b), false),
+            }
+        }
+        // A named item that does not exist: error (`:2546-2547`).
+        Base::Named(None) => Res::Err,
+        Base::Named(Some(item)) => {
+            let is_self = ax.trie.item[me as usize] == item;
+            let b = ax
+                .trie
+                .child(anc, item)
+                .and_then(descend)
+                .map_or(0.0, value_of);
+            relative(kind, this_v, b, is_self)
+        }
+        Base::Invalid => Res::Err,
+    }
+}
+
+fn relative(kind: ShowAsKindData, v: f64, b: f64, is_self: bool) -> Res {
+    // The reference item itself is empty for difference and percentage
+    // difference (`:2491-2495`).
+    if is_self && kind != ShowAsKindData::PercentOf {
+        return Res::Empty;
+    }
+    match kind {
+        ShowAsKindData::Difference => Res::Num(v - b),
+        ShowAsKindData::PercentOf => {
+            if b == 0.0 {
+                Res::Err
+            } else {
+                Res::Num(v / b)
+            }
+        }
+        _ => {
+            if b == 0.0 {
+                Res::Err
+            } else {
+                Res::Num((v - b) / b)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lookup (GETPIVOTDATA, drill-down)
+// ---------------------------------------------------------------------------
+
+fn lower(s: &str) -> String {
+    s.trim().to_lowercase()
+}
+
+/// A stable 64-bit hash (the lookup indexes item names and identities by
+/// hash, so a large pivot keeps no second copy of its item texts).
+fn hash_of(v: &impl std::hash::Hash) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
+}
+
+fn lookup_field(f: &AxisField<'_>, source: &str) -> FieldLookup {
+    let mut by_text: FxMap<u64, u32> = FxMap::default();
+    by_text.reserve(f.items.len());
+    let mut dups: FxMap<u64, Vec<u32>> = FxMap::default();
+    for (i, it) in f.items.iter().enumerate() {
+        let t = hash_of(&lower(&it.text));
+        match by_text.get(&t) {
+            Some(first) => dups.entry(t).or_insert_with(|| vec![*first]).push(i as u32),
+            None => {
+                by_text.insert(t, i as u32);
+            }
+        }
+    }
+    FieldLookup {
+        names: (lower(&f.name), lower(source)),
+        by_text,
+        dups,
+        keys: f.items.iter().map(|i| hash_of(&i.key)).collect(),
+    }
+}
+
+fn lookup_axis(ax: &Axis<'_>, lines: &[Line], names: &[String]) -> AxisLookup {
+    let mut line_of: FxMap<(u32, u16), u32> = FxMap::default();
+    for (i, l) in lines.iter().enumerate() {
+        if matches!(l.kind, Kind::Blank | Kind::Sub(1..)) {
+            continue;
+        }
+        line_of
+            .entry((l.node, l.df.unwrap_or(u16::MAX)))
+            .or_insert(i as u32);
+    }
+    AxisLookup {
+        fields: ax
+            .fields
+            .iter()
+            .map(|f| lookup_field(f, names.get(f.source_col).map_or("", String::as_str)))
+            .collect(),
+        parent: ax.trie.parent.clone(),
+        item: ax.trie.item.clone(),
+        edges: ax.trie.edges.clone(),
+        line_of,
+    }
+}
+
+fn build_lookup(p: &PivotData, cache: &Cache, comp: &Computed<'_>, layout: &mut Layout) -> Lookup {
+    let rows = lookup_axis(&comp.rows, &layout.row_lines, &cache.names);
+    let cols = lookup_axis(&comp.cols, &layout.col_lines, &cache.names);
+    let pages: Vec<PageLookup> = comp
+        .pages
+        .iter()
+        .map(|f| PageLookup {
+            names: (
+                lower(&f.name),
+                lower(cache.names.get(f.source_col).map_or("", String::as_str)),
+            ),
+            selected: f.def.page_item.as_ref().map(|s| lower(s)),
+        })
+        .collect();
+    Lookup {
+        df_names: p
+            .data_fields
+            .iter()
+            .map(|d| {
+                (
+                    lower(&caption(d, &cache.names)),
+                    lower(
+                        cache
+                            .names
+                            .get(d.source_col as usize)
+                            .map_or("", String::as_str),
+                    ),
+                )
+            })
+            .collect(),
+        rows,
+        cols,
+        pages,
+        values: std::mem::take(&mut layout.values),
+        ncols: layout.col_lines.len(),
+        data_rows: layout.row_lines.iter().any(|l| l.df.is_some()),
+        data_cols: layout.col_lines.iter().any(|l| l.df.is_some()),
     }
 }
 
@@ -1999,8 +3021,15 @@ fn has_content_outside(wb: &Workbook, range: &CellRange, except: Option<&CellRan
 }
 
 /// What [`write_output`] produced: the definition with its output range,
-/// the cell roles, the lookup table and the inverse changes.
-type Written = (PivotData, Arc<Vec<OutCell>>, Arc<Lookup>, Vec<Change>);
+/// the label roles, the data grid, the lookup table and the inverse
+/// changes.
+type Written = (
+    PivotData,
+    Arc<Vec<OutCell>>,
+    Arc<Grid>,
+    Arc<Lookup>,
+    Vec<Change>,
+);
 
 /// Computes `data` and writes its output at the target; returns the
 /// written table and the changes (the caller records the meta).
@@ -2011,10 +3040,11 @@ fn write_output(
     old_output: Option<CellRangeLocal>,
     overwrite: bool,
 ) -> Result<Written, ApiError> {
-    let src = source_range(wb, &data.source)?;
-    let cache = read_source(wb, &src, data.ignore_empty_rows)?;
+    let (src, cache) = read_for(wb, data)?;
     let comp = compute(wb, data, &cache)?;
-    let layout = lay_out(data, &cache, &comp)?;
+    let mut layout = lay_out(data, &cache, &comp)?;
+    let lookup = build_lookup(data, &cache, &comp, &mut layout);
+    drop(comp);
     let (tr, tc) = data.target;
     if u64::from(tr) + u64::from(layout.rows) > u64::from(MAX_ROWS)
         || u64::from(tc) + u64::from(layout.cols) > u64::from(MAX_COLS)
@@ -2036,6 +3066,7 @@ fn write_output(
         ));
     }
     let old = old_output.map(|o| CellRange::new(sheet, o.r0, o.c0, o.r1, o.c1));
+    // AOO `lcl_EmptyExcept` / STR_PIVOT_NOTEMPTY (`dbdocfun.cxx:1349-1371`).
     if !overwrite && has_content_outside(wb, &out, old.as_ref()) {
         return Err(ApiError::new(
             "target_not_empty",
@@ -2058,44 +3089,111 @@ fn write_output(
     }
     clear_range_content(wb, out);
     clear_range_styles(wb, out);
-    let mut roles: Vec<OutCell> = Vec::with_capacity(layout.cells.len());
-    for o in layout.cells {
-        let a = CellAddr::new(sheet, tr + o.r, tc + o.c);
-        if !o.value.is_empty() {
-            wb.set_value(a, o.value);
+    let mut roles: Vec<OutCell> = Vec::with_capacity(layout.labels.len());
+    let ctx = RecognizeContext::now(wb.settings.date_epoch);
+    for l in layout.labels {
+        let a = CellAddr::new(sheet, tr + l.r, tc + l.c);
+        // Numeric captions are entered as typed (AOO `ScDPOutput::HeaderCell`
+        // writes them without the text apostrophe).
+        let (value, format) = if l.numeric {
+            let rec = recognize_input_with(&l.text, wb.locale, &ctx);
+            (rec.value, rec.implied_format)
+        } else {
+            (Value::text(l.text.as_str()), None)
+        };
+        if !value.is_empty() {
+            wb.set_value(a, value);
         }
         let cell = CellRange::new(sheet, a.row, a.col, a.row, a.col);
-        match o.role {
-            PivotCellRole::Header
-            | PivotCellRole::RowItem
-            | PivotCellRole::ColItem
-            | PivotCellRole::PageField => {
-                map_styles(wb, cell, |t, old| {
-                    let mut d = t.get(old).data.clone();
-                    d.font.bold = true;
-                    t.intern(d)
-                });
+        let total = l.role == PivotCellRole::Total;
+        map_styles(wb, cell, |t, old| {
+            let mut d = t.get(old).data.clone();
+            d.font.bold = true;
+            if total {
+                d.fill = Some(0xeeee_eeff);
             }
-            PivotCellRole::Total => {
-                map_styles(wb, cell, |t, old| {
-                    let mut d = t.get(old).data.clone();
-                    d.font.bold = true;
-                    d.fill = Some(0xeeee_eeff);
-                    t.intern(d)
-                });
+            let id = t.intern(d);
+            match &format {
+                Some(code) => t.with_format(id, code),
+                None => id,
             }
-            PivotCellRole::Data => {}
-        }
+        });
         roles.push(OutCell {
             r: a.row,
             c: a.col,
-            role: o.role,
-            field: o.field,
-            item: o.item,
-            key: o.key,
+            role: l.role,
+            field: l.field,
+            item: if l.item_is_text { Some(l.text) } else { l.item },
         });
     }
     roles.sort_by_key(|o| (o.r, o.c));
+    roles.dedup_by_key(|o| (o.r, o.c));
+    // Data cells.
+    let ncl = layout.col_lines.len();
+    let r0 = tr + layout.first_data_row;
+    let c0 = tc + layout.data_col0;
+    for (ri, rl) in layout.row_lines.iter().enumerate() {
+        if rl.kind == Kind::Blank {
+            continue;
+        }
+        for (ci, cl) in layout.col_lines.iter().enumerate() {
+            if cl.kind == Kind::Blank {
+                continue;
+            }
+            let v = lookup.values[ri * ncl + ci].value();
+            if !v.is_empty() {
+                wb.set_value(CellAddr::new(sheet, r0 + ri as u32, c0 + ci as u32), v);
+            }
+        }
+    }
+    // Total styles, one strip per total line.
+    let total_style = |t: &mut crate::styles::StyleTable, old| {
+        let mut d = t.get(old).data.clone();
+        d.font.bold = true;
+        d.fill = Some(0xeeee_eeff);
+        t.intern(d)
+    };
+    if ncl > 0 {
+        for (ri, rl) in layout.row_lines.iter().enumerate() {
+            if rl.total() {
+                let r = r0 + ri as u32;
+                map_styles(
+                    wb,
+                    CellRange::new(sheet, r, c0, r, c0 + ncl as u32 - 1),
+                    total_style,
+                );
+            }
+        }
+    }
+    if !layout.row_lines.is_empty() {
+        let r1 = r0 + layout.row_lines.len() as u32 - 1;
+        for (ci, cl) in layout.col_lines.iter().enumerate() {
+            if cl.total() {
+                let c = c0 + ci as u32;
+                map_styles(wb, CellRange::new(sheet, r0, c, r1, c), total_style);
+            }
+        }
+    }
+    let grid_line = |i: usize, l: &Line| GridLine {
+        node: l.node,
+        total: l.total(),
+        blank: l.kind == Kind::Blank,
+        line: i as u32,
+    };
+    let grid = Grid {
+        rows: layout
+            .row_lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (r0 + i as u32, grid_line(i, l)))
+            .collect(),
+        cols: layout
+            .col_lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (c0 + i as u32, grid_line(i, l)))
+            .collect(),
+    };
     wb.pending.ranges.push(out);
     let mut written = data.clone();
     written.output = Some(CellRangeLocal {
@@ -2104,7 +3202,13 @@ fn write_output(
         r1: out.r1,
         c1: out.c1,
     });
-    Ok((written, Arc::new(roles), Arc::new(layout.lookup), changes))
+    Ok((
+        written,
+        Arc::new(roles),
+        Arc::new(grid),
+        Arc::new(lookup),
+        changes,
+    ))
 }
 
 fn next_name(wb: &Workbook) -> String {
@@ -2122,6 +3226,16 @@ fn next_name(wb: &Workbook) -> String {
         }
         n += 1;
     }
+}
+
+fn table(id: u32, w: &Written) -> Arc<PivotTable> {
+    Arc::new(PivotTable {
+        id,
+        data: w.0.clone(),
+        cells: w.1.clone(),
+        grid: w.2.clone(),
+        lookup: w.3.clone(),
+    })
 }
 
 /// `Op::CreatePivot`.
@@ -2143,17 +3257,13 @@ pub fn create(
     if data.name.is_empty() {
         data.name = next_name(wb);
     }
-    let (written, roles, lookup, mut changes) = write_output(wb, sheet, &data, None, overwrite)?;
+    let mut w = write_output(wb, sheet, &data, None, overwrite)?;
+    let mut changes = std::mem::take(&mut w.4);
     let mut created = 0;
     changes.extend(with_meta(wb, sheet, fx, |_, meta| {
         let id = meta.alloc_id();
         created = id;
-        Arc::make_mut(&mut meta.pivots).push(Arc::new(PivotTable {
-            id,
-            data: written.clone(),
-            cells: roles.clone(),
-            lookup: lookup.clone(),
-        }));
+        Arc::make_mut(&mut meta.pivots).push(table(id, &w));
         Ok(())
     })?);
     fx.created(u32::MAX, created);
@@ -2198,20 +3308,14 @@ pub fn update(
             Ok(())
         })?);
     }
-    let (written, roles, lookup, ch) =
-        write_output(wb, target_sheet, &data, old_output, overwrite)?;
-    changes.extend(ch);
+    let mut w = write_output(wb, target_sheet, &data, old_output, overwrite)?;
+    changes.append(&mut w.4);
     changes.extend(with_meta(wb, target_sheet, fx, |_, meta| {
         let list = Arc::make_mut(&mut meta.pivots);
-        let table = Arc::new(PivotTable {
-            id,
-            data: written.clone(),
-            cells: roles.clone(),
-            lookup: lookup.clone(),
-        });
+        let t = table(id, &w);
         match list.iter().position(|p| p.id == id) {
-            Some(i) => list[i] = table,
-            None => list.push(table),
+            Some(i) => list[i] = t,
+            None => list.push(t),
         }
         Ok(())
     })?);
@@ -2219,22 +3323,24 @@ pub fn update(
     Ok(changes)
 }
 
-/// `Op::RefreshPivot`.
-pub fn refresh(wb: &mut Workbook, id: u32, fx: &mut Effects) -> Result<Vec<Change>, ApiError> {
+/// `Op::RefreshPivot`. When the new output grows over non-empty cells
+/// outside the previous output, the op fails with `target_not_empty`
+/// unless `overwrite` (AOO asks STR_PIVOT_NOTEMPTY, `dbdocfun.cxx:1349-1371`).
+pub fn refresh(
+    wb: &mut Workbook,
+    id: u32,
+    overwrite: bool,
+    fx: &mut Effects,
+) -> Result<Vec<Change>, ApiError> {
     let holder = sheet_of_pivot(wb, id)
         .ok_or_else(|| ApiError::not_found(format!("no pivot table {id}")))?;
     let old = pivot_of(wb, holder, id)?;
-    let (written, roles, lookup, mut changes) =
-        write_output(wb, holder, &old.data, old.data.output, true)?;
+    let mut w = write_output(wb, holder, &old.data, old.data.output, overwrite)?;
+    let mut changes = std::mem::take(&mut w.4);
     changes.extend(with_meta(wb, holder, fx, |_, meta| {
         let list = Arc::make_mut(&mut meta.pivots);
         if let Some(i) = list.iter().position(|p| p.id == id) {
-            list[i] = Arc::new(PivotTable {
-                id,
-                data: written.clone(),
-                cells: roles.clone(),
-                lookup: lookup.clone(),
-            });
+            list[i] = table(id, &w);
         }
         Ok(())
     })?);
@@ -2270,6 +3376,13 @@ pub fn delete(
     Ok(changes)
 }
 
+/// The data-grid lines of an output cell.
+fn grid_at(g: &Grid, r: u32, c: u32) -> Option<(GridLine, GridLine)> {
+    let ri = g.rows.binary_search_by_key(&r, |x| x.0).ok()?;
+    let ci = g.cols.binary_search_by_key(&c, |x| x.0).ok()?;
+    Some((g.rows[ri].1, g.cols[ci].1))
+}
+
 /// `pivot_at`.
 pub fn pivot_at(wb: &Workbook, sheet: SheetId, r: u32, c: u32) -> Option<PivotHit> {
     let s = wb.sheet(sheet)?;
@@ -2283,22 +3396,41 @@ pub fn pivot_at(wb: &Workbook, sheet: SheetId, r: u32, c: u32) -> Option<PivotHi
             .binary_search_by_key(&(r, c), |x| (x.r, x.c))
             .ok()
             .map(|i| &p.cells[i]);
-        return Some(match hit {
-            Some(cell) => PivotHit {
+        if let Some(cell) = hit {
+            return Some(PivotHit {
                 pivot: p.id,
                 role: cell.role,
                 field: cell.field,
                 item: cell.item.clone(),
-            },
-            None => PivotHit {
-                pivot: p.id,
-                role: PivotCellRole::Data,
-                field: None,
-                item: None,
-            },
+            });
+        }
+        let role = match grid_at(&p.grid, r, c) {
+            Some((a, b)) if a.total || b.total => PivotCellRole::Total,
+            _ => PivotCellRole::Data,
+        };
+        return Some(PivotHit {
+            pivot: p.id,
+            role,
+            field: None,
+            item: None,
         });
     }
     None
+}
+
+/// The item keys of a node's path.
+fn node_keys(ax: &AxisLookup, mut n: u32) -> Option<Vec<u64>> {
+    let mut items = Vec::new();
+    while n != 0 {
+        items.push(*ax.item.get(n as usize)?);
+        n = *ax.parent.get(n as usize)?;
+    }
+    items.reverse();
+    items
+        .iter()
+        .enumerate()
+        .map(|(l, it)| ax.fields.get(l)?.keys.get(*it as usize).copied())
+        .collect()
 }
 
 /// `Op::PivotDrillDown`: a new sheet with the source rows behind a data
@@ -2313,32 +3445,53 @@ pub fn drill_down(
     let holder = sheet_of_pivot(wb, id)
         .ok_or_else(|| ApiError::not_found(format!("no pivot table {id}")))?;
     let p = pivot_of(wb, holder, id)?;
-    let cell = p
-        .cells
+    let not_data = || ApiError::invalid_argument("not a data cell of the pivot");
+    if p.cells
         .binary_search_by_key(&(r, c), |x| (x.r, x.c))
-        .ok()
-        .map(|i| p.cells[i].clone())
-        .filter(|x| matches!(x.role, PivotCellRole::Data | PivotCellRole::Total))
-        .ok_or_else(|| ApiError::invalid_argument("not a data cell of the pivot"))?;
-    let Some((rk, ck, _)) = cell.key else {
-        return Err(ApiError::invalid_argument("not a data cell of the pivot"));
-    };
+        .is_ok()
+    {
+        return Err(not_data());
+    }
+    let (rl, cl) = grid_at(&p.grid, r, c).ok_or_else(not_data)?;
+    if rl.blank || cl.blank {
+        return Err(not_data());
+    }
+    let rk = node_keys(&p.lookup.rows, rl.node).ok_or_else(not_data)?;
+    let ck = node_keys(&p.lookup.cols, cl.node).ok_or_else(not_data)?;
     crate::protection::check_structure(wb)?;
-    let src = source_range(wb, &p.data.source)?;
-    let cache = read_source(wb, &src, p.data.ignore_empty_rows)?;
+    let (src, cache) = read_for(wb, &p.data)?;
     let comp = compute(wb, &p.data, &cache)?;
-    let matches: Vec<usize> = comp
-        .kept
-        .iter()
-        .copied()
-        .filter(|&row| {
-            rk.iter().enumerate().all(|(l, t)| {
-                comp.row_fields[l].items[comp.row_fields[l].row_item[row] as usize].text == *t
-            }) && ck.iter().enumerate().all(|(l, t)| {
-                comp.col_fields[l].items[comp.col_fields[l].row_item[row] as usize].text == *t
+    let want = |fields: &[AxisField<'_>], keys: &[u64]| -> Option<Vec<u32>> {
+        keys.iter()
+            .enumerate()
+            .map(|(l, k)| {
+                fields
+                    .get(l)?
+                    .items
+                    .iter()
+                    .position(|i| hash_of(&i.key) == *k)
+                    .map(|i| i as u32)
             })
-        })
-        .collect();
+            .collect()
+    };
+    let matches: Vec<usize> = match (want(&comp.rows.fields, &rk), want(&comp.cols.fields, &ck)) {
+        (Some(ri), Some(ci)) => comp
+            .kept
+            .iter()
+            .map(|r| *r as usize)
+            .filter(|&row| {
+                ri.iter()
+                    .enumerate()
+                    .all(|(l, it)| comp.rows.fields[l].item_of[row] == *it)
+                    && ci
+                        .iter()
+                        .enumerate()
+                        .all(|(l, it)| comp.cols.fields[l].item_of[row] == *it)
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    drop(comp);
     if matches.len() as u64 + 1 > u64::from(MAX_ROWS) {
         return Err(ApiError::invalid_argument("too many rows"));
     }
@@ -2371,13 +3524,106 @@ pub fn drill_down(
     Ok(vec![Change::RemoveSheet { id: new }])
 }
 
-/// `EvalContext::pivot_data`: the value of the pivot whose output
-/// contains `at`, for data field `field` restricted by `filters`.
+/// Resolves the data field text of the Excel form (AOO
+/// `ScDPObject::ParseFilters`, `dpobject.cxx:1320-1530`): from left to
+/// right, the longest word run naming a data field, else the longest
+/// naming an item of exactly one field (which becomes a filter); a
+/// single data field may be omitted.
+fn parse_excel_words(
+    lk: &Lookup,
+    text: &str,
+    filters: &mut Vec<(String, String)>,
+) -> Option<usize> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut df: Option<usize> = None;
+    let mut i = 0;
+    'outer: while i < words.len() {
+        for j in (i + 1..=words.len()).rev() {
+            let cand = lower(&words[i..j].join(" "));
+            if let Some(d) = lk
+                .df_names
+                .iter()
+                .position(|(c, s)| *c == cand || *s == cand)
+            {
+                df = Some(d);
+                i = j;
+                continue 'outer;
+            }
+            // An item of exactly one field (the same name in several
+            // fields is an error).
+            let mut owners = lk
+                .rows
+                .fields
+                .iter()
+                .chain(&lk.cols.fields)
+                .filter(|f| f.by_text.contains_key(&hash_of(&cand)))
+                .map(|f| &f.names.0)
+                .chain(
+                    lk.pages
+                        .iter()
+                        .filter(|pf| pf.selected.as_deref() == Some(cand.as_str()))
+                        .map(|pf| &pf.names.0),
+                );
+            if let Some(owner) = owners.next() {
+                if owners.next().is_some() {
+                    return None;
+                }
+                filters.push((owner.clone(), cand));
+                i = j;
+                continue 'outer;
+            }
+        }
+        return None;
+    }
+    match df {
+        Some(d) => Some(d),
+        None if lk.df_names.len() == 1 => Some(0),
+        None => None,
+    }
+}
+
+/// The node of an axis selected by per-level item names (a prefix; an
+/// unspecified outer field with a specified inner one has no cell). An
+/// item name shared by several items that are all shown is ambiguous.
+fn select_node(ax: &AxisLookup, sel: &[Option<String>]) -> Option<u32> {
+    let mut n = 0u32;
+    let mut ended = false;
+    for (lvl, s) in sel.iter().enumerate() {
+        match s {
+            None => ended = true,
+            Some(_) if ended => return None,
+            Some(t) => {
+                let f = ax.fields.get(lvl)?;
+                let h = hash_of(t);
+                let one = [*f.by_text.get(&h)?];
+                let cands: &[u32] = f.dups.get(&h).map_or(&one, Vec::as_slice);
+                let mut found = cands
+                    .iter()
+                    .filter_map(|it| ax.edges.get(&(n, *it)).copied());
+                let first = found.next()?;
+                if found.next().is_some() {
+                    return None;
+                }
+                n = first;
+            }
+        }
+    }
+    Some(n)
+}
+
+/// `EvalContext::pivot_data`: the displayed value of the pivot whose
+/// output contains `at`, for data field `field` restricted by `filters`
+/// (AOO `ScDPOutput::GetPivotData`, `dpoutput.cxx:1728-1828`). `excel`:
+/// the Excel 2000 form, whose field text is parsed into a data field and
+/// item names; in the AOO form `field` must name a data field. `None`
+/// (`#REF!`) for an unknown field or item, a page field not set to the
+/// filtered item, an error result or no such cell.
 pub fn pivot_data(
     wb: &Workbook,
     at: CellAddr,
     field: &str,
     filters: &[(String, String)],
+    excel: bool,
 ) -> Option<Value> {
     let s = wb.sheet(at.sheet)?;
     let p = s.meta.pivots.iter().find(|p| {
@@ -2386,151 +3632,45 @@ pub fn pivot_data(
             .is_some_and(|o| at.row >= o.r0 && at.row <= o.r1 && at.col >= o.c0 && at.col <= o.c1)
     })?;
     let lk = &p.lookup;
-    let lower = |s: &str| s.trim().to_lowercase();
-    // The data field: an exact caption, a field name, or (Excel form) the
-    // leading words, with the remaining words item names of any field.
+    if lk.df_names.is_empty() {
+        return None;
+    }
     let mut filters: Vec<(String, String)> = filters.to_vec();
-    let find_df = |text: &str| -> Option<usize> {
-        let t = lower(text);
-        if let Some(i) = lk.captions.iter().position(|c| lower(c) == t) {
-            return Some(i);
-        }
-        p.data.data_fields.iter().position(|d| {
-            lk.field_names
-                .get(d.source_col as usize)
-                .is_some_and(|n| lower(n) == t)
-        })
+    let df = if excel {
+        parse_excel_words(lk, field, &mut filters)?
+    } else {
+        let t = lower(field);
+        lk.df_names.iter().position(|(c, s)| *c == t || *s == t)?
     };
-    let df = match find_df(field) {
-        Some(i) => i,
-        None => {
-            // Greedy: the longest leading word run that names a data field;
-            // the rest are item names.
-            let words: Vec<&str> = field.split_whitespace().collect();
-            let mut found: Option<(usize, usize)> = None;
-            for n in (1..=words.len()).rev() {
-                if let Some(i) = find_df(&words[..n].join(" ")) {
-                    found = Some((i, n));
-                    break;
-                }
-            }
-            let (i, n) = match found {
-                Some(x) => x,
-                None if p.data.data_fields.len() == 1 => (0, 0),
-                None => return None,
-            };
-            let rest = words[n..].join(" ");
-            if !rest.trim().is_empty() {
-                // An item name of some row/column field.
-                let item = rest.trim().to_string();
-                let owner = p
-                    .data
-                    .row_fields
-                    .iter()
-                    .chain(&p.data.col_fields)
-                    .find(|f| {
-                        lk.values.keys().any(|(rk, ck, _)| {
-                            let pos_r = p
-                                .data
-                                .row_fields
-                                .iter()
-                                .position(|x| x.source_col == f.source_col);
-                            let pos_c = p
-                                .data
-                                .col_fields
-                                .iter()
-                                .position(|x| x.source_col == f.source_col);
-                            pos_r.is_some_and(|l| {
-                                rk.get(l).is_some_and(|t| lower(t) == lower(&item))
-                            }) || pos_c.is_some_and(|l| {
-                                ck.get(l).is_some_and(|t| lower(t) == lower(&item))
-                            })
-                        })
-                    })?;
-                let name = lk
-                    .field_names
-                    .get(owner.source_col as usize)
-                    .cloned()
-                    .unwrap_or_default();
-                filters.push((name, item));
-            }
-            i
-        }
-    };
-    let field_name = |f: &PivotFieldData| -> String {
-        if f.name.is_empty() {
-            lk.field_names
-                .get(f.source_col as usize)
-                .cloned()
-                .unwrap_or_default()
-        } else {
-            f.name.clone()
-        }
-    };
-    let mut rk: Vec<Option<String>> = vec![None; p.data.row_fields.len()];
-    let mut ck: Vec<Option<String>> = vec![None; p.data.col_fields.len()];
+    let mut rsel: Vec<Option<String>> = vec![None; lk.rows.fields.len()];
+    let mut csel: Vec<Option<String>> = vec![None; lk.cols.fields.len()];
+    let named = |names: &(String, String), f: &str| names.0 == f || names.1 == f;
     for (fname, item) in &filters {
         let fl = lower(fname);
-        if let Some(l) = p
-            .data
-            .row_fields
-            .iter()
-            .position(|f| lower(&field_name(f)) == fl)
-        {
-            rk[l] = Some(item.clone());
-        } else if let Some(l) = p
-            .data
-            .col_fields
-            .iter()
-            .position(|f| lower(&field_name(f)) == fl)
-        {
-            ck[l] = Some(item.clone());
-        } else if let Some(pf) = p
-            .data
-            .page_fields
-            .iter()
-            .find(|f| lower(&field_name(f)) == fl)
-        {
-            // A page field: only its selected item (or all) is answerable.
-            if pf
-                .page_item
-                .as_ref()
-                .is_some_and(|sel| lower(sel) != lower(item))
-            {
+        let il = lower(item);
+        if let Some(l) = lk.rows.fields.iter().position(|f| named(&f.names, &fl)) {
+            rsel[l] = Some(il);
+        } else if let Some(l) = lk.cols.fields.iter().position(|f| named(&f.names, &fl)) {
+            csel[l] = Some(il);
+        } else if let Some(pf) = lk.pages.iter().find(|f| named(&f.names, &fl)) {
+            // Only the selected page item is answerable (`lcl_CheckPageField`).
+            if pf.selected.as_deref() != Some(il.as_str()) {
                 return None;
             }
         } else {
             return None;
         }
     }
-    // Keys are prefixes: an unspecified outer field with a specified inner
-    // one has no cell.
-    let prefix = |v: Vec<Option<String>>| -> Option<Vec<String>> {
-        let mut out = Vec::new();
-        let mut ended = false;
-        for x in v {
-            match x {
-                Some(t) if !ended => out.push(t),
-                Some(_) => return None,
-                None => ended = true,
-            }
-        }
-        Some(out)
-    };
-    let rk = prefix(rk)?;
-    let ck = prefix(ck)?;
-    // Items are matched case-insensitively against the display text.
-    let hit = lk.values.iter().find(|((r, c, d), _)| {
-        *d as usize == df
-            && r.len() == rk.len()
-            && c.len() == ck.len()
-            && r.iter().zip(&rk).all(|(a, b)| lower(a) == lower(b))
-            && c.iter().zip(&ck).all(|(a, b)| lower(a) == lower(b))
-    });
-    hit.map(|(_, v)| match v {
-        Value::Empty => Value::Number(0.0),
-        other => other.clone(),
-    })
+    let rn = select_node(&lk.rows, &rsel)?;
+    let cn = select_node(&lk.cols, &csel)?;
+    let dkey = |on_axis: bool| if on_axis { df as u16 } else { u16::MAX };
+    let ri = *lk.rows.line_of.get(&(rn, dkey(lk.data_rows)))? as usize;
+    let ci = *lk.cols.line_of.get(&(cn, dkey(lk.data_cols)))? as usize;
+    match lk.values.get(ri * lk.ncols + ci)? {
+        Res::Num(n) => Some(Value::Number(*n)),
+        Res::Empty => Some(Value::Number(0.0)),
+        Res::Err => None,
+    }
 }
 
 /// Moves pivot sources, targets and outputs for a row/column change.
@@ -2584,8 +3724,9 @@ pub fn adjust_structure(wb: &mut Workbook, sh: &Shape) {
             }
             if d != p.data {
                 any = true;
-                let cells: Vec<OutCell> = if on_sheet {
-                    p.cells
+                let (cells, grid): (Vec<OutCell>, Grid) = if on_sheet {
+                    let cells = p
+                        .cells
                         .iter()
                         .filter_map(|c| {
                             let (r, col) = if sh.rows {
@@ -2599,14 +3740,34 @@ pub fn adjust_structure(wb: &mut Workbook, sh: &Shape) {
                                 ..c.clone()
                             })
                         })
-                        .collect()
+                        .collect();
+                    let moved = |v: &[(u32, GridLine)], axis_rows: bool| -> Vec<(u32, GridLine)> {
+                        v.iter()
+                            .filter_map(|(x, l)| {
+                                let x = if sh.rows == axis_rows {
+                                    point_after(sh, *x)?
+                                } else {
+                                    *x
+                                };
+                                Some((x, *l))
+                            })
+                            .collect()
+                    };
+                    (
+                        cells,
+                        Grid {
+                            rows: moved(&p.grid.rows, true),
+                            cols: moved(&p.grid.cols, false),
+                        },
+                    )
                 } else {
-                    (*p.cells).clone()
+                    ((*p.cells).clone(), (*p.grid).clone())
                 };
                 *p = Arc::new(PivotTable {
                     id: p.id,
                     data: d,
                     cells: Arc::new(cells),
+                    grid: Arc::new(grid),
                     lookup: p.lookup.clone(),
                 });
             }
@@ -2621,36 +3782,125 @@ pub fn adjust_structure(wb: &mut Workbook, sh: &Shape) {
 mod tests {
     use super::*;
 
+    fn gx() -> Gx {
+        Gx {
+            epoch: DateEpoch::D1899,
+            locale: &tally_numfmt::EN_US,
+        }
+    }
+
+    fn num_item(n: f64) -> Item {
+        Item {
+            text: fmt_num(n),
+            num: Some(n),
+            empty: false,
+            numeric: true,
+            key: ItemKey::Num(round15(n).to_bits()),
+        }
+    }
+
+    fn groups(g: &PivotGroupData, vals: &[f64]) -> Vec<String> {
+        let src: Vec<Item> = vals.iter().map(|v| num_item(*v)).collect();
+        let (items, map) = group_items(g, &src, gx());
+        map.iter()
+            .map(|i| items[*i as usize].text.clone())
+            .collect()
+    }
+
     #[test]
-    fn numeric_and_date_groups() {
+    fn numeric_groups_follow_dpgroup() {
+        // Integers, explicit start: "10-19".
         let g = PivotGroupData::Numeric {
             start: Some(0.0),
             end: None,
             step: 10.0,
         };
-        let it = Item {
-            text: "17".into(),
-            num: Some(17.0),
+        assert_eq!(groups(&g, &[17.0, 3.0]), ["10-19", "0-9"]);
+        // The end value joins the last group, shown including the end.
+        let g = PivotGroupData::Numeric {
+            start: Some(0.0),
+            end: Some(20.0),
+            step: 10.0,
         };
         assert_eq!(
-            group_item(&g, &it, tally_types::DateEpoch::D1899).text,
-            "10-19"
+            groups(&g, &[20.0, 12.0, 30.0, -4.0]),
+            ["10-20", "10-20", ">20", "<0"]
         );
+        // The last group is clamped to the end.
+        let g = PivotGroupData::Numeric {
+            start: Some(0.0),
+            end: Some(25.0),
+            step: 10.0,
+        };
+        assert_eq!(groups(&g, &[22.0]), ["20-25"]);
+        // Automatic start/end from the values; non-integers show lo-hi.
+        let g = PivotGroupData::Numeric {
+            start: None,
+            end: None,
+            step: 5.0,
+        };
+        assert_eq!(groups(&g, &[-4.0, 2.5, 30.0]), ["-4-1", "1-6", "26-31"]);
+    }
+
+    #[test]
+    fn date_groups_follow_dpgroup() {
+        let s =
+            |y, m, d| tally_numfmt::date::serial_from_ymd(DateEpoch::D1899, y, m, d).unwrap_or(0.0);
         let d = PivotGroupData::Date {
             start: None,
             end: None,
             parts: vec![DatePartData::Months, DatePartData::Years],
         };
-        let serial =
-            tally_numfmt::date::serial_from_ymd(tally_types::DateEpoch::D1899, 2024, 3, 15)
-                .unwrap();
-        let it = Item {
-            text: "x".into(),
-            num: Some(serial),
+        assert_eq!(groups(&d, &[s(2024, 3, 15)]), ["2024 Mar"]);
+        let d = PivotGroupData::Date {
+            start: None,
+            end: None,
+            parts: vec![DatePartData::Days(1)],
+        };
+        assert_eq!(groups(&d, &[s(2024, 1, 5)]), ["05-Jan"]);
+        // Explicit limits.
+        let d = PivotGroupData::Date {
+            start: Some(s(2024, 2, 1)),
+            end: Some(s(2024, 6, 30)),
+            parts: vec![DatePartData::Months],
         };
         assert_eq!(
-            group_item(&d, &it, tally_types::DateEpoch::D1899).text,
-            "2024 Mar"
+            groups(&d, &[s(2024, 1, 20), s(2024, 4, 11), s(2024, 12, 31)]),
+            ["<02/01/2024", "Apr", ">06/30/2024"]
         );
+        // Days with a step: numeric date groups from the first date.
+        let d = PivotGroupData::Date {
+            start: None,
+            end: None,
+            parts: vec![DatePartData::Days(7)],
+        };
+        assert_eq!(
+            groups(&d, &[s(2024, 1, 5), s(2024, 1, 12), s(2024, 1, 20)]),
+            [
+                "01/05/2024 - 01/11/2024",
+                "01/12/2024 - 01/18/2024",
+                "01/19/2024 - 01/25/2024"
+            ]
+        );
+    }
+
+    #[test]
+    fn aggregation_follows_scdpaggdata() {
+        let mut a = Acc::default();
+        a.push(Cv::Str);
+        a.push(Cv::Str);
+        assert_eq!(a.result(AggFnData::Sum), Res::Empty);
+        assert_eq!(a.result(AggFnData::Min), Res::Empty);
+        assert_eq!(a.result(AggFnData::Count), Res::Num(2.0));
+        let mut e = Acc::default();
+        e.push(Cv::Err);
+        e.push(Cv::Num(3.0));
+        assert_eq!(e.result(AggFnData::Sum), Res::Err);
+        assert_eq!(e.result(AggFnData::Count), Res::Num(2.0));
+        assert_eq!(e.result(AggFnData::CountNums), Res::Err);
+        let mut one = Acc::default();
+        one.push(Cv::Num(5.0));
+        assert_eq!(one.result(AggFnData::StDev), Res::Err);
+        assert_eq!(one.result(AggFnData::StDevP), Res::Num(0.0));
     }
 }

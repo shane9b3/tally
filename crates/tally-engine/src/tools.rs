@@ -52,6 +52,68 @@ pub const MAX_DATABASE_RANGES: usize = 10_000;
 pub const MAX_SORT_LISTS: usize = 1_000;
 /// Most rows a filter, Subtotals or Remove Duplicates scans.
 pub const MAX_TOOL_ROWS: u64 = MAX_OP_CELLS;
+/// Most rows of an advanced filter's criteria range.
+pub const MAX_CRITERIA_ROWS: u32 = 1_000;
+
+/// The transaction cost of the data-tool ops ([`crate::ops::op_cost`]):
+/// the cells they move, copy or scan, so a transaction of many of them
+/// meets `MAX_TX_CELLS` (security review 4, MEDIUM-T8). `None` for the
+/// other ops.
+pub fn tool_op_cost(wb: &Workbook, op: &Op) -> Option<u64> {
+    let used = |sheet: SheetId, r: &RangeDto| -> u64 {
+        let Some(s) = wb.sheet(sheet) else { return 0 };
+        let Ok(r) = to_range(sheet, r) else { return 0 };
+        s.used_range()
+            .and_then(|u| u.intersect(&r))
+            .map_or(0, |x| x.cell_count())
+    };
+    Some(match op {
+        Op::InsertCells {
+            sheet,
+            range,
+            shift,
+        }
+        | Op::DeleteCells {
+            sheet,
+            range,
+            shift,
+        } => {
+            // The used part of the moved band.
+            let Ok(r) = to_range(*sheet, range) else {
+                return Some(1);
+            };
+            let moved = match shift {
+                tally_api::ShiftDir::Down | tally_api::ShiftDir::Up => {
+                    CellRange::new(*sheet, r.r0, r.c0, MAX_ROWS - 1, r.c1)
+                }
+                _ => CellRange::new(*sheet, r.r0, r.c0, r.r1, MAX_COLS - 1),
+            };
+            wb.sheet(*sheet)
+                .and_then(|s| s.used_range())
+                .and_then(|u| u.intersect(&moved))
+                .map_or(0, |x| x.cell_count())
+        }
+        Op::CopySheet { sheet, .. } => wb.sheet(*sheet).map_or(0, |s| s.cell_count() as u64),
+        Op::AdvancedFilter { sheet, range, .. }
+        | Op::StandardFilter { sheet, range, .. }
+        | Op::Subtotals { sheet, range, .. }
+        | Op::RemoveSubtotals { sheet, range }
+        | Op::RemoveDuplicates { sheet, range, .. }
+        | Op::TextToColumns { sheet, range, .. } => used(*sheet, range),
+        Op::Consolidate { sources, .. } => sources.iter().map(|s| used(s.sheet, &s.range)).sum(),
+        Op::CreateScenario { sheet, scenario }
+        | Op::UpdateScenario {
+            sheet, scenario, ..
+        } => scenario.ranges.iter().map(|r| used(*sheet, r)).sum(),
+        _ => return None,
+    })
+}
+
+/// Longest Consolidate link formula (the formula parser's limit).
+pub const MAX_LINK_FORMULA_LEN: usize = 8192;
+/// Most subtotal rows one Subtotals op inserts (security review 4,
+/// HIGH-T2).
+pub const MAX_SUBTOTAL_ROWS: usize = 100_000;
 
 /// AOO's AutoFormat presets, in dialog order.
 pub const AUTOFORMAT_PRESETS: [&str; 17] = [
@@ -430,8 +492,9 @@ enum Test {
         op: StdFilterOpData,
         re: Box<regex::Regex>,
     },
-    /// Rows whose value is in the set (top/bottom N, computed up front).
-    TopSet(HashSet<u32>),
+    /// Top/bottom N (or N %): numbers at or above (`ge`) / at or below
+    /// the threshold computed up front (`NaN`: nothing passes).
+    Threshold { ge: bool, value: f64 },
 }
 
 fn fold(s: &str, case_sensitive: bool) -> String {
@@ -475,33 +538,41 @@ fn prepare_tests(
                 | StdFilterOpData::Smallest
                 | StdFilterOpData::LargestPct
                 | StdFilterOpData::SmallestPct => {
-                    let n = c.value.trim().parse::<f64>().unwrap_or(0.0).max(0.0);
-                    let mut vals: Vec<(f64, u32)> = rows
+                    // AOO `ScTable::TopTenQuery` (`table3.cxx:1280-1375`):
+                    // numbers only, sorted ascending; N is truncated and at
+                    // least 1 (10 when not a number); the threshold is the
+                    // value at the offset and ties pass (`>=` / `<=`).
+                    let mut vals: Vec<f64> = rows
                         .clone()
                         .filter_map(|r| match wb.value(CellAddr::new(sheet, r, c.col)) {
-                            Value::Number(x) => Some((x, r)),
+                            Value::Number(x) => Some(x),
+                            Value::Bool(b) => Some(f64::from(u8::from(b))),
                             _ => None,
                         })
                         .collect();
-                    let largest =
-                        matches!(c.op, StdFilterOpData::Largest | StdFilterOpData::LargestPct);
-                    vals.sort_by(|a, b| {
-                        let o = a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal);
-                        if largest {
-                            o.reverse()
-                        } else {
-                            o
-                        }
-                    });
-                    let take = if matches!(
-                        c.op,
-                        StdFilterOpData::LargestPct | StdFilterOpData::SmallestPct
-                    ) {
-                        ((vals.len() as f64) * n / 100.0).round() as usize
-                    } else {
-                        n as usize
+                    vals.sort_by(|a, b| a.total_cmp(b));
+                    let valid = vals.len();
+                    let n = match c.value.trim().parse::<f64>() {
+                        Ok(x) if x.is_finite() => x,
+                        _ => 10.0,
                     };
-                    Test::TopSet(vals.iter().take(take).map(|(_, r)| *r).collect())
+                    let n = if n >= 1.0 { n.min(1e15) as usize } else { 1 };
+                    let (ge, offset) = match c.op {
+                        StdFilterOpData::Largest => (true, valid.saturating_sub(n.min(valid))),
+                        StdFilterOpData::Smallest => (false, n.min(valid).saturating_sub(1)),
+                        StdFilterOpData::LargestPct => {
+                            let o = valid - valid * n.min(100) / 100;
+                            (true, o.min(valid.saturating_sub(1)))
+                        }
+                        _ => {
+                            let o = valid * n.min(100) / 100;
+                            (false, o.min(valid.saturating_sub(1)))
+                        }
+                    };
+                    Test::Threshold {
+                        ge,
+                        value: vals.get(offset).copied().unwrap_or(f64::NAN),
+                    }
                 }
                 op if f.options.regex
                     && !matches!(
@@ -543,12 +614,26 @@ fn prepare_tests(
         .collect()
 }
 
-fn test_passes(t: &Test, row: u32, v: &Value, text: &str, cs: bool) -> bool {
+/// One condition on one cell, as AOO's `ScTable::ValidQuery`
+/// (`table3.cxx:964-1235`): a number query against a number compares by
+/// value; equality and the text conditions compare the cell's input
+/// string (`GetInputString`, not the displayed text); `<`/`>` of a text
+/// query compare text cells only; any other mix is false (filters run
+/// without `bMixedComparison`, `queryparam.cxx:209`; correctness review 4,
+/// M1/M3).
+fn test_passes(t: &Test, v: &Value, input: &str, cs: bool) -> bool {
     use std::cmp::Ordering;
+    let num = match v {
+        Value::Number(n) => Some(*n),
+        Value::Bool(b) => Some(f64::from(u8::from(*b))),
+        _ => None,
+    };
     match t {
-        Test::TopSet(set) => set.contains(&row),
+        Test::Threshold { ge, value } => num.is_some_and(|a| {
+            tally_types::approx_equal(a, *value) || if *ge { a > *value } else { a < *value }
+        }),
         Test::Regex { op, re } => {
-            let hit = re.is_match(text);
+            let hit = re.is_match(input);
             match op {
                 StdFilterOpData::Ne
                 | StdFilterOpData::NotContains
@@ -562,22 +647,16 @@ fn test_passes(t: &Test, row: u32, v: &Value, text: &str, cs: bool) -> bool {
             number,
             text: o,
         } => {
-            let t = fold(text, cs);
+            let t = || fold(input, cs);
             match op {
-                StdFilterOpData::Contains => return t.contains(o.as_str()),
-                StdFilterOpData::NotContains => return !t.contains(o.as_str()),
-                StdFilterOpData::BeginsWith => return t.starts_with(o.as_str()),
-                StdFilterOpData::NotBeginsWith => return !t.starts_with(o.as_str()),
-                StdFilterOpData::EndsWith => return t.ends_with(o.as_str()),
-                StdFilterOpData::NotEndsWith => return !t.ends_with(o.as_str()),
+                StdFilterOpData::Contains => return t().contains(o.as_str()),
+                StdFilterOpData::NotContains => return !t().contains(o.as_str()),
+                StdFilterOpData::BeginsWith => return t().starts_with(o.as_str()),
+                StdFilterOpData::NotBeginsWith => return !t().starts_with(o.as_str()),
+                StdFilterOpData::EndsWith => return t().ends_with(o.as_str()),
+                StdFilterOpData::NotEndsWith => return !t().ends_with(o.as_str()),
                 _ => {}
             }
-            let num = match v {
-                Value::Number(n) => Some(*n),
-                Value::Bool(b) => Some(f64::from(u8::from(*b))),
-                _ => None,
-            };
-            let empty = v.is_empty();
             let ord = match (num, number) {
                 (Some(a), Some(b)) => {
                     if tally_types::approx_equal(a, *b) {
@@ -586,9 +665,18 @@ fn test_passes(t: &Test, row: u32, v: &Value, text: &str, cs: bool) -> bool {
                         a.partial_cmp(b).unwrap_or(Ordering::Equal)
                     }
                 }
-                (Some(_), None) => Ordering::Less,
-                (None, Some(_)) if !empty => Ordering::Greater,
-                _ => t.cmp(o),
+                // Equality by the input string (the text "10" equals the
+                // query 10, an empty cell equals "").
+                _ if matches!(op, StdFilterOpData::Eq | StdFilterOpData::Ne) => {
+                    if t() == *o {
+                        Ordering::Equal
+                    } else {
+                        Ordering::Less
+                    }
+                }
+                // Text order: a text query against a text cell only.
+                (None, None) if matches!(v, Value::Text(_)) => t().cmp(o),
+                _ => return false,
             };
             match op {
                 StdFilterOpData::Eq => ord == Ordering::Equal,
@@ -627,8 +715,8 @@ fn visible_rows(wb: &Workbook, sheet: SheetId, f: &StandardFilterData) -> Vec<u3
             let (_, test) = &tests[i];
             let addr = CellAddr::new(sheet, row, c.col);
             let v = wb.value(addr);
-            let text = display_text(wb, addr);
-            let ok = test_passes(test, row, &v, &text, cs);
+            let text = crate::service::view::input_string(wb, addr);
+            let ok = test_passes(test, &v, &text, cs);
             if first || c.connector == StdConnectorData::And {
                 group &= ok;
             } else {
@@ -894,10 +982,13 @@ pub fn advanced_filter(
     let range = check_filter_args(wb, sheet, range, &[], options)?;
     check_sheet(wb, criteria.sheet)?;
     let crit = to_range(criteria.sheet, &criteria.range)?;
-    if crit.cell_count() > 100_000 {
-        return Err(ApiError::invalid_argument(
-            "the criteria range is too large",
-        ));
+    // AOO's criteria use a few rows (the dialog has 8 conditions); every
+    // data row is tested against every criteria row (security review 4,
+    // MEDIUM-T8: 100,000 criteria rows over 100,000 rows took minutes).
+    if crit.cell_count() > 100_000 || crit.rows() > MAX_CRITERIA_ROWS {
+        return Err(ApiError::invalid_argument(format!(
+            "the criteria range is too large (at most {MAX_CRITERIA_ROWS} rows)"
+        )));
     }
     let tab = wb.tab_of(criteria.sheet).unwrap_or(0) as u32;
     let copy_to = options
@@ -977,121 +1068,84 @@ fn run(wb: &mut Workbook, op: Op, fx: &mut Effects) -> Result<Vec<Change>, ApiEr
     crate::ops::apply_op(wb, &op, None, fx)
 }
 
-/// Inserts the subtotal rows of one group level inside `rows` and returns
-/// the new last row of the area.
-#[allow(clippy::too_many_arguments)]
-fn subtotal_level(
-    wb: &mut Workbook,
-    sheet: SheetId,
-    groups: &[SubtotalGroupData],
-    level: usize,
-    r0: u32,
-    r1: u32,
-    c0: u32,
-    c1: u32,
-    case_sensitive: bool,
-    fx: &mut Effects,
-    changes: &mut Vec<Change>,
-    subtotal_rows: &mut Vec<u32>,
-) -> Result<u32, ApiError> {
-    let g = &groups[level];
-    let key = |wb: &Workbook, r: u32| {
-        let t = display_text(wb, CellAddr::new(sheet, r, g.group_by));
-        if case_sensitive {
-            t
-        } else {
-            t.to_lowercase()
-        }
-    };
-    let mut end = r1;
-    let mut start = r0;
-    while start <= end {
-        let k = key(wb, start);
-        let mut last = start;
-        while last < end && key(wb, last + 1) == k {
-            last += 1;
-        }
-        // Inner levels first: they grow the run.
-        let mut run_end = last;
-        if level + 1 < groups.len() {
-            let grown = subtotal_level(
-                wb,
-                sheet,
-                groups,
-                level + 1,
-                start,
-                last,
-                c0,
-                c1,
-                case_sensitive,
-                fx,
-                changes,
-                subtotal_rows,
-            )?;
-            end += grown - last;
-            run_end = grown;
-        }
-        // The subtotal row after the run.
-        let at = run_end + 1;
-        if at >= MAX_ROWS {
-            return Err(ApiError::invalid_argument("no room for subtotal rows"));
-        }
-        changes.extend(run(
-            wb,
-            Op::InsertRows {
-                sheet,
-                at,
-                count: 1,
-            },
-            fx,
-        )?);
-        end += 1;
-        for r in subtotal_rows.iter_mut() {
-            if *r >= at {
-                *r += 1;
-            }
-        }
-        let label_text = display_text(wb, CellAddr::new(sheet, start, g.group_by));
-        let label = format!("{label_text} {}", agg_caption(g.function));
-        let row_range = CellRange::new(sheet, at, c0, at, c1);
-        changes.push(Change::Range(capture_range(wb, row_range, true, true)));
-        wb.set_value(CellAddr::new(sheet, at, g.group_by), Value::text(label));
-        for col in &g.columns {
-            if *col < c0 || *col > c1 {
-                continue;
-            }
-            let letters = tally_types::col_to_letters(*col);
-            let text = format!(
-                "=SUBTOTAL({};{}{}:{}{})",
-                subtotal_code(g.function),
-                letters,
-                start + 1,
-                letters,
-                run_end + 1
-            );
-            wb.set_input(CellAddr::new(sheet, at, *col), &text);
-        }
-        map_styles(wb, row_range, |table, old| {
-            let mut d = table.get(old).data.clone();
-            d.font.bold = true;
-            table.intern(d)
-        });
-        subtotal_rows.push(at);
-        // Outline group over the run's rows (inner subtotal rows included).
-        let _ = with_meta(wb, sheet, fx, |_, meta| {
-            let list = Arc::make_mut(&mut meta.row_groups);
-            if !list.iter().any(|x| x.start == start && x.end == run_end) {
-                let _ = crate::outline::insert_group(list, start, run_end);
-            }
-            Ok(())
-        })
-        .map(|c| changes.extend(c));
-        start = at + 1;
-    }
-    Ok(end)
+/// One output row of a Subtotals layout.
+enum SubItem {
+    /// A data row (its source row).
+    Data(u32),
+    /// A subtotal row of group `level` over output rows `first..=last`
+    /// (indices into the layout), labelled from source row `label`.
+    Sub {
+        level: usize,
+        first: usize,
+        last: usize,
+        label: u32,
+    },
 }
 
-/// `Op::Subtotals`.
+/// The layout of one group level over source rows `start..=end`: runs of
+/// equal keys, each followed by its subtotal row (inner levels first, as
+/// AOO `ScTable::DoSubTotals` nests them, `table3.cxx:718-860`).
+fn plan_subtotals(
+    keys: &[Vec<String>],
+    level: usize,
+    start: u32,
+    end: u32,
+    r0: u32,
+    out: &mut Vec<SubItem>,
+) {
+    let k = &keys[level];
+    let at = |r: u32| &k[(r - r0) as usize];
+    let mut s = start;
+    while s <= end {
+        let mut e = s;
+        let key = at(s);
+        while e < end && at(e + 1) == key {
+            e += 1;
+        }
+        let first = out.len();
+        if level + 1 < keys.len() {
+            plan_subtotals(keys, level + 1, s, e, r0, out);
+        } else {
+            out.extend((s..=e).map(SubItem::Data));
+        }
+        let last = out.len() - 1;
+        out.push(SubItem::Sub {
+            level,
+            first,
+            last,
+            label: s,
+        });
+        s = e + 1;
+    }
+}
+
+/// The label of a subtotal row: the group value (or "(empty)") and the
+/// function, or "Result" for more than one result column (AOO
+/// `table3.cxx:812-840`, strings `globstr.src:483,692-736`).
+pub fn subtotal_caption(value: &str, f: AggFnData, columns: usize) -> String {
+    let v = if value.is_empty() { "(empty)" } else { value };
+    let what = if columns == 1 {
+        match f {
+            AggFnData::Sum => "Sum",
+            AggFnData::Count | AggFnData::CountNums => "Count",
+            AggFnData::Average => "Average",
+            AggFnData::Max => "Max",
+            AggFnData::Min => "Min",
+            AggFnData::Product => "Product",
+            AggFnData::StDev | AggFnData::StDevP => "StDev",
+            AggFnData::Var | AggFnData::VarP => "Var",
+        }
+    } else {
+        "Result"
+    };
+    format!("{v} {what}")
+}
+
+/// `Op::Subtotals`. The layout is computed first; the rows are then
+/// inserted with one structural change and the data rows spread in one
+/// pass ([`crate::structure::respace_rows`]), and every SUBTOTAL formula
+/// is written once (security review 4, HIGH-T2: one InsertRows per group
+/// was O(groups × (rows + formulas))).
 pub fn subtotals(
     wb: &mut Workbook,
     sheet: SheetId,
@@ -1123,11 +1177,23 @@ pub fn subtotals(
     let model: Vec<SubtotalGroupData> = groups.iter().map(sub_group_to_model).collect();
     let mut changes: Vec<Change> = Vec::new();
     // Existing subtotals go first.
+    let mut range = range;
     if wb.sheet(sheet).is_some_and(|s| s.meta.subtotals.is_some()) {
-        changes.extend(remove_subtotals(wb, sheet, &range_dto(&local(&range)), fx)?);
+        let area = subtotal_area(wb, sheet, range);
+        if area.cell_count() > MAX_TOOL_ROWS {
+            return Err(ApiError::invalid_argument("bad range for subtotals"));
+        }
+        let removed = remove_subtotals_rows(wb, sheet, area, fx, &mut changes)?;
+        range = CellRange::new(
+            sheet,
+            area.r0,
+            area.c0,
+            area.r1.saturating_sub(removed).max(area.r0 + 1),
+            area.c1,
+        );
     }
     let r0 = range.r0 + 1;
-    let mut r1 = range.r1;
+    let r1 = range.r1;
     if options.presort {
         let keys: Vec<tally_api::SortKey> = model
             .iter()
@@ -1152,81 +1218,183 @@ pub fn subtotals(
             fx,
         )?);
     }
-    let mut subtotal_rows = Vec::new();
-    let end = subtotal_level(
-        wb,
-        sheet,
-        &model,
-        0,
-        r0,
-        r1,
-        range.c0,
-        range.c1,
-        options.case_sensitive,
-        fx,
-        &mut changes,
-        &mut subtotal_rows,
-    )?;
-    r1 = end;
-    // Grand total.
-    let at = r1 + 1;
-    if at >= MAX_ROWS {
-        return Err(ApiError::invalid_argument("no room for the grand total"));
+    // 1. The layout. Without sorting, an empty group cell continues the
+    // group above it (AOO `bChanged = (aString.Len() || bDoSort) && …`).
+    let cs = options.case_sensitive;
+    let cols: Vec<Vec<String>> = model
+        .iter()
+        .map(|g| {
+            let mut prev = String::new();
+            (r0..=r1)
+                .map(|r| {
+                    let t = display_text(wb, CellAddr::new(sheet, r, g.group_by));
+                    let t = if cs { t } else { t.to_lowercase() };
+                    if t.is_empty() && !options.presort && r > r0 {
+                        prev.clone()
+                    } else {
+                        prev = t.clone();
+                        t
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    // A level's key includes the outer levels' keys: a change in any of
+    // them starts a new group.
+    let keys: Vec<Vec<String>> = (0..model.len())
+        .map(|level| {
+            (0..cols[0].len())
+                .map(|i| {
+                    let mut k = String::new();
+                    for c in &cols[..=level] {
+                        k.push_str(&c[i]);
+                        k.push('\u{1}');
+                    }
+                    k
+                })
+                .collect()
+        })
+        .collect();
+    drop(cols);
+    let mut items: Vec<SubItem> = Vec::new();
+    plan_subtotals(&keys, 0, r0, r1, r0, &mut items);
+    drop(keys);
+    let subs = items
+        .iter()
+        .filter(|i| matches!(i, SubItem::Sub { .. }))
+        .count() as u32;
+    if subs as usize > MAX_SUBTOTAL_ROWS {
+        return Err(ApiError::invalid_argument(format!(
+            "more than {MAX_SUBTOTAL_ROWS} subtotal rows"
+        )));
     }
+    let k = subs + 1; // and the grand total
+    let total_at = u64::from(r1) + u64::from(k);
+    if total_at >= u64::from(MAX_ROWS) {
+        return Err(ApiError::invalid_argument("no room for subtotal rows"));
+    }
+    // 2. One insertion below the area, then the data rows spread.
     changes.extend(run(
         wb,
         Op::InsertRows {
             sheet,
-            at,
-            count: 1,
+            at: r1 + 1,
+            count: k,
         },
         fx,
     )?);
-    let row_range = CellRange::new(sheet, at, range.c0, at, range.c1);
-    changes.push(Change::Range(capture_range(wb, row_range, true, true)));
+    let mut new: Vec<Option<u32>> = vec![None; (r1 - r0 + 1) as usize];
+    for (i, it) in items.iter().enumerate() {
+        if let SubItem::Data(r) = it {
+            new[(r - r0) as usize] = Some(r0 + i as u32);
+        }
+    }
+    let map = crate::structure::RowMap::new(sheet, r0, new);
+    let tail_from = map.r1().max(map.last_new()) + 1;
+    changes.extend(crate::structure::respace_rows(wb, &map, fx)?);
+    let at = r0 + items.len() as u32; // the grand total row
+    if tail_from <= at {
+        let tail = CellRange::new(sheet, tail_from, range.c0, at, range.c1);
+        changes.push(Change::Range(capture_range(wb, tail, true, true)));
+    }
+    // 3. The subtotal rows.
+    let bold = |wb: &mut Workbook, r: u32| {
+        map_styles(
+            wb,
+            CellRange::new(sheet, r, range.c0, r, range.c1),
+            |table, old| {
+                let mut d = table.get(old).data.clone();
+                d.font.bold = true;
+                table.intern(d)
+            },
+        );
+    };
+    let formula = |f: AggFnData, col: u32, a: u32, b: u32| {
+        let letters = tally_types::col_to_letters(col);
+        format!(
+            "=SUBTOTAL({};{}{}:{}{})",
+            subtotal_code(f),
+            letters,
+            a + 1,
+            letters,
+            b + 1
+        )
+    };
+    let mut outline: Vec<(u32, u32)> = Vec::new();
+    let mut subtotal_rows: Vec<(u32, usize)> = Vec::new();
+    for (i, it) in items.iter().enumerate() {
+        let SubItem::Sub {
+            level,
+            first,
+            last,
+            label,
+        } = it
+        else {
+            continue;
+        };
+        let g = &model[*level];
+        let row = r0 + i as u32;
+        let (a, b) = (r0 + *first as u32, r0 + *last as u32);
+        // The label's source row has moved: read it at its new place.
+        let src = map.row(*label).unwrap_or(*label);
+        let value = display_text(wb, CellAddr::new(sheet, src, g.group_by));
+        let cols: Vec<u32> = g
+            .columns
+            .iter()
+            .copied()
+            .filter(|c| *c >= range.c0 && *c <= range.c1)
+            .collect();
+        wb.set_value(
+            CellAddr::new(sheet, row, g.group_by),
+            Value::text(subtotal_caption(&value, g.function, cols.len())),
+        );
+        for col in &cols {
+            wb.set_input(
+                CellAddr::new(sheet, row, *col),
+                &formula(g.function, *col, a, b),
+            );
+        }
+        bold(wb, row);
+        outline.push((a, b));
+        subtotal_rows.push((row, *level));
+    }
+    // Grand total: the first group's columns and function (AOO uses
+    // group 0 for the total row, `aRowEntry.nGroupNo = 0`).
     wb.set_value(
         CellAddr::new(sheet, at, model[0].group_by),
         Value::text("Grand Total"),
     );
-    let mut done: HashSet<u32> = HashSet::new();
-    for g in &model {
-        for col in &g.columns {
-            if *col < range.c0 || *col > range.c1 || !done.insert(*col) {
-                continue;
-            }
-            let letters = tally_types::col_to_letters(*col);
-            let text = format!(
-                "=SUBTOTAL({};{}{}:{}{})",
-                subtotal_code(g.function),
-                letters,
-                r0 + 1,
-                letters,
-                r1 + 1
+    for col in &model[0].columns {
+        if *col >= range.c0 && *col <= range.c1 {
+            wb.set_input(
+                CellAddr::new(sheet, at, *col),
+                &formula(model[0].function, *col, r0, at - 1),
             );
-            wb.set_input(CellAddr::new(sheet, at, *col), &text);
         }
     }
-    map_styles(wb, row_range, |table, old| {
-        let mut d = table.get(old).data.clone();
-        d.font.bold = true;
-        table.intern(d)
-    });
-    if options.page_breaks {
-        for r in &subtotal_rows {
-            if let Some(b) = r.checked_add(1) {
-                changes.extend(run(
-                    wb,
-                    Op::SetPageBreak {
-                        sheet,
-                        axis: tally_api::BreakAxis::Row,
-                        at: b,
-                        present: true,
-                    },
-                    fx,
-                )?);
+    bold(wb, at);
+    // 4. Outline groups and page breaks, in one meta change.
+    let page_breaks = options.page_breaks;
+    changes.extend(with_meta(wb, sheet, fx, |_, meta| {
+        let list = Arc::make_mut(&mut meta.row_groups);
+        // Widest first so inner groups nest under outer ones.
+        outline.sort_by_key(|(a, b)| (std::cmp::Reverse(b - a), *a));
+        for (a, b) in &outline {
+            if !list.iter().any(|x| x.start == *a && x.end == *b) {
+                let _ = crate::outline::insert_group(list, *a, *b);
             }
         }
-    }
+        if page_breaks {
+            let br = Arc::make_mut(&mut meta.row_breaks);
+            for (r, _) in &subtotal_rows {
+                if let Some(b) = r.checked_add(1).filter(|b| *b < MAX_ROWS) {
+                    br.insert(b);
+                }
+            }
+        }
+        Ok(())
+    })?);
+    crate::outline::reapply(wb, sheet);
     let data = SubtotalsData {
         range: CellRangeLocal {
             r0: range.r0,
@@ -1255,6 +1423,31 @@ pub fn subtotals(
     Ok(changes)
 }
 
+/// `true` if the text is a subtotal label (this version's captions, the
+/// earlier ones, or "Grand Total").
+fn is_subtotal_label(t: &str) -> bool {
+    const CAPTIONS: [&str; 13] = [
+        "Sum",
+        "Count",
+        "Average",
+        "Max",
+        "Min",
+        "Product",
+        "StDev",
+        "Var",
+        "Result",
+        "Count (Numbers only)",
+        "StDev (Sample)",
+        "StDevP (Population)",
+        "Var (Sample)",
+    ];
+    t == "Grand Total"
+        || t.ends_with(" VarP (Population)")
+        || CAPTIONS
+            .iter()
+            .any(|c| t.len() > c.len() && t.ends_with(c) && t[..t.len() - c.len()].ends_with(' '))
+}
+
 /// `true` if the row holds a subtotal (a `SUBTOTAL(` formula in one of
 /// its cells and a label text).
 fn is_subtotal_row(wb: &Workbook, sheet: SheetId, r: u32, c0: u32, c1: u32) -> bool {
@@ -1274,24 +1467,7 @@ fn is_subtotal_row(wb: &Workbook, sheet: SheetId, r: u32, c0: u32, c1: u32) -> b
                 }
             }
             Some(CellContent::Value(Value::Text(t))) => {
-                let t = t.as_ref();
-                if t == "Grand Total"
-                    || [
-                        AggFnData::Sum,
-                        AggFnData::Count,
-                        AggFnData::Average,
-                        AggFnData::Max,
-                        AggFnData::Min,
-                        AggFnData::Product,
-                        AggFnData::CountNums,
-                        AggFnData::StDev,
-                        AggFnData::StDevP,
-                        AggFnData::Var,
-                        AggFnData::VarP,
-                    ]
-                    .iter()
-                    .any(|f| t.ends_with(&format!(" {}", agg_caption(*f))))
-                {
+                if is_subtotal_label(t) {
                     has_text = true;
                 }
             }
@@ -1301,57 +1477,46 @@ fn is_subtotal_row(wb: &Workbook, sheet: SheetId, r: u32, c0: u32, c1: u32) -> b
     has_formula && has_text
 }
 
-/// `Op::RemoveSubtotals`.
-pub fn remove_subtotals(
+/// Removes the subtotal rows of `range` in one pass (the kept rows close
+/// up, then one row deletion takes the emptied rows) and returns how many
+/// rows went.
+fn remove_subtotals_rows(
     wb: &mut Workbook,
     sheet: SheetId,
-    range: &RangeDto,
+    range: CellRange,
     fx: &mut Effects,
-) -> Result<Vec<Change>, ApiError> {
-    check_sheet(wb, sheet)?;
-    let mut range = to_range(sheet, range)?;
-    check_sheet_action(wb, sheet, |p| p.delete_rows)?;
-    if let Some(st) = wb.sheet(sheet).and_then(|s| s.meta.subtotals.clone()) {
-        let r = crate::filter::area(sheet, &st.range);
-        if r.intersects(&range) {
-            range = CellRange::new(
-                sheet,
-                range.r0.min(r.r0),
-                range.c0.min(r.c0),
-                range.r1.max(r.r1),
-                range.c1.max(r.c1),
-            );
+    changes: &mut Vec<Change>,
+) -> Result<u32, ApiError> {
+    let mut new: Vec<Option<u32>> = Vec::with_capacity(range.rows() as usize);
+    let mut next = range.r0;
+    let mut gone = 0u32;
+    for r in range.r0..=range.r1 {
+        if is_subtotal_row(wb, sheet, r, range.c0, range.c1) {
+            new.push(None);
+            gone += 1;
+        } else {
+            new.push(Some(next));
+            next += 1;
         }
     }
-    let rows: Vec<u32> = (range.r0..=range.r1)
-        .filter(|r| is_subtotal_row(wb, sheet, *r, range.c0, range.c1))
-        .collect();
-    let mut changes = Vec::new();
-    // Bottom to top, in runs.
-    let mut i = rows.len();
-    while i > 0 {
-        let end = rows[i - 1];
-        let mut start = end;
-        while i > 1 && rows[i - 2] + 1 == start {
-            start = rows[i - 2];
-            i -= 1;
-        }
-        i -= 1;
+    if gone > 0 {
+        let map = crate::structure::RowMap::new(sheet, range.r0, new);
+        changes.extend(crate::structure::respace_rows(wb, &map, fx)?);
         changes.extend(run(
             wb,
             Op::DeleteRows {
                 sheet,
-                at: start,
-                count: end - start + 1,
+                at: range.r1 + 1 - gone,
+                count: gone,
             },
             fx,
         )?);
     }
     changes.extend(with_meta(wb, sheet, fx, |_, meta| {
         meta.subtotals = None;
-        let before = meta.row_groups.len();
-        if before > 0 {
-            Arc::make_mut(&mut meta.row_groups).retain(|g| g.end < range.r0 || g.start > range.r1);
+        let r1 = range.r1 - gone;
+        if !meta.row_groups.is_empty() {
+            Arc::make_mut(&mut meta.row_groups).retain(|g| g.end < range.r0 || g.start > r1);
         }
         if meta.database_ranges.iter().any(|d| d.subtotals.is_some()) {
             for d in Arc::make_mut(&mut meta.database_ranges) {
@@ -1361,6 +1526,43 @@ pub fn remove_subtotals(
         Ok(())
     })?);
     crate::outline::reapply(wb, sheet);
+    Ok(gone)
+}
+
+/// `range` grown to the stored subtotal area it meets.
+fn subtotal_area(wb: &Workbook, sheet: SheetId, range: CellRange) -> CellRange {
+    if let Some(st) = wb.sheet(sheet).and_then(|s| s.meta.subtotals.clone()) {
+        let r = crate::filter::area(sheet, &st.range);
+        if r.intersects(&range) {
+            return CellRange::new(
+                sheet,
+                range.r0.min(r.r0),
+                range.c0.min(r.c0),
+                range.r1.max(r.r1),
+                range.c1.max(r.c1),
+            );
+        }
+    }
+    range
+}
+
+/// `Op::RemoveSubtotals`: one compaction and one row deletion (security
+/// review 4, HIGH-T2).
+pub fn remove_subtotals(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    range: &RangeDto,
+    fx: &mut Effects,
+) -> Result<Vec<Change>, ApiError> {
+    check_sheet(wb, sheet)?;
+    let range = to_range(sheet, range)?;
+    check_sheet_action(wb, sheet, |p| p.delete_rows)?;
+    let range = subtotal_area(wb, sheet, range);
+    if range.cell_count() > MAX_TOOL_ROWS {
+        return Err(ApiError::invalid_argument("the range is too large"));
+    }
+    let mut changes = Vec::new();
+    remove_subtotals_rows(wb, sheet, range, fx, &mut changes)?;
     Ok(changes)
 }
 
@@ -1380,7 +1582,6 @@ pub fn consolidate(
     link: bool,
     fx: &mut Effects,
 ) -> Result<Vec<Change>, ApiError> {
-    let _ = fx;
     if sources.is_empty() || sources.len() > 255 {
         return Err(ApiError::invalid_argument(
             "between 1 and 255 source ranges",
@@ -1391,13 +1592,34 @@ pub fn consolidate(
         return Err(ApiError::invalid_argument("bad destination"));
     }
     let mut srcs: Vec<CellRange> = Vec::with_capacity(sources.len());
+    let mut total: u64 = 0;
     for s in sources {
         check_sheet(wb, s.sheet)?;
         let r = to_range(s.sheet, &s.range)?;
         if r.cell_count() > MAX_OP_CELLS {
             return Err(ApiError::invalid_argument("a source range is too large"));
         }
+        // Trailing empty rows/columns hold nothing: clip to the used area.
+        let used = wb.sheet(s.sheet).and_then(|x| x.used_range());
+        let r = match used {
+            Some(u) => CellRange::new(
+                s.sheet,
+                r.r0,
+                r.c0,
+                r.r1.min(u.r1.max(r.r0)),
+                r.c1.min(u.c1.max(r.c0)),
+            ),
+            None => CellRange::new(s.sheet, r.r0, r.c0, r.r0, r.c0),
+        };
+        total += r.cell_count();
         srcs.push(r);
+    }
+    // All sources together, not each (security review 4, HIGH-T4: 255
+    // sources of 1M cells each were accepted).
+    if total > MAX_OP_CELLS {
+        return Err(ApiError::invalid_argument(format!(
+            "the source ranges hold more than {MAX_OP_CELLS} cells"
+        )));
     }
     let f = agg_to_model(function);
     // Row and column keys: labels (first column/row of each source) or
@@ -1406,11 +1628,25 @@ pub fn consolidate(
     let mut col_keys: Vec<String> = Vec::new();
     let mut row_index: HashMap<String, usize> = HashMap::new();
     let mut col_index: HashMap<String, usize> = HashMap::new();
-    // (row key, col key) → the source cells.
-    let mut cells: BTreeMap<(usize, usize), Vec<CellAddr>> = BTreeMap::new();
+    // (row key, col key) → the running aggregate (and, with links, the
+    // source cells).
+    let mut cells: BTreeMap<(usize, usize), (Agg, Vec<CellAddr>)> = BTreeMap::new();
     for s in &srcs {
         let r_start = s.r0 + u32::from(by_col_labels);
         let c_start = s.c0 + u32::from(by_row_labels);
+        let col_ix: Vec<usize> = (c_start..=s.c1)
+            .map(|c| {
+                let ck = if by_col_labels {
+                    display_text(wb, CellAddr::new(s.sheet, s.r0, c))
+                } else {
+                    (c - c_start).to_string()
+                };
+                *col_index.entry(ck.clone()).or_insert_with(|| {
+                    col_keys.push(ck);
+                    col_keys.len() - 1
+                })
+            })
+            .collect();
         for r in r_start..=s.r1 {
             let rk = if by_row_labels {
                 display_text(wb, CellAddr::new(s.sheet, r, s.c0))
@@ -1418,23 +1654,16 @@ pub fn consolidate(
                 (r - r_start).to_string()
             };
             let ri = *row_index.entry(rk.clone()).or_insert_with(|| {
-                row_keys.push(rk.clone());
+                row_keys.push(rk);
                 row_keys.len() - 1
             });
-            for c in c_start..=s.c1 {
-                let ck = if by_col_labels {
-                    display_text(wb, CellAddr::new(s.sheet, s.r0, c))
-                } else {
-                    (c - c_start).to_string()
-                };
-                let ci = *col_index.entry(ck.clone()).or_insert_with(|| {
-                    col_keys.push(ck.clone());
-                    col_keys.len() - 1
-                });
-                cells
-                    .entry((ri, ci))
-                    .or_default()
-                    .push(CellAddr::new(s.sheet, r, c));
+            for (i, c) in (c_start..=s.c1).enumerate() {
+                let a = CellAddr::new(s.sheet, r, c);
+                let e = cells.entry((ri, col_ix[i])).or_default();
+                e.0.push(&wb.value(a));
+                if link {
+                    e.1.push(a);
+                }
             }
         }
         if cells.len() as u64 > MAX_OP_CELLS {
@@ -1480,32 +1709,49 @@ pub fn consolidate(
             );
         }
     }
-    for ((ri, ci), addrs) in &cells {
+    let mut too_long = 0u32;
+    for ((ri, ci), (agg, addrs)) in &cells {
         let at = CellAddr::new(dest.sheet, r_off + *ri as u32, c_off + *ci as u32);
         if link {
-            let refs: Vec<String> = addrs
-                .iter()
-                .map(|a| {
-                    let name = wb
-                        .sheet(a.sheet)
-                        .map(|s| s.name.to_string())
-                        .unwrap_or_default();
-                    let quoted = if name.contains([' ', '\'', '.', '-']) {
-                        format!("'{}'", name.replace('\'', "''"))
-                    } else {
-                        name
-                    };
-                    format!("${}.{}", quoted, a.to_a1())
-                })
-                .collect();
-            let text = format!("={}({})", agg_function_name(f), refs.join(";"));
-            wb.set_input(at, &text);
-        } else {
-            let v = aggregate(f, addrs.iter().map(|a| wb.value(*a)));
-            if !v.is_empty() {
-                wb.set_value(at, v);
+            let mut text = format!("={}(", agg_function_name(f));
+            for (i, a) in addrs.iter().enumerate() {
+                if i > 0 {
+                    text.push(';');
+                }
+                let name = wb
+                    .sheet(a.sheet)
+                    .map(|s| s.name.to_string())
+                    .unwrap_or_default();
+                let quoted = if name.contains([' ', '\'', '.', '-']) {
+                    format!("'{}'", name.replace('\'', "''"))
+                } else {
+                    name
+                };
+                text.push_str(&format!("${}.{}", quoted, a.to_a1()));
+                if text.len() > MAX_LINK_FORMULA_LEN {
+                    break;
+                }
             }
+            text.push(')');
+            // A formula over the parser's limit would be a broken
+            // `Err:512` cell: write the value instead and warn (security
+            // review 4, HIGH-T4).
+            if text.len() <= MAX_LINK_FORMULA_LEN {
+                wb.set_input(at, &text);
+                continue;
+            }
+            too_long += 1;
         }
+        let v = agg.result(f);
+        if !v.is_empty() {
+            wb.set_value(at, v);
+        }
+    }
+    if too_long > 0 {
+        fx.warnings.push(ApiError::invalid_argument(format!(
+            "{too_long} consolidated cells have too many sources for a link formula \
+             ({MAX_LINK_FORMULA_LEN} characters at most); they hold values instead"
+        )));
     }
     wb.pending.ranges.push(target);
     Ok(vec![Change::Range(inv)])
@@ -1528,6 +1774,11 @@ pub fn split_fields(text: &str, o: &CsvImportOptionsDto) -> Vec<String> {
         }
         let mut out = Vec::new();
         for (i, s) in starts.iter().enumerate() {
+            // Fields start inside the text only (security review 4,
+            // HIGH-T3: 16,384 widths gave every short row 16,384 fields).
+            if i > 0 && *s >= chars.len() {
+                break;
+            }
             let e = starts.get(i + 1).copied().unwrap_or(chars.len());
             let s = (*s).min(chars.len());
             let e = e.min(chars.len()).max(s);
@@ -1621,21 +1872,39 @@ pub fn text_to_columns(
     if options.delimiters.is_empty() && options.fixed_widths.is_none() {
         return Err(ApiError::invalid_argument("no separator"));
     }
-    let rows: Vec<(u32, Vec<String>)> = (range.r0..=range.r1)
-        .filter_map(|r| {
-            let a = CellAddr::new(sheet, r, range.c0);
-            let v = wb.value(a);
-            let text = match &v {
-                Value::Text(t) => t.to_string(),
-                Value::Empty => return None,
-                _ => display_text(wb, a),
-            };
-            Some((r, split_fields(&text, options)))
-        })
-        .collect();
-    let width = rows.iter().map(|(_, f)| f.len()).max().unwrap_or(0) as u32;
+    if options
+        .fixed_widths
+        .as_ref()
+        .is_some_and(|w| w.len() > MAX_COLS as usize)
+        || options.column_types.len() > MAX_COLS as usize
+    {
+        return Err(ApiError::invalid_argument("too many columns"));
+    }
+    let text_of = |wb: &Workbook, r: u32| -> Option<String> {
+        let a = CellAddr::new(sheet, r, range.c0);
+        match wb.value(a) {
+            Value::Text(t) => Some(t.to_string()),
+            Value::Empty => None,
+            _ => Some(display_text(wb, a)),
+        }
+    };
+    // First pass: the output size, before any field is kept (security
+    // review 4, HIGH-T3: rows × the widest row was unbudgeted).
+    let mut width: u32 = 0;
+    let mut filled: u64 = 0;
+    for r in range.r0..=range.r1 {
+        if let Some(t) = text_of(wb, r) {
+            filled += 1;
+            width = width.max(split_fields(&t, options).len() as u32);
+        }
+    }
     if width == 0 {
         return Ok(Vec::new());
+    }
+    if filled.saturating_mul(u64::from(width)) > MAX_OP_CELLS {
+        return Err(ApiError::invalid_argument(format!(
+            "the result would have more than {MAX_OP_CELLS} cells"
+        )));
     }
     let c1 = range
         .c0
@@ -1647,7 +1916,14 @@ pub fn text_to_columns(
     crate::ops::check_array_blocks(wb, &[target])?;
     let inv = capture_range(wb, target, true, true);
     let epoch = wb.settings.date_epoch;
-    for (r, fields) in rows {
+    // Rows holding text are split again and written one at a time; only
+    // the cells that exist in each row's target are cleared.
+    let texts: Vec<(u32, String)> = (range.r0..=range.r1)
+        .filter_map(|r| Some((r, text_of(wb, r)?)))
+        .collect();
+    for (r, text) in texts {
+        clear_range_content(wb, CellRange::new(sheet, r, range.c0, r, c1));
+        let fields = split_fields(&text, options);
         let mut out_col = range.c0;
         for (i, field) in fields.iter().enumerate() {
             let kind = options
@@ -1660,7 +1936,6 @@ pub fn text_to_columns(
             }
             let a = CellAddr::new(sheet, r, out_col);
             out_col += 1;
-            wb.clear_content(a);
             if field.is_empty() {
                 continue;
             }
@@ -1689,10 +1964,6 @@ pub fn text_to_columns(
                 _ => wb.set_value(a, Value::text(field.as_str())),
             }
         }
-        // Columns past the fields of this row are cleared.
-        for c in out_col..=c1 {
-            wb.clear_content(CellAddr::new(sheet, r, c));
-        }
     }
     wb.pending.ranges.push(target);
     Ok(vec![Change::Range(inv)])
@@ -1703,8 +1974,13 @@ pub fn text_to_columns(
 // ---------------------------------------------------------------------------
 
 /// `Op::RemoveDuplicates`: rows of `range` whose key columns repeat an
-/// earlier row are removed (the cells below shift up inside the range,
-/// as Excel does).
+/// earlier row are removed; the rows below them *inside the range* move
+/// up and the range's last rows become empty, as Excel does (AOO 4.1 has
+/// no such tool). Cells outside the range never move (correctness review
+/// 4, H2). The kept rows are found in one pass and the range is
+/// rewritten once, with one undo snapshot (security review 4,
+/// CRITICAL-T1: one band shift and snapshot per run of duplicates was
+/// O(n²)).
 pub fn remove_duplicates(
     wb: &mut Workbook,
     sheet: SheetId,
@@ -1719,52 +1995,70 @@ pub fn remove_duplicates(
     if range.cell_count() > MAX_TOOL_ROWS {
         return Err(ApiError::invalid_argument("the range is too large"));
     }
-    let keys: Vec<u32> = if cols.is_empty() {
+    if cols.len() > range.cols() as usize {
+        return Err(ApiError::invalid_argument("too many key columns"));
+    }
+    let mut keys: Vec<u32> = if cols.is_empty() {
         (range.c0..=range.c1).collect()
     } else {
         cols.to_vec()
     };
+    keys.sort_unstable();
+    keys.dedup();
     if keys.iter().any(|c| *c < range.c0 || *c > range.c1) {
         return Err(ApiError::invalid_argument(
             "a key column is outside the range",
         ));
     }
     let r0 = range.r0 + u32::from(has_header);
+    if r0 > range.r1 {
+        return Ok(Vec::new());
+    }
+    let data = CellRange::new(sheet, r0, range.c0, range.r1, range.c1);
     let mut seen: HashSet<String> = HashSet::new();
+    let mut kept: Vec<u32> = Vec::new();
     let mut dups: Vec<u32> = Vec::new();
+    let mut key = String::new();
     for r in r0..=range.r1 {
-        let key: Vec<String> = keys
-            .iter()
-            .map(|c| display_text(wb, CellAddr::new(sheet, r, *c)).to_lowercase())
-            .collect();
-        if !seen.insert(key.join("\u{1}")) {
-            dups.push(r);
+        key.clear();
+        for c in &keys {
+            key.push_str(&display_text(wb, CellAddr::new(sheet, r, *c)).to_lowercase());
+            key.push('\u{1}');
+        }
+        if seen.contains(key.as_str()) {
+            dups.push(r - r0);
+        } else {
+            seen.insert(key.clone());
+            kept.push(r - r0);
         }
     }
-    let mut changes = Vec::new();
-    let mut i = dups.len();
-    while i > 0 {
-        let end = dups[i - 1];
-        let mut start = end;
-        while i > 1 && dups[i - 2] + 1 == start {
-            start = dups[i - 2];
-            i -= 1;
+    if dups.is_empty() {
+        return Ok(Vec::new());
+    }
+    crate::sort::check_movable(wb, &data)?;
+    let n_kept = kept.len() as u32;
+    let mut perm = kept;
+    perm.extend(&dups);
+    let changes = crate::sort::permute_data(wb, data, &perm, false, true);
+    // The duplicates now fill the tail of the range: empty it.
+    let tail = CellRange::new(sheet, r0 + n_kept, range.c0, range.r1, range.c1);
+    clear_range_content(wb, tail);
+    if let Some(s) = wb.sheet_mut(sheet) {
+        if crate::annotations::entries_in(&s.meta.notes, &tail)
+            .next()
+            .is_some()
+        {
+            crate::annotations::clear_in(Arc::make_mut(&mut s.meta.notes), &tail);
         }
-        i -= 1;
-        let band = Band {
-            sheet,
-            rows: true,
-            lo: range.c0,
-            hi: range.c1,
-            at: start,
-            count: end - start + 1,
-            insert: false,
-        };
-        changes.extend(shift_cells(wb, &band, fx)?);
+        if crate::annotations::entries_in(&s.meta.links, &tail)
+            .next()
+            .is_some()
+        {
+            crate::annotations::clear_in(Arc::make_mut(&mut s.meta.links), &tail);
+        }
     }
-    if !dups.is_empty() {
-        fx.replaced = Some(dups.len() as u32);
-    }
+    fx.layout(sheet);
+    fx.replaced = Some(dups.len() as u32);
     Ok(changes)
 }
 
@@ -1998,20 +2292,23 @@ pub fn fill_series(
                     SeriesKind::Growth => Some(v * step),
                     SeriesKind::Date => match unit.unwrap_or(DateUnit::Day) {
                         DateUnit::Day => Some(v + step),
+                        // AOO `ScTable::IncDate` (`table4.cxx:1198-1216`):
+                        // add N calendar days, then step off a weekend
+                        // (forwards: Sat +2, Sun +1; backwards: Sat -1,
+                        // Sun -2; correctness review 4, M7).
                         DateUnit::Weekday => {
-                            let mut d = v;
-                            let mut left = step.round() as i64;
-                            let dir = if left < 0 { -1.0 } else { 1.0 };
-                            left = left.abs();
-                            while left > 0 {
-                                d += dir;
-                                let wd = weekday(epoch, d).unwrap_or(2);
-                                // 1 = Sunday, 7 = Saturday.
-                                if wd != 1 && wd != 7 {
-                                    left -= 1;
-                                }
-                            }
-                            Some(d)
+                            let inc = step.trunc();
+                            let d = v.floor() + inc;
+                            // 1 = Sunday, 7 = Saturday.
+                            let wd = weekday(epoch, d).unwrap_or(2);
+                            let fix = match (inc >= 0.0, wd) {
+                                (true, 7) => 2.0,
+                                (true, 1) => 1.0,
+                                (false, 7) => -1.0,
+                                (false, 1) => -2.0,
+                                _ => 0.0,
+                            };
+                            Some(d + fix + (v - v.floor()))
                         }
                         // Months count from the start, so the day clamps
                         // per month (Jan 31 → Feb 29 → Mar 31).
@@ -2110,12 +2407,22 @@ pub fn shift_range(
 // Sheet extras
 // ---------------------------------------------------------------------------
 
-fn repoint_sheet(f: &mut tally_formula::Formula, from: SheetId, to: SheetId) -> bool {
+/// Points references to sheet `from` at `to`. With `relative_only`,
+/// references written with an absolute sheet (`$Sheet1.A1`) keep naming
+/// `from`, as AOO's `ScDocument::CopyTab` → `UpdateInsertTabAbs` leaves
+/// `!IsTabRel()` references alone (`documen2.cxx:912-916`,
+/// `cell2.cxx:1155`; correctness review 4, M16).
+fn repoint_sheet_refs(
+    f: &mut tally_formula::Formula,
+    from: SheetId,
+    to: SheetId,
+    relative_only: bool,
+) -> bool {
     use tally_formula::{RefExpr, SheetRef};
     let mut changed = false;
     let mut fix = |s: &mut SheetRef| {
-        if let SheetRef::Id { id, .. } = s {
-            if *id == from {
+        if let SheetRef::Id { id, abs } = s {
+            if *id == from && !(relative_only && *abs) {
                 *id = to;
                 changed = true;
             }
@@ -2131,6 +2438,10 @@ fn repoint_sheet(f: &mut tally_formula::Formula, from: SheetId, to: SheetId) -> 
         RefExpr::Invalid => {}
     });
     changed
+}
+
+fn repoint_sheet(f: &mut tally_formula::Formula, from: SheetId, to: SheetId) -> bool {
+    repoint_sheet_refs(f, from, to, true)
 }
 
 /// A formula copied to a new sheet: address, AST, raw text, array size.
@@ -2214,7 +2525,7 @@ pub fn copy_sheet(
         wb.set_value(a, v);
     }
     // Sheet-scoped names first, so the copy's formulas resolve them.
-    let names = crate::undo::names_snapshot(wb);
+    let names = crate::undo::names_snapshot_tx(wb, fx);
     let scoped: Vec<(String, crate::names::NameDef)> = wb
         .names
         .defined()
@@ -2223,7 +2534,8 @@ pub fn copy_sheet(
         .collect();
     for (n, def) in scoped {
         let mut f = (*def.formula).clone();
-        repoint_sheet(&mut f, sheet, new);
+        // A sheet-local name of the copy names the copy (Excel).
+        repoint_sheet_refs(&mut f, sheet, new, false);
         let mut base = def.base;
         if base.sheet == sheet {
             base.sheet = new;
@@ -2314,7 +2626,9 @@ pub fn copy_sheet(
     fx.layout(new);
     fx.objects(new);
     fx.created(u32::MAX, new);
-    Ok(vec![names, Change::RemoveSheet { id: new }])
+    let mut out: Vec<Change> = names.into_iter().collect();
+    out.push(Change::RemoveSheet { id: new });
+    Ok(out)
 }
 
 /// `Op::SetSheetHidden`.
@@ -2386,24 +2700,35 @@ pub fn set_tab_color(
 
 /// A label made into a name as AOO does: spaces and other characters
 /// that are not letters, digits, `_` or `.` become `_`; a leading digit
-/// gets a `_` in front.
-pub fn name_from_label(label: &str) -> Option<String> {
-    let t = label.trim();
+/// A valid name made from a label, as AOO's `ScRangeData::MakeValidName`
+/// (`sc/source/core/tool/rangenam.cxx:479-519`): leading characters that
+/// cannot be in a name are dropped, a name that cannot start with its
+/// first character gets a `_` in front, other invalid characters become
+/// `_` (letters of any script stay), and while the result reads as a
+/// reference a `.` becomes `_` (or a `_` goes in front): `A1` → `_A1`.
+pub fn name_from_label(wb: &Workbook, label: &str) -> Option<String> {
+    let name_char = |c: char| c.is_alphanumeric() || c == '_' || c == '.';
+    let t = label.trim_start_matches(|c: char| !name_char(c));
     if t.is_empty() {
         return None;
     }
-    let mut out = String::with_capacity(t.len() + 1);
-    for c in t.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' || c == '.' {
-            out.push(c);
-        } else {
-            out.push('_');
-        }
-    }
-    if out.starts_with(|c: char| !c.is_ascii_alphabetic() && c != '_') {
+    let mut out: String = t
+        .chars()
+        .map(|c| if name_char(c) { c } else { '_' })
+        .collect();
+    if out.starts_with(|c: char| !(c.is_alphabetic() || c == '_')) {
         out.insert(0, '_');
     }
-    Some(out)
+    for _ in 0..4 {
+        if crate::names::validate_name(wb, &out).is_ok() {
+            return Some(out);
+        }
+        match out.find('.') {
+            Some(i) => out.replace_range(i..=i, "_"),
+            None => out.insert(0, '_'),
+        }
+    }
+    crate::names::validate_name(wb, &out).ok().map(|_| out)
 }
 
 fn sheet_ref_text(wb: &Workbook, sheet: SheetId) -> String {
@@ -2435,10 +2760,18 @@ pub fn create_names_from_labels(
     if range.cell_count() > MAX_OP_CELLS {
         return Err(ApiError::invalid_argument("the range is too large"));
     }
+    // AOO `ScDocFunc::CreateNames` (`sc/source/ui/docshell/docfunc.cxx:4560-4631`).
+    if ((from.top || from.bottom) && range.r0 == range.r1)
+        || ((from.left || from.right) && range.c0 == range.c1)
+    {
+        return Err(ApiError::invalid_argument(
+            "the range has no cells besides the labels",
+        ));
+    }
     let inner_r0 = range.r0 + u32::from(from.top);
-    let inner_r1 = range.r1.saturating_sub(u32::from(from.bottom));
+    let inner_r1 = range.r1 - u32::from(from.bottom);
     let inner_c0 = range.c0 + u32::from(from.left);
-    let inner_c1 = range.c1.saturating_sub(u32::from(from.right));
+    let inner_c1 = range.c1 - u32::from(from.right);
     let sheet_text = sheet_ref_text(wb, sheet);
     let abs = |r0: u32, c0: u32, r1: u32, c1: u32| {
         format!(
@@ -2450,45 +2783,56 @@ pub fn create_names_from_labels(
             r1 + 1
         )
     };
+    // name → reference; a later label of the same name replaces an
+    // earlier one (`CreateOneName` with `bApi`).
     let mut defs: Vec<(String, String)> = Vec::new();
-    let mut add = |label: String, refers: String| {
-        if let Some(n) = name_from_label(&label) {
-            if crate::names::validate_name(wb, &n).is_ok()
-                && !defs.iter().any(|(x, _)| x.eq_ignore_ascii_case(&n))
+    let mut add = |r: u32, c: u32, refers: String| {
+        let a = CellAddr::new(sheet, r, c);
+        // Cells holding a value are not labels (`!HasValueData`).
+        if !matches!(wb.value(a), Value::Text(_)) {
+            return;
+        }
+        if let Some(n) = name_from_label(wb, &display_text(wb, a)) {
+            match defs
+                .iter_mut()
+                .find(|(x, _)| x.to_lowercase() == n.to_lowercase())
             {
-                defs.push((n, refers));
+                Some(d) => d.1 = refers,
+                None => defs.push((n, refers)),
             }
         }
     };
-    if inner_r0 <= inner_r1 && (from.top || from.bottom) {
-        for c in inner_c0..=inner_c1.min(range.c1) {
-            if from.top {
-                add(
-                    display_text(wb, CellAddr::new(sheet, range.r0, c)),
-                    abs(inner_r0, c, inner_r1, c),
-                );
-            }
-            if from.bottom {
-                add(
-                    display_text(wb, CellAddr::new(sheet, range.r1, c)),
-                    abs(inner_r0, c, inner_r1, c),
-                );
+    if inner_r0 <= inner_r1 && inner_c0 <= inner_c1 {
+        let content = abs(inner_r0, inner_c0, inner_r1, inner_c1);
+        if from.top {
+            for c in inner_c0..=inner_c1 {
+                add(range.r0, c, abs(inner_r0, c, inner_r1, c));
             }
         }
-    }
-    if inner_c0 <= inner_c1 && (from.left || from.right) {
-        for r in inner_r0..=inner_r1.min(range.r1) {
-            if from.left {
-                add(
-                    display_text(wb, CellAddr::new(sheet, r, range.c0)),
-                    abs(r, inner_c0, r, inner_c1),
-                );
+        if from.left {
+            for r in inner_r0..=inner_r1 {
+                add(r, range.c0, abs(r, inner_c0, r, inner_c1));
             }
-            if from.right {
-                add(
-                    display_text(wb, CellAddr::new(sheet, r, range.c1)),
-                    abs(r, inner_c0, r, inner_c1),
-                );
+        }
+        if from.bottom {
+            for c in inner_c0..=inner_c1 {
+                add(range.r1, c, abs(inner_r0, c, inner_r1, c));
+            }
+        }
+        if from.right {
+            for r in inner_r0..=inner_r1 {
+                add(r, range.c1, abs(r, inner_c0, r, inner_c1));
+            }
+        }
+        // Corner labels name the whole content.
+        for (on, r, c) in [
+            (from.top && from.left, range.r0, range.c0),
+            (from.top && from.right, range.r0, range.c1),
+            (from.bottom && from.left, range.r1, range.c0),
+            (from.bottom && from.right, range.r1, range.c1),
+        ] {
+            if on {
+                add(r, c, content.clone());
             }
         }
     }
@@ -2734,7 +3078,7 @@ pub fn set_custom_sort_lists(
 }
 
 /// The data block around `(r, c)` in column `c`: the contiguous run of
-/// non-empty rows (AutoInput looks in it).
+/// non-empty rows.
 pub fn data_block_rows(wb: &Workbook, sheet: SheetId, r: u32, c: u32) -> (u32, u32) {
     let Some(s) = wb.sheet(sheet) else {
         return (r, r);
@@ -2805,8 +3149,16 @@ mod tests {
 
     #[test]
     fn labels_to_names() {
-        assert_eq!(name_from_label("Net Sales").as_deref(), Some("Net_Sales"));
-        assert_eq!(name_from_label("2024").as_deref(), Some("_2024"));
-        assert_eq!(name_from_label("  "), None);
+        let wb = Workbook::new();
+        let n = |t: &str| name_from_label(&wb, t);
+        assert_eq!(n("Net Sales").as_deref(), Some("Net_Sales"));
+        assert_eq!(n("2024").as_deref(), Some("_2024"));
+        assert_eq!(n("  "), None);
+        // AOO MakeValidName: leading junk dropped, references prefixed,
+        // letters of any script kept.
+        assert_eq!(n("  Lead").as_deref(), Some("Lead"));
+        assert_eq!(n("A1").as_deref(), Some("_A1"));
+        assert_eq!(n("r1").as_deref(), Some("_r1"));
+        assert_eq!(n("Größe").as_deref(), Some("Größe"));
     }
 }

@@ -6,7 +6,7 @@
  */
 import type { ChartDto } from "@tally/bridge";
 import { AxisModel, anchorToPx, pxToAnchor, type AnchorAxes } from "@tally/grid";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { nodeVisible } from "../src/charts/chartMounts";
 import { objectId, objectsFor, parseObjectId, useChartStore } from "../src/charts/chartStore";
 import { defaultChart } from "../src/charts/chartFeatures";
@@ -130,5 +130,33 @@ describe("a drag on the object layer", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(ops).toHaveLength(1);
     node.remove();
+  });
+});
+
+describe("chart data refresh budget (review 4 C3)", () => {
+  it("fetches at most 20 charts, 4 at a time, and coalesces chartsChanged", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let calls = 0;
+    const client = {
+      chartData: async (_doc: number, sheet: number, id: number) => {
+        calls++;
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 1));
+        inFlight--;
+        return { chart: { sheet, id }, version: 1, categories: [], series: [], truncated: false, problems: [] };
+      },
+    };
+    const ctl = { info: { doc: 1 }, sheet: 1, client, grid: null };
+    useChartStore.getState().setObjects(1, [], []);
+    const f = new ObjectFeatures(ctl as never);
+    const ids = Array.from({ length: 1000 }, (_, i) => i + 1);
+    // Three bursts inside the debounce window become one flush of at most 20 fetches.
+    const p = [f.scheduleRefresh(ids), f.scheduleRefresh(ids), f.scheduleRefresh(ids)];
+    await Promise.all(p);
+    expect(calls).toBe(20);
+    expect(maxInFlight).toBeLessThanOrEqual(4);
+    vi.restoreAllMocks();
   });
 });

@@ -5,9 +5,26 @@
 //! and the remaining fields mirror the chart DTO in `tally-api`.
 //! Every field has a serde default so older files and clients load.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::CellRangeLocal;
+
+/// Most literal points (number and text slots of `numLit`/`strLit` and
+/// `local-table` values, counted per chart reference) one document may
+/// hold. Readers and the engine drop the literal data of the charts past
+/// it with a warning.
+pub const MAX_LITERAL_POINTS: usize = 1_000_000;
+
+/// Most chart series one document may hold (all charts, counted per
+/// chart reference); readers and the engine cut the series of the charts
+/// past it with a warning.
+pub const MAX_SERIES_PER_DOCUMENT: usize = 32_000;
+
+/// Most picture bytes per document, counted once per picture reference
+/// (a picture shown by 1,000 frames counts 1,000 times).
+pub const MAX_TOTAL_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 
 /// A data range of a chart: one or more areas (`~` unions), each on a
 /// sheet given by its tab index. An empty, non-invalid value means "not
@@ -475,6 +492,45 @@ pub struct ChartData {
     pub include_hidden: bool,
 }
 
+impl ChartValuesData {
+    /// Number of slots (points, empty or not).
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Literal(v) => v.len(),
+            Self::LiteralText(v) => v.len(),
+        }
+    }
+
+    /// `true` when there is no slot.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl ChartData {
+    /// Literal slots held by the chart (categories and every series'
+    /// values, X values and sizes), for [`MAX_LITERAL_POINTS`].
+    pub fn literal_points(&self) -> usize {
+        let n = |v: &Option<ChartValuesData>| v.as_ref().map_or(0, ChartValuesData::len);
+        n(&self.literal_categories)
+            + self
+                .series
+                .iter()
+                .map(|s| n(&s.literal_values) + n(&s.literal_x) + n(&s.literal_sizes))
+                .sum::<usize>()
+    }
+
+    /// Drops every literal value list (the ranges are kept).
+    pub fn drop_literals(&mut self) {
+        self.literal_categories = None;
+        for s in &mut self.series {
+            s.literal_values = None;
+            s.literal_x = None;
+            s.literal_sizes = None;
+        }
+    }
+}
+
 impl Default for ChartData {
     fn default() -> Self {
         Self {
@@ -527,7 +583,8 @@ pub struct ImageData {
     /// Media type (`image/png`, `image/jpeg`).
     #[serde(default)]
     pub mime: String,
-    /// The encoded picture.
+    /// The encoded picture, shared by every frame that shows it (readers
+    /// load a picture once per document; cloning never copies the bytes).
     #[serde(default)]
-    pub bytes: Vec<u8>,
+    pub bytes: Arc<[u8]>,
 }

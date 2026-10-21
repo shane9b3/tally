@@ -66,6 +66,7 @@ export function ChartLayer() {
     if (!m || !m2) return;
     const run = (): void => {
       if (ctl.grid) m.sync(ctl.grid, charts, data, images, imageData, theme);
+      ctl.w5.objects.fetchStaleVisible();
       const g2 = split ? ctl.w5.secondaryGrid : null;
       if (g2) m2.sync(g2, charts, data, images, imageData, theme);
       else m2.clear();

@@ -15,7 +15,7 @@ use tally_model::{
     StdConditionData, StdConnectorData, StdFilterOpData, StdFilterOptionsData, SubtotalGroupData,
     SubtotalsData, WorkbookData,
 };
-use tally_types::{MAX_COLS, MAX_ROWS};
+use tally_types::{DateEpoch, MAX_COLS, MAX_ROWS};
 
 use crate::units::{color_hex, fmt_f64, parse_color};
 use crate::v03::{base_address, parse_base, parse_range_list, range_list};
@@ -130,26 +130,83 @@ fn group_tag(rows: bool) -> &'static str {
     }
 }
 
-/// Opens every group starting at `i`, outermost first.
-pub(crate) fn write_group_starts(s: &mut String, groups: &[OutlineGroupData], i: u32, rows: bool) {
-    let mut starting: Vec<&OutlineGroupData> = groups.iter().filter(|g| g.start == i).collect();
-    starting.sort_by_key(|g| (g.level, std::cmp::Reverse(g.end)));
-    for g in starting {
-        let _ = write!(
-            s,
-            r#"<{} table:display="{}">"#,
-            group_tag(rows),
-            !g.collapsed
-        );
-    }
+/// Writes the column or row groups of a sheet in index order: opens
+/// the groups starting at an index (outermost first), closes those ending
+/// there (innermost first) and reports the next boundary, so repeated
+/// runs stop at group starts and ends.
+pub(crate) struct GroupWalk<'a> {
+    /// Groups by start, outermost first.
+    order: Vec<&'a OutlineGroupData>,
+    /// Next group of `order` to open.
+    next: usize,
+    /// Ends of the open groups, outermost first.
+    open: Vec<u32>,
+    /// Starts and `end + 1` of every group, ascending.
+    boundaries: Vec<u32>,
+    rows: bool,
 }
 
-/// Closes every group ending at `i`, innermost first.
-pub(crate) fn write_group_ends(s: &mut String, groups: &[OutlineGroupData], i: u32, rows: bool) {
-    let mut ending: Vec<&OutlineGroupData> = groups.iter().filter(|g| g.end == i).collect();
-    ending.sort_by_key(|g| std::cmp::Reverse((g.level, std::cmp::Reverse(g.start))));
-    for _ in ending {
-        let _ = write!(s, "</{}>", group_tag(rows));
+impl<'a> GroupWalk<'a> {
+    pub(crate) fn new(groups: &'a [OutlineGroupData], rows: bool) -> Self {
+        let mut order: Vec<&OutlineGroupData> =
+            groups.iter().filter(|g| g.start <= g.end).collect();
+        order.sort_by_key(|g| (g.start, g.level, std::cmp::Reverse(g.end)));
+        let mut boundaries: Vec<u32> = order
+            .iter()
+            .flat_map(|g| [g.start, g.end.saturating_add(1)])
+            .collect();
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        Self {
+            order,
+            next: 0,
+            open: Vec::new(),
+            boundaries,
+            rows,
+        }
+    }
+
+    /// Opens every group starting at or before `i` that is not open yet.
+    pub(crate) fn open(&mut self, s: &mut String, i: u32) {
+        while let Some(g) = self.order.get(self.next) {
+            if g.start > i {
+                break;
+            }
+            let _ = write!(
+                s,
+                r#"<{} table:display="{}">"#,
+                group_tag(self.rows),
+                !g.collapsed
+            );
+            self.open.push(g.end);
+            self.next += 1;
+        }
+    }
+
+    /// Closes every open group ending at or before `i`, innermost first.
+    pub(crate) fn close(&mut self, s: &mut String, i: u32) {
+        while self.open.last().is_some_and(|end| *end <= i) {
+            self.open.pop();
+            let _ = write!(s, "</{}>", group_tag(self.rows));
+        }
+    }
+
+    /// Closes every group still open.
+    pub(crate) fn close_all(&mut self, s: &mut String) {
+        while self.open.pop().is_some() {
+            let _ = write!(s, "</{}>", group_tag(self.rows));
+        }
+    }
+
+    /// The first boundary after `i`.
+    pub(crate) fn next_boundary(&mut self, i: u32) -> Option<u32> {
+        let k = self.boundaries.partition_point(|b| *b <= i);
+        self.boundaries.get(k).copied()
+    }
+
+    /// The last index any group covers.
+    pub(crate) fn last_index(&self) -> Option<u32> {
+        self.order.iter().map(|g| g.end).max()
     }
 }
 
@@ -181,8 +238,13 @@ pub(crate) fn close_group(sheet: &mut SheetData, open: &OpenGroup, end: u32, sti
     };
     if list.len() < 100_000 {
         list.push(g);
-        list.sort_by_key(|g| (g.level, g.start, g.end));
     }
+}
+
+/// Sorts the groups read for a sheet (once, after the sheet is read).
+pub(crate) fn sort_groups(sheet: &mut SheetData) {
+    sheet.row_groups.sort_by_key(|g| (g.level, g.start, g.end));
+    sheet.col_groups.sort_by_key(|g| (g.level, g.start, g.end));
 }
 
 // ---------------------------------------------------------------------------
@@ -735,6 +797,7 @@ fn write_axis_field(
     orientation: &str,
     data: &PivotData,
     names: &dyn Fn(u32) -> String,
+    epoch: DateEpoch,
 ) {
     s.push_str("<table:data-pilot-field");
     attr(s, "table:source-field-name", &names(f.source_col));
@@ -820,30 +883,34 @@ fn write_axis_field(
                 attr(s, "table:step", &fmt_f64(*step));
             }
             PivotGroupData::Date { start, end, parts } => {
-                attr(
-                    s,
-                    "table:date-start",
-                    &start.map_or("auto".to_string(), fmt_f64),
-                );
-                attr(
-                    s,
-                    "table:date-end",
-                    &end.map_or("auto".to_string(), fmt_f64),
-                );
-                let (by, step) = parts
-                    .first()
-                    .map(|p| match p {
-                        DatePartData::Seconds => ("seconds", 1),
-                        DatePartData::Minutes => ("minutes", 1),
-                        DatePartData::Hours => ("hours", 1),
-                        DatePartData::Days(n) => ("days", *n),
-                        DatePartData::Months => ("months", 1),
-                        DatePartData::Quarters => ("quarters", 1),
-                        DatePartData::Years => ("years", 1),
-                    })
-                    .unwrap_or(("days", 1));
-                attr(s, "table:grouped-by", by);
-                let _ = write!(s, r#" table:step="{step}""#);
+                // AOO writes the limits as ISO date-times
+                // (`XMLExportDataPilot.cxx:560-581`).
+                let iso =
+                    |v: &Option<f64>| v.map_or("auto".to_string(), |v| serial_to_iso(v, epoch));
+                attr(s, "table:date-start", &iso(start));
+                attr(s, "table:date-end", &iso(end));
+                match parts.as_slice() {
+                    // Days alone with a step: numeric grouping of dates
+                    // (no `grouped-by`, AOO `xmldpimp.cxx:1033-1040`).
+                    [DatePartData::Days(n)] if *n >= 2 => {
+                        let _ = write!(s, r#" table:step="{n}""#);
+                    }
+                    _ => {
+                        let by = parts
+                            .first()
+                            .map(|p| match p {
+                                DatePartData::Seconds => "seconds",
+                                DatePartData::Minutes => "minutes",
+                                DatePartData::Hours => "hours",
+                                DatePartData::Days(_) => "days",
+                                DatePartData::Months => "months",
+                                DatePartData::Quarters => "quarters",
+                                DatePartData::Years => "years",
+                            })
+                            .unwrap_or("days");
+                        attr(s, "table:grouped-by", by);
+                    }
+                }
                 // Extra parts are kept in application data.
                 if parts.len() > 1 {
                     let extra: Vec<String> = parts
@@ -866,6 +933,29 @@ fn write_axis_field(
         s.push_str("/>");
     }
     s.push_str("</table:data-pilot-field>");
+}
+
+/// Serial date → ISO date-time (`2024-01-01T00:00:00`), as AOO writes
+/// pivot date limits.
+fn serial_to_iso(v: f64, epoch: DateEpoch) -> String {
+    let days = v.floor();
+    let secs = ((v - days) * 86_400.0).round() as i64;
+    // Howard Hinnant's civil_from_days.
+    let z = days as i64 + crate::units::epoch_base(epoch) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs / 60) % 60,
+        secs % 60
+    )
 }
 
 /// Writes `table:data-pilot-tables` for every sheet's pivots.
@@ -994,21 +1084,43 @@ fn write_pivot(s: &mut String, p: &PivotData, tab: usize, sheet: &SheetData, dat
         _ => {}
     }
     for f in &p.row_fields {
-        write_axis_field(s, f, "row", p, &names);
+        write_axis_field(
+            s,
+            f,
+            "row",
+            p,
+            &names,
+            data.settings.calc_settings.date_epoch,
+        );
     }
     for f in &p.col_fields {
-        write_axis_field(s, f, "column", p, &names);
+        write_axis_field(
+            s,
+            f,
+            "column",
+            p,
+            &names,
+            data.settings.calc_settings.date_epoch,
+        );
     }
     for f in &p.page_fields {
-        write_axis_field(s, f, "page", p, &names);
+        write_axis_field(
+            s,
+            f,
+            "page",
+            p,
+            &names,
+            data.settings.calc_settings.date_epoch,
+        );
     }
     for d in &p.data_fields {
         s.push_str("<table:data-pilot-field");
         attr(s, "table:source-field-name", &names(d.source_col));
         s.push_str(r#" table:orientation="data" table:used-hierarchy="1""#);
         attr(s, "table:function", agg_name(d.function));
+        // The caption is the layout name (`XMLExportDataPilot.cxx:690-696`).
         if let Some(c) = &d.caption {
-            attr(s, "table:application-data", c);
+            attr(s, "tableooo:display-name", c);
         }
         s.push('>');
         if let Some(sa) = &d.show_as {
@@ -1062,13 +1174,14 @@ fn write_pivot(s: &mut String, p: &PivotData, tab: usize, sheet: &SheetData, dat
 pub(crate) fn parse_pivot_tables<R: BufRead>(
     xml: &mut XmlReader<R>,
     sheets: &mut [SheetData],
+    epoch: DateEpoch,
 ) -> Result<(), OdsError> {
     let d = xml.depth();
     let mut count = 0usize;
     loop {
         match xml.next()? {
             Ev::Start(e) if e.name == "table:data-pilot-table" => {
-                let parsed = parse_pivot(xml, &e, sheets)?;
+                let parsed = parse_pivot(xml, &e, sheets, epoch)?;
                 if let Some((tab, p)) = parsed {
                     if count < 10_000 {
                         if let Some(sh) = sheets.get_mut(tab) {
@@ -1095,6 +1208,7 @@ fn parse_pivot<R: BufRead>(
     xml: &mut XmlReader<R>,
     e: &Elem,
     sheets: &[SheetData],
+    epoch: DateEpoch,
 ) -> Result<Option<(usize, PivotData)>, OdsError> {
     let mut p = PivotData {
         name: e.attr("table:name").unwrap_or("DataPilot").to_string(),
@@ -1162,6 +1276,12 @@ fn parse_pivot<R: BufRead>(
                     xml.skip()?;
                 }
                 "table:data-pilot-field" => {
+                    // Bounded: past the engine's field cap the pivot is
+                    // refused on load anyway (security review 4, H7).
+                    if pending.len() >= 1024 {
+                        xml.skip()?;
+                        continue;
+                    }
                     let orientation = c.attr("table:orientation").unwrap_or("row").to_string();
                     let source = c
                         .attr("table:source-field-name")
@@ -1189,7 +1309,13 @@ fn parse_pivot<R: BufRead>(
                                 .attr("table:function")
                                 .and_then(agg_parse)
                                 .unwrap_or(AggFnData::Sum),
-                            caption: c.attr("table:application-data").map(str::to_string),
+                            // The layout name (`xmldpimp.cxx:1637-1657`);
+                            // older Tally files used application data.
+                            caption: c
+                                .attr("tableooo:display-name")
+                                .or_else(|| c.attr("table:application-data"))
+                                .filter(|t| !t.is_empty())
+                                .map(str::to_string),
                             show_as,
                         };
                         pending.push(PendingField {
@@ -1200,13 +1326,15 @@ fn parse_pivot<R: BufRead>(
                             sort_df: None,
                             auto_df: None,
                             base_field,
+                            group_source: None,
                         });
                     } else {
                         let mut f = PivotFieldData {
                             page_item: c.attr("table:selected-page").map(str::to_string),
                             ..PivotFieldData::default()
                         };
-                        let (sort_df, auto_df) = parse_axis_field_body(xml, &mut f)?;
+                        let (sort_df, auto_df, group_source) =
+                            parse_axis_field_body(xml, &mut f, epoch)?;
                         pending.push(PendingField {
                             source,
                             orientation,
@@ -1215,6 +1343,7 @@ fn parse_pivot<R: BufRead>(
                             sort_df,
                             auto_df,
                             base_field: None,
+                            group_source,
                         });
                     }
                 }
@@ -1225,20 +1354,23 @@ fn parse_pivot<R: BufRead>(
             _ => {}
         }
     }
-    let col_of = |name: &str| -> u32 {
-        header
-            .iter()
-            .position(|h| h == name)
-            .map_or(0, |i| i as u32)
-    };
+    // Field names resolve against the source header; a group dimension
+    // (`Date2`) through its `data-pilot-groups/@source-field-name`;
+    // anything else is dropped (AOO `xmldpimp.cxx:1630-1700`).
+    let col_of =
+        |name: &str| -> Option<u32> { header.iter().position(|h| h == name).map(|i| i as u32) };
     // Data fields first: sort/auto-show refer to them by caption.
     let mut data_fields: Vec<PivotDataFieldData> = Vec::new();
     for pf in &pending {
         if let Some(df) = &pf.data {
+            let Some(col) = col_of(&pf.source) else {
+                continue;
+            };
             let mut df = df.clone();
-            df.source_col = col_of(&pf.source);
+            df.source_col = col;
             if let (Some(sa), Some(bf)) = (df.show_as.as_mut(), &pf.base_field) {
-                sa.base_field = Some(col_of(bf));
+                // An unknown base field stays unset (an error value, as AOO).
+                sa.base_field = col_of(bf);
             }
             data_fields.push(df);
         }
@@ -1254,21 +1386,21 @@ fn parse_pivot<R: BufRead>(
             .map_or(0, |i| i as u32)
     };
     for pf in pending {
-        let col = col_of(&pf.source);
-        if let Some(mut f) = pf.axis {
-            f.source_col = col;
-            f.name = pf.source.clone();
-            if let (PivotSortData::Data { data_field, .. }, Some(n)) = (&mut f.sort, &pf.sort_df) {
-                *data_field = resolve(n);
-            }
-            if let (Some(a), Some(n)) = (f.auto_show.as_mut(), &pf.auto_df) {
-                a.data_field = resolve(n);
-            }
-            match pf.orientation.as_str() {
-                "row" => p.row_fields.push(f),
-                "column" => p.col_fields.push(f),
-                _ => p.page_fields.push(f),
-            }
+        let Some(mut f) = pf.axis else { continue };
+        let col = col_of(&pf.source).or_else(|| pf.group_source.as_deref().and_then(col_of));
+        let Some(col) = col else { continue };
+        f.source_col = col;
+        f.name = pf.source.clone();
+        if let (PivotSortData::Data { data_field, .. }, Some(n)) = (&mut f.sort, &pf.sort_df) {
+            *data_field = resolve(n);
+        }
+        if let (Some(a), Some(n)) = (f.auto_show.as_mut(), &pf.auto_df) {
+            a.data_field = resolve(n);
+        }
+        match pf.orientation.as_str() {
+            "row" => p.row_fields.push(f),
+            "column" => p.col_fields.push(f),
+            _ => p.page_fields.push(f),
         }
     }
     p.data_fields = data_fields;
@@ -1287,6 +1419,8 @@ struct PendingField {
     sort_df: Option<String>,
     auto_df: Option<String>,
     base_field: Option<String>,
+    /// `data-pilot-groups/@source-field-name` of a group dimension.
+    group_source: Option<String>,
 }
 
 /// The header texts of a source range.
@@ -1364,15 +1498,21 @@ fn parse_data_field_body<R: BufRead>(
     Ok((out, base))
 }
 
+/// The sort and auto-show data field names and the group source of an
+/// axis field.
+type AxisRefs = (Option<String>, Option<String>, Option<String>);
+
 fn parse_axis_field_body<R: BufRead>(
     xml: &mut XmlReader<R>,
     f: &mut PivotFieldData,
-) -> Result<(Option<String>, Option<String>), OdsError> {
+    epoch: DateEpoch,
+) -> Result<AxisRefs, OdsError> {
     let d = xml.depth();
     let mut manual: Vec<String> = Vec::new();
     let mut sort_is_manual = false;
     let mut sort_df: Option<String> = None;
     let mut auto_df: Option<String> = None;
+    let mut group_source: Option<String> = None;
     loop {
         match xml.next()? {
             Ev::Start(c) => match c.name.as_str() {
@@ -1479,12 +1619,30 @@ fn parse_axis_field_body<R: BufRead>(
                     xml.skip()?;
                 }
                 "table:data-pilot-groups" => {
+                    group_source = c
+                        .attr("table:source-field-name")
+                        .filter(|n| !n.is_empty())
+                        .map(str::to_string);
                     let num = |k: &str| c.attr(k).and_then(|v| v.trim().parse::<f64>().ok());
+                    // Date limits are ISO date-times (`2024-01-01T00:00:00`);
+                    // older Tally files wrote serials.
+                    let date = |k: &str| {
+                        c.attr(k).and_then(|v| {
+                            v.trim()
+                                .parse::<f64>()
+                                .ok()
+                                .or_else(|| crate::units::date_value_to_serial(v, epoch))
+                        })
+                    };
+                    let step_attr = c
+                        .attr("table:step")
+                        .and_then(|v| v.trim().parse::<f64>().ok());
+                    let dated =
+                        c.attr("table:date-start").is_some() || c.attr("table:date-end").is_some();
                     f.group = Some(if let Some(by) = c.attr("table:grouped-by") {
-                        let step = c
-                            .attr("table:step")
-                            .and_then(|v| v.trim().parse::<u32>().ok())
-                            .unwrap_or(1);
+                        let step = step_attr
+                            .filter(|v| v.is_finite() && *v >= 1.0 && *v <= f64::from(u32::MAX))
+                            .map_or(1, |v| v as u32);
                         let part = |name: &str, n: u32| match name {
                             "seconds" => Some(DatePartData::Seconds),
                             "minutes" => Some(DatePartData::Minutes),
@@ -1497,7 +1655,7 @@ fn parse_axis_field_body<R: BufRead>(
                         };
                         let mut parts: Vec<DatePartData> = part(by, step).into_iter().collect();
                         if let Some(extra) = c.attr("table:application-data") {
-                            for x in extra.split(',') {
+                            for x in extra.split(',').take(8) {
                                 let (n, st) = match x.split_once(':') {
                                     Some((a, b)) => (a, b.parse::<u32>().unwrap_or(1)),
                                     None => (x, 1),
@@ -1508,9 +1666,19 @@ fn parse_axis_field_body<R: BufRead>(
                             }
                         }
                         PivotGroupData::Date {
-                            start: num("table:date-start"),
-                            end: num("table:date-end"),
+                            start: date("table:date-start"),
+                            end: date("table:date-end"),
                             parts,
+                        }
+                    } else if dated {
+                        // Days with a step: numeric grouping of dates.
+                        let n = step_attr
+                            .filter(|v| v.is_finite() && *v >= 1.0 && *v <= f64::from(u32::MAX))
+                            .map_or(1, |v| v as u32);
+                        PivotGroupData::Date {
+                            start: date("table:date-start"),
+                            end: date("table:date-end"),
+                            parts: vec![DatePartData::Days(n.max(2))],
                         }
                     } else {
                         PivotGroupData::Numeric {
@@ -1531,7 +1699,7 @@ fn parse_axis_field_body<R: BufRead>(
     if sort_is_manual && !manual.is_empty() {
         f.sort = PivotSortData::Manual { order: manual };
     }
-    Ok((sort_df, auto_df))
+    Ok((sort_df, auto_df, group_source))
 }
 
 // ---------------------------------------------------------------------------
@@ -1649,6 +1817,149 @@ pub(crate) fn apply_view_item(sheet: &mut SheetData, name: &str, value: &str) {
 mod tests {
     use super::*;
 
+    fn pivot_sheets() -> Vec<SheetData> {
+        let cell = |row, col, t: &str| tally_model::CellData {
+            row,
+            col,
+            content: tally_model::CellContentData::Value(tally_types::Value::text(t)),
+            style: None,
+        };
+        vec![
+            SheetData {
+                name: "Data".into(),
+                cells: vec![cell(0, 0, "Date"), cell(0, 1, "Amount")],
+                ..SheetData::default()
+            },
+            SheetData {
+                name: "Pivot".into(),
+                ..SheetData::default()
+            },
+        ]
+    }
+
+    fn parse_pivots_xml(xml: &str, sheets: &mut [SheetData]) {
+        let mut r = XmlReader::new(
+            xml.as_bytes(),
+            crate::xml::XmlLimits {
+                max_depth: 64,
+                max_attrs: 64,
+            },
+        );
+        assert!(matches!(r.next(), Ok(Ev::Start(_))));
+        parse_pivot_tables(&mut r, sheets, DateEpoch::D1899).unwrap();
+    }
+
+    /// Correctness review 4, H7 and M14: a LibreOffice-shaped table with a
+    /// group dimension ("Date2" grouping "Date" by years), an unknown
+    /// column field, an ISO date limit and a display name.
+    #[test]
+    fn pivot_group_dimensions_unknown_fields_and_display_names() {
+        let xml = r#"<table:data-pilot-tables><table:data-pilot-table table:name="DataPilot1" table:target-range-address="Pivot.A1:Pivot.C9"><table:source-cell-range table:cell-range-address="Data.A1:Data.B5"/><table:data-pilot-field table:source-field-name="Date2" table:orientation="row"><table:data-pilot-groups table:source-field-name="Date" table:date-start="auto" table:date-end="auto" table:grouped-by="years"/></table:data-pilot-field><table:data-pilot-field table:source-field-name="Date" table:orientation="row"><table:data-pilot-groups table:source-field-name="Date" table:date-start="2024-01-01T00:00:00" table:date-end="auto" table:grouped-by="months"/></table:data-pilot-field><table:data-pilot-field table:source-field-name="Amount" tableooo:display-name="My total" table:orientation="data" table:function="sum"/><table:data-pilot-field table:source-field-name="Nonexistent" table:orientation="column"/><table:data-pilot-field table:source-field-name="Gone" table:orientation="data" table:function="sum"/></table:data-pilot-table></table:data-pilot-tables>"#;
+        let mut sheets = pivot_sheets();
+        parse_pivots_xml(xml, &mut sheets);
+        let p = &sheets[1].pivots[0];
+        let rows: Vec<(u32, &str)> = p
+            .row_fields
+            .iter()
+            .map(|f| (f.source_col, f.name.as_str()))
+            .collect();
+        assert_eq!(rows, [(0, "Date2"), (0, "Date")]);
+        assert!(
+            p.col_fields.is_empty(),
+            "the unknown field is dropped, not column 0"
+        );
+        assert_eq!(p.data_fields.len(), 1);
+        assert_eq!(p.data_fields[0].source_col, 1);
+        assert_eq!(p.data_fields[0].caption.as_deref(), Some("My total"));
+        // 2024-01-01 is serial 45292.
+        assert_eq!(
+            p.row_fields[1].group,
+            Some(PivotGroupData::Date {
+                start: Some(45292.0),
+                end: None,
+                parts: vec![DatePartData::Months],
+            })
+        );
+    }
+
+    /// M14: date limits are written as ISO date-times, numeric day groups
+    /// without `grouped-by`, captions as `tableooo:display-name`; all read
+    /// back.
+    #[test]
+    fn pivot_dates_and_captions_round_trip() {
+        let mut sheets = pivot_sheets();
+        sheets[1].pivots.push(PivotData {
+            name: "P".into(),
+            source: PivotSourceData::Range {
+                sheet: 0,
+                range: CellRangeLocal {
+                    r0: 0,
+                    c0: 0,
+                    r1: 4,
+                    c1: 1,
+                },
+            },
+            row_fields: vec![
+                PivotFieldData {
+                    source_col: 0,
+                    group: Some(PivotGroupData::Date {
+                        start: Some(45292.0),
+                        end: Some(45400.5),
+                        parts: vec![DatePartData::Months, DatePartData::Years],
+                    }),
+                    ..PivotFieldData::default()
+                },
+                PivotFieldData {
+                    source_col: 0,
+                    group: Some(PivotGroupData::Date {
+                        start: None,
+                        end: None,
+                        parts: vec![DatePartData::Days(7)],
+                    }),
+                    ..PivotFieldData::default()
+                },
+            ],
+            data_fields: vec![PivotDataFieldData {
+                source_col: 1,
+                function: AggFnData::Sum,
+                caption: Some("Rev total".into()),
+                show_as: None,
+            }],
+            ..PivotData::default()
+        });
+        let data = WorkbookData {
+            sheets: sheets.clone(),
+            ..WorkbookData::default()
+        };
+        let mut out = String::new();
+        write_pivots(&mut out, &data);
+        assert!(
+            out.contains(r#"table:date-start="2024-01-01T00:00:00""#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"table:date-end="2024-04-18T12:00:00""#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"tableooo:display-name="Rev total""#),
+            "{out}"
+        );
+        assert!(!out.contains(r#"table:grouped-by="days""#), "{out}");
+        let mut back = pivot_sheets();
+        parse_pivots_xml(&out, &mut back);
+        let p = &back[1].pivots[0];
+        assert_eq!(p.data_fields[0].caption.as_deref(), Some("Rev total"));
+        assert_eq!(
+            p.row_fields[0].group,
+            sheets[1].pivots[0].row_fields[0].group
+        );
+        assert_eq!(
+            p.row_fields[1].group,
+            sheets[1].pivots[0].row_fields[1].group
+        );
+    }
+
     #[test]
     fn style_names_round_trip() {
         assert_eq!(odf_style_name("Heading 1"), "Heading_20_1");
@@ -1673,14 +1984,21 @@ mod tests {
                 collapsed: true,
             },
         ];
+        let mut w = GroupWalk::new(&g, true);
         let mut s = String::new();
-        write_group_starts(&mut s, &g, 0, true);
+        w.open(&mut s, 0);
         assert_eq!(
             s,
             r#"<table:table-row-group table:display="true"><table:table-row-group table:display="false">"#
         );
+        assert_eq!(w.next_boundary(0), Some(3));
         let mut e = String::new();
-        write_group_ends(&mut e, &g, 2, true);
+        w.close(&mut e, 2);
+        assert_eq!(e, "</table:table-row-group>");
+        assert_eq!(w.next_boundary(3), Some(6));
+        assert_eq!(w.last_index(), Some(5));
+        let mut e = String::new();
+        w.close_all(&mut e);
         assert_eq!(e, "</table:table-row-group>");
     }
 }

@@ -79,4 +79,14 @@ indent?: number | null,
 /**
  * Underline style (v0.4; also sets `underline` when not `None`).
  */
-underlineStyle?: UnderlineStyle | null, };
+underlineStyle?: UnderlineStyle | null, 
+/**
+ * `true` removes the background fill (applied before `fill`;
+ * review 4, M40). A fully transparent `fill` (alpha 0) also clears.
+ */
+clearFill?: boolean | null, 
+/**
+ * `true` resets the text colour to Automatic (applied before
+ * `color`). A fully transparent `color` (alpha 0) also resets.
+ */
+clearColor?: boolean | null, };

@@ -47,7 +47,7 @@ pub const MAX_PATH: usize = 4096;
 /// Longest locale tag.
 pub const MAX_LOCALE: usize = 64;
 /// Most series in one chart (`addChart`, `updateChart`).
-pub const MAX_CHART_SERIES: usize = 256;
+pub const MAX_CHART_SERIES: usize = 255;
 /// Most fields (row + column + page + data) in one pivot table.
 pub const MAX_PIVOT_FIELDS: usize = 64;
 /// Most constraints (and variable ranges) in one solver request.
@@ -58,6 +58,19 @@ pub const MAX_PRINT_PAGES: u32 = 10_000;
 pub const MAX_SVG_BYTES: usize = 4 * 1024 * 1024;
 /// Most chart SVGs in one print job.
 pub const MAX_PRINT_CHARTS: usize = 1_000;
+/// Most chart SVG bytes in one print job (all charts together).
+pub const MAX_SVG_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+/// Longest solver wall-clock limit the shell passes on (ms).
+pub const MAX_SOLVER_TIMEOUT_MS: u32 = 60_000;
+/// Most branch-and-bound nodes the shell passes on.
+pub const MAX_SOLVER_ITERATIONS: u32 = 100_000;
+/// Consolidation sources (the engine's limit).
+pub const MAX_CONSOLIDATE_SOURCES: usize = 255;
+/// Subtotal columns per group (the engine's limit).
+pub const MAX_SUBTOTAL_COLUMNS: usize = 1_024;
+/// Ops of the "expensive structural" kinds (outline groups, sheet copies, cell
+/// insertion, name definitions, scenarios) in one transaction.
+pub const MAX_STRUCTURAL_OPS: usize = 1_000;
 /// Highest raster resolution of `print_job_page_png`.
 pub const MAX_PRINT_DPI: u32 = 600;
 /// Longest AutoInput prefix in characters.
@@ -302,6 +315,18 @@ pub fn solver_request(req: &SolverRequest) -> CmdResult<()> {
     if !req.options.epsilon.is_finite() {
         return Err(bad("the solver epsilon is not a number"));
     }
+    if req.options.timeout_ms > MAX_SOLVER_TIMEOUT_MS {
+        return Err(bad(format!(
+            "the solver time limit is too long ({} ms; the limit is {MAX_SOLVER_TIMEOUT_MS})",
+            req.options.timeout_ms
+        )));
+    }
+    if req.options.max_iterations > MAX_SOLVER_ITERATIONS {
+        return Err(bad(format!(
+            "too many solver iterations ({}; the limit is {MAX_SOLVER_ITERATIONS})",
+            req.options.max_iterations
+        )));
+    }
     Ok(())
 }
 
@@ -345,7 +370,14 @@ pub fn chart_svgs(charts: &[ChartSvgDto]) -> CmdResult<()> {
     }
     charts
         .iter()
-        .try_for_each(|c| text_max("a chart image", &c.svg, MAX_SVG_BYTES))
+        .try_for_each(|c| text_max("a chart image", &c.svg, MAX_SVG_BYTES))?;
+    let total: usize = charts.iter().map(|c| c.svg.len()).sum();
+    if total > MAX_SVG_TOTAL_BYTES {
+        return Err(bad(format!(
+            "the chart images are too large together ({total} bytes; the limit is {MAX_SVG_TOTAL_BYTES})"
+        )));
+    }
+    Ok(())
 }
 
 /// A raster resolution: 1..=[`MAX_PRINT_DPI`].
@@ -375,6 +407,25 @@ pub fn transaction(tx: &Transaction) -> CmdResult<()> {
         .flatten()
     {
         selection("the selection", s)?;
+    }
+    let structural = tx
+        .ops
+        .iter()
+        .filter(|o| {
+            matches!(
+                o,
+                Op::Group { .. }
+                    | Op::CopySheet { .. }
+                    | Op::InsertCells { .. }
+                    | Op::DefineName { .. }
+                    | Op::CreateScenario { .. }
+            )
+        })
+        .count();
+    if structural > MAX_STRUCTURAL_OPS {
+        return Err(bad(format!(
+            "too many structural ops in one transaction ({structural}; the limit is {MAX_STRUCTURAL_OPS})"
+        )));
     }
     let mut total = 0usize;
     for op in &tx.ops {
@@ -466,7 +517,32 @@ fn typed_op(op: &Op) -> CmdResult<()> {
         Op::AddImage { image, .. } => {
             anchor("the picture", &image.anchor)?;
             name("the picture name", &image.name)?;
-            text_max("the picture data", &image.data, MAX_TSV)
+            // Base64 of at most MAX_IMAGE_BYTES (the engine's limit) plus slack.
+            let max = usize::try_from(crate::images::MAX_IMAGE_BYTES.div_ceil(3) * 4 + 8)
+                .unwrap_or(usize::MAX);
+            text_max("the picture data", &image.data, max)
+        }
+        Op::Consolidate { sources, .. } if sources.len() > MAX_CONSOLIDATE_SOURCES => Err(bad(
+            format!("too many consolidation sources (the limit is {MAX_CONSOLIDATE_SOURCES})"),
+        )),
+        Op::TextToColumns { options, .. } => {
+            let widths = options.fixed_widths.as_ref().map_or(0, Vec::len);
+            if widths > MAX_COLS as usize || options.column_types.len() > MAX_COLS as usize {
+                return Err(bad("too many text-to-columns widths or column types"));
+            }
+            Ok(())
+        }
+        Op::RemoveDuplicates { cols, .. } if cols.len() > MAX_COLS as usize => {
+            Err(bad("too many columns to compare"))
+        }
+        Op::Subtotals { groups, .. }
+            if groups
+                .iter()
+                .any(|g| g.columns.len() > MAX_SUBTOTAL_COLUMNS) =>
+        {
+            Err(bad(format!(
+                "too many subtotal columns (the limit is {MAX_SUBTOTAL_COLUMNS})"
+            )))
         }
         Op::CreatePivot { pivot: p, .. } | Op::UpdatePivot { pivot: p, .. } => {
             pivot("the pivot table", p)
@@ -779,6 +855,14 @@ mod tests {
         };
         assert!(solver_request(&req(MAX_SOLVER_CONSTRAINTS)).is_ok());
         assert!(solver_request(&req(MAX_SOLVER_CONSTRAINTS + 1)).is_err());
+        let mut slow = req(1);
+        slow.options.timeout_ms = MAX_SOLVER_TIMEOUT_MS;
+        assert!(solver_request(&slow).is_ok());
+        slow.options.timeout_ms = MAX_SOLVER_TIMEOUT_MS + 1;
+        assert!(solver_request(&slow).is_err());
+        slow.options.timeout_ms = 1000;
+        slow.options.max_iterations = MAX_SOLVER_ITERATIONS + 1;
+        assert!(solver_request(&slow).is_err());
 
         let opts = |from: Option<u32>, to: Option<u32>| PrintOptionsDto {
             sheets: PrintSheets::Active,
@@ -802,6 +886,85 @@ mod tests {
         assert!(chart_svgs(&[svg(1000)]).is_ok());
         assert!(chart_svgs(&[svg(MAX_SVG_BYTES + 6)]).is_err());
         assert!(chart_svgs(&vec![svg(1); MAX_PRINT_CHARTS + 1]).is_err());
+        // 17 charts of 4 MB are each fine but exceed the 64 MiB total.
+        assert!(chart_svgs(&vec![svg(MAX_SVG_BYTES - 6); 17]).is_err());
+        assert!(chart_svgs(&vec![svg(MAX_SVG_BYTES - 6); 15]).is_ok());
+    }
+
+    #[test]
+    fn tool_op_array_counts_are_capped() {
+        use tally_api::SheetRange;
+        let src = SheetRange {
+            sheet: 1,
+            range: RangeDto {
+                r0: 0,
+                c0: 0,
+                r1: 0,
+                c1: 0,
+            },
+        };
+        let cons = |n: usize| Op::Consolidate {
+            function: tally_api::AggFn::Sum,
+            sources: vec![src; n],
+            dest: SheetCell {
+                sheet: 1,
+                r: 0,
+                c: 0,
+            },
+            by_row_labels: false,
+            by_col_labels: false,
+            link: false,
+        };
+        assert!(transaction(&tx(vec![cons(MAX_CONSOLIDATE_SOURCES)])).is_ok());
+        assert!(transaction(&tx(vec![cons(MAX_CONSOLIDATE_SOURCES + 1)])).is_err());
+        let dedupe = |n: usize| Op::RemoveDuplicates {
+            sheet: 1,
+            range: RangeDto {
+                r0: 0,
+                c0: 0,
+                r1: 5,
+                c1: 5,
+            },
+            cols: vec![0; n],
+            has_header: false,
+        };
+        assert!(transaction(&tx(vec![dedupe(MAX_COLS as usize)])).is_ok());
+        assert!(transaction(&tx(vec![dedupe(MAX_COLS as usize + 1)])).is_err());
+        let names = |n: usize| {
+            (0..n)
+                .map(|i| Op::DefineName {
+                    scope: None,
+                    name: format!("N{i}"),
+                    refers_to: "A1".into(),
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(transaction(&tx(names(MAX_STRUCTURAL_OPS))).is_ok());
+        assert!(transaction(&tx(names(MAX_STRUCTURAL_OPS + 1))).is_err());
+    }
+
+    #[test]
+    fn picture_data_is_capped_like_the_engine() {
+        let max = usize::try_from(crate::images::MAX_IMAGE_BYTES.div_ceil(3) * 4 + 8).unwrap();
+        let add = |n: usize| Op::AddImage {
+            sheet: 1,
+            image: tally_api::ImageDto {
+                id: 0,
+                name: "p".into(),
+                mime: "image/png".into(),
+                data: "A".repeat(n),
+                anchor: tally_api::ChartAnchor {
+                    r: 0,
+                    c: 0,
+                    dx_mm: 0.0,
+                    dy_mm: 0.0,
+                    width_mm: 10.0,
+                    height_mm: 10.0,
+                },
+            },
+        };
+        assert!(transaction(&tx(vec![add(max)])).is_ok());
+        assert!(transaction(&tx(vec![add(max + 1)])).is_err());
     }
 
     #[test]

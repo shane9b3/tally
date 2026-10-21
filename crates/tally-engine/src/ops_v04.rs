@@ -62,6 +62,8 @@ fn add_chart(
             )));
         }
         let data = charts::from_api(wb, sheet, dto)?;
+        let here: usize = meta.charts.iter().map(|c| c.data.series.len()).sum();
+        charts::check_series_budget(charts::series_count(wb) + here, data.series.len())?;
         let id = meta.alloc_id();
         let mut data = data;
         if data.name.is_empty() {
@@ -93,6 +95,11 @@ fn update_chart(
             .position(|c| c.id == id)
             .ok_or_else(|| not_found("chart", id))?;
         let mut data = charts::from_api(wb, sheet, dto)?;
+        let here: usize = meta.charts.iter().map(|c| c.data.series.len()).sum();
+        charts::check_series_budget(
+            charts::series_count(wb) + here - meta.charts[i].data.series.len(),
+            data.series.len(),
+        )?;
         if data.name.is_empty() {
             data.name.clone_from(&meta.charts[i].data.name);
         }
