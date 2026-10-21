@@ -5,7 +5,9 @@ import type { SeriesDataDto } from "./SeriesDataDto";
 /**
  * Result of `chart_data`: the resolved values of a chart, read from
  * cached cell values without recalculating. Caps: 255 series and 32,000
- * points per series (`truncated` is set beyond them).
+ * points per series; one call also visits at most 2,000,000 cells and
+ * returns at most 100,000 points in total, and trend lines are computed on
+ * a sample of at most 500 points (`truncated` is set beyond the caps).
  */
 export type ChartDataDto = { 
 /**

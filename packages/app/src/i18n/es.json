@@ -261,6 +261,7 @@
   "dialog.confirmPassword": "Confirmar contraseña",
   "dialog.unsavedChanges": "¿Guardar los cambios de este libro antes de cerrar?",
   "dialog.overwrite": "El intervalo de destino no está vacío. ¿Sobrescribirlo?",
+  "pivot.refreshOverwrite": "La salida de la tabla dinámica sobrescribirá celdas existentes. ¿Continuar?",
   "dialog.confirmDelete": "¿Eliminar permanentemente?",
   "sort.title": "Ordenar",
   "sort.key": "Clave de orden",

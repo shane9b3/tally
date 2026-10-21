@@ -853,7 +853,7 @@ export async function applyW56Op(x: W56Ext, op: Op, ctx: W56Ctx): Promise<W56Out
     case "refreshPivot": {
       const p = x.pivots.find((q) => q.id === op.id);
       if (!p) return err("not_found", `pivot ${op.id} not found`);
-      const res = await pivotOps(x, p, ctx, true, p.output);
+      const res = await pivotOps(x, p, ctx, (op as { overwrite?: boolean }).overwrite === true, p.output);
       if ("error" in res) return err(res.code, res.error);
       const prev = p.output;
       p.output = res.output;

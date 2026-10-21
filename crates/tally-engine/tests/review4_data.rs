@@ -1107,3 +1107,224 @@ fn h12_many_groups_build_and_save_in_linear_time() {
     eprintln!("h12 build {build:?}, ODS save+open {save:?}");
     assert!(build < Duration::from_secs(20) && save < Duration::from_secs(60));
 }
+
+// ---------------------------------------------------------------- H9 dependents
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x02\x00\xde\xf2\x8a\xbb\x00\x00\x00\x00IEND\xaeB`\x82";
+
+fn chart_anchor(r: u32) -> tally_api::ChartAnchor {
+    tally_api::ChartAnchor {
+        r,
+        c: 4,
+        dx_mm: 0.0,
+        dy_mm: 0.0,
+        width_mm: 80.0,
+        height_mm: 50.0,
+    }
+}
+
+/// A list with a chart and a picture anchored inside and below it, a
+/// second sheet with a conditional format, a validation, a formula and a
+/// name pointing into the list.
+fn dependents_setup() -> (Fixture, u32) {
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    rows_in(
+        &mut f,
+        &[
+            &["K", "V"],
+            &["a", "1"],
+            &["a", "2"],
+            &["b", "3"],
+            &["b", "4"],
+        ],
+    );
+    let axis = tally_api::ChartAxisDto {
+        visible: true,
+        title: None,
+        min: None,
+        max: None,
+        major: None,
+        minor_count: None,
+        log: false,
+        reverse: false,
+        major_grid: false,
+        minor_grid: false,
+        number_format: None,
+    };
+    let chart = tally_api::ChartDto {
+        id: 0,
+        name: String::new(),
+        anchor: chart_anchor(3),
+        kind: tally_api::ChartKind::Column,
+        stacking: tally_api::Stacking::None,
+        lines: true,
+        markers: false,
+        smooth: false,
+        hole: None,
+        exploded: false,
+        filled: false,
+        stock: None,
+        three_d: false,
+        source: None,
+        categories: Some("$Sheet1.$A$2:$A$5".into()),
+        series: vec![tally_api::ChartSeriesDto {
+            name: None,
+            values: "$Sheet1.$B$2:$B$5".into(),
+            x_values: None,
+            sizes: None,
+            kind: None,
+            secondary_axis: false,
+            color: None,
+            marker: None,
+            labels: tally_api::DataLabelsDto::default(),
+            trend: None,
+            error_bars: None,
+            mean_line: false,
+        }],
+        title: None,
+        subtitle: None,
+        legend: tally_api::LegendPos::Right,
+        x_axis: axis.clone(),
+        y_axis: axis,
+        y2_axis: None,
+        background: None,
+        plot_background: None,
+        include_hidden: false,
+    };
+    let r = f.apply(vec![
+        Op::AddChart { sheet: s, chart },
+        Op::AddImage {
+            sheet: s,
+            image: tally_api::ImageDto {
+                id: 0,
+                name: String::new(),
+                anchor: chart_anchor(9),
+                mime: "image/png".into(),
+                data: tally_engine::protection::base64(PNG),
+            },
+        },
+        Op::AddSheet {
+            name: None,
+            index: None,
+        },
+        Op::DefineName {
+            name: "bvals".into(),
+            scope: None,
+            refers_to: "$Sheet1.$B$4:$B$5".into(),
+        },
+    ]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let s2 = f.svc.document(f.doc).unwrap().info().sheets[1].id;
+    let r = f.apply(vec![
+        common::input(s2, "A1", "=SUM($Sheet1.B2:B5)"),
+        common::input(s2, "A2", "=SUM(bvals)"),
+        Op::AddConditionalFormat {
+            sheet: s2,
+            ranges: vec![range("A1")],
+            rules: vec![tally_api::CfRuleDto {
+                kind: tally_api::CfRuleKind::CellValue {
+                    op: tally_api::CmpOp::Gt,
+                    formulas: vec!["$Sheet1.$B$4".into()],
+                },
+                style: tally_api::CfStyleDto::default(),
+                stop_if_true: false,
+            }],
+        },
+    ]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    (f, s2)
+}
+
+/// What the dependents look like, for comparison.
+fn dependents(f: &Fixture, s2: u32) -> String {
+    let s = f.sheet;
+    let charts: Vec<String> = f
+        .svc
+        .charts(f.doc, s)
+        .unwrap()
+        .iter()
+        .map(|c| format!("{} {:?} {:?}", c.anchor.r, c.categories, c.series[0].values))
+        .collect();
+    let images: Vec<u32> = f
+        .svc
+        .images(f.doc, s)
+        .unwrap()
+        .iter()
+        .map(|i| i.anchor.r)
+        .collect();
+    let cf = format!(
+        "{:?}",
+        f.svc.conditional_formats(f.doc, s2).unwrap()[0].rules[0].kind
+    );
+    let names: Vec<String> = f
+        .svc
+        .names(f.doc)
+        .unwrap()
+        .iter()
+        .map(|n| n.refers_to.clone())
+        .collect();
+    let e = |a1: &str| {
+        let a = CellAddr::from_a1(s2, a1).unwrap();
+        f.svc.cell_edit_info(f.doc, s2, a.row, a.col).unwrap().input
+    };
+    format!(
+        "charts={charts:?} images={images:?} cf={cf} names={names:?} A1={} A2={}",
+        e("A1"),
+        e("A2")
+    )
+}
+
+#[test]
+fn h9_subtotals_move_dependents_like_row_inserts() {
+    // Subtotals over a/a/b/b insert one row after the a group (before
+    // row 4) and two at the end (b subtotal, grand total): the same as
+    // these two InsertRows.
+    let (mut f, s2) = dependents_setup();
+    let errs = sub(
+        &mut f,
+        "A1:B5",
+        vec![SubtotalGroup {
+            group_by: 0,
+            columns: vec![1],
+            function: AggFn::Sum,
+        }],
+    );
+    assert!(errs.is_empty(), "{errs:?}");
+    let after = dependents(&f, s2);
+
+    let (mut g, gs2) = dependents_setup();
+    let sheet = g.sheet;
+    g.apply(vec![
+        Op::InsertRows {
+            sheet,
+            at: 5,
+            count: 2,
+        },
+        Op::InsertRows {
+            sheet,
+            at: 3,
+            count: 1,
+        },
+    ]);
+    assert_eq!(after, dependents(&g, gs2));
+    // The chart grew over the inner subtotal row, the picture below moved
+    // down three rows, the other sheet's rule and formulas followed.
+    assert!(after.contains("$B$2:$B$6"), "{after}");
+    assert!(after.contains("images=[12]"), "{after}");
+    assert!(after.contains("$B$5"), "{after}");
+
+    // Remove Subtotals brings everything back; so does undo.
+    let (h, hs2) = dependents_setup();
+    let before = dependents(&h, hs2);
+    let r = f.apply(vec![Op::RemoveSubtotals {
+        sheet: f.sheet,
+        range: range("A1:B8"),
+    }]);
+    assert!(r.errors.is_empty());
+    assert_eq!(dependents(&f, s2), before);
+    f.svc.undo(f.doc).unwrap();
+    assert_eq!(dependents(&f, s2), after);
+    f.svc.undo(f.doc).unwrap();
+    assert_eq!(dependents(&f, s2), before);
+}

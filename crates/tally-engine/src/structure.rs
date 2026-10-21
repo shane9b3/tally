@@ -1290,6 +1290,48 @@ impl RowMap {
         }
     }
 
+    /// The row changes the map stands for, bottom-up (each in the
+    /// coordinates of the rows above it, which the later ones keep): with
+    /// deleted rows, one deletion per run of them (the kept rows close
+    /// up); otherwise one insertion per gap before a row.
+    pub fn shapes(&self) -> Vec<Shape> {
+        let mut out = Vec::new();
+        let shape = |at: u32, count: u32, insert: bool| Shape {
+            sheet: self.sheet,
+            rows: true,
+            at,
+            count,
+            insert,
+        };
+        if self.new.iter().any(Option::is_none) {
+            let mut i = self.new.len();
+            while i > 0 {
+                if self.new[i - 1].is_some() {
+                    i -= 1;
+                    continue;
+                }
+                let end = i;
+                while i > 0 && self.new[i - 1].is_none() {
+                    i -= 1;
+                }
+                out.push(shape(self.r0 + i as u32, (end - i) as u32, false));
+            }
+        } else {
+            for i in (0..self.new.len()).rev() {
+                let prev = if i == 0 {
+                    self.r0
+                } else {
+                    self.new[i - 1].map_or(self.r0, |p| p + 1)
+                };
+                let here = self.new[i].unwrap_or(prev);
+                if here > prev {
+                    out.push(shape(self.r0 + i as u32, here - prev, true));
+                }
+            }
+        }
+        out
+    }
+
     /// Contiguous pieces `(src_start, src_end, dst_start)` of kept rows.
     fn segments(&self) -> Vec<(u32, u32, u32)> {
         let mut out: Vec<(u32, u32, u32)> = Vec::new();
@@ -1478,9 +1520,39 @@ pub fn respace_rows(
             MetaKind::DatabaseRanges,
             MetaKind::AutoFilter,
             MetaKind::StandardFilter,
+            MetaKind::Charts,
+            MetaKind::Images,
+            MetaKind::Pivots,
         ],
     )
     .ok_or_else(|| ApiError::not_found("no sheet"))?;
+    // Objects and rules on the other sheets that may point at this one.
+    let others: Vec<Change> = wb
+        .sheets
+        .iter()
+        .filter(|o| {
+            o.id != sheet
+                && (!o.meta.charts.is_empty()
+                    || !o.meta.pivots.is_empty()
+                    || !o.meta.cond_formats.is_empty()
+                    || !o.meta.validations.is_empty())
+        })
+        .map(|o| o.id)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .filter_map(|id| {
+            crate::undo::meta_parts(
+                wb,
+                id,
+                &[
+                    MetaKind::Charts,
+                    MetaKind::Pivots,
+                    MetaKind::CondFormats,
+                    MetaKind::Validations,
+                ],
+            )
+        })
+        .collect();
     let names = crate::undo::names_snapshot_tx(wb, fx);
     let snap = capture_range(wb, snap_area, true, true);
     let rows_area = CellRange::new(sheet, map.r0, 0, r1, MAX_COLS - 1);
@@ -1671,13 +1743,107 @@ pub fn respace_rows(
         // 6. Ranges and rule formulas of the sheet.
         map.adjust_meta(&mut s.meta);
     }
+    // 7. Charts, pictures, pivots (on every sheet) and the rule formulas
+    // of other sheets follow the rows as a series of row insertions or
+    // deletions would move them.
+    adjust_objects_for_map(wb, map, fx);
     wb.reapply_filter(sheet);
     crate::outline::reapply(wb, sheet);
     wb.pending.ranges.push(block);
     fx.layout(sheet);
     let mut out: Vec<Change> = names.into_iter().collect();
+    out.extend(others);
     out.extend([dims, meta, Change::Range(snap), Change::Cells(outside)]);
     Ok(out)
+}
+
+/// Applies the row insertions/deletions a [`RowMap`] stands for (plus the
+/// compensating change described below) to the
+/// objects [`respace_rows`] does not rewrite itself: chart ranges and
+/// anchors, picture anchors, pivot sources/targets/outputs (all sheets)
+/// and conditional-format/validation formulas of the other sheets. Each
+/// shape goes through the same adjusters as `InsertRows`/`DeleteRows`,
+/// bottom-up so earlier positions stay valid; nothing is done when no
+/// such object exists.
+fn adjust_objects_for_map(wb: &mut Workbook, map: &RowMap, fx: &mut crate::undo::Effects) {
+    let sheet = map.sheet;
+    let objects = wb
+        .sheets
+        .iter()
+        .any(|s| !s.meta.charts.is_empty() || !s.meta.pivots.is_empty())
+        || wb.sheet(sheet).is_some_and(|s| !s.meta.images.is_empty());
+    let rules = wb.sheets.iter().any(|s| {
+        s.id != sheet && (!s.meta.cond_formats.is_empty() || !s.meta.validations.is_empty())
+    });
+    if !objects && !rules {
+        return;
+    }
+    let pivots = wb.sheets.iter().any(|s| !s.meta.pivots.is_empty());
+    // The rows a spread grows into were inserted below the block by the
+    // caller (and the rows a compaction frees are deleted by it after):
+    // one compensating change at the block's end keeps everything below
+    // where the caller's change puts it.
+    let mut shapes = map.shapes();
+    let moved: u32 = shapes.iter().map(|x| x.count).sum();
+    if moved > 0 {
+        let insert = shapes.first().is_some_and(|x| x.insert);
+        let at = if insert {
+            map.r1() + 1 + moved
+        } else {
+            map.r1() + 1 - moved
+        };
+        if at < MAX_ROWS {
+            shapes.push(Shape {
+                sheet,
+                rows: true,
+                at,
+                count: moved.min(MAX_ROWS - at),
+                insert: !insert,
+            });
+        }
+    }
+    for sh in shapes {
+        if objects {
+            crate::charts::adjust_structure(wb, &sh);
+            if pivots {
+                crate::pivot::adjust_structure(wb, &sh);
+            }
+        }
+        if rules {
+            let change = if sh.insert {
+                StructureChange::InsertRows {
+                    sheet,
+                    at: sh.at,
+                    count: sh.count,
+                }
+            } else {
+                StructureChange::DeleteRows {
+                    sheet,
+                    at: sh.at,
+                    count: sh.count,
+                }
+            };
+            for other in &mut wb.sheets {
+                if other.id != sheet {
+                    Workbook::adjust_other_sheet_rules(&mut other.meta, &change);
+                }
+            }
+        }
+    }
+    if objects {
+        let ids: Vec<SheetId> = wb
+            .sheets
+            .iter()
+            .filter(|s| !s.meta.charts.is_empty() || !s.meta.images.is_empty())
+            .map(|s| s.id)
+            .collect();
+        for id in ids {
+            fx.objects(id);
+        }
+        if pivots {
+            fx.pivots_changed = Some(true);
+        }
+    }
 }
 
 impl RowMap {

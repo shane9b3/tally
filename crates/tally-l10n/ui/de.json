@@ -261,6 +261,7 @@
   "dialog.confirmPassword": "Kennwort bestätigen",
   "dialog.unsavedChanges": "Änderungen an dieser Arbeitsmappe vor dem Schließen speichern?",
   "dialog.overwrite": "Der Zielbereich ist nicht leer. Überschreiben?",
+  "pivot.refreshOverwrite": "Die Datenpilot-Ausgabe überschreibt vorhandene Zellen. Fortfahren?",
   "dialog.confirmDelete": "Endgültig löschen?",
   "sort.title": "Sortieren",
   "sort.key": "Sortierschlüssel",

@@ -141,3 +141,24 @@ describe("pivot layout round trip (review 4 H14)", () => {
     expect(moved.colFields[0]!.group).toEqual(group);
   });
 });
+
+describe("mock DataPilot refresh over occupied cells", () => {
+  it("refuses with target_not_empty unless overwrite is set", async () => {
+    const { c, doc, sheet, tx } = await setup();
+    const source = { type: "range" as const, sheet, range: { r0: 0, c0: 0, r1: 6, c1: 2 } };
+    const fields = await c.pivotFieldItems(doc, source);
+    let layout = emptyLayout(source, source.range, sheet);
+    layout = addField(layout, fields[0]!, "row");
+    layout = addField(layout, fields[1]!, "col");
+    layout = addField(layout, fields[2]!, "data");
+    expect((await tx([{ type: "createPivot", pivot: toPivotDto(layout, sheet), overwrite: false }])).errors).toEqual([]);
+    const out = (await c.pivots(doc))[0]!.output!;
+    // A new source row makes the output grow by one row, over an occupied cell.
+    await tx([{ type: "setRangeInputs", sheet, r: 5, c: 0, rows: [["North", "Q1", "3"], ["South", "Q1", "4"]] }]);
+    await tx([{ type: "setRangeInputs", sheet, r: out.r1 + 1, c: out.c0, rows: [["keep", "keep", "keep", "keep", "keep"], ["keep", "keep", "keep", "keep", "keep"]] }]);
+    const refused = await tx([{ type: "refreshPivot", id: 1, overwrite: false }]);
+    expect(refused.errors[0]?.code).toBe("target_not_empty");
+    const ok = await tx([{ type: "refreshPivot", id: 1, overwrite: true }]);
+    expect(ok.errors).toEqual([]);
+  });
+});

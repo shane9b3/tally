@@ -388,12 +388,22 @@ export class W56Features {
     return true;
   }
 
-  async refreshPivot(p: PivotDto | null = this.activePivot()): Promise<void> {
+  async refreshPivot(p: PivotDto | null = this.activePivot(), overwrite = false): Promise<void> {
     if (!p) {
       this.toast("info", "Put the cursor inside a pivot table to refresh it.");
       return;
     }
-    await this.ctl.apply("Refresh pivot table", [{ type: "refreshPivot", id: p.id }]);
+    const res = await this.ctl.apply("Refresh pivot table", [{ type: "refreshPivot", id: p.id, overwrite }]);
+    if (res?.errors.some((e) => e.code === "target_not_empty")) {
+      useUiStore.getState().openDialog({
+        kind: "confirm",
+        title: t("pivot.title", "DataPilot"),
+        message: t("pivot.refreshOverwrite", "The pivot table output will overwrite existing cells. Continue?"),
+        ok: t("dialog.yes", "Yes"),
+        danger: true,
+        onConfirm: () => void this.refreshPivot(p, true),
+      });
+    }
   }
 
   async deletePivot(p: PivotDto | null = this.activePivot(), clearOutput = true): Promise<void> {

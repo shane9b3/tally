@@ -133,7 +133,11 @@ fn group_tag(rows: bool) -> &'static str {
 /// Writes the column or row groups of a sheet in index order: opens
 /// the groups starting at an index (outermost first), closes those ending
 /// there (innermost first) and reports the next boundary, so repeated
-/// runs stop at group starts and ends.
+/// runs stop at group starts and ends. Starts and boundaries are sorted
+/// once, so the walk is O(indices + groups) (security review 4,
+/// HIGH-T5: filtering the whole list per written row was O(rows ×
+/// groups)); `last_index` lets the writer extend its range so groups past
+/// the data are written and closed (correctness review 4, H1).
 pub(crate) struct GroupWalk<'a> {
     /// Groups by start, outermost first.
     order: Vec<&'a OutlineGroupData>,
@@ -148,8 +152,11 @@ pub(crate) struct GroupWalk<'a> {
 
 impl<'a> GroupWalk<'a> {
     pub(crate) fn new(groups: &'a [OutlineGroupData], rows: bool) -> Self {
-        let mut order: Vec<&OutlineGroupData> =
-            groups.iter().filter(|g| g.start <= g.end).collect();
+        let limit = if rows { MAX_ROWS } else { MAX_COLS };
+        let mut order: Vec<&OutlineGroupData> = groups
+            .iter()
+            .filter(|g| g.start <= g.end && g.end < limit)
+            .collect();
         order.sort_by_key(|g| (g.start, g.level, std::cmp::Reverse(g.end)));
         let mut boundaries: Vec<u32> = order
             .iter()
@@ -228,18 +235,28 @@ pub(crate) fn close_group(sheet: &mut SheetData, open: &OpenGroup, end: u32, sti
     let g = OutlineGroupData {
         start: open.start,
         end: end.min(limit - 1),
-        level: u8::try_from(still_open + 1).unwrap_or(u8::MAX).min(8),
+        level: u8::try_from(still_open + 1).unwrap_or(u8::MAX),
         collapsed: open.collapsed,
     };
+    // AOO keeps at most SC_OL_MAXDEPTH = 7 levels (`sc/inc/olinetab.hxx:31`;
+    // `ScOutlineArray::Insert` refuses deeper groups, `olinetab.cxx:240-243`).
+    if g.level > MAX_OUTLINE_DEPTH {
+        return;
+    }
     let list = if open.rows {
         &mut sheet.row_groups
     } else {
         &mut sheet.col_groups
     };
+    // Sorted once at the end of the table ([`sort_groups`]): sorting on
+    // every push made reading O(G² log G) (security review 4, HIGH-T5).
     if list.len() < 100_000 {
         list.push(g);
     }
 }
+
+/// Deepest outline level read (AOO `SC_OL_MAXDEPTH`).
+pub(crate) const MAX_OUTLINE_DEPTH: u8 = 7;
 
 /// Sorts the groups read for a sheet (once, after the sheet is read).
 pub(crate) fn sort_groups(sheet: &mut SheetData) {
@@ -1966,6 +1983,23 @@ mod tests {
         assert_eq!(display_style_name("Heading_20_1"), "Heading 1");
         assert_eq!(display_style_name("Result2"), "Result2");
         assert_eq!(display_style_name("a_b"), "a_b");
+    }
+
+    #[test]
+    fn groups_deeper_than_seven_levels_are_dropped() {
+        let mut sheet = SheetData::default();
+        for still in 0..9usize {
+            let g = OpenGroup {
+                rows: true,
+                start: still as u32,
+                depth: 0,
+                collapsed: false,
+            };
+            close_group(&mut sheet, &g, 40 - still as u32, still);
+        }
+        sort_groups(&mut sheet);
+        assert_eq!(sheet.row_groups.len(), 7);
+        assert_eq!(sheet.row_groups.iter().map(|g| g.level).max(), Some(7));
     }
 
     #[test]
