@@ -15,11 +15,11 @@ import { CommandRegistry } from "../src/registry";
 import { useUiStore } from "../src/stores/uiStore";
 
 const FUNCS = [
-  { name: "SUM", category: "Mathematical", signature: "SUM(number1, [number2], …)", description: "Adds the numbers." },
-  { name: "SUMIF", category: "Mathematical", signature: "SUMIF(range, criterion, [sum_range])", description: "Adds the cells that meet a condition." },
-  { name: "AVERAGE", category: "Statistical", signature: "AVERAGE(number1, …)", description: "The arithmetic mean." },
-  { name: "IF", category: "Logical", signature: "IF(test, then, [else])", description: "Chooses by a condition." },
-  { name: "VLOOKUP", category: "Spreadsheet", signature: "VLOOKUP(key, range, column, [sorted])", description: "Vertical lookup in a range." },
+  { name: "SUM", category: "Mathematical", signature: "SUM(number1, [number2], …)", description: "Adds the numbers.", params: [], example: "" },
+  { name: "SUMIF", category: "Mathematical", signature: "SUMIF(range, criterion, [sum_range])", description: "Adds the cells that meet a condition.", params: [], example: "" },
+  { name: "AVERAGE", category: "Statistical", signature: "AVERAGE(number1, …)", description: "The arithmetic mean.", params: [], example: "" },
+  { name: "IF", category: "Logical", signature: "IF(test, then, [else])", description: "Chooses by a condition.", params: [], example: "" },
+  { name: "VLOOKUP", category: "Spreadsheet", signature: "VLOOKUP(key, range, column, [sorted])", description: "Vertical lookup in a range.", params: [], example: "" },
 ];
 
 afterEach(() => {

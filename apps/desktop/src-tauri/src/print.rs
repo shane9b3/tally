@@ -208,7 +208,7 @@ fn print_in_window(app: &AppHandle, job: u32, bytes: Vec<u8>) -> CmdResult<()> {
                 map.remove(&k);
             }
         }
-        map.insert(job, bytes);
+        map.insert(job, bytes.clone());
     }
     let label = format!("tally-print-{job}");
     if let Some(existing) = app.get_webview_window(&label) {
@@ -224,10 +224,16 @@ fn print_in_window(app: &AppHandle, job: u32, bytes: Vec<u8>) -> CmdResult<()> {
     .title("Print")
     .inner_size(640.0, 820.0)
     .center()
-    .on_page_load(|window, payload| {
+    .on_page_load(move |window, payload| {
         if payload.event() == tauri::webview::PageLoadEvent::Finished {
             if let Err(e) = window.print() {
-                eprintln!("tally: print dialog failed: {e}");
+                // WKWebView could not run the print operation: hand the PDF
+                // to Preview, whose ⌘P is the system print dialog.
+                eprintln!("tally: print dialog failed ({e}); opening Preview");
+                let _ = window.close();
+                if let Err(e) = open_in_preview(job, &bytes) {
+                    eprintln!("tally: cannot open Preview: {}", e.message);
+                }
             }
         }
     })
@@ -235,6 +241,26 @@ fn print_in_window(app: &AppHandle, job: u32, bytes: Vec<u8>) -> CmdResult<()> {
     .map_err(|e| ApiError::new(ApiError::INTERNAL, format!("print window: {e}")))?;
     let _ = window.set_focus();
     Ok(())
+}
+
+/// macOS fallback for `wb_print`: the PDF in Preview (`open -a Preview`).
+fn open_in_preview(job: u32, bytes: &[u8]) -> CmdResult<()> {
+    let path = temp_pdf_path(job);
+    write_pdf_atomically(&path, bytes)?;
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg("-a")
+        .arg("Preview")
+        .arg(&path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| ApiError::new(ApiError::IO, format!("cannot open Preview: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(ApiError::new(ApiError::IO, "Preview could not be started"))
+    }
 }
 
 /// Writes the PDF to the temp dir and opens it with the OS default viewer.

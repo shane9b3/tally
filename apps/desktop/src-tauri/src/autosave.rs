@@ -8,32 +8,21 @@
 //! `list_recovery`, and `recover_snapshot` opens it as an untitled, dirty
 //! workbook.
 //!
-//! The engine's `save` sets the document's path, title and dirty flag to the
-//! target it wrote, so every `WorkbookInfo` the shell hands back is passed
-//! through [`fix_info`]: the path and title come from the shell's own path
-//! map (the authoritative one for Save), and a document that was autosaved
-//! since its last real save stays dirty.
+//! Snapshots are written with the engine's `save_copy`, which leaves the
+//! document's path, title and dirty flag alone; a recovered snapshot is
+//! opened with `open_untitled(path, dirty: true)`.
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tally_api::{ApiError, ApplyResult, DocId, FileFormat, WorkbookInfo};
+use tally_api::{ApiError, DocId, FileFormat, WorkbookInfo};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::commands::{blocking, with_service, CmdResult};
 use crate::state::{lock, AppState};
 
 const DIR: &str = "autosave";
-
-/// Documents autosaved since their last real save (kept dirty), and the
-/// documents opened from a recovery snapshot (no path, dirty).
-#[derive(Default)]
-pub struct AutosaveState {
-    pub dirty: Mutex<HashSet<u32>>,
-}
 
 /// Sidecar of a snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,7 +95,8 @@ fn now_text() -> String {
     )
 }
 
-/// Writes the snapshot of `doc` (engine save to the autosave dir plus the sidecar).
+/// Writes the snapshot of `doc` (an engine `save_copy` into the autosave dir
+/// plus the sidecar).
 pub fn write_snapshot<R: Runtime>(
     app: &AppHandle<R>,
     st: &AppState,
@@ -120,7 +110,7 @@ pub fn write_snapshot<R: Runtime>(
         |n| n.to_string_lossy().into_owned(),
     );
     let path = folder.join(snapshot_name(doc, &title));
-    with_service(st, |s| s.save(doc, Some(&path), FileFormat::Ods))?;
+    with_service(st, |s| s.save_copy(doc, &path, FileFormat::Ods))?;
     let snap = Snapshot {
         path: path.display().to_string(),
         title,
@@ -130,7 +120,6 @@ pub fn write_snapshot<R: Runtime>(
     let side = serde_json::to_string_pretty(&snap)
         .map_err(|e| ApiError::new(ApiError::INTERNAL, e.to_string()))?;
     fs::write(path.with_extension("json"), side).map_err(|e| io_err("writing the sidecar", &e))?;
-    lock(&app.state::<AutosaveState>().dirty).insert(doc.0);
     Ok(snap)
 }
 
@@ -146,7 +135,6 @@ pub fn remove_snapshot<R: Runtime>(app: &AppHandle<R>, doc: DocId) {
             }
         }
     }
-    lock(&app.state::<AutosaveState>().dirty).remove(&doc.0);
 }
 
 /// Snapshots on disk (the sidecars found under the autosave dir).
@@ -186,27 +174,6 @@ fn check_inside<R: Runtime>(app: &AppHandle<R>, path: &Path) -> CmdResult<PathBu
     Ok(canon)
 }
 
-/// Puts the shell's view of path, title and dirty state onto a `WorkbookInfo`.
-pub fn fix_info(st: &AppState, dirty: &HashSet<u32>, info: &mut WorkbookInfo) {
-    let path = lock(&st.paths).get(&info.doc.0).cloned();
-    info.title = path.as_ref().and_then(|p| p.file_name()).map_or_else(
-        || "Untitled".to_owned(),
-        |n| n.to_string_lossy().into_owned(),
-    );
-    info.path = path.map(|p| p.display().to_string());
-    if dirty.contains(&info.doc.0) {
-        info.dirty = true;
-    }
-}
-
-/// [`fix_info`] on an `ApplyResult`'s info, if present.
-pub fn fix_result<R: Runtime>(app: &AppHandle<R>, st: &AppState, res: &mut ApplyResult) {
-    if let Some(info) = res.info.as_mut() {
-        let dirty = lock(&app.state::<AutosaveState>().dirty).clone();
-        fix_info(st, &dirty, info);
-    }
-}
-
 /// `autosave_snapshot(doc)`.
 #[tauri::command]
 pub async fn autosave_snapshot(app: AppHandle, doc: DocId) -> CmdResult<()> {
@@ -223,14 +190,11 @@ pub async fn list_recovery(app: AppHandle) -> CmdResult<Vec<RecoveryFile>> {
 #[tauri::command]
 pub async fn recover_snapshot(app: AppHandle, path: String) -> CmdResult<WorkbookInfo> {
     let canon = check_inside(&app, Path::new(&path))?;
-    blocking(app, move |app, st| {
-        let mut info = with_service(st, |s| s.open(&canon))?;
+    blocking(app, move |_, st| {
+        let info = with_service(st, |s| s.open_untitled(&canon, true))?;
         lock(&st.paths).remove(&info.doc.0);
-        lock(&app.state::<AutosaveState>().dirty).insert(info.doc.0);
         let _ = fs::remove_file(&canon);
         let _ = fs::remove_file(canon.with_extension("json"));
-        let dirty = lock(&app.state::<AutosaveState>().dirty).clone();
-        fix_info(st, &dirty, &mut info);
         Ok(info)
     })
     .await
@@ -258,32 +222,6 @@ mod tests {
             "doc-5-....etcpasswd.ods"
         );
         assert!(snapshot_name(DocId(6), &"x".repeat(200)).len() < 100);
-    }
-
-    #[test]
-    fn fix_info_uses_the_shell_path_map() {
-        let st = AppState::new(Box::new(crate::assist::build_service()));
-        let mut info = WorkbookInfo {
-            doc: DocId(1),
-            title: "doc-1-Book.ods".into(),
-            path: Some("/tmp/autosave/doc-1-Book.ods".into()),
-            sheets: vec![],
-            active_sheet: 1,
-            dirty: false,
-            version: 3,
-            warnings: vec![],
-            external_links: None,
-        };
-        lock(&st.paths).insert(1, PathBuf::from("/Users/me/Book.ods"));
-        let dirty: HashSet<u32> = [1].into_iter().collect();
-        fix_info(&st, &dirty, &mut info);
-        assert_eq!(info.title, "Book.ods");
-        assert_eq!(info.path.as_deref(), Some("/Users/me/Book.ods"));
-        assert!(info.dirty);
-        lock(&st.paths).clear();
-        fix_info(&st, &HashSet::new(), &mut info);
-        assert_eq!(info.title, "Untitled");
-        assert_eq!(info.path, None);
     }
 
     #[test]

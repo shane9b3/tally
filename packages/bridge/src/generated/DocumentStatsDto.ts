@@ -17,7 +17,8 @@ cells: number,
  */
 formulas: number, 
 /**
- * Printed pages (`None` until pagination exists).
+ * Printed pages of the visible sheets (empty pages suppressed;
+ * `None` when pagination fails).
  */
 pages: number | null, 
 /**

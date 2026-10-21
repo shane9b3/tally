@@ -6,7 +6,7 @@
  * blur / Enter, pickers at once.
  */
 import type { ChartAxisDto, ChartDto, ChartKind, ChartSeriesDto, ErrorBarKind, LegendPos, Stacking, StockVariant, TrendKind } from "@tally/bridge";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cx, useController } from "../context";
 import { t } from "../i18n";
 import { hexToRgba, rgbaToHex } from "../palette";
@@ -69,23 +69,35 @@ export function ChartEditorPanel() {
   const [draft, setDraft] = useState<ChartDto | null>(chart);
   const [seriesIdx, setSeriesIdx] = useState(0);
   const [axisTab, setAxisTab] = useState<"x" | "y" | "y2">("y");
+  // The latest draft, for edits that land after an await (range picking): a
+  // closure over `draft` would re-apply a stale chart (and undo e.g. a title
+  // committed on the way to the pick button).
+  const latest = useRef<ChartDto | null>(draft);
+  latest.current = draft;
   useEffect(() => setDraft(chart), [chart]);
   if (!chart || !draft) return null;
 
+  const now = (): ChartDto => latest.current ?? draft;
   const commit = (next: ChartDto): void => {
+    latest.current = next;
     setDraft(next);
     void ctl.w5.charts.updateChart(next);
   };
-  const patch = (p: Partial<ChartDto>): void => commit({ ...draft, ...p });
-  const stage = (p: Partial<ChartDto>): void => setDraft({ ...draft, ...p });
+  const patch = (p: Partial<ChartDto>): void => commit({ ...now(), ...p });
+  const stage = (p: Partial<ChartDto>): void => {
+    const next = { ...now(), ...p };
+    latest.current = next;
+    setDraft(next);
+  };
   const commitDraft = (): void => {
-    if (JSON.stringify(draft) !== JSON.stringify(chart)) void ctl.w5.charts.updateChart(draft);
+    const d = now();
+    if (JSON.stringify(d) !== JSON.stringify(chart)) void ctl.w5.charts.updateChart(d);
   };
   const series = draft.series;
   const cur = series[Math.min(seriesIdx, Math.max(0, series.length - 1))];
-  const setSeries = (i: number, p: Partial<ChartSeriesDto>, now = true): void => {
-    const next = series.map((s, j) => (j === i ? { ...s, ...p } : s));
-    if (now) patch({ series: next });
+  const setSeries = (i: number, p: Partial<ChartSeriesDto>, commitNow = true): void => {
+    const next = now().series.map((s, j) => (j === i ? { ...s, ...p } : s));
+    if (commitNow) patch({ series: next });
     else stage({ series: next });
   };
   const pick = async (apply: (ref: string) => void): Promise<void> => {

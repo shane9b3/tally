@@ -108,22 +108,67 @@ pub const MAX_ITEMS: usize = 10_000;
 /// Most output cells.
 pub const MAX_OUTPUT_CELLS: u64 = 4_000_000;
 
-/// Loads a sheet's pivots from the interchange model.
+/// Loads a sheet's pivots from the interchange model. Range sources name
+/// their sheet by tab index in the file and by [`SheetId`] in the engine
+/// (so inserting, moving or copying sheets keeps them on their sheet); an
+/// index past the last sheet becomes `u32::MAX` ("the source sheet is
+/// gone").
 pub fn from_data(wb: &mut Workbook, sheet: SheetId, pivots: &[PivotData]) {
+    let ids: Vec<SheetId> = wb.sheets.iter().map(|s| s.id).collect();
     let Some(s) = wb.sheet_mut(sheet) else {
         return;
     };
     for p in pivots.iter().take(MAX_PIVOTS) {
         let id = s.meta.alloc_id();
-        Arc::make_mut(&mut s.meta.pivots).push(Arc::new(PivotTable::new(id, p.clone())));
+        let mut data = p.clone();
+        if let PivotSourceData::Range { sheet, .. } = &mut data.source {
+            *sheet = ids.get(*sheet as usize).copied().unwrap_or(u32::MAX);
+        }
+        Arc::make_mut(&mut s.meta.pivots).push(Arc::new(PivotTable::new(id, data)));
     }
 }
 
-/// The interchange form of a sheet's pivots.
+/// The interchange form of a sheet's pivots (source sheet ids become tab
+/// indices).
 pub fn to_data(wb: &Workbook, sheet: SheetId) -> Vec<PivotData> {
     wb.sheet(sheet)
-        .map(|s| s.meta.pivots.iter().map(|p| p.data.clone()).collect())
+        .map(|s| {
+            s.meta
+                .pivots
+                .iter()
+                .map(|p| {
+                    let mut data = p.data.clone();
+                    if let PivotSourceData::Range { sheet, .. } = &mut data.source {
+                        *sheet = wb.tab_of(*sheet).map_or(u32::MAX, |t| t as u32);
+                    }
+                    data
+                })
+                .collect()
+        })
         .unwrap_or_default()
+}
+
+/// For `CopySheet`: pivots copied with the sheet's meta stay on the copy
+/// (their target and output are sheet-local); a range source on the
+/// copied sheet now reads the copy, as for charts.
+pub fn clone_for_sheet(
+    meta: &mut crate::storage::SheetMeta,
+    old_sheet: SheetId,
+    new_sheet: SheetId,
+) {
+    if meta.pivots.is_empty() {
+        return;
+    }
+    for p in Arc::make_mut(&mut meta.pivots).iter_mut() {
+        if let PivotSourceData::Range { sheet, .. } = &p.data.source {
+            if *sheet == old_sheet {
+                let p = Arc::make_mut(p);
+                if let PivotSourceData::Range { sheet, .. } = &mut p.data.source {
+                    *sheet = new_sheet;
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +401,7 @@ pub fn from_api(wb: &Workbook, dto: &PivotDto) -> Result<PivotData, ApiError> {
             check_sheet(wb, *sheet)?;
             let r = to_range(*sheet, range)?;
             PivotSourceData::Range {
-                sheet: wb.tab_of(*sheet).unwrap_or(0) as u32,
+                sheet: *sheet,
                 range: CellRangeLocal {
                     r0: r.r0,
                     c0: r.c0,
@@ -405,14 +450,14 @@ pub fn from_api(wb: &Workbook, dto: &PivotDto) -> Result<PivotData, ApiError> {
 }
 
 /// Model → API definition.
-pub fn to_api(wb: &Workbook, sheet: SheetId, p: &PivotTable) -> PivotDto {
+pub fn to_api(sheet: SheetId, p: &PivotTable) -> PivotDto {
     let d = &p.data;
     PivotDto {
         id: p.id,
         name: d.name.clone(),
         source: match &d.source {
             PivotSourceData::Range { sheet, range } => PivotSource::Range {
-                sheet: wb.sheets.get(*sheet as usize).map_or(0, |s| s.id),
+                sheet: *sheet,
                 range: range_dto(range),
             },
             PivotSourceData::DatabaseRange { name } => {
@@ -447,7 +492,7 @@ pub fn list(wb: &Workbook) -> Vec<PivotDto> {
     let mut out = Vec::new();
     for s in &wb.sheets {
         for p in s.meta.pivots.iter() {
-            out.push(to_api(wb, s.id, p));
+            out.push(to_api(s.id, p));
         }
     }
     out
@@ -462,8 +507,7 @@ pub fn source_range(wb: &Workbook, src: &PivotSourceData) -> Result<CellRange, A
     match src {
         PivotSourceData::Range { sheet, range } => {
             let id = wb
-                .sheets
-                .get(*sheet as usize)
+                .sheet(*sheet)
                 .map(|s| s.id)
                 .ok_or_else(|| ApiError::not_found("the source sheet is gone"))?;
             if range.r0 > range.r1
@@ -2491,7 +2535,6 @@ pub fn pivot_data(
 
 /// Moves pivot sources, targets and outputs for a row/column change.
 pub fn adjust_structure(wb: &mut Workbook, sh: &Shape) {
-    let changed_tab = wb.tab_of(sh.sheet).map(|t| t as u32);
     for s in wb.sheets.iter_mut() {
         if s.meta.pivots.is_empty() {
             continue;
@@ -2502,7 +2545,7 @@ pub fn adjust_structure(wb: &mut Workbook, sh: &Shape) {
         for p in list.iter_mut() {
             let mut d = p.data.clone();
             if let PivotSourceData::Range { sheet, range } = &mut d.source {
-                if Some(*sheet) == changed_tab {
+                if *sheet == sh.sheet {
                     let n = if sh.rows {
                         span_after(sh, range.r0, range.r1).map(|(r0, r1)| CellRangeLocal {
                             r0,

@@ -158,6 +158,31 @@ impl EngineService {
     /// bare line breaks, so values at A1 and XFD1048576 cost two short rows
     /// and a million line breaks, not 17 G fields. Exports that still exceed
     /// the cap are refused.
+    /// Serializes `doc` in `format` and writes it to `target` atomically;
+    /// the document itself (path, title, dirty flag) is not touched.
+    fn write_doc(&self, doc: DocId, target: &Path, format: FileFormat) -> Result<()> {
+        let d = self.docs.get(&doc.0).ok_or_else(|| not_found_doc(doc))?;
+        let mut data = d.wb.to_data();
+        data.meta.generator = Some(format!("Tally/{}", env!("CARGO_PKG_VERSION")));
+        data.meta.modified = Some(crate::ops_v03::now_iso());
+        if data.meta.created.is_none() {
+            data.meta.created = data.meta.modified.clone();
+        }
+        let csv_rows = if format == FileFormat::Csv {
+            Some(Self::csv_rows(&d.wb)?)
+        } else {
+            None
+        };
+        let bytes = self.codec.write(
+            &Export {
+                data: &data,
+                csv_rows,
+            },
+            format,
+        )?;
+        write_atomically(target, &bytes).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))
+    }
+
     fn csv_rows(wb: &Workbook) -> Result<Vec<Vec<(String, bool)>>> {
         let too_large = || ApiError::unsupported("the sheet is too large to export as CSV");
         let sheet_id = wb.active_sheet;
@@ -342,26 +367,7 @@ impl DocumentService for EngineService {
                 .clone()
                 .ok_or_else(|| ApiError::invalid_argument("the document has no file path yet"))?,
         };
-        let mut data = d.wb.to_data();
-        data.meta.generator = Some(format!("Tally/{}", env!("CARGO_PKG_VERSION")));
-        data.meta.modified = Some(crate::ops_v03::now_iso());
-        if data.meta.created.is_none() {
-            data.meta.created = data.meta.modified.clone();
-        }
-        let csv_rows = if format == FileFormat::Csv {
-            Some(Self::csv_rows(&d.wb)?)
-        } else {
-            None
-        };
-        let bytes = self.codec.write(
-            &Export {
-                data: &data,
-                csv_rows,
-            },
-            format,
-        )?;
-        write_atomically(&target, &bytes)
-            .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+        self.write_doc(doc, &target, format)?;
         let d = self
             .docs
             .get_mut(&doc.0)
@@ -370,6 +376,22 @@ impl DocumentService for EngineService {
         d.path = Some(target);
         d.dirty = false;
         Ok(d.info())
+    }
+
+    fn open_untitled(&mut self, path: &Path, dirty: bool) -> Result<WorkbookInfo> {
+        let mut info = self.open(path)?;
+        let d = self.document_mut(info.doc)?;
+        d.path = None;
+        d.title = "Untitled".to_owned();
+        d.dirty = dirty;
+        info.path = None;
+        info.title = d.title.clone();
+        info.dirty = dirty;
+        Ok(info)
+    }
+
+    fn save_copy(&self, doc: DocId, path: &Path, format: FileFormat) -> Result<()> {
+        self.write_doc(doc, path, format)
     }
 
     fn close(&mut self, doc: DocId) -> Result<()> {
@@ -488,13 +510,28 @@ impl DocumentService for EngineService {
     fn list_functions(&self) -> Vec<FunctionInfo> {
         let mut out: Vec<FunctionInfo> = registry()
             .iter()
-            .map(|(_, d)| FunctionInfo {
-                name: d.name.to_owned(),
-                category: d.category.aoo_name().to_owned(),
-                signature: d.signature().replace("; ", ", "),
-                description: d.help.to_owned(),
+            .map(|(_, d)| {
+                let meta = tally_functions::FunctionMeta::from_def(d);
+                FunctionInfo {
+                    name: meta.name,
+                    category: meta.category,
+                    signature: d.signature().replace("; ", ", "),
+                    description: meta.help,
+                    params: meta
+                        .params
+                        .into_iter()
+                        .map(|p| tally_api::ParamInfo {
+                            name: p.name,
+                            kind: p.kind,
+                            optional: p.optional,
+                            repeat: p.repeat,
+                        })
+                        .collect(),
+                    example: meta.example,
+                }
             })
             .collect();
+
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
     }
@@ -744,7 +781,22 @@ impl DocumentService for EngineService {
     }
 
     fn document_statistics(&self, doc: DocId) -> Result<tally_api::DocumentStatsDto> {
-        tools::document_statistics(&self.document(doc)?.wb)
+        let d = self.document(doc)?;
+        let mut stats = tools::document_statistics(&d.wb)?;
+        // Pages: every visible sheet at its own page setup, empty pages
+        // suppressed (AOO's File ▸ Properties ▸ Statistics).
+        let opts = tally_api::PrintOptionsDto {
+            sheets: tally_api::PrintSheets::All,
+            selection: None,
+            suppress_empty_pages: true,
+            page_from: None,
+            page_to: None,
+        };
+        let ctx = crate::print::HfContext::now(&d.wb, &d.title, None);
+        stats.pages = crate::print::layout(&d.wb, &opts, &ctx)
+            .ok()
+            .map(|(pages, _)| pages.len() as u32);
+        Ok(stats)
     }
 
     fn custom_sort_lists(&self, doc: DocId) -> Result<Vec<Vec<String>>> {
@@ -871,6 +923,31 @@ impl DocumentService for EngineService {
     ) -> Result<Vec<CellPos>> {
         let d = self.document(doc)?;
         crate::validation::invalid_cells(&d.wb, sheet, range)
+    }
+
+    fn cells_with(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        ranges: &[RangeDto],
+        opts: &tally_api::CellsOptions,
+    ) -> Result<Vec<CellBlock>> {
+        let d = self.document(doc)?;
+        let mut blocks = view::cells(&d.wb, d.version, sheet, ranges)?;
+        view::apply_cells_options(&d.wb, sheet, &mut blocks, opts);
+        Ok(blocks)
+    }
+
+    fn preview_formula(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        r: u32,
+        c: u32,
+        text: &str,
+    ) -> Result<Option<String>> {
+        let d = self.document(doc)?;
+        view::preview_formula(d, sheet, r, c, text)
     }
 }
 

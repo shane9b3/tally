@@ -515,6 +515,115 @@ pub fn cells_with_cf_budget(
     Ok(out)
 }
 
+/// AOO value highlighting: constant numbers (and booleans).
+pub const HIGHLIGHT_VALUE: u32 = 0x0000_ffff;
+/// AOO value highlighting: formulas.
+pub const HIGHLIGHT_FORMULA: u32 = 0x0080_00ff;
+/// AOO value highlighting: text constants.
+pub const HIGHLIGHT_TEXT: u32 = 0x0000_00ff;
+
+/// Applies the View options of `cells_with` to blocks from [`cells`]:
+/// formula text instead of results, value highlighting colours (RGBA) and
+/// blank zero values.
+pub fn apply_cells_options(
+    wb: &Workbook,
+    sheet: SheetId,
+    blocks: &mut [CellBlock],
+    opts: &tally_api::CellsOptions,
+) {
+    if !opts.show_formulas && !opts.value_highlighting && !opts.hide_zero_values {
+        return;
+    }
+    let Some(s) = wb.sheet(sheet) else {
+        return;
+    };
+    let protected = s.meta.protection.is_some();
+    for b in blocks.iter_mut() {
+        for v in &mut b.cells {
+            let content = s.get(v.r, v.c);
+            let formula_id = match content {
+                Some(CellContent::Formula(id) | CellContent::ArrayPart(id)) => Some(*id),
+                _ => None,
+            };
+            if opts.value_highlighting && v.kind != ValueKind::Empty {
+                v.color = Some(if formula_id.is_some() {
+                    HIGHLIGHT_FORMULA
+                } else if v.kind == ValueKind::Text {
+                    HIGHLIGHT_TEXT
+                } else {
+                    HIGHLIGHT_VALUE
+                });
+            }
+            if opts.show_formulas {
+                if let Some(id) = formula_id {
+                    let hidden = protected
+                        && crate::protection::cell_protection(wb, s.style(v.r, v.c)).hidden_formula;
+                    if !hidden {
+                        if let Some(text) = wb.formula_text(id) {
+                            let array = wb.formulas.get(id).is_some_and(|f| f.array.is_some())
+                                || matches!(content, Some(CellContent::ArrayPart(_)));
+                            v.text =
+                                cap_view_text(if array { format!("{{{text}}}") } else { text });
+                            v.kind = ValueKind::Text;
+                            v.num = None;
+                            if !opts.value_highlighting {
+                                v.color = None;
+                            }
+                            continue;
+                        }
+                    }
+                }
+            }
+            if opts.hide_zero_values && v.kind == ValueKind::Number {
+                let addr = CellAddr::new(sheet, v.r, v.c);
+                if matches!(wb.value(addr), Value::Number(n) if n == 0.0) {
+                    v.text.clear();
+                    v.num = None;
+                }
+            }
+        }
+    }
+}
+
+/// The Function Wizard's live result: `text` evaluated at `(r, c)` and
+/// formatted with that cell's number format; `None` when it does not
+/// parse.
+pub fn preview_formula(
+    d: &crate::document::Document,
+    sheet: SheetId,
+    r: u32,
+    c: u32,
+    text: &str,
+) -> Result<Option<String>, ApiError> {
+    let wb = &d.wb;
+    sheet_or_err(wb, sheet)?;
+    if r >= MAX_ROWS || c >= MAX_COLS {
+        return Err(ApiError::invalid_argument("cell outside the grid"));
+    }
+    let t = text.trim();
+    if t.is_empty() || t == "=" {
+        return Ok(None);
+    }
+    let src = if t.starts_with('=') {
+        t.to_owned()
+    } else {
+        format!("={t}")
+    };
+    let addr = CellAddr::new(sheet, r, c);
+    let Some(v) = d.eval_formula_text_at(addr, &src) else {
+        return Ok(None);
+    };
+    let v = match v {
+        Value::Array(m) => m.get(0, 0).cloned().unwrap_or(Value::Empty),
+        other => other,
+    };
+    if v.is_empty() {
+        return Ok(Some(String::new()));
+    }
+    let st = wb.styles.get(wb.style_at(addr));
+    Ok(Some(cap_view_text(format_with(wb, &v, st).text)))
+}
+
 /// Labels for `explain`: the text header at the top of a column's data
 /// block, or at the left of a row of numbers.
 pub struct HeaderLabels<'a> {

@@ -7,8 +7,8 @@
 //! the objective and every constraint cell are evaluated at the current
 //! variable values, at a unit step along each variable and at a combined
 //! step. A model whose samples are not affine (products, powers, IFs …)
-//! is reported as `invalid_argument` ("not linear"), as the DTO has no
-//! non-linear status. The affine model is then solved by a two-phase
+//! is reported as [`SolverStatus::NotLinear`] (with the current values).
+//! The affine model is then solved by a two-phase
 //! dense simplex (Bland's rule, so it cannot cycle); integer and binary
 //! constraints by depth-first branch and bound on the LP relaxation, within
 //! `max_iterations` nodes and `timeout_ms`. Free variables are split into
@@ -147,19 +147,14 @@ struct Linear {
     rows: Vec<Affine>,
 }
 
-/// Samples the model and checks it is affine in the variables.
-fn linearize(p: &mut Probe, x0: &[f64]) -> Result<Linear, ApiError> {
+/// Samples the model and checks it is affine in the variables; `None`
+/// when it is not.
+fn linearize(p: &mut Probe, x0: &[f64]) -> Result<Option<Linear>, ApiError> {
     let n = x0.len();
     let base = p.sample(x0)?;
     let m = base.rows.len();
     let mut obj_a = vec![0.0; n];
     let mut rows_a = vec![vec![0.0; n]; m];
-    let not_linear = || {
-        ApiError::invalid_argument(
-            "the model is not linear: the objective or a constraint does not change \
-             proportionally with the variables (only a linear solver is available)",
-        )
-    };
     let close = |expected: f64, got: f64| {
         (expected - got).abs() <= LIN_TOL * expected.abs().max(got.abs()).max(1.0)
     };
@@ -171,12 +166,12 @@ fn linearize(p: &mut Probe, x0: &[f64]) -> Result<Linear, ApiError> {
         let s2 = p.sample(&x)?;
         obj_a[i] = (s1.objective - base.objective) / STEP;
         if !close(base.objective + 2.0 * obj_a[i] * STEP, s2.objective) {
-            return Err(not_linear());
+            return Ok(None);
         }
         for (k, row) in rows_a.iter_mut().enumerate() {
             row[i] = (s1.rows[k] - base.rows[k]) / STEP;
             if !close(base.rows[k] + 2.0 * row[i] * STEP, s2.rows[k]) {
-                return Err(not_linear());
+                return Ok(None);
             }
         }
     }
@@ -186,16 +181,16 @@ fn linearize(p: &mut Probe, x0: &[f64]) -> Result<Linear, ApiError> {
         let s = p.sample(&x)?;
         let exp = base.objective + obj_a.iter().sum::<f64>() * STEP;
         if !close(exp, s.objective) {
-            return Err(not_linear());
+            return Ok(None);
         }
         for (k, row) in rows_a.iter().enumerate() {
             let exp = base.rows[k] + row.iter().sum::<f64>() * STEP;
             if !close(exp, s.rows[k]) {
-                return Err(not_linear());
+                return Ok(None);
             }
         }
     }
-    Ok(Linear {
+    Ok(Some(Linear {
         objective: Affine {
             f0: base.objective,
             a: obj_a,
@@ -206,7 +201,7 @@ fn linearize(p: &mut Probe, x0: &[f64]) -> Result<Linear, ApiError> {
             .zip(rows_a)
             .map(|(f0, a)| Affine { f0: *f0, a })
             .collect(),
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -644,7 +639,29 @@ pub fn solve(wb: &Workbook, req: &SolverRequest) -> Result<SolverResult, ApiErro
         rows,
         evals: 0,
     };
-    let lin = linearize(&mut probe, &x0)?;
+    let Some(lin) = linearize(&mut probe, &x0)? else {
+        let objective = match wb.value(objective) {
+            Value::Number(n) => n,
+            _ => 0.0,
+        };
+        return Ok(SolverResult {
+            status: SolverStatus::NotLinear,
+            objective,
+            values: vars
+                .iter()
+                .zip(&x0)
+                .map(|(a, v)| SolverValue {
+                    cell: tally_api::SheetCell {
+                        sheet: a.sheet,
+                        r: a.row,
+                        c: a.col,
+                    },
+                    value: *v,
+                })
+                .collect(),
+            iterations: probe.evals,
+        });
+    };
     let n = vars.len();
 
     // Variables: y = [x⁺…, x⁻… (free vars only)].
@@ -980,11 +997,12 @@ mod tests {
             constraints: vec![con("A1:A2", SolverOp::Le, "3")],
             options: SolverOptions::default(),
         };
-        let e = solve(&wb, &req).unwrap_err();
-        assert_eq!(e.code, ApiError::INVALID_ARGUMENT);
-        assert!(e.message.contains("not linear"));
+        let r = solve(&wb, &req).unwrap();
+        assert_eq!(r.status, SolverStatus::NotLinear);
+        assert_eq!(r.values.len(), 2);
+        assert!((r.values[0].value - 1.0).abs() < 1e-12);
         wb.set_input(a("B1"), "=A1^2");
         recalc(&mut wb);
-        assert!(solve(&wb, &req).is_err());
+        assert_eq!(solve(&wb, &req).unwrap().status, SolverStatus::NotLinear);
     }
 }

@@ -68,6 +68,8 @@ import type { ScenarioDto } from "./generated/ScenarioDto";
 import type { SolverRequest } from "./generated/SolverRequest";
 import type { SolverResult } from "./generated/SolverResult";
 import type { TraceDto } from "./generated/TraceDto";
+import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
+import type { CellsOptions } from "./generated/CellsOptions";
 
 /** Sheet ids are stable numbers, independent of tab order. */
 export type SheetId = number;
@@ -241,6 +243,18 @@ export interface EngineClientV4 extends EngineClientV3 {
   precedents(doc: DocId, sheet: SheetId, r: number, c: number): Promise<TraceDto[]>;
   /** Detective: the formulas that read a cell. */
   dependents(doc: DocId, sheet: SheetId, r: number, c: number): Promise<TraceDto[]>;
+  /** A picture's bytes, base64 (pictures from files carry no `data` in `images`). */
+  imageData(doc: DocId, sheet: SheetId, id: number): Promise<string>;
+  /** A sheet's view options with the persisted split (`null` when not split). */
+  viewOptions(doc: DocId, sheet: SheetId): Promise<ViewOptionsDto>;
+  /** Mark Invalid Data: cells failing their validation (≤ 10,000, row-major). */
+  invalidCells(doc: DocId, sheet: SheetId, range: RangeDto | null): Promise<CellPos[]>;
+  /** Tools ▸ Options ▸ Sort Lists. */
+  customSortLists(doc: DocId): Promise<string[][]>;
+  /** `cells` rendered with view options (formulas, value highlighting, zero values). */
+  cellsWith(doc: DocId, sheet: SheetId, ranges: RangeDto[], opts: CellsOptions): Promise<CellBlock[]>;
+  /** Function Wizard: a formula evaluated at a cell without committing it, formatted; `null` if it does not parse. */
+  previewFormula(doc: DocId, sheet: SheetId, r: number, c: number, text: string): Promise<string | null>;
 }
 
 /** Narrows an unknown rejection value to {@link ApiError}. */

@@ -125,3 +125,30 @@ describe("EngineClientSource", () => {
     expect(events.some((e) => e !== "all" && e.some((r) => r.r0 === 0 && r.c0 === 0 && r.r1 === 63))).toBe(true);
   });
 });
+
+describe("EngineClientSource view options", () => {
+  it("fetches with cellsWith while an option is on and refetches every tile when they change", async () => {
+    const { client, source } = await setup();
+    const plain = vi.spyOn(client, "cells");
+    const withOpts = vi.spyOn(client, "cellsWith");
+    source.ensureRanges([{ r0: 0, c0: 0, r1: 63, c1: 31 }]);
+    await flush();
+    expect(source.getCell(0, 2)?.text).toBe("3");
+    source.setCellsOptions({ showFormulas: true, valueHighlighting: true, hideZeroValues: false });
+    source.ensureRanges([{ r0: 0, c0: 0, r1: 63, c1: 31 }]);
+    await flush();
+    expect(withOpts).toHaveBeenCalledTimes(1);
+    expect(source.getCell(0, 2)?.text).toBe("=A1+B1");
+    expect(source.getCell(0, 2)?.color).toBe(0x008000ff);
+    expect(source.getCell(0, 0)?.color).toBe(0x0000ffff);
+    expect(source.getCell(1, 0)?.color).toBe(0x000000ff);
+    // All off: back to `cells`.
+    const before = plain.mock.calls.length;
+    source.setCellsOptions({ showFormulas: false, valueHighlighting: false, hideZeroValues: false });
+    expect(source.cellsOptions).toBeNull();
+    source.ensureRanges([{ r0: 0, c0: 0, r1: 63, c1: 31 }]);
+    await flush();
+    expect(plain.mock.calls.length).toBe(before + 1);
+    expect(source.getCell(0, 2)?.text).toBe("3");
+  });
+});

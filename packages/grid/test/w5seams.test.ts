@@ -323,3 +323,33 @@ describe("split view", () => {
     expect(container.querySelectorAll(".tally-grid").length).toBe(0);
   });
 });
+
+describe("view toggles (gridlines, headers)", () => {
+  it("hiding the headers drops the header strips from the geometry; gridlines can be turned off", () => {
+    const { grid } = make();
+    const on = grid.getGeometry();
+    expect(on.headerW).toBeGreaterThan(0);
+    expect(on.headerH).toBeGreaterThan(0);
+    grid.update({ showHeaders: false });
+    grid.flush();
+    const off = grid.getGeometry();
+    expect(off.headerW).toBe(0);
+    expect(off.headerH).toBe(0);
+    expect(off.colLeft(0)).toBe(0);
+    // Gridlines off: the frame draws fewer 1 px rects.
+    const thin = () => calls.filter((c) => c.name === "fillRect" && ((c.args[2] as number) <= 1 || (c.args[3] as number) <= 1)).length;
+    calls.length = 0;
+    grid.update({ showGridlines: true, zoom: 1.0001 });
+    grid.flush();
+    const withLines = thin();
+    calls.length = 0;
+    grid.update({ showGridlines: false, zoom: 1 });
+    grid.flush();
+    expect(thin()).toBeLessThan(withLines);
+    // Headers back, with the outline gutter kept left of them.
+    grid.update({ showHeaders: true, outline: { rows: [{ start: 1, end: 3, level: 1, collapsed: false }], cols: [], levelPx: 13 } });
+    grid.flush();
+    expect(grid.getGeometry().headerW).toBeGreaterThan(26);
+    grid.destroy();
+  });
+});

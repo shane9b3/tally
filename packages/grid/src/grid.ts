@@ -294,6 +294,8 @@ export class Grid {
     if ("pageBreakPreview" in partial && partial.pageBreakPreview !== prev.pageBreakPreview) this.invalidate("main");
     if ("traces" in partial && partial.traces !== prev.traces) this.invalidate("overlay");
     if ("invalidCells" in partial && partial.invalidCells !== prev.invalidCells) this.invalidate("overlay");
+    if ("showGridlines" in partial && partial.showGridlines !== prev.showGridlines) this.invalidate("main");
+    if ("showHeaders" in partial && partial.showHeaders !== prev.showHeaders) this.relayout();
     if ("objects" in partial && partial.objects !== prev.objects) {
       this.objects.setObjects(this.props.objects ?? []);
       this.objects.sync(this.geo);
@@ -729,12 +731,10 @@ export class Grid {
     const levelPx = (outline?.levelPx ?? OUTLINE_LEVEL_PX) * zoom;
     this.gutterW = outline ? Math.round(outlineLevels(outline.rows) * levelPx) : 0;
     this.gutterH = outline ? Math.round(outlineLevels(outline.cols) * levelPx) : 0;
-    this.headerH = this.gutterH + Math.round(HEADER_HEIGHT * zoom);
+    this.headerH = this.gutterH + (this.headersShown ? Math.round(HEADER_HEIGHT * zoom) : 0);
     // Row header fits the widest row number currently visible (≥ 3 digits).
     const lastRow = Math.min(this.rowsCount, this.rows.pxToIndex((this.contentY + this.height) / zoom) + 1);
-    const digits = Math.max(3, String(lastRow).length);
-    const digitW = this.renderer.measurer.measure(headerFont(this.props.theme, zoom, true), "0".repeat(digits));
-    this.headerW = this.gutterW + Math.max(Math.round(MIN_ROW_HEADER_WIDTH * zoom), Math.ceil(digitW + 20 * zoom));
+    this.headerW = this.gutterW + this.rowHeaderWidth(lastRow);
 
     const cellsW = Math.max(0, this.width - this.headerW);
     const cellsH = Math.max(0, this.height - this.headerH);
@@ -749,6 +749,19 @@ export class Grid {
     this.objects.sync(this.geo);
     this.emitViewport();
     this.invalidate("all");
+  }
+
+  /** View ▸ Column and row headers. */
+  private get headersShown(): boolean {
+    return this.props.showHeaders !== false;
+  }
+
+  /** The row-number strip's width for rows up to `lastRow` (0 with the headers hidden). */
+  private rowHeaderWidth(lastRow: number): number {
+    if (!this.headersShown) return 0;
+    const digits = Math.max(3, String(lastRow).length);
+    const digitW = this.renderer.measurer.measure(headerFont(this.props.theme, this.zoom, true), "0".repeat(digits));
+    return Math.max(Math.round(MIN_ROW_HEADER_WIDTH * this.zoom), Math.ceil(digitW + 20 * this.zoom));
   }
 
   private makeGeometry(): Geometry {
@@ -855,9 +868,7 @@ export class Grid {
     const prevHeaderW = this.headerW;
     this.geo = this.makeGeometry();
     // Row numbers may need a wider header after a long jump.
-    const digits = Math.max(3, String(this.geo.visibleRange().r1 + 1).length);
-    const digitW = this.renderer.measurer.measure(headerFont(this.props.theme, this.zoom, true), "0".repeat(digits));
-    const want = this.gutterW + Math.max(Math.round(MIN_ROW_HEADER_WIDTH * this.zoom), Math.ceil(digitW + 20 * this.zoom));
+    const want = this.gutterW + this.rowHeaderWidth(this.geo.visibleRange().r1 + 1);
     if (want !== prevHeaderW) this.relayout();
     else {
       this.objects.sync(this.geo);
@@ -943,7 +954,10 @@ export class Grid {
         printRange: this.props.printRange ?? null,
         outline: this.props.outline ?? null,
         pageBreakPreview: this.props.pageBreakPreview ?? false,
+        showGridlines: this.props.showGridlines !== false,
+        showHeaders: this.headersShown,
       });
+
       const panes = this.geo.panes();
       // The scrolling pane first (it is the largest), then frozen ones.
       for (let i = panes.length - 1; i >= 0; i--) {

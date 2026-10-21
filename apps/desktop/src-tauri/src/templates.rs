@@ -136,7 +136,7 @@ pub fn save_template<R: Runtime>(
     let folder = dir(app)?;
     fs::create_dir_all(&folder).map_err(|e| io_err("creating the templates dir", &e))?;
     let tmp = folder.join(format!(".{name}.tmp.ods"));
-    with_service(st, |s| s.save(doc, Some(&tmp), FileFormat::Ods))?;
+    with_service(st, |s| s.save_copy(doc, &tmp, FileFormat::Ods))?;
     let ods = fs::read(&tmp).map_err(|e| io_err("reading the saved copy", &e));
     let _ = fs::remove_file(&tmp);
     let ots = ods_to_ots(&ods?)?;
@@ -192,10 +192,8 @@ pub fn path_of<R: Runtime>(app: &AppHandle<R>, id: &str) -> CmdResult<PathBuf> {
 
 /// Opens a template file as an untitled workbook (no path, so Save asks).
 pub fn open_as_untitled(st: &AppState, path: &Path) -> CmdResult<WorkbookInfo> {
-    let mut info = with_service(st, |s| s.open(path))?;
+    let info = with_service(st, |s| s.open_untitled(path, false))?;
     lock(&st.paths).remove(&info.doc.0);
-    info.path = None;
-    info.title = "Untitled".to_owned();
     Ok(info)
 }
 

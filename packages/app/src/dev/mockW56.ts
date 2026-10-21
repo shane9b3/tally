@@ -36,7 +36,7 @@ import type {
 } from "@tally/bridge";
 import { completionFor, matchingItems } from "../autocorrect/autoinput";
 import { absoluteRef } from "../dataOps";
-import { applyOutlineOp, autoOutlineGroups, emptyOutlineModel, hiddenByOutline, type OutlineModel } from "../data/outlineModel";
+import { applyOutlineOp, autoOutlineGroups, emptyOutlineModel, hiddenByOutline, type OutlineModel } from "./mockOutline";
 import { splitLine, type SeparatorState } from "../data/textToColumns";
 import { SUBTOTAL_FNS } from "../data/builders";
 import { AUTOFORMAT_PRESETS } from "../styles/autoformat";

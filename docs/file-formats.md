@@ -317,6 +317,13 @@ loses.
 - **View options**: `ShowFormulas`, `ShowZeroValues`, `ShowGrid`,
   `HasColumnRowHeaders`, `IsValueHighlightingEnabled` in the sheet's
   `settings.xml` entry.
+- **Window ▸ Split**: `HorizontalSplitMode`/`VerticalSplitMode` = 1 with
+  `HorizontalSplitPosition`/`VerticalSplitPosition` in pixels at 100 %
+  (96 dpi), converted to and from 1/100 mm. A frozen pane (mode 2, positions
+  in cells) wins when a sheet has both.
+- **Chart frames**: `draw:object` carries `draw:notify-on-update-of-ranges`
+  with the plotted category and value ranges (`Sheet1.A2:Sheet1.A6 …`, at
+  most 64 areas), as AOO writes it.
 - **Names** (review 3, H3/H4): `table:base-cell-address` is read into
   `NameData::base_cell` and relative references are parsed against it, so
   "the cell to the left" names from AOO/LibreOffice evaluate where they

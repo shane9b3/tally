@@ -885,3 +885,845 @@ fn oversized_arguments_are_rejected_before_the_engine() -> CmdResult<()> {
     assert!(res.errors.is_empty());
     Ok(())
 }
+
+// ----- wave 5 over the real engine (integration pass) ---------------------------
+
+mod wave5 {
+    use std::io::Read as _;
+
+    use tally_api::{
+        AggFn, CalcSettingsDto, ChartKind, CriteriaModeDto, CsvImportOptionsDto, DataLayout,
+        DateEpochDto, IterationsDto, ListSource, OutlineAxis, PivotDataFieldDto, PivotDto,
+        PivotFieldDto, PivotLayout, PivotSort, PivotSource, PivotSubtotals, PrintOptionsDto,
+        PrintSheets, ScenarioDto, SheetCell, SheetRange, SolverConstraint, SolverGoal, SolverOp,
+        SolverOptions, SolverRequest, SolverStatus, SplitDto, StdCondition, StdConnector,
+        StdFilterOp, StdFilterOptions, SubtotalGroup, SubtotalOptions, TextToNumberDto,
+        ValidationAlert, ValidationDto, ValidationErrorStyle, ValidationKind, ViewOptionsDto,
+    };
+
+    use super::*;
+
+    fn repo(rel: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .join(rel)
+    }
+
+    fn text_at(view: &[CellView], r: u32, c: u32) -> String {
+        cell(view, r, c).map(|v| v.text.clone()).unwrap_or_default()
+    }
+
+    /// A column chart of Qty, Price and Total (D1:F15) on the invoices
+    /// template, as `suggest_chart` proposes it; returns the chart id.
+    fn add_invoice_chart(st: &AppState, info: &WorkbookInfo) -> CmdResult<u32> {
+        let sheet = info.active_sheet;
+        let chart = with_service(st, |s| {
+            s.suggest_chart(info.doc, sheet, range(0, 3, 14, 5), ChartKind::Column)
+        })?;
+        assert_eq!(chart.kind, ChartKind::Column);
+        assert!(!chart.series.is_empty(), "{chart:?}");
+        let res = apply_ok(st, info.doc, vec![Op::AddChart { sheet, chart }])?;
+        assert_eq!(res.objects_changed.as_deref(), Some(&[sheet][..]));
+        let created = res.created.unwrap_or_default();
+        assert_eq!(created.len(), 1);
+        Ok(created[0].id)
+    }
+
+    fn series_values(st: &AppState, doc: DocId, sheet: SheetId, id: u32) -> CmdResult<Vec<f64>> {
+        let data = with_service(st, |s| s.chart_data(doc, sheet, id))?;
+        assert!(data.problems.is_empty(), "{:?}", data.problems);
+        Ok(data
+            .series
+            .iter()
+            .flat_map(|s| s.values.iter().map(|v| v.unwrap_or(f64::NAN)))
+            .collect())
+    }
+
+    fn zip_entry(path: &std::path::Path, name: &str) -> String {
+        let file = std::fs::File::open(path).expect("saved file");
+        let mut z = zip::ZipArchive::new(file).expect("a zip");
+        let mut s = String::new();
+        z.by_name(name)
+            .expect("entry")
+            .read_to_string(&mut s)
+            .expect("utf-8");
+        s
+    }
+
+    #[test]
+    fn chart_on_invoices_has_data_and_round_trips_through_ods_and_xlsx() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, Some("invoices"))?;
+        let sheet = info.active_sheet;
+        let id = add_invoice_chart(&st, &info)?;
+        let data = with_service(&st, |s| s.chart_data(info.doc, sheet, id))?;
+        assert_eq!(data.series.len(), 3, "{:?}", data.series);
+        assert!(data.series.iter().all(|s| s.values.len() == 14));
+        let before = series_values(&st, info.doc, sheet, id)?;
+        assert!(before.iter().all(|v| v.is_finite() && *v > 0.0));
+
+        // ODS: save, check the frame's update ranges, reopen.
+        let ods = temp_path("chart.ods");
+        save_to(&st, info.doc, &ods, FileFormat::Ods)?;
+        let content = zip_entry(&ods, "content.xml");
+        assert!(
+            content.contains("draw:notify-on-update-of-ranges=\"Orders.D2:Orders.D15"),
+            "notify ranges missing"
+        );
+        let again = open_path(&st, &ods)?;
+        let s2 = again.sheets[0].id;
+        let charts = with_service(&st, |s| s.charts(again.doc, s2))?;
+        assert_eq!(charts.len(), 1);
+        assert_eq!(series_values(&st, again.doc, s2, charts[0].id)?, before);
+
+        // XLSX: save, reopen.
+        let xlsx = temp_path("chart.xlsx");
+        save_to(&st, info.doc, &xlsx, FileFormat::Xlsx)?;
+        let x = open_path(&st, &xlsx)?;
+        let s3 = x.sheets[0].id;
+        let charts = with_service(&st, |s| s.charts(x.doc, s3))?;
+        assert_eq!(charts.len(), 1, "{charts:?}");
+        assert_eq!(charts[0].kind, ChartKind::Column);
+        assert_eq!(series_values(&st, x.doc, s3, charts[0].id)?, before);
+        let _ = std::fs::remove_file(&ods);
+        let _ = std::fs::remove_file(&xlsx);
+        Ok(())
+    }
+
+    fn field(col: u32, name: &str) -> PivotFieldDto {
+        PivotFieldDto {
+            source_col: col,
+            name: name.into(),
+            subtotals: PivotSubtotals::Auto,
+            show_empty: false,
+            sort: PivotSort::Name { ascending: true },
+            hidden_items: Vec::new(),
+            page_item: None,
+            layout: PivotLayout::Tabular,
+            empty_line_after: false,
+            auto_show: None,
+            group: None,
+        }
+    }
+
+    /// Sum of Total by Status, at J1 of the Orders sheet.
+    fn status_pivot(sheet: SheetId) -> PivotDto {
+        PivotDto {
+            id: 0,
+            name: String::new(),
+            source: PivotSource::Range {
+                sheet,
+                range: range(0, 0, 14, 6),
+            },
+            target_sheet: sheet,
+            target: CellPos { r: 0, c: 9 },
+            output: None,
+            row_fields: vec![field(6, "Status")],
+            col_fields: Vec::new(),
+            page_fields: Vec::new(),
+            data_fields: vec![PivotDataFieldDto {
+                source_col: 5,
+                function: AggFn::Sum,
+                caption: None,
+                show_as: None,
+            }],
+            data_layout: DataLayout::Row,
+            row_totals: true,
+            col_totals: true,
+            ignore_empty_rows: false,
+            identify_categories: false,
+            show_filter_button: false,
+            drill_down: true,
+        }
+    }
+
+    #[test]
+    fn pivot_sum_of_total_by_status_and_getpivotdata() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, Some("invoices"))?;
+        let sheet = info.active_sheet;
+        let table = cells(&st, info.doc, sheet, range(0, 0, 14, 6))?;
+        let paid: f64 = (1..=14)
+            .filter(|r| text_at(&table, *r, 6) == "Paid")
+            .filter_map(|r| cell(&table, r, 5).and_then(number))
+            .sum();
+        let all: f64 = (1..=14)
+            .filter_map(|r| cell(&table, r, 5).and_then(number))
+            .sum();
+        let res = apply_ok(
+            &st,
+            info.doc,
+            vec![Op::CreatePivot {
+                pivot: status_pivot(sheet),
+                overwrite: false,
+            }],
+        )?;
+        assert_eq!(res.pivots_changed, Some(true));
+        let out = cells(&st, info.doc, sheet, range(0, 9, 10, 10))?;
+        // AOO tabular layout without column fields: the row field name and
+        // the data caption share the header row.
+        assert_eq!(text_at(&out, 0, 9), "Status");
+        assert_eq!(text_at(&out, 0, 10), "Sum - Total");
+        let row_of = |label: &str| (0..=10).find(|r| text_at(&out, *r, 9) == label);
+        let paid_row = row_of("Paid").expect("a Paid row");
+        let total_row = row_of("Total Result").expect("a total row");
+        let got = cell(&out, paid_row, 10)
+            .and_then(number)
+            .unwrap_or(f64::NAN);
+        assert!((got - paid).abs() < 1e-6, "{got} vs {paid}");
+        let total = cell(&out, total_row, 10)
+            .and_then(number)
+            .unwrap_or(f64::NAN);
+        assert!((total - all).abs() < 1e-6, "{total} vs {all}");
+        // GETPIVOTDATA reads the output.
+        set(
+            &st,
+            &info,
+            19,
+            0,
+            "=GETPIVOTDATA(\"Sum - Total\",J1,\"Status\",\"Paid\")",
+        )?;
+        let v = cells(&st, info.doc, sheet, range(19, 0, 19, 0))?;
+        let gp = cell(&v, 19, 0).and_then(number).unwrap_or(f64::NAN);
+        assert!((gp - paid).abs() < 1e-6, "{gp} vs {paid}");
+        assert_eq!(with_service(&st, |s| s.pivots(info.doc))?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn copy_sheet_repoints_charts_and_pivots_at_the_copy() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, Some("invoices"))?;
+        let sheet = info.active_sheet;
+        add_invoice_chart(&st, &info)?;
+        apply_ok(
+            &st,
+            info.doc,
+            vec![Op::CreatePivot {
+                pivot: status_pivot(sheet),
+                overwrite: false,
+            }],
+        )?;
+        let res = apply_ok(
+            &st,
+            info.doc,
+            vec![Op::CopySheet {
+                sheet,
+                name: Some("Copy".into()),
+                index: None,
+            }],
+        )?;
+        assert_eq!(res.pivots_changed, Some(true));
+        let sheets = res.info.map(|i| i.sheets).unwrap_or_default();
+        let copy = sheets
+            .iter()
+            .find(|s| s.name == "Copy")
+            .map(|s| s.id)
+            .expect("the copy");
+        let charts = with_service(&st, |s| s.charts(info.doc, copy))?;
+        assert_eq!(charts.len(), 1);
+        for s in &charts[0].series {
+            assert!(s.values.contains("Copy."), "{}", s.values);
+            assert!(!s.values.contains("Orders"), "{}", s.values);
+        }
+        // The copy's chart follows the copy's cells, not the source's.
+        set(&st, &info, 1, 3, "1000")?; // Orders D2
+        let src = series_values(&st, info.doc, sheet, charts[0].id)?;
+        let cpy = series_values(&st, info.doc, copy, charts[0].id)?;
+        assert!(src.contains(&1000.0) && !cpy.contains(&1000.0));
+        // Pivots: one on each sheet, the copy's reading the copy.
+        let pivots = with_service(&st, |s| s.pivots(info.doc))?;
+        assert_eq!(pivots.len(), 2, "{pivots:?}");
+        let on_copy = pivots
+            .iter()
+            .find(|p| p.target_sheet == copy)
+            .expect("a pivot on the copy");
+        assert!(matches!(on_copy.source, PivotSource::Range { sheet: s, .. } if s == copy));
+        let out = cells(&st, info.doc, copy, range(0, 10, 0, 10))?;
+        assert_eq!(text_at(&out, 0, 10), "Sum - Total");
+        // Undo removes the copy with its objects.
+        with_service(&st, |s| s.undo(info.doc))?;
+        with_service(&st, |s| s.undo(info.doc))?;
+        assert_eq!(with_service(&st, |s| s.pivots(info.doc))?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn group_and_collapse_rows_hides_them() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, Some("invoices"))?;
+        let sheet = info.active_sheet;
+        let res = apply_ok(
+            &st,
+            info.doc,
+            vec![Op::Group {
+                sheet,
+                axis: OutlineAxis::Rows,
+                start: 2,
+                end: 5,
+            }],
+        )?;
+        // The UI's outline gutter refetches the layout on this signal.
+        assert!(res.layout_changed.contains(&sheet), "{res:?}");
+        let layout = with_service(&st, |s| s.sheet_layout(info.doc, sheet))?;
+        let outline = layout.outline.expect("an outline");
+        assert_eq!(outline.rows.len(), 1);
+        assert!(!layout.row_runs.iter().any(|r| r.hidden));
+        let res = apply_ok(
+            &st,
+            info.doc,
+            vec![Op::SetOutlineCollapsed {
+                sheet,
+                axis: OutlineAxis::Rows,
+                start: 2,
+                end: 5,
+                collapsed: true,
+            }],
+        )?;
+        assert!(res.layout_changed.contains(&sheet));
+        let layout = with_service(&st, |s| s.sheet_layout(info.doc, sheet))?;
+        let hidden: Vec<(u32, u32)> = layout
+            .row_runs
+            .iter()
+            .filter(|r| r.hidden)
+            .map(|r| (r.start, r.end))
+            .collect();
+        assert_eq!(hidden, [(2, 5)]);
+        Ok(())
+    }
+
+    #[test]
+    fn standard_filter_subtotals_and_text_to_columns() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, Some("invoices"))?;
+        let sheet = info.active_sheet;
+        let table = cells(&st, info.doc, sheet, range(0, 0, 14, 6))?;
+        let not_paid = (1..=14)
+            .filter(|r| text_at(&table, *r, 6) != "Paid")
+            .count() as u32;
+        apply_ok(
+            &st,
+            info.doc,
+            vec![Op::StandardFilter {
+                sheet,
+                range: range(0, 0, 14, 6),
+                conditions: vec![StdCondition {
+                    connector: StdConnector::And,
+                    col: 6,
+                    op: StdFilterOp::Eq,
+                    value: "Paid".into(),
+                }],
+                options: StdFilterOptions {
+                    has_header: true,
+                    ..StdFilterOptions::default()
+                },
+            }],
+        )?;
+        let layout = with_service(&st, |s| s.sheet_layout(info.doc, sheet))?;
+        let filtered: u32 = layout
+            .row_runs
+            .iter()
+            .filter(|r| r.hidden && r.filtered == Some(true))
+            .map(|r| r.end - r.start + 1)
+            .sum();
+        assert_eq!(filtered, not_paid);
+        apply_ok(&st, info.doc, vec![Op::ResetFilter { sheet }])?;
+
+        // Subtotals of Total by Status.
+        apply_ok(
+            &st,
+            info.doc,
+            vec![Op::Subtotals {
+                sheet,
+                range: range(0, 0, 14, 6),
+                groups: vec![SubtotalGroup {
+                    group_by: 6,
+                    columns: vec![5],
+                    function: AggFn::Sum,
+                }],
+                options: SubtotalOptions::default(),
+            }],
+        )?;
+        let view = cells(&st, info.doc, sheet, range(0, 0, 30, 6))?;
+        let labels: Vec<String> = (0..=30).map(|r| text_at(&view, r, 6)).collect();
+        assert!(labels.iter().any(|l| l == "Paid Sum"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "Grand Total"), "{labels:?}");
+        let layout = with_service(&st, |s| s.sheet_layout(info.doc, sheet))?;
+        assert!(layout.outline.is_some_and(|o| !o.rows.is_empty()));
+
+        // Text to columns on a fresh cell.
+        set(&st, &info, 40, 0, "north;12;x")?;
+        apply_ok(
+            &st,
+            info.doc,
+            vec![Op::TextToColumns {
+                sheet,
+                range: range(40, 0, 40, 0),
+                options: CsvImportOptionsDto {
+                    delimiters: ";".into(),
+                    ..CsvImportOptionsDto::default()
+                },
+            }],
+        )?;
+        let row = cells(&st, info.doc, sheet, range(40, 0, 40, 2))?;
+        assert_eq!(text_at(&row, 40, 0), "north");
+        assert_eq!(cell(&row, 40, 1).and_then(number), Some(12.0));
+        assert_eq!(text_at(&row, 40, 2), "x");
+        Ok(())
+    }
+
+    #[test]
+    fn scenarios_and_cell_styles() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, None)?;
+        let sheet = info.active_sheet;
+        set(&st, &info, 0, 0, "10")?;
+        set(&st, &info, 1, 0, "20")?;
+        set(&st, &info, 0, 1, "=A1+A2")?;
+        let scenario = |name: &str| ScenarioDto {
+            id: 0,
+            name: name.into(),
+            comment: String::new(),
+            ranges: vec![range(0, 0, 1, 0)],
+            border_color: None,
+            display_border: true,
+            copy_back: true,
+            copy_styles: false,
+            prevent_changes: false,
+            active: false,
+        };
+        let res = apply_ok(
+            &st,
+            info.doc,
+            vec![Op::CreateScenario {
+                sheet,
+                scenario: scenario("Base"),
+            }],
+        )?;
+        let base = res.created.unwrap_or_default()[0].id;
+        set(&st, &info, 0, 0, "100")?;
+        apply_ok(
+            &st,
+            info.doc,
+            vec![Op::CreateScenario {
+                sheet,
+                scenario: scenario("High"),
+            }],
+        )?;
+        assert_eq!(
+            with_service(&st, |s| s.scenarios(info.doc, sheet))?.len(),
+            2
+        );
+        apply_ok(&st, info.doc, vec![Op::ShowScenario { sheet, id: base }])?;
+        let v = cells(&st, info.doc, sheet, range(0, 0, 0, 1))?;
+        assert_eq!(cell(&v, 0, 0).and_then(number), Some(10.0));
+        assert_eq!(cell(&v, 0, 1).and_then(number), Some(30.0));
+
+        // Apply Heading, then edit the style: the cell follows.
+        set(&st, &info, 5, 0, "Title")?;
+        apply_ok(
+            &st,
+            info.doc,
+            vec![Op::ApplyCellStyle {
+                sheet,
+                ranges: vec![range(5, 0, 5, 0)],
+                name: "Heading".into(),
+            }],
+        )?;
+        let style_of = |st: &AppState| -> CmdResult<tally_api::StyleDto> {
+            let v = cells(st, info.doc, sheet, range(5, 0, 5, 0))?;
+            let id = cell(&v, 5, 0).map_or(0, |c| c.style);
+            let styles = with_service(st, |s| s.styles(info.doc, &[id]))?;
+            styles
+                .into_iter()
+                .next()
+                .ok_or_else(|| ApiError::not_found("no style"))
+        };
+        let s = style_of(&st)?;
+        assert!(s.bold);
+        assert_eq!(s.style_name.as_deref(), Some("Heading"));
+        let mut heading = with_service(&st, |s| s.cell_styles(info.doc))?
+            .into_iter()
+            .find(|s| s.name == "Heading")
+            .expect("Heading");
+        heading.style.color = Some(0xff00_00ff);
+        apply_ok(&st, info.doc, vec![Op::DefineCellStyle { style: heading }])?;
+        assert_eq!(style_of(&st)?.color, Some(0xff00_00ff));
+        Ok(())
+    }
+
+    fn all_sheets() -> PrintOptionsDto {
+        PrintOptionsDto {
+            sheets: PrintSheets::All,
+            selection: None,
+            suppress_empty_pages: true,
+            page_from: None,
+            page_to: None,
+        }
+    }
+
+    #[test]
+    fn print_layout_pdf_and_png_pages() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, Some("invoices"))?;
+        let layout = with_service(&st, |s| s.print_layout(info.doc, &all_sheets()))?;
+        assert!(!layout.pages.is_empty());
+        let stats = with_service(&st, |s| s.document_statistics(info.doc))?;
+        assert_eq!(stats.pages, Some(layout.pages.len() as u32));
+        let job = with_service(&st, |s| s.prepare_print_job(info.doc, &all_sheets(), &[]))?;
+        assert_eq!(job.layout.pages.len(), layout.pages.len());
+        let pdf = with_service(&st, |s| s.print_job_pdf(job.job))?;
+        assert!(pdf.starts_with(b"%PDF"), "a PDF");
+        let png64 = with_service(&st, |s| s.print_job_page_png(job.job, 0, 72))?;
+        let png = tally_engine::protection::base64_decode(&png64).expect("base64");
+        let (w, h, pixels) = tally_io_pdf::png_pixels(&png).expect("a PNG");
+        assert!(w > 500 && h > 700, "{w}×{h} at 72 dpi");
+        assert!(pixels.chunks(4).any(|p| p[0] < 128), "ink on the page");
+        Ok(())
+    }
+
+    #[test]
+    fn iterations_converge_self_reference() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, None)?;
+        let sheet = info.active_sheet;
+        set(&st, &info, 0, 0, "=A1/2+1")?;
+        let v = cells(&st, info.doc, sheet, range(0, 0, 0, 0))?;
+        assert_eq!(text_at(&v, 0, 0), "Err:522");
+        apply_ok(
+            &st,
+            info.doc,
+            vec![Op::SetCalcSettings {
+                settings: CalcSettingsDto {
+                    iterations: Some(IterationsDto {
+                        steps: 100,
+                        min_change: 0.001,
+                    }),
+                    date_epoch: DateEpochDto::D1899,
+                    case_sensitive: false,
+                    precision_as_shown: false,
+                    whole_cell_match: true,
+                    criteria_mode: CriteriaModeDto::Wildcards,
+                    text_to_number: TextToNumberDto::ConvertUnambiguous,
+                },
+            }],
+        )?;
+        let v = cells(&st, info.doc, sheet, range(0, 0, 0, 0))?;
+        let x = cell(&v, 0, 0).and_then(number).unwrap_or(f64::NAN);
+        assert!((x - 2.0).abs() < 0.001, "{x}");
+        Ok(())
+    }
+
+    #[test]
+    fn solver_max_profit_and_not_linear() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, None)?;
+        let sheet = info.active_sheet;
+        // AOO help "maximum profit": unit profits 5, 4, 6; material ≤ 100,
+        // hours ≤ 180, product A ≤ 40.
+        for r in 0..3 {
+            set(&st, &info, r, 1, "0")?;
+        }
+        set(&st, &info, 0, 2, "=5*B1+4*B2+6*B3")?;
+        set(&st, &info, 1, 2, "=B1+B2+B3")?;
+        set(&st, &info, 2, 2, "=2*B1+B2+3*B3")?;
+        let sr = |r0, c0, r1, c1| SheetRange {
+            sheet,
+            range: range(r0, c0, r1, c1),
+        };
+        let con = |r, rhs: &str| SolverConstraint {
+            lhs: sr(r, 2, r, 2),
+            op: SolverOp::Le,
+            rhs: rhs.into(),
+        };
+        let mut req = SolverRequest {
+            objective: SheetCell { sheet, r: 0, c: 2 },
+            goal: SolverGoal::Maximize,
+            variables: vec![sr(0, 1, 2, 1)],
+            constraints: vec![
+                con(1, "100"),
+                con(2, "180"),
+                SolverConstraint {
+                    lhs: sr(0, 1, 0, 1),
+                    op: SolverOp::Le,
+                    rhs: "40".into(),
+                },
+            ],
+            options: SolverOptions {
+                assume_non_negative: true,
+                ..SolverOptions::default()
+            },
+        };
+        let r = with_service(&st, |s| s.solver(info.doc, &req))?;
+        assert_eq!(r.status, SolverStatus::Optimal);
+        assert!((r.objective - 480.0).abs() < 1e-6, "{r:?}");
+        // The sandbox leaves the document alone.
+        let v = cells(&st, info.doc, sheet, range(0, 1, 0, 1))?;
+        assert_eq!(cell(&v, 0, 1).and_then(number), Some(0.0));
+        set(&st, &info, 0, 2, "=B1*B2+B3")?;
+        req.options.assume_non_negative = true;
+        let r = with_service(&st, |s| s.solver(info.doc, &req))?;
+        assert_eq!(r.status, SolverStatus::NotLinear, "{r:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_formats_open_through_the_codec() -> CmdResult<()> {
+        let st = state();
+        let xls = open_path(&st, &repo("tests/fixtures/xls/basic.xls"))?;
+        let v = cells(&st, xls.doc, xls.sheets[0].id, range(0, 0, 3, 1))?;
+        assert_eq!(text_at(&v, 1, 1), "Zürich");
+        assert_eq!(cell(&v, 3, 1).and_then(number), Some(3.0));
+        let edit = with_service(&st, |s| s.cell_edit_info(xls.doc, xls.sheets[0].id, 3, 1))?;
+        assert_eq!(edit.input, "=SUM(A1:A2)");
+
+        let sxc = open_path(&st, &repo("tests/fixtures/sxc/ooo1.sxc"))?;
+        let v = cells(&st, sxc.doc, sxc.sheets[0].id, range(0, 0, 1, 2))?;
+        assert_eq!(cell(&v, 1, 0).and_then(number), Some(3.0));
+        assert_eq!(text_at(&v, 1, 2), "x!");
+
+        let html = open_path(&st, &repo("tests/fixtures/html/two-tables.html"))?;
+        assert_eq!(html.sheets.len(), 2);
+        assert_eq!(html.sheets[0].name, "Sales");
+        let v = cells(&st, html.doc, html.sheets[0].id, range(0, 0, 2, 2))?;
+        assert_eq!(cell(&v, 1, 1).and_then(number), Some(1234.5));
+        assert_eq!(text_at(&v, 2, 0), "South & East");
+
+        let dbf = open_path(&st, &repo("tests/fixtures/dbf/customers.dbf"))?;
+        let v = cells(&st, dbf.doc, dbf.sheets[0].id, range(0, 0, 1, 1))?;
+        assert_eq!(text_at(&v, 0, 0), "NAME");
+        assert_eq!(text_at(&v, 1, 0), "Müller & Co");
+        assert_eq!(cell(&v, 1, 1).and_then(number), Some(1234.5));
+
+        // Save As HTML and dBase through the command layer.
+        for (fmt, ext) in [(FileFormat::Html, "html"), (FileFormat::Dbf, "dbf")] {
+            let p = temp_path(&format!("export.{ext}"));
+            let saved = save_to(&st, dbf.doc, &p, fmt)?;
+            assert_eq!(
+                saved.path.as_deref(),
+                Some(p.display().to_string().as_str())
+            );
+            let back = open_path(&st, &p)?;
+            let v = cells(&st, back.doc, back.sheets[0].id, range(1, 0, 1, 0))?;
+            assert_eq!(text_at(&v, 1, 0), "Müller & Co", "{ext}");
+            let _ = std::fs::remove_file(&p);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn de_locale_countif_uses_comma_decimals() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, None)?;
+        let sheet = info.active_sheet;
+        with_service(&st, |s| s.set_locale(info.doc, "de-DE"))?;
+        set(&st, &info, 0, 0, "1")?;
+        set(&st, &info, 1, 0, "2")?;
+        set(&st, &info, 2, 0, "1,7")?;
+        set(&st, &info, 0, 1, "=COUNTIF(A1:A3;\">1,5\")")?;
+        let v = cells(&st, info.doc, sheet, range(0, 1, 0, 1))?;
+        assert_eq!(cell(&v, 0, 1).and_then(|c| c.num), Some(2.0));
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_cells_marks_values_outside_the_list() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, Some("invoices"))?;
+        let sheet = info.active_sheet;
+        let table = cells(&st, info.doc, sheet, range(0, 0, 14, 6))?;
+        let expected: Vec<u32> = (1..=14)
+            .filter(|r| !matches!(text_at(&table, *r, 6).as_str(), "Paid" | "Due"))
+            .collect();
+        assert!(!expected.is_empty());
+        apply_ok(
+            &st,
+            info.doc,
+            vec![Op::AddValidation {
+                sheet,
+                validation: ValidationDto {
+                    id: 0,
+                    ranges: vec![range(1, 6, 14, 6)],
+                    kind: ValidationKind::List {
+                        source: ListSource::Values {
+                            items: vec!["Paid".into(), "Due".into()],
+                        },
+                    },
+                    allow_blank: true,
+                    show_dropdown: true,
+                    input_help: None,
+                    error: Some(ValidationAlert {
+                        style: ValidationErrorStyle::Stop,
+                        title: "Status".into(),
+                        text: "Paid or Due".into(),
+                    }),
+                },
+            }],
+        )?;
+        let bad = with_service(&st, |s| s.invalid_cells(info.doc, sheet, None))?;
+        let rows: Vec<u32> = bad.iter().map(|p| p.r).collect();
+        assert_eq!(rows, expected);
+        assert!(bad.iter().all(|p| p.c == 6));
+        let none = with_service(&st, |s| {
+            s.invalid_cells(info.doc, sheet, Some(range(0, 0, 14, 5)))
+        })?;
+        assert!(none.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn view_options_round_trip_and_render() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, Some("invoices"))?;
+        let sheet = info.active_sheet;
+        assert_eq!(
+            with_service(&st, |s| s.view_options(info.doc, sheet))?,
+            ViewOptionsDto::default()
+        );
+        let opts = ViewOptionsDto {
+            split: None,
+            show_formulas: true,
+            value_highlighting: true,
+            show_zero_values: false,
+            show_gridlines: false,
+            show_headers: true,
+        };
+        apply_ok(
+            &st,
+            info.doc,
+            vec![
+                Op::SetViewOptions {
+                    sheet,
+                    options: opts.clone(),
+                },
+                Op::SetSplit {
+                    sheet,
+                    split: Some(SplitDto {
+                        x_px: 240.0,
+                        y_px: 120.0,
+                    }),
+                },
+            ],
+        )?;
+        let got = with_service(&st, |s| s.view_options(info.doc, sheet))?;
+        assert_eq!(got.split.map(|s| (s.x_px, s.y_px)), Some((240.0, 120.0)));
+        let ods = temp_path("view.ods");
+        save_to(&st, info.doc, &ods, FileFormat::Ods)?;
+        let again = open_path(&st, &ods)?;
+        let back = with_service(&st, |s| s.view_options(again.doc, again.sheets[0].id))?;
+        assert!(back.show_formulas && back.value_highlighting);
+        assert!(!back.show_zero_values && !back.show_gridlines && back.show_headers);
+        let split = back
+            .split
+            .unwrap_or_else(|| panic!("the split is lost: {back:?}"));
+        assert!((split.x_px - 240.0).abs() < 1.5 && (split.y_px - 120.0).abs() < 1.5);
+        let _ = std::fs::remove_file(&ods);
+
+        // cells_with: formulas, highlighting, zero values.
+        set(&st, &info, 20, 0, "0")?;
+        let co = tally_api::CellsOptions {
+            show_formulas: true,
+            value_highlighting: true,
+            hide_zero_values: true,
+        };
+        let blocks = with_service(&st, |s| {
+            s.cells_with(info.doc, sheet, &[range(1, 0, 20, 6)], &co)
+        })?;
+        let v: Vec<CellView> = blocks.into_iter().flat_map(|b| b.cells).collect();
+        let total = cell(&v, 1, 5).expect("F2");
+        assert!(total.text.starts_with('='), "{}", total.text);
+        assert_eq!(total.color, Some(0x0080_00ff), "formulas are green");
+        assert_eq!(cell(&v, 1, 3).and_then(|c| c.color), Some(0x0000_ffff));
+        assert_eq!(cell(&v, 1, 1).and_then(|c| c.color), Some(0x0000_00ff));
+        assert_eq!(text_at(&v, 20, 0), "", "zero hidden");
+        let plain = cells(&st, info.doc, sheet, range(1, 5, 1, 5))?;
+        assert!(!text_at(&plain, 1, 5).starts_with('='));
+        Ok(())
+    }
+
+    #[test]
+    fn save_copy_leaves_path_title_and_dirty_alone() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, Some("invoices"))?;
+        let sheet = info.active_sheet;
+        let real = temp_path("Real.ods");
+        save_to(&st, info.doc, &real, FileFormat::Ods)?;
+        set(&st, &info, 30, 0, "edited")?;
+        let snap = temp_path("snap.ods");
+        with_service(&st, |s| s.save_copy(info.doc, &snap, FileFormat::Ods))?;
+        assert!(snap.is_file());
+        // A sheet rename reports the document info.
+        let res = apply_ok(
+            &st,
+            info.doc,
+            vec![Op::RenameSheet {
+                sheet,
+                name: "Orders2".into(),
+            }],
+        )?;
+        let after = res.info.expect("info");
+        assert!(after.dirty, "still dirty after the copy");
+        assert_eq!(
+            after.path.as_deref(),
+            Some(real.display().to_string().as_str())
+        );
+        assert!(after.title.starts_with("tally-desktop-"), "{}", after.title);
+        // The copy holds the edit; opening it untitled forgets its path.
+        let rec = with_service(&st, |s| s.open_untitled(&snap, true))?;
+        assert_eq!(
+            (rec.path, rec.title.as_str(), rec.dirty),
+            (None, "Untitled", true)
+        );
+        let v = cells(&st, rec.doc, rec.sheets[0].id, range(30, 0, 30, 0))?;
+        assert_eq!(text_at(&v, 30, 0), "edited");
+        let _ = std::fs::remove_file(&real);
+        let _ = std::fs::remove_file(&snap);
+        Ok(())
+    }
+
+    #[test]
+    fn function_info_params_and_preview_formula() -> CmdResult<()> {
+        let st = state();
+        let fns = with_service(&st, |s| Ok(s.list_functions()))?;
+        let sumif = fns.iter().find(|f| f.name == "SUMIF").expect("SUMIF");
+        let names: Vec<(&str, bool)> = sumif
+            .params
+            .iter()
+            .map(|p| (p.name.as_str(), p.optional))
+            .collect();
+        assert_eq!(names.len(), 3);
+        assert!(names[2].1, "sum_range is optional: {names:?}");
+        assert!(sumif.example.starts_with("=SUMIF("));
+        let sum = fns.iter().find(|f| f.name == "SUM").expect("SUM");
+        assert!(sum.params.iter().any(|p| p.repeat));
+        assert!(fns.iter().all(|f| !f.example.is_empty()));
+
+        let info = new_workbook(&st, Some("invoices"))?;
+        let sheet = info.active_sheet;
+        let view = cells(&st, info.doc, sheet, range(0, 0, 14, 6))?;
+        let unpaid = unpaid_total(&view);
+        let p = with_service(&st, |s| s.preview_formula(info.doc, sheet, 16, 0, SUMIF))?
+            .expect("a result");
+        let n: f64 = p.replace([',', '$'], "").parse().unwrap_or(f64::NAN);
+        assert!((n - unpaid).abs() < 0.005, "{p} vs {unpaid}");
+        // Without "=", and errors.
+        let p = with_service(&st, |s| s.preview_formula(info.doc, sheet, 16, 0, "1+1"))?;
+        assert_eq!(p.as_deref(), Some("2"));
+        // The wizard builds calls with `;` (AOO's separator), which en-US accepts too.
+        let p = with_service(&st, |s| {
+            s.preview_formula(info.doc, sheet, 16, 0, "=SUMIF(G2:G15;\"Paid\";D2:D15)")
+        })?;
+        assert!(
+            p.as_deref().is_some_and(|t| t.parse::<f64>().is_ok()),
+            "{p:?}"
+        );
+        let p = with_service(&st, |s| s.preview_formula(info.doc, sheet, 16, 0, "=1/0"))?;
+        assert_eq!(p.as_deref(), Some("#DIV/0!"));
+        let p = with_service(&st, |s| s.preview_formula(info.doc, sheet, 16, 0, "=SUM("))?;
+        assert_eq!(p, None);
+        // Nothing was committed.
+        let v = cells(&st, info.doc, sheet, range(16, 0, 16, 0))?;
+        assert_eq!(text_at(&v, 16, 0), "");
+        Ok(())
+    }
+}

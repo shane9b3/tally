@@ -1,9 +1,9 @@
 /**
  * Tools ▸ Detective (W5-5, §4 item 34): trace precedents / dependents
  * through the engine's `precedents()` / `dependents()` queries, drawn as
- * grid `traces` arrows; "Mark invalid data" circles cells that break a
- * validation (checked here from the sheet's validations and cell views;
- * the engine has no `invalid_cells` query yet).
+ * grid `traces` arrows; "Mark invalid data" circles the cells the
+ * engine's `invalid_cells` query reports. `cellValid` / `invalidCells`
+ * are the browser mock's approximation of that query.
  */
 import type { CellPos, CellView, CmpOp, RangeDto, TraceDto, ValidationDto } from "@tally/bridge";
 import type { TraceArrow } from "@tally/grid";
@@ -12,7 +12,7 @@ import { useUiStore } from "../stores/uiStore";
 import { useW5Store } from "../objects/w5Store";
 import { clientV4 } from "../objects/shell";
 
-/** Cells scanned at most for "Mark invalid data". */
+/** Cells the browser mock scans at most for "Mark invalid data". */
 export const INVALID_SCAN_CAP = 50_000;
 
 /** Arrows for the traces of `cell` (precedents point at it, dependents away from it); other sheets are skipped. */
@@ -151,45 +151,13 @@ export class Detective {
     useW5Store.getState().setInvalidCells([]);
   }
 
-  /** Tools ▸ Detective ▸ Mark Invalid Data: circles cells that break a validation. */
+  /** Tools ▸ Detective ▸ Mark Invalid Data: circles the cells the engine's `invalid_cells` reports (≤ 10,000). */
   async markInvalid(): Promise<void> {
     try {
       const doc = this.ctl.requireDoc();
       const sheet = this.ctl.sheet;
-      const validations = await clientV4(this.ctl).validations(doc, sheet);
-      if (validations.length === 0) {
-        this.toast("info", "This sheet has no data validation to check.");
-        return;
-      }
-      const layout = await clientV4(this.ctl).sheetLayout(doc, sheet);
-      const used = layout.used;
-      if (!used) {
-        useW5Store.getState().setInvalidCells([]);
-        return;
-      }
-      let scanned = 0;
-      const ranges: RangeDto[] = [];
-      for (const v of validations) {
-        for (const rg of v.ranges) {
-          const clipped = { r0: Math.max(rg.r0, used.r0), c0: Math.max(rg.c0, used.c0), r1: Math.min(rg.r1, used.r1), c1: Math.min(rg.c1, used.c1) };
-          if (clipped.r0 > clipped.r1 || clipped.c0 > clipped.c1) continue;
-          const n = (clipped.r1 - clipped.r0 + 1) * (clipped.c1 - clipped.c0 + 1);
-          if (scanned + n > INVALID_SCAN_CAP) {
-            clipped.r1 = clipped.r0 + Math.max(0, Math.floor((INVALID_SCAN_CAP - scanned) / (clipped.c1 - clipped.c0 + 1)) - 1);
-            if (clipped.r1 < clipped.r0) break;
-          }
-          scanned += (clipped.r1 - clipped.r0 + 1) * (clipped.c1 - clipped.c0 + 1);
-          ranges.push(clipped);
-        }
-      }
-      const cells: CellView[] = [];
-      if (ranges.length > 0) for (const b of await clientV4(this.ctl).cells(doc, sheet, ranges.slice(0, 8))) cells.push(...b.cells);
-      // Empty cells are not in the blocks: add them so `allowBlank: false` can flag them.
-      const present = new Set(cells.map((c) => `${c.r},${c.c}`));
-      for (const rg of ranges) {
-        for (let r = rg.r0; r <= rg.r1; r++) for (let c = rg.c0; c <= rg.c1; c++) if (!present.has(`${r},${c}`)) cells.push({ r, c, text: "", kind: "empty", num: null, style: 0, color: null, flags: 0 });
-      }
-      const bad = invalidCells(validations, cells);
+      const bad = await clientV4(this.ctl).invalidCells(doc, sheet, null);
+      if (this.ctl.sheet !== sheet) return;
       useW5Store.getState().setInvalidCells(bad);
       this.toast("info", bad.length === 0 ? "No invalid data found." : `${bad.length} invalid ${bad.length === 1 ? "cell" : "cells"} circled.`);
     } catch (e) {

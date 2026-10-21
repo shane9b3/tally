@@ -14,10 +14,10 @@ import {
 } from "../src/formulaEdit";
 
 const FNS: FunctionInfo[] = [
-  { name: "SUM", category: "Mathematical", signature: "SUM(number1, [number2], …)", description: "Adds numbers." },
-  { name: "SUMIF", category: "Mathematical", signature: "SUMIF(range, criteria, [sum_range])", description: "Adds if." },
-  { name: "SUMPRODUCT", category: "Mathematical", signature: "SUMPRODUCT(array1, [array2], …)", description: "Products." },
-  { name: "IF", category: "Logical", signature: "IF(test, [then], [else])", description: "Chooses." },
+  { name: "SUM", category: "Mathematical", signature: "SUM(number1, [number2], …)", description: "Adds numbers.", params: [], example: "" },
+  { name: "SUMIF", category: "Mathematical", signature: "SUMIF(range, criteria, [sum_range])", description: "Adds if.", params: [], example: "" },
+  { name: "SUMPRODUCT", category: "Mathematical", signature: "SUMPRODUCT(array1, [array2], …)", description: "Products.", params: [], example: "" },
+  { name: "IF", category: "Logical", signature: "IF(test, [then], [else])", description: "Chooses.", params: [], example: "" },
 ];
 
 describe("formulaHighlights", () => {

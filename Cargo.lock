@@ -4196,6 +4196,7 @@ dependencies = [
  "tally-api",
  "tally-assist",
  "tally-engine",
+ "tally-io-pdf",
  "tally-l10n",
  "tally-types",
  "tauri",

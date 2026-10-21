@@ -15,7 +15,7 @@
  * - The layout comes from `client.sheetLayout`; it is refetched when
  *   `layoutChanged` names the sheet or cells changed (the used range moves).
  */
-import type { ApplyResult, CellView, DocId, EngineClient, RangeDto, SheetLayout, StyleDto } from "@tally/bridge";
+import type { ApplyResult, CellBlock, CellsOptions, CellView, DocId, EngineClient, RangeDto, SheetLayout, StyleDto } from "@tally/bridge";
 import { intersects, MAX_TILES_PER_BATCH, TILE_COLS, TILE_ROWS } from "./tiles";
 import { MAX_COLS, MAX_ROWS, type DirtySet, type GridDataSource } from "./types";
 
@@ -43,6 +43,20 @@ interface Tile {
 
 const tileId = (tr: number, tc: number): number => tr * 1024 + tc;
 
+/** A client with the v0.6 `cellsWith` query (View ▸ Formula, Value Highlighting, Zero Values). */
+interface CellsWithClient {
+  cellsWith(doc: DocId, sheet: number, ranges: RangeDto[], opts: CellsOptions): Promise<CellBlock[]>;
+}
+
+function hasCellsWith(c: EngineClient): c is EngineClient & CellsWithClient {
+  return typeof (c as Partial<CellsWithClient>).cellsWith === "function";
+}
+
+/** `true` when the options change what `cells` returns. */
+export function cellsOptionsActive(o: CellsOptions | null | undefined): o is CellsOptions {
+  return !!o && (o.showFormulas || o.valueHighlighting || o.hideZeroValues);
+}
+
 function defaultLayout(sheet: number): SheetLayout {
   return {
     sheet,
@@ -69,6 +83,7 @@ export class EngineClientSource implements GridDataSource {
   private layoutQueued = false;
   private styleQueued = false;
   private disposed = false;
+  private cellsOpts: CellsOptions | null = null;
   private readonly offDoc: (() => void) | null;
   /** Number of `client.cells` calls made (tests, perf). */
   fetches = 0;
@@ -104,6 +119,26 @@ export class EngineClientSource implements GridDataSource {
     this.layout = defaultLayout(sheet);
     void this.refreshLayout();
     this.emit("all");
+  }
+
+  /**
+   * View options for the cell views: with any of them set, tiles are
+   * fetched with `cellsWith` (formula text, value highlighting, blank
+   * zeros); `null` (or all off) goes back to `cells`. Every tile refetches.
+   */
+  setCellsOptions(opts: CellsOptions | null): void {
+    const next = cellsOptionsActive(opts) ? { ...opts } : null;
+    if (JSON.stringify(next) === JSON.stringify(this.cellsOpts)) return;
+    this.cellsOpts = next;
+    for (const tile of this.tiles.values()) {
+      tile.stale = true;
+      tile.seq++;
+    }
+    this.emit("all");
+  }
+
+  get cellsOptions(): CellsOptions | null {
+    return this.cellsOpts;
   }
 
   dispose(): void {
@@ -215,7 +250,11 @@ export class EngineClientSource implements GridDataSource {
     const seqs = batch.map((t) => t.seq);
     for (const t of batch) t.inflight = t.seq;
     this.fetches++;
-    this.client.cells(this.doc, sheet, batch.map((t) => this.tileRange(t))).then(
+    const ranges = batch.map((t) => this.tileRange(t));
+    const opts = this.cellsOpts;
+    const request = opts && hasCellsWith(this.client) ? this.client.cellsWith(this.doc, sheet, ranges, opts) : this.client.cells(this.doc, sheet, ranges);
+    request.then(
+
       (blocks) => {
         if (this.disposed || sheet !== this.sheet) return;
         const dirty: RangeDto[] = [];

@@ -100,3 +100,13 @@
 .example code {
   font-family: var(--tally-font-mono);
 }
+
+.result {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.result output {
+  font-family: var(--tally-font-mono);
+  font-weight: 600;
+}

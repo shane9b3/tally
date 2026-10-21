@@ -79,6 +79,8 @@ import type { ScenarioDto } from "./generated/ScenarioDto";
 import type { SolverRequest } from "./generated/SolverRequest";
 import type { SolverResult } from "./generated/SolverResult";
 import type { TraceDto } from "./generated/TraceDto";
+import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
+import type { CellsOptions } from "./generated/CellsOptions";
 import { isApiError, type EngineClientV4, type SheetId, type Unsubscribe } from "./client";
 import type { ShellClient, TemplateInfo } from "./shell";
 
@@ -168,6 +170,12 @@ export const COMMANDS = {
   solver: "solver",
   precedents: "precedents",
   dependents: "dependents",
+  imageData: "image_data",
+  viewOptions: "view_options",
+  invalidCells: "invalid_cells",
+  customSortLists: "custom_sort_lists",
+  cellsWith: "cells_with",
+  previewFormula: "preview_formula",
   exportPdf: "wb_export_pdf",
   print: "wb_print",
   // W5-6 shell: prefs.rs, autosave.rs, templates.rs, l10n.rs
@@ -212,6 +220,12 @@ export const V4_METHODS = [
   "solver",
   "precedents",
   "dependents",
+  "imageData",
+  "viewOptions",
+  "invalidCells",
+  "customSortLists",
+  "cellsWith",
+  "previewFormula",
 ] as const satisfies readonly (keyof EngineClientV4 & keyof typeof COMMANDS)[];
 
 /** The W5-6 shell commands (prefs, autosave, templates, UI language); `w56shell.test.ts` covers them. */
@@ -529,6 +543,30 @@ export class TauriClient implements EngineClientV4, ShellClient {
 
   dependents(doc: DocId, sheet: SheetId, r: number, c: number): Promise<TraceDto[]> {
     return this.call(COMMANDS.dependents, { doc, sheet, r, c });
+  }
+
+  imageData(doc: DocId, sheet: SheetId, id: number): Promise<string> {
+    return this.call(COMMANDS.imageData, { doc, sheet, id });
+  }
+
+  viewOptions(doc: DocId, sheet: SheetId): Promise<ViewOptionsDto> {
+    return this.call(COMMANDS.viewOptions, { doc, sheet });
+  }
+
+  invalidCells(doc: DocId, sheet: SheetId, range: RangeDto | null): Promise<CellPos[]> {
+    return this.call(COMMANDS.invalidCells, { doc, sheet, range });
+  }
+
+  customSortLists(doc: DocId): Promise<string[][]> {
+    return this.call(COMMANDS.customSortLists, { doc });
+  }
+
+  cellsWith(doc: DocId, sheet: SheetId, ranges: RangeDto[], opts: CellsOptions): Promise<CellBlock[]> {
+    return this.call(COMMANDS.cellsWith, { doc, sheet, ranges, opts });
+  }
+
+  previewFormula(doc: DocId, sheet: SheetId, r: number, c: number, text: string): Promise<string | null> {
+    return this.call(COMMANDS.previewFormula, { doc, sheet, r, c, text });
   }
 
   // -- wave-5 shell ----------------------------------------------------------------

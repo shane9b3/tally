@@ -4,7 +4,7 @@
  * `setPageBreak`), zoom presets (optimal / page width / whole page, §4 item
  * 50) and full screen.
  */
-import { isApiError, type Op, type PrintPageDto, type RangeDto } from "@tally/bridge";
+import { isApiError, type Op, type PrintPageDto, type RangeDto, type SplitDto } from "@tally/bridge";
 import type { AppController } from "../controller";
 import { clampZoom } from "../formats";
 import { useDocStore } from "../stores/docStore";
@@ -76,7 +76,35 @@ export class ViewFeatures {
     this.persistSplit();
   }
 
+  /**
+   * Shows the split the document stores for the sheet (`view_options().split`,
+   * px at zoom 100 %), without persisting it again: a vertical divider when
+   * only `xPx` is set, else a horizontal one.
+   */
+  restoreSplit(split: SplitDto | null): void {
+    if (!split || (split.xPx <= 0 && split.yPx <= 0)) {
+      if (useW5Store.getState().split) useW5Store.getState().setSplit(null);
+      return;
+    }
+    const axis: SplitAxis = split.yPx > 0 ? "horizontal" : "vertical";
+    const host = this.hostSize();
+    const zoom = useUiStore.getState().zoom || 1;
+    const extent = axis === "vertical" ? host.width : host.height;
+    const px = (axis === "vertical" ? split.xPx : split.yPx) * zoom;
+    const ratio = extent > 0 ? clampRatio(px / extent) : 0.5;
+    useW5Store.getState().setSplit({ axis, ratio });
+  }
+
+  /** The size of the whole grid area (both panes of a split), CSS px. */
+  private hostSize(): { width: number; height: number } {
+    const el = typeof document === "undefined" ? null : document.querySelector<HTMLElement>('[data-testid="grid"]');
+    if (el && el.clientWidth > 0) return { width: el.clientWidth, height: el.clientHeight };
+    const g = this.ctl.grid?.getGeometry();
+    return { width: g?.width ?? 0, height: g?.height ?? 0 };
+  }
+
   /** The divider was dragged (persisted after a short delay). */
+
   onSplitRatio = (ratio: number): void => {
     const s = useW5Store.getState().split;
     if (!s || s.ratio === ratio) return;
@@ -98,7 +126,7 @@ export class ViewFeatures {
     const grid = this.ctl.grid;
     if (!info) return;
     const s = useW5Store.getState().split;
-    const g = grid?.getGeometry();
+    const g = grid ? this.hostSize() : null;
     const zoom = useUiStore.getState().zoom || 1;
     const split = s && g ? { xPx: s.axis === "vertical" ? Math.round((s.ratio * g.width) / zoom) : 0, yPx: s.axis === "horizontal" ? Math.round((s.ratio * g.height) / zoom) : 0 } : null;
     const op: Op = { type: "setSplit", sheet: this.ctl.sheet, split };

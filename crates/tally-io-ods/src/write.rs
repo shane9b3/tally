@@ -217,11 +217,24 @@ fn settings_xml(data: &WorkbookData) -> String {
         escape_attr(&sheet.name, &mut s);
         s.push_str("\">");
         let (rows, cols) = sheet.frozen.unwrap_or((0, 0));
-        let mode = |n: u32| if n > 0 { "2" } else { "0" };
-        config_item(&mut s, "HorizontalSplitMode", "short", mode(cols));
-        config_item(&mut s, "VerticalSplitMode", "short", mode(rows));
-        config_item(&mut s, "HorizontalSplitPosition", "int", &cols.to_string());
-        config_item(&mut s, "VerticalSplitPosition", "int", &rows.to_string());
+        // A frozen pane (mode 2, positions in cells) wins over a Window ▸
+        // Split (mode 1, positions in pixels at 100 %), as in AOO.
+        let split = sheet.split.filter(|_| sheet.frozen.is_none());
+        let (h_mode, h_pos, v_mode, v_pos) = match split {
+            Some(sp) => {
+                let px = crate::tools::split_hmm_to_px;
+                let mode = |hmm: u32| if hmm > 0 { "1" } else { "0" };
+                (mode(sp.x_hmm), px(sp.x_hmm), mode(sp.y_hmm), px(sp.y_hmm))
+            }
+            None => {
+                let mode = |n: u32| if n > 0 { "2" } else { "0" };
+                (mode(cols), cols, mode(rows), rows)
+            }
+        };
+        config_item(&mut s, "HorizontalSplitMode", "short", h_mode);
+        config_item(&mut s, "VerticalSplitMode", "short", v_mode);
+        config_item(&mut s, "HorizontalSplitPosition", "int", &h_pos.to_string());
+        config_item(&mut s, "VerticalSplitPosition", "int", &v_pos.to_string());
         if sheet.frozen.is_some() {
             config_item(&mut s, "ActiveSplitRange", "short", "2");
             config_item(&mut s, "PositionRight", "int", &cols.to_string());
@@ -886,6 +899,9 @@ struct Extras<'a> {
     tab: usize,
     /// The sheet (for the objects anchored in its cells).
     sheet: &'a SheetData,
+    /// Every sheet (chart ranges name their sheet for
+    /// `draw:notify-on-update-of-ranges`).
+    sheets: &'a [SheetData],
     /// (ranges, validation name).
     vals: Vec<(&'a [CellRangeLocal], String)>,
     notes: HashMap<(u32, u32), &'a tally_model::NoteData>,
@@ -1170,6 +1186,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
     let extras = Extras {
         tab,
         sheet,
+        sheets: &data.sheets,
         vals: sheet
             .validations
             .iter()
@@ -1886,7 +1903,7 @@ fn write_cell(
     }
     if frame {
         // Wave 5: charts and pictures anchored in this cell.
-        crate::v04::write_cell_frames(s, x.sheet, x.tab, cell.row, cell.col);
+        crate::v04::write_cell_frames(s, x.sheets, x.sheet, x.tab, cell.row, cell.col);
     }
     match (text, link) {
         (Some(t), None) => write_paragraphs(s, &t),

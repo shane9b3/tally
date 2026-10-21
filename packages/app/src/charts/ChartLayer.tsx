@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useController } from "../context";
 import { useDocStore } from "../stores/docStore";
+import { useW5Store } from "../objects/w5Store";
 import { useUiStore } from "../stores/uiStore";
 import { ChartMounts } from "./chartMounts";
 import { useChartStore } from "./chartStore";
@@ -39,30 +40,41 @@ export function ChartLayer() {
   const zoom = useUiStore((s) => s.zoom);
   const sheet = useDocStore((s) => s.activeSheet);
   const theme = useMemo(() => chartThemeFor(resolved), [resolved]);
+  const split = useW5Store((s) => s.split);
   const mounts = useRef<ChartMounts | null>(null);
+  /** The second pane of a split window gets its own instances. */
+  const secondary = useRef<ChartMounts | null>(null);
 
   useEffect(() => {
     const m = new ChartMounts();
+    const m2 = new ChartMounts(false);
     mounts.current = m;
+    secondary.current = m2;
     ctl.w5.charts.mounts = m;
     return () => {
       m.dispose();
+      m2.dispose();
       if (ctl.w5.charts.mounts === m) ctl.w5.charts.mounts = null;
       mounts.current = null;
+      secondary.current = null;
     };
   }, [ctl]);
 
   useEffect(() => {
-    const grid = ctl.grid;
     const m = mounts.current;
-    if (!grid || !m) return;
-    // The layer nodes appear after the grid's own update effect; sync now and once more next frame.
-    m.sync(grid, charts, data, images, imageData, theme);
-    const raf = requestAnimationFrame(() => {
+    const m2 = secondary.current;
+    if (!m || !m2) return;
+    const run = (): void => {
       if (ctl.grid) m.sync(ctl.grid, charts, data, images, imageData, theme);
-    });
+      const g2 = split ? ctl.w5.secondaryGrid : null;
+      if (g2) m2.sync(g2, charts, data, images, imageData, theme);
+      else m2.clear();
+    };
+    // The layer nodes appear after the grid's own update effect; sync now and once more next frame.
+    run();
+    const raf = requestAnimationFrame(run);
     return () => cancelAnimationFrame(raf);
-  }, [ctl, charts, data, images, imageData, theme, zoom, tick, sheet]);
+  }, [ctl, charts, data, images, imageData, theme, zoom, tick, sheet, split]);
 
   return null;
 }

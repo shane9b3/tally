@@ -171,6 +171,10 @@ export interface MainFrame {
   outline?: OutlineProps | null;
   /** Page Break Preview: a "Page N" watermark per page. */
   pageBreakPreview?: boolean;
+  /** View ▸ Grid lines (default `true`). */
+  showGridlines?: boolean;
+  /** View ▸ Column and row headers (default `true`). */
+  showHeaders?: boolean;
 }
 
 export interface OverlayFrame extends MainFrame {
@@ -388,22 +392,25 @@ export class Renderer {
     }
     this.curFill = "";
 
-    // 2. Gridlines: one device-aligned 1 CSS px line on the right/bottom edge of each cell.
+    // 2. Gridlines: one device-aligned 1 CSS px line on the right/bottom edge of each cell
+    //    (View ▸ Grid lines off: none).
     const lw = Math.max(1, Math.round(dpr)) / dpr;
     this.setFill(theme.colors.gridLine);
     const top = Math.max(pane.clip.y, ys[0] ?? pane.clip.y);
     const left = Math.max(pane.clip.x, xs[0] ?? pane.clip.x);
     const bottom = Math.min(pane.clip.y + pane.clip.h, ys[nr] ?? geo.height);
     const right = Math.min(pane.clip.x + pane.clip.w, xs[nc] ?? geo.width);
-    for (let j = 1; j <= nc; j++) {
-      const x = xs[j] ?? 0;
-      if (x === xs[j - 1]) continue;
-      ctx.fillRect(snapFill(x, dpr) - lw, top, lw, bottom - top);
-    }
-    for (let i = 1; i <= nr; i++) {
-      const y = ys[i] ?? 0;
-      if (y === ys[i - 1]) continue;
-      ctx.fillRect(left, snapFill(y, dpr) - lw, right - left, lw);
+    if (f.showGridlines !== false) {
+      for (let j = 1; j <= nc; j++) {
+        const x = xs[j] ?? 0;
+        if (x === xs[j - 1]) continue;
+        ctx.fillRect(snapFill(x, dpr) - lw, top, lw, bottom - top);
+      }
+      for (let i = 1; i <= nr; i++) {
+        const y = ys[i] ?? 0;
+        if (y === ys[i - 1]) continue;
+        ctx.fillRect(left, snapFill(y, dpr) - lw, right - left, lw);
+      }
     }
 
     // 2b. Merged areas: one fill over the whole rect hides the inner gridlines.
@@ -942,8 +949,20 @@ export class Renderer {
     const c = theme.colors;
     const lw = Math.max(1, Math.round(dpr)) / dpr;
     const font = headerFont(theme, geo.zoom, false);
+    if (f.showHeaders === false) {
+      // View ▸ Column and row headers off: only the outline gutters remain.
+      if (f.outline && (geo.gutterW > 0 || geo.gutterH > 0)) {
+        this.setFill(c.headerBg);
+        if (geo.gutterH > 0) ctx.fillRect(0, 0, geo.width, geo.gutterH);
+        if (geo.gutterW > 0) ctx.fillRect(0, 0, geo.gutterW, geo.height);
+        this.curFill = "";
+        this.drawOutlineGutter(f, f.outline);
+      }
+      return;
+    }
 
     // Header strips.
+
     this.setFill(c.headerBg);
     ctx.fillRect(geo.headerW, 0, geo.width - geo.headerW, geo.headerH);
     ctx.fillRect(0, geo.headerH, geo.headerW, geo.height - geo.headerH);

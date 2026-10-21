@@ -1,10 +1,9 @@
 /**
  * Function Wizard argument editor (W5-6C): one field per parameter (from
- * `FunctionInfo.params` when present, else the signature), a point-mode
- * pick button per field (`grid.pickRange()`), the resulting formula text
- * and, as a stretch, a live result when the engine can evaluate the call
- * (it cannot yet: there is no `eval_formula_text_at` command, so the
- * result line shows the formula structure instead).
+ * `FunctionInfo.params`, the repeating group growing as it fills; the
+ * signature only when a function has no metadata), a point-mode pick
+ * button per field (`grid.pickRange()`) and the resulting formula text.
+ * The wizard shows the live result next to it (`preview_formula`).
  */
 import type { FunctionInfo } from "@tally/bridge";
 import { useEffect, useMemo, useState } from "react";
@@ -56,7 +55,7 @@ export function ArgumentEditor({ fn, initial, onChange }: ArgumentEditorProps) {
       <div className={w56.section}>{t("wizard.arguments", "Arguments")}</div>
       {slots.map((p, i) => (
         <label key={`${p.name}-${i}`} className={dlg.field} style={{ marginBottom: 6 }}>
-          <span>
+          <span data-testid={`wizard-arg-label-${i}`}>
             {p.name} <span className={w56.muted}>{p.optional ? t("wizard.optional", "optional") : t("wizard.required", "required")}</span>
           </span>
           <div className={w56.rangeRow}>

@@ -4,8 +4,29 @@ Tally is a modern, fast spreadsheet for macOS, Windows and Linux. It aims for
 OpenOffice Calc compatible behaviour (the same functions, `Err:5xx` codes and
 OpenDocument files) with a clean, modern interface. "Tally" is a placeholder name.
 
-Status: Phase A (first runnable build) is integrated: the desktop app runs the
-real engine with ODS/CSV files and the ⌘K assist. See `docs/phase-a.md`.
+Status: waves 1–5 are integrated; the desktop app runs the real engine. See
+`docs/TODO.md` for what remains before 1.0.
+
+## Features
+
+- All 408 Calc functions (405 AOO 4.1 + IFERROR, IFNA, NUMBERVALUE,
+  ISOWEEKNUM), AOO error codes, iterative calculation, precision as shown,
+  de/fr/es function names and locale separators.
+- Files: ODS/OTS, XLSX, CSV/TSV and HTML read + write; XLS, SXC read; dBase
+  read + write; PDF export and printing with a print preview.
+- Charts (column, bar, line, area, pie/donut, scatter, bubble, radar, stock;
+  trend lines, error bars) and pictures, saved in ODS and XLSX.
+- DataPilot (pivot tables) with GETPIVOTDATA, outline groups, standard and
+  advanced filters, AutoFilter, subtotals, consolidate, text to columns,
+  remove duplicates, scenarios, the linear solver, goal seek, multiple
+  operations, detective and Mark Invalid Data.
+- Named cell styles, AutoFormat, conditional formatting, validation, notes,
+  hyperlinks, sheet protection, page setup, Window ▸ Split, view toggles
+  (formulas, value highlighting, zero values, gridlines, headers).
+- Function Wizard with argument fields and a live result, AutoInput,
+  AutoCorrect, Navigator, Styles panel, templates, autosave and crash
+  recovery, light and dark themes, English/German/French/Spanish UI, and the
+  ⌘K assist.
 
 ## Stack
 

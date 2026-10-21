@@ -329,7 +329,12 @@ export interface GridProps extends Partial<GridEvents> {
   objects?: GridObject[] | null;
   /** Detective "Mark invalid data": cells circled in red (W5-5). */
   invalidCells?: CellPos[] | null;
+  /** View ▸ Grid lines (default `true`). */
+  showGridlines?: boolean;
+  /** View ▸ Column and row headers (default `true`; off: no header strips, `headerW`/`headerH` are the outline gutters only). */
+  showHeaders?: boolean;
 }
+
 
 /** The visible cells (inclusive), plus pixel offsets of the scroll position. */
 export interface Viewport extends RangeDto {

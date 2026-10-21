@@ -465,3 +465,28 @@ fn reads_libreoffice_tools_fixture() {
     assert_eq!(back.sheets[1].pivots.len(), 1);
     assert_eq!(back.cell_styles.len(), wb.cell_styles.len());
 }
+
+#[test]
+fn window_split_round_trips_and_frozen_panes_win() {
+    let split = SplitData {
+        x_hmm: 6350,
+        y_hmm: 3175,
+    };
+    let sheet = |name: &str, frozen: Option<(u32, u32)>| SheetData {
+        name: name.into(),
+        frozen,
+        split: Some(split),
+        cells: vec![cell(0, 0, Value::Number(1.0))],
+        ..SheetData::default()
+    };
+    let wb = WorkbookData {
+        sheets: vec![sheet("Split", None), sheet("Frozen", Some((1, 2)))],
+        ..WorkbookData::default()
+    };
+    let back = round_trip(&wb);
+    // 240 × 120 px at 96 dpi.
+    assert_eq!(back.sheets[0].split, Some(split));
+    assert_eq!(back.sheets[0].frozen, None);
+    assert_eq!(back.sheets[1].split, None, "a frozen pane wins");
+    assert_eq!(back.sheets[1].frozen, Some((1, 2)));
+}

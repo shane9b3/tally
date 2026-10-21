@@ -3,4 +3,4 @@
 /**
  * Solver outcome.
  */
-export type SolverStatus = "optimal" | "infeasible" | "unbounded" | "limit";
+export type SolverStatus = "optimal" | "infeasible" | "unbounded" | "limit" | "notLinear";

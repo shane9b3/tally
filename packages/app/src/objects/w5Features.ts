@@ -5,6 +5,7 @@
  * (`ctl.w5`); it talks to the engine only through the controller.
  */
 import type { ApplyResult, Op } from "@tally/bridge";
+import type { Grid as GridCore } from "@tally/grid";
 import { ChartFeatures } from "../charts/chartFeatures";
 import { useChartStore } from "../charts/chartStore";
 import type { AppController } from "../controller";
@@ -20,6 +21,8 @@ export class W5Features {
   readonly print: PrintFeatures;
   readonly view: ViewFeatures;
   readonly detective: Detective;
+  /** The second pane of Window ▸ Split (`SplitGrid`'s secondary grid), or `null`; `ctl.grid` is the first. */
+  secondaryGrid: GridCore | null = null;
 
   constructor(ctl: AppController) {
     this.objects = new ObjectFeatures(ctl);
@@ -28,6 +31,12 @@ export class W5Features {
     this.view = new ViewFeatures(ctl);
     this.detective = new Detective(ctl);
   }
+
+  /** `SplitGrid`'s `splitRef`: remembers the second pane so charts mount there too. */
+  setSplitView = (view: { secondary: GridCore } | null): void => {
+    this.secondaryGrid = view?.secondary ?? null;
+    useChartStore.getState().bumpViewport();
+  };
 
   /** A document was loaded or the visible sheet changed. */
   refreshSheet(): void {

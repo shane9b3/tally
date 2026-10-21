@@ -555,6 +555,24 @@ impl Default for ViewOptionsDto {
     }
 }
 
+/// Rendering options for `cells_with` (View ▸ Formula, Value Highlighting,
+/// Zero Values; v0.6).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CellsOptions {
+    /// `CellView.text` is the formula text (`=SUM(A1:A3)`) for formula cells.
+    #[serde(default)]
+    pub show_formulas: bool,
+    /// AOO value highlighting: `CellView.color` is blue for constant
+    /// numbers, green for formulas and black for text.
+    #[serde(default)]
+    pub value_highlighting: bool,
+    /// Numeric zero values are shown blank.
+    #[serde(default)]
+    pub hide_zero_values: bool,
+}
+
 /// Window ▸ Split position in CSS pixels at zoom 100 % (`0` = no split
 /// on that axis).
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -649,7 +667,8 @@ pub struct DocumentStatsDto {
     /// Formula cells.
     #[ts(type = "number")]
     pub formulas: u64,
-    /// Printed pages (`None` until pagination exists).
+    /// Printed pages of the visible sheets (empty pages suppressed;
+    /// `None` when pagination fails).
     pub pages: Option<u32>,
     /// Charts.
     pub charts: u32,

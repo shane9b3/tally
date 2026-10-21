@@ -69,6 +69,9 @@ const PROP_KEYS = [
   "onObjectKey",
   "invalidCells",
   "onPageBreakDrag",
+  "showGridlines",
+  "showHeaders",
+
 ] as const satisfies readonly (keyof GridProps)[];
 
 function pickProps(p: GridComponentProps): GridProps {

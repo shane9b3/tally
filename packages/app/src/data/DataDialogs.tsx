@@ -935,7 +935,7 @@ export function SolverDialog({ d }: { d: D<"solver"> }) {
       {error ? <p className={dlg.error}>{error}</p> : null}
       {result ? (
         <div className={cx(styles.result, result.status !== "optimal" && styles.resultWarn)} data-testid="solver-result">
-          <div className={styles.resultTitle}>{result.status === "optimal" ? t("solver.solved", "Solving successfully finished.") : `${t("solver.failed", "No solution was found.")} (${result.status})`}</div>
+          <div className={styles.resultTitle}>{result.status === "optimal" ? t("solver.solved", "Solving successfully finished.") : result.status === "notLinear" ? t("solver.notLinear", "The model is not linear. The solver handles linear models only.") : `${t("solver.failed", "No solution was found.")} (${result.status})`}</div>
           <div>
             Objective: <b>{String(Number(result.objective.toPrecision(10)))}</b> after {result.iterations} iterations.
             {result.values.length > 0 ? ` ${result.values.map((v) => `${colLetter(v.cell.c)}${v.cell.r + 1} = ${Number(v.value.toPrecision(10))}`).join(", ")}` : ""}

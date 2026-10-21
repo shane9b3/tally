@@ -31,7 +31,7 @@ import {
   subtotalsOp,
 } from "../src/data/builders";
 import { DEFAULT_SEPARATORS, delimiterString, guessSeparator, previewColumns, previewSplit, splitLine, toCsvOptions } from "../src/data/textToColumns";
-import { addGroup, applyOutlineOp, autoOutlineGroups, emptyOutlineModel, hiddenByOutline, removeGroup, showLevel } from "../src/data/outlineModel";
+import { addGroup, applyOutlineOp, autoOutlineGroups, emptyOutlineModel, hiddenByOutline, removeGroup, showLevel } from "../src/dev/mockOutline";
 
 const sheets = (name: string) => (name.toLowerCase() === "sheet2" ? 2 : name.toLowerCase() === "sheet1" ? 1 : null);
 

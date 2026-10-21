@@ -138,7 +138,10 @@ test("pick a series range with point mode", async ({ page }) => {
   await ready(page);
   await insertChart(page);
   const values = page.getByTestId("chart-series-0-values");
+  // The derived series has landed in the editor (not the placeholder draft).
+  await expect(values).toHaveValue(/\$B\$/);
   const before = await values.inputValue();
+  const opsBefore = (await recorded(page)).length;
   await page.getByTestId("chart-series-0").getByRole("button", { name: "Pick range" }).click();
   await expect(page.locator(".tally-grid[data-range-pick]")).toHaveCount(1);
   // Column A (the chart sits over D:I).
@@ -148,9 +151,14 @@ test("pick a series range with point mode", async ({ page }) => {
   await page.mouse.down();
   await page.mouse.move(b.x, b.y, { steps: 4 });
   await page.mouse.up();
+  // The pick settled (range-pick mode off), then the editor shows the new range.
+  await expect(page.locator(".tally-grid[data-range-pick]")).toHaveCount(0);
   await expect(values).not.toHaveValue(before);
   await expect(values).toHaveValue(/\$A\$2:\$A\$7$/);
-  await expect.poll(async () => ((await recorded(page)).at(-1) as { type: string }).type).toBe("updateChart");
+  // Exactly the picked range went to the engine in one updateChart.
+  await expect
+    .poll(async () => (await recorded(page)).slice(opsBefore).filter((o) => o.type === "updateChart").map((o) => (o as unknown as { chart: { series: { values: string }[] } }).chart.series[0]?.values))
+    .toEqual([expect.stringMatching(/\$A\$2:\$A\$7$/)]);
 });
 
 test("trace precedents draws arrows; Remove All Traces clears them", async ({ page }) => {

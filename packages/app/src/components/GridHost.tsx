@@ -77,6 +77,9 @@ export function GridHost() {
     onPageBreakDrag: w5.view.onPageBreakDrag,
     onViewportChange: () => useChartStore.getState().bumpViewport(),
   };
+  // View ▸ Grid lines / Column and row headers (the engine's `view_options`).
+  const showGridlines = useW56Store((s) => s.view.showGridlines);
+  const showHeaders = useW56Store((s) => s.view.showHeaders);
   const outlineGroups = useW56Store((s) => s.outline);
   const outline = outlineGroups.rows.length > 0 || outlineGroups.cols.length > 0 ? outlineGroups : null;
   const GridComponent = split ? SplitGrid : Grid;
@@ -89,6 +92,7 @@ export function GridHost() {
         {...w5Props}
         {...splitProps}
         gridRef={ctl.setGrid}
+        {...(split ? { splitRef: w5.setSplitView } : {})}
         className={styles.grid}
         source={source}
         sheet={sheet}
@@ -105,6 +109,8 @@ export function GridHost() {
         onFilterButton={ctl.onFilterButton}
         aria={aria}
         outline={outline}
+        showGridlines={showGridlines}
+        showHeaders={showHeaders}
         onOutlineToggle={ctl.w56.onOutlineToggle}
         onOutlineLevel={ctl.w56.onOutlineLevel}
         onCellButton={ctl.v3.onCellButton}

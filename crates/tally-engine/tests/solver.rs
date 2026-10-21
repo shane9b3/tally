@@ -75,8 +75,8 @@ fn solver_max_profit_via_service_and_document_unchanged() {
     let r = f.svc.solver(f.doc, &int).unwrap();
     assert_eq!(r.status, SolverStatus::Optimal);
     assert!(r.values.iter().all(|v| v.value.fract() == 0.0), "{r:?}");
-    // Non-linear models are refused.
+    // Non-linear models are reported as such.
     f.set("C1", "=B1*B2");
-    let e = f.svc.solver(f.doc, &req).unwrap_err();
-    assert!(e.message.contains("not linear"), "{e:?}");
+    let r = f.svc.solver(f.doc, &req).unwrap();
+    assert_eq!(r.status, SolverStatus::NotLinear, "{r:?}");
 }

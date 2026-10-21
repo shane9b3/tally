@@ -1,9 +1,9 @@
 /**
- * Client-side outline model (Data ▸ Group and Outline). The engine keeps
- * the groups (`SheetData.row_groups` / `col_groups`) but no query returns
- * them yet (DTO gap: `outline(doc, sheet)`), so the UI mirrors every
- * outline op it applies into this model and feeds the grid's gutter from
- * it. Pure reducers; the mock (`mockW56.ts`) uses the same functions.
+ * The browser mock's outline emulation (Data ▸ Group and Outline): pure
+ * reducers over the groups of a sheet, used by `mockW56.ts` to answer the
+ * outline ops and report the groups through `sheetLayout().outline` the
+ * way the engine does. The app itself reads the groups from the engine's
+ * `SheetLayout.outline` (`W56Features.syncOutline`).
  */
 import type { Op, OutlineGroupDto } from "@tally/bridge";
 

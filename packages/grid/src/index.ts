@@ -32,7 +32,7 @@ export { Geometry, HEADER_HEIGHT } from "./geometry";
 export { fillTarget, fillDirection, type FillDir } from "./fillHandle";
 export { wrapLines, luminance, textColor, cssColor, drawStyleId } from "./renderer";
 export { drawCfIcon, drawDataBar, iconCount, ICON_COLORS } from "./cfIcons";
-export { EngineClientSource, type EngineClientSourceOptions } from "./engineSource";
+export { cellsOptionsActive, EngineClientSource, type EngineClientSourceOptions } from "./engineSource";
 // Wave 5 seams (W5-0b)
 export { ObjectLayer, anchorToPx, pxToAnchor, anchorRange, PX_PER_MM, OBJECT_HANDLES, type GridObject, type ObjectAnchor, type ObjectHandle, type AnchorAxes, type ObjectLayerEvents } from "./objectLayer";
 export { AriaMirror, describeCell, describeSelection, OFFSCREEN_STYLE, type AriaProps } from "./aria";

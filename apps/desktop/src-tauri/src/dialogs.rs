@@ -46,12 +46,22 @@ pub fn format_for(path: &Path) -> FileFormat {
     }
 }
 
-/// Open dialog filters: every supported format first, then one per format.
+/// Open dialog filters: every supported format first, then one per format
+/// (the engine codec reads all of them; docs/file-formats.md).
 pub const OPEN_FILTERS: &[(&str, &[&str])] = &[
-    ("Spreadsheets", &["ods", "xlsx", "csv"]),
-    ("OpenDocument Spreadsheet", &["ods"]),
+    (
+        "Spreadsheets",
+        &[
+            "ods", "ots", "xlsx", "xls", "sxc", "csv", "tsv", "html", "htm", "dbf",
+        ],
+    ),
+    ("OpenDocument Spreadsheet", &["ods", "ots"]),
     ("Excel Workbook", &["xlsx"]),
-    ("CSV", &["csv"]),
+    ("Excel 97–2003 Workbook", &["xls"]),
+    ("OpenOffice.org 1.x Spreadsheet", &["sxc"]),
+    ("CSV", &["csv", "tsv"]),
+    ("HTML", &["html", "htm"]),
+    ("dBase", &["dbf"]),
 ];
 
 /// Save dialog formats as (label, extension), in menu order.
@@ -59,6 +69,8 @@ pub const SAVE_FORMATS: &[(&str, &str)] = &[
     ("OpenDocument Spreadsheet", "ods"),
     ("Excel Workbook", "xlsx"),
     ("CSV", "csv"),
+    ("HTML", "html"),
+    ("dBase", "dbf"),
 ];
 
 /// What a Save dialog shows.
@@ -74,7 +86,7 @@ pub struct SavePlan {
     pub ext: &'static str,
 }
 
-/// `true` if the path ends in `.ods`, `.xlsx` or `.csv` (any case).
+/// `true` if the path ends in one of [`SAVE_FORMATS`]' extensions (any case).
 pub fn has_known_ext(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -82,7 +94,7 @@ pub fn has_known_ext(path: &Path) -> bool {
 }
 
 /// The Save dialog for `doc`'s current file and the requested format: an
-/// export (`format` set) offers that format only; Save As offers all three,
+/// export (`format` set) offers that format only; Save As offers them all,
 /// the current file's format first, and the format then follows the chosen
 /// extension ([`format_for`]).
 pub fn save_plan(current: Option<&Path>, format: Option<FileFormat>) -> SavePlan {
@@ -123,7 +135,7 @@ pub fn save_plan(current: Option<&Path>, format: Option<FileFormat>) -> SavePlan
     }
 }
 
-/// Shows the Open dialog (ODS/XLSX/CSV), then opens the chosen file.
+/// Shows the Open dialog ([`OPEN_FILTERS`]), then opens the chosen file.
 /// Returns `null` when the user cancels.
 #[tauri::command]
 pub async fn wb_open_dialog(
@@ -215,19 +227,31 @@ mod tests {
 
     #[test]
     fn open_offers_every_format() {
-        assert_eq!(OPEN_FILTERS[0].1, &["ods", "xlsx", "csv"]);
+        for ext in [
+            "ods", "ots", "xlsx", "xls", "sxc", "csv", "html", "htm", "dbf",
+        ] {
+            assert!(OPEN_FILTERS[0].1.contains(&ext), "{ext}");
+        }
+        // Every per-format filter is part of the combined one.
+        for (_, exts) in &OPEN_FILTERS[1..] {
+            assert!(exts.iter().all(|e| OPEN_FILTERS[0].1.contains(e)));
+        }
     }
 
     #[test]
-    fn save_as_lists_three_formats_current_first() {
+    fn save_as_lists_every_format_current_first() {
         let p = save_plan(Some(Path::new("/tmp/Book.xlsx")), None);
         assert_eq!(p.title, "Save As");
         assert_eq!(p.file_name, "Book.xlsx");
         let exts: Vec<_> = p.filters.iter().map(|(_, e)| *e).collect();
-        assert_eq!(exts, ["xlsx", "ods", "csv"]);
+        assert_eq!(exts, ["xlsx", "ods", "csv", "html", "dbf"]);
         let p = save_plan(None, None);
         assert_eq!(p.file_name, "Untitled.ods");
-        assert_eq!(p.filters.len(), 3);
+        assert_eq!(p.filters.len(), 5);
+        let p = save_plan(Some(Path::new("/tmp/t.dbf")), Some(FileFormat::Html));
+        assert_eq!(p.filters, [("HTML", "html")]);
+        assert_eq!(p.title, "Export as HTML");
+        assert!(has_known_ext(Path::new("a.DBF")));
     }
 
     #[test]

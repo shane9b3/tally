@@ -80,8 +80,38 @@ describe("Function Wizard arguments", () => {
     expect(parseCall('=SUMIF(A1:A5;">3";B1:B5)')).toEqual({ name: "SUMIF", args: ["A1:A5", '">3"', "B1:B5"] });
     expect(parseCall("=IF(SUM(A1;A2)>3;\"a;b\";0)")).toEqual({ name: "IF", args: ["SUM(A1;A2)>3", '"a;b"', "0"] });
     expect(parseCall("hello")).toBeNull();
-    const meta = { name: "X", category: "c", signature: "X(a)", description: "", params: [{ name: "a", optional: false, description: "first" }] } as unknown as Parameters<typeof wizardParams>[0];
-    expect(wizardParams(meta)).toEqual([{ name: "a", optional: false, variadic: false, description: "first" }]);
+  });
+
+  it("uses FunctionInfo.params, growing the repeating group as it fills", () => {
+    const fn = (name: string, params: { name: string; optional?: boolean; repeat?: boolean }[]) => ({
+      name,
+      category: "Mathematical",
+      signature: "ignored(x)",
+      description: "",
+      example: "",
+      params: params.map((p) => ({ name: p.name, kind: "number", optional: p.optional ?? false, repeat: p.repeat ?? false })),
+    });
+    const sumif = wizardParams(fn("SUMIF", [{ name: "range" }, { name: "criterion" }, { name: "sum_range", optional: true }]));
+    expect(sumif).toEqual([
+      { name: "range", optional: false, variadic: false },
+      { name: "criterion", optional: false, variadic: false },
+      { name: "sum_range", optional: true, variadic: false },
+    ]);
+    expect(argumentSlots(sumif, []).map((p) => p.name)).toEqual(["range", "criterion", "sum_range"]);
+    const sum = wizardParams(fn("SUM", [{ name: "number", repeat: true }]));
+    expect(argumentSlots(sum, []).map((p) => `${p.name}:${p.optional}`)).toEqual(["number1:false"]);
+    expect(argumentSlots(sum, ["A1"]).map((p) => p.name)).toEqual(["number1", "number2"]);
+    expect(argumentSlots(sum, ["A1", "B1"]).map((p) => p.name)).toEqual(["number1", "number2", "number3"]);
+    expect(argumentError(argumentSlots(sum, []), [])).toBe("number1 is required.");
+    // SUMIFS: one fixed parameter, then (range; criterion) pairs.
+    const sumifs = wizardParams(fn("SUMIFS", [{ name: "sum_range" }, { name: "range", repeat: true }, { name: "criterion", repeat: true }]));
+    expect(argumentSlots(sumifs, []).map((p) => p.name)).toEqual(["sum_range", "range1", "criterion1"]);
+    expect(argumentSlots(sumifs, ["C1:C9", "A1:A9"]).map((p) => p.name)).toEqual(["sum_range", "range1", "criterion1", "range2", "criterion2"]);
+    expect(argumentSlots(sumifs, ["C1:C9", "A1:A9", '">1"']).map((p) => p.optional)).toEqual([false, false, false, true, true]);
+    // At most 255 arguments.
+    expect(argumentSlots(sum, Array.from({ length: 300 }, () => "1")).length).toBe(255);
+    // No metadata: the signature is parsed.
+    expect(wizardParams({ ...fn("X", []), signature: "X(a, [b])" }).map((p) => p.name)).toEqual(["a", "b"]);
   });
 });
 
@@ -99,7 +129,7 @@ describe("display-level function names", () => {
     expect(toDisplayFormula(null, "=SUM(A1)")).toBe("=SUM(A1)");
     expect(toDisplayFormula("fr", "plain text")).toBe("plain text");
     expect(mapFunctionNames("=A1.SUM(1)", () => "X")).toBe("=A1.SUM(1)");
-    const fns = localizeFunctions("de", [{ name: "SUM", category: "Mathematical", signature: "SUM(number1, …)", description: "" }, { name: "MAX", category: "Statistical", signature: "MAX(a)", description: "" }]);
+    const fns = localizeFunctions("de", [{ name: "SUM", category: "Mathematical", signature: "SUM(number1, …)", description: "", params: [], example: "" }, { name: "MAX", category: "Statistical", signature: "MAX(a)", description: "", params: [], example: "" }]);
     expect(fns.map((f) => f.signature)).toEqual(["SUMME(number1, …)", "MAX(a)"]);
   });
 });

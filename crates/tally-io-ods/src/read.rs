@@ -142,6 +142,11 @@ pub(crate) fn read_with(
                 crate::tools::apply_view_item(sheet, k, v);
             }
         }
+        if sheet.frozen.is_none() {
+            if let Some(split) = settings.splits.get(&sheet.name) {
+                sheet.split = Some(*split);
+            }
+        }
     }
     // Wave 5 (W5-2): named cell styles (`office:styles`).
     wb.cell_styles = named_styles;
@@ -218,6 +223,9 @@ struct Settings {
     frozen: HashMap<String, (u32, u32)>,
     /// Sheet name → view option items (wave 5).
     views: HashMap<String, Vec<(String, String)>>,
+    /// Sheet name → Window ▸ Split position in 1/100 mm (`SplitMode` 1,
+    /// whose positions are pixels at 100 %).
+    splits: HashMap<String, tally_model::SplitData>,
 }
 
 #[derive(Default)]
@@ -288,6 +296,22 @@ fn parse_settings<R: BufRead>(xml: &mut XmlReader<R>) -> Result<Settings, OdsErr
     for (sheet, info) in splits {
         let cols = if info.h_mode == 2 { info.h_pos } else { 0 };
         let rows = if info.v_mode == 2 { info.v_pos } else { 0 };
+        if info.h_mode == 1 || info.v_mode == 1 {
+            let hmm = |mode: i64, px: u32| {
+                if mode == 1 {
+                    crate::tools::split_px_to_hmm(px)
+                } else {
+                    0
+                }
+            };
+            let split = tally_model::SplitData {
+                x_hmm: hmm(info.h_mode, info.h_pos),
+                y_hmm: hmm(info.v_mode, info.v_pos),
+            };
+            if split.x_hmm > 0 || split.y_hmm > 0 {
+                s.splits.insert(sheet.clone(), split);
+            }
+        }
         s.frozen.insert(sheet, (rows, cols));
     }
     Ok(s)

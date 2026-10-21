@@ -81,6 +81,8 @@ import type { ScenarioDto } from "./generated/ScenarioDto";
 import type { SolverRequest } from "./generated/SolverRequest";
 import type { SolverResult } from "./generated/SolverResult";
 import type { TraceDto } from "./generated/TraceDto";
+import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
+import type { CellsOptions } from "./generated/CellsOptions";
 import type { EngineClientV4, SheetId, Unsubscribe } from "./client";
 import { mockTemplate } from "./mockTemplates";
 import { BUILTIN_TEMPLATES, type ShellClient, type TemplateInfo } from "./shell";
@@ -365,6 +367,11 @@ class Evaluator {
     } finally {
       this.visiting.delete(k);
     }
+  }
+
+  /** Evaluates formula text (without the leading `=`) as if it were in a cell. */
+  evalText(src: string): Scalar {
+    return this.formula(src.trim());
   }
 
   private operand(text: string): Scalar {
@@ -670,6 +677,8 @@ export class MockClient implements EngineClientV4, ShellClient {
         category: "Mathematical",
         signature: "SUM(number1, [number2], …)",
         description: "Adds all the numbers in a range of cells.",
+        params: [{ name: "number", kind: "numberSeq", optional: false, repeat: true }],
+        example: "=SUM(A1:A10)",
       },
     ]);
   }
@@ -986,6 +995,67 @@ export class MockClient implements EngineClientV4, ShellClient {
     return this.run(() => {
       this.sheet(this.doc(doc), sheet);
       return [];
+    });
+  }
+
+  imageData(doc: DocId, sheet: SheetId, id: number): Promise<string> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      throw apiError("not_found", `no picture ${id}`);
+    });
+  }
+
+  viewOptions(doc: DocId, sheet: SheetId): Promise<ViewOptionsDto> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      return { split: null, showFormulas: false, valueHighlighting: false, showZeroValues: true, showGridlines: true, showHeaders: true };
+    });
+  }
+
+  invalidCells(doc: DocId, sheet: SheetId, _range: RangeDto | null): Promise<CellPos[]> {
+    return this.run(() => {
+      this.sheet(this.doc(doc), sheet);
+      return [];
+    });
+  }
+
+  customSortLists(doc: DocId): Promise<string[][]> {
+    return this.run(() => {
+      this.doc(doc);
+      return [];
+    });
+  }
+
+  /** `cells` with the view options applied the way the engine does (formula text, AOO value-highlighting colours, blank zeros). */
+  async cellsWith(doc: DocId, sheet: SheetId, ranges: RangeDto[], opts: CellsOptions): Promise<CellBlock[]> {
+    const blocks = await this.cells(doc, sheet, ranges);
+    const sh = this.sheet(this.doc(doc), sheet);
+    for (const b of blocks) {
+      for (const v of b.cells) {
+        const input = sh.cells.get(key(v.r, v.c))?.input ?? "";
+        const formula = input.startsWith("=") && input.length > 1;
+        if (opts.valueHighlighting && v.kind !== "empty") v.color = formula ? 0x008000ff : v.kind === "text" ? 0x000000ff : 0x0000ffff;
+        if (opts.showFormulas && formula) {
+          v.text = input;
+          v.kind = "text";
+          v.num = null;
+          continue;
+        }
+        if (opts.hideZeroValues && v.kind === "number" && v.num === 0) {
+          v.text = "";
+          v.num = null;
+        }
+      }
+    }
+    return blocks;
+  }
+
+  previewFormula(doc: DocId, sheet: SheetId, _r: number, _c: number, text: string): Promise<string | null> {
+    return this.run(() => {
+      const sh = this.sheet(this.doc(doc), sheet);
+      const src = text.trim().replace(/^=/, "");
+      if (src === "") return null;
+      return displayText(new Evaluator(sh).evalText(src));
     });
   }
 

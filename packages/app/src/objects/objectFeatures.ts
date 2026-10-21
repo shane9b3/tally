@@ -61,7 +61,38 @@ export class ObjectFeatures {
     ]);
     if (seq !== this.refreshSeq || sheet !== this.ctl.sheet || this.ctl.info?.doc !== doc) return;
     useChartStore.getState().setObjects(sheet, charts, images);
+    void this.loadImageData(doc, sheet, images);
     await this.refreshData(charts.slice(0, DATA_FETCH_CAP).map((c) => c.id));
+  }
+
+  /** `(doc, sheet, id)` of picture bytes being fetched. */
+  private readonly imageFetches = new Set<string>();
+
+  /**
+   * Pictures from files come without bytes (`images()` leaves `data` empty):
+   * fetch each one once with `image_data` and cache it as a data URL in the
+   * chart store (until the sheet or document changes).
+   */
+  private async loadImageData(doc: number, sheet: number, images: readonly ImageDto[]): Promise<void> {
+    const have = useChartStore.getState().imageData;
+    await Promise.all(
+      images
+        .filter((im) => !im.data && have[im.id] === undefined)
+        .map(async (im) => {
+          const key = `${doc}:${sheet}:${im.id}`;
+          if (this.imageFetches.has(key)) return;
+          this.imageFetches.add(key);
+          try {
+            const data = await clientV4(this.ctl).imageData(doc, sheet, im.id);
+            const st = useChartStore.getState();
+            if (data && this.ctl.info?.doc === doc && this.ctl.sheet === sheet && st.sheet === sheet && st.images.some((x) => x.id === im.id)) st.setImageData(im.id, `data:${im.mime || "image/png"};base64,${data}`);
+          } catch {
+            // Gone or unsupported: the frame keeps its placeholder.
+          } finally {
+            this.imageFetches.delete(key);
+          }
+        }),
+    );
   }
 
   /** Re-fetches `chart_data` for charts of the active sheet. */

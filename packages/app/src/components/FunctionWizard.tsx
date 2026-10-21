@@ -1,14 +1,14 @@
 /**
- * Function Wizard skeleton (wave 5, W5-0b seam; ⌘F2 / Insert ▸ Function…).
+ * Function Wizard (⌘F2 / Insert ▸ Function…).
  *
  * Category list (Last Used, All, the engine's categories), a search box,
- * the function list, its signature and description, and Insert, which
- * writes `NAME(` into the open editor (or starts `=NAME(` in the active
- * cell). The argument editor with point mode, the live result and the
- * structure tree come in W5-6C; `FunctionInfo.params` / `example` are
- * read when the engine lead maps `FunctionMeta` (shown here when present).
+ * the function list, its signature, description, parameters and example
+ * (`FunctionInfo.params` / `example` from the engine's registry), the
+ * argument editor with point mode, the live result of the call at the
+ * active cell (`preview_formula`, debounced) and Insert, which writes the
+ * call into the open editor (or commits it to the active cell).
  */
-import type { FunctionInfo } from "@tally/bridge";
+import type { EngineClientV4, FunctionInfo } from "@tally/bridge";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useController } from "../context";
 import { t } from "../i18n";
@@ -42,10 +42,41 @@ export function resetLastUsed(): void {
 export const LAST_USED = "__last";
 export const ALL = "__all";
 
-/** Optional metadata the engine lead will add to `FunctionInfo` (W5-4). */
-interface FunctionMeta {
-  params?: readonly { name: string; description?: string; optional?: boolean }[];
-  example?: string;
+/** Debounce of the live result (ms). */
+export const PREVIEW_DEBOUNCE_MS = 150;
+
+/**
+ * The live result of `call` (`SUMIF(A1:A5;">3")`) at the active cell,
+ * debounced; stale answers are dropped. `null` while there is nothing to
+ * show; `{ error }` when the engine refuses.
+ */
+function usePreview(call: string | null): { text: string | null; error: boolean } {
+  const ctl = useController();
+  const [state, setState] = useState<{ text: string | null; error: boolean }>({ text: null, error: false });
+  const seq = useRef(0);
+  useEffect(() => {
+    const n = ++seq.current;
+    const info = ctl.info;
+    if (!call || !info) {
+      setState({ text: null, error: false });
+      return;
+    }
+    const client = ctl.client as EngineClientV4;
+    if (typeof client.previewFormula !== "function") return;
+    const timer = setTimeout(() => {
+      const a = ctl.selection.active;
+      client.previewFormula(info.doc, ctl.sheet, a.r, a.c, `=${call}`).then(
+        (text) => {
+          if (n === seq.current) setState({ text, error: false });
+        },
+        () => {
+          if (n === seq.current) setState({ text: null, error: true });
+        },
+      );
+    }, PREVIEW_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [call, ctl]);
+  return state;
 }
 
 /** Categories in display order: Last Used, All, then the engine's (sorted). */
@@ -98,7 +129,8 @@ export function FunctionWizard() {
   const categories = useMemo(() => wizardCategories(functions), [functions]);
   const list = useMemo(() => wizardList(functions, category, query), [functions, category, query]);
   const current = list.find((f) => f.name === selected) ?? list[0] ?? null;
-  const meta = (current ?? {}) as FunctionMeta;
+  const callText = call && current && call.text.startsWith(`${current.name}(`) ? call.text : null;
+  const preview = usePreview(callText);
 
   useEffect(() => {
     searchRef.current?.focus();
@@ -206,24 +238,30 @@ export function FunctionWizard() {
               <code className={wiz.signature}>{current.signature}</code>
               <div className={wiz.description}>{current.description}</div>
               <div className={wiz.category}>{current.category}</div>
-              {meta.params && meta.params.length > 0 ? (
-                <dl className={wiz.params}>
-                  {meta.params.map((p) => (
+              {current.params && current.params.length > 0 ? (
+                <dl className={wiz.params} data-testid="wizard-params">
+                  {current.params.map((p) => (
                     <div key={p.name}>
                       <dt>
-                        {p.name} <span className={wiz.muted}>{p.optional ? t("wizard.optional", "optional") : t("wizard.required", "required")}</span>
+                        {p.name}{" "}
+                        <span className={wiz.muted}>
+                          {p.optional ? t("wizard.optional", "optional") : t("wizard.required", "required")}
+                          {p.repeat ? ", …" : ""}
+                        </span>
                       </dt>
-                      {p.description ? <dd>{p.description}</dd> : null}
                     </div>
                   ))}
                 </dl>
               ) : null}
-              {meta.example ? (
-                <div className={wiz.example}>
-                  {t("wizard.example", "Example")}: <code>{meta.example}</code>
+              {current.example ? (
+                <div className={wiz.example} data-testid="wizard-example">
+                  {t("wizard.example", "Example")}: <code>{current.example}</code>
                 </div>
               ) : null}
               <ArgumentEditor fn={current} initial={existing && existing.name === current.name ? existing.args : undefined} onChange={(text, complete) => setCall({ text, complete })} />
+              <div className={wiz.result} data-testid="wizard-result" aria-live="polite">
+                {t("wizard.result", "Result")}: <output>{preview.error ? t("wizard.error", "Error") : (preview.text ?? "")}</output>
+              </div>
             </>
           ) : (
             <div className={wiz.muted}>{t("wizard.noFunction", "No function selected")}</div>

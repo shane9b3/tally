@@ -26,9 +26,9 @@ Types come from `crates/tally-api/src/dto.rs` and are generated into
 | Tauri command | Arguments | Returns | `DocumentService` method | `EngineClient` method |
 |---|---|---|---|---|
 | `wb_new` | `template?: string` (id: `invoices`, `budget`, `stock`) | `WorkbookInfo` | `new_workbook(template)` (id passed through; the engine builds it) | `newWorkbook(template?)` |
-| `wb_open_dialog` | none | `WorkbookInfo \| null` | shell only: native dialog (filters: ODS, XLSX, CSV), then `open(path)` | `ShellClient.openDialog()` |
+| `wb_open_dialog` | none | `WorkbookInfo \| null` | shell only: native dialog (filters: ODS/OTS, XLSX, XLS, SXC, CSV/TSV, HTML, dBase), then `open(path)` | `ShellClient.openDialog()` |
 | `wb_open` | `path: string` | `WorkbookInfo` | `open(path)` | `open(path)` |
-| `wb_save` | `doc, saveAs: boolean, format?: FileFormat` | `WorkbookInfo` | shell shows a dialog when `saveAs`, no path or a format change (Save As offers ODS, XLSX and CSV; without `format` the chosen extension decides), then `save(doc, path, format)` | `save(doc, path \| null, format)`; `ShellClient.saveWithDialog(doc, saveAs, format)` |
+| `wb_save` | `doc, saveAs: boolean, format?: FileFormat` | `WorkbookInfo` | shell shows a dialog when `saveAs`, no path or a format change (Save As offers ODS, XLSX, CSV, HTML and dBase; without `format` the chosen extension decides), then `save(doc, path, format)` | `save(doc, path \| null, format)`; `ShellClient.saveWithDialog(doc, saveAs, format)` |
 | `wb_close` | `doc` | `void` | `close(doc)` | `close(doc)` |
 | `sheet_layout` | `doc, sheet` | `SheetLayout` | `sheet_layout(doc, sheet)` | `sheetLayout(doc, sheet)` |
 | `get_cells` | `doc, sheet, ranges: RangeDto[]` | `CellBlock[]` | `cells(doc, sheet, ranges)` | `cells(doc, sheet, ranges)` |
@@ -41,7 +41,7 @@ Types come from `crates/tally-api/src/dto.rs` and are generated into
 | `clipboard_copy` | `doc, sel: SelectionDto` | `ClipboardOut` | `copy(doc, sel)` | `copy(doc, sel)` |
 | `navigate_edge` | `doc, sheet, from: CellPos, dir: Direction` | `CellPos` | `navigate_edge(doc, sheet, from, dir)` | `navigateEdge(doc, sheet, from, dir)` |
 | `resolve_name_box` | `doc, text` | `SelectionDto` | `resolve_name_box(doc, text)` | `resolveNameBox(doc, text)` |
-| `list_functions` | none | `FunctionInfo[]` | `list_functions()` | `listFunctions()` |
+| `list_functions` | none | `FunctionInfo[]` (`{ name, category, signature, description, params: ParamInfo[] { name, kind, optional, repeat }, example }`; the trailing `repeat` params form the repeating group) | `list_functions()` | `listFunctions()` |
 | `assist_suggest` | `doc, query, sel: SelectionDto` | `Suggestion[]` | `assist_suggest(doc, query, sel)` | `assistSuggest(doc, query, sel)` |
 | `recent_files` | none | `string[]` | shell only (app data) | `ShellClient.recentFiles()` |
 | `list_templates` | none | `TemplateInfo[]` (`{ id, title, description }`) | shell only (the engine's `templates::CATALOG`) | `ShellClient.listTemplates()` |
@@ -292,14 +292,16 @@ load). Results of the UI's own `apply`/`undo`/`redo` come back as return values.
 ## v0.4–v0.6 (wave 5)
 
 Contracts landed in W5-0a (`crates/tally-api/src/{charts,pivot,tools,print}.rs`); the
-behaviour lands in W5-1 (charts, pictures), W5-2 (DataPilot, outline, data tools,
+behaviour landed in W5-1 (charts, pictures), W5-2 (DataPilot, outline, data tools,
 scenarios, cell styles) and W5-3 (print, PDF, calculation semantics, solver,
-detective). Until then every new `DocumentService` method answers `unsupported`, and
-every new op is refused with `OpError { code: "unsupported" }` by `ops_v04`/`ops_v05`.
+detective); the integration pass added `image_data`, `view_options`, `invalid_cells`,
+`custom_sort_lists`, `cells_with` and `preview_formula` commands and the `save_copy` /
+`open_untitled` service methods. A `DocumentService` without an implementation answers
+`unsupported` (the trait defaults).
 `EngineClientV4` (`packages/bridge/src/client.ts`) lists the queries; `MockClient` has
 stubs (empty lists for the list queries, `unsupported` for the rest). The UI shell
-registers the commands in `apps/desktop/src-tauri/src/commands_v4.rs` (W5-0b, landed:
-24 commands, `commands_v4::COMMAND_NAMES`) with the names below, and `TauriClient`
+registers the commands in `apps/desktop/src-tauri/src/commands_v4.rs` (W5-0b plus the
+integration pass: 30 commands, `commands_v4::COMMAND_NAMES`) with the names below, and `TauriClient`
 (`COMMANDS.charts` … `COMMANDS.dependents`, `V4_METHODS`) implements `EngineClientV4`;
 `packages/app/test/tauriClientV4.test.ts` checks that every interface method has a
 registered command. The shell-only `wb_export_pdf` and `wb_print` take a job id.
@@ -321,7 +323,7 @@ registered command. The shell-only `wb_export_pdf` and `wb_print` take a job id.
 | `scenarios` | `doc, sheet` | `ScenarioDto[]` | `scenarios(doc, sheet)` | `scenarios(doc, sheet)` |
 | `database_ranges` | `doc` | `DatabaseRangeDto[]` | `database_ranges(doc)` | `databaseRanges(doc)` |
 | `navigator` | `doc` | `NavigatorDto` | `navigator(doc)` | `navigator(doc)` |
-| `document_statistics` | `doc` | `DocumentStatsDto` | `document_statistics(doc)` | `documentStatistics(doc)` |
+| `document_statistics` | `doc` | `DocumentStatsDto` (`pages`: the printed pages of the visible sheets at their page setup, empty pages suppressed) | `document_statistics(doc)` | `documentStatistics(doc)` |
 | `custom_sort_lists` | `doc` | `string[][]` (Tools ▸ Options ▸ Sort Lists; set with `setCustomSortLists`) | `custom_sort_lists(doc)` | `customSortLists(doc)` |
 | `print_layout` | `doc, opts: PrintOptionsDto` | `PrintLayoutDto` | `print_layout(doc, &opts)` | `printLayout(doc, opts)` |
 | `page_breaks` | `doc, sheet` | `PageBreaksDto` | `page_breaks(doc, sheet)` | `pageBreaks(doc, sheet)` |
@@ -329,19 +331,27 @@ registered command. The shell-only `wb_export_pdf` and `wb_print` take a job id.
 | `print_job_page_png` | `job, page, dpi` | `string` (base64 PNG) | `print_job_page_png(job, page, dpi)` | `printJobPagePng(job, page, dpi)` |
 | `print_job_pdf` | `job` | bytes | `print_job_pdf(job)` | `printJobPdf(job)` (the shell's `wb_export_pdf(doc, job)` / `wb_print(doc, job)` normally consume the PDF) |
 | `calc_settings` | `doc` | `CalcSettingsDto` | `calc_settings(doc)` | `calcSettings(doc)` |
-| `solver` | `doc, req: SolverRequest` | `SolverResult` (sandboxed; nothing changes) | `solver(doc, &req)` | `solver(doc, req)` |
+| `solver` | `doc, req: SolverRequest` | `SolverResult` (sandboxed; nothing changes; `status`: `optimal`, `infeasible`, `unbounded`, `limit`, or `notLinear` when the model is not linear in the variables, with the current values) | `solver(doc, &req)` | `solver(doc, req)` |
 | `precedents` | `doc, sheet, r, c` | `TraceDto[]` | `precedents(doc, sheet, r, c)` | `precedents(doc, sheet, r, c)` |
 | `dependents` | `doc, sheet, r, c` | `TraceDto[]` | `dependents(doc, sheet, r, c)` | `dependents(doc, sheet, r, c)` |
 | `view_options` | `doc, sheet` | `ViewOptionsDto` (toggles plus the persisted `split`, `null` when not split) | `view_options(doc, sheet)` | `viewOptions(doc, sheet)` |
 | `invalid_cells` | `doc, sheet, range?: RangeDto` | `CellPos[]` (Mark Invalid Data; ≤ 10,000 cells, row-major, the validation work budget applies; nothing changes) | `invalid_cells(doc, sheet, range)` | `invalidCells(doc, sheet, range)` |
+| `image_data` | `doc, sheet, id` | `string` (base64; pictures from files come without `data` in `images`) | `image_data(doc, sheet, id)` | `imageData(doc, sheet, id)` |
+| `cells_with` | `doc, sheet, ranges: RangeDto[], opts: CellsOptions` | `CellBlock[]`: `get_cells` rendered with `{ showFormulas, valueHighlighting, hideZeroValues }`: formula cells show their formula text (`{=…}` for arrays; kind `text`, `num` null; a protected sheet's hidden formulas keep their value), value highlighting sets `color` to `0x0000ffff` for constant numbers and booleans, `0x008000ff` for formulas and `0x000000ff` for text (AOO), hidden zeros are blank | `cells_with(doc, sheet, ranges, &opts)` | `cellsWith(doc, sheet, ranges, opts)` |
+| `preview_formula` | `doc, sheet, r, c, text` | `string \| null` (the Function Wizard's result: `text`, with or without `=`, evaluated at the cell without committing, formatted with the cell's number format; `null` when it does not parse) | `preview_formula(doc, sheet, r, c, text)` | `previewFormula(doc, sheet, r, c, text)` |
+
+Two service methods have no command of their own: `save_copy(doc, path, format)`
+writes a copy without changing the document's path, title or dirty flag (autosave and
+Save as Template use it), and `open_untitled(path, dirty)` opens a file as an untitled
+document (recovered snapshots, user templates).
 
 Wave-5 shell commands (no `DocumentService` method; optional `ShellClient.exportPdf` /
-`print`, `packages/bridge/src/shell.ts`; stubs answering `unsupported` until W5-3):
+`print`, `packages/bridge/src/shell.ts`):
 
 | Tauri command | Arguments | Returns | What it does |
 |---|---|---|---|
 | `wb_export_pdf` | `doc, job` | `void` | Native Save dialog, then writes `print_job_pdf(job)`; `cancelled` when dismissed. |
-| `wb_print` | `doc, job` | `void` | Sends the job's PDF to the OS print dialog (the `tally-print` window). |
+| `wb_print` | `doc, job` | `void` | Sends the job's PDF to the OS print dialog (see "Printing on macOS" below). |
 
 Wave-5 argument limits (`limits.rs`, checked before the engine; `invalid_argument`):
 
@@ -432,6 +442,9 @@ Additive changes to existing DTOs (all optional, so older clients keep working):
 - `StylePatch.rotationDeg?`, `stacked?`, `shrinkToFit?`, `indent?`, `underlineStyle?`; `BordersPatch.diagonalDown?`, `diagonalUp?` (per cell). These already apply in the engine.
 - `PageScale` gains `{ type: "fitPages", pages }`; `PageSetupDto.printCharts?`, `printNotes?: none | atEnd`, `printZeroValues?`, `printFormulas?`.
 - `ApplyResult.chartsChanged?: ChartRef[]`, `objectsChanged?: SheetId[]`, `created?: CreatedId[]` (`{ opIndex, id }`), `pivotsChanged?: boolean`.
+- `FunctionInfo.params: ParamInfo[]` and `FunctionInfo.example` (serde default; from `tally_functions::FunctionMeta`).
+- `SolverStatus` gains `notLinear` (the solver used to answer `invalid_argument` for a non-linear model).
+- `CellsOptions` (`cells_with`) and the engine's split persistence: ODS `settings.xml` `HorizontalSplitMode`/`VerticalSplitMode` = 1 with the positions in pixels at 100 % (a frozen pane, mode 2, wins).
 - `WorkbookInfo.externalLinks?: ExternalLinkWarning[]` (`{ kind: dde | externalReference | linkedSheet | linkedImage, count, detail }`; disabled by policy, see docs/security.md).
 
 Error codes added: `target_not_empty` (DataPilot).
@@ -446,11 +459,11 @@ stand-ins).
 |---|---|---|---|
 | `get_prefs` | — | `string` | The `prefs.json` text (`{}` when none). The schema lives in `packages/app/src/options/prefs.ts`. |
 | `set_prefs` | `json` | `void` | Stores the text after checking it is a JSON object of at most 64 KiB. |
-| `autosave_snapshot` | `doc` | `void` | Writes `<app data>/autosave/doc-<id>-<name>.ods` plus a `.json` sidecar (title, original path, time). The engine's `save` moves the document's path/title/dirty flag, so `apply`/`undo`/`redo`/`recalc_all`/`set_locale` results are passed through `autosave::fix_result`, which restores the shell's path map and keeps the document dirty until a real save. |
+| `autosave_snapshot` | `doc` | `void` | Writes `<app data>/autosave/doc-<id>-<name>.ods` plus a `.json` sidecar (title, original path, time) with the engine's `save_copy`, so the document keeps its path, title and dirty flag. |
 | `list_recovery` | — | `RecoveryFile[]` (`{ path, title, savedAt }`) | Snapshots left by a crashed session. |
-| `recover_snapshot` | `path` | `WorkbookInfo` | Opens a snapshot (only inside the autosave dir) as an untitled, dirty workbook and deletes it. |
+| `recover_snapshot` | `path` | `WorkbookInfo` | Opens a snapshot (only inside the autosave dir) as an untitled, dirty workbook (`open_untitled(path, true)`) and deletes it. |
 | `discard_recovery` | `path` | `void` | Deletes a snapshot. |
-| `save_as_template` | `doc, name` | `void` | Saves a copy as `<app data>/templates/<name>.ots` (the ODS zip re-packed with the `…spreadsheet-template` mimetype). Names: 1–80 characters, no `/ \ : * ? " < > \|`. |
+| `save_as_template` | `doc, name` | `void` | Saves a copy (`save_copy`) as `<app data>/templates/<name>.ots` (the ODS zip re-packed with the `…spreadsheet-template` mimetype). Names: 1–80 characters, no `/ \ : * ? " < > \|`. |
 | `list_user_templates` | — | `TemplateInfo[]` (`id: "user:<name>"`) | The templates folder. |
 | `new_from_user_template` | `id` | `WorkbookInfo` | Opens a user template as an untitled workbook (no path, so Save asks). |
 | `set_ui_language` | `lang` | `void` | Stores `uiLanguage` in `prefs.json` and rebuilds the native menu with `tally_l10n::t()` labels (`cmd.<id>`, `menu.*`). |

@@ -1,31 +1,29 @@
 /**
- * Function Wizard argument model (§4 item 19): parses a `FunctionInfo`
- * signature such as `SUMIF(range, criterion, [sum_range])` or
- * `SUM(number1, [number2], …)` into parameters, and builds the call text
- * from the argument fields. `FunctionInfo.params` is not in the DTO yet;
- * when the engine adds it the parsed list is replaced by it.
+ * Function Wizard argument model (§4 item 19): the parameters come from
+ * `FunctionInfo.params` (the engine's registry metadata: name, optional,
+ * and `repeat` for the trailing repeating group, e.g. SUMIFS's
+ * `range; criterion` pairs). Only when a function has no metadata is its
+ * signature (`SUMIF(range, criterion, [sum_range])`) parsed instead. The
+ * call text is built from the argument fields.
  */
 import type { FunctionInfo } from "@tally/bridge";
 
 export interface WizardParam {
   name: string;
   optional: boolean;
-  /** The parameter repeats (`number1, [number2], …`). */
+  /** Part of the trailing repeating group (`SUM(number; ...)`). */
   variadic: boolean;
   description?: string;
 }
 
-/** Optional metadata the engine may add to `FunctionInfo` later (W5-4). */
-interface FunctionMeta {
-  params?: readonly { name: string; description?: string; optional?: boolean }[];
-  example?: string;
-}
+/** Most arguments of one call (AOO's limit). */
+export const MAX_ARGS = 255;
 
 /** The parameters of a function, from `params` when present, else from the signature. */
 export function wizardParams(f: FunctionInfo): WizardParam[] {
-  const meta = f as FunctionInfo & FunctionMeta;
-  if (meta.params && meta.params.length > 0) {
-    return meta.params.map((p, i, all) => ({ name: p.name, optional: p.optional ?? false, variadic: i === all.length - 1 && /\d$/.test(p.name), ...(p.description ? { description: p.description } : {}) }));
+  const params = (f.params ?? []) as readonly (FunctionInfo["params"][number] & { description?: string })[];
+  if (params.length > 0) {
+    return params.map((p) => ({ name: p.name, optional: p.optional, variadic: p.repeat, ...(p.description ? { description: p.description } : {}) }));
   }
   return parseSignature(f.signature);
 }
@@ -74,11 +72,36 @@ function splitTopLevel(s: string): string[] {
   return out;
 }
 
-/** The number of argument fields to show: every parameter, plus free slots for a repeating last one. */
+/**
+ * The argument fields to show: the fixed parameters, then the repeating
+ * group once more than the last filled repetition (AOO grows the list as
+ * the fields fill), names suffixed `1, 2, …`; at most {@link MAX_ARGS}.
+ */
 export function argumentSlots(params: readonly WizardParam[], values: readonly string[]): WizardParam[] {
-  const last = params[params.length - 1];
-  if (!last?.variadic) return [...params];
-  const fixed = params.slice(0, -1);
+  const first = params.findIndex((p) => p.variadic);
+  if (first < 0) return [...params];
+  const fixed = params.slice(0, first);
+  const group = params.slice(first);
+  const last = group[group.length - 1];
+  if (!last) return [...params];
+  // Signature fallback: `number1, [number2], …` (one numbered repeating name).
+  if (group.length === 1 && /\d$/.test(last.name)) return legacySlots(fixed, last, values);
+  const g = group.length;
+  const extra = values.slice(fixed.length);
+  let filled = 0;
+  for (let k = 0; k * g < extra.length; k++) {
+    if (extra.slice(k * g, k * g + g).some((v) => v.trim() !== "")) filled = k + 1;
+  }
+  const maxReps = Math.max(1, Math.floor((MAX_ARGS - fixed.length) / g));
+  const reps = Math.min(maxReps, Math.max(1, filled + 1));
+  const slots: WizardParam[] = [...fixed];
+  for (let k = 0; k < reps; k++) {
+    for (const p of group) slots.push({ name: `${p.name}${k + 1}`, optional: k > 0 || p.optional, variadic: true, ...(p.description ? { description: p.description } : {}) });
+  }
+  return slots;
+}
+
+function legacySlots(fixed: readonly WizardParam[], last: WizardParam, values: readonly string[]): WizardParam[] {
   const filled = values.slice(fixed.length).filter((v) => v.trim() !== "").length;
   const base = last.name.replace(/\d+$/, "");
   const startIndex = Number(/\d+$/.exec(last.name)?.[0] ?? "1");
@@ -90,7 +113,7 @@ export function argumentSlots(params: readonly WizardParam[], values: readonly s
 
 /** Which arguments are missing (`null` = fine). */
 export function argumentError(params: readonly WizardParam[], values: readonly string[]): string | null {
-  const missing = params.find((p, i) => !p.optional && !p.variadic && (values[i] ?? "").trim() === "");
+  const missing = params.find((p, i) => !p.optional && (values[i] ?? "").trim() === "");
   return missing ? `${missing.name} is required.` : null;
 }
 

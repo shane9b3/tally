@@ -105,7 +105,7 @@ test("dialogs are modal and keep Tab inside; the Function Wizard inserts NAME(",
 
   // The list is a listbox; searching narrows it and Enter inserts.
   await expect(page.getByTestId("wizard-list")).toHaveAttribute("role", "listbox");
-  // (The browser mock lists SUM only; the engine lists all 400+.)
+  // (The browser mock lists a few functions; the engine lists all 400+.)
   await page.getByTestId("wizard-search").fill("su");
   await expect(page.getByTestId("wizard-list").getByRole("option", { selected: true })).toHaveText("SUM");
   await expect(page.getByTestId("wizard-description")).toContainText("SUM(");

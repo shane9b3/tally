@@ -47,6 +47,9 @@ export class ChartMounts {
   private readonly images = new Map<number, HTMLImageElement>();
   private ro: ResizeObserver | null = null;
 
+  /** `exposeHooks`: register instances on `window.__tallyCharts` (the primary pane only). */
+  constructor(private readonly exposeHooks = true) {}
+
   /** Places/updates every visible chart and picture; disposes what left. */
   sync(grid: Grid, charts: readonly ChartDto[], data: Readonly<Record<number, ChartDataDto>>, images: readonly ImageDto[], imageData: Readonly<Record<number, string>>, theme: ChartTheme): void {
     const geo = grid.getGeometry();
@@ -65,7 +68,7 @@ export class ChartMounts {
       if (!wanted.has(id)) {
         m.chart.dispose();
         this.mounts.delete(id);
-        expose(id, null);
+        if (this.exposeHooks) expose(id, null);
       }
     }
     const wantedImages = new Set<number>();
@@ -110,7 +113,7 @@ export class ChartMounts {
       this.mounts.set(dto.id, m);
       m.chart.setOption(toEchartsOption(dto, data ?? emptyData(dto), theme), true);
       this.observe(node);
-      expose(dto.id, chart);
+      if (this.exposeHooks) expose(dto.id, chart);
       return;
     }
     if (Math.abs(m.w - w) >= 0.5 || Math.abs(m.h - h) >= 0.5) {
@@ -146,14 +149,22 @@ export class ChartMounts {
     this.ro.observe(node);
   }
 
-  dispose(): void {
-    for (const m of this.mounts.values()) m.chart.dispose();
+  /** Disposes every instance and picture (e.g. the second pane after the split is removed). */
+  clear(): void {
+    for (const [id, m] of this.mounts) {
+      m.chart.dispose();
+      if (this.exposeHooks) expose(id, null);
+    }
     this.mounts.clear();
     for (const img of this.images.values()) img.remove();
     this.images.clear();
+  }
+
+  dispose(): void {
+    this.clear();
     this.ro?.disconnect();
     this.ro = null;
-    expose(null, null);
+    if (this.exposeHooks) expose(null, null);
   }
 }
 

@@ -38,7 +38,6 @@ pub fn run() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new(service))
-        .manage(autosave::AutosaveState::default())
         .menu(menu::build)
         .on_menu_event(menu::on_event)
         .register_uri_scheme_protocol(print::PRINT_SCHEME, print::protocol)
@@ -115,6 +114,12 @@ pub fn run() {
             commands_v4::solver,
             commands_v4::precedents,
             commands_v4::dependents,
+            commands_v4::image_data,
+            commands_v4::view_options,
+            commands_v4::invalid_cells,
+            commands_v4::custom_sort_lists,
+            commands_v4::cells_with,
+            commands_v4::preview_formula,
             commands_v4::wb_export_pdf,
             commands_v4::wb_print,
             // W5-5 shell commands: pictures and the window chrome.

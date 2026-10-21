@@ -25,8 +25,8 @@ use crate::print::{
     SolverRequest, SolverResult,
 };
 use crate::tools::{
-    AutocompleteDto, CellStyleDto, DatabaseRangeDto, DocumentStatsDto, NavigatorDto, ScenarioDto,
-    TraceDto, ViewOptionsDto,
+    AutocompleteDto, CellStyleDto, CellsOptions, DatabaseRangeDto, DocumentStatsDto, NavigatorDto,
+    ScenarioDto, TraceDto, ViewOptionsDto,
 };
 
 /// Result type of every fallible [`DocumentService`] method.
@@ -46,6 +46,21 @@ pub trait DocumentService {
     /// Saves `doc` to `path` (or its current path when `None`) in `format`.
     fn save(&mut self, doc: DocId, path: Option<&Path>, format: FileFormat)
         -> Result<WorkbookInfo>;
+
+    /// Opens a file as a new untitled document: no path (so Save asks
+    /// where), title `Untitled`, dirty when `dirty` (recovery snapshots,
+    /// user templates).
+    fn open_untitled(&mut self, path: &Path, dirty: bool) -> Result<WorkbookInfo> {
+        let _ = dirty;
+        self.open(path)
+    }
+
+    /// Writes a copy of `doc` to `path` in `format` without changing the
+    /// document's path, title or dirty flag (autosave, Save as Template).
+    fn save_copy(&self, doc: DocId, path: &Path, format: FileFormat) -> Result<()> {
+        let _ = (doc, path, format);
+        Err(ApiError::unsupported("save_copy is not supported"))
+    }
 
     /// Closes a document and frees its memory.
     ///
@@ -410,6 +425,36 @@ pub trait DocumentService {
     fn view_options(&self, doc: DocId, sheet: SheetId) -> Result<ViewOptionsDto> {
         let _ = (doc, sheet);
         Err(ApiError::unsupported("view options are not supported"))
+    }
+
+    /// [`DocumentService::cells`] rendered with view options: formula text
+    /// instead of results, value highlighting colours, hidden zero values
+    /// (v0.6).
+    fn cells_with(
+        &self,
+        doc: DocId,
+        sheet: SheetId,
+        ranges: &[RangeDto],
+        opts: &CellsOptions,
+    ) -> Result<Vec<CellBlock>> {
+        let _ = opts;
+        self.cells(doc, sheet, ranges)
+    }
+
+    /// The Function Wizard's live result: formula `text` (with or without
+    /// the leading `=`) evaluated at `(r, c)` without committing it,
+    /// formatted with that cell's number format; `None` when it does not
+    /// parse (v0.6).
+    fn preview_formula(
+        &self,
+        doc: DocId,
+        sheet: SheetId,
+        r: u32,
+        c: u32,
+        text: &str,
+    ) -> Result<Option<String>> {
+        let _ = (doc, sheet, r, c, text);
+        Err(ApiError::unsupported("formula preview is not supported"))
     }
 
     /// Detective ▸ Mark Invalid Data: the cells of `range` (or the whole

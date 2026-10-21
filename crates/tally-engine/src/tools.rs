@@ -2267,8 +2267,9 @@ pub fn copy_sheet(
         s.hidden = hidden;
         s.tab_color = tab_color;
         let mut m = meta;
-        // Rule formulas and pivots are re-pointed; pivots keep their
-        // source (a copy would write into the same output otherwise).
+        // Rule formulas, charts and pivots are re-pointed: areas on the
+        // source sheet now name the copy (pivot targets and outputs are
+        // sheet-local, so the copied pivots stay on the copy).
         if !m.cond_formats.is_empty() {
             for cf in Arc::make_mut(&mut m.cond_formats).iter_mut() {
                 let cf = Arc::make_mut(cf);
@@ -2293,7 +2294,11 @@ pub fn copy_sheet(
                 }
             }
         }
-        m.pivots = Arc::new(Vec::new());
+        crate::charts::clone_for_sheet(&mut m, sheet, new);
+        if !m.pivots.is_empty() {
+            crate::pivot::clone_for_sheet(&mut m, sheet, new);
+            fx.pivots_changed = Some(true);
+        }
         m.standard_filter = None;
         s.meta = m;
         s.filtered_rows = Spans::default();

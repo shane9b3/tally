@@ -10,10 +10,11 @@
 //! is complete so the UI packages can be wired against it now.
 
 use tally_api::{
-    AutocompleteDto, CalcSettingsDto, CellStyleDto, ChartDataDto, ChartDto, ChartKind, ChartSvgDto,
-    DatabaseRangeDto, DocId, DocumentStatsDto, ImageDto, NavigatorDto, PageBreaksDto, PivotDto,
-    PivotFieldItemsDto, PivotHit, PivotSource, PrintJobInfo, PrintLayoutDto, PrintOptionsDto,
-    RangeDto, ScenarioDto, SolverRequest, SolverResult, TraceDto,
+    AutocompleteDto, CalcSettingsDto, CellBlock, CellPos, CellStyleDto, CellsOptions, ChartDataDto,
+    ChartDto, ChartKind, ChartSvgDto, DatabaseRangeDto, DocId, DocumentStatsDto, ImageDto,
+    NavigatorDto, PageBreaksDto, PivotDto, PivotFieldItemsDto, PivotHit, PivotSource, PrintJobInfo,
+    PrintLayoutDto, PrintOptionsDto, RangeDto, ScenarioDto, SolverRequest, SolverResult, TraceDto,
+    ViewOptionsDto,
 };
 use tally_types::SheetId;
 use tauri::AppHandle;
@@ -246,6 +247,86 @@ pub async fn dependents(
     .await
 }
 
+// ----- integration pass: queries the UI needs from the real engine ------------
+
+/// `image_data(doc, sheet, id)`: a picture's bytes, base64 (≤ 16 MiB decoded).
+#[tauri::command]
+pub async fn image_data(app: AppHandle, doc: DocId, sheet: SheetId, id: u32) -> CmdResult<String> {
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.image_data(doc, sheet, id))
+    })
+    .await
+}
+
+/// `view_options(doc, sheet)`: the toggles and the persisted split.
+#[tauri::command]
+pub async fn view_options(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<ViewOptionsDto> {
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.view_options(doc, sheet))
+    })
+    .await
+}
+
+/// `invalid_cells(doc, sheet, range)`: Mark Invalid Data.
+#[tauri::command]
+pub async fn invalid_cells(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    range: Option<RangeDto>,
+) -> CmdResult<Vec<CellPos>> {
+    if let Some(r) = &range {
+        limits::range("invalid_cells", r)?;
+    }
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.invalid_cells(doc, sheet, range))
+    })
+    .await
+}
+
+/// `custom_sort_lists(doc)`: Tools ▸ Options ▸ Sort Lists.
+#[tauri::command]
+pub async fn custom_sort_lists(app: AppHandle, doc: DocId) -> CmdResult<Vec<Vec<String>>> {
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.custom_sort_lists(doc))
+    })
+    .await
+}
+
+/// `cells_with(doc, sheet, ranges, opts)`: `get_cells` with View options.
+#[tauri::command]
+pub async fn cells_with(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    ranges: Vec<RangeDto>,
+    opts: CellsOptions,
+) -> CmdResult<Vec<CellBlock>> {
+    limits::ranges("cells_with", &ranges)?;
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.cells_with(doc, sheet, &ranges, &opts))
+    })
+    .await
+}
+
+/// `preview_formula(doc, sheet, r, c, text)`: the Function Wizard's result.
+#[tauri::command]
+pub async fn preview_formula(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    r: u32,
+    c: u32,
+    text: String,
+) -> CmdResult<Option<String>> {
+    limits::pos("preview_formula", r, c)?;
+    limits::text("preview_formula", &text)?;
+    blocking(app, move |_, st| {
+        with_service(st, |s| s.preview_formula(doc, sheet, r, c, &text))
+    })
+    .await
+}
+
 // ----- shell-only: PDF export and printing (W5-5, `print.rs`) ----------------
 
 /// `wb_export_pdf(doc, job)`: shows a save dialog and writes the job's PDF
@@ -294,6 +375,12 @@ pub const COMMAND_NAMES: &[&str] = &[
     "solver",
     "precedents",
     "dependents",
+    "image_data",
+    "view_options",
+    "invalid_cells",
+    "custom_sort_lists",
+    "cells_with",
+    "preview_formula",
     "wb_export_pdf",
     "wb_print",
 ];

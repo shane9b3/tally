@@ -67,15 +67,18 @@ pub(crate) fn next_group_boundary(groups: &[OutlineGroupData], i: u32) -> Option
 }
 
 /// Writes the `draw:frame` elements of the charts and pictures anchored
-/// at cell `(r, c)` of `sheet` (inside the `table:table-cell`).
-///
-/// TODO(W5-1): `<draw:frame draw:z-index draw:name svg:x svg:y svg:width
-/// svg:height table:end-cell-address table:end-x table:end-y>` with
-/// `<draw:object xlink:href="./Object N" draw:notify-on-update-of-ranges
-/// …/>` for charts and `<draw:image xlink:href="Pictures/…"/>` for
-/// pictures.
-pub(crate) fn write_cell_frames(s: &mut String, sheet: &SheetData, tab: usize, r: u32, c: u32) {
-    crate::frame::write_cell_frames(s, None, sheet, tab, r, c);
+/// at cell `(r, c)` of `sheet` (inside the `table:table-cell`); chart
+/// objects carry `draw:notify-on-update-of-ranges` with the plotted
+/// ranges of `sheets`.
+pub(crate) fn write_cell_frames(
+    s: &mut String,
+    sheets: &[SheetData],
+    sheet: &SheetData,
+    tab: usize,
+    r: u32,
+    c: u32,
+) {
+    crate::frame::write_cell_frames(s, Some(sheets), sheet, tab, r, c);
 }
 
 /// `true` when a cell holds an anchored object, so the row/cell writer

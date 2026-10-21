@@ -33,7 +33,7 @@ function fake() {
 describe("EngineClientV4 over Tauri (W5-0b seams)", () => {
   it("lists every V4 method with a snake_case command", () => {
     expect(everyV4MethodListed).toBe(true);
-    expect(V4_METHODS.length).toBe(22);
+    expect(V4_METHODS.length).toBe(28);
     for (const m of V4_METHODS) {
       const cmd = COMMANDS[m];
       expect(cmd, m).toMatch(/^[a-z]+(_[a-z0-9]+)*$/);
@@ -88,6 +88,12 @@ describe("EngineClientV4 over Tauri (W5-0b seams)", () => {
     await client.solver(1, req);
     await client.precedents(1, 2, 3, 4);
     await client.dependents(1, 2, 3, 4);
+    await client.imageData(1, 2, 3);
+    await client.viewOptions(1, 2);
+    await client.invalidCells(1, 2, null);
+    await client.customSortLists(1);
+    await client.cellsWith(1, 2, [sel], { showFormulas: true, valueHighlighting: false, hideZeroValues: true });
+    await client.previewFormula(1, 2, 3, 4, "=SUM(A1:A3)");
     await client.exportPdf(1, 7);
     await client.print(1, 7);
     expect(pdf).toBeInstanceOf(Uint8Array);
@@ -115,6 +121,12 @@ describe("EngineClientV4 over Tauri (W5-0b seams)", () => {
       { cmd: "solver", args: { doc: 1, req } },
       { cmd: "precedents", args: { doc: 1, sheet: 2, r: 3, c: 4 } },
       { cmd: "dependents", args: { doc: 1, sheet: 2, r: 3, c: 4 } },
+      { cmd: "image_data", args: { doc: 1, sheet: 2, id: 3 } },
+      { cmd: "view_options", args: { doc: 1, sheet: 2 } },
+      { cmd: "invalid_cells", args: { doc: 1, sheet: 2, range: null } },
+      { cmd: "custom_sort_lists", args: { doc: 1 } },
+      { cmd: "cells_with", args: { doc: 1, sheet: 2, ranges: [sel], opts: { showFormulas: true, valueHighlighting: false, hideZeroValues: true } } },
+      { cmd: "preview_formula", args: { doc: 1, sheet: 2, r: 3, c: 4, text: "=SUM(A1:A3)" } },
       { cmd: "wb_export_pdf", args: { doc: 1, job: 7 } },
       { cmd: "wb_print", args: { doc: 1, job: 7 } },
     ]);

@@ -1792,9 +1792,32 @@ pub struct FunctionInfo {
     pub signature: String,
     /// One-line description.
     pub description: String,
+    /// Declared parameters, for the Function Wizard's argument fields; the
+    /// trailing `repeat` ones form the repeating group (`SUM(number; ...)`).
+    #[serde(default)]
+    pub params: Vec<ParamInfo>,
+    /// One example call in the en-US UI dialect (`=SUMIF(A1:A10;">5")`).
+    #[serde(default)]
+    pub example: String,
+}
+
+/// One parameter of a [`FunctionInfo`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ParamInfo {
+    /// Display name (`"sum_range"`).
+    pub name: String,
+    /// `"number"`, `"text"`, `"reference"`, `"numberSeq"`, `"lazy"`, …
+    pub kind: String,
+    /// The argument may be omitted.
+    pub optional: bool,
+    /// Part of the trailing repeating group.
+    pub repeat: bool,
 }
 
 /// A ⌘K palette suggestion.
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -2190,6 +2213,8 @@ mod tests {
         crate::tools::TraceDto::export_all(&cfg).unwrap();
         crate::tools::NavigatorDto::export_all(&cfg).unwrap();
         crate::tools::DocumentStatsDto::export_all(&cfg).unwrap();
+        crate::tools::CellsOptions::export_all(&cfg).unwrap();
+        ParamInfo::export_all(&cfg).unwrap();
     }
 
     #[test]

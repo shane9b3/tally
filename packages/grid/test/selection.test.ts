@@ -104,6 +104,8 @@ describe("reduceKey: other actions", () => {
 
   it("F2 edits, Delete/Backspace clear, Escape and letters do nothing", () => {
     expect(reduceKey(at(1, 1), "F2", mods(), lim).type).toBe("startEdit");
+    // ⌘F2 is the app's Function Wizard, not an edit.
+    expect(reduceKey(at(1, 1), "F2", mods({ mod: true }), lim).type).toBe("none");
     expect(reduceKey(at(1, 1), "Delete", mods(), lim).type).toBe("delete");
     expect(reduceKey(at(1, 1), "Backspace", mods(), lim).type).toBe("delete");
     expect(reduceKey(at(1, 1), "Escape", mods(), lim).type).toBe("none");

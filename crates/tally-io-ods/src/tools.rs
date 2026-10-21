@@ -1615,6 +1615,17 @@ pub(crate) fn write_view_settings(s: &mut String, sheet: &SheetData) {
     item(s, "IsValueHighlightingEnabled", v.value_highlighting);
 }
 
+/// A Window ▸ Split position in 1/100 mm as AOO's `settings.xml` pixels
+/// (96 px per inch at 100 %).
+pub(crate) fn split_hmm_to_px(hmm: u32) -> u32 {
+    ((f64::from(hmm) * 96.0 / 2540.0).round() as u32).min(1_000_000)
+}
+
+/// A `settings.xml` split position in pixels as 1/100 mm.
+pub(crate) fn split_px_to_hmm(px: u32) -> u32 {
+    (f64::from(px.min(1_000_000)) * 2540.0 / 96.0).round() as u32
+}
+
 /// A view-settings config item of a sheet (`settings.xml`).
 pub(crate) fn apply_view_item(sheet: &mut SheetData, name: &str, value: &str) {
     let b = value.trim() == "true";

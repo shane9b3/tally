@@ -347,6 +347,9 @@ pub enum SolverStatus {
     Unbounded,
     /// The iteration or time limit was hit (`values` is the best so far).
     Limit,
+    /// The model is not linear in the variable cells (the solver is
+    /// linear only; `values` are the current values) (v0.6).
+    NotLinear,
 }
 
 /// One variable's solved value.

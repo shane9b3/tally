@@ -38,6 +38,7 @@ export type { FindMode } from "./generated/FindMode";
 export type { FindQuery } from "./generated/FindQuery";
 export type { FindResult } from "./generated/FindResult";
 export type { FunctionInfo } from "./generated/FunctionInfo";
+export type { ParamInfo } from "./generated/ParamInfo";
 export type { HAlign } from "./generated/HAlign";
 export type { MenuActionEvent } from "./generated/MenuActionEvent";
 export type { NameInfo } from "./generated/NameInfo";
@@ -198,6 +199,7 @@ export type { TrendKind } from "./generated/TrendKind";
 export type { TrendLineDto } from "./generated/TrendLineDto";
 export type { UnderlineStyle } from "./generated/UnderlineStyle";
 export type { ViewOptionsDto } from "./generated/ViewOptionsDto";
+export type { CellsOptions } from "./generated/CellsOptions";
 
 export { isApiError } from "./client";
 export type { EngineClient, EngineClientV2, EngineClientV3, EngineClientV4, SheetId, Unsubscribe } from "./client";

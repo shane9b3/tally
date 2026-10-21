@@ -50,7 +50,9 @@ import { applyV3Op, cellKey, DEFAULT_VALIDATION_MESSAGE, emptyV3, MOCK_LOCALES, 
 import { applyW56Op, autocompleteOf, cellStylesOf, decorateSheets, emptyW56, navigatorOf, pivotFieldItemsOf, pivotHitAt, stdFilterHidden, type W56Ctx, type W56Ext } from "./mockW56";
 import { applyW5Op, BLANK_PNG, chartDataFor, chartsTouched, dependentsOf, emptyW5, pageBreaksFor, precedentsOf, printLayoutFor, renderPagePng, suggestChartFor, type W5Ext } from "./mockW5";
 import { parseAbsoluteRef } from "../dataOps";
+import { previewCall, WIZARD_FUNCTIONS, type MockValue } from "./mockWizard";
 import type {
+  FunctionInfo,
   AutocompleteDto,
   CalcSettingsDto,
   CellStyleDto,
@@ -90,6 +92,8 @@ import type {
   ValidationInfo,
 } from "@tally/bridge";
 import { defaultPageSetup } from "../v03";
+import { INVALID_SCAN_CAP, invalidCells as invalidCellsOf } from "../detective/detective";
+import type { CellPos, CellsOptions, ViewOptionsDto } from "@tally/bridge";
 
 /** Synthesized conditional-format style ids start here (as in the engine). */
 export const CF_STYLE_BASE = 0x4000_0000;
@@ -255,6 +259,27 @@ export class WebMockClient extends MockClient {
     return s;
   }
 
+  // -- Function Wizard (mockWizard.ts) ----------------------------------------------
+
+  override listFunctions(): Promise<FunctionInfo[]> {
+    return Promise.resolve(WIZARD_FUNCTIONS.map((f) => structuredClone(f)));
+  }
+
+  override async previewFormula(doc: DocId, sheet: number, r: number, c: number, text: string): Promise<string | null> {
+    const read = async (range: RangeDto): Promise<MockValue[][]> => {
+      const [block] = await this.cells(doc, sheet, [range]);
+      const rows: MockValue[][] = Array.from({ length: range.r1 - range.r0 + 1 }, () => Array.from({ length: range.c1 - range.c0 + 1 }, () => null));
+      for (const v of block?.cells ?? []) {
+        const row = rows[v.r - range.r0];
+        if (!row) continue;
+        row[v.c - range.c0] = v.kind === "number" ? (v.num ?? Number(v.text.replace(/[^0-9.+-eE]/g, ""))) : v.kind === "text" ? v.text : null;
+      }
+      return rows;
+    };
+    const emulated = await previewCall(text, read);
+    return emulated ?? super.previewFormula(doc, sheet, r, c, text);
+  }
+
   // -- queries ---------------------------------------------------------------------
 
   override async sheetLayout(doc: DocId, sheet: number): Promise<SheetLayout> {
@@ -263,13 +288,73 @@ export class WebMockClient extends MockClient {
     if (!s) return base;
     const hidden = new Set(s.hiddenRows);
     const filtered = new Set(s.filteredRows);
+    const o = this.ext.get(doc)?.w56.outline[sheet];
+    const levels = (gs: readonly { level: number }[]) => gs.reduce((m, g) => Math.max(m, g.level), 0);
     return {
       ...base,
       merges: s.merges.map((m) => ({ ...m })),
       frozen: s.frozen ? { ...s.frozen } : null,
       rowRuns: overlayRuns(base.rowRuns, base.defaultRowHeightPx, hidden, filtered),
       colRuns: overlayRuns(base.colRuns, base.defaultColWidthPx, new Set(s.hiddenCols), new Set()),
+      // Like the engine: the outline groups ride along with the layout.
+      outline: o && (o.rows.length > 0 || o.cols.length > 0) ? { rows: o.rows.map((g) => ({ ...g })), cols: o.cols.map((g) => ({ ...g })), rowLevels: levels(o.rows), colLevels: levels(o.cols) } : null,
     };
+  }
+
+  // -- v0.6 queries the integration pass wired (view options, Mark Invalid Data, sort lists, picture bytes) --
+
+  override async viewOptions(doc: DocId, sheet: number): Promise<ViewOptionsDto> {
+    const base = await super.viewOptions(doc, sheet);
+    const x = this.docExt(doc);
+    const v = x.w56.view[sheet];
+    const split = x.w5.split[sheet] ?? null;
+    return { ...base, ...(v ? { ...v } : {}), split: split ? { ...split } : null };
+  }
+
+  override async customSortLists(doc: DocId): Promise<string[][]> {
+    await super.customSortLists(doc);
+    return this.docExt(doc).w56.lists.map((l) => [...l]);
+  }
+
+  override async imageData(doc: DocId, sheet: number, id: number): Promise<string> {
+    const im = (this.docExt(doc).w5.images[sheet] ?? []).find((i) => i.id === id);
+    if (!im) throw { code: "not_found", message: `no picture ${id}` };
+    this.recordedCalls.push({ type: "imageData", sheet, id });
+    return im.data;
+  }
+
+  /** Mark Invalid Data: the client-side approximation of the engine's `invalid_cells` (literal bounds, list values). */
+  override async invalidCells(doc: DocId, sheet: number, range: RangeDto | null): Promise<CellPos[]> {
+    const validations = await this.validations(doc, sheet);
+    const used = range ?? (await super.sheetLayout(doc, sheet)).used;
+    if (validations.length === 0 || !used) return [];
+    let scanned = 0;
+    const ranges: RangeDto[] = [];
+    for (const v of validations) {
+      for (const rg of v.ranges) {
+        const clipped = { r0: Math.max(rg.r0, used.r0), c0: Math.max(rg.c0, used.c0), r1: Math.min(rg.r1, used.r1), c1: Math.min(rg.c1, used.c1) };
+        if (clipped.r0 > clipped.r1 || clipped.c0 > clipped.c1) continue;
+        const n = (clipped.r1 - clipped.r0 + 1) * (clipped.c1 - clipped.c0 + 1);
+        if (scanned + n > INVALID_SCAN_CAP) {
+          clipped.r1 = clipped.r0 + Math.max(0, Math.floor((INVALID_SCAN_CAP - scanned) / (clipped.c1 - clipped.c0 + 1)) - 1);
+          if (clipped.r1 < clipped.r0) break;
+        }
+        scanned += (clipped.r1 - clipped.r0 + 1) * (clipped.c1 - clipped.c0 + 1);
+        ranges.push(clipped);
+      }
+    }
+    const cells: CellView[] = [];
+    if (ranges.length > 0) for (const b of await this.cells(doc, sheet, ranges.slice(0, 8))) cells.push(...b.cells);
+    const present = new Set(cells.map((c) => `${c.r},${c.c}`));
+    for (const rg of ranges) {
+      for (let r = rg.r0; r <= rg.r1; r++) for (let c = rg.c0; c <= rg.c1; c++) if (!present.has(`${r},${c}`)) cells.push({ r, c, text: "", kind: "empty", num: null, style: 0, color: null, flags: 0 });
+    }
+    return invalidCellsOf(validations, cells).slice(0, 10_000);
+  }
+
+  override async cellsWith(doc: DocId, sheet: number, ranges: RangeDto[], opts: CellsOptions): Promise<CellBlock[]> {
+    this.recordedCalls.push({ type: "cellsWith", opts: { ...opts } });
+    return super.cellsWith(doc, sheet, ranges, opts);
   }
 
   override async cellEditInfo(doc: DocId, sheet: number, r: number, c: number): Promise<CellEditInfo> {

@@ -33,3 +33,7 @@ zip.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# PNG decoding for the print-preview integration test.
+tally-io-pdf.workspace = true

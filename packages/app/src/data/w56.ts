@@ -26,6 +26,7 @@ import {
   type PivotFieldItemsDto,
   type PivotSource,
   type RangeDto,
+  type SheetLayout,
   type ScenarioDto,
   type SheetCell,
   type SolverRequest,
@@ -54,7 +55,6 @@ import { DEFAULT_PREFS, parsePrefs, readLocalPrefs, serializePrefs, writeLocalPr
 import { emptyLayout, fromPivotDto, layoutError, pivotAtCell, toPivotDto, type PivotLayoutState } from "../pivot/pivotModel";
 import { stateFromStyle } from "../styles/formatCells";
 import { copySheetName, deleteContentsOp, groupAxisFor, hiddenContentCount, mergedContent, maxOutlineLevel } from "./builders";
-import { applyOutlineOp, emptyOutlineModel, groupsOf, type OutlineModel } from "./outlineModel";
 import { DEFAULT_VIEW, useW56Store, type OptionsTab, type RecoveryFile, type W56Dialog } from "./store";
 import type { PopoverItem } from "../components/Popover";
 import type { Command } from "../registry";
@@ -80,9 +80,10 @@ const LAST_ROW = MAX_ROWS - 1;
 const LAST_COL = MAX_COLS - 1;
 
 export class W56Features {
-  private outlineModels = new Map<number, OutlineModel>();
-  private outlineHistory = new Map<number, OutlineModel>();
-  private viewModels = new Map<number, ViewOptionsDto>();
+  /** The source whose layout feeds the outline gutter, and its last layout seen. */
+  private offSource: (() => void) | null = null;
+  private lastLayout: SheetLayout | null = null;
+  private viewSeq = 0;
   private canonicalFunctions: FunctionInfo[] = [];
   private lang: FormulaLang | null = null;
   private autoInputSeq = 0;
@@ -157,6 +158,8 @@ export class W56Features {
     void this.offerRecovery();
     return () => {
       offs.splice(0).forEach((f) => f());
+      this.offSource?.();
+      this.offSource = null;
       if (this.autosaveTimer) clearInterval(this.autosaveTimer);
       this.autosaveTimer = null;
     };
@@ -169,12 +172,11 @@ export class W56Features {
 
   /** A workbook was loaded. */
   onLoad(): void {
-    this.outlineModels.clear();
-    this.outlineHistory.clear();
-    this.viewModels.clear();
+    this.lists = null;
     this.store.reset();
     this.setFormulaLang(formulaLangOf(useV3Store.getState().locale));
-    this.publishSheetState();
+    this.watchSource();
+    void this.refreshView(true);
     void this.refreshPivots();
     void this.refreshCellStyles();
     this.restartAutosave();
@@ -182,7 +184,8 @@ export class W56Features {
 
   /** The visible sheet changed. */
   onSheet(): void {
-    this.publishSheetState();
+    this.syncOutline();
+    void this.refreshView(true);
     this.updateActivePivot(this.ctl.selection.active);
   }
 
@@ -204,43 +207,40 @@ export class W56Features {
     if (res.pivotsChanged || ops?.some((o) => o.type === "createPivot" || o.type === "updatePivot" || o.type === "deletePivot" || o.type === "refreshPivot" || o.type === "pivotDrillDown")) void this.refreshPivots();
     if (ops?.some((o) => o.type === "defineCellStyle" || o.type === "deleteCellStyle")) void this.refreshCellStyles();
     if (ops?.some((o) => o.type === "createScenario" || o.type === "deleteScenario" || o.type === "updateScenario")) void this.refreshNavigatorPanel();
-    if (ops === null) {
-      // Undo / redo: the outline model of this version (if we saw it) comes back.
-      const model = this.outlineHistory.get(res.version);
-      if (model) {
-        this.outlineModels.set(this.sheet, model);
-        this.publishSheetState();
-      }
-    } else {
-      this.outlineHistory.set(res.version, this.outlineModel());
-    }
+    // Undo/redo (ops === null), view-option edits and layout changes: the engine's view options are re-read.
+    if (ops === null || ops.some((o) => o.type === "setViewOptions") || res.layoutChanged.includes(this.sheet)) void this.refreshView(false);
+    if (ops === null || ops.some((o) => o.type === "setCustomSortLists")) this.lists = null;
   }
 
   // -- outline (Data ▸ Group and Outline) -----------------------------------------
+  // The groups come from the engine's `SheetLayout.outline`, which the grid's
+  // source refetches whenever an op reports `layoutChanged` (outline ops,
+  // undo/redo, structure edits).
 
-  private outlineModel(sheet = this.sheet): OutlineModel {
-    let m = this.outlineModels.get(sheet);
-    if (!m) {
-      m = emptyOutlineModel();
-      this.outlineModels.set(sheet, m);
-    }
-    return m;
+  /** Follows the current document's grid source (re-attached on every load). */
+  private watchSource(): void {
+    this.offSource?.();
+    this.offSource = null;
+    this.lastLayout = null;
+    const src = useDocStore.getState().source;
+    if (src) this.offSource = src.subscribe(() => this.syncOutline());
+    this.syncOutline();
   }
 
-  private publishSheetState(): void {
-    const m = this.outlineModel();
-    this.store.setOutline({ rows: groupsOf(m, "rows"), cols: groupsOf(m, "cols") });
-    this.store.setView(this.viewModels.get(this.sheet) ?? DEFAULT_VIEW);
+  /** Publishes the active sheet's outline groups from the source's layout (when it changed). */
+  private syncOutline(): void {
+    const src = useDocStore.getState().source;
+    if (!src) return;
+    const layout = src.getLayout(src.sheetId);
+    if (layout === this.lastLayout) return;
+    this.lastLayout = layout;
+    const o = layout.outline;
+    const next = { rows: (o?.rows ?? []).map((g) => ({ ...g })), cols: (o?.cols ?? []).map((g) => ({ ...g })) };
+    if (JSON.stringify(next) !== JSON.stringify(this.store.outline)) this.store.setOutline(next);
   }
 
   private async outlineOp(op: Op, label: string): Promise<void> {
-    const before = this.outlineModel();
-    const next = applyOutlineOp(before, op);
-    const res = await this.ctl.apply(label, [op]);
-    if (!res || res.errors.length > 0) return;
-    this.outlineModels.set(this.sheet, next);
-    this.outlineHistory.set(res.version, next);
-    this.publishSheetState();
+    await this.ctl.apply(label, [op]);
   }
 
   /** F12: groups the selected rows (or columns); a single-cell selection groups by the longer side. */
@@ -547,22 +547,31 @@ export class W56Features {
     try {
       const r = await this.regionWithLabels();
       if (!r) return;
-      this.store.openDialog({ kind: "sortOptions", ...r, lists: this.customLists() });
+      this.store.openDialog({ kind: "sortOptions", ...r, lists: await this.customLists() });
     } catch (e) {
       this.ctl.notifyError(e);
     }
   }
 
+  /** The document's custom sort lists from `custom_sort_lists` (cached until they change, an undo or a load). */
   private lists: string[][] | null = null;
 
-  /** The document's custom sort lists as last set here (no query exists yet). */
-  customLists(): string[][] {
-    return this.lists ?? [];
+  async customLists(): Promise<string[][]> {
+    if (this.lists) return this.lists.map((l) => [...l]);
+    const doc = this.doc;
+    let lists: string[][] = [];
+    try {
+      lists = await this.client.customSortLists(doc);
+    } catch (e) {
+      if (!isApiError(e) || e.code !== "unsupported") this.ctl.notifyError(e);
+    }
+    if (this.ctl.info?.doc === doc) this.lists = lists.map((l) => [...l]);
+    return lists;
   }
 
   async setCustomLists(lists: string[][]): Promise<void> {
     const res = await this.ctl.apply("Sort lists", [{ type: "setCustomSortLists", lists: lists.map((l) => [...l]) }]);
-    if (res && res.errors.length === 0) this.lists = lists.map((l) => [...l]);
+    if (res && res.errors.length === 0) this.lists = null;
   }
 
   /** The Delete key (AOO's Delete Contents dialog). */
@@ -831,26 +840,53 @@ export class W56Features {
 
   // -- view options and zoom ---------------------------------------------------------
 
-  async setViewOption<K extends keyof ViewOptionsDto>(key: K, value: boolean): Promise<void> {
-    const cur = this.viewModels.get(this.sheet) ?? DEFAULT_VIEW;
-    const next = { ...cur, [key]: value };
-    const res = await this.ctl.apply("View options", [{ type: "setViewOptions", sheet: this.sheet, options: next }]);
-    if (res && res.errors.length === 0) {
-      this.viewModels.set(this.sheet, next);
-      this.store.setView(next);
+  /**
+   * Re-reads the active sheet's view options from the engine (`view_options`)
+   * and applies them: the store (View menu checks, grid gridlines/headers),
+   * the grid source's `cellsWith` options and, when `restoreSplit`, the
+   * persisted Window ▸ Split.
+   */
+  async refreshView(restoreSplit: boolean): Promise<void> {
+    const info = this.ctl.info;
+    if (!info) return;
+    const sheet = this.sheet;
+    const seq = ++this.viewSeq;
+    let v: ViewOptionsDto = DEFAULT_VIEW;
+    try {
+      v = await this.client.viewOptions(info.doc, sheet);
+    } catch (e) {
+      if (!isApiError(e) || (e.code !== "unsupported" && e.code !== "not_found")) this.ctl.notifyError(e);
     }
+    if (seq !== this.viewSeq || this.ctl.info?.doc !== info.doc || this.sheet !== sheet) return;
+    this.applyView(v);
+    if (restoreSplit) this.ctl.w5.view.restoreSplit(v.split ?? null);
   }
 
-  toggleView(key: keyof ViewOptionsDto): void {
-    void this.setViewOption(key, !(this.viewModels.get(this.sheet) ?? DEFAULT_VIEW)[key]);
+  private applyView(v: ViewOptionsDto): void {
+    const view: ViewOptionsDto = { ...DEFAULT_VIEW, ...v, split: v.split ?? null };
+    if (JSON.stringify(view) !== JSON.stringify(this.store.view)) this.store.setView(view);
+    useDocStore.getState().source?.setCellsOptions({ showFormulas: view.showFormulas, valueHighlighting: view.valueHighlighting, hideZeroValues: !view.showZeroValues });
+  }
+
+  /** The active sheet's toggles without the split (what `setViewOptions` takes). */
+  private currentView(): ViewOptionsDto {
+    const { split: _split, ...toggles } = this.store.view;
+    return { ...DEFAULT_VIEW, ...toggles };
+  }
+
+  async setViewOption<K extends keyof ViewOptionsDto>(key: K, value: boolean): Promise<void> {
+    await this.setViewOptions({ ...this.currentView(), [key]: value });
+  }
+
+  toggleView(key: Exclude<keyof ViewOptionsDto, "split">): void {
+    void this.setViewOption(key, !this.currentView()[key]);
   }
 
   async setViewOptions(v: ViewOptionsDto): Promise<void> {
-    const res = await this.ctl.apply("View options", [{ type: "setViewOptions", sheet: this.sheet, options: { ...v } }]);
-    if (res && res.errors.length === 0) {
-      this.viewModels.set(this.sheet, { ...v });
-      this.store.setView({ ...v });
-    }
+    const { split: _split, ...options } = v;
+    const res = await this.ctl.apply("View options", [{ type: "setViewOptions", sheet: this.sheet, options: { ...DEFAULT_VIEW, ...options } }]);
+    // The engine's answer is authoritative (afterResult re-reads it too; this covers results without a version bump).
+    if (res && res.errors.length === 0) await this.refreshView(false);
   }
 
   /** File ▸ Open Recent ▸ Clear Menu (the shell keeps the list; the sidebar re-reads it). */
@@ -909,7 +945,7 @@ export class W56Features {
   async openOptions(tab: OptionsTab = "calculate"): Promise<void> {
     try {
       const calc = await this.client.calcSettings(this.doc).catch((): CalcSettingsDto => ({ iterations: null, dateEpoch: "d1899", caseSensitive: false, precisionAsShown: false, wholeCellMatch: true, criteriaMode: "wildcards", textToNumber: "convertUnambiguous" }));
-      this.store.openDialog({ kind: "options", tab, calc, view: this.viewModels.get(this.sheet) ?? DEFAULT_VIEW, lists: this.customLists() });
+      this.store.openDialog({ kind: "options", tab, calc, view: this.currentView(), lists: await this.customLists() });
     } catch (e) {
       this.ctl.notifyError(e);
     }
