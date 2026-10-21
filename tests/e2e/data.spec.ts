@@ -110,11 +110,12 @@ test("merging warns that only the top-left value is kept", async ({ page }) => {
   await clickCell(page, 0, 0);
   await clickCell(page, 0, 1, "Shift");
   await page.locator('[data-command="format.toggleMerge"]').click();
-  const dialog = page.getByTestId("confirm-dialog");
+  // W5-6 (§51): AOO's prompt — "No" keeps only the first cell's content.
+  const dialog = page.getByTestId("merge-prompt");
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("Only the top-left value will be kept");
-  await expect(dialog).toContainText("1 other cell");
-  await dialog.getByTestId("dialog-ok").click();
+  await expect(dialog).toContainText("moved into the first cell");
+  await expect(dialog).toContainText("1 cell holds content");
+  await dialog.getByTestId("dialog-cancel").click();
   await expect
     .poll(() => page.evaluate(async () => (await window.__tally!.client.sheetLayout(window.__tally!.controller.info!.doc, 1)).merges))
     .toEqual([{ r0: 0, c0: 0, r1: 0, c1: 1 }]);

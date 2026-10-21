@@ -10,6 +10,8 @@ import type { TemplateInfo } from "@tally/bridge";
 import { useDocStore } from "../stores/docStore";
 import { PlusIcon } from "./icons";
 import styles from "./Sidebar.module.css";
+import { t } from "../i18n";
+import { useW56Store } from "../data/store";
 
 const DOTS = ["#2563eb", "#16a34a", "#f59e0b", "#db2777", "#7c3aed", "#0891b2"];
 const TEMPLATE_DOTS: Record<string, string> = { invoices: "#16a34a", budget: "#f59e0b", stock: "#7c3aed" };
@@ -66,6 +68,8 @@ export function Sidebar({ inset }: { inset: boolean }) {
   const rev = useDocStore((s) => s.rev);
   const [recent, setRecent] = useState<string[]>([]);
   const [templates, setTemplates] = useState<TemplateInfo[]>([]);
+  const [userTemplates, setUserTemplates] = useState<TemplateInfo[]>([]);
+  useW56Store((s) => s.i18nRev);
   const [editedAt, setEditedAt] = useState(() => Date.now());
   const [, setNow] = useState(0);
 
@@ -76,7 +80,11 @@ export function Sidebar({ inset }: { inset: boolean }) {
   useEffect(() => {
     ctl.shell.recentFiles().then(setRecent, () => setRecent([]));
     if (info?.path) writeSeen({ ...readSeen(), [info.path]: Date.now() });
-  }, [ctl, info?.path]);
+  }, [ctl, info?.path, rev]);
+
+  useEffect(() => {
+    void ctl.w56.listUserTemplates().then(setUserTemplates);
+  }, [ctl, rev]);
 
   useEffect(() => {
     if (info?.dirty) setEditedAt(Date.now());
@@ -95,11 +103,11 @@ export function Sidebar({ inset }: { inset: boolean }) {
       <div className={cx(styles.top, inset && styles.insetTop)} data-tauri-drag-region />
       <button type="button" className={styles.newButton} onClick={() => void ctl.newWorkbook()}>
         <PlusIcon />
-        New sheet
+        {t("cmd.file.new", "New sheet")}
       </button>
 
       <section className={styles.section}>
-        <h3 className={styles.heading}>My workbooks</h3>
+        <h3 className={styles.heading}>{t("app.name", "Tally")}</h3>
         <ul className={styles.list}>
           {info ? (
             <li>
@@ -115,7 +123,7 @@ export function Sidebar({ inset }: { inset: boolean }) {
 
       {others.length > 0 ? (
         <section className={styles.section} data-testid="open-recent">
-          <h3 className={styles.heading}>Open recent</h3>
+          <h3 className={styles.heading}>{t("menu.file.recent", "Open recent")}</h3>
           <ul className={styles.list}>
             {others.map((p) => {
               const t = seen[p];
@@ -140,9 +148,25 @@ export function Sidebar({ inset }: { inset: boolean }) {
         </section>
       ) : null}
 
+      {userTemplates.length > 0 ? (
+        <section className={styles.section} data-testid="user-templates">
+          <h3 className={styles.heading}>{t("templates.title", "Templates")}</h3>
+          <ul className={styles.list}>
+            {userTemplates.map((u) => (
+              <li key={u.id}>
+                <button type="button" className={styles.row} title={u.description} onClick={() => void ctl.w56.newFromUserTemplate(u.id)}>
+                  <span className={styles.square} style={{ borderColor: "#2563eb" }} />
+                  <span className={styles.rowTitle}>{u.title}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       {templates.length > 0 ? (
         <section className={styles.section}>
-          <h3 className={styles.heading}>Start from a template</h3>
+          <h3 className={styles.heading}>{t("templates.title", "Start from a template")}</h3>
           <ul className={styles.list}>
             {templates.map((t) => (
               <li key={t.id}>

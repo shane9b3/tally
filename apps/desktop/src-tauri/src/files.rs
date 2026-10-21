@@ -93,6 +93,14 @@ pub fn push_recent<R: Runtime>(app: &AppHandle<R>, state: &AppState, path: &Path
     }
 }
 
+/// `clear_recent`: File ▸ Open Recent ▸ Clear Menu (W5-6).
+#[tauri::command]
+pub async fn clear_recent(app: AppHandle) -> Result<(), ApiError> {
+    let state = app.state::<AppState>();
+    lock(&state.recent).clear();
+    store_recent(&app, &[])
+}
+
 /// Records a path the user chose in a native dialog: both as given and in
 /// canonical form, since JS may pass back either (dialog result, or the
 /// canonical path from `WorkbookInfo.path` / the recent list).

@@ -22,31 +22,32 @@ pub(crate) fn write_charts(
     ws: &mut Worksheet,
     sheet: &SheetData,
     sheet_index: u32,
+    resolver: &crate::formula::XlsxResolver,
     report: &mut dyn Warn,
 ) -> Result<(), XlsxError> {
-    let _ = (ws, sheet, sheet_index, report);
-    Ok(())
+    let _ = sheet_index;
+    crate::chart_write::write_charts(ws, sheet, resolver, report)
 }
 
 /// Writes the sheet's pictures (`insert_image_with_offset`).
-///
-/// TODO(W5-1 stretch): PNG/JPEG from `ImageData::bytes`.
 pub(crate) fn write_images(
     ws: &mut Worksheet,
     sheet: &SheetData,
     report: &mut dyn Warn,
 ) -> Result<(), XlsxError> {
-    let _ = (ws, sheet, report);
-    Ok(())
+    crate::chart_write::write_images(ws, sheet, report)
 }
 
 /// Writes the row and column outline groups (`outlineLevel`,
 /// `collapsed`, `hidden`).
 ///
 /// TODO(W5-2): rust_xlsxwriter row/column group APIs; at most 8 levels.
-pub(crate) fn write_outline(ws: &mut Worksheet, sheet: &SheetData) -> Result<(), XlsxError> {
-    let _ = (ws, sheet);
-    Ok(())
+pub(crate) fn write_outline(
+    ws: &mut Worksheet,
+    sheet: &SheetData,
+    report: &mut dyn Warn,
+) -> Result<(), XlsxError> {
+    crate::tools::write_outline(ws, sheet, report)
 }
 
 /// Adds `<scenarios>` to the sheet XML through the patches pass.
@@ -55,7 +56,7 @@ pub(crate) fn write_outline(ws: &mut Worksheet, sheet: &SheetData) -> Result<(),
 /// count><inputCells r val/></scenario></scenarios>` after
 /// `sheetProtection`.
 pub(crate) fn scenario_patches(data: &WorkbookData, patches: &mut Patches, report: &mut dyn Warn) {
-    let _ = (data, patches, report);
+    crate::tools::scenario_patches(data, patches, report);
 }
 
 /// Adds the pivot cache and pivot table parts through the patches pass.
@@ -66,5 +67,5 @@ pub(crate) fn scenario_patches(data: &WorkbookData, patches: &mut Patches, repor
 /// `rowFields`, `colFields`, `pageFields`, `dataFields`), the workbook
 /// `pivotCaches`, the rels and the content types. Best effort.
 pub(crate) fn pivot_patches(data: &WorkbookData, patches: &mut Patches, report: &mut dyn Warn) {
-    let _ = (data, patches, report);
+    crate::tools::pivot_patches(data, patches, report);
 }

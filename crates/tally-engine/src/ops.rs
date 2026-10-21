@@ -479,7 +479,42 @@ fn postcheck(
             | Op::FillRange { .. }
     );
     if validate {
+        // Typed input: the cells as typed (even when now empty) and the
+        // text typed, for blank and text-length rules (review 3, M13/LOW).
+        let mut typed: BTreeMap<SheetId, std::collections::HashMap<(u32, u32), String>> =
+            BTreeMap::new();
+        match op {
+            Op::SetCellInput { sheet, r, c, input } => {
+                typed
+                    .entry(*sheet)
+                    .or_default()
+                    .insert((*r, *c), input.clone());
+            }
+            Op::SetRangeInputs { sheet, r, c, rows } => {
+                let m = typed.entry(*sheet).or_default();
+                for (dr, row) in rows.iter().enumerate() {
+                    for (dc, text) in row.iter().enumerate() {
+                        let (rr, cc) = (r.saturating_add(dr as u32), c.saturating_add(dc as u32));
+                        if rr < MAX_ROWS && cc < MAX_COLS {
+                            m.insert((rr, cc), text.clone());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
         let mut by_sheet: BTreeMap<SheetId, Vec<(u32, u32)>> = BTreeMap::new();
+        for (sheet, m) in &typed {
+            if wb
+                .sheet(*sheet)
+                .is_some_and(|s| !s.meta.validations.is_empty())
+            {
+                by_sheet
+                    .entry(*sheet)
+                    .or_default()
+                    .extend(m.keys().copied());
+            }
+        }
         for r in &written {
             let Some(s) = wb.sheet(r.sheet) else {
                 continue;
@@ -504,7 +539,11 @@ fn postcheck(
         for (sheet, mut cells) in by_sheet {
             cells.sort_unstable();
             cells.dedup();
-            match crate::validation::check_cells(wb, sheet, &cells) {
+            let checked = match typed.get(&sheet) {
+                Some(inputs) => crate::validation::check_cells_inputs(wb, sheet, &cells, inputs),
+                None => crate::validation::check_cells(wb, sheet, &cells),
+            };
+            match checked {
                 Ok(n) => fx.notices.extend(n),
                 Err(e) => {
                     revert(wb, changes, fx);
@@ -605,6 +644,36 @@ fn apply_op_inner(
                         });
                     }
                     wb.pending.display_only.extend(ranges.iter().copied());
+                    fx.layout(*sheet);
+                }
+                // "Delete all" removes the cell attributes, conditional
+                // formats and validations included (AOO `IDF_ATTRIB`,
+                // review 3, LOW).
+                let touches = wb.sheet(*sheet).is_some_and(|s| {
+                    ranges.iter().any(|r| {
+                        let l = local(r);
+                        s.meta.cond_formats.iter().any(|cf| {
+                            cf.ranges
+                                .iter()
+                                .any(|x| crate::condfmt::intersect_rect(x, &l).is_some())
+                        }) || s.meta.validations.iter().any(|v| {
+                            v.ranges
+                                .iter()
+                                .any(|x| crate::condfmt::intersect_rect(x, &l).is_some())
+                        })
+                    })
+                });
+                if touches {
+                    if let Some(parts) =
+                        meta_parts(wb, *sheet, &[MetaKind::CondFormats, MetaKind::Validations])
+                    {
+                        inv.push(parts);
+                    }
+                    if let Some(s) = wb.sheet_mut(*sheet) {
+                        for r in &ranges {
+                            crate::condfmt::remove_area(&mut s.meta, &local(r));
+                        }
+                    }
                     fx.layout(*sheet);
                 }
             }
@@ -957,8 +1026,20 @@ fn apply_op_inner(
                     }
                 }
             }
+            // The covered cells lose their contents (AOO asks first; the
+            // UI prompts, the result reports what was cleared; review 3, M3).
+            let cleared = cells.iter().filter(|a| !wb.value(**a).is_empty()).count();
             for a in cells {
                 wb.clear_content(a);
+            }
+            if cleared > 0 {
+                fx.notices.push(ApiError::new(
+                    "merge_cleared",
+                    format!(
+                        "Merging cleared the contents of {cleared} covered cell{}.",
+                        if cleared == 1 { "" } else { "s" }
+                    ),
+                ));
             }
             if let Some(s) = wb.sheet_mut(*sheet) {
                 let l = local(&range);
@@ -1112,16 +1193,15 @@ fn apply_op_inner(
             options,
         } => {
             check_sheet(wb, *sheet)?;
-            // TODO(W5-2): left-to-right, copy to, custom order, include
-            // formats and natural sort in `crate::sort`.
-            if options
-                .as_ref()
-                .is_some_and(|o| *o != tally_api::SortOptions::default())
-            {
-                return Err(ApiError::unsupported("sort options are coming in wave 5"));
-            }
             let range = to_range(*sheet, range)?;
-            crate::sort::sort_range(wb, range, keys, *has_header, *case_sensitive)
+            crate::sort::sort_range_with(
+                wb,
+                range,
+                keys,
+                *has_header,
+                *case_sensitive,
+                options.as_ref(),
+            )
         }
         Op::ReplaceAll {
             sheet,
@@ -1204,12 +1284,24 @@ fn structure(
         .iter()
         .filter(|s| {
             s.id != shape.sheet
-                && (!s.meta.cond_formats.is_empty() || !s.meta.validations.is_empty())
+                && (!s.meta.cond_formats.is_empty()
+                    || !s.meta.validations.is_empty()
+                    || !s.meta.charts.is_empty())
         })
         .map(|s| s.id)
         .collect::<Vec<_>>()
         .into_iter()
-        .filter_map(|id| meta_parts(wb, id, &[MetaKind::CondFormats, MetaKind::Validations]))
+        .filter_map(|id| {
+            meta_parts(
+                wb,
+                id,
+                &[
+                    MetaKind::CondFormats,
+                    MetaKind::Validations,
+                    MetaKind::Charts,
+                ],
+            )
+        })
         .collect();
     let lost = Change::Range(capture_range(wb, shape.lost(), true, true));
     let old = wb.structure_change(&change);

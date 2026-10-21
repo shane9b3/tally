@@ -131,6 +131,17 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
     }
     s.push_str("</style:default-style>");
     s.push_str(r#"<style:style style:name="Default" style:family="table-cell"/>"#);
+    // Wave 5: named cell styles with their parent chains.
+    crate::tools::write_named_styles(&mut s, data, &|out, name, st| {
+        let parent = st
+            .parent
+            .as_deref()
+            .map(crate::tools::odf_style_name)
+            .unwrap_or_else(|| "Default".into());
+        let mut display = String::new();
+        escape_attr(&st.name, &mut display);
+        cell_style_xml_with(out, name, &parent, Some(&display), &st.style, None);
+    });
     s.push_str(&plan.cf_data_xml);
     for (st, name, ds) in &plan.cf_styles {
         crate::v03::write_cf_style(&mut s, name, st, ds.as_deref());
@@ -248,7 +259,7 @@ type TableKey = (bool, Option<u32>, String);
 type ColInterval = (u32, u32, Option<u32>, Option<usize>);
 
 /// Names of the automatic styles we will emit.
-struct StylePlan {
+pub(crate) struct StylePlan {
     /// data.styles index → (cell style name, XML).
     cell_xml: String,
     data_xml: String,
@@ -383,6 +394,14 @@ impl StylePlan {
             if !plan.table_styles.iter().any(|(k, _)| *k == key) {
                 let name = format!("ta{}", plan.table_styles.len() + 1);
                 plan.table_styles.push((key, name));
+            }
+            if !sheet.scenarios.is_empty() {
+                // Scenario sheets are hidden copies with the base's colour.
+                let key = (true, sheet.tab_color, "Default".to_string());
+                if !plan.table_styles.iter().any(|(k, _)| *k == key) {
+                    let name = format!("ta{}", plan.table_styles.len() + 1);
+                    plan.table_styles.push((key, name));
+                }
             }
             for cf in &sheet.conditional_formats {
                 for rule in &cf.rules {
@@ -592,15 +611,64 @@ impl StylePlan {
 }
 
 fn cell_style_xml(out: &mut String, name: &str, st: &StyleData, data_style: Option<&str>) {
+    let parent = st
+        .style_name
+        .as_deref()
+        .filter(|n| *n != "Default")
+        .map(crate::tools::odf_style_name)
+        .unwrap_or_else(|| "Default".into());
+    cell_style_xml_with(out, name, &parent, None, st, data_style);
+}
+
+/// One `table-cell` style with an explicit parent (and, for named
+/// styles, a display name).
+fn cell_style_xml_with(
+    out: &mut String,
+    name: &str,
+    parent: &str,
+    display_name: Option<&str>,
+    st: &StyleData,
+    data_style: Option<&str>,
+) {
     let _ = write!(
         out,
-        r#"<style:style style:name="{name}" style:family="table-cell" style:parent-style-name="Default""#
+        r#"<style:style style:name="{name}" style:family="table-cell" style:parent-style-name="{parent}""#
     );
+    if let Some(d) = display_name {
+        let _ = write!(out, r#" style:display-name="{d}""#);
+    }
     if let Some(ds) = data_style {
         let _ = write!(out, r#" style:data-style-name="{ds}""#);
     }
     out.push('>');
     let mut cell_props = String::new();
+    if st.align.rotation_deg != 0 {
+        let _ = write!(
+            cell_props,
+            r#" style:rotation-angle="{}" style:rotation-align="none""#,
+            st.align.rotation_deg.rem_euclid(360)
+        );
+    }
+    if st.align.stacked {
+        cell_props.push_str(r#" style:direction="ttb""#);
+    }
+    if st.align.shrink_to_fit {
+        cell_props.push_str(r#" style:shrink-to-fit="true""#);
+    }
+    if let Some(l) = &st.borders.diagonal_down {
+        let _ = write!(
+            cell_props,
+            r#" style:diagonal-tl-br="{}""#,
+            border_to_string(l)
+        );
+    }
+    if let Some(l) = &st.borders.diagonal_up {
+        let _ = write!(
+            cell_props,
+            r#" style:diagonal-bl-tr="{}""#,
+            border_to_string(l)
+        );
+    }
     if let Some(fill) = st.fill {
         let _ = write!(cell_props, r#" fo:background-color="{}""#, color_hex(fill));
     }
@@ -651,8 +719,20 @@ fn cell_style_xml(out: &mut String, name: &str, st: &StyleData, data_style: Opti
     if !cell_props.is_empty() {
         let _ = write!(out, "<style:table-cell-properties{cell_props}/>");
     }
-    if let Some(a) = text_align {
-        let _ = write!(out, r#"<style:paragraph-properties fo:text-align="{a}"/>"#);
+    if text_align.is_some() || st.align.indent > 0 {
+        out.push_str("<style:paragraph-properties");
+        if let Some(a) = text_align {
+            let _ = write!(out, r#" fo:text-align="{a}""#);
+        }
+        if st.align.indent > 0 {
+            // AOO's indent step is 10 pt (0.353 cm).
+            let _ = write!(
+                out,
+                r#" fo:margin-left="{}""#,
+                hmm_to_cm(u32::from(st.align.indent) * 353)
+            );
+        }
+        out.push_str("/>");
     }
     let f = &st.font;
     let mut tp = String::new();
@@ -663,7 +743,20 @@ fn cell_style_xml(out: &mut String, name: &str, st: &StyleData, data_style: Opti
         tp.push_str(r#" fo:font-style="italic" style:font-style-asian="italic" style:font-style-complex="italic""#);
     }
     if f.underline {
-        tp.push_str(r#" style:text-underline-style="solid" style:text-underline-width="auto" style:text-underline-color="font-color""#);
+        let (style, ty, width) = match f.underline_style {
+            tally_model::UnderlineStyleData::Single => ("solid", "single", "auto"),
+            tally_model::UnderlineStyleData::Double => ("solid", "double", "auto"),
+            tally_model::UnderlineStyleData::SingleAccounting => ("solid", "single", "auto"),
+            tally_model::UnderlineStyleData::DoubleAccounting => ("solid", "double", "auto"),
+            tally_model::UnderlineStyleData::Dotted => ("dotted", "single", "auto"),
+            tally_model::UnderlineStyleData::Dashed => ("dash", "single", "auto"),
+            tally_model::UnderlineStyleData::Wave => ("wave", "single", "auto"),
+            tally_model::UnderlineStyleData::Bold => ("solid", "single", "bold"),
+        };
+        let _ = write!(
+            tp,
+            r#" style:text-underline-style="{style}" style:text-underline-type="{ty}" style:text-underline-width="{width}" style:text-underline-color="font-color""#
+        );
     }
     if f.strike {
         tp.push_str(
@@ -753,8 +846,18 @@ fn write_content<W: Write + Seek>(
         .collect();
     crate::v03::write_validations(&mut s, &vals);
 
+    let mut taken: Vec<String> = data.sheets.iter().map(|sh| sh.name.clone()).collect();
     for (tab, sheet) in data.sheets.iter().enumerate() {
         write_sheet(sheet, tab, data, plan, &mut s, zip, report)?;
+        // Wave 5: each scenario is a hidden sheet after its base sheet.
+        for sc in sheet.scenarios.iter().take(1_000) {
+            let synthetic = crate::tools::scenario_sheet(sheet, sc, &taken);
+            taken.push(synthetic.name.clone());
+            crate::tools::set_current_scenario(Some((sheet.name.clone(), sc.clone())));
+            let r = write_sheet(&synthetic, tab, data, plan, &mut s, zip, report);
+            crate::tools::set_current_scenario(None);
+            r?;
+        }
     }
     let global: Vec<&NameData> = data.names.iter().filter(|n| n.sheet.is_none()).collect();
     write_named_expressions(&mut s, &global, data);
@@ -1033,7 +1136,7 @@ fn empty_runs(sheet: &SheetData, vruns: &[StyleRun]) -> Vec<ERun> {
     out
 }
 
-fn write_sheet<W: Write + Seek>(
+pub(crate) fn write_sheet<W: Write + Seek>(
     sheet: &SheetData,
     tab: usize,
     data: &WorkbookData,
@@ -1104,6 +1207,8 @@ fn write_sheet<W: Write + Seek>(
             .keys()
             .chain(extras.links.keys())
             .copied()
+            // Chart and picture anchors (W5-1) get an empty cell too.
+            .chain(crate::v04::frame_anchor_cells(sheet))
             .filter(|p| !have.contains(p) && p.0 < MAX_ROWS && p.1 < MAX_COLS)
             .collect();
         extra_pos.sort_unstable();

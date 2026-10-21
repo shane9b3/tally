@@ -251,6 +251,7 @@ pub fn replace_all(
     let (hits, _) = scan(wb, &sheets, &re, query.in_formulas, left);
     let mut changes = Vec::new();
     let mut failed = 0usize;
+    let mut rejected = 0usize;
     let mut skipped_arrays = 0usize;
     let mut too_long = 0usize;
     let mut bytes = 0usize;
@@ -310,8 +311,52 @@ pub fn replace_all(
             continue;
         }
         let range = tally_types::CellRange::single(addr);
-        changes.push(Change::Range(capture_range(wb, range, true, true)));
+        let snapshot = capture_range(wb, range, true, true);
         wb.set_input(addr, &new_text);
+        // Validation: a Stop rule refuses this cell (the rest of the
+        // replace goes on), Warning/Info accept it with a notice (M12).
+        if let Some(val) = crate::validation::at(wb, h.sheet, h.r, h.c).cloned() {
+            if let Some(err) = &val.error {
+                let v = crate::validation::current_value(wb, addr);
+                let ok = v.is_empty() && val.allow_blank
+                    || !v.is_empty()
+                        && crate::validation::is_valid_input(wb, &val, addr, &v, Some(&new_text));
+                if !ok {
+                    let text = if err.text.trim().is_empty() {
+                        "The value you entered is not valid.".to_string()
+                    } else {
+                        err.text.clone()
+                    };
+                    match err.style {
+                        tally_model::ValidationErrorStyleData::Stop => {
+                            crate::undo::restore_range(wb, snapshot.clone());
+                            rejected += 1;
+                            if rejected <= 20 {
+                                fx.notices.push(ApiError::new(
+                                    crate::validation::VALIDATION,
+                                    format!("{}: {text} (not replaced)", addr.to_a1()),
+                                ));
+                            }
+                            continue;
+                        }
+                        _ => fx.notices.push(ApiError::new(
+                            crate::validation::VALIDATION,
+                            format!("{}: {text}", addr.to_a1()),
+                        )),
+                    }
+                }
+            }
+        }
+        changes.push(Change::Range(snapshot));
+    }
+    if rejected > 20 {
+        fx.notices.push(ApiError::new(
+            crate::validation::VALIDATION,
+            format!(
+                "{} more cells were not replaced (validation)",
+                rejected - 20
+            ),
+        ));
     }
     if failed > 20 {
         fx.warnings.push(ApiError::invalid_argument(format!(

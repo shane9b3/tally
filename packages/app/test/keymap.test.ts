@@ -100,3 +100,63 @@ describe("v0.2 bindings", () => {
     expect(resolveKey(ev("z"), { typing: true, nativeMenu: false })).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 5 (W5-6, §4 item 49): the shortcut table and docs/shortcuts.md
+// ---------------------------------------------------------------------------
+import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { buildCommands } from "../src/commands";
+import type { AppController } from "../src/controller";
+import { BINDINGS, GRID_KEYS } from "../src/keymap";
+import { renderShortcutsDoc } from "../src/options/shortcutsDoc";
+
+describe("shortcut parity (W5-6)", () => {
+  const ui = { renameActiveSheet() {}, showAbout() {}, customNumberFormat() {}, resize() {} };
+  const titles = new Map(buildCommands({} as AppController, ui).map((c) => [c.id, c.title]));
+  const idle = { typing: false, nativeMenu: false };
+  const ev = (key: string, mods: Partial<KeyLike> = {}): KeyLike => ({ key, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...mods });
+
+  it.each([
+    ["⌘1 Format Cells", ev("1", { metaKey: true, code: "Digit1" }), "format.cells"],
+    ["⌘F2 Function Wizard", ev("F2", { metaKey: true }), "insert.function"],
+    ["⌃` show formulas", ev("`", { ctrlKey: true, code: "Backquote" }), "view.showFormulas"],
+    ["F5 Navigator", ev("F5"), "view.navigator"],
+    ["⇧F5 dependents", ev("F5", { shiftKey: true }), "tools.traceDependents"],
+    ["⇧F7 precedents", ev("F7", { shiftKey: true }), "tools.tracePrecedents"],
+    ["⌘F8 value highlighting", ev("F8", { metaKey: true }), "view.valueHighlighting"],
+    ["⌘F11 styles", ev("F11", { metaKey: true }), "view.stylesPanel"],
+    ["⇧F11 save as template", ev("F11", { shiftKey: true }), "file.saveAsTemplate"],
+    ["F12 group", ev("F12"), "data.group"],
+    ["⌘F12 ungroup", ev("F12", { metaKey: true }), "data.ungroup"],
+    ["⌘⇧J full screen", ev("J", { metaKey: true, shiftKey: true }), "view.fullScreen"],
+    ["⌘⇧T name box", ev("T", { metaKey: true, shiftKey: true }), "edit.focusNameBox"],
+    ["⌘⌥C note", ev("ç", { metaKey: true, altKey: true, code: "KeyC" }), "insert.note"],
+    ["⌘⇧Y repeat", ev("Y", { metaKey: true, shiftKey: true }), "edit.repeat"],
+    ["⌘, options", ev(",", { metaKey: true, code: "Comma" }), "tools.options"],
+    ["F9 recalc", ev("F9"), "data.recalc"],
+    ["⌘M clear formats", ev("m", { metaKey: true }), "edit.clearFormats"],
+  ])("%s", (_label, e, command) => {
+    expect(resolveKey(e, idle)).toBe(command);
+  });
+
+  it("every binding has a registered command and a unique key chord", () => {
+    const chords = BINDINGS.map((b) => `${b.key}|${b.code ?? ""}|${b.mod}|${b.shift}|${b.alt ?? false}`);
+    const dup = chords.filter((c, i) => chords.indexOf(c) !== i);
+    expect(dup).toEqual([]);
+    expect(BINDINGS.filter((b) => !titles.has(b.command)).map((b) => b.command)).toEqual([]);
+  });
+
+  it("docs/shortcuts.md is generated from the keymap (TALLY_WRITE_SHORTCUTS=1 rewrites it)", () => {
+    const path = fileURLToPath(new URL("../../../docs/shortcuts.md", import.meta.url));
+    const rendered = renderShortcutsDoc(BINDINGS, GRID_KEYS, (id) => titles.get(id) ?? id);
+    if (process.env.TALLY_WRITE_SHORTCUTS) writeFileSync(path, rendered);
+    let current = "";
+    try {
+      current = readFileSync(path, "utf8");
+    } catch {
+      current = "";
+    }
+    expect(current).toBe(rendered);
+  });
+});

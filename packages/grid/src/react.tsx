@@ -5,6 +5,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, type CSSProperties, type Ref } from "react";
 import { Grid as GridCore, type GridOptions } from "./grid";
+import { SplitView, type SplitAxis } from "./split";
 import type { GridProps } from "./types";
 
 export interface GridComponentProps extends GridProps {
@@ -52,6 +53,22 @@ const PROP_KEYS = [
   "onCellButton",
   "onOpenLink",
   "onNoteHover",
+  // wave 5 seams
+  "rangePick",
+  "outline",
+  "pageBreakPreview",
+  "traces",
+  "aria",
+  "objects",
+  "onViewportChange",
+  "onOutlineToggle",
+  "onOutlineLevel",
+  "onObjectSelect",
+  "onObjectPointerDown",
+  "onObjectDoubleClick",
+  "onObjectKey",
+  "invalidCells",
+  "onPageBreakDrag",
 ] as const satisfies readonly (keyof GridProps)[];
 
 function pickProps(p: GridComponentProps): GridProps {
@@ -115,3 +132,80 @@ export function Grid(props: GridComponentProps) {
 
 export { GridCore };
 export type { GridProps };
+
+// ---------------------------------------------------------------------------
+// Split window (W5-5, §4 item 30)
+// ---------------------------------------------------------------------------
+
+
+export interface SplitGridProps extends GridComponentProps {
+  /** `"vertical"`: panes left/right; `"horizontal"`: panes top/bottom. */
+  axis: SplitAxis;
+  /** Share of the first pane (0.1–0.9). */
+  ratio: number;
+  /** The divider was dragged. */
+  onRatioChange?: (ratio: number) => void;
+  /** Receives the {@link SplitView} (or `null` on unmount). */
+  splitRef?: Ref<SplitView | null>;
+}
+
+/**
+ * Two grids over the same source with a draggable divider ({@link SplitView}).
+ * `gridRef` receives the primary (first) pane; prop changes reach both panes.
+ */
+export function SplitGrid(props: SplitGridProps) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<SplitView | null>(null);
+  const lastRef = useRef<GridProps | null>(null);
+  const ratioCb = useRef(props.onRatioChange);
+  ratioCb.current = props.onRatioChange;
+  const { gridRef: externalRef, splitRef } = props;
+
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const initial = pickProps(props);
+    const view = new SplitView(host, initial, {
+      axis: props.axis,
+      ratio: props.ratio,
+      grid: props.options,
+      onRatioChange: (r) => ratioCb.current?.(r),
+    });
+    viewRef.current = view;
+    lastRef.current = initial;
+    setRef(externalRef, view.primary);
+    setRef(splitRef, view);
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+      lastRef.current = null;
+      setRef(externalRef, null);
+      setRef(splitRef, null);
+    };
+    // Created once; later changes go through update().
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    const last = lastRef.current;
+    if (!view || !last) return;
+    view.setAxis(props.axis);
+    view.setRatio(props.ratio);
+    const next = pickProps(props);
+    const changed: Partial<GridProps> = {};
+    let any = false;
+    for (const k of PROP_KEYS) {
+      if (next[k] !== last[k]) {
+        (changed as Record<string, unknown>)[k] = next[k];
+        any = true;
+      }
+    }
+    if (any) {
+      lastRef.current = next;
+      view.update(changed);
+    }
+  });
+
+  return <div ref={hostRef} className={props.className} style={{ position: "relative", ...props.style }} />;
+}

@@ -395,6 +395,7 @@ fn unsupported_things_are_reported() {
     wb.styles.push(fmt("[NatNum1]0"));
     wb.styles.push(fmt("0;-0;0;@"));
     wb.names.push(NameData {
+        base_cell: None,
         name: "N".into(),
         sheet: None,
         formula: "of:=[$Orders.$A$1]".into(),

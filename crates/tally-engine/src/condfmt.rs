@@ -963,10 +963,24 @@ enum ValKey {
     Err(String),
 }
 
+/// A number normalized to 15 significant digits, so values that are
+/// `approx_equal` (0.1 and 0.3-0.2) share a key (review 3, LOW).
+fn num_key(n: f64) -> u64 {
+    if n == 0.0 || !n.is_finite() {
+        return if n.is_finite() { 0 } else { n.to_bits() };
+    }
+    let r: f64 = format!("{n:.14e}").parse().unwrap_or(n);
+    if r == 0.0 {
+        0
+    } else {
+        r.to_bits()
+    }
+}
+
 fn val_key(v: &Value) -> Option<ValKey> {
     Some(match v {
         Value::Empty => return None,
-        Value::Number(n) => ValKey::Num(if *n == 0.0 { 0 } else { n.to_bits() }),
+        Value::Number(n) => ValKey::Num(num_key(*n)),
         Value::Text(t) => ValKey::Text(t.to_lowercase()),
         Value::Bool(b) => ValKey::Bool(*b),
         Value::Error(e) => ValKey::Err(e.display().into_owned()),
@@ -1386,6 +1400,13 @@ fn order(v: &Value, other: &Value) -> Option<std::cmp::Ordering> {
 /// `true` if `v` passes `op` against the operands.
 pub fn compare(v: &Value, op: CmpOpData, a: &Value, b: Option<&Value>) -> bool {
     use std::cmp::Ordering::*;
+    // A text operand never matches a number, except for "not equal"
+    // (AOO `ScConditionEntry::IsValid`, review 3, LOW).
+    let is_num = |x: &Value| matches!(x, Value::Number(_) | Value::Bool(_));
+    if is_num(v) && (matches!(a, Value::Text(_)) || b.is_some_and(|b| matches!(b, Value::Text(_))))
+    {
+        return op == CmpOpData::Ne || op == CmpOpData::NotBetween;
+    }
     let Some(oa) = order(v, a) else {
         return false;
     };
@@ -1431,7 +1452,13 @@ fn date_matches(wb: &Workbook, serial: f64, period: CfDatePeriodData) -> bool {
     let epoch = wb.settings.date_epoch;
     let today = tally_numfmt::date::now_serial(epoch).floor();
     let d = serial.floor();
-    let week_start = |t: f64| t - f64::from(weekday(epoch, t).unwrap_or(1) - 1);
+    // Weeks start on the locale's first weekday (Monday for de/fr/es/en-GB,
+    // Sunday for en-US and ja-JP; review 3, LOW).
+    let first = first_weekday(wb.locale.tag);
+    let week_start = |t: f64| {
+        let wd = weekday(epoch, t).unwrap_or(1);
+        t - f64::from((wd + 7 - first) % 7)
+    };
     let ym = |s: f64| ymd_from_serial(epoch, s).map(|(y, m, _)| (i64::from(y), i64::from(m)));
     let month_index = |s: f64| ym(s).map(|(y, m)| y * 12 + m - 1);
     match period {
@@ -1465,6 +1492,112 @@ fn date_matches(wb: &Workbook, serial: f64, period: CfDatePeriodData) -> bool {
             }
         }
     }
+}
+
+/// The first day of the week of a locale, Sunday = 1 … Saturday = 7.
+pub fn first_weekday(tag: &str) -> u32 {
+    let t = tag.to_ascii_lowercase();
+    if t == "en-us"
+        || t.starts_with("ja")
+        || t.starts_with("zh")
+        || t.starts_with("ko")
+        || t == "en-ca"
+        || t == "pt-br"
+    {
+        1
+    } else {
+        2
+    }
+}
+
+/// `rects` minus `cut`: every rectangle is replaced by its parts outside
+/// `cut` (at most four per rectangle).
+pub fn subtract_rect(rects: &[CellRangeLocal], cut: &CellRangeLocal) -> Vec<CellRangeLocal> {
+    let mut out = Vec::with_capacity(rects.len() + 3);
+    for r in rects {
+        let overlaps = r.r0 <= cut.r1 && cut.r0 <= r.r1 && r.c0 <= cut.c1 && cut.c0 <= r.c1;
+        if !overlaps {
+            out.push(*r);
+            continue;
+        }
+        if r.r0 < cut.r0 {
+            out.push(CellRangeLocal {
+                r1: cut.r0 - 1,
+                ..*r
+            });
+        }
+        if r.r1 > cut.r1 {
+            out.push(CellRangeLocal {
+                r0: cut.r1 + 1,
+                ..*r
+            });
+        }
+        let (mr0, mr1) = (r.r0.max(cut.r0), r.r1.min(cut.r1));
+        if r.c0 < cut.c0 {
+            out.push(CellRangeLocal {
+                r0: mr0,
+                r1: mr1,
+                c1: cut.c0 - 1,
+                ..*r
+            });
+        }
+        if r.c1 > cut.c1 {
+            out.push(CellRangeLocal {
+                r0: mr0,
+                r1: mr1,
+                c0: cut.c1 + 1,
+                ..*r
+            });
+        }
+    }
+    out
+}
+
+/// The intersection of two local rectangles.
+pub fn intersect_rect(a: &CellRangeLocal, b: &CellRangeLocal) -> Option<CellRangeLocal> {
+    let r = CellRangeLocal {
+        r0: a.r0.max(b.r0),
+        c0: a.c0.max(b.c0),
+        r1: a.r1.min(b.r1),
+        c1: a.c1.min(b.c1),
+    };
+    (r.r0 <= r.r1 && r.c0 <= r.c1).then_some(r)
+}
+
+/// Removes `cut` from every conditional format and validation of a sheet
+/// (cells cleared with "Delete all", pasted or moved over: AOO treats
+/// both as cell attributes, `ATTR_CONDITIONAL`/`ATTR_VALIDDATA`). Formats
+/// left without cells are dropped. `true` if anything changed.
+pub fn remove_area(meta: &mut crate::storage::SheetMeta, cut: &CellRangeLocal) -> bool {
+    let hit_cf = meta
+        .cond_formats
+        .iter()
+        .any(|cf| cf.ranges.iter().any(|r| intersect_rect(r, cut).is_some()));
+    let hit_val = meta
+        .validations
+        .iter()
+        .any(|v| v.ranges.iter().any(|r| intersect_rect(r, cut).is_some()));
+    if hit_cf {
+        let list = Arc::make_mut(&mut meta.cond_formats);
+        for cf in list.iter_mut() {
+            if cf.ranges.iter().any(|r| intersect_rect(r, cut).is_some()) {
+                let cf = Arc::make_mut(cf);
+                cf.ranges = subtract_rect(&cf.ranges, cut);
+            }
+        }
+        list.retain(|cf| !cf.ranges.is_empty());
+    }
+    if hit_val {
+        let list = Arc::make_mut(&mut meta.validations);
+        for v in list.iter_mut() {
+            if v.ranges.iter().any(|r| intersect_rect(r, cut).is_some()) {
+                let v = Arc::make_mut(v);
+                v.ranges = subtract_rect(&v.ranges, cut);
+            }
+        }
+        list.retain(|v| !v.ranges.is_empty());
+    }
+    hit_cf || hit_val
 }
 
 /// Linear interpolation of two `0xRRGGBBAA` colours.

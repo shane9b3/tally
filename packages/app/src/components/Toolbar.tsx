@@ -1,6 +1,5 @@
 /** Top row: (traffic-light inset), document title, action pills, panel/theme toggles, Share. */
 import { useState, type ReactNode } from "react";
-import { COMING_SOON } from "../commands";
 import { useDataStore } from "../stores/dataStore";
 import { cx, useController } from "../context";
 import { useDocStore } from "../stores/docStore";
@@ -8,6 +7,8 @@ import { useEditStore } from "../stores/editStore";
 import { useUiStore } from "../stores/uiStore";
 import { ChartIcon, FilterIcon, GlanceIcon, MoonIcon, RedoIcon, SidebarIcon, SortIcon, UndoIcon } from "./icons";
 import { Popover } from "./Popover";
+import { t } from "../i18n";
+import { useW56Store } from "../data/store";
 import styles from "./Toolbar.module.css";
 
 interface PillProps {
@@ -59,6 +60,7 @@ export function Toolbar({ inset }: { inset: boolean }) {
   const [share, setShare] = useState<{ x: number; y: number } | null>(null);
   const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(null);
   const filtering = useDataStore((s) => s.filter !== null);
+  useW56Store((s) => s.i18nRev);
 
   const title = info?.title ?? "Untitled";
   const folder = info?.path ? info.path.split(/[\\/]/).slice(-2, -1)[0] : undefined;
@@ -86,8 +88,8 @@ export function Toolbar({ inset }: { inset: boolean }) {
         </div>
       </div>
       <nav className={styles.pills} aria-label="Toolbar">
-        <Pill command="edit.undo" label="Undo" icon={<UndoIcon />} />
-        <Pill command="edit.redo" label="Redo" icon={<RedoIcon />} iconOnly />
+        <Pill command="edit.undo" label={t("cmd.edit.undo", "Undo")} icon={<UndoIcon />} />
+        <Pill command="edit.redo" label={t("cmd.edit.redo", "Redo")} icon={<RedoIcon />} iconOnly />
         <span className={styles.sep} />
         <button
           type="button"
@@ -104,14 +106,14 @@ export function Toolbar({ inset }: { inset: boolean }) {
           }}
         >
           <SortIcon />
-          <span>Sort</span>
+          <span>{t("sort.title", "Sort")}</span>
         </button>
-        <Pill command="data.filter" label="Filter" icon={<FilterIcon />} active={filtering} tooltip={filtering ? "Remove the AutoFilter" : "AutoFilter: a ▾ in each header"} />
+        <Pill command="data.filter" label={t("menu.data.filter", "Filter")} icon={<FilterIcon />} active={filtering} tooltip={filtering ? "Remove the AutoFilter" : "AutoFilter: a ▾ in each header"} />
         <Pill command="insert.addUp" label="Add up" tooltip="Add up the numbers above (Σ)">
           <span className={styles.glyph}>Σ</span>
-          <span>Add up</span>
+          <span>{t("toolbar.sum", "Add up")}</span>
         </Pill>
-        <Pill command="insert.chart" label="Chart" icon={<ChartIcon />} tooltip={COMING_SOON} />
+        <Pill command="insert.chart" label={t("chart.title", "Chart")} icon={<ChartIcon />} tooltip="Insert a chart of the data around the selection" />
       </nav>
       <div className={styles.spacer} data-tauri-drag-region />
       <button
@@ -137,7 +139,7 @@ export function Toolbar({ inset }: { inset: boolean }) {
           setShare(share ? null : { x: r.right, y: r.bottom + 6 });
         }}
       >
-        Share
+        {t("menu.file.share", "Share")}
       </button>
       {sortMenu ? (
         <Popover
@@ -164,6 +166,7 @@ export function Toolbar({ inset }: { inset: boolean }) {
             { id: "xlsx", label: "Export XLSX…", hint: ".xlsx", onSelect: () => ctl.registry.run("file.exportXlsx") },
             { id: "ods", label: "Export ODS…", hint: ".ods", onSelect: () => ctl.registry.run("file.exportOds") },
             { id: "csv", label: "Export as CSV…", hint: ".csv", onSelect: () => ctl.registry.run("file.exportCsv") },
+            { id: "pdf", label: "Export as PDF…", hint: ".pdf", onSelect: () => ctl.registry.run("file.exportPdf") },
             { id: "saveAs", label: "Save a copy…", hint: "⇧⌘S", onSelect: () => ctl.registry.run("file.saveAs") },
           ]}
         />

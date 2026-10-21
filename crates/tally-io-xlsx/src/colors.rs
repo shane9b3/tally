@@ -61,11 +61,13 @@ impl XColor {
     }
 
     /// The colour as `0xRRGGBBAA`, or `None` if it does not name one.
+    /// Theme colours come from the workbook's `theme1.xml` when the reader
+    /// installed one ([`set_active_theme`]), else from the Office default.
     pub fn resolve(&self, indexed: &[u32]) -> Option<u32> {
         let rgb = if let Some(rgb) = self.rgb {
             rgb
         } else if let Some(t) = self.theme {
-            *THEME.get(t as usize)?
+            ACTIVE_THEME.with(|a| a.get().get(t as usize).copied())?
         } else if let Some(i) = self.indexed {
             *indexed.get(i as usize)?
         } else {
@@ -73,6 +75,87 @@ impl XColor {
         };
         Some((apply_tint(rgb, self.tint) << 8) | 0xff)
     }
+}
+
+thread_local! {
+    /// The theme palette of the workbook being read (wave 5, item 28: a
+    /// custom `theme1.xml` changes what `theme="N"` colours mean).
+    static ACTIVE_THEME: std::cell::Cell<[u32; 12]> = const { std::cell::Cell::new(THEME) };
+}
+
+/// Installs the palette used for `theme="N"` colours on this thread (the
+/// reader calls it before parsing styles and sheets; `None` restores the
+/// Office default).
+pub(crate) fn set_active_theme(theme: Option<[u32; 12]>) {
+    ACTIVE_THEME.with(|a| a.set(theme.unwrap_or(THEME)));
+}
+
+/// Parses `xl/theme/theme1.xml`: the twelve `a:clrScheme` colours in the
+/// order style indices use them (`lt1`, `dk1`, `lt2`, `dk2`, `accent1`…`6`,
+/// `hlink`, `folHlink`; the scheme lists `dk1` before `lt1`). `None` when
+/// the scheme is incomplete.
+pub(crate) fn parse_theme<R: std::io::BufRead>(
+    xr: &mut crate::xml::XmlReader<R>,
+) -> Result<Option<[u32; 12]>, crate::XlsxError> {
+    use crate::xml::Ev;
+    let mut found: [Option<u32>; 12] = [None; 12];
+    let mut slot: Option<usize> = None;
+    let mut in_scheme = false;
+    let mut depth_guard = 0u32;
+    loop {
+        match xr.next()? {
+            Ev::Start(e) => {
+                depth_guard += 1;
+                if depth_guard > 100_000 {
+                    break;
+                }
+                let name = e.local();
+                if name == "clrScheme" {
+                    in_scheme = true;
+                    continue;
+                }
+                if !in_scheme {
+                    continue;
+                }
+                match name {
+                    "dk1" => slot = Some(1),
+                    "lt1" => slot = Some(0),
+                    "dk2" => slot = Some(3),
+                    "lt2" => slot = Some(2),
+                    "accent1" => slot = Some(4),
+                    "accent2" => slot = Some(5),
+                    "accent3" => slot = Some(6),
+                    "accent4" => slot = Some(7),
+                    "accent5" => slot = Some(8),
+                    "accent6" => slot = Some(9),
+                    "hlink" => slot = Some(10),
+                    "folHlink" => slot = Some(11),
+                    "srgbClr" | "sysClr" => {
+                        if let Some(i) = slot {
+                            let v = e
+                                .attr_local("lastClr")
+                                .or_else(|| e.attr_local("val"))
+                                .and_then(parse_argb);
+                            if let Some(v) = v {
+                                found[i] = Some(v);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ev::Eof => break,
+            _ => {}
+        }
+    }
+    let mut out = [0u32; 12];
+    for (i, f) in found.iter().enumerate() {
+        match f {
+            Some(v) => out[i] = *v,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(out))
 }
 
 /// Parses `FFRRGGBB` (ARGB) or `RRGGBB` into `0xRRGGBB`.

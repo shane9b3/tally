@@ -227,7 +227,8 @@ describe("other v0.3 flows", () => {
     src.getStyle(src.getCell(1, 2)?.style ?? 0);
     for (let i = 0; i < 5; i++) await tick();
     expect(ctl.typingOps(sheet, { r: 1, c: 2 }, "long text")).toEqual([
-      { type: "setCellInput", sheet, r: 1, c: 2, input: "long text" },
+      // AutoCorrect (W5-6) capitalises the sentence start on commit, as AOO does.
+      { type: "setCellInput", sheet, r: 1, c: 2, input: "Long text" },
       { type: "autoFitRows", sheet, start: 1, end: 1 },
     ]);
     expect(ctl.typingOps(sheet, { r: 1, c: 3 }, "line 1\nline 2")).toHaveLength(2);
@@ -247,7 +248,7 @@ describe("other v0.3 flows", () => {
 describe("Tauri shell", () => {
   it("registers every TauriClient command", () => {
     const lib = readFileSync(fileURLToPath(new URL("../../../apps/desktop/src-tauri/src/lib.rs", import.meta.url)), "utf8");
-    const registered = new Set([...lib.matchAll(/(?:commands|dialogs)::([a-z_]+),/g)].map((m) => m[1]));
+    const registered = new Set([...lib.matchAll(/(?:commands|commands_v4|dialogs|prefs|autosave|templates|l10n|files)::([a-z_]+),/g)].map((m) => m[1]));
     expect(Object.values(COMMANDS).filter((c) => !registered.has(c))).toEqual([]);
   });
 });

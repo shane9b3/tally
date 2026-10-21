@@ -1,34 +1,33 @@
-# MULTIPLE.OPERATIONS reaches the engine through `EvalContext::table_op`.
-# Until the engine's what-if sandbox (W5-3) answers, every well-formed call
-# is `Err:504`; the cases here pin the argument validation, which follows
-# AOO's ScTableOp (3 or 5 arguments, single-cell references for the formula
-# and the input cells). Value cases live in the engine's
-# `multiple_operations_one_and_two_variable` test.
+# MULTIPLE.OPERATIONS reaches the engine through `EvalContext::table_op`
+# (the what-if sandbox of W5-3, `crates/tally-engine/src/recalc.rs`). The
+# cases pin the argument validation, which follows AOO's ScTableOp (3 or 5
+# arguments, single-cell references for the formula and the input cells),
+# and the values of the simple forms; chains through intermediate cells
+# live in the engine's `multiple_operations_one_and_two_variable` test.
 
 [[case]]
 name = "one-variable form, replacement from a cell"
 cells = { A1 = "=B1*2", B1 = 1, B2 = 5 }
 formula = "=MULTIPLE.OPERATIONS(A1;B1;B2)"
-expect = "Err:504"
-note = "Err:504 until the engine provides table_op; then 10."
+expect = 10
 
 [[case]]
 name = "one-variable form, replacement as a constant"
 cells = { A1 = "=B1*2", B1 = 1 }
 formula = "=MULTIPLE.OPERATIONS(A1;B1;5)"
-expect = "Err:504"
+expect = 10
 
 [[case]]
 name = "two-variable form"
 cells = { A1 = "=B1*C1", B1 = 1, C1 = 1 }
 formula = "=MULTIPLE.OPERATIONS(A1;B1;5;C1;6)"
-expect = "Err:504"
+expect = 30
 
 [[case]]
 name = "two-variable form with replacements in cells"
 cells = { A1 = "=B1+C1", B1 = 1, C1 = 2, B2 = 10, C2 = 20 }
 formula = "=MULTIPLE.OPERATIONS(A1;B1;B2;C1;C2)"
-expect = "Err:504"
+expect = 30
 
 [[case]]
 name = "formula argument must be a reference"
@@ -68,9 +67,15 @@ formula = "=MULTIPLE.OPERATIONS(IF(D1;A1;A1);B1;5)"
 expect = "#N/A"
 
 [[case]]
-name = "IFERROR catches it"
+name = "IFERROR passes a value through"
 cells = { A1 = "=B1*2", B1 = 1 }
 formula = "=IFERROR(MULTIPLE.OPERATIONS(A1;B1;5);\"n/a\")"
+expect = 10
+
+[[case]]
+name = "IFERROR catches a bad call"
+cells = { A1 = "=B1*2", B1 = 1 }
+formula = "=IFERROR(MULTIPLE.OPERATIONS(1;2;3);\"n/a\")"
 expect = "n/a"
 
 [[case]]

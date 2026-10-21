@@ -123,6 +123,8 @@ pub(crate) struct SheetExtras {
     pub links: Vec<crate::sheet_v03::RawLink>,
     /// Page setup pieces.
     pub page: crate::sheet_v03::PageParts,
+    /// The `<drawing r:id>` of the sheet (charts, pictures; W5-1).
+    pub drawing_rid: Option<String>,
 }
 
 /// Per-sheet parse state.
@@ -143,6 +145,10 @@ struct State<'a, 'b> {
     /// `<col>` entries with a style: (first, last, style), in file order.
     col_styles: Vec<(u32, u32, u32)>,
     col_elements: usize,
+    /// Outline levels of rows: (row, level, hidden, collapsed marker).
+    row_levels: Vec<(u32, u8, bool, bool)>,
+    /// Outline levels of columns.
+    col_levels: Vec<(u32, u8, bool, bool)>,
 }
 
 /// Parses one worksheet part.
@@ -165,6 +171,8 @@ pub(crate) fn parse_sheet<R: BufRead>(
         last_pos: None,
         col_styles: Vec::new(),
         col_elements: 0,
+        row_levels: Vec::new(),
+        col_levels: Vec::new(),
     };
     loop {
         match xr.next()? {
@@ -228,9 +236,19 @@ pub(crate) fn parse_sheet<R: BufRead>(
                     xr.skip()?;
                 }
                 "sheetView" => {
-                    // TODO(W5-2): `showFormulas`, `showZeros`,
-                    // `showGridLines`, `showRowColHeaders` →
-                    // `SheetData::view_options`.
+                    let flag = |k: &str, default: bool| {
+                        e.attr_local(k).map_or(default, crate::units::parse_bool)
+                    };
+                    let v = tally_model::ViewOptionsData {
+                        show_formulas: flag("showFormulas", false),
+                        value_highlighting: false,
+                        show_zero_values: flag("showZeros", true),
+                        show_gridlines: flag("showGridLines", true),
+                        show_headers: flag("showRowColHeaders", true),
+                    };
+                    if v != tally_model::ViewOptionsData::default() {
+                        st.out.view_options = Some(v);
+                    }
                 }
                 "pane" => {
                     // TODO(W5-2): a non-frozen pane (`state` absent or
@@ -238,29 +256,27 @@ pub(crate) fn parse_sheet<R: BufRead>(
                     st.pane(&e);
                     xr.skip()?;
                 }
-                "drawing" | "legacyDrawing" | "picture" => {
-                    // TODO(W5-1): sheet rels `drawing` →
-                    // `xdr:twoCellAnchor`/`oneCellAnchor`/`absoluteAnchor`
-                    // (1 hmm = 360 EMU) → `c:chart r:id` →
-                    // `xl/charts/chartN.xml` (chart_read.rs) or `a:blip`
-                    // pictures; resolved only through the rels helpers.
+                "drawing" => {
+                    // Charts and pictures: the drawing part is resolved
+                    // through the sheet's relationships in `read.rs`.
+                    if st.extras.drawing_rid.is_none() {
+                        st.extras.drawing_rid = e.attr_local("id").map(str::to_string);
+                    }
                     xr.skip()?;
                 }
+                "legacyDrawing" | "picture" => xr.skip()?,
                 "scenarios" => {
-                    // TODO(W5-2): `scenario` with `inputCells` →
-                    // `SheetData::scenarios`.
-                    xr.skip()?;
+                    crate::tools::parse_scenarios(xr, &e, &mut st.out.scenarios)?;
                 }
                 "outlinePr" => {
-                    // TODO(W5-2): `summaryBelow`/`summaryRight`.
+                    // `summaryBelow`/`summaryRight`: Tally's groups carry
+                    // no summary side; nothing to keep.
                     xr.skip()?;
                 }
                 "col" => {
                     st.col(&e);
                     xr.skip()?;
                 }
-                // TODO(W5-2): `outlineLevel`/`collapsed` on `row` and `col`
-                // → `SheetData::row_groups`/`col_groups`.
                 "row" => st.row_start(&e),
                 "c" => st.cell(xr, &e)?,
                 "mergeCell" => {
@@ -289,6 +305,15 @@ pub(crate) fn parse_sheet<R: BufRead>(
     let runs = column_style_runs(&st.col_styles);
     st.budget.add_cells(runs.len() as u64, ctx.limits)?;
     st.out.style_runs.extend(runs);
+    // Outline groups from the per-row/column levels (wave 5).
+    if !st.row_levels.is_empty() {
+        st.row_levels.sort_by_key(|l| l.0);
+        st.out.row_groups = crate::tools::groups_from_levels(&st.row_levels);
+    }
+    if !st.col_levels.is_empty() {
+        st.col_levels.sort_by_key(|l| l.0);
+        st.out.col_groups = crate::tools::groups_from_levels(&st.col_levels);
+    }
     let mut out = st.out;
     if !st.sorted {
         // Stable: of two cells at one position the later one wins below.
@@ -378,7 +403,7 @@ fn attr_u32(e: &Elem, k: &str) -> Option<u32> {
 }
 
 /// `A1` → (row, col).
-fn parse_cell_ref(s: &str) -> Option<(u32, u32)> {
+pub(crate) fn parse_cell_ref(s: &str) -> Option<(u32, u32)> {
     if s.len() > 16 {
         return None;
     }
@@ -488,6 +513,13 @@ impl State<'_, '_> {
             };
             push_run(&mut self.out.col_widths, c0, c1, hmm, hidden);
         }
+        let level = attr_u32(e, "outlineLevel").unwrap_or(0).min(8) as u8;
+        let collapsed = e.attr_local("collapsed").is_some_and(parse_bool);
+        if (level > 0 || collapsed) && self.col_levels.len() < 100_000 {
+            for c in c0..=c1.min(c0 + 16_383) {
+                self.col_levels.push((c, level, hidden, collapsed));
+            }
+        }
         if let Some(style) = attr_u32(e, "style").and_then(|s| self.ctx.styles.style_of(s)) {
             self.col_styles.push((c0, c1, style));
         }
@@ -518,6 +550,11 @@ impl State<'_, '_> {
                 .filter(|_| custom || hidden)
                 .unwrap_or(self.default_row_hmm);
             push_run(&mut self.out.row_heights, row, row, size, hidden);
+        }
+        let level = attr_u32(e, "outlineLevel").unwrap_or(0).min(8) as u8;
+        let collapsed = e.attr_local("collapsed").is_some_and(parse_bool);
+        if (level > 0 || collapsed) && self.row_levels.len() < 1_000_000 {
+            self.row_levels.push((row, level, hidden, collapsed));
         }
     }
 

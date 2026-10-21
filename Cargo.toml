@@ -12,6 +12,10 @@ members = [
     "crates/tally-io-ods",
     "crates/tally-io-xlsx",
     "crates/tally-io-csv",
+    "crates/tally-io-pdf",
+    "crates/tally-io-xls",
+    "crates/tally-io-html",
+    "crates/tally-io-dbf",
     "crates/tally-assist",
     "crates/tally-cli",
     "apps/desktop/src-tauri",
@@ -40,6 +44,10 @@ tally-engine = { path = "crates/tally-engine", version = "0.1.0" }
 tally-io-ods = { path = "crates/tally-io-ods", version = "0.1.0" }
 tally-io-xlsx = { path = "crates/tally-io-xlsx", version = "0.1.0" }
 tally-io-csv = { path = "crates/tally-io-csv", version = "0.1.0" }
+tally-io-pdf = { path = "crates/tally-io-pdf", version = "0.1.0" }
+tally-io-xls = { path = "crates/tally-io-xls", version = "0.1.0" }
+tally-io-html = { path = "crates/tally-io-html", version = "0.1.0" }
+tally-io-dbf = { path = "crates/tally-io-dbf", version = "0.1.0" }
 tally-assist = { path = "crates/tally-assist", version = "0.1.0" }
 
 # Desktop shell (used by apps/desktop/src-tauri from WP7 on)

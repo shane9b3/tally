@@ -23,8 +23,11 @@
 #![warn(missing_docs)]
 
 mod archive;
+mod chart_read;
+mod chart_write;
 mod colors;
 mod dates;
+mod drawing_read;
 mod formula;
 mod numfmt;
 mod read;
@@ -32,6 +35,7 @@ mod sheet;
 mod sheet_v03;
 mod sst;
 mod styles;
+mod tools;
 mod units;
 mod workbook;
 mod write;
@@ -44,6 +48,7 @@ use std::io::{Cursor, Read, Seek, Write};
 use tally_model::WorkbookData;
 
 pub use dates::{excel_serial_to_tally, tally_serial_to_excel};
+pub use formula::excel_formula_to_of;
 pub use numfmt::{builtin_format_code, is_date_format};
 
 /// Excel's default column width (8.43 characters, 64 px), in 1/100 mm.
@@ -160,7 +165,10 @@ pub struct WriteReport {
 /// kept with their original text after `of:=` (the engine shows Err:5xx
 /// for them) and their cached value.
 pub fn read_xlsx(reader: impl Read + Seek, limits: &Limits) -> Result<WorkbookData, XlsxError> {
-    read::read(reader, limits)
+    let r = read::read(reader, limits);
+    // The workbook's theme palette must not leak into the next read.
+    colors::set_active_theme(None);
+    r
 }
 
 /// Replaces every [`tally_model::CellContentData::SharedFormula`] member

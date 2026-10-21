@@ -1,7 +1,10 @@
 //! Cut and paste ([`tally_api::Op::MoveRange`], plan §3.5 `move_refs`).
 //!
-//! The block moves with its contents, styles, merges and array blocks; the
-//! destination's previous content is overwritten. References follow
+//! The block moves with its contents, styles, merges, array blocks, notes,
+//! links, conditional formats and validations (the parts of their ranges
+//! inside the block; parts covering the destination are removed, as AOO
+//! does for cell attributes; review 3, M4); the destination's previous
+//! content is overwritten. References follow
 //! OpenOffice's move semantics ([`tally_formula::move_refs`]): references
 //! into the moved block (from any formula on any sheet, and from names)
 //! follow it; references inside moved formulas that point outside keep
@@ -85,6 +88,10 @@ pub fn move_range(
             crate::storage::MetaKind::Merges,
             crate::storage::MetaKind::Notes,
             crate::storage::MetaKind::Links,
+            crate::storage::MetaKind::Charts,
+            crate::storage::MetaKind::Images,
+            crate::storage::MetaKind::CondFormats,
+            crate::storage::MetaKind::Validations,
         ],
     )
     .ok_or_else(|| ApiError::not_found("no sheet"))?;
@@ -222,7 +229,74 @@ pub fn move_range(
         if inside_any(&sh.meta.links, &from, &dest) {
             crate::annotations::move_block(Arc::make_mut(&mut sh.meta.links), &from, dr, dc);
         }
+        // Conditional formats and validations: the parts inside the block
+        // move with it, the parts over the destination are overwritten.
+        let lf = CellRangeLocal {
+            r0: from.r0,
+            c0: from.c0,
+            r1: from.r1,
+            c1: from.c1,
+        };
+        let ld = CellRangeLocal {
+            r0: dest.r0,
+            c0: dest.c0,
+            r1: dest.r1,
+            c1: dest.c1,
+        };
+        let touches = |ranges: &[CellRangeLocal]| {
+            ranges.iter().any(|r| {
+                crate::condfmt::intersect_rect(r, &lf).is_some()
+                    || crate::condfmt::intersect_rect(r, &ld).is_some()
+            })
+        };
+        let moved_ranges = |ranges: &[CellRangeLocal]| -> Vec<CellRangeLocal> {
+            let mut out = crate::condfmt::subtract_rect(ranges, &ld);
+            out = crate::condfmt::subtract_rect(&out, &lf);
+            out.extend(
+                ranges
+                    .iter()
+                    .filter_map(|r| crate::condfmt::intersect_rect(r, &lf))
+                    .map(|r| shifted(&r, dr, dc)),
+            );
+            out
+        };
+        let moved_origin = |o: CellAddr| {
+            if from.contains(o) {
+                CellAddr::new(
+                    sheet,
+                    (i64::from(o.row) + dr) as u32,
+                    (i64::from(o.col) + dc) as u32,
+                )
+            } else {
+                o
+            }
+        };
+        if sh.meta.cond_formats.iter().any(|cf| touches(&cf.ranges)) {
+            let list = Arc::make_mut(&mut sh.meta.cond_formats);
+            for cf in list.iter_mut() {
+                if touches(&cf.ranges) {
+                    let cf = Arc::make_mut(cf);
+                    cf.ranges = moved_ranges(&cf.ranges);
+                    cf.origin = moved_origin(cf.origin);
+                }
+            }
+            list.retain(|cf| !cf.ranges.is_empty());
+        }
+        if sh.meta.validations.iter().any(|v| touches(&v.ranges)) {
+            let list = Arc::make_mut(&mut sh.meta.validations);
+            for v in list.iter_mut() {
+                if touches(&v.ranges) {
+                    let v = Arc::make_mut(v);
+                    v.ranges = moved_ranges(&v.ranges);
+                    v.origin = moved_origin(v.origin);
+                }
+            }
+            list.retain(|v| !v.ranges.is_empty());
+        }
     }
+    // Charts and pictures anchored in the block, and series ranges inside
+    // it (on any sheet), move with it (v0.4, W5-1).
+    crate::charts::move_block(wb, &from, dr, dc);
     fx.layout(sheet);
     Ok(vec![
         names,

@@ -25,6 +25,8 @@ fn ext_of(format: FileFormat) -> &'static str {
         FileFormat::Ods => "ods",
         FileFormat::Xlsx => "xlsx",
         FileFormat::Csv => "csv",
+        FileFormat::Html => "html",
+        FileFormat::Dbf => "dbf",
     }
 }
 
@@ -38,6 +40,8 @@ pub fn format_for(path: &Path) -> FileFormat {
     {
         Some("csv") => FileFormat::Csv,
         Some("xlsx") => FileFormat::Xlsx,
+        Some("html") | Some("htm") => FileFormat::Html,
+        Some("dbf") => FileFormat::Dbf,
         _ => FileFormat::Ods,
     }
 }
@@ -94,6 +98,8 @@ pub fn save_plan(current: Option<&Path>, format: Option<FileFormat>) -> SavePlan
                 FileFormat::Csv => "Export as CSV",
                 FileFormat::Xlsx => "Export as Excel Workbook",
                 FileFormat::Ods => "Export as ODS",
+                FileFormat::Html => "Export as HTML",
+                FileFormat::Dbf => "Export as dBase",
             };
             let only: Vec<_> = SAVE_FORMATS
                 .iter()
@@ -197,6 +203,7 @@ pub async fn wb_save(
     blocking(app, move |app, st| {
         let info = save_to(st, doc, &target, fmt)?;
         files::push_recent(app, st, &target);
+        crate::autosave::remove_snapshot(app, doc);
         Ok(info)
     })
     .await

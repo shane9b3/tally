@@ -31,6 +31,10 @@ import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
+import { ChartEditorPanel } from "./charts/ChartEditorPanel";
+import { useChartStore } from "./charts/chartStore";
+import { PrintPreview } from "./print/PrintPreview";
+import { W56Chrome, W56Panels } from "./data/W56Chrome";
 import { ControllerContext } from "./context";
 import { AppController } from "./controller";
 import { useUiStore } from "./stores/uiStore";
@@ -65,6 +69,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
   const [about, setAbout] = useState(false);
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const glanceOpen = useUiStore((s) => s.glanceOpen);
+  const chartEditorOpen = useChartStore((s) => s.editorOpen);
 
   // "Match system": follow prefers-color-scheme changes.
   useEffect(() => {
@@ -76,8 +81,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
   }, []);
 
   useEffect(() => {
-    const offCommands = ctl.registry.registerAll(
-      buildCommands(ctl, {
+    const uiHooks = {
         renameActiveSheet: () => setRenaming(ctl.sheet),
         showAbout: () => setAbout(true),
         customNumberFormat: () => {
@@ -86,9 +90,10 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
             () => useUiStore.getState().openDialog({ kind: "numberFormat", code: "General" }),
           );
         },
-        resize: (axis) => openResizeDialog(ctl, axis),
-      }),
-    );
+        resize: (axis: "row" | "col") => openResizeDialog(ctl, axis),
+    };
+    const offCommands = ctl.registry.registerAll(buildCommands(ctl, uiHooks));
+    ctl.w56.setCommandRebuilder(() => buildCommands(ctl, uiHooks));
     const detach = ctl.attach();
     void ctl.start(initialTemplate);
     onReady?.(ctl);
@@ -114,6 +119,8 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
             <GridHost />
             <FindBar />
             {glanceOpen ? <GlancePanel /> : null}
+            {chartEditorOpen ? <ChartEditorPanel /> : null}
+            <W56Panels />
           </div>
           <footer className={styles.footer}>
             <SheetTabs renaming={renaming} setRenaming={setRenaming} />
@@ -127,6 +134,8 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
         <CellPopovers />
         <Dialogs />
         <ShortcutsModal />
+        <PrintPreview />
+        <W56Chrome />
         <Toasts />
         {about ? (
           <div className={styles.aboutOverlay} onMouseDown={() => setAbout(false)}>

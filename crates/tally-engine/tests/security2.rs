@@ -54,12 +54,14 @@ fn assert_fast(what: &str, t: Instant, limit: Duration) {
 /// 14 s and 2.5 GB).
 fn fan_names(fan: usize, cells: u32) -> WorkbookData {
     let mut names = vec![NameData {
+        base_cell: None,
         name: "nm_0".into(),
         sheet: None,
         formula: "of:=1".into(),
     }];
     for i in 1..16 {
         names.push(NameData {
+            base_cell: None,
             name: format!("nm_{i}"),
             sheet: None,
             formula: format!("of:={}", vec![format!("nm_{}", i - 1); fan].join("+")),

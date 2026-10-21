@@ -1,0 +1,5655 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`toEchartsOption snapshots > area 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "areaStyle": {
+        "color": "#004586",
+        "opacity": 0.5,
+      },
+      "connectNulls": false,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#004586",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "showSymbol": false,
+      "smooth": false,
+      "stack": undefined,
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+    {
+      "areaStyle": {
+        "color": "#ff420e",
+        "opacity": 0.5,
+      },
+      "connectNulls": false,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#ff420e",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "showSymbol": false,
+      "smooth": false,
+      "stack": undefined,
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > area percent 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "areaStyle": {
+        "color": "#004586",
+        "opacity": 0.85,
+      },
+      "connectNulls": false,
+      "data": [
+        66.66666666666666,
+        100,
+        66.66666666666666,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#004586",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "showSymbol": false,
+      "smooth": false,
+      "stack": "total",
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+    {
+      "areaStyle": {
+        "color": "#ff420e",
+        "opacity": 0.85,
+      },
+      "connectNulls": false,
+      "data": [
+        33.33333333333333,
+        null,
+        33.33333333333333,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#ff420e",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "showSymbol": false,
+      "smooth": false,
+      "stack": "total",
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > area stacked 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "areaStyle": {
+        "color": "#004586",
+        "opacity": 0.85,
+      },
+      "connectNulls": false,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#004586",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "showSymbol": false,
+      "smooth": false,
+      "stack": "total",
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+    {
+      "areaStyle": {
+        "color": "#ff420e",
+        "opacity": 0.85,
+      },
+      "connectNulls": false,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#ff420e",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "showSymbol": false,
+      "smooth": false,
+      "stack": "total",
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > axes options 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "barMaxWidth": 48,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": true,
+      "name": "Month",
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": 10,
+      "inverse": false,
+      "max": 50,
+      "min": 0,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": true,
+      },
+      "minorTick": {
+        "show": true,
+        "splitNumber": 2,
+      },
+      "name": "Units",
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > bar 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "barMaxWidth": 48,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > bar stacked 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": "total",
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "barMaxWidth": 48,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": "total",
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > bubble 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "data": [
+        [
+          1,
+          10,
+          4,
+        ],
+        [
+          2,
+          20,
+          9,
+        ],
+        [
+          3,
+          30,
+          16,
+        ],
+      ],
+      "itemStyle": {
+        "color": "#004586",
+        "opacity": 0.75,
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "symbolSize": [Function],
+      "type": "scatter",
+      "yAxisIndex": 0,
+    },
+    {
+      "data": [
+        [
+          1,
+          5,
+          4,
+        ],
+        [
+          3,
+          15,
+          16,
+        ],
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+        "opacity": 0.75,
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "symbolSize": [Function],
+      "type": "scatter",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "item",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "scale": true,
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "value",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > column 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "barMaxWidth": 48,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > column percent 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        66.66666666666666,
+        100,
+        66.66666666666666,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": "total",
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "barMaxWidth": 48,
+      "data": [
+        33.33333333333333,
+        null,
+        33.33333333333333,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": "total",
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > column stacked 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": "total",
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "barMaxWidth": 48,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": "total",
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > combo column + line on secondary axis 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "areaStyle": undefined,
+      "connectNulls": false,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#ff420e",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "showSymbol": false,
+      "smooth": false,
+      "stack": undefined,
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 1,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": "Margin",
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "position": "right",
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > data labels 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "color": "#111827",
+        "formatter": [Function],
+        "position": "top",
+        "show": true,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "barMaxWidth": 48,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > donut 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "center": [
+        "50%",
+        "59%",
+      ],
+      "data": [
+        {
+          "itemStyle": {
+            "color": "#004586",
+          },
+          "name": "Jan",
+          "selected": false,
+          "value": 10,
+        },
+        {
+          "itemStyle": {
+            "color": "#ff420e",
+          },
+          "name": "Feb",
+          "selected": false,
+          "value": 20,
+        },
+        {
+          "itemStyle": {
+            "color": "#ffd320",
+          },
+          "name": "Mar",
+          "selected": false,
+          "value": 30,
+        },
+      ],
+      "label": {
+        "show": false,
+      },
+      "labelLine": {
+        "show": false,
+      },
+      "name": "North",
+      "radius": [
+        "35%",
+        "70%",
+      ],
+      "selectedMode": false,
+      "selectedOffset": 12,
+      "type": "pie",
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "item",
+  },
+}
+`;
+
+exports[`toEchartsOption snapshots > donut multi ring 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "center": [
+        "50%",
+        "59%",
+      ],
+      "data": [
+        {
+          "itemStyle": {
+            "color": "#004586",
+          },
+          "name": "Jan",
+          "selected": false,
+          "value": 10,
+        },
+        {
+          "itemStyle": {
+            "color": "#ff420e",
+          },
+          "name": "Feb",
+          "selected": false,
+          "value": 20,
+        },
+        {
+          "itemStyle": {
+            "color": "#ffd320",
+          },
+          "name": "Mar",
+          "selected": false,
+          "value": 30,
+        },
+      ],
+      "label": {
+        "show": false,
+      },
+      "labelLine": {
+        "show": false,
+      },
+      "name": "North",
+      "radius": [
+        "28%",
+        "47%",
+      ],
+      "selectedMode": false,
+      "selectedOffset": 12,
+      "type": "pie",
+    },
+    {
+      "center": [
+        "50%",
+        "59%",
+      ],
+      "data": [
+        {
+          "itemStyle": {
+            "color": "#004586",
+          },
+          "name": "Jan",
+          "selected": false,
+          "value": 5,
+        },
+        {
+          "itemStyle": {
+            "color": "#ff420e",
+          },
+          "name": "Feb",
+          "selected": false,
+          "value": 0,
+        },
+        {
+          "itemStyle": {
+            "color": "#ffd320",
+          },
+          "name": "Mar",
+          "selected": false,
+          "value": 15,
+        },
+      ],
+      "label": {
+        "show": false,
+      },
+      "labelLine": {
+        "show": false,
+      },
+      "name": "South",
+      "radius": [
+        "49%",
+        "68%",
+      ],
+      "selectedMode": false,
+      "selectedOffset": 12,
+      "type": "pie",
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "item",
+  },
+}
+`;
+
+exports[`toEchartsOption snapshots > empty data with problems 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "graphic": [
+    {
+      "left": "center",
+      "style": {
+        "fill": "#6b7280",
+        "fontSize": 12,
+        "text": "#REF!",
+      },
+      "top": "middle",
+      "type": "text",
+    },
+  ],
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+}
+`;
+
+exports[`toEchartsOption snapshots > error bars and mean line 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": {
+        "data": [
+          {
+            "yAxis": 20,
+          },
+        ],
+        "label": {
+          "color": "#004586",
+          "formatter": [Function],
+        },
+        "lineStyle": {
+          "color": "#004586",
+          "type": "dotted",
+          "width": 1.25,
+        },
+        "silent": true,
+        "symbol": "none",
+      },
+      "name": "North",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "data": [
+        [
+          0,
+          10,
+          2,
+          2,
+        ],
+        [
+          1,
+          20,
+          3,
+          3,
+        ],
+        [
+          2,
+          30,
+          4,
+          4,
+        ],
+      ],
+      "name": "Error bars (North)",
+      "renderItem": [Function],
+      "silent": true,
+      "tooltip": {
+        "show": false,
+      },
+      "type": "custom",
+      "yAxisIndex": 0,
+      "z": 4,
+    },
+    {
+      "barMaxWidth": 48,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > legend bottom, titles, backgrounds 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#f0f0f0",
+  "grid": {
+    "backgroundColor": "#ffffff",
+    "borderWidth": 0,
+    "bottom": 46,
+    "containLabel": true,
+    "left": 48,
+    "right": 24,
+    "show": true,
+    "top": 50,
+  },
+  "legend": {
+    "bottom": 8,
+    "left": "center",
+    "orient": "horizontal",
+    "right": undefined,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": undefined,
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "barMaxWidth": 48,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "FY26",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > line points and lines 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "areaStyle": undefined,
+      "connectNulls": false,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#004586",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "showSymbol": true,
+      "smooth": false,
+      "stack": undefined,
+      "symbol": "circle",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+    {
+      "areaStyle": undefined,
+      "connectNulls": false,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#ff420e",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "showSymbol": true,
+      "smooth": false,
+      "stack": undefined,
+      "symbol": "circle",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > line points only 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": undefined,
+      "symbol": "circle",
+      "symbolSize": 8,
+      "type": "scatter",
+      "yAxisIndex": 0,
+    },
+    {
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": undefined,
+      "symbol": "circle",
+      "symbolSize": 8,
+      "type": "scatter",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > line smooth 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "areaStyle": undefined,
+      "connectNulls": false,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#004586",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "showSymbol": false,
+      "smooth": true,
+      "stack": undefined,
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+    {
+      "areaStyle": undefined,
+      "connectNulls": false,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#ff420e",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "showSymbol": false,
+      "smooth": true,
+      "stack": undefined,
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > line stacked 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "areaStyle": undefined,
+      "connectNulls": false,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#004586",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "showSymbol": false,
+      "smooth": false,
+      "stack": "total",
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+    {
+      "areaStyle": undefined,
+      "connectNulls": false,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#ff420e",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "showSymbol": false,
+      "smooth": false,
+      "stack": "total",
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > no legend 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 24,
+    "show": false,
+    "top": 14,
+  },
+  "legend": {
+    "show": false,
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "barMaxWidth": 48,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": false,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > pie 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "center": [
+        "50%",
+        "59%",
+      ],
+      "data": [
+        {
+          "itemStyle": {
+            "color": "#004586",
+          },
+          "name": "Jan",
+          "selected": false,
+          "value": 10,
+        },
+        {
+          "itemStyle": {
+            "color": "#ff420e",
+          },
+          "name": "Feb",
+          "selected": false,
+          "value": 20,
+        },
+        {
+          "itemStyle": {
+            "color": "#ffd320",
+          },
+          "name": "Mar",
+          "selected": false,
+          "value": 30,
+        },
+      ],
+      "label": {
+        "show": false,
+      },
+      "labelLine": {
+        "show": false,
+      },
+      "name": "North",
+      "radius": [
+        "0%",
+        "70%",
+      ],
+      "selectedMode": false,
+      "selectedOffset": 12,
+      "type": "pie",
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "item",
+  },
+}
+`;
+
+exports[`toEchartsOption snapshots > pie exploded 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "center": [
+        "50%",
+        "59%",
+      ],
+      "data": [
+        {
+          "itemStyle": {
+            "color": "#004586",
+          },
+          "name": "Jan",
+          "selected": true,
+          "value": 10,
+        },
+        {
+          "itemStyle": {
+            "color": "#ff420e",
+          },
+          "name": "Feb",
+          "selected": true,
+          "value": 20,
+        },
+        {
+          "itemStyle": {
+            "color": "#ffd320",
+          },
+          "name": "Mar",
+          "selected": true,
+          "value": 30,
+        },
+      ],
+      "label": {
+        "show": false,
+      },
+      "labelLine": {
+        "show": false,
+      },
+      "name": "North",
+      "radius": [
+        "0%",
+        "70%",
+      ],
+      "selectedMode": "multiple",
+      "selectedOffset": 12,
+      "type": "pie",
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "item",
+  },
+}
+`;
+
+exports[`toEchartsOption snapshots > radar 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "radar": {
+    "axisLine": {
+      "lineStyle": {
+        "color": "#e5e7eb",
+      },
+    },
+    "axisName": {
+      "color": "#6b7280",
+    },
+    "center": [
+      "50%",
+      "56%",
+    ],
+    "indicator": [
+      {
+        "max": 30,
+        "min": undefined,
+        "name": "Jan",
+      },
+      {
+        "max": 30,
+        "min": undefined,
+        "name": "Feb",
+      },
+      {
+        "max": 30,
+        "min": undefined,
+        "name": "Mar",
+      },
+    ],
+    "radius": "62%",
+    "splitArea": {
+      "show": false,
+    },
+    "splitLine": {
+      "lineStyle": {
+        "color": "#e5e7eb",
+      },
+    },
+  },
+  "series": [
+    {
+      "data": [
+        {
+          "areaStyle": undefined,
+          "itemStyle": {
+            "color": "#004586",
+          },
+          "lineStyle": {
+            "color": "#004586",
+            "width": 2,
+          },
+          "name": "North",
+          "value": [
+            10,
+            20,
+            30,
+          ],
+        },
+        {
+          "areaStyle": undefined,
+          "itemStyle": {
+            "color": "#ff420e",
+          },
+          "lineStyle": {
+            "color": "#ff420e",
+            "width": 2,
+          },
+          "name": "South",
+          "value": [
+            5,
+            0,
+            15,
+          ],
+        },
+      ],
+      "symbol": "circle",
+      "symbolSize": 6,
+      "type": "radar",
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+}
+`;
+
+exports[`toEchartsOption snapshots > radar filled 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "radar": {
+    "axisLine": {
+      "lineStyle": {
+        "color": "#e5e7eb",
+      },
+    },
+    "axisName": {
+      "color": "#6b7280",
+    },
+    "center": [
+      "50%",
+      "56%",
+    ],
+    "indicator": [
+      {
+        "max": 30,
+        "min": undefined,
+        "name": "Jan",
+      },
+      {
+        "max": 30,
+        "min": undefined,
+        "name": "Feb",
+      },
+      {
+        "max": 30,
+        "min": undefined,
+        "name": "Mar",
+      },
+    ],
+    "radius": "62%",
+    "splitArea": {
+      "show": false,
+    },
+    "splitLine": {
+      "lineStyle": {
+        "color": "#e5e7eb",
+      },
+    },
+  },
+  "series": [
+    {
+      "data": [
+        {
+          "areaStyle": {
+            "color": "#004586",
+            "opacity": 0.35,
+          },
+          "itemStyle": {
+            "color": "#004586",
+          },
+          "lineStyle": {
+            "color": "#004586",
+            "width": 2,
+          },
+          "name": "North",
+          "value": [
+            10,
+            20,
+            30,
+          ],
+        },
+        {
+          "areaStyle": {
+            "color": "#ff420e",
+            "opacity": 0.35,
+          },
+          "itemStyle": {
+            "color": "#ff420e",
+          },
+          "lineStyle": {
+            "color": "#ff420e",
+            "width": 2,
+          },
+          "name": "South",
+          "value": [
+            5,
+            0,
+            15,
+          ],
+        },
+      ],
+      "symbol": "none",
+      "symbolSize": 6,
+      "type": "radar",
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+}
+`;
+
+exports[`toEchartsOption snapshots > scatter lines 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "data": [
+        [
+          1,
+          10,
+        ],
+        [
+          2,
+          20,
+        ],
+        [
+          3,
+          30,
+        ],
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#004586",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "showSymbol": true,
+      "smooth": false,
+      "symbol": "circle",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+    {
+      "data": [
+        [
+          1,
+          5,
+        ],
+        [
+          3,
+          15,
+        ],
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#ff420e",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "showSymbol": true,
+      "smooth": false,
+      "symbol": "circle",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "item",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "scale": true,
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "value",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > scatter points 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "data": [
+        [
+          1,
+          10,
+        ],
+        [
+          2,
+          20,
+        ],
+        [
+          3,
+          30,
+        ],
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "symbol": "circle",
+      "symbolSize": 8,
+      "type": "scatter",
+      "yAxisIndex": 0,
+    },
+    {
+      "data": [
+        [
+          1,
+          5,
+        ],
+        [
+          3,
+          15,
+        ],
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "symbol": "circle",
+      "symbolSize": 8,
+      "type": "scatter",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "item",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "scale": true,
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "value",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > scatter smooth 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "data": [
+        [
+          1,
+          10,
+        ],
+        [
+          2,
+          20,
+        ],
+        [
+          3,
+          30,
+        ],
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#004586",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "showSymbol": false,
+      "smooth": true,
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+    {
+      "data": [
+        [
+          1,
+          5,
+        ],
+        [
+          3,
+          15,
+        ],
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#ff420e",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "showSymbol": false,
+      "smooth": true,
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "item",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "scale": true,
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "value",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > stock hlc 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 14,
+      "data": [
+        [
+          12,
+          12,
+          9,
+          13,
+        ],
+        [
+          11,
+          11,
+          11,
+          14,
+        ],
+        [
+          11.5,
+          11.5,
+          10,
+          12,
+        ],
+      ],
+      "itemStyle": {
+        "borderColor": "#579d1c",
+        "borderColor0": "#c5000b",
+        "color": "#579d1c",
+        "color0": "#c5000b",
+      },
+      "name": "Close",
+      "type": "candlestick",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "scale": true,
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > stock ohlc 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 14,
+      "data": [
+        [
+          10,
+          12,
+          9,
+          13,
+        ],
+        [
+          12,
+          11,
+          11,
+          14,
+        ],
+        [
+          11,
+          11.5,
+          10,
+          12,
+        ],
+      ],
+      "itemStyle": {
+        "borderColor": "#579d1c",
+        "borderColor0": "#c5000b",
+        "color": "#579d1c",
+        "color0": "#c5000b",
+      },
+      "name": "Close",
+      "type": "candlestick",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "scale": true,
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > stock volume hlc 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 14,
+      "data": [
+        100,
+        120,
+        90,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+        "opacity": 0.6,
+      },
+      "name": "Volume",
+      "type": "bar",
+      "yAxisIndex": 1,
+    },
+    {
+      "barMaxWidth": 14,
+      "data": [
+        [
+          12,
+          12,
+          9,
+          13,
+        ],
+        [
+          11,
+          11,
+          11,
+          14,
+        ],
+        [
+          11.5,
+          11.5,
+          10,
+          12,
+        ],
+      ],
+      "itemStyle": {
+        "borderColor": "#579d1c",
+        "borderColor0": "#c5000b",
+        "color": "#579d1c",
+        "color0": "#c5000b",
+      },
+      "name": "Close",
+      "type": "candlestick",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "scale": true,
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": [Function],
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "position": "right",
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > stock volume ohlc 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 14,
+      "data": [
+        100,
+        120,
+        90,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+        "opacity": 0.6,
+      },
+      "name": "Volume",
+      "type": "bar",
+      "yAxisIndex": 1,
+    },
+    {
+      "barMaxWidth": 14,
+      "data": [
+        [
+          10,
+          12,
+          9,
+          13,
+        ],
+        [
+          12,
+          11,
+          11,
+          14,
+        ],
+        [
+          11,
+          11.5,
+          10,
+          12,
+        ],
+      ],
+      "itemStyle": {
+        "borderColor": "#579d1c",
+        "borderColor0": "#c5000b",
+        "color": "#579d1c",
+        "color0": "#c5000b",
+      },
+      "name": "Close",
+      "type": "candlestick",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "scale": true,
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": [Function],
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "position": "right",
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`toEchartsOption snapshots > trend line with equation 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "barMaxWidth": 48,
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+    {
+      "data": [
+        [
+          0,
+          10,
+        ],
+        [
+          2,
+          30,
+        ],
+      ],
+      "endLabel": {
+        "color": "#004586",
+        "fontSize": 11,
+        "formatter": [Function],
+        "show": true,
+      },
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "lineStyle": {
+        "color": "#004586",
+        "type": "dashed",
+        "width": 1.5,
+      },
+      "name": "Trend (North)",
+      "showSymbol": false,
+      "silent": true,
+      "smooth": false,
+      "tooltip": {
+        "show": false,
+      },
+      "type": "line",
+      "yAxisIndex": 0,
+      "z": 3,
+    },
+    {
+      "barMaxWidth": 48,
+      "data": [
+        5,
+        null,
+        15,
+      ],
+      "itemStyle": {
+        "color": "#ff420e",
+      },
+      "label": {
+        "show": false,
+      },
+      "markLine": undefined,
+      "name": "South",
+      "stack": undefined,
+      "type": "bar",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "alignWithLabel": true,
+      },
+      "boundaryGap": true,
+      "data": [
+        "Jan",
+        "Feb",
+        "Mar",
+      ],
+      "inverse": false,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "category",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;

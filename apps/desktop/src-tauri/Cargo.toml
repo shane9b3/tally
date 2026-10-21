@@ -28,6 +28,8 @@ tally-api.workspace = true
 tally-types.workspace = true
 tally-engine = { workspace = true, features = ["io"] }
 tally-assist.workspace = true
+tally-l10n.workspace = true
+zip.workspace = true
 
 [lints]
 workspace = true

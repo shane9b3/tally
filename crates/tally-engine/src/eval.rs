@@ -20,7 +20,10 @@
 //! - Unary `+` is the identity (AOO keeps text), unary `-` negates, `%` divides by 100.
 //! - `:` between references gives their bounding box (`#VALUE!` otherwise
 //!   or across sheets), `!` intersects (`#NULL!` when disjoint), `~` (union)
-//!   is not supported in Phase A and gives Err:504.
+//!   joins two references into one `EvalValue::Union` operand (AOO
+//!   `svRefList`): sequence parameters, `SUBTOTAL`, `AREAS`, `COUNTIF`,
+//!   `INDEX` and `ISREF` accept it, anything that needs one rectangle or a
+//!   scalar gives `#VALUE!` (a union as a cell's final value too).
 //! - A multi-cell reference used as an operand is implicitly intersected
 //!   with the formula cell, except in array context (array-forcing
 //!   parameters such as SUMPRODUCT's), where references become matrices and
@@ -278,16 +281,6 @@ pub fn eval_at_depth<'e>(
                         vals.push(EvalValue::error(ErrorKind::Name));
                         continue;
                     };
-                    if let Some(flat) = flatten_unions(def, args, env) {
-                        // `SUM(A1~B2;C3)`: each area of a reference union is
-                        // passed as its own argument of a sequence parameter.
-                        let call = Expr::Call {
-                            func: func.clone(),
-                            args: flat,
-                        };
-                        vals.push(eval_at_depth(&call, ctx, arr, depth + 1, env));
-                        continue;
-                    }
                     if let Err(e) = check_arity(def, args.len()) {
                         vals.push(EvalValue::error(e));
                         continue;
@@ -409,67 +402,6 @@ pub fn eval_at_depth<'e>(
         }
     }
     vals.pop().unwrap_or(EvalValue::Missing)
-}
-
-/// The leaves of a reference union `a~b~c` (through parentheses and names).
-fn union_leaves<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>, env: &'e EvalEnv, depth: u32) {
-    match e {
-        Expr::Paren(x) if is_union(x, env, depth) => union_leaves(x, out, env, depth),
-        Expr::Name(n) if is_union(e, env, depth) => {
-            if let Some((_, f)) = env.names.resolve(n) {
-                union_leaves(&f.expr, out, env, depth + 1);
-            }
-        }
-        Expr::Binary(BinOp::Union, l, r) => {
-            union_leaves(l, out, env, depth);
-            union_leaves(r, out, env, depth);
-        }
-        other => out.push(other),
-    }
-}
-
-fn is_union(e: &Expr, env: &EvalEnv, depth: u32) -> bool {
-    match e {
-        Expr::Paren(x) => is_union(x, env, depth),
-        Expr::Name(n) if depth < crate::names::MAX_NAME_DEPTH => env
-            .names
-            .resolve(n)
-            .is_some_and(|(_, f)| is_union(&f.expr, env, depth + 1)),
-        Expr::Binary(BinOp::Union, _, _) => true,
-        _ => false,
-    }
-}
-
-/// The arguments with every union argument of a sequence parameter split
-/// into its areas, or `None` when there is nothing to split (or the
-/// split would land an area on a non-sequence parameter).
-#[inline(never)]
-fn flatten_unions(def: &FunctionDef, args: &[Expr], env: &EvalEnv) -> Option<Vec<Expr>> {
-    let seq = |k: ParamKind| matches!(k, ParamKind::NumberSeq | ParamKind::ValueSeq);
-    if !args
-        .iter()
-        .enumerate()
-        .any(|(i, a)| is_union(a, env, 0) && seq(def.param_kind(i)))
-    {
-        return None;
-    }
-    let first = args
-        .iter()
-        .enumerate()
-        .position(|(i, a)| is_union(a, env, 0) && seq(def.param_kind(i)))?;
-    let mut out: Vec<Expr> = Vec::with_capacity(args.len() + 2);
-    for (i, a) in args.iter().enumerate() {
-        if is_union(a, env, 0) && seq(def.param_kind(i)) {
-            let mut leaves = Vec::new();
-            union_leaves(a, &mut leaves, env, 0);
-            out.extend(leaves.into_iter().cloned());
-        } else {
-            out.push(a.clone());
-        }
-    }
-    // The shifted arguments must still meet sequence parameters.
-    let ok = (first..out.len()).all(|j| seq(def.param_kind(j)));
-    ok.then_some(out)
 }
 
 /// Evaluates a name by reference: its memoized value, or its expression
@@ -621,6 +553,9 @@ impl EvalContext for ArrayCtx<'_> {
     fn settings(&self) -> &CalcSettings {
         self.inner.settings()
     }
+    fn locale_tag(&self) -> &str {
+        self.inner.locale_tag()
+    }
     fn cell_value(&mut self, addr: CellAddr) -> Value {
         self.inner.cell_value(addr)
     }
@@ -710,7 +645,9 @@ fn operand(v: EvalValue, array: bool, ctx: &mut dyn EvalContext) -> Operand {
             Ok(m) => Operand::Matrix(m),
             Err(e) => Operand::Scalar(Value::Error(e)),
         },
-        r @ EvalValue::Range(_) => Operand::Scalar(scalar_value(&r, ctx)),
+        // A single-cell range, an implicitly intersected one, or a union
+        // (which has no single cell to intersect with: `#VALUE!`).
+        other => Operand::Scalar(scalar_value(&other, ctx)),
     }
 }
 
@@ -765,9 +702,7 @@ fn apply_binary(
     match op {
         BinOp::Range => return range_op(&l, &r),
         BinOp::Intersect => return intersect_op(&l, &r),
-        // A union is only meaningful as an argument of a sequence parameter
-        // (see `flatten_unions`); elsewhere it is #VALUE!, as in Calc.
-        BinOp::Union => return EvalValue::error(ErrorKind::Value),
+        BinOp::Union => return union_op(&l, &r),
         _ => {}
     }
     let a = operand(l, array, ctx);
@@ -826,6 +761,23 @@ fn range_op(l: &EvalValue, r: &EvalValue) -> EvalValue {
                 a.r1.max(b.r1),
                 a.c1.max(b.c1),
             ))
+        }
+        _ => EvalValue::error(ErrorKind::Value),
+    }
+}
+
+/// `a~b`: the areas of both sides, in formula order (nested unions
+/// concatenate). Anything that is not a reference gives `#VALUE!`.
+fn union_op(l: &EvalValue, r: &EvalValue) -> EvalValue {
+    if let Some(e) = l.as_error().or_else(|| r.as_error()) {
+        return EvalValue::error(e);
+    }
+    match (l.areas(), r.areas()) {
+        (Some(a), Some(b)) => {
+            let mut areas = Vec::with_capacity(a.len() + b.len());
+            areas.extend_from_slice(a);
+            areas.extend_from_slice(b);
+            EvalValue::union(areas)
         }
         _ => EvalValue::error(ErrorKind::Value),
     }

@@ -15,6 +15,7 @@ import { useSelectionStore } from "../stores/selectionStore";
 import { useUiStore, type DialogState } from "../stores/uiStore";
 import styles from "./Dialogs.module.css";
 import { V3Dialog, isV3Dialog } from "./V3Dialogs";
+import { FunctionWizard } from "./FunctionWizard";
 
 export function Dialogs() {
   const dialog = useUiStore((s) => s.dialog);
@@ -43,7 +44,39 @@ function DialogFor({ dialog }: { dialog: DialogState }) {
       return <ManageNamesDialog />;
     case "confirm":
       return <ConfirmDialog d={dialog} />;
+    case "functionWizard":
+      return <FunctionWizard />;
   }
+}
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Keeps Tab / Shift+Tab inside `form` (every dialog is modal: §4 item 46,
+ * "dialogs focus-trapped"). Returns true when the key was handled.
+ */
+export function trapTab(form: HTMLElement, e: { key: string; shiftKey: boolean; preventDefault(): void }, active: Element | null): boolean {
+  if (e.key !== "Tab") return false;
+  const items = [...form.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => !el.hidden && el.getAttribute("aria-hidden") !== "true");
+  if (items.length === 0) {
+    e.preventDefault();
+    return true;
+  }
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (!first || !last) return false;
+  const idx = active ? items.indexOf(active as HTMLElement) : -1;
+  if (e.shiftKey && (idx <= 0 || !active || !form.contains(active))) {
+    e.preventDefault();
+    last.focus();
+    return true;
+  }
+  if (!e.shiftKey && (idx === items.length - 1 || idx === -1)) {
+    e.preventDefault();
+    first.focus();
+    return true;
+  }
+  return false;
 }
 
 export function close(): void {
@@ -72,15 +105,24 @@ export interface ShellProps {
 
 export function Shell({ title, children, onSubmit, ok = "Apply", valid = true, wide, danger, testId, extra, keepOpen, cancelLabel = "Cancel", cardClass, noOk }: ShellProps) {
   const ctl = useController();
+  const formRef = useRef<HTMLFormElement>(null);
   const cancel = () => {
     close();
     ctl.focusGrid();
   };
+  // Modal: focus starts inside the dialog (the first field, else the first button).
+  useEffect(() => {
+    const form = formRef.current;
+    if (!form || form.contains(document.activeElement)) return;
+    form.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  }, []);
   return (
     <div className={styles.overlay} onMouseDown={(e) => e.target === e.currentTarget && cancel()}>
       <form
+        ref={formRef}
         className={[styles.card, wide ? styles.wide : "", cardClass ?? ""].filter(Boolean).join(" ")}
         role="dialog"
+        aria-modal="true"
         aria-label={title}
         data-testid={testId}
         onKeyDown={(e) => {
@@ -88,7 +130,9 @@ export function Shell({ title, children, onSubmit, ok = "Apply", valid = true, w
             e.preventDefault();
             e.stopPropagation();
             cancel();
+            return;
           }
+          if (formRef.current) trapTab(formRef.current, e, document.activeElement);
         }}
         onSubmit={(e) => {
           e.preventDefault();

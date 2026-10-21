@@ -1,0 +1,424 @@
+/**
+ * Cell styles UI (W5-6D): the Styles panel (⌘F11: the named styles, apply on
+ * click, New style from selection, edit / delete, paint-can mode), the style
+ * editor, the AutoFormat dialog (17 presets with previews) and the Format
+ * Cells dialog (⌘1: Numbers / Font / Font Effects / Alignment / Borders /
+ * Background / Cell Protection).
+ */
+import type { AutoFormatOptions, CellStyleDto, StyleDto } from "@tally/bridge";
+import { useMemo, useState } from "react";
+import dlg from "../components/Dialogs.module.css";
+import { cx, useController } from "../context";
+import { a1 } from "../dataOps";
+import { FONT_SIZES, NUMBER_FORMATS } from "../formats";
+import { t } from "../i18n";
+import { formatNumberLite } from "../numfmtLite";
+import { rgbaToHex } from "../palette";
+import { useW56Store, type W56Dialog } from "../data/store";
+import { Check, ColorField, Field, Tabs, W56Shell, closeW56 } from "../data/W56Shell";
+import w56 from "../data/W56.module.css";
+import { AUTOFORMAT_OPTION_LABELS, AUTOFORMAT_PRESETS, DEFAULT_AUTOFORMAT_OPTIONS, PREVIEW_ROWS, previewCell, previewText } from "./autoformat";
+import { BORDER_EDGES, BORDER_STYLES, FONT_FAMILIES, H_ALIGNS, UNDERLINE_STYLES, V_ALIGNS, formatCellsError, patchFromState, presetEdges, stateFromStyle, toggleEdge, type FormatCellsState } from "./formatCells";
+
+type D<K extends W56Dialog["kind"]> = Extract<W56Dialog, { kind: K }>;
+
+// ---------------------------------------------------------------------------
+// Styles panel
+// ---------------------------------------------------------------------------
+
+function sampleStyle(s: StyleDto): React.CSSProperties {
+  return {
+    fontWeight: s.bold ? 700 : 400,
+    fontStyle: s.italic ? "italic" : "normal",
+    textDecoration: [s.underline ? "underline" : "", s.strike ? "line-through" : ""].filter(Boolean).join(" ") || undefined,
+    color: s.color === null ? undefined : rgbaToHex(s.color).slice(0, 7),
+    background: s.fill === null ? undefined : rgbaToHex(s.fill).slice(0, 7),
+    fontFamily: s.fontFamily ?? undefined,
+  };
+}
+
+export function StylesPanel() {
+  const ctl = useController();
+  const styles = useW56Store((s) => s.cellStyles);
+  const paint = useW56Store((s) => s.paintStyle);
+  useW56Store((s) => s.i18nRev);
+  const [selected, setSelected] = useState<string>("Default");
+  const sel = styles.find((s) => s.name === selected) ?? null;
+  return (
+    <aside className={w56.panel} aria-label={t("styles.title", "Styles")} data-testid="styles-panel">
+      <div className={w56.panelHead}>
+        <span className={w56.grow}>{t("styles.cellStyles", "Cell styles")}</span>
+        <button type="button" className={w56.iconBtn} aria-label={t("dialog.close", "Close")} onClick={() => useW56Store.getState().setPanel(null)}>
+          ×
+        </button>
+      </div>
+      <div className={w56.panelToolbar}>
+        <button type="button" className={paint ? w56.iconBtnOn : w56.iconBtn} title="Fill format mode: click cells to apply the selected style" aria-pressed={paint !== null} onClick={() => ctl.w56.togglePaintCan(selected)} data-testid="styles-paint">
+          🪣
+        </button>
+        <button type="button" className={w56.iconBtn} onClick={() => void ctl.w56.newStyleFromSelection()} data-testid="styles-new">
+          {t("styles.newStyle", "New style…")}
+        </button>
+        {sel ? (
+          <button type="button" className={w56.iconBtn} onClick={() => ctl.w56.editStyle(sel)} data-testid="styles-edit">
+            {t("dialog.edit", "Edit")}
+          </button>
+        ) : null}
+        {sel && !sel.builtin ? (
+          <button type="button" className={w56.iconBtn} onClick={() => void ctl.w56.deleteCellStyle(sel.name)} data-testid="styles-delete">
+            {t("dialog.delete", "Delete")}
+          </button>
+        ) : null}
+      </div>
+      <div className={w56.panelBody} role="listbox" aria-label={t("styles.cellStyles", "Cell styles")}>
+        {styles.map((s) => (
+          <button
+            key={s.name}
+            type="button"
+            role="option"
+            aria-selected={s.name === selected}
+            className={s.name === selected ? w56.styleRowOn : w56.styleRow}
+            onClick={() => {
+              setSelected(s.name);
+              void ctl.w56.applyCellStyle(s.name);
+            }}
+            onDoubleClick={() => ctl.w56.editStyle(s)}
+            data-testid={`style-${s.name}`}
+          >
+            <span className={w56.styleSample} style={sampleStyle(s.style)}>
+              Aa
+            </span>
+            <span className={w56.grow}>{s.name}</span>
+            {s.parent && s.parent !== "Default" ? <span className={w56.muted}>↳ {s.parent}</span> : null}
+          </button>
+        ))}
+        {styles.length === 0 ? <div className={cx(w56.muted, w56.navItem)}>No styles yet (the engine lists them once W5-2 lands).</div> : null}
+      </div>
+      {paint ? <div className={w56.modeBadge}>Fill format: {paint} (Esc stops)</div> : null}
+    </aside>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Style editor (new / edit)
+// ---------------------------------------------------------------------------
+
+export function StyleEditorDialog({ d }: { d: D<"styleEditor"> }) {
+  const ctl = useController();
+  const styles = useW56Store((s) => s.cellStyles);
+  const [name, setName] = useState(d.style.name);
+  const [parent, setParent] = useState(d.style.parent ?? "Default");
+  const [st, setSt] = useState<FormatCellsState>(() => stateFromStyle(d.style.style));
+  const taken = d.isNew && styles.some((s) => s.name.toLowerCase() === name.trim().toLowerCase());
+  const valid = name.trim() !== "" && !taken && formatCellsError(st) === null;
+  const submit = async () => {
+    const patch = patchFromState(st, undefined);
+    const base = d.style.style;
+    const style: StyleDto = {
+      ...base,
+      bold: patch.bold ?? base.bold,
+      italic: patch.italic ?? base.italic,
+      underline: patch.underline ?? base.underline,
+      strike: patch.strike ?? base.strike,
+      fontFamily: st.fontFamily === "" ? null : st.fontFamily,
+      fontSizePt: st.fontSizePt,
+      color: st.color,
+      fill: st.fill,
+      hAlign: st.hAlign,
+      vAlign: st.vAlign,
+      wrap: st.wrap,
+      indent: st.indent,
+      numberFormat: st.numberFormat.trim() === "" ? "General" : st.numberFormat.trim(),
+      rotationDeg: st.rotationDeg,
+      shrinkToFit: st.shrinkToFit,
+      underlineStyle: st.underline ? st.underlineStyle : null,
+    };
+    await ctl.w56.defineCellStyle({ name: name.trim(), parent: parent === "" ? null : parent, builtin: d.style.builtin && !d.isNew, style });
+  };
+  return (
+    <W56Shell title={d.isNew ? t("styles.newStyle", "New style…").replace(/…$/, "") : `${t("dialog.edit", "Edit")}: ${d.style.name}`} ok={d.isNew ? t("dialog.add", "Add") : t("dialog.apply", "Apply")} size="xwide" testId="style-editor" valid={valid} onSubmit={submit}>
+      <div className={w56.grid2}>
+        <Field label={t("dialog.name", "Name")}>
+          <input className={dlg.input} value={name} disabled={!d.isNew && d.style.builtin} autoFocus onChange={(e) => setName(e.target.value)} data-testid="style-name" />
+        </Field>
+        <Field label="Inherit from">
+          <select className={dlg.select} value={parent} disabled={name.trim() === "Default"} onChange={(e) => setParent(e.target.value)}>
+            <option value="">- none -</option>
+            {styles.filter((s) => s.name !== d.style.name).map((s) => (
+              <option key={s.name} value={s.name}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      {taken ? <p className={dlg.error}>A style with this name exists.</p> : null}
+      <FormatCellsTabs st={st} setSt={setSt} showProtection={false} />
+    </W56Shell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AutoFormat
+// ---------------------------------------------------------------------------
+
+export function AutoFormatDialog({ d }: { d: D<"autoFormat"> }) {
+  const ctl = useController();
+  const [preset, setPreset] = useState(AUTOFORMAT_PRESETS[4]?.name ?? "Default");
+  const [options, setOptions] = useState<AutoFormatOptions>(DEFAULT_AUTOFORMAT_OPTIONS);
+  const p = AUTOFORMAT_PRESETS.find((x) => x.name === preset) ?? AUTOFORMAT_PRESETS[0]!;
+  return (
+    <W56Shell title={t("cmd.format.autoFormat", "AutoFormat").replace(/…$/, "")} ok={t("dialog.ok", "OK")} size="xwide" testId="autoformat-dialog" onSubmit={() => void ctl.w56.applyAutoFormat(d.range, preset, options)}>
+      <p className={dlg.lead}>Applies a table format to {a1(d.range)}: the first row and column are headers, the last ones totals.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 12 }}>
+        <div className={w56.list} role="listbox" aria-label="Format" style={{ maxHeight: 300 }}>
+          {AUTOFORMAT_PRESETS.map((x) => (
+            <button key={x.name} type="button" role="option" aria-selected={x.name === preset} className={x.name === preset ? w56.listItemOn : w56.listItem} onClick={() => setPreset(x.name)} onDoubleClick={() => (closeW56(), void ctl.w56.applyAutoFormat(d.range, x.name, options))} data-testid={`autoformat-${x.name.replace(/\s+/g, "-").toLowerCase()}`}>
+              <span className={w56.styleSample} style={{ background: x.header[0], borderColor: x.border }} />
+              {x.name}
+            </button>
+          ))}
+        </div>
+        <div>
+          <table className={w56.previewTable} style={{ marginTop: 0 }} data-testid="autoformat-preview">
+            <tbody>
+              {PREVIEW_ROWS.map((row, r) => (
+                <tr key={r}>
+                  {row.map((_, c) => {
+                    const cell = previewCell(p, r, c, options);
+                    return (
+                      <td key={c} style={{ background: cell.bg, color: cell.fg, fontWeight: cell.bold ? 700 : 400, border: options.borders ? `1px solid ${p.border}` : "1px solid transparent", textAlign: options.alignment && c > 0 ? "right" : "left" }}>
+                        {previewText(p, r, c, options)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className={w56.section}>Formatting</div>
+          <div className={dlg.optionGrid}>
+            {AUTOFORMAT_OPTION_LABELS.map((o) => (
+              <Check key={o.key} label={o.label} checked={options[o.key]} onChange={(v) => setOptions({ ...options, [o.key]: v })} testId={`autoformat-opt-${o.key}`} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </W56Shell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Format Cells (⌘1)
+// ---------------------------------------------------------------------------
+
+type CellsTab = "numbers" | "font" | "effects" | "alignment" | "borders" | "background" | "protection";
+
+export function FormatCellsDialog({ d }: { d: D<"formatCells"> }) {
+  const ctl = useController();
+  const [st, setSt] = useState<FormatCellsState>(() => stateFromStyle(d.style));
+  const [protection, setProtection] = useState<{ locked: boolean | null; hiddenFormula: boolean | null }>({ locked: null, hiddenFormula: null });
+  const error = formatCellsError(st);
+  return (
+    <W56Shell title={t("cells.title", "Format Cells")} ok={t("dialog.ok", "OK")} size="xwide" testId="format-cells" valid={error === null} onSubmit={() => void ctl.w56.applyFormatCells(d.ranges, patchFromState(st, d.style), protection)}>
+      <FormatCellsTabs st={st} setSt={setSt} showProtection protection={protection} setProtection={setProtection} />
+      {error ? <p className={dlg.error}>{error}</p> : null}
+    </W56Shell>
+  );
+}
+
+function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection }: { st: FormatCellsState; setSt: (s: FormatCellsState) => void; showProtection: boolean; protection?: { locked: boolean | null; hiddenFormula: boolean | null }; setProtection?: (p: { locked: boolean | null; hiddenFormula: boolean | null }) => void }) {
+  const [tab, setTab] = useState<CellsTab>("numbers");
+  const tabs: { id: CellsTab; label: string }[] = [
+    { id: "numbers", label: t("cells.numbers", "Numbers") },
+    { id: "font", label: t("cells.font", "Font") },
+    { id: "effects", label: t("cells.fontEffects", "Font Effects") },
+    { id: "alignment", label: t("cells.alignment", "Alignment") },
+    { id: "borders", label: t("cells.borders", "Borders") },
+    { id: "background", label: t("cells.background", "Background") },
+    ...(showProtection ? [{ id: "protection" as const, label: t("cells.protection", "Cell Protection") }] : []),
+  ];
+  const samples = useMemo(() => [1234.5, -1234.5, 0].map((v) => formatNumberLite(v, st.numberFormat.trim() || "General")), [st.numberFormat]);
+  const previewStyle: React.CSSProperties = {
+    fontWeight: st.bold ? 700 : 400,
+    fontStyle: st.italic ? "italic" : "normal",
+    textDecoration: [st.underline ? "underline" : "", st.strike ? "line-through" : ""].filter(Boolean).join(" ") || undefined,
+    textDecorationStyle: st.underline ? (st.underlineStyle === "double" || st.underlineStyle === "doubleAccounting" ? "double" : st.underlineStyle === "dotted" ? "dotted" : st.underlineStyle === "dashed" ? "dashed" : st.underlineStyle === "wave" ? "wavy" : "solid") : undefined,
+    color: st.color === null ? undefined : rgbaToHex(st.color).slice(0, 7),
+    background: st.fill === null ? undefined : rgbaToHex(st.fill).slice(0, 7),
+    fontFamily: st.fontFamily || undefined,
+    fontSize: Math.min(28, st.fontSizePt) * 1.2,
+    transform: st.rotationDeg ? `rotate(${-st.rotationDeg}deg)` : undefined,
+    textAlign: st.hAlign === "general" ? "left" : (st.hAlign as "left" | "center" | "right" | "justify"),
+    paddingLeft: st.indent * 4,
+    display: "inline-block",
+    minWidth: 120,
+    padding: "6px 10px",
+  };
+  return (
+    <>
+      <Tabs label="Format" tabs={tabs} value={tab} onChange={setTab} />
+      {tab === "numbers" ? (
+        <div>
+          <div className={w56.chips}>
+            {NUMBER_FORMATS.map((f) => (
+              <button key={f.id} type="button" className={st.numberFormat.toLowerCase() === f.code.toLowerCase() ? w56.chipOn : w56.chip} onClick={() => setSt({ ...st, numberFormat: f.code })} data-testid={`cells-fmt-${f.id}`}>
+                {t(`fmt.${f.id}`, f.label)}
+              </button>
+            ))}
+          </div>
+          <Field label={t("fmt.formatCode", "Format code")} className={dlg.gap}>
+            <input className={cx(dlg.input, dlg.mono)} value={st.numberFormat} spellCheck={false} onChange={(e) => setSt({ ...st, numberFormat: e.target.value })} data-testid="cells-format-code" />
+          </Field>
+          <div className={dlg.preview}>
+            {samples.map((s, i) => (
+              <div key={i} className={dlg.previewRow}>
+                <span className={dlg.previewIn}>{[1234.5, -1234.5, 0][i]}</span>
+                <span className={dlg.previewOut}>{s ?? "(engine formats)"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {tab === "font" ? (
+        <div className={w56.grid2}>
+          <Field label={t("toolbar.font", "Font")}>
+            <select className={dlg.select} value={st.fontFamily} onChange={(e) => setSt({ ...st, fontFamily: e.target.value })} data-testid="cells-font">
+              {FONT_FAMILIES.map((f) => (
+                <option key={f} value={f}>
+                  {f === "" ? "Default (Inter)" : f}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t("toolbar.fontSize", "Font size")}>
+            <input className={dlg.input} type="number" min={1} max={409} step={0.5} list="cells-font-sizes" value={st.fontSizePt} onChange={(e) => setSt({ ...st, fontSizePt: Number(e.target.value) })} data-testid="cells-font-size" />
+            <datalist id="cells-font-sizes">
+              {FONT_SIZES.map((s) => (
+                <option key={s} value={s} />
+              ))}
+            </datalist>
+          </Field>
+          <Check label={t("cmd.format.bold", "Bold")} checked={st.bold} onChange={(v) => setSt({ ...st, bold: v })} testId="cells-bold" />
+          <Check label={t("cmd.format.italic", "Italic")} checked={st.italic} onChange={(v) => setSt({ ...st, italic: v })} />
+        </div>
+      ) : null}
+      {tab === "effects" ? (
+        <div className={w56.grid2}>
+          <Field label={t("toolbar.fontColor", "Font colour")}>
+            <ColorField value={st.color} onChange={(c) => setSt({ ...st, color: c })} allowNone testId="cells-color" />
+          </Field>
+          <span />
+          <Check label={t("cmd.format.underline", "Underline")} checked={st.underline} onChange={(v) => setSt({ ...st, underline: v })} testId="cells-underline" />
+          <Field label="Underline style">
+            <select className={dlg.select} value={st.underlineStyle} disabled={!st.underline} onChange={(e) => setSt({ ...st, underlineStyle: e.target.value as FormatCellsState["underlineStyle"] })} data-testid="cells-underline-style">
+              {UNDERLINE_STYLES.map((u) => (
+                <option key={u.style} value={u.style}>
+                  {u.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Check label={t("cmd.format.strike", "Strikethrough")} checked={st.strike} onChange={(v) => setSt({ ...st, strike: v })} />
+        </div>
+      ) : null}
+      {tab === "alignment" ? (
+        <div className={w56.grid2}>
+          <Field label={t("cells.horizontal", "Horizontal")}>
+            <select className={dlg.select} value={st.hAlign} onChange={(e) => setSt({ ...st, hAlign: e.target.value as FormatCellsState["hAlign"] })} data-testid="cells-halign">
+              {H_ALIGNS.map((h) => (
+                <option key={h.align} value={h.align}>
+                  {h.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t("cells.vertical", "Vertical")}>
+            <select className={dlg.select} value={st.vAlign} onChange={(e) => setSt({ ...st, vAlign: e.target.value as FormatCellsState["vAlign"] })}>
+              {V_ALIGNS.map((v) => (
+                <option key={v.align} value={v.align}>
+                  {v.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t("cells.indent", "Indent")}>
+            <input className={dlg.input} type="number" min={0} max={250} value={st.indent} onChange={(e) => setSt({ ...st, indent: Number(e.target.value) })} data-testid="cells-indent" />
+          </Field>
+          <Field label={`${t("cells.rotation", "Text orientation")} (°)`}>
+            <input className={dlg.input} type="number" min={-90} max={90} value={st.rotationDeg} onChange={(e) => setSt({ ...st, rotationDeg: Number(e.target.value) })} data-testid="cells-rotation" />
+          </Field>
+          <Check label={t("cmd.format.wrap", "Wrap text")} checked={st.wrap} onChange={(v) => setSt({ ...st, wrap: v })} />
+          <Check label={t("cells.shrinkToFit", "Shrink to fit cell size")} checked={st.shrinkToFit} onChange={(v) => setSt({ ...st, shrinkToFit: v })} testId="cells-shrink" />
+          <Check label="Vertically stacked" checked={st.stacked} onChange={(v) => setSt({ ...st, stacked: v })} />
+        </div>
+      ) : null}
+      {tab === "borders" ? (
+        <div>
+          <div className={w56.row}>
+            <button type="button" className={w56.chip} onClick={() => setSt(presetEdges(st, "none"))} data-testid="cells-borders-none">
+              {t("cells.noBorder", "No borders")}
+            </button>
+            <button type="button" className={w56.chip} onClick={() => setSt(presetEdges(st, "outer"))} data-testid="cells-borders-outer">
+              {t("cells.outerBorder", "Outer border")}
+            </button>
+            <button type="button" className={w56.chip} onClick={() => setSt(presetEdges(st, "all"))} data-testid="cells-borders-all">
+              {t("cells.allBorders", "All borders")}
+            </button>
+          </div>
+          <div className={w56.chips}>
+            {BORDER_EDGES.map((e) => {
+              const v = st.borders[e.edge];
+              const on = v !== undefined && v !== null;
+              const off = v === null;
+              return (
+                <button key={e.edge} type="button" className={on ? w56.chipOn : w56.chip} aria-pressed={on} title={off ? "Removed" : on ? "Set" : "Unchanged"} style={off ? { textDecoration: "line-through" } : undefined} onClick={() => setSt(toggleEdge(st, e.edge))} data-testid={`cells-border-${e.edge}`}>
+                  {e.label}
+                </button>
+              );
+            })}
+          </div>
+          <div className={w56.grid3}>
+            <Field label={t("cells.lineStyle", "Line style")}>
+              <select className={dlg.select} value={st.borderStyle} onChange={(e) => setSt({ ...st, borderStyle: e.target.value as FormatCellsState["borderStyle"] })}>
+                {BORDER_STYLES.map((b) => (
+                  <option key={b.style} value={b.style}>
+                    {b.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Width (px)">
+              <input className={dlg.input} type="number" min={1} max={8} value={st.borderWidth} onChange={(e) => setSt({ ...st, borderWidth: Math.max(1, Math.min(8, Number(e.target.value) || 1)) })} />
+            </Field>
+            <Field label={t("cells.lineColor", "Line colour")}>
+              <ColorField value={st.borderColor} onChange={(c) => setSt({ ...st, borderColor: c ?? st.borderColor })} />
+            </Field>
+          </div>
+          <p className={dlg.note}>Edges toggle between set (with the current line), removed and unchanged. The diagonals apply per cell.</p>
+        </div>
+      ) : null}
+      {tab === "background" ? (
+        <Field label={t("toolbar.fillColor", "Fill colour")}>
+          <ColorField value={st.fill} onChange={(c) => setSt({ ...st, fill: c })} allowNone testId="cells-fill" />
+        </Field>
+      ) : null}
+      {tab === "protection" && protection && setProtection ? (
+        <div>
+          <p className={dlg.lead}>Takes effect once the sheet is protected (Tools ▸ Protect Sheet…).</p>
+          <Check label={t("cells.protected", "Protected")} checked={protection.locked ?? st.locked} onChange={(v) => setProtection({ ...protection, locked: v })} testId="cells-locked" />
+          <Check label={t("cells.hideFormula", "Hide formula")} checked={protection.hiddenFormula ?? st.hiddenFormula} onChange={(v) => setProtection({ ...protection, hiddenFormula: v })} />
+        </div>
+      ) : null}
+      <div className={w56.section}>Preview</div>
+      <div style={{ overflow: "hidden", padding: 8, border: "1px solid var(--tally-border-subtle)", borderRadius: 8 }}>
+        <span style={previewStyle} data-testid="cells-preview">
+          {samples[0] ?? "1234.5"}
+        </span>
+      </div>
+    </>
+  );
+}
+
+/** Keeps the CellStyleDto import referenced for the panel's types. */
+export type { CellStyleDto };

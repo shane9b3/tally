@@ -59,7 +59,9 @@ export type DialogState =
   | { kind: "protectDocument"; protected: boolean; hasPassword: boolean }
   | { kind: "goalSeek"; formulaCell: string; target: string; variableCell: string }
   | { kind: "properties"; props: DocPropertiesDto }
-  | { kind: "pageSetup"; setup: PageSetupDto };
+  | { kind: "pageSetup"; setup: PageSetupDto }
+  /** Wave 5 (W5-0b): the Function Wizard skeleton (⌘F2); the argument editor comes in W5-6. */
+  | { kind: "functionWizard" };
 
 /** The AutoFilter popover of one column, anchored at client coordinates. */
 export interface FilterPopoverState {

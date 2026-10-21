@@ -69,6 +69,8 @@ import { toastWarnings, useUiStore } from "./stores/uiStore";
 import { detectSumRange, sumFormula, sumScanRanges } from "./sumRange";
 import { V3Features } from "./features";
 import { useV3Store } from "./stores/v3Store";
+import { W5Features } from "./objects/w5Features";
+import { W56Features } from "./data/w56";
 
 export interface ControllerOptions {
   /** Inside Tauri: the native menu owns its accelerators. */
@@ -116,6 +118,10 @@ export class AppController {
 
   /** v0.3 features (conditional formatting, validation, notes, links, protection, page setup…). */
   readonly v3: V3Features;
+  /** Wave 5 (W5-5): charts and pictures, print/PDF, split window, detective, view presets. */
+  readonly w5: W5Features;
+  /** Wave 5 (W5-6): DataPilot, data tools, styles, options, assists, navigator, i18n. */
+  readonly w56: W56Features;
 
   constructor(
     readonly client: EngineClientV3,
@@ -123,6 +129,8 @@ export class AppController {
     readonly opts: ControllerOptions,
   ) {
     this.v3 = new V3Features(this);
+    this.w5 = new W5Features(this);
+    this.w56 = new W56Features(this);
   }
 
   // -- lifecycle --------------------------------------------------------------
@@ -145,6 +153,7 @@ export class AppController {
           void this.refreshActive();
         }
       }),
+      this.w56.attach(),
     );
     return () => {
       this.offs.splice(0).forEach((f) => f());
@@ -154,7 +163,7 @@ export class AppController {
 
   async start(template?: string | null): Promise<void> {
     this.client.listFunctions().then(
-      (fns) => useFunctionsStore.getState().set(fns),
+      (fns) => this.w56.setFunctions(fns),
       () => undefined,
     );
     try {
@@ -186,6 +195,8 @@ export class AppController {
     void this.refreshFilter();
     void this.refreshNames();
     void this.v3.refreshSheet();
+    this.w5.refreshSheet();
+    this.w56.onLoad();
   }
 
   setGrid = (grid: GridCore | null): void => {
@@ -244,6 +255,8 @@ export class AppController {
     const first = res.errors.find((_, i) => !handled.has(i));
     if (first) useUiStore.getState().pushToast("error", friendlyError(first.code, first.message));
     this.v3.afterResult(res, ops);
+    this.w5.afterResult(res, ops);
+    this.w56.afterResult(res, ops);
     void this.refreshActive();
     const sheet = this.sheet;
     const filtered = useDataStore.getState().filter !== null;
@@ -283,7 +296,7 @@ export class AppController {
     try {
       const res = await this.client.cellEditInfo(info.doc, sheet, cell.r, cell.c);
       if (seq !== this.infoSeq) return;
-      useEditStore.getState().setActive({ sheet, cell, input: res.input, hint: res.hint, arrayRange: res.array ? (res.arrayRange ?? null) : null });
+      useEditStore.getState().setActive({ sheet, cell, input: this.w56.displayText(res.input), hint: res.hint, arrayRange: res.array ? (res.arrayRange ?? null) : null });
     } catch {
       // Quiet: background query (the stub engine does not support it).
       if (seq === this.infoSeq) useEditStore.getState().setActive({ sheet, cell, input: "", hint: null });
@@ -459,17 +472,21 @@ export class AppController {
     this.client.cellEditInfo(info.doc, this.sheet, cell.r, cell.c).then(
       (res) => {
         const cur = useEditStore.getState().edit;
-        this.editOriginal = res.input;
-        if (cur && cur.cell.r === cell.r && cur.cell.c === cell.c && cur.text === "") useEditStore.getState().change(res.input);
+        this.editOriginal = this.w56.displayText(res.input);
+        if (cur && cur.cell.r === cell.r && cur.cell.c === cell.c && cur.text === "") useEditStore.getState().change(this.editOriginal);
       },
       () => undefined,
     );
   };
 
-  onGridStartEdit = (cell: CellPos, seed?: string): void => this.startEdit(cell, seed, "grid");
+  onGridStartEdit = (cell: CellPos, seed?: string): void => {
+    if (seed === undefined && this.w56.maybeDrillDown(cell)) return;
+    this.startEdit(cell, seed, "grid");
+  };
 
   onEditChange = (text: string, caret: number): void => {
     useEditStore.getState().change(text, caret);
+    this.w56.onEditChange(text);
   };
 
   /** Commits the edit. The grid moves its own selection; the formula bar asks us to. */
@@ -509,7 +526,7 @@ export class AppController {
    * the row when the cell wraps or the text has line breaks (one undo step).
    */
   typingOps(sheet: number, cell: CellPos, text: string): Op[] {
-    const ops: Op[] = [{ type: "setCellInput", sheet, r: cell.r, c: cell.c, input: text }];
+    const ops: Op[] = [{ type: "setCellInput", sheet, r: cell.r, c: cell.c, input: this.w56.commitText(text) }];
     const source = useDocStore.getState().source;
     const view = source?.getCell(cell.r, cell.c);
     const wraps = source?.getStyle(drawStyleId(view))?.wrap ?? false;
@@ -661,6 +678,7 @@ export class AppController {
     const st = useEditStore.getState();
     const edit = st.edit;
     if (!edit) return false;
+    if (this.w56.editorKey(e)) return true;
     const mod = e.metaKey || e.ctrlKey;
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (e.key === "Enter" && mod && e.shiftKey && !e.altKey) {
@@ -769,6 +787,7 @@ export class AppController {
   // -- clipboard ----------------------------------------------------------------
 
   copy = async (): Promise<boolean> => {
+    if (await this.w5.clipboard("copy")) return true;
     try {
       const doc = this.requireDoc();
       if ((this.selection.others ?? []).length > 0) {
@@ -791,6 +810,7 @@ export class AppController {
    * moves it (`moveRange`, so references follow), as in Calc.
    */
   cut = async (): Promise<void> => {
+    if (await this.w5.clipboard("cut")) return;
     if (!(await this.copy())) return;
     const clip = useDataStore.getState().clip;
     if (clip) useDataStore.getState().setClip({ ...clip, cut: true });
@@ -806,6 +826,7 @@ export class AppController {
 
   /** Pastes TSV text or an internal clipboard token at the selection. */
   pasteData(text: string, token: string | null, valuesOnly: boolean): Promise<ApplyResult | null> {
+    if (!valuesOnly && this.w5.wantsChartPaste(text)) return this.w5.charts.pasteChart().then(() => null);
     if ((valuesOnly || !token) && text === "") return Promise.resolve(null);
     const target = { ...this.selection.range };
     const clip = useDataStore.getState().clip;
@@ -908,6 +929,8 @@ export class AppController {
     void this.refreshActive();
     void this.refreshFilter();
     void this.v3.refreshSheet();
+    this.w5.refreshSheet();
+    this.w56.onSheet();
     if (focus) this.focusGrid();
   }
 
@@ -1205,16 +1228,8 @@ export class AppController {
         go();
         return;
       }
-      const keep = filled.find((v) => v.r === range.r0 && v.c === range.c0)?.text;
-      const n = others.length;
-      useUiStore.getState().openDialog({
-        kind: "confirm",
-        title: "Merge cells?",
-        message: `Only the top-left value will be kept${keep ? ` (“${keep}”)` : ""}. The contents of ${n === 1 ? "1 other cell" : `${n} other cells`} will be deleted (Undo brings them back).`,
-        ok: "Merge",
-        danger: true,
-        onConfirm: go,
-      });
+      // §51: AOO asks whether to move the hidden cells' contents into the first cell.
+      if (!this.w56.mergePrompt(range, filled, go)) go();
     } catch (e) {
       this.notifyError(e);
     }
@@ -1369,7 +1384,7 @@ export class AppController {
     const sel = this.selection.range;
     const inSel = edit.cell.r >= sel.r0 && edit.cell.r <= sel.r1 && edit.cell.c >= sel.c0 && edit.cell.c <= sel.c1;
     const range = block ?? (inSel ? { ...sel } : { r0: edit.cell.r, c0: edit.cell.c, r1: edit.cell.r, c1: edit.cell.c });
-    const op = arrayFormulaOp(this.sheet, range, edit.text);
+    const op = arrayFormulaOp(this.sheet, range, this.w56.commitText(edit.text));
     if (!op) {
       useUiStore.getState().pushToast("info", "An array formula starts with = (type it, then press ⌃⇧↩).");
       return;

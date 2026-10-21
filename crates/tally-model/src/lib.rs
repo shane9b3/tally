@@ -1328,10 +1328,15 @@ pub struct NameData {
     pub sheet: Option<u32>,
     /// Expression in the OpenFormula dialect, e.g. `of:=[$Sheet1.$A$1:.$A$10]`.
     ///
-    /// Relative references are relative to cell A1 of the first sheet (the
-    /// model has no base cell; ODS `table:base-cell-address` is ignored on
-    /// read and written as `$<first sheet>.$A$1`).
+    /// Relative references are relative to `base_cell` when set, else to
+    /// cell A1 of the first sheet (ODS `table:base-cell-address`; XLSX
+    /// defined names are absolute).
     pub formula: String,
+    /// The base cell of relative references `(sheet index, row, col)`
+    /// (wave 5, W5-2: ODS `table:base-cell-address`). `None` = A1 of the
+    /// first sheet.
+    #[serde(default)]
+    pub base_cell: Option<(u32, u32, u32)>,
 }
 
 /// Document-level settings.
@@ -1822,6 +1827,7 @@ mod tests {
             ],
             styles: vec![bold],
             names: vec![NameData {
+                base_cell: None,
                 name: "Total".into(),
                 sheet: None,
                 formula: "of:=[$Orders.$A$1:.$A$2]".into(),

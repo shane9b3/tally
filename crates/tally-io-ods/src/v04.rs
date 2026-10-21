@@ -26,7 +26,7 @@ use crate::{OdsError, WriteReport};
 /// table:comment=… table:border-color=… table:display-border=…
 /// table:copy-back=… table:copy-styles=… table:protected=…/>`.
 pub(crate) fn write_scenario(s: &mut String, sheet: &SheetData) {
-    let _ = (s, sheet);
+    crate::tools::write_scenario(s, sheet);
 }
 
 /// Writes `table:shapes` (page-anchored frames).
@@ -45,7 +45,7 @@ pub(crate) fn write_shapes(s: &mut String, sheet: &SheetData, tab: usize) {
 /// TODO(W5-2): emit the open tags; `write.rs` already stops repeated
 /// runs at group boundaries.
 pub(crate) fn write_group_starts(s: &mut String, groups: &[OutlineGroupData], i: u32, rows: bool) {
-    let _ = (s, groups, i, rows);
+    crate::tools::write_group_starts(s, groups, i, rows);
 }
 
 /// Closes every column/row group that ends at index `i` (innermost
@@ -53,7 +53,7 @@ pub(crate) fn write_group_starts(s: &mut String, groups: &[OutlineGroupData], i:
 ///
 /// TODO(W5-2): emit the close tags.
 pub(crate) fn write_group_ends(s: &mut String, groups: &[OutlineGroupData], i: u32, rows: bool) {
-    let _ = (s, groups, i, rows);
+    crate::tools::write_group_ends(s, groups, i, rows);
 }
 
 /// The group boundaries after `i` (starts and `end + 1`), so repeated
@@ -75,7 +75,7 @@ pub(crate) fn next_group_boundary(groups: &[OutlineGroupData], i: u32) -> Option
 /// …/>` for charts and `<draw:image xlink:href="Pictures/…"/>` for
 /// pictures.
 pub(crate) fn write_cell_frames(s: &mut String, sheet: &SheetData, tab: usize, r: u32, c: u32) {
-    let _ = (s, sheet, tab, r, c);
+    crate::frame::write_cell_frames(s, None, sheet, tab, r, c);
 }
 
 /// `true` when a cell holds an anchored object, so the row/cell writer
@@ -84,8 +84,18 @@ pub(crate) fn write_cell_frames(s: &mut String, sheet: &SheetData, tab: usize, r
 /// TODO(W5-1): look up `sheet.charts`/`sheet.images` anchors (index them
 /// once per sheet in `write_sheet`).
 pub(crate) fn cell_has_frame(sheet: &SheetData, r: u32, c: u32) -> bool {
-    let _ = (sheet, r, c);
-    false
+    crate::frame::cell_has_frame(sheet, r, c)
+}
+
+/// The anchor cells of the sheet's charts and pictures (the cell writer
+/// gives each an empty cell so the frame has a place to go).
+pub(crate) fn frame_anchor_cells(sheet: &SheetData) -> Vec<(u32, u32)> {
+    sheet
+        .charts
+        .iter()
+        .map(|c| (c.anchor.row, c.anchor.col))
+        .chain(sheet.images.iter().map(|i| (i.anchor.row, i.anchor.col)))
+        .collect()
 }
 
 /// Writes the named database ranges of every sheet inside
@@ -96,14 +106,13 @@ pub(crate) fn cell_has_frame(sheet: &SheetData, r: u32, c: u32) -> bool {
 /// `table:filter` (standard/advanced filter, `table:filter-or`/`-and`,
 /// `table:condition-source-range-address`) and `table:subtotal-rules`.
 pub(crate) fn write_named_database_ranges(s: &mut String, data: &WorkbookData) {
-    let _ = (s, data);
+    crate::tools::write_named_database_ranges(s, data);
 }
 
 /// `true` when [`write_named_database_ranges`] will emit something, so
 /// `write.rs` opens the `table:database-ranges` element.
 pub(crate) fn has_named_database_ranges(data: &WorkbookData) -> bool {
-    let _ = data;
-    false
+    crate::tools::has_named_database_ranges(data)
 }
 
 /// Writes `table:data-pilot-tables` after `table:database-ranges`.
@@ -118,7 +127,7 @@ pub(crate) fn has_named_database_ranges(data: &WorkbookData) -> bool {
 /// (subtotals, members, display-info, sort-info, layout-info),
 /// `table:data-pilot-field-reference` and `table:data-pilot-groups`.
 pub(crate) fn write_pivots(s: &mut String, data: &WorkbookData) {
-    let _ = (s, data);
+    crate::tools::write_pivots(s, data);
 }
 
 /// The manifest entries of the chart objects and pictures
@@ -129,8 +138,7 @@ pub(crate) fn write_pivots(s: &mut String, data: &WorkbookData) {
 ///
 /// TODO(W5-1): list them from `SheetData::charts`/`images`.
 pub(crate) fn object_manifest_entries(data: &WorkbookData) -> Vec<(String, String)> {
-    let _ = data;
-    Vec::new()
+    crate::frame::object_manifest_entries(data)
 }
 
 /// Writes the chart objects (`Object N/content.xml`, `Object N/styles.xml`)
@@ -146,8 +154,7 @@ pub(crate) fn write_objects<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     report: &mut WriteReport,
 ) -> Result<(), OdsError> {
-    let _ = (data, zip, report);
-    Ok(())
+    crate::frame::write_objects(data, zip, report)
 }
 
 /// Writes the per-sheet view options and split position into
@@ -157,7 +164,7 @@ pub(crate) fn write_objects<W: Write + Seek>(
 ///
 /// TODO(W5-2/W5-5): emit the config items.
 pub(crate) fn write_view_settings(s: &mut String, sheet: &SheetData) {
-    let _ = (s, sheet);
+    crate::tools::write_view_settings(s, sheet);
 }
 
 #[cfg(test)]

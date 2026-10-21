@@ -10,11 +10,17 @@ information. All readers produce, and all writers consume,
 | ODS (OpenDocument spreadsheet) | `tally-io-ods` | yes | yes | read + write |
 | XLSX (Office Open XML, Excel 2007+) | `tally-io-xlsx` | yes | yes | read only |
 | CSV / TSV | `tally-io-csv` | yes | yes | read + write |
+| XLS (Excel 97–2003, BIFF8) | `tally-io-xls` (calamine 0.37) | yes | no | read + write |
+| SXC (StarOffice 6 / OpenOffice.org 1.x) | `tally-io-ods` (`sxc.rs`) | yes | no | read + write |
+| HTML tables | `tally-io-html` | yes | yes | read + write |
+| dBase III/IV (`.dbf`) | `tally-io-dbf` | yes | yes | read + write |
+| PDF | `tally-io-pdf` (krilla 0.8.2) | no | yes (export, print, preview) | export |
 
 AOO 4.1 imports `.xlsx` but cannot save it (see
 `docs/calc-features-inventory.md`, "Calc MS Excel 2007 XML"). Tally writes it.
-XLSB, XLSM macros, XLS (BIFF) and strict-OOXML-only packages are not
-supported; an `.xlsb` is reported as `XlsxError::Unsupported`.
+XLSB, XLSM macros, XLS export and strict-OOXML-only packages are not
+supported; an `.xlsb` is reported as `XlsxError::Unsupported`. The wave-5
+formats are described at the end of this page.
 
 ## v0.3 feature coverage
 
@@ -225,13 +231,14 @@ share it in a common crate). Tests: `crates/tally-io-xlsx/tests/malicious.rs`
 
 ### Known gaps
 
-- No images, charts, tables or pivot tables, in either direction. Hyperlinks
+- No tables (Excel structured tables), in either direction; pivot tables and
+  named styles are best effort (see "Wave 5 data tools"). Hyperlinks
   on numeric or formula cells are not written (`rust_xlsxwriter` stores
   links as string cells). Custom paper sizes are written as the default
   paper. An ODF-only password hash (SHA-256 without the companion legacy
   hash) is dropped on XLSX export (reported).
-- Named cell styles are flattened into cell formats; `applyX` flags are not
-  consulted (a cell xf's ids are taken as the effective formatting).
+- `applyX` flags are not consulted (a cell xf's ids are taken as the
+  effective formatting).
 - Rich text runs are flattened to plain text.
 - Row styles (`<row s customFormat="1">`) are not imported.
 - Theme colours ignore a custom `theme1.xml`.
@@ -243,3 +250,217 @@ share it in a common crate). Tests: `crates/tally-io-xlsx/tests/malicious.rs`
   written as a numeric result (`rust_xlsxwriter` infers the result type).
 - A D1900 workbook re-imports as D1899 (same dates, different epoch).
 - Only one underline style (single) and solid fills are written.
+
+## Wave 5 data tools (W5-2)
+
+What the DataPilot, outline, scenario, database-range, named-style and
+format-extras state looks like in each format, and what each direction
+loses.
+
+### ODS
+
+- **DataPilot**: `table:data-pilot-tables` / `table:data-pilot-table` with
+  `table:source-cell-range` or `table:database-source-table`
+  (`table:table-name` = a named database range), `table:target-range-address`
+  (the last written output), `table:grand-total`, `table:ignore-empty-rows`,
+  `table:identify-categories`, `table:show-filter-button`,
+  `table:drill-down-on-double-click`; one `table:data-pilot-field` per
+  row/column/page/data field with `table:orientation`, `table:function`,
+  `table:selected-page`, `table:data-pilot-level` (`table:show-empty`,
+  `data-pilot-subtotals` with `auto`/named functions, `data-pilot-members`
+  with `table:display` for hidden items and the manual order,
+  `data-pilot-display-info`, `data-pilot-sort-info`, `data-pilot-layout-info`),
+  `table:data-pilot-field-reference` (show-as) and `table:data-pilot-groups`
+  (numeric and date groups; extra date parts go into
+  `table:application-data`). The "Data" pseudo-field is written as
+  `table:is-data-layout-field`. Data-field captions are kept in
+  `table:application-data`. Field names are resolved against the source's
+  header row on read. The output cells are plain values in the target sheet;
+  Tally recomputes on `RefreshPivot`, never on load (as AOO).
+- **Outline**: `table:table-row-group` / `table:table-column-group`
+  (nested, `table:display="false"` for collapsed). The rows/columns of a
+  collapsed group are written `table:visibility="collapse"` as AOO does;
+  on read they are unhidden again and hidden by the group instead (a third
+  hidden source next to user-hidden and filtered rows).
+- **Scenarios**: each scenario is a hidden sheet right after its base sheet
+  with `table:scenario` (`table:scenario-ranges`, `table:is-active`,
+  `table:display-border`, `table:border-color`, `table:copy-back`,
+  `table:copy-styles`, `table:copy-formulas`, `table:protected`,
+  `table:comment`); the reader folds it into `SheetData::scenarios` of the
+  base sheet (values inside the scenario ranges). Tally stores no styles
+  with a scenario (`copy_styles` round-trips as a flag only).
+- **Database ranges**: `table:database-range` with `table:name`,
+  `table:contains-header`, `table:display-filter-buttons`, a `table:filter`
+  (the 16 standard operators as `=`, `!=`, `<`, `>`, `<=`, `>=`,
+  `top values`, `bottom values`, `top percent`, `bottom percent`, `contains`,
+  `does-not-contain`, `begins-with`, `does-not-begin-with`, `ends-with`,
+  `does-not-end-with`; AND runs inside `table:filter-or`; `table:case-sensitive`
+  on the conditions, `table:display-duplicates="false"` for "no duplicates",
+  `table:condition-source-range-address` for an advanced filter,
+  `table:target-range-address` for "copy results to") and
+  `table:subtotal-rules` (`table:sort-groups`, `table:subtotal-rule` with
+  `table:subtotal-field`). A sheet-level standard filter or subtotal
+  definition without a named range is written on the anonymous
+  `__Anonymous_Sheet_DB__N` range when the sheet has no AutoFilter.
+- **Named cell styles**: `office:styles` `style:style
+  style:family="table-cell"` with `style:parent-style-name` (and
+  `style:display-name`; names are escaped `_20_`-style). Cell automatic
+  styles name their base style as parent. Attributes are stored resolved,
+  so a redefined parent in another application does not change Tally's
+  children (and vice versa). The number format of a named style is not
+  written (the cells carry theirs).
+- **Format extras**: `style:rotation-angle`, `style:direction="ttb"`
+  (stacked), `style:shrink-to-fit`, `style:diagonal-tl-br` /
+  `style:diagonal-bl-tr`, `style:text-underline-style` / `-type` / `-width`
+  (double, dotted, dashed, wave, bold) and `fo:margin-left` (indent in
+  10 pt steps).
+- **View options**: `ShowFormulas`, `ShowZeroValues`, `ShowGrid`,
+  `HasColumnRowHeaders`, `IsValueHighlightingEnabled` in the sheet's
+  `settings.xml` entry.
+- **Names** (review 3, H3/H4): `table:base-cell-address` is read into
+  `NameData::base_cell` and relative references are parsed against it, so
+  "the cell to the left" names from AOO/LibreOffice evaluate where they
+  should; the base is written back. A name that is legal in AOO's
+  1,024-column grid but reads as a cell reference in Tally's 16,384 columns
+  (`Rel2`, `Tax1`) is renamed with a trailing `_` (`Rel2_`), the file's
+  formulas still resolve the original spelling, and `WorkbookInfo.warnings`
+  lists the renames; invalid names are dropped with a warning.
+
+### XLSX
+
+- **Outline**: `outlineLevel` / `collapsed` / `hidden` on rows and columns
+  (`sheetFormatPr outlineLevelRow/Col`, `outlinePr`); on read a group at
+  level *k* is every maximal run of rows/columns with level ≥ *k*, collapsed
+  when the run is hidden or the next row carries `collapsed`. Adjacent
+  groups of the same level cannot be written (rust_xlsxwriter refuses them;
+  reported and skipped).
+- **Scenarios**: `<scenarios current show><scenario name comment locked
+  count><inputCells r val/>` (at most 32 cells per scenario, values only; a
+  read scenario has one range per cell).
+- **Pivot tables**: written as a post-pass patch of the package:
+  `xl/pivotCache/pivotCacheDefinitionN.xml` (`saveData="0"
+  refreshOnLoad="1"`, `cacheFields` with `sharedItems` for the axis
+  fields), `xl/pivotTables/pivotTableN.xml` (`location`, `pivotFields`,
+  `rowFields`/`colFields`/`pageFields`, `dataFields` with the 11 subtotal
+  functions, the Data pseudo-field as `x="-2"`), the workbook `pivotCaches`,
+  the relationships and content types. Best effort: Excel rebuilds the
+  table on load. Read: the definition only (fields, functions, layout,
+  totals, location); show-as, grouping, sorting and hidden items are not
+  translated.
+- **Named cell styles**: `cellStyles`/`cellStyleXfs` (the `Normal` style is
+  `Default`; `xfId` gives a cell's base style). Tally writes the names with
+  default-looking `cellStyleXfs` entries; the attributes stay on the cells.
+- **Format extras**: `alignment textRotation` (0–90, 91–180, 255 =
+  stacked), `shrinkToFit`, `indent`, `u val="double|singleAccounting|
+  doubleAccounting"`, `border diagonalUp/diagonalDown` with `diagonal`.
+- **View options**: `sheetView showGridLines/showZeros/showFormulas/
+  showRowColHeaders`.
+
+## Wave 5 formats (W5-3)
+
+Formats are sniffed by content before the extension (`service/codec.rs`): a
+zip whose `mimetype` is the ODS or SXC type, the OLE2 signature for XLS, the
+dBase header (only with a `.dbf` extension or no extension), HTML tags for
+`.html`/`.htm`/`.xhtml` (and extension-less or `.txt` files that start with
+a document), else CSV.
+
+### XLS, Excel 97–2003 (`crates/tally-io-xls`, read only)
+
+Read through calamine 0.37 (MIT): sheet names, order and visibility; cell
+values (numbers, text, booleans, errors); dates and times (as serials with
+a `YYYY-MM-DD`, `HH:MM:SS` or `[HH]:MM:SS` format, the 1904 date system
+honoured); formulas with their cached results, converted from calamine's
+ExcelA1 text to OpenFormula through `tally_io_xlsx::excel_formula_to_of`
+(a formula calamine cannot decode keeps its cached value and is counted in
+a warning); merged areas. Not available from calamine, so not read: column
+widths, row heights, cell styles, number formats other than dates, names,
+hidden rows, notes, charts. BIFF5 files are read the same way; BIFF2–4
+(Excel 2–4) are refused. Export is not supported (documented in
+`docs/parity-deviations.md`); save as XLSX instead. Pre-checks: the OLE2
+signature, file size ≤ 256 MiB, ≤ 1024 sheets, ≤ 10 M cells, ≤ 512 MiB of
+text; calamine runs under `catch_unwind`, so a malformed stream is an error.
+
+### SXC, OpenOffice.org 1.x (`crates/tally-io-ods/src/sxc.rs`, read only)
+
+The OOo 1.0 XML format maps onto the ODS reader through a name translation
+applied while the XML is read (`XmlReader::new_legacy`):
+`table:value-type`/`table:value`/`table:date-value`/… → `office:*`;
+`office:body` → `office:spreadsheet` (OOo 1.x has no spreadsheet element);
+one `style:properties` element per style → the ODF text/cell/paragraph/
+column/row properties (also accepted by the ODS parser itself);
+`style:text-underline="single"` → `style:text-underline-style="solid"`.
+Formulas have no prefix and native syntax (`=SUM(A1:B1)`, `=Sheet2.A1`,
+`='My Sheet'.A1`); references are bracketed into OpenFormula
+(`oooc:=SUM([.A1:.B1])`). Values, formulas with cached results, styles and
+data styles, column widths, row heights, merges, named ranges, annotations,
+the document locale (`fo:language`/`fo:country` of the default style) and
+print ranges are read. `.stc` templates open as untitled documents. The
+same limits as ODS apply. Not written.
+
+### HTML (`crates/tally-io-html`, read and write)
+
+Import: an own tolerant tokenizer (no DOM, no script execution). Every
+`<table>` becomes a sheet named after its `<caption>` (else `Table1`,
+`Table2`, …; names are made unique); `<tr>`/`<td>`/`<th>` with `colspan`
+and `rowspan` (which produce merged areas); `<br>` breaks lines;
+`<script>`, `<style>`, `<template>`, comments, doctypes and processing
+instructions are skipped; entities are decoded; whitespace is collapsed;
+nested tables flow into the parent cell's text; empty tables are dropped.
+Cells arrive as text and the engine runs the document locale's input
+recognition over them (as it does for CSV), so `1,234.5` and `12/31/2026`
+become a number and a date while `=1+1` stays text (formulas are never
+evaluated from HTML). Limits: 64 MiB of input, 1024 tables, 10 M cells,
+64 KiB per cell; the rest is cut with a warning. The same reader serves the
+HTML clipboard paste.
+
+Export (`FileFormat::Html`): a UTF-8 document with one `<table>` per
+visible sheet, the sheet name as `<caption>`, `colspan`/`rowspan` for
+merges, values formatted with their number formats in the document locale,
+inline styles for bold/italic/underline, font family and size, text and
+background colours and horizontal alignment (numbers right-aligned by
+default), everything escaped. Formulas are exported as their results.
+
+### dBase (`crates/tally-io-dbf`, read and write)
+
+Import: dBase III/IV and FoxPro-compatible tables (version bytes 0x02–0x05,
+0x07, 0x30/0x31, 0x43, 0x7B, 0x83, 0x8B, 0x8E, 0xCB, 0xE5, 0xF5, 0xFB).
+Field types `C`/`V` (text), `N`/`F`/`Y` (numbers), `D` (`YYYYMMDD` → date
+serial with a `YYYY-MM-DD` format), `L` (`T`/`Y` → TRUE, `F`/`N` → FALSE,
+`?` → empty); `M`, `B`, `G`, `T`, `I`, `+` and other types leave the cell
+empty. Deleted records (`*`) are skipped. The first row holds the field
+names (as AOO imports). Text is decoded with the code page of the header's
+language driver id (cp437, cp850, cp852 through built-in tables; ibm866,
+windows-1250…1257, macintosh, Shift_JIS, GBK, Big5, EUC-KR through
+`encoding_rs`; unknown ids → windows-1252) unless `DbfOptions::encoding`
+names one. Limits: 256 MiB, 2 M records, 1024 fields, 10 M cells; a header
+whose record count or record length disagrees with the data is refused.
+
+Export (`FileFormat::Dbf`, first visible sheet): a dBase III header
+(version 0x03, language driver of the chosen code page, windows-1252 by
+default). The first row supplies the field names (upper-cased, 10
+characters, made unique); each column's type is inferred from its values:
+all dates → `D`, all booleans → `L`, all numbers → `N` with the widest
+integer part and most decimals seen (≤ 20 characters), otherwise `C` with
+the longest encoded text (≤ 254 bytes, longer text is cut). Unencodable
+characters become `?`.
+
+### PDF, printing and preview (`crates/tally-io-pdf`)
+
+One rendering serves Export PDF, Print and the preview: the engine paginates
+(`crates/tally-engine/src/print.rs`, see `docs/api.md` for the queries)
+and builds a `PrintJob` of fills, lines, text and SVG items in points;
+`tally_io_pdf::render_pdf` writes it with krilla 0.8.2 (MIT/Apache-2.0;
+fonts subsetted by `subsetter`, charts through krilla-svg/usvg), and
+`rasterize` renders a page to PNG with hayro 0.7.1 for the preview. The
+static Inter 4.1 faces (Regular, Bold, Italic, BoldItalic; OFL-1.1, see
+NOTICE) are embedded; other families are looked up in the system fonts
+(fontdb) and fall back to Inter with a warning; characters a face lacks
+fall back per character to an installed face (CJK) or are drawn as the
+`.notdef` box with a warning. Cells print with their fills (conditional
+fills included), borders (solid/dashed/dotted/double), alignment, wrapping,
+overflow into empty neighbours, `###` for numbers that do not fit,
+optional gridlines and row/column headers, headers and footers with
+`&[PAGE]`-style placeholders, charts from the SVGs the UI supplies, notes
+on a page at the end when the page setup asks for it. Pictures and
+conditional data bars/icons are not printed yet. The PDF has no outline,
+tags or links.

@@ -103,14 +103,18 @@ pub fn goal_seek(wb: &Workbook, req: &GoalSeekRequest) -> Result<GoalSeekResult,
     };
     let tol = 1e-9 * req.target.abs().max(1.0);
     let mut best = (x0, f64::INFINITY);
+    // A root is reported only when it was bracketed (a sign change) or the
+    // secant steps settled; an asymptote (`EXP(x) = 0`, `1/x = 0`) gets
+    // |f| below the tolerance while x keeps running away (review 3, LOW).
+    let mut settled = false;
     let note = |x: f64, fx: f64, best: &mut (f64, f64)| {
         if fx.abs() < best.1.abs() {
             *best = (x, fx);
         }
     };
-    let done = |best: &(f64, f64), p: &Probe| -> GoalSeekResult {
+    let done = |best: &(f64, f64), p: &Probe, settled: bool| -> GoalSeekResult {
         GoalSeekResult {
-            found: best.1.abs() <= tol,
+            found: best.1.abs() <= tol && settled,
             value: best.0,
             result: best.1 + p.target,
             iterations: p.evals,
@@ -127,7 +131,7 @@ pub fn goal_seek(wb: &Workbook, req: &GoalSeekRequest) -> Result<GoalSeekResult,
     };
     note(x0, f0, &mut best);
     if f0.abs() <= tol {
-        return Ok(done(&best, &p));
+        return Ok(done(&best, &p, true));
     }
     // Secant from (x0, f0) and a nearby point.
     let mut a = (x0, f0);
@@ -139,7 +143,7 @@ pub fn goal_seek(wb: &Workbook, req: &GoalSeekRequest) -> Result<GoalSeekResult,
             b_x = x0 - step;
             match p.f(b_x) {
                 Some(fb) => (b_x, fb),
-                None => return Ok(done(&best, &p)),
+                None => return Ok(done(&best, &p, false)),
             }
         }
     };
@@ -162,6 +166,9 @@ pub fn goal_seek(wb: &Workbook, req: &GoalSeekRequest) -> Result<GoalSeekResult,
         match p.f(next) {
             Some(fx) => {
                 note(next, fx, &mut best);
+                if (next - b.0).abs() <= 1e-7 * next.abs().max(1.0) {
+                    settled = true;
+                }
                 a = b;
                 b = (next, fx);
             }
@@ -193,6 +200,7 @@ pub fn goal_seek(wb: &Workbook, req: &GoalSeekRequest) -> Result<GoalSeekResult,
     }
     // Illinois regula falsi inside the bracket.
     if let Some((mut lo, mut hi)) = bracket {
+        settled = true;
         let mut side = 0i8;
         while p.budget() && best.1.abs() > tol {
             let denom = hi.1 - lo.1;
@@ -226,7 +234,17 @@ pub fn goal_seek(wb: &Workbook, req: &GoalSeekRequest) -> Result<GoalSeekResult,
             }
         }
     }
-    Ok(done(&best, &p))
+    // A candidate the secant reached in a few large steps (a linear model
+    // hits the root exactly) is confirmed by a sign change around it;
+    // an asymptote has none.
+    if !settled && best.1.abs() <= tol && p.evals + 2 <= MAX_ITERATIONS {
+        let x = best.0;
+        let delta = 1e-6 * x.abs().max(1.0);
+        if let (Some(lo), Some(hi)) = (p.f(x - delta), p.f(x + delta)) {
+            settled = lo == 0.0 || hi == 0.0 || lo.signum() != hi.signum();
+        }
+    }
+    Ok(done(&best, &p, settled))
 }
 
 #[cfg(test)]

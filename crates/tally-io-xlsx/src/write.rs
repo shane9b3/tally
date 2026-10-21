@@ -117,7 +117,12 @@ fn format_of(s: &StyleData, report: &mut Report) -> Format {
         f = f.set_italic();
     }
     if s.font.underline {
-        f = f.set_underline(FormatUnderline::Single);
+        f = f.set_underline(match s.font.underline_style {
+            tally_model::UnderlineStyleData::Double => FormatUnderline::Double,
+            tally_model::UnderlineStyleData::SingleAccounting => FormatUnderline::SingleAccounting,
+            tally_model::UnderlineStyleData::DoubleAccounting => FormatUnderline::DoubleAccounting,
+            _ => FormatUnderline::Single,
+        });
     }
     if s.font.strike {
         f = f.set_font_strikethrough();
@@ -158,6 +163,28 @@ fn format_of(s: &StyleData, report: &mut Report) -> Format {
     }
     if s.align.indent > 0 {
         f = f.set_indent(s.align.indent);
+    }
+    if s.align.stacked {
+        f = f.set_rotation(270);
+    } else if s.align.rotation_deg != 0 {
+        f = f.set_rotation(s.align.rotation_deg.clamp(-90, 90));
+    }
+    if s.align.shrink_to_fit {
+        f = f.set_shrink();
+    }
+    match (&s.borders.diagonal_down, &s.borders.diagonal_up) {
+        (None, None) => {}
+        (down, up) => {
+            let l = down.as_ref().or(up.as_ref()).expect("one diagonal");
+            f = f
+                .set_border_diagonal(border(l))
+                .set_border_diagonal_color(rgb(l.color))
+                .set_border_diagonal_type(match (down.is_some(), up.is_some()) {
+                    (true, true) => rust_xlsxwriter::FormatDiagonalBorder::BorderUpDown,
+                    (true, false) => rust_xlsxwriter::FormatDiagonalBorder::BorderDown,
+                    _ => rust_xlsxwriter::FormatDiagonalBorder::BorderUp,
+                });
+        }
     }
     let b = &s.borders;
     if let Some(l) = &b.top {
@@ -505,8 +532,8 @@ impl SheetWriter<'_> {
         crate::write_v03::write_notes(ws, sheet, warn);
         crate::write_v03::write_page_setup(ws, sheet, warn)?;
         // Wave 5 (placeholders until W5-1/W5-2 land).
-        crate::write_v04::write_outline(ws, sheet)?;
-        crate::write_v04::write_charts(ws, sheet, self.sheet_index, warn)?;
+        crate::write_v04::write_outline(ws, sheet, warn)?;
+        crate::write_v04::write_charts(ws, sheet, self.sheet_index, self.resolver, warn)?;
         crate::write_v04::write_images(ws, sheet, warn)?;
         if let Some(p) = &sheet.protection {
             crate::write_v03::write_protection(ws, p);
@@ -515,6 +542,13 @@ impl SheetWriter<'_> {
             if rows > 0 || cols > 0 {
                 ws.set_freeze_panes(rows.min(MAX_ROWS - 1), col_num(cols.min(MAX_COLS - 1)))?;
             }
+        }
+        if sheet
+            .view_options
+            .as_ref()
+            .is_some_and(|v| !v.show_gridlines)
+        {
+            ws.set_screen_gridlines(false);
         }
         if let Some(c) = sheet.tab_color {
             ws.set_tab_color(rgb(c));
@@ -731,6 +765,8 @@ pub(crate) fn write(
     // Wave 5 parts added through the patches pass (placeholders).
     crate::write_v04::scenario_patches(data, &mut patches, &mut report);
     crate::write_v04::pivot_patches(data, &mut patches, &mut report);
+    crate::tools::style_patches(data, &mut patches);
+    crate::tools::view_patches(data, &mut patches);
     let bytes = if patches.is_empty() {
         bytes
     } else {

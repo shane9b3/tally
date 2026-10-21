@@ -12,6 +12,9 @@ import { pretty } from "../pretty";
 import { useDocStore } from "../stores/docStore";
 import { toSelectionDto, useSelectionStore } from "../stores/selectionStore";
 import { useUiStore } from "../stores/uiStore";
+import { useW56Store } from "../data/store";
+import { KIND_KEYS } from "../i18n/locales";
+import { t } from "../i18n";
 import { SparkIcon } from "./icons";
 import styles from "./CommandPalette.module.css";
 
@@ -34,6 +37,8 @@ function PaletteCard() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [functions, setFunctions] = useState<FunctionInfo[]>([]);
   const doc = useDocStore((s) => s.info?.doc);
+  const i18nRev = useW56Store((s) => s.i18nRev);
+  const kindLabel = (kind: string): string => (KIND_KEYS[kind] ? t(KIND_KEYS[kind] ?? "", kind) : kind);
   const close = (focus = true) => {
     useUiStore.getState().setPalette(false);
     if (focus) ctl.focusGrid();
@@ -65,7 +70,8 @@ function PaletteCard() {
 
   const answers = suggestions.filter((s) => s.formula !== null);
   const actionHints = suggestions.filter((s) => s.formula === null && s.action !== null && ctl.registry.has(s.action));
-  const commands = useMemo(() => ctl.registry.list(), [ctl]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const commands = useMemo(() => ctl.registry.list(), [ctl, i18nRev]);
 
   return (
     <div
@@ -146,7 +152,7 @@ function PaletteCard() {
               return (
                 <Command.Item
                   key={c.id}
-                  value={`${c.title} ${c.id}`}
+                  value={`${c.title} ${c.id} ${kindLabel(c.kind)}`}
                   keywords={c.keywords ?? []}
                   disabled={!enabled}
                   className={styles.item}
@@ -159,7 +165,7 @@ function PaletteCard() {
                   <span className={styles.title}>{c.title}</span>
                   {!enabled && c.reason ? <span className={styles.reason}>{c.reason}</span> : null}
                   {c.shortcut ? <kbd className={styles.shortcut}>{c.shortcut}</kbd> : null}
-                  <span className={styles.kind}>{c.kind}</span>
+                  <span className={styles.kind}>{kindLabel(c.kind)}</span>
                 </Command.Item>
               );
             })}

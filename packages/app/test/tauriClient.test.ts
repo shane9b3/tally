@@ -1,6 +1,6 @@
 import type { Transaction } from "@tally/bridge";
 import { describe, expect, it, vi } from "vitest";
-import { COMMANDS, TauriClient, type InvokeArgs, type TauriEvent } from "@tally/bridge/tauri";
+import { COMMANDS, TauriClient, V4_METHODS, W56_SHELL_COMMANDS, type InvokeArgs, type TauriEvent } from "@tally/bridge/tauri";
 
 function fake(result: unknown = null) {
   const calls: { cmd: string; args: InvokeArgs | undefined }[] = [];
@@ -112,7 +112,9 @@ describe("TauriClient", () => {
       { cmd: "open_url", args: { url: "https://example.com" } },
       { cmd: "user_name", args: undefined },
     ]);
-    expect(new Set(calls.map((c) => c.cmd))).toEqual(new Set(Object.values(COMMANDS)));
+    // Wave-5 commands (`V4_METHODS`, `wb_export_pdf`, `wb_print`) are covered by tauriClientV4.test.ts.
+    const v4 = new Set<string>([...V4_METHODS.map((m) => COMMANDS[m]), COMMANDS.exportPdf, COMMANDS.print, ...W56_SHELL_COMMANDS.map((m) => COMMANDS[m])]);
+    expect(new Set(calls.map((c) => c.cmd))).toEqual(new Set(Object.values(COMMANDS).filter((c) => !v4.has(c))));
   });
 
   it("rejects with ApiError objects", async () => {

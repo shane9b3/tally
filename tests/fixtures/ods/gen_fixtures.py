@@ -581,6 +581,354 @@ def gen_csv():
     w("empty.csv", b"")
 
 
+# ---------------------------------------------------------------------------
+# Charts (LibreOffice 7.x shaped embedded chart objects; wave 5, W5-1)
+# ---------------------------------------------------------------------------
+
+CHART_NS = (
+    ' xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
+    ' xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"'
+    ' xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"'
+    ' xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"'
+    ' xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"'
+    ' xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"'
+    ' xmlns:xlink="http://www.w3.org/1999/xlink"'
+    ' xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0"'
+    ' xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"'
+    ' xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0"'
+    ' xmlns:ooo="http://openoffice.org/2004/office"'
+    ' xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0"'
+)
+
+CHART_STYLES_XML = (
+    DECL
+    + '<office:document-styles%s office:version="1.3"><office:styles/><office:automatic-styles/><office:master-styles/></office:document-styles>' % CHART_NS
+)
+
+PNG_1x1 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    b"\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x02\x00\xde\xf2\x8a\xbb\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+def chart_doc(auto_styles, body):
+    return (
+        DECL
+        + '<office:document-content%s office:version="1.3">' % CHART_NS
+        + "<office:automatic-styles>%s</office:automatic-styles>" % auto_styles
+        + "<office:body><office:chart>%s</office:chart></office:body></office:document-content>" % body
+    )
+
+
+def lo_column_chart():
+    """A clustered column chart of Data.A1:C6 with a title, legend, Y grid,
+    data labels on the second series and a data style on the Y axis (the
+    shape LibreOffice 7.6 writes)."""
+    auto = (
+        '<number:number-style style:name="N0"><number:number number:min-integer-digits="1"/></number:number-style>'
+        '<style:style style:name="ch1" style:family="chart"><style:graphic-properties draw:stroke="none" draw:fill="none"/></style:style>'
+        '<style:style style:name="ch2" style:family="chart"><style:chart-properties chart:auto-position="true"/><style:text-properties fo:font-size="13pt" style:font-size-asian="13pt" style:font-size-complex="13pt"/></style:style>'
+        '<style:style style:name="ch3" style:family="chart"><style:chart-properties chart:auto-position="true"/><style:text-properties fo:font-size="10pt"/></style:style>'
+        '<style:style style:name="ch4" style:family="chart"><style:chart-properties chart:stacked="false" chart:percentage="false" chart:three-dimensional="false" chart:vertical="false" chart:right-angled-axes="true" chart:include-hidden-cells="false" chart:auto-position="true" chart:auto-size="true" chart:treat-empty-cells="leave-gap"/></style:style>'
+        '<style:style style:name="ch5" style:family="chart" style:data-style-name="N0"><style:chart-properties chart:display-label="true" chart:logarithmic="false" chart:reverse-direction="false" chart:axis-position="start"/><style:graphic-properties svg:stroke-color="#b3b3b3"/><style:text-properties fo:font-size="10pt"/></style:style>'
+        '<style:style style:name="ch6" style:family="chart"><style:chart-properties chart:display-label="true" chart:logarithmic="false" chart:minimum="0" chart:maximum="120" chart:interval-major="20" chart:reverse-direction="false" chart:axis-position="0"/><style:graphic-properties svg:stroke-color="#b3b3b3"/><style:text-properties fo:font-size="10pt"/></style:style>'
+        '<style:style style:name="ch7" style:family="chart"><style:graphic-properties svg:stroke-color="#b3b3b3"/></style:style>'
+        '<style:style style:name="ch8" style:family="chart"><style:chart-properties chart:symbol-type="none" chart:link-data-style-to-source="true"/><style:graphic-properties draw:fill-color="#004586" svg:stroke-color="#004586"/></style:style>'
+        '<style:style style:name="ch9" style:family="chart"><style:chart-properties chart:data-label-number="value" chart:data-label-text="false" chart:data-label-symbol="false" chart:label-position="outside" chart:symbol-type="none" chart:link-data-style-to-source="true"/><style:graphic-properties draw:fill-color="#ff420e" svg:stroke-color="#ff420e"/></style:style>'
+        '<style:style style:name="ch10" style:family="chart"><style:graphic-properties draw:fill="solid" draw:fill-color="#e6e6e6" draw:stroke="none"/></style:style>'
+    )
+    body = (
+        '<chart:chart svg:width="16cm" svg:height="9cm" xlink:href=".." xlink:type="simple" chart:class="chart:bar" chart:style-name="ch1">'
+        '<chart:title svg:x="6cm" svg:y="0.2cm" chart:style-name="ch2"><text:p>Sales <text:span text:style-name="T1">2026</text:span></text:p></chart:title>'
+        '<chart:legend chart:legend-position="end" svg:x="13cm" svg:y="4cm" style:legend-expansion="high" chart:style-name="ch3"/>'
+        '<chart:plot-area chart:style-name="ch4" table:cell-range-address="Data.A1:Data.C6" chart:data-source-has-labels="both" svg:x="1cm" svg:y="1cm" svg:width="11cm" svg:height="7cm">'
+        '<chart:axis chart:dimension="x" chart:name="primary-x" chart:style-name="ch5"><chart:title chart:style-name="ch3"><text:p>Month</text:p></chart:title><chart:categories table:cell-range-address="Data.A2:Data.A6"/></chart:axis>'
+        '<chart:axis chart:dimension="y" chart:name="primary-y" chart:style-name="ch6"><chart:title chart:style-name="ch3"><text:p>k€</text:p></chart:title><chart:grid chart:style-name="ch7" chart:class="major"/></chart:axis>'
+        '<chart:series chart:style-name="ch8" chart:values-cell-range-address="Data.B2:Data.B6" chart:label-cell-address="Data.B1" chart:class="chart:bar"><chart:data-point chart:repeated="5"/></chart:series>'
+        '<chart:series chart:style-name="ch9" chart:values-cell-range-address="Data.C2:Data.C6" chart:label-cell-address="Data.C1" chart:class="chart:bar"><chart:data-point chart:repeated="5"/></chart:series>'
+        '<chart:wall chart:style-name="ch10"/><chart:floor chart:style-name="ch10"/></chart:plot-area>'
+        '<table:table table:name="local-table"><table:table-header-columns><table:table-column/></table:table-header-columns><table:table-columns><table:table-column table:number-columns-repeated="2"/></table:table-columns>'
+        '<table:table-header-rows><table:table-row><table:table-cell><text:p/></table:table-cell><table:table-cell office:value-type="string"><text:p>Sales</text:p></table:table-cell><table:table-cell office:value-type="string"><text:p>Costs</text:p></table:table-cell></table:table-row></table:table-header-rows>'
+        '<table:table-rows>'
+        + "".join(
+            '<table:table-row><table:table-cell office:value-type="string"><text:p>%s</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="%s"><text:p>%s</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="%s"><text:p>%s</text:p></table:table-cell></table:table-row>'
+            % (m, a, a, b, b)
+            for m, a, b in [("Jan", 10, 4), ("Feb", 20, 8), ("Mar", 35, 12), ("Apr", 50, 20), ("May", 100, 40)]
+        )
+        + "</table:table-rows></table:table></chart:chart>"
+    )
+    return chart_doc(auto, body)
+
+
+def lo_pie_chart():
+    """A 3D exploded pie of the Sales column (page anchored in table:shapes)."""
+    auto = (
+        '<style:style style:name="ch1" style:family="chart"><style:graphic-properties draw:stroke="none" draw:fill="solid" draw:fill-color="#ffffcc"/></style:style>'
+        '<style:style style:name="ch2" style:family="chart"><style:chart-properties chart:three-dimensional="true" chart:deep="false" chart:sort-by-x-values="false" chart:right-angled-axes="true"/></style:style>'
+        '<style:style style:name="ch3" style:family="chart"><style:chart-properties chart:pie-offset="20" chart:data-label-number="percentage" chart:data-label-text="true" chart:label-position="outside"/></style:style>'
+    )
+    body = (
+        '<chart:chart svg:width="8cm" svg:height="7cm" xlink:href=".." xlink:type="simple" chart:class="chart:circle" chart:style-name="ch1">'
+        '<chart:legend chart:legend-position="bottom"/>'
+        '<chart:plot-area chart:style-name="ch2" table:cell-range-address="Data.A1:Data.B6" chart:data-source-has-labels="both">'
+        '<chart:axis chart:dimension="x" chart:name="primary-x"><chart:categories table:cell-range-address="Data.A2:Data.A6"/></chart:axis>'
+        '<chart:axis chart:dimension="y" chart:name="primary-y"/>'
+        '<chart:series chart:style-name="ch3" chart:values-cell-range-address="Data.B2:Data.B6" chart:label-cell-address="Data.B1" chart:class="chart:circle"><chart:data-point chart:repeated="5"/></chart:series>'
+        '<chart:wall/><chart:floor/></chart:plot-area></chart:chart>'
+    )
+    return chart_doc(auto, body)
+
+
+def lo_line_chart():
+    """A line chart with a smooth second series on the secondary Y axis
+    (logarithmic), a linear regression with equation and R², standard
+    deviation error bars and a mean value line."""
+    auto = (
+        '<style:style style:name="ch1" style:family="chart"><style:graphic-properties draw:stroke="none" draw:fill="none"/></style:style>'
+        '<style:style style:name="ch2" style:family="chart"><style:chart-properties chart:stacked="false" chart:percentage="false" chart:three-dimensional="false" chart:symbol-type="automatic" chart:interpolation="cubic-spline" chart:lines="true"/></style:style>'
+        '<style:style style:name="ch3" style:family="chart"><style:chart-properties chart:display-label="true" chart:logarithmic="false"/></style:style>'
+        '<style:style style:name="ch4" style:family="chart"><style:chart-properties chart:display-label="true" chart:logarithmic="true" chart:minimum="1" chart:maximum="1000"/></style:style>'
+        '<style:style style:name="ch5" style:family="chart"><style:chart-properties chart:symbol-type="named-symbol" chart:symbol-name="diamond" chart:symbol-width="0.25cm" chart:symbol-height="0.25cm"/><style:graphic-properties svg:stroke-color="#579d1c"/></style:style>'
+        '<style:style style:name="ch6" style:family="chart"><style:chart-properties chart:regression-type="linear"/><style:graphic-properties svg:stroke-color="#000000"/></style:style>'
+        '<style:style style:name="ch7" style:family="chart"><style:chart-properties chart:error-category="standard-deviation" chart:error-upper-indicator="true" chart:error-lower-indicator="true"/></style:style>'
+        '<style:style style:name="ch8" style:family="chart"><style:chart-properties chart:symbol-type="none"/><style:graphic-properties svg:stroke-color="#7e0021"/></style:style>'
+        '<style:style style:name="ch9" style:family="chart"><style:graphic-properties svg:stroke-color="#b3b3b3"/></style:style>'
+    )
+    body = (
+        '<chart:chart svg:width="12cm" svg:height="8cm" xlink:href=".." xlink:type="simple" chart:class="chart:line" chart:style-name="ch1">'
+        '<chart:title><text:p>Trend</text:p></chart:title><chart:subtitle><text:p>with regression</text:p></chart:subtitle>'
+        '<chart:legend chart:legend-position="top"/>'
+        '<chart:plot-area chart:style-name="ch2" table:cell-range-address="Data.A1:Data.C6" chart:data-source-has-labels="both">'
+        '<chart:axis chart:dimension="x" chart:name="primary-x" chart:style-name="ch3"><chart:categories table:cell-range-address="Data.A2:Data.A6"/><chart:grid chart:class="minor"/></chart:axis>'
+        '<chart:axis chart:dimension="y" chart:name="primary-y" chart:style-name="ch3"><chart:grid chart:style-name="ch9" chart:class="major"/></chart:axis>'
+        '<chart:axis chart:dimension="y" chart:name="secondary-y" chart:style-name="ch4"/>'
+        '<chart:series chart:style-name="ch5" chart:values-cell-range-address="Data.B2:Data.B6" chart:label-cell-address="Data.B1" chart:class="chart:line">'
+        '<chart:regression-curve chart:style-name="ch6"><chart:equation chart:display-equation="true" chart:display-r-square="true"/></chart:regression-curve>'
+        '<chart:error-indicator chart:style-name="ch7" chart:dimension="y"/><chart:mean-value chart:style-name="ch9"/><chart:data-point chart:repeated="5"/></chart:series>'
+        '<chart:series chart:style-name="ch8" chart:values-cell-range-address="Data.C2:Data.C6" chart:label-cell-address="Data.C1" chart:class="chart:line" chart:attached-axis="secondary-y"><chart:data-point chart:repeated="5"/></chart:series>'
+        '<chart:wall/><chart:floor/></chart:plot-area></chart:chart>'
+    )
+    return chart_doc(auto, body)
+
+
+def gen_charts():
+    d = os.path.join(ODS_DIR, "charts")
+    os.makedirs(d, exist_ok=True)
+    auto = (
+        '<style:style style:name="co1" style:family="table-column"><style:table-column-properties style:column-width="2.258cm"/></style:style>'
+        '<style:style style:name="ro1" style:family="table-row"><style:table-row-properties style:row-height="0.452cm" style:use-optimal-row-height="true"/></style:style>'
+        '<style:style style:name="ta1" style:family="table" style:master-page-name="Default"><style:table-properties table:display="true" style:writing-mode="lr-tb"/></style:style>'
+        '<style:style style:name="gr1" style:family="graphic"><style:graphic-properties draw:stroke="none" draw:fill="none"/></style:style>'
+    )
+    data = [("Jan", 10, 4), ("Feb", 20, 8), ("Mar", 35, 12), ("Apr", 50, 20), ("May", 100, 40)]
+    frame1 = (
+        '<draw:frame draw:z-index="0" draw:name="Object 1" draw:style-name="gr1" svg:width="16cm" svg:height="9cm" svg:x="0.3cm" svg:y="0.1cm" table:end-cell-address="Data.K21" table:end-x="1.2cm" table:end-y="0.4cm">'
+        '<draw:object draw:notify-on-update-of-ranges="Data.A1:Data.C6" xlink:href="./Object 1" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/>'
+        '<draw:image xlink:href="./ObjectReplacements/Object 1" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>'
+    )
+    frame3 = (
+        '<draw:frame draw:z-index="2" draw:name="Object 3" draw:style-name="gr1" svg:width="12cm" svg:height="8cm" svg:x="0cm" svg:y="0cm" table:end-cell-address="Data.J40" table:end-x="0cm" table:end-y="0cm">'
+        '<draw:object xlink:href="./Object 3" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>'
+    )
+    frame_img = (
+        '<draw:frame draw:z-index="3" draw:name="Image 1" draw:style-name="gr1" svg:width="2cm" svg:height="2cm" svg:x="0.5cm" svg:y="0.2cm" table:end-cell-address="Data.F3" table:end-x="0.2cm" table:end-y="0.1cm">'
+        '<draw:image xlink:href="Pictures/10000000000000010000000149B5DCBA.png" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"><text:p/></draw:image></draw:frame>'
+    )
+    frame_math = (
+        '<draw:frame draw:z-index="4" draw:name="Object 4" svg:width="2cm" svg:height="1cm" svg:x="0cm" svg:y="0cm">'
+        '<draw:object xlink:href="./Object 4" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>'
+    )
+    rows = ['<table:table-row table:style-name="ro1">' + str_cell("Month") + str_cell("Sales") + str_cell("Costs") + '<table:table-cell table:number-columns-repeated="1021"/></table:table-row>']
+    for i, (m, a, b) in enumerate(data):
+        extra = ""
+        if i == 0:
+            # D2: the column chart (cell-anchored) and the picture in F2.
+            extra = '<table:table-cell>%s</table:table-cell><table:table-cell/><table:table-cell>%s</table:table-cell><table:table-cell table:number-columns-repeated="1018"/>' % (frame1, frame_img)
+        elif i == 1:
+            extra = '<table:table-cell>%s%s</table:table-cell><table:table-cell table:number-columns-repeated="1020"/>' % (frame3, frame_math)
+        else:
+            extra = '<table:table-cell table:number-columns-repeated="1021"/>'
+        rows.append('<table:table-row table:style-name="ro1">' + str_cell(m) + float_cell(a) + float_cell(b) + extra + "</table:table-row>")
+    shapes = (
+        '<table:shapes><draw:frame draw:z-index="1" draw:name="Object 2" draw:style-name="gr1" svg:width="8cm" svg:height="7cm" svg:x="9cm" svg:y="6cm">'
+        '<draw:object xlink:href="./Object 2" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame></table:shapes>'
+    )
+    table = (
+        '<table:table table:name="Data" table:style-name="ta1">' + shapes
+        + '<table:table-column table:style-name="co1" table:number-columns-repeated="1024" table:default-cell-style-name="Default"/>'
+        + "".join(rows)
+        + '<table:table-row table:style-name="ro1" table:number-rows-repeated="1048570"><table:table-cell table:number-columns-repeated="1024"/></table:table-row>'
+        + "</table:table>"
+    )
+    extra_manifest = [
+        ("Object 1/", "application/vnd.oasis.opendocument.chart"), ("Object 1/content.xml", "text/xml"), ("Object 1/styles.xml", "text/xml"),
+        ("Object 2/", "application/vnd.oasis.opendocument.chart"), ("Object 2/content.xml", "text/xml"), ("Object 2/styles.xml", "text/xml"),
+        ("Object 3/", "application/vnd.oasis.opendocument.chart"), ("Object 3/content.xml", "text/xml"), ("Object 3/styles.xml", "text/xml"),
+        ("Object 4/", "application/vnd.oasis.opendocument.formula"), ("Object 4/content.xml", "text/xml"),
+        ("ObjectReplacements/Object 1", "application/x-openoffice-gdimetafile;windows_formatname=\"GDIMetaFile\""),
+        ("Pictures/10000000000000010000000149B5DCBA.png", "image/png"),
+    ]
+    man = [DECL, '<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.3">\n',
+           ' <manifest:file-entry manifest:full-path="/" manifest:version="1.3" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/>\n']
+    for f in ["content.xml", "styles.xml", "meta.xml", "settings.xml"]:
+        man.append(' <manifest:file-entry manifest:full-path="%s" manifest:media-type="text/xml"/>\n' % f)
+    for path, mt in extra_manifest:
+        man.append(' <manifest:file-entry manifest:full-path="%s" manifest:media-type="%s"/>\n' % (path, mt.replace('"', "&quot;")))
+    man.append("</manifest:manifest>\n")
+    math = DECL + '<math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>x</mi></semantics></math>'
+    write_zip(
+        os.path.join(d, "libreoffice-charts.ods"),
+        [
+            ("META-INF/manifest.xml", "".join(man)),
+            ("content.xml", content_doc(table, auto)),
+            ("styles.xml", LO_STYLES),
+            ("meta.xml", meta("LibreOffice/7.6.4.1$Linux_X86_64 LibreOffice_project/e19e193f88cd6c0525a17fb7a176ed8e6a3e2aa1")),
+            ("settings.xml", settings("Data", [("Data", (0, 0, 0, 0))])),
+            ("Object 1/content.xml", lo_column_chart()),
+            ("Object 1/styles.xml", CHART_STYLES_XML),
+            ("Object 2/content.xml", lo_pie_chart()),
+            ("Object 2/styles.xml", CHART_STYLES_XML),
+            ("Object 3/content.xml", lo_line_chart()),
+            ("Object 3/styles.xml", CHART_STYLES_XML),
+            ("Object 4/content.xml", math),
+            ("ObjectReplacements/Object 1", b"VCLMTF" + b"\0" * 16),
+            ("Pictures/10000000000000010000000149B5DCBA.png", PNG_1x1),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Data tools (LibreOffice 7.x shaped: named styles, outline groups, a
+# scenario sheet, a named database range with a standard filter and
+# subtotal rules, a DataPilot table; wave 5, W5-2)
+# ---------------------------------------------------------------------------
+
+TOOLS_STYLES = (
+    DECL
+    + '<office:document-styles%s office:version="1.3"><office:styles>' % NS
+    + '<style:default-style style:family="table-cell"><style:paragraph-properties style:tab-stop-distance="1.25cm"/></style:default-style>'
+    + '<style:style style:name="Default" style:family="table-cell"/>'
+    + '<style:style style:name="Heading" style:family="table-cell" style:parent-style-name="Default"><style:table-cell-properties style:text-align-source="fix" style:repeat-content="false"/><style:paragraph-properties fo:text-align="center"/><style:text-properties fo:font-size="16pt" fo:font-style="italic" fo:font-weight="bold"/></style:style>'
+    + '<style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="table-cell" style:parent-style-name="Heading"><style:table-cell-properties style:rotation-angle="90"/></style:style>'
+    + '<style:style style:name="Result" style:family="table-cell" style:parent-style-name="Default"><style:text-properties fo:font-style="italic" style:text-underline-style="solid" style:text-underline-width="auto" style:text-underline-color="font-color" fo:font-weight="bold"/></style:style>'
+    + '<style:style style:name="Money" style:family="table-cell" style:parent-style-name="Result"><style:table-cell-properties fo:background-color="#ffffcc" style:shrink-to-fit="true" style:diagonal-bl-tr="0.74pt solid #ff0000"/><style:paragraph-properties fo:margin-left="0.706cm"/><style:text-properties style:text-underline-style="solid" style:text-underline-type="double" style:text-underline-width="auto" style:text-underline-color="font-color"/></style:style>'
+    + "</office:styles><office:automatic-styles/><office:master-styles/></office:document-styles>"
+)
+
+TOOLS_AUTO = (
+    BASE_AUTO
+    + '<style:style style:name="ta2" style:family="table" style:master-page-name="Default"><style:table-properties table:display="false" style:writing-mode="lr-tb"/></style:style>'
+    + '<style:style style:name="ce1" style:family="table-cell" style:parent-style-name="Heading"><style:text-properties fo:color="#ff0000"/></style:style>'
+    + '<style:style style:name="ce2" style:family="table-cell" style:parent-style-name="Money"/>'
+    + '<style:style style:name="ce3" style:family="table-cell" style:parent-style-name="Default"><style:table-cell-properties style:rotation-angle="45" style:rotation-align="none" style:shrink-to-fit="true" style:diagonal-tl-br="0.74pt solid #000000"/></style:style>'
+)
+
+
+def tools_content():
+    def r(cells, extra=""):
+        return '<table:table-row table:style-name="ro1"%s>%s</table:table-row>' % (extra, "".join(cells))
+
+    data = (
+        '<table:table table:name="Data" table:style-name="ta1">'
+        '<table:table-column table:style-name="co1" table:default-cell-style-name="Default"/>'
+        '<table:table-column-group table:display="true">'
+        '<table:table-column table:style-name="co1" table:number-columns-repeated="2" table:default-cell-style-name="Default"/>'
+        "</table:table-column-group>"
+        '<table:table-column table:style-name="co1" table:default-cell-style-name="Default"/>'
+        + r([
+            '<table:table-cell table:style-name="ce1" office:value-type="string" calcext:value-type="string"><text:p>Region</text:p></table:table-cell>',
+            str_cell("Product"), str_cell("Qty"), str_cell("Amount"),
+        ])
+        + '<table:table-row-group table:display="true">'
+        + r([str_cell("East"), str_cell("Apple"), float_cell(10), float_cell(100, "ce2")])
+        + '<table:table-row-group table:display="false">'
+        + r([str_cell("East"), str_cell("Pear"), float_cell(5), float_cell(60)], ' table:visibility="collapse"')
+        + r([str_cell("East"), str_cell("Plum"), float_cell(2), float_cell(30)], ' table:visibility="collapse"')
+        + "</table:table-row-group>"
+        + r([str_cell("West"), str_cell("Apple"), float_cell(20), float_cell(200)])
+        + "</table:table-row-group>"
+        + r([str_cell("West"), str_cell("Pear"), float_cell(9), float_cell(110, "ce3")])
+        + r([str_cell("West"), str_cell("Plum"), float_cell(3), float_cell(35)])
+        + "</table:table>"
+    )
+    scenario = (
+        '<table:table table:name="High" table:style-name="ta2">'
+        '<table:scenario table:scenario-ranges="Data.C2:Data.C3" table:is-active="false" table:display-border="true" table:border-color="#0000ff" table:copy-back="true" table:copy-styles="false" table:copy-formulas="true" table:comment="what if" table:protected="false"/>'
+        '<table:table-column table:style-name="co1" table:number-columns-repeated="3" table:default-cell-style-name="Default"/>'
+        + r(['<table:table-cell table:number-columns-repeated="3"/>'])
+        + r(['<table:table-cell table:number-columns-repeated="2"/>', float_cell(99)])
+        + r(['<table:table-cell table:number-columns-repeated="2"/>', float_cell(55)])
+        + "</table:table>"
+    )
+    pivot_sheet = (
+        '<table:table table:name="Pivot" table:style-name="ta1">'
+        '<table:table-column table:style-name="co1" table:number-columns-repeated="3" table:default-cell-style-name="Default"/>'
+        + r([str_cell("Region"), str_cell("Sum - Amount")])
+        + r([str_cell("East"), float_cell(190)])
+        + r([str_cell("West"), float_cell(345)])
+        + r([str_cell("Total Result"), float_cell(535)])
+        + "</table:table>"
+    )
+    dbranges = (
+        "<table:database-ranges>"
+        '<table:database-range table:name="Sales" table:target-range-address="Data.A1:Data.D7" table:contains-header="true" table:display-filter-buttons="false">'
+        '<table:filter table:display-duplicates="false"><table:filter-or>'
+        '<table:filter-condition table:field-number="0" table:value="East" table:operator="=" table:data-type="text" table:case-sensitive="true"/>'
+        '<table:filter-and>'
+        '<table:filter-condition table:field-number="2" table:value="2" table:operator="top values" table:data-type="number"/>'
+        '<table:filter-condition table:field-number="1" table:value="P" table:operator="begins-with" table:data-type="text"/>'
+        "</table:filter-and>"
+        "</table:filter-or></table:filter>"
+        '<table:subtotal-rules table:case-sensitive="false" table:page-breaks-on-group-change="true" table:bind-styles-to-content="false">'
+        '<table:sort-groups table:data-type="automatic" table:order="descending"/>'
+        '<table:subtotal-rule table:group-by-field-number="0"><table:subtotal-field table:field-number="3" table:function="sum"/><table:subtotal-field table:field-number="2" table:function="average"/></table:subtotal-rule>'
+        "</table:subtotal-rules>"
+        "</table:database-range>"
+        "</table:database-ranges>"
+    )
+    pivots = (
+        "<table:data-pilot-tables>"
+        '<table:data-pilot-table table:name="DataPilot1" table:application-data="" table:grand-total="both" table:show-filter-button="false" table:drill-down-on-double-click="true" table:target-range-address="Pivot.A1:Pivot.B4" table:ignore-empty-rows="true">'
+        '<table:database-source-table table:database-name="" table:table-name="Sales"/>'
+        '<table:data-pilot-field table:source-field-name="Region" table:orientation="row" table:used-hierarchy="1">'
+        '<table:data-pilot-level table:show-empty="false">'
+        '<table:data-pilot-subtotals><table:data-pilot-subtotal table:function="auto"/></table:data-pilot-subtotals>'
+        '<table:data-pilot-members><table:data-pilot-member table:name="West" table:display="true" table:show-details="true"/><table:data-pilot-member table:name="East" table:display="true" table:show-details="true"/></table:data-pilot-members>'
+        '<table:data-pilot-sort-info table:sort-mode="data" table:order="descending" table:data-field="Sum - Amount"/>'
+        '<table:data-pilot-layout-info table:add-empty-lines="false" table:layout-mode="tabular-layout"/>'
+        "</table:data-pilot-level></table:data-pilot-field>"
+        '<table:data-pilot-field table:source-field-name="Product" table:orientation="page" table:selected-page="Apple" table:used-hierarchy="1"><table:data-pilot-level table:show-empty="false"><table:data-pilot-subtotals/><table:data-pilot-members><table:data-pilot-member table:name="Plum" table:display="false" table:show-details="true"/></table:data-pilot-members></table:data-pilot-level></table:data-pilot-field>'
+        '<table:data-pilot-field table:source-field-name="Qty" table:orientation="column" table:used-hierarchy="1"><table:data-pilot-level table:show-empty="true"><table:data-pilot-subtotals><table:data-pilot-subtotal table:function="max"/><table:data-pilot-subtotal table:function="min"/></table:data-pilot-subtotals></table:data-pilot-level>'
+        '<table:data-pilot-groups table:source-field-name="Qty" table:start="0" table:end="auto" table:step="5"/>'
+        "</table:data-pilot-field>"
+        '<table:data-pilot-field table:source-field-name="Amount" table:orientation="data" table:function="sum" table:used-hierarchy="1"><table:data-pilot-field-reference table:field-name="Region" table:type="row-percentage"/></table:data-pilot-field>'
+        '<table:data-pilot-field table:source-field-name="Amount" table:orientation="data" table:function="count" table:used-hierarchy="1"/>'
+        '<table:data-pilot-field table:source-field-name="" table:is-data-layout-field="true" table:orientation="column" table:used-hierarchy="1"/>'
+        "</table:data-pilot-table>"
+        "</table:data-pilot-tables>"
+    )
+    return content_doc(data + scenario + pivot_sheet + dbranges + pivots, TOOLS_AUTO)
+
+
+def tools_settings():
+    base = settings("Data", [("Data", (0, 0, 0, 0)), ("Pivot", (0, 0, 0, 0))])
+    item = '<config:config-item config:name="ShowGrid" config:type="boolean">false</config:config-item><config:config-item config:name="ShowZeroValues" config:type="boolean">false</config:config-item>'
+    return base.replace('<config:config-item-map-entry config:name="Data">', '<config:config-item-map-entry config:name="Data">' + item, 1)
+
+
+def gen_tools():
+    write_zip(
+        os.path.join(ODS_DIR, "tools-lo.ods"),
+        [
+            ("META-INF/manifest.xml", manifest("1.3")),
+            ("content.xml", tools_content()),
+            ("styles.xml", TOOLS_STYLES),
+            ("meta.xml", meta("LibreOffice/7.6.4.1$Linux_X86_64 LibreOffice_project/e19e193f88cd6c0525a17fb7a176ed8e6a3e2aa1")),
+            ("settings.xml", tools_settings()),
+        ],
+    )
+
+
 def main():
     for d in (ODS_DIR, CSV_DIR, BAD_DIR):
         os.makedirs(d, exist_ok=True)
@@ -596,7 +944,9 @@ def main():
     gen_many_entries()
     gen_not_ods()
     gen_csv()
-    for d in (ODS_DIR, CSV_DIR, BAD_DIR):
+    gen_charts()
+    gen_tools()
+    for d in (ODS_DIR, CSV_DIR, BAD_DIR, os.path.join(ODS_DIR, "charts")):
         for f in sorted(os.listdir(d)):
             if f.endswith(".py"):
                 continue

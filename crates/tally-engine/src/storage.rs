@@ -876,6 +876,12 @@ pub struct Sheet {
     /// Rows hidden by the AutoFilter (derived from `meta.auto_filter` and
     /// the cell values; recomputed by `Workbook::reapply_filter`).
     pub filtered_rows: Spans,
+    /// Rows hidden by collapsed outline groups (derived from
+    /// `meta.row_groups`; recomputed by `crate::outline::reapply`). A third
+    /// hidden source, separate from user-hidden and filtered rows.
+    pub outline_rows: Spans,
+    /// Columns hidden by collapsed outline groups (from `meta.col_groups`).
+    pub outline_cols: Spans,
 }
 
 impl Sheet {
@@ -891,6 +897,8 @@ impl Sheet {
             tab_color: None,
             meta: SheetMeta::default(),
             filtered_rows: Spans::default(),
+            outline_rows: Spans::default(),
+            outline_cols: Spans::default(),
         }
     }
 
@@ -909,9 +917,17 @@ impl Sheet {
             .is_some_and(|m| (m.r0, m.c0) != (row, col))
     }
 
-    /// `true` if `row` is hidden by the user or by the AutoFilter.
+    /// `true` if `row` is hidden by the user, by the AutoFilter or by a
+    /// collapsed outline group.
     pub fn row_hidden(&self, row: u32) -> bool {
-        self.row_dims.is_hidden(row) || self.filtered_rows.contains(row)
+        self.row_dims.is_hidden(row)
+            || self.filtered_rows.contains(row)
+            || self.outline_rows.contains(row)
+    }
+
+    /// `true` if `col` is hidden by the user or by a collapsed outline group.
+    pub fn col_hidden(&self, col: u32) -> bool {
+        self.col_dims.is_hidden(col) || self.outline_cols.contains(col)
     }
 
     /// The column, if it exists.

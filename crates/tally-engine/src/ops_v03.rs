@@ -570,8 +570,28 @@ pub fn apply(
             // when the protection permits formatting (LOW-9).
             check_sheet_action(wb, *sheet, |p| p.format_cells)?;
             let p = crate::pagesetup::from_api(setup)?;
+            let breaks =
+                |v: &[u32], limit: u32| -> Result<std::collections::BTreeSet<u32>, ApiError> {
+                    if v.len() > 10_000 {
+                        return Err(ApiError::invalid_argument("too many page breaks"));
+                    }
+                    if v.iter().any(|b| *b == 0 || *b >= limit) {
+                        return Err(ApiError::invalid_argument("page break outside the grid"));
+                    }
+                    Ok(v.iter().copied().collect())
+                };
+            let rows = breaks(&setup.row_breaks, MAX_ROWS)?;
+            let cols = breaks(&setup.col_breaks, MAX_COLS)?;
             with_meta(wb, *sheet, fx, |_, meta| {
                 meta.page_setup = Arc::new(p);
+                // The DTO's breaks are the sheet's breaks (review 3, LOW:
+                // `page_setup` reports them, so `SetPageSetup` sets them).
+                if *meta.row_breaks != rows {
+                    meta.row_breaks = Arc::new(rows);
+                }
+                if *meta.col_breaks != cols {
+                    meta.col_breaks = Arc::new(cols);
+                }
                 Ok(())
             })
         })(),

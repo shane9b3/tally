@@ -69,6 +69,12 @@ export interface InteractionHost {
   setFillPreview(range: RangeDto | null): void;
   /** Whether point mode is on (the `pointMode` prop). */
   pointMode(): boolean;
+  /** Whether range-pick mode is on without an edit (the `rangePick` prop or `Grid.pickRange()`). */
+  rangePick(): boolean;
+  /** A reference was picked (point mode or range pick); the grid forwards `onPointRange` and settles `pickRange()`. */
+  pointRange(range: RangeDto, phase: "start" | "move" | "end"): void;
+  /** Escape in range-pick mode: the grid rejects a pending `pickRange()` with `null`. */
+  cancelPick(): void;
   invalidateOverlay(): void;
   /** The AutoFilter button under a canvas point, with its client rect. */
   filterButtonAt(x: number, y: number): { col: number; rect: { left: number; top: number; right: number; bottom: number } } | null;
@@ -183,6 +189,16 @@ export class Interaction {
     this.pointSel = null;
   }
 
+  /**
+   * Whether cell clicks/drags pick references right now: point mode inside
+   * an open formula edit, or range-pick mode without an edit (a dialog
+   * asking for a range).
+   */
+  picking(): boolean {
+    const host = this.host;
+    return host.editor.open ? host.pointMode() : host.rangePick();
+  }
+
   /** Whether `p` is on the fill handle of the selection. */
   private onFillHandle(p: { x: number; y: number }): boolean {
     const host = this.host;
@@ -207,12 +223,13 @@ export class Interaction {
     const sel = host.selection();
     const add = (e.metaKey || e.ctrlKey) && !e.shiftKey;
 
-    // Point mode: clicking cells picks references for the formula being edited.
-    if (e.button === 0 && host.editor.open && host.pointMode() && hit.area === "cell") {
+    // Point mode: clicking cells picks references for the formula being edited
+    // (or, in range-pick mode, for the dialog that asked).
+    if (e.button === 0 && this.picking() && hit.area === "cell") {
       const cell = { r: hit.r, c: hit.c };
       const base = this.pointSel ?? cellSelection(host.editor.cell ?? sel.active);
       this.pointSel = e.shiftKey && this.pointSel ? extendTo(base, cell) : cellSelection(cell);
-      host.events().onPointRange?.({ ...this.pointSel.range }, "start");
+      host.pointRange({ ...this.pointSel.range }, "start");
       this.drag = { kind: "point" };
       this.capture(e);
       return;
@@ -346,7 +363,7 @@ export class Interaction {
           : "row-resize"
         : this.onFillHandle(p)
           ? "crosshair"
-          : host.editor.open && host.pointMode() && hit.area === "cell"
+          : this.picking() && hit.area === "cell"
             ? "cell"
             : "default";
       return;
@@ -398,7 +415,7 @@ export class Interaction {
       const next = extendTo(ps, cell);
       if (next.range.r0 !== ps.range.r0 || next.range.r1 !== ps.range.r1 || next.range.c0 !== ps.range.c0 || next.range.c1 !== ps.range.c1) {
         this.pointSel = next;
-        host.events().onPointRange?.({ ...next.range }, "move");
+        host.pointRange({ ...next.range }, "move");
       }
       return;
     }
@@ -467,7 +484,7 @@ export class Interaction {
         host.events().onFill?.({ ...drag.source }, { ...target });
       }
     } else if (drag?.kind === "point" && this.pointSel) {
-      host.events().onPointRange?.({ ...this.pointSel.range }, "end");
+      host.pointRange({ ...this.pointSel.range }, "end");
     }
   }
 
@@ -491,7 +508,7 @@ export class Interaction {
       return;
     }
     if (hit.area !== "cell") return;
-    if (host.editor.open && host.pointMode()) return;
+    if (this.picking()) return;
     e.preventDefault();
     this.startEdit("edit");
   }
@@ -651,6 +668,19 @@ export class Interaction {
 
     const sel = host.selection();
     const lim = host.limits();
+    // Range-pick mode (no edit): arrows move/extend the pick, Enter settles it, Escape cancels.
+    if (host.rangePick()) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        host.pointRange({ ...sel.range }, "end");
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        host.cancelPick();
+        return;
+      }
+    }
     const action = reduceKey(sel, e.key, mods, lim);
     switch (action.type) {
       case "select": {
@@ -660,6 +690,7 @@ export class Interaction {
           emit: true,
           reveal: extending ? extentCorner(action.selection) : action.selection.active,
         });
+        if (host.rangePick()) host.pointRange({ ...action.selection.range }, "move");
         return;
       }
       case "navigateEdge": {
@@ -708,7 +739,7 @@ export class Interaction {
       const [dr, dc] = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] }[dir] as [number, number];
       const next = moveBy(base, dr, dc, mods.shift, lim);
       this.pointSel = next;
-      host.events().onPointRange?.({ ...next.range }, "end");
+      host.pointRange({ ...next.range }, "end");
       host.reveal(extentCorner(next));
       return;
     }

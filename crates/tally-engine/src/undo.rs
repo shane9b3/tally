@@ -98,6 +98,9 @@ pub enum Change {
     Names(Box<crate::names::NameTable>),
     /// Restore the document metadata (properties).
     DocMeta(Box<tally_model::DocMeta>),
+    /// Restore the calculation settings (every formula is re-marked dirty;
+    /// v0.6, `SetCalcSettings`).
+    Settings(Box<tally_types::CalcSettings>),
     /// Restore the document structure protection.
     DocProtection(Option<tally_model::SheetProtectionData>),
     /// Restore the rows an AutoFilter hides.
@@ -106,6 +109,20 @@ pub enum Change {
         sheet: SheetId,
         /// The rows.
         rows: crate::storage::Spans,
+    },
+    /// Restore the named cell styles (v0.5; the cells keep their
+    /// `style_name`, so the display follows the table).
+    CellStyles(Vec<tally_model::CellStyleData>),
+    /// Restore the custom sort lists (v0.5).
+    CustomSortLists(Vec<Vec<String>>),
+    /// Restore a sheet's hidden flag and tab colour (v0.5).
+    SheetProps {
+        /// Sheet.
+        id: SheetId,
+        /// Hidden.
+        hidden: bool,
+        /// Tab colour.
+        tab_color: Option<u32>,
     },
 }
 
@@ -341,7 +358,7 @@ pub fn clear_range_styles(wb: &mut Workbook, range: CellRange) {
     wb.pending.display_only.push(range);
 }
 
-fn restore_range(wb: &mut Workbook, snap: RangeSnapshot) {
+pub(crate) fn restore_range(wb: &mut Workbook, snap: RangeSnapshot) {
     let range = snap.range;
     if let Some(contents) = snap.contents {
         clear_range_content(wb, range);
@@ -473,15 +490,21 @@ pub fn apply_change(wb: &mut Workbook, change: Change, fx: &mut Effects) -> Opti
         Change::Meta { sheet, parts } => {
             let s = wb.sheet_mut(sheet)?;
             let mut filter_changed = false;
+            let mut outline_changed = false;
             let mut inv = Vec::with_capacity(parts.len());
             for p in parts.into_iter().rev() {
-                filter_changed |=
-                    p.kind() == Some(MetaKind::AutoFilter) && !p.unchanged_in(&s.meta);
+                let changed = !p.unchanged_in(&s.meta);
+                filter_changed |= p.kind() == Some(MetaKind::AutoFilter) && changed;
+                outline_changed |=
+                    matches!(p.kind(), Some(MetaKind::RowGroups | MetaKind::ColGroups)) && changed;
                 inv.push(p.swap_into(&mut s.meta));
             }
             // Only a change of the filter itself re-applies it.
             if filter_changed {
                 wb.reapply_filter(sheet);
+            }
+            if outline_changed {
+                crate::outline::reapply(wb, sheet);
             }
             wb.pending.display_only.push(whole_sheet(sheet));
             fx.layout(sheet);
@@ -496,6 +519,15 @@ pub fn apply_change(wb: &mut Workbook, change: Change, fx: &mut Effects) -> Opti
             let old = std::mem::replace(&mut wb.meta, *meta);
             Some(Change::DocMeta(Box::new(old)))
         }
+        Change::Settings(s) => {
+            let old = std::mem::replace(&mut wb.settings, *s);
+            wb.dirty_all();
+            let sheets: Vec<SheetId> = wb.sheets.iter().map(|s| s.id).collect();
+            for s in sheets {
+                fx.layout(s);
+            }
+            Some(Change::Settings(Box::new(old)))
+        }
         Change::FilteredRows { sheet, rows } => {
             let s = wb.sheet_mut(sheet)?;
             let old = std::mem::replace(&mut s.filtered_rows, rows);
@@ -506,6 +538,31 @@ pub fn apply_change(wb: &mut Workbook, change: Change, fx: &mut Effects) -> Opti
             let old = std::mem::replace(&mut wb.structure_protection, p);
             fx.sheets_changed = true;
             Some(Change::DocProtection(old))
+        }
+        Change::CellStyles(styles) => {
+            let old = std::mem::replace(&mut wb.cell_styles, styles);
+            crate::cellstyles::after_table_change(wb, &old);
+            Some(Change::CellStyles(old))
+        }
+        Change::CustomSortLists(lists) => {
+            let old = std::mem::replace(&mut wb.custom_sort_lists, lists);
+            Some(Change::CustomSortLists(old))
+        }
+        Change::SheetProps {
+            id,
+            hidden,
+            tab_color,
+        } => {
+            let s = wb.sheet_mut(id)?;
+            let old = Change::SheetProps {
+                id,
+                hidden: s.hidden,
+                tab_color: s.tab_color,
+            };
+            s.hidden = hidden;
+            s.tab_color = tab_color;
+            fx.sheets_changed = true;
+            Some(old)
         }
     }
 }

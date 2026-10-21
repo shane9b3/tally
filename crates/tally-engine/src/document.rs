@@ -107,8 +107,8 @@ impl Document {
             dirty: self.dirty,
             version: self.version,
             warnings: self.warnings.clone(),
-            // TODO(W5-3): filled from the reader's external-link policy report.
-            external_links: None,
+            external_links: (!self.wb.external_links.is_empty())
+                .then(|| self.wb.external_links.clone()),
         }
     }
 
@@ -120,6 +120,11 @@ impl Document {
         selection: Option<SelectionDto>,
     ) -> ApplyResult {
         self.version += 1;
+        // Charts whose plotted cells changed (v0.4, W5-1).
+        if fx.charts_changed.is_none() {
+            fx.charts_changed =
+                crate::charts::changed_charts(&self.wb, &report.changed, &fx.layout_changed);
+        }
         let notices: Vec<OpError> = std::mem::take(&mut fx.notice_errors);
         let mut by_sheet: Vec<SheetRanges> = Vec::new();
         for r in report.changed {
@@ -244,7 +249,16 @@ impl Document {
             }
             spent += cost;
             match apply_op(&mut self.wb, op, clip, &mut fx) {
-                Ok(c) => changes.extend(c),
+                Ok(c) => {
+                    // Ids allocated by this op (recorded with a placeholder
+                    // index) belong to op `i`.
+                    if let Some(v) = fx.created.as_mut() {
+                        for c in v.iter_mut().filter(|c| c.op_index == u32::MAX) {
+                            c.op_index = i as u32;
+                        }
+                    }
+                    changes.extend(c);
+                }
                 Err(e) => errors.push(OpError {
                     op_index: i as u32,
                     code: e.code,

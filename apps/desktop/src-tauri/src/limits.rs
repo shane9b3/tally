@@ -18,8 +18,9 @@
 
 use serde_json::Value;
 use tally_api::{
-    ApiError, CellPos, FindQuery, GoalSeekRequest, Op, PastePayload, RangeDto, SelectionDto,
-    Transaction,
+    ApiError, CellPos, ChartDto, ChartSvgDto, FindQuery, GoalSeekRequest, Op, PastePayload,
+    PivotDto, PivotSource, PrintOptionsDto, RangeDto, SelectionDto, SheetCell, SheetRange,
+    SolverRequest, Transaction,
 };
 use tally_types::{MAX_COLS, MAX_ROWS};
 
@@ -45,6 +46,22 @@ pub const MAX_SORT_KEYS: usize = 64;
 pub const MAX_PATH: usize = 4096;
 /// Longest locale tag.
 pub const MAX_LOCALE: usize = 64;
+/// Most series in one chart (`addChart`, `updateChart`).
+pub const MAX_CHART_SERIES: usize = 256;
+/// Most fields (row + column + page + data) in one pivot table.
+pub const MAX_PIVOT_FIELDS: usize = 64;
+/// Most constraints (and variable ranges) in one solver request.
+pub const MAX_SOLVER_CONSTRAINTS: usize = 1_000;
+/// Highest page number a print job may address (`page_from`, `page_to`, `page`).
+pub const MAX_PRINT_PAGES: u32 = 10_000;
+/// Largest SVG payload per chart in `prepare_print_job`, in bytes (4 MB).
+pub const MAX_SVG_BYTES: usize = 4 * 1024 * 1024;
+/// Most chart SVGs in one print job.
+pub const MAX_PRINT_CHARTS: usize = 1_000;
+/// Highest raster resolution of `print_job_page_png`.
+pub const MAX_PRINT_DPI: u32 = 600;
+/// Longest AutoInput prefix in characters.
+pub const MAX_AUTOCOMPLETE_CHARS: usize = 1_024;
 
 fn bad(message: impl Into<String>) -> ApiError {
     ApiError::invalid_argument(message)
@@ -190,6 +207,157 @@ pub fn goal_seek(req: &GoalSeekRequest) -> CmdResult<()> {
     Ok(())
 }
 
+// ----- wave 5 (v0.4–v0.6) ---------------------------------------------------
+
+/// A chart DTO (`addChart`, `updateChart`): at most [`MAX_CHART_SERIES`]
+/// series, a valid anchor cell, finite non-negative anchor sizes and every
+/// reference text at most [`MAX_TEXT`] bytes (the structural walk covers
+/// the rest).
+pub fn chart(what: &str, chart: &ChartDto) -> CmdResult<()> {
+    if chart.series.len() > MAX_CHART_SERIES {
+        return Err(bad(format!(
+            "{what}: too many series ({}; the limit is {MAX_CHART_SERIES})",
+            chart.series.len()
+        )));
+    }
+    anchor(what, &chart.anchor)?;
+    name(what, &chart.name)?;
+    for s in &chart.series {
+        text(what, &s.values)?;
+    }
+    Ok(())
+}
+
+/// A chart/image anchor: the cell is inside the sheet and the sizes are
+/// finite and not negative.
+pub fn anchor(what: &str, a: &tally_api::ChartAnchor) -> CmdResult<()> {
+    pos(what, a.r, a.c)?;
+    for v in [a.dx_mm, a.dy_mm, a.width_mm, a.height_mm] {
+        if !v.is_finite() {
+            return Err(bad(format!("{what}: the anchor is not a number")));
+        }
+    }
+    if a.width_mm < 0.0 || a.height_mm < 0.0 {
+        return Err(bad(format!("{what}: the size is negative")));
+    }
+    Ok(())
+}
+
+/// A pivot source: its range or database-range name.
+pub fn pivot_source(what: &str, source: &PivotSource) -> CmdResult<()> {
+    match source {
+        PivotSource::Range { range: rg, .. } => range(what, rg),
+        PivotSource::DatabaseRange { name: n } => name(what, n),
+    }
+}
+
+/// A pivot DTO (`createPivot`, `updatePivot`): at most [`MAX_PIVOT_FIELDS`]
+/// fields over all areas, a valid source and target.
+pub fn pivot(what: &str, p: &PivotDto) -> CmdResult<()> {
+    let fields =
+        p.row_fields.len() + p.col_fields.len() + p.page_fields.len() + p.data_fields.len();
+    if fields > MAX_PIVOT_FIELDS {
+        return Err(bad(format!(
+            "{what}: too many fields ({fields}; the limit is {MAX_PIVOT_FIELDS})"
+        )));
+    }
+    pivot_source(what, &p.source)?;
+    cell(what, &p.target)?;
+    name(what, &p.name)
+}
+
+/// A sheet-qualified cell.
+pub fn sheet_cell(what: &str, c: &SheetCell) -> CmdResult<()> {
+    pos(what, c.r, c.c)
+}
+
+/// A sheet-qualified range.
+pub fn sheet_range(what: &str, r: &SheetRange) -> CmdResult<()> {
+    range(what, &r.range)
+}
+
+/// A solver request: at most [`MAX_SOLVER_CONSTRAINTS`] constraints and
+/// variable ranges, every cell inside the sheet, finite options.
+pub fn solver_request(req: &SolverRequest) -> CmdResult<()> {
+    if req.constraints.len() > MAX_SOLVER_CONSTRAINTS {
+        return Err(bad(format!(
+            "too many constraints ({}; the limit is {MAX_SOLVER_CONSTRAINTS})",
+            req.constraints.len()
+        )));
+    }
+    if req.variables.len() > MAX_SOLVER_CONSTRAINTS {
+        return Err(bad(format!(
+            "too many variable ranges ({}; the limit is {MAX_SOLVER_CONSTRAINTS})",
+            req.variables.len()
+        )));
+    }
+    sheet_cell("the objective cell", &req.objective)?;
+    req.variables
+        .iter()
+        .try_for_each(|v| sheet_range("a variable range", v))?;
+    for c in &req.constraints {
+        sheet_range("a constraint", &c.lhs)?;
+        text("a constraint value", &c.rhs)?;
+    }
+    if !req.options.epsilon.is_finite() {
+        return Err(bad("the solver epsilon is not a number"));
+    }
+    Ok(())
+}
+
+/// A page number (1-based or 0-based, the engine decides): at most
+/// [`MAX_PRINT_PAGES`].
+pub fn print_page(what: &str, page: u32) -> CmdResult<()> {
+    if page > MAX_PRINT_PAGES {
+        return Err(bad(format!(
+            "{what}: page {page} is beyond the limit of {MAX_PRINT_PAGES}"
+        )));
+    }
+    Ok(())
+}
+
+/// Print options: the selection range and the page window.
+pub fn print_options(opts: &PrintOptionsDto) -> CmdResult<()> {
+    if let Some(sel) = &opts.selection {
+        range("the print selection", sel)?;
+    }
+    for (what, p) in [("page_from", opts.page_from), ("page_to", opts.page_to)] {
+        if let Some(p) = p {
+            print_page(what, p)?;
+        }
+    }
+    if let (Some(a), Some(b)) = (opts.page_from, opts.page_to) {
+        if a > b {
+            return Err(bad("the page range is reversed"));
+        }
+    }
+    Ok(())
+}
+
+/// Chart SVGs for a print job: at most [`MAX_PRINT_CHARTS`], each at most
+/// [`MAX_SVG_BYTES`].
+pub fn chart_svgs(charts: &[ChartSvgDto]) -> CmdResult<()> {
+    if charts.len() > MAX_PRINT_CHARTS {
+        return Err(bad(format!(
+            "too many chart images ({}; the limit is {MAX_PRINT_CHARTS})",
+            charts.len()
+        )));
+    }
+    charts
+        .iter()
+        .try_for_each(|c| text_max("a chart image", &c.svg, MAX_SVG_BYTES))
+}
+
+/// A raster resolution: 1..=[`MAX_PRINT_DPI`].
+pub fn dpi(dpi: u32) -> CmdResult<()> {
+    if dpi == 0 || dpi > MAX_PRINT_DPI {
+        return Err(bad(format!(
+            "the resolution must be between 1 and {MAX_PRINT_DPI} dpi"
+        )));
+    }
+    Ok(())
+}
+
 /// A transaction: op count, the typed per-op limits, then the structural
 /// walk (strings, ranges, positions) and the total string size.
 pub fn transaction(tx: &Transaction) -> CmdResult<()> {
@@ -289,12 +457,27 @@ fn typed_op(op: &Op) -> CmdResult<()> {
             }
             Ok(())
         }
+        Op::AddChart { chart: ch, .. } | Op::UpdateChart { chart: ch, .. } => {
+            chart("the chart", ch)
+        }
+        Op::MoveResizeChart { anchor: a, .. } | Op::MoveResizeImage { anchor: a, .. } => {
+            anchor("the object", a)
+        }
+        Op::AddImage { image, .. } => {
+            anchor("the picture", &image.anchor)?;
+            name("the picture name", &image.name)?;
+            text_max("the picture data", &image.data, MAX_TSV)
+        }
+        Op::CreatePivot { pivot: p, .. } | Op::UpdatePivot { pivot: p, .. } => {
+            pivot("the pivot table", p)
+        }
         _ => Ok(()),
     }
 }
 
 /// Walks a serialized op: every string at most [`MAX_TEXT`] bytes (a TSV
-/// payload's text up to [`MAX_TSV`]), every `{r0,c0,r1,c1}` a valid range,
+/// payload's text and an `addImage` picture's `data` up to [`MAX_TSV`]),
+/// every `{r0,c0,r1,c1}` a valid range,
 /// every `{r,c}` a valid position, every `ranges` list at most
 /// [`MAX_RANGES`] long; `total` sums the string bytes (≤ [`MAX_TSV`]).
 fn walk(v: &Value, tsv: bool, total: &mut usize) -> CmdResult<()> {
@@ -336,9 +519,14 @@ fn walk(v: &Value, tsv: bool, total: &mut usize) -> CmdResult<()> {
                     )));
                 }
             }
-            let is_tsv = map.get("type").and_then(Value::as_str) == Some("tsv");
+            // Strings allowed up to MAX_TSV: a TSV payload's `text` and the
+            // base64 `data` of an `addImage` op's `image`.
+            let ty = map.get("type").and_then(Value::as_str);
             for (k, x) in map {
-                walk(x, is_tsv && k == "text", total)?;
+                let big = (ty == Some("tsv") && k == "text")
+                    || (ty == Some("addImage") && k == "image")
+                    || (tsv && k == "data");
+                walk(x, big, total)?;
             }
             Ok(())
         }
@@ -446,6 +634,174 @@ mod tests {
             },
         };
         assert!(transaction(&tx(vec![note])).is_err());
+    }
+
+    /// Wave-5 caps: chart series, pivot fields, solver constraints, print
+    /// pages, SVG payloads, and the `addImage` data allowance in the walk.
+    #[test]
+    fn wave5_caps() {
+        use tally_api::{
+            ChartAnchor, ChartAxisDto, ChartDto, ChartKind, ChartSeriesDto, ChartSvgDto,
+            DataLabelsDto, ImageDto, LabelPos, LegendPos, PrintOptionsDto, PrintSheets, SheetCell,
+            SolverConstraint, SolverGoal, SolverOp, SolverOptions, SolverRequest, Stacking,
+        };
+        let anchor = ChartAnchor {
+            r: 0,
+            c: 0,
+            dx_mm: 0.0,
+            dy_mm: 0.0,
+            width_mm: 160.0,
+            height_mm: 90.0,
+        };
+        let series = |n: usize| -> Vec<ChartSeriesDto> {
+            (0..n)
+                .map(|_| ChartSeriesDto {
+                    name: None,
+                    values: "A1:A5".into(),
+                    x_values: None,
+                    sizes: None,
+                    kind: None,
+                    secondary_axis: false,
+                    color: None,
+                    marker: None,
+                    labels: DataLabelsDto {
+                        value: false,
+                        percent: false,
+                        category: false,
+                        series_name: false,
+                        position: LabelPos::Outside,
+                    },
+                    trend: None,
+                    error_bars: None,
+                    mean_line: false,
+                })
+                .collect()
+        };
+        let axis = ChartAxisDto {
+            visible: true,
+            title: None,
+            min: None,
+            max: None,
+            major: None,
+            minor_count: None,
+            log: false,
+            reverse: false,
+            major_grid: false,
+            minor_grid: false,
+            number_format: None,
+        };
+        let chart_with = |n: usize| ChartDto {
+            id: 0,
+            name: "Chart".into(),
+            anchor,
+            kind: ChartKind::Column,
+            stacking: Stacking::None,
+            lines: false,
+            markers: false,
+            smooth: false,
+            hole: None,
+            exploded: false,
+            filled: false,
+            stock: None,
+            three_d: false,
+            source: None,
+            categories: None,
+            series: series(n),
+            title: None,
+            subtitle: None,
+            legend: LegendPos::Right,
+            x_axis: axis.clone(),
+            y_axis: axis.clone(),
+            y2_axis: None,
+            background: None,
+            plot_background: None,
+            include_hidden: false,
+        };
+        assert!(chart("c", &chart_with(MAX_CHART_SERIES)).is_ok());
+        assert!(chart("c", &chart_with(MAX_CHART_SERIES + 1)).is_err());
+        let add = |ch: ChartDto| Op::AddChart {
+            sheet: 1,
+            chart: ch,
+        };
+        assert!(transaction(&tx(vec![add(chart_with(MAX_CHART_SERIES + 1))])).is_err());
+        let mut nan = chart_with(1);
+        nan.anchor.width_mm = f32::NAN;
+        assert!(chart("c", &nan).is_err());
+
+        // A picture's base64 data may exceed MAX_TEXT (up to MAX_TSV) in the walk.
+        let image = |n: usize| Op::AddImage {
+            sheet: 1,
+            image: ImageDto {
+                id: 0,
+                name: "p".into(),
+                anchor,
+                mime: "image/png".into(),
+                data: "A".repeat(n),
+            },
+        };
+        assert!(transaction(&tx(vec![image(MAX_TEXT * 4)])).is_ok());
+        assert!(transaction(&tx(vec![image(MAX_TSV + 1)])).is_err());
+
+        let cell = SheetCell {
+            sheet: 1,
+            r: 0,
+            c: 0,
+        };
+        let constraint = |n: usize| -> Vec<SolverConstraint> {
+            (0..n)
+                .map(|_| SolverConstraint {
+                    lhs: SheetRange {
+                        sheet: 1,
+                        range: RangeDto {
+                            r0: 0,
+                            c0: 0,
+                            r1: 0,
+                            c1: 0,
+                        },
+                    },
+                    op: SolverOp::Le,
+                    rhs: "10".into(),
+                })
+                .collect()
+        };
+        let req = |n: usize| SolverRequest {
+            objective: cell,
+            goal: SolverGoal::Maximize,
+            variables: vec![],
+            constraints: constraint(n),
+            options: SolverOptions {
+                assume_non_negative: true,
+                integer: false,
+                epsilon: 1e-6,
+                max_iterations: 100,
+                timeout_ms: 1000,
+            },
+        };
+        assert!(solver_request(&req(MAX_SOLVER_CONSTRAINTS)).is_ok());
+        assert!(solver_request(&req(MAX_SOLVER_CONSTRAINTS + 1)).is_err());
+
+        let opts = |from: Option<u32>, to: Option<u32>| PrintOptionsDto {
+            sheets: PrintSheets::Active,
+            selection: None,
+            suppress_empty_pages: true,
+            page_from: from,
+            page_to: to,
+        };
+        assert!(print_options(&opts(Some(1), Some(MAX_PRINT_PAGES))).is_ok());
+        assert!(print_options(&opts(None, Some(MAX_PRINT_PAGES + 1))).is_err());
+        assert!(print_options(&opts(Some(5), Some(4))).is_err());
+        assert!(print_page("p", MAX_PRINT_PAGES + 1).is_err());
+        assert!(dpi(600).is_ok());
+        assert!(dpi(0).is_err() && dpi(601).is_err());
+
+        let svg = |n: usize| ChartSvgDto {
+            sheet: 1,
+            id: 1,
+            svg: "<svg/>".repeat(n / 6 + 1),
+        };
+        assert!(chart_svgs(&[svg(1000)]).is_ok());
+        assert!(chart_svgs(&[svg(MAX_SVG_BYTES + 6)]).is_err());
+        assert!(chart_svgs(&vec![svg(1); MAX_PRINT_CHARTS + 1]).is_err());
     }
 
     #[test]

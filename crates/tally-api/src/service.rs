@@ -26,7 +26,7 @@ use crate::print::{
 };
 use crate::tools::{
     AutocompleteDto, CellStyleDto, DatabaseRangeDto, DocumentStatsDto, NavigatorDto, ScenarioDto,
-    TraceDto,
+    TraceDto, ViewOptionsDto,
 };
 
 /// Result type of every fallible [`DocumentService`] method.
@@ -259,6 +259,13 @@ pub trait DocumentService {
         Err(ApiError::unsupported("pictures are not supported"))
     }
 
+    /// The bytes of a picture, base64 (≤ 16 MiB decoded), so the UI can
+    /// show pictures of reopened files.
+    fn image_data(&self, doc: DocId, sheet: SheetId, id: u32) -> Result<String> {
+        let _ = (doc, sheet, id);
+        Err(ApiError::unsupported("pictures are not supported"))
+    }
+
     // ----- v0.5 DataPilot and data tools (W5-2) ----------------------------
 
     /// Every pivot table of the document.
@@ -319,6 +326,12 @@ pub trait DocumentService {
     fn navigator(&self, doc: DocId) -> Result<NavigatorDto> {
         let _ = doc;
         Err(ApiError::unsupported("the Navigator is not supported"))
+    }
+
+    /// The custom sort lists (Tools ▸ Options ▸ Sort Lists; v0.5, W5-2).
+    fn custom_sort_lists(&self, doc: DocId) -> Result<Vec<Vec<String>>> {
+        let _ = doc;
+        Err(ApiError::unsupported("custom sort lists are not supported"))
     }
 
     /// Document statistics.
@@ -391,6 +404,25 @@ pub trait DocumentService {
     fn dependents(&self, doc: DocId, sheet: SheetId, r: u32, c: u32) -> Result<Vec<TraceDto>> {
         let _ = (doc, sheet, r, c);
         Err(ApiError::unsupported("the detective is not supported"))
+    }
+
+    /// A sheet's view options, with the persisted split position (v0.6).
+    fn view_options(&self, doc: DocId, sheet: SheetId) -> Result<ViewOptionsDto> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("view options are not supported"))
+    }
+
+    /// Detective ▸ Mark Invalid Data: the cells of `range` (or the whole
+    /// sheet) whose values fail their validation rule, at most 10,000,
+    /// checked within the validation work budget (v0.6).
+    fn invalid_cells(
+        &self,
+        doc: DocId,
+        sheet: SheetId,
+        range: Option<RangeDto>,
+    ) -> Result<Vec<CellPos>> {
+        let _ = (doc, sheet, range);
+        Err(ApiError::unsupported("validation marking is not supported"))
     }
 }
 

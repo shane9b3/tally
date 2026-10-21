@@ -9,8 +9,15 @@
 //!    formula cells. Strongly connected components come out precedents
 //!    first. Members on a cycle of *strict* precedents (references whose
 //!    values are always read: not inside IF/IFERROR/IFNA branches, not the
-//!    address-only arguments of ROW/COLUMN) get Err:522 without evaluation
-//!    (iterations are off in Phase A).
+//!    address-only arguments of ROW/COLUMN) get Err:522 without evaluation.
+//!    With `CalcSettings::iterations` set (AOO Tools ▸ Options ▸ Calculate ▸
+//!    Iterations) a cyclic component is instead evaluated Gauss–Seidel:
+//!    every member once per round in Tarjan order, each reading the
+//!    current values of the others (a member still being evaluated hands
+//!    out its previous value), starting from the cached values (0 for new
+//!    cells), for at most `steps` rounds, until no member changes by more
+//!    than `min_change`; a change that is not numeric never converges.
+//!    Without convergence every member gets Err:523.
 //! 4. Evaluation in that order with [`CalcCtx`]. A dirty precedent met
 //!    during evaluation (through a lazy branch or a dynamic reference) is
 //!    evaluated on demand, nested at most [`MAX_ON_DEMAND_DEPTH`] deep and
@@ -19,8 +26,8 @@
 //!    (AOO detects circularity at interpretation time the same way): every
 //!    cell on that cycle gets Err:522.
 
+use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
-#[cfg(test)]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -29,7 +36,7 @@ use tally_formula::{Expr, ResolvedRef};
 use tally_functions::{CellFormatInfo, EvalContext};
 use tally_numfmt::date::now_serial;
 use tally_types::{
-    CalcSettings, CellAddr, CellRange, ErrorKind, SheetId, Value, MAX_COLS, MAX_ROWS,
+    CalcSettings, CellAddr, CellRange, ErrorKind, IterSettings, SheetId, Value, MAX_COLS, MAX_ROWS,
 };
 
 use crate::deps::{coalesce, DepIndex};
@@ -118,6 +125,7 @@ pub fn recalc(wb: &mut Workbook) -> RecalcReport {
 
 /// [`recalc`] within `budget`.
 pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
+    wb.table_op_calls = 0;
     let pending = std::mem::take(&mut wb.pending);
     let mut dirty: Vec<FormulaCellId> = Vec::new();
     for id in pending.dirty {
@@ -191,6 +199,20 @@ pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
             }
             continue;
         }
+        if scc.cyclic {
+            if let Some(iter) = wb.settings.iterations {
+                for id in &scc.members {
+                    if let Some(f) = wb.formulas.get(*id) {
+                        match f.array_range() {
+                            Some(b) => recalculated_blocks.push(b),
+                            None => recalculated.push(f.addr),
+                        }
+                    }
+                }
+                iterate_scc(wb, &scc.members, iter, now, &mut report);
+                continue;
+            }
+        }
         for id in &scc.strict {
             if let Some(f) = wb.formulas.get_mut(*id) {
                 f.cached = Value::Error(ErrorKind::Circular);
@@ -244,6 +266,86 @@ struct Scc {
     members: Vec<FormulaCellId>,
     /// Members on a cycle of strict precedents: Err:522 without evaluation.
     strict: Vec<FormulaCellId>,
+    /// Several members or a self-edge (iterated when iterations are on).
+    cyclic: bool,
+}
+
+/// Evaluates one cyclic component with iterations on (see the module
+/// docs): Gauss–Seidel rounds until convergence, else Err:523 everywhere.
+fn iterate_scc(
+    wb: &mut Workbook,
+    members: &[FormulaCellId],
+    iter: IterSettings,
+    now: f64,
+    report: &mut RecalcReport,
+) {
+    // Seed: the previous values; circular/non-converged errors start at 0.
+    for id in members {
+        if let Some(f) = wb.formulas.get_mut(*id) {
+            if matches!(
+                f.cached,
+                Value::Error(ErrorKind::Circular | ErrorKind::NoConvergence) | Value::Empty
+            ) {
+                f.cached = Value::Number(0.0);
+            }
+        }
+    }
+    let set: Arc<HashSet<FormulaCellId>> = Arc::new(members.iter().copied().collect());
+    let mut converged = false;
+    for _round in 0..iter.steps.max(1) {
+        let before: Vec<Value> = members
+            .iter()
+            .map(|id| {
+                wb.formulas
+                    .get(*id)
+                    .map_or(Value::Empty, |f| f.cached.clone())
+            })
+            .collect();
+        for id in members {
+            if let Some(f) = wb.formulas.get_mut(*id) {
+                f.state = CellState::Dirty;
+            }
+        }
+        for id in members {
+            let dirty = wb
+                .formulas
+                .get(*id)
+                .is_some_and(|f| f.state == CellState::Dirty);
+            if !dirty {
+                continue;
+            }
+            let mut ctx = CalcCtx::new(wb, now);
+            ctx.iter_set = Some(set.clone());
+            ctx.evaluate(*id);
+            report.evaluated += 1;
+        }
+        let mut max_delta = 0f64;
+        let mut numeric = true;
+        for (id, prev) in members.iter().zip(&before) {
+            let Some(f) = wb.formulas.get(*id) else {
+                continue;
+            };
+            match (prev, &f.cached) {
+                (Value::Number(a), Value::Number(b)) => max_delta = max_delta.max((a - b).abs()),
+                (a, b) if a == b => {}
+                _ => numeric = false,
+            }
+        }
+        if numeric && max_delta <= iter.min_change {
+            converged = true;
+            break;
+        }
+    }
+    if !converged {
+        for id in members {
+            if let Some(f) = wb.formulas.get_mut(*id) {
+                f.cached = Value::Error(ErrorKind::NoConvergence);
+                f.array_result = None;
+                f.state = CellState::Clean;
+                report.circular += 1;
+            }
+        }
+    }
 }
 
 /// The dirty formula cells inside `range`.
@@ -324,7 +426,11 @@ fn topo_order(wb: &Workbook, dirty: &[FormulaCellId]) -> Vec<Scc> {
         } else {
             Vec::new()
         };
-        out.push(Scc { members, strict });
+        out.push(Scc {
+            members,
+            strict,
+            cyclic,
+        });
     }
     out
 }
@@ -464,11 +570,21 @@ pub struct CalcCtx<'w> {
     deferred: Vec<FormulaCellId>,
     /// Cells given Err:522 because a cycle through them was followed.
     pub circular: usize,
+    /// The members of the cyclic component being iterated (iterations on):
+    /// a member that is being evaluated hands out its previous value
+    /// instead of Err:522 (see the module docs).
+    iter_set: Option<Arc<HashSet<FormulaCellId>>>,
+    /// `CalcSettings::precision_as_shown`.
+    precision: bool,
+    /// `MULTIPLE.OPERATIONS` calls of a read-only context (the workbook's
+    /// own counter is used when it is writable).
+    local_table_ops: u32,
 }
 
 impl<'w> CalcCtx<'w> {
     /// A context over `wb` with the recalc's fixed `now`.
     pub fn new(wb: &'w mut Workbook, now: f64) -> Self {
+        let precision = wb.settings.precision_as_shown;
         Self {
             wb: WbAccess::Mut(wb),
             origin: CellAddr::new(0, 0, 0),
@@ -479,6 +595,9 @@ impl<'w> CalcCtx<'w> {
             eval_stack: Vec::new(),
             deferred: Vec::new(),
             circular: 0,
+            iter_set: None,
+            precision,
+            local_table_ops: 0,
         }
     }
 
@@ -495,6 +614,7 @@ impl<'w> CalcCtx<'w> {
     pub fn shared_at(wb: &'w Workbook, origin: CellAddr) -> Self {
         Self {
             now: now_serial(wb.settings.date_epoch),
+            precision: wb.settings.precision_as_shown,
             wb: WbAccess::Shared(wb),
             origin,
             depth: 0,
@@ -503,6 +623,8 @@ impl<'w> CalcCtx<'w> {
             eval_stack: Vec::new(),
             deferred: Vec::new(),
             circular: 0,
+            iter_set: None,
+            local_table_ops: 0,
         }
     }
 
@@ -510,6 +632,31 @@ impl<'w> CalcCtx<'w> {
         match &mut self.wb {
             WbAccess::Mut(wb) => Some(wb),
             WbAccess::Shared(_) => None,
+        }
+    }
+
+    /// `true` if `id` is a member of the component being iterated.
+    fn in_iteration(&self, id: FormulaCellId) -> bool {
+        self.iter_set.as_ref().is_some_and(|s| s.contains(&id))
+    }
+
+    /// The previous value of an iterated member (what a cycle reads).
+    fn iterated_value(&self, id: FormulaCellId) -> Value {
+        match self.wb.formulas.get(id).map(|f| &f.cached) {
+            Some(Value::Empty) | None => Value::Number(0.0),
+            Some(v) => v.clone(),
+        }
+    }
+
+    /// With "precision as shown", a number rounded to the decimals its
+    /// cell's format displays.
+    fn shown(&self, addr: CellAddr, v: Value) -> Value {
+        if !self.precision {
+            return v;
+        }
+        match v {
+            Value::Number(n) => Value::Number(shown_number(&self.wb, addr, n)),
+            other => other,
         }
     }
 
@@ -633,6 +780,7 @@ impl<'w> CalcCtx<'w> {
             matrix = None;
             self.circular += 1;
         }
+        let precision = self.precision;
         let Some(wb) = self.wb_mut() else {
             return;
         };
@@ -644,6 +792,17 @@ impl<'w> CalcCtx<'w> {
             f.state = CellState::Dirty;
             return;
         }
+        let value = if precision {
+            match value {
+                Value::Number(n) => Value::Number(shown_number(wb, addr, n)),
+                other => other,
+            }
+        } else {
+            value
+        };
+        let Some(f) = wb.formulas.get_mut(id) else {
+            return;
+        };
         f.cached = value;
         if f.array.is_some() {
             f.array_result = matrix;
@@ -667,11 +826,19 @@ impl<'w> CalcCtx<'w> {
         match f.state {
             CellState::Clean => f.cached.clone(),
             CellState::Evaluating => {
+                if self.in_iteration(id) {
+                    return self.iterated_value(id);
+                }
                 self.cycle_followed(id);
                 Value::Error(ErrorKind::Circular)
             }
             CellState::Dirty => {
                 if self.depth >= MAX_ON_DEMAND_DEPTH {
+                    if self.in_iteration(id) {
+                        // Too deep to nest inside the iterated component:
+                        // this round reads the previous value.
+                        return self.iterated_value(id);
+                    }
                     // Too deep to nest: defer it; this attempt is discarded.
                     if !self.deferred.contains(&id) {
                         self.deferred.push(id);
@@ -695,6 +862,9 @@ impl<'w> CalcCtx<'w> {
 
     /// Marks every cell on the evaluation stack from `id` up as circular.
     fn cycle_followed(&mut self, id: FormulaCellId) {
+        if self.in_iteration(id) {
+            return;
+        }
         if let Some(p) = self.eval_stack.iter().rposition(|f| f.id == id) {
             for f in &mut self.eval_stack[p..] {
                 f.circular = true;
@@ -738,6 +908,18 @@ fn normalize_cell_value(v: Value) -> Value {
             .cloned()
             .unwrap_or(Value::Error(ErrorKind::Value)),
         other => other,
+    }
+}
+
+/// `n` rounded to the decimals the cell's number format shows ("precision
+/// as shown"); `General`, dates, scientific and fraction formats keep the
+/// full value.
+fn shown_number(wb: &Workbook, addr: CellAddr, n: f64) -> f64 {
+    let id = wb.style_at(addr);
+    let st = wb.styles.get(id);
+    match tally_numfmt::display_decimals_of(&st.format) {
+        Some(d) => crate::calcsettings::round_to_decimals(n, d),
+        None => n,
     }
 }
 
@@ -790,6 +972,10 @@ impl EvalContext for CalcCtx<'_> {
         &self.wb.settings
     }
 
+    fn locale_tag(&self) -> &str {
+        self.wb.locale.tag
+    }
+
     fn cell_value(&mut self, addr: CellAddr) -> Value {
         if !addr.is_valid() {
             return Value::Error(ErrorKind::Ref);
@@ -799,9 +985,13 @@ impl EvalContext for CalcCtx<'_> {
         };
         match sheet.get(addr.row, addr.col) {
             None => Value::Empty,
-            Some(CellContent::Value(v)) => v.clone(),
+            Some(CellContent::Value(v)) => {
+                let v = v.clone();
+                self.shown(addr, v)
+            }
             Some(CellContent::Formula(id)) => {
                 let id = *id;
+                // Formula results are stored already rounded.
                 self.formula_value(id)
             }
             Some(CellContent::ArrayPart(id)) => {
@@ -837,12 +1027,15 @@ impl EvalContext for CalcCtx<'_> {
             return;
         }
         self.ensure_clean(range);
+        let iter_set = self.iter_set.clone();
+        let precision = self.precision;
         let wb = &*self.wb;
         let Some(sheet) = wb.sheet(range.sheet) else {
             return;
         };
         let circular = Value::Error(ErrorKind::Circular);
         let empty = Value::Empty;
+        let iterated = |id: FormulaCellId| iter_set.as_ref().is_some_and(|s| s.contains(&id));
         for c in range.c0..=c1 {
             let col = sheet.column(c);
             let value_of = |content: &'_ CellContent, r: u32| -> Option<Value> {
@@ -850,17 +1043,37 @@ impl EvalContext for CalcCtx<'_> {
                     CellContent::Value(_) => None,
                     CellContent::Formula(id) => Some(match wb.formulas.get(*id) {
                         Some(fc) if fc.state == CellState::Clean => fc.cached.clone(),
+                        Some(fc) if iterated(*id) => match &fc.cached {
+                            Value::Empty => Value::Number(0.0),
+                            v => v.clone(),
+                        },
                         Some(_) => circular.clone(),
                         None => Value::Empty,
                     }),
                     CellContent::ArrayPart(id) => Some(match wb.formulas.get(*id) {
-                        Some(fc) if fc.state == CellState::Clean => fc.array_value(
-                            r.saturating_sub(fc.addr.row),
-                            c.saturating_sub(fc.addr.col),
-                        ),
+                        Some(fc) if fc.state == CellState::Clean || iterated(*id) => fc
+                            .array_value(
+                                r.saturating_sub(fc.addr.row),
+                                c.saturating_sub(fc.addr.col),
+                            ),
                         Some(_) => circular.clone(),
                         None => Value::Empty,
                     }),
+                }
+            };
+            // "Precision as shown" for constant numbers (formula results
+            // are stored rounded).
+            let shown = |r: u32, v: &Value| -> Option<Value> {
+                if !precision {
+                    return None;
+                }
+                match v {
+                    Value::Number(n) => {
+                        let st = wb.styles.get(sheet.style(r, c));
+                        tally_numfmt::display_decimals_of(&st.format)
+                            .map(|d| Value::Number(crate::calcsettings::round_to_decimals(*n, d)))
+                    }
+                    _ => None,
                 }
             };
             if skip_empty {
@@ -870,7 +1083,10 @@ impl EvalContext for CalcCtx<'_> {
                 for (r, content) in col.cells.iter_range(range.r0, r1) {
                     let addr = CellAddr::new(range.sheet, r, c);
                     let flow = match content {
-                        CellContent::Value(v) => f(addr, v),
+                        CellContent::Value(v) => match shown(r, v) {
+                            Some(rounded) => f(addr, &rounded),
+                            None => f(addr, v),
+                        },
                         other => {
                             let v = value_of(other, r).unwrap_or(Value::Empty);
                             f(addr, &v)
@@ -893,7 +1109,10 @@ impl EvalContext for CalcCtx<'_> {
                             let content = *content;
                             it.next();
                             match content {
-                                CellContent::Value(v) => f(addr, v),
+                                CellContent::Value(v) => match shown(r, v) {
+                                    Some(rounded) => f(addr, &rounded),
+                                    None => f(addr, v),
+                                },
                                 other => {
                                     let v = value_of(other, r).unwrap_or(Value::Empty);
                                     f(addr, &v)
@@ -978,24 +1197,298 @@ impl EvalContext for CalcCtx<'_> {
             .is_some_and(|s| s.filtered_rows.contains(row))
     }
 
-    /// TODO(W5-3): a goal-seek style sandbox that re-evaluates the
-    /// precedent chain from `subs` to `formula`, capped at
-    /// `crate::tools::MAX_TABLE_OPS` calls per recalc.
+    /// `MULTIPLE.OPERATIONS`: re-evaluates `formula` with `subs` in place
+    /// of the input cells, through a sandbox that recomputes only the
+    /// formulas between the inputs and `formula` (see [`SubCtx`]). At most
+    /// [`crate::tools::MAX_TABLE_OPS`] calls per recalc; past that the
+    /// result is Err:512.
     fn table_op(&mut self, formula: CellAddr, subs: &[(CellAddr, Value)]) -> Option<Value> {
-        let _ = (formula, subs);
-        None
+        let calls = match self.wb_mut() {
+            Some(wb) => {
+                wb.table_op_calls = wb.table_op_calls.saturating_add(1);
+                wb.table_op_calls
+            }
+            None => {
+                self.local_table_ops = self.local_table_ops.saturating_add(1);
+                self.local_table_ops
+            }
+        };
+        if calls > crate::tools::MAX_TABLE_OPS {
+            return Some(Value::Error(ErrorKind::FormulaOverflow));
+        }
+        self.wb.formula_at(formula)?;
+        let mut sub = SubCtx::new(self, subs);
+        Some(sub.eval_cell(formula, false))
     }
 
-    /// TODO(W5-2): look up the pivot whose output contains `at` in
-    /// `SheetMeta::pivots` and read the requested data cell.
     fn pivot_data(
         &mut self,
         at: CellAddr,
         field: &str,
         filters: &[(String, String)],
     ) -> Option<Value> {
-        let _ = (at, field, filters);
+        crate::pivot::pivot_data(&self.wb, at, field, filters)
+    }
+}
+
+/// Most formulas the `MULTIPLE.OPERATIONS` sandbox recomputes per call.
+const MAX_SUB_AFFECTED: usize = 200_000;
+/// Largest range the sandbox iterates cell by cell.
+const MAX_SUB_RANGE_CELLS: u64 = 1 << 20;
+/// Deepest nesting of sandbox re-evaluations.
+const MAX_SUB_DEPTH: u32 = 64;
+
+/// The `MULTIPLE.OPERATIONS` sandbox: an [`EvalContext`] over the recalc
+/// context in which the input cells have the substituted values and every
+/// formula that (transitively) reads them is recomputed on the fly, memoized
+/// per call; everything else reads the workbook as is. Nothing is written.
+struct SubCtx<'a, 'w> {
+    inner: &'a mut CalcCtx<'w>,
+    subs: Vec<(CellAddr, Value)>,
+    /// Anchors of the formulas depending on the inputs.
+    affected: HashSet<CellAddr>,
+    memo: HashMap<CellAddr, Value>,
+    arrays: HashMap<CellAddr, Value>,
+    in_progress: HashSet<CellAddr>,
+    origin: CellAddr,
+    depth: u32,
+}
+
+impl<'a, 'w> SubCtx<'a, 'w> {
+    fn new(inner: &'a mut CalcCtx<'w>, subs: &[(CellAddr, Value)]) -> Self {
+        // The formulas reachable from the inputs through the reverse index.
+        let mut affected: HashSet<CellAddr> = HashSet::new();
+        let mut frontier: Vec<CellRange> =
+            subs.iter().map(|(a, _)| CellRange::single(*a)).collect();
+        let mut found: Vec<FormulaCellId> = Vec::new();
+        let mut seen: HashSet<FormulaCellId> = HashSet::new();
+        while !frontier.is_empty() && affected.len() < MAX_SUB_AFFECTED {
+            found.clear();
+            inner.wb.deps.dependents_of(&frontier, &mut found);
+            let mut next = Vec::new();
+            for id in found.drain(..) {
+                if !seen.insert(id) {
+                    continue;
+                }
+                if let Some(f) = inner.wb.formulas.get(id) {
+                    affected.insert(f.addr);
+                    next.push(f.extent());
+                }
+            }
+            frontier = next;
+        }
+        let origin = inner.origin;
+        Self {
+            inner,
+            subs: subs.to_vec(),
+            affected,
+            memo: HashMap::new(),
+            arrays: HashMap::new(),
+            in_progress: HashSet::new(),
+            origin,
+            depth: 0,
+        }
+    }
+
+    fn touches(&self, range: &CellRange) -> bool {
+        self.subs.iter().any(|(a, _)| range.contains(*a))
+            || self.affected.iter().any(|a| {
+                range.contains(*a)
+                    || self
+                        .inner
+                        .wb
+                        .formula_at(*a)
+                        .is_some_and(|(_, f)| f.extent().intersects(range))
+            })
+    }
+
+    /// The value of `addr` inside the sandbox.
+    fn eval_cell(&mut self, addr: CellAddr, force: bool) -> Value {
+        if let Some((_, v)) = self.subs.iter().find(|(a, _)| *a == addr) {
+            return v.clone();
+        }
+        let content = self
+            .inner
+            .wb
+            .sheet(addr.sheet)
+            .and_then(|s| s.get(addr.row, addr.col))
+            .cloned();
+        match content {
+            Some(CellContent::Formula(id)) => {
+                if force || self.affected.contains(&addr) {
+                    self.eval_formula(addr, id)
+                } else {
+                    self.inner.cell_value(addr)
+                }
+            }
+            Some(CellContent::ArrayPart(id)) => {
+                let anchor = self.inner.wb.formulas.get(id).map(|f| f.addr);
+                match anchor {
+                    Some(anchor) if self.affected.contains(&anchor) => {
+                        let m = self.eval_formula(anchor, id);
+                        match m {
+                            Value::Array(m) => m
+                                .get(addr.row - anchor.row, addr.col - anchor.col)
+                                .cloned()
+                                .unwrap_or(Value::Error(ErrorKind::NA)),
+                            other => other,
+                        }
+                    }
+                    _ => self.inner.cell_value(addr),
+                }
+            }
+            _ => self.inner.cell_value(addr),
+        }
+    }
+
+    fn eval_formula(&mut self, addr: CellAddr, id: FormulaCellId) -> Value {
+        let Some(f) = self.inner.wb.formulas.get(id) else {
+            return Value::Empty;
+        };
+        let is_array = f.array.is_some();
+        if let Some(v) = if is_array {
+            self.arrays.get(&addr)
+        } else {
+            self.memo.get(&addr)
+        } {
+            return v.clone();
+        }
+        if self.in_progress.contains(&addr) || self.depth >= MAX_SUB_DEPTH {
+            return Value::Error(ErrorKind::Circular);
+        }
+        if f.invalid_text.is_some() {
+            return f.cached.clone();
+        }
+        let formula = f.formula.clone();
+        let env = if f.has_names {
+            EvalEnv::new(
+                crate::names::collect_names(&self.inner.wb.names, &formula.expr, addr.sheet).0,
+            )
+        } else {
+            EvalEnv::default()
+        };
+        self.in_progress.insert(addr);
+        self.depth += 1;
+        let saved = std::mem::replace(&mut self.origin, addr);
+        let v = eval_with(&formula.expr, self, is_array, &env);
+        let out = if is_array {
+            array_result(&v, self)
+        } else {
+            cell_result(&v, self)
+        };
+        self.origin = saved;
+        self.depth -= 1;
+        self.in_progress.remove(&addr);
+        if is_array {
+            self.arrays.insert(addr, out.clone());
+        } else {
+            self.memo.insert(addr, out.clone());
+        }
+        out
+    }
+}
+
+impl EvalContext for SubCtx<'_, '_> {
+    fn origin(&self) -> CellAddr {
+        self.origin
+    }
+
+    fn settings(&self) -> &CalcSettings {
+        self.inner.settings()
+    }
+
+    fn locale_tag(&self) -> &str {
+        self.inner.locale_tag()
+    }
+
+    fn cell_value(&mut self, addr: CellAddr) -> Value {
+        if !addr.is_valid() {
+            return Value::Error(ErrorKind::Ref);
+        }
+        self.eval_cell(addr, false)
+    }
+
+    fn for_each_in_range(
+        &mut self,
+        range: &CellRange,
+        skip_empty: bool,
+        f: &mut dyn FnMut(CellAddr, &Value) -> ControlFlow<()>,
+    ) {
+        let r1 = range.r1.min(MAX_ROWS - 1);
+        let c1 = range.c1.min(MAX_COLS - 1);
+        if range.r0 > r1 || range.c0 > c1 {
+            return;
+        }
+        let clipped = CellRange::new(range.sheet, range.r0, range.c0, r1, c1);
+        if clipped.cell_count() > MAX_SUB_RANGE_CELLS || !self.touches(&clipped) {
+            return self.inner.for_each_in_range(range, skip_empty, f);
+        }
+        for c in clipped.c0..=c1 {
+            for r in clipped.r0..=r1 {
+                let addr = CellAddr::new(range.sheet, r, c);
+                let v = self.eval_cell(addr, false);
+                if skip_empty && v.is_empty() {
+                    continue;
+                }
+                if f(addr, &v).is_break() {
+                    return;
+                }
+            }
+        }
+    }
+
+    fn used_bounds(&self, range: &CellRange) -> Option<CellRange> {
+        self.inner.used_bounds(range)
+    }
+
+    fn parse_reference_text(&self, text: &str, a1: bool) -> Option<CellRange> {
+        self.inner.parse_reference_text(text, a1)
+    }
+
+    fn record_dynamic_dep(&mut self, range: &CellRange) {
+        self.inner.record_dynamic_dep(range);
+    }
+
+    fn now_serial(&self) -> f64 {
+        self.inner.now_serial()
+    }
+
+    fn rand(&mut self) -> f64 {
+        self.inner.rand()
+    }
+
+    fn sheet_index(&self, id: SheetId) -> Option<u32> {
+        self.inner.sheet_index(id)
+    }
+
+    fn sheet_count(&self) -> u32 {
+        self.inner.sheet_count()
+    }
+
+    fn cell_format_info(&self, addr: CellAddr) -> CellFormatInfo {
+        self.inner.cell_format_info(addr)
+    }
+
+    fn hidden_row(&self, sheet: SheetId, row: u32) -> bool {
+        self.inner.hidden_row(sheet, row)
+    }
+
+    fn filtered_row(&self, sheet: SheetId, row: u32) -> bool {
+        self.inner.filtered_row(sheet, row)
+    }
+
+    fn table_op(&mut self, _formula: CellAddr, _subs: &[(CellAddr, Value)]) -> Option<Value> {
+        // No nested what-if tables.
         None
+    }
+
+    fn pivot_data(
+        &mut self,
+        at: CellAddr,
+        field: &str,
+        filters: &[(String, String)],
+    ) -> Option<Value> {
+        self.inner.pivot_data(at, field, filters)
     }
 }
 

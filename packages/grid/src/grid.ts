@@ -12,14 +12,17 @@
  * requestAnimationFrame.
  */
 import type { CellPos, CellView, RangeDto, SheetLayout, StyleDto } from "@tally/bridge";
+import { AriaMirror } from "./aria";
 import { CellEditor } from "./editor";
+import { ObjectLayer, type AnchorAxes } from "./objectLayer";
+import { OUTLINE_LEVEL_PX, outlineHit, outlineLevels } from "./outline";
 import { Geometry, HEADER_HEIGHT, MIN_ROW_HEADER_WIDTH, NO_FROZEN, type Frozen } from "./geometry";
 import { Interaction, type InteractionHost, type ResizeGuide } from "./interaction";
 import { AxisModel, ScrollAxisMap, clamp } from "./layout";
 import { CELL_PADDING, Renderer, cellFont, drawStyleId, dropdownButtonRect, filterButtonRect, headerFont, linkButtonRect, type FrameStats } from "./renderer";
 import { sameSelection, snapToMerges, type Limits } from "./selection";
 import { TileTracker } from "./tiles";
-import { CELL_FLAGS, MAX_COLS, MAX_ROWS, type CellButtonKind, type ClientRect, type DirtySet, type GridProps, type Selection, type Viewport } from "./types";
+import { CELL_FLAGS, MAX_COLS, MAX_ROWS, type CellButtonKind, type ClientRect, type DirtySet, type GridGeometryInfo, type GridProps, type PointPhase, type Selection, type Viewport } from "./types";
 
 /** Font the grid waits for before its first paint. */
 const FONT_PROBE = '13px "Inter Variable"';
@@ -38,6 +41,13 @@ export class Grid {
   private readonly renderer: Renderer;
   private readonly editor: CellEditor;
   private readonly interaction: Interaction;
+  /** Wave 5: the HTML layer for charts/pictures and the ARIA mirror. */
+  private readonly objects: ObjectLayer;
+  private readonly aria: AriaMirror;
+  /** `pickRange()` in flight (range-pick mode is on while set). */
+  private pick: { resolve: (range: RangeDto | null) => void } | null = null;
+  /** Last viewport reported through `onViewportChange`. */
+  private lastViewport = "";
   private readonly tracker: TileTracker;
   private readonly rowsCount: number;
   private readonly colsCount: number;
@@ -60,6 +70,9 @@ export class Grid {
   private dpr = 1;
   private headerW = MIN_ROW_HEADER_WIDTH;
   private headerH = HEADER_HEIGHT;
+  /** Outline gutter sizes (screen px), included in `headerW` / `headerH`. */
+  private gutterW = 0;
+  private gutterH = 0;
   private geo: Geometry;
 
   private raf = 0;
@@ -75,6 +88,8 @@ export class Grid {
   private lockedTimer: ReturnType<typeof setTimeout> | null = null;
   /** The note cell under the pointer (for `onNoteHover`). */
   private hoverNote: CellPos | null = null;
+  /** A page-break line being dragged (Page Break Preview, W5-5). */
+  private breakDrag: { axis: "row" | "col"; from: number; manual: boolean; pos: number; pointerId: number } | null = null;
 
   /** Recent frame durations (ms between rAF callbacks while drawing). */
   private readonly frameTimes: number[] = [];
@@ -118,8 +133,19 @@ export class Grid {
     scroller.appendChild(spacer);
     this.editor = new CellEditor(doc);
     root.append(main, overlay, scroller);
+    this.objects = new ObjectLayer(doc, {
+      onObjectSelect: (id) => this.props.onObjectSelect?.(id),
+      onObjectPointerDown: (id, part, e) => this.props.onObjectPointerDown?.(id, part, e),
+      onObjectDoubleClick: (id) => this.props.onObjectDoubleClick?.(id),
+      onObjectKey: (id, key, e) => this.props.onObjectKey?.(id, key, e),
+    });
     this.editor.mount(root);
+    this.aria = new AriaMirror(doc, root, this.editor.el, { rows: this.rowsCount, cols: this.colsCount });
+    if (props.aria) this.aria.setProps(props.aria);
+    if (props.objects) this.objects.setObjects(props.objects);
     container.appendChild(root);
+    // The object layer sits next to the root (see ObjectLayer.mount).
+    this.objects.mount(container);
     this.root = root;
     this.scroller = scroller;
     this.spacer = spacer;
@@ -165,6 +191,9 @@ export class Grid {
         self.invalidate("overlay");
       },
       pointMode: () => (self.props.pointMode ?? false) && self.editor.open,
+      rangePick: () => !self.editor.open && (self.pick !== null || (self.props.rangePick ?? false)),
+      pointRange: (range, phase) => self.pointRange(range, phase),
+      cancelPick: () => self.settlePick(null),
       setResizeGuide: (g) => {
         self.resizeGuide = g;
         self.invalidate("overlay");
@@ -185,6 +214,9 @@ export class Grid {
     };
     this.interaction = new Interaction(host);
 
+    // Outline gutter clicks (before the interaction layer sees them) and
+    // object deselection on any cell/header click.
+    scroller.addEventListener("pointerdown", this.onScrollerPointerDown, { capture: true });
     scroller.addEventListener("scroll", this.onScroll, { passive: true });
     scroller.addEventListener("wheel", this.onWheel, { passive: false });
     const win = doc.defaultView;
@@ -237,6 +269,7 @@ export class Grid {
     if ("selection" in partial && partial.selection && !sameSelection(partial.selection, this.selection)) {
       this.selection = partial.selection;
       this.invalidate("overlay");
+      this.mirrorSelection(false);
     }
     if ("edit" in partial && partial.edit !== prev.edit) {
       const opened = this.editor.sync(this.props.edit, prev.edit);
@@ -255,7 +288,228 @@ export class Grid {
     if ("editHighlights" in partial && partial.editHighlights !== prev.editHighlights) {
       this.editor.setHighlights(this.props.editHighlights ?? []);
     }
+    // Wave 5 seams.
+    if ("rangePick" in partial && !partial.rangePick && prev.rangePick) this.interaction.resetPoint();
+    if ("outline" in partial && partial.outline !== prev.outline) this.relayout();
+    if ("pageBreakPreview" in partial && partial.pageBreakPreview !== prev.pageBreakPreview) this.invalidate("main");
+    if ("traces" in partial && partial.traces !== prev.traces) this.invalidate("overlay");
+    if ("invalidCells" in partial && partial.invalidCells !== prev.invalidCells) this.invalidate("overlay");
+    if ("objects" in partial && partial.objects !== prev.objects) {
+      this.objects.setObjects(this.props.objects ?? []);
+      this.objects.sync(this.geo);
+    }
+    if ("aria" in partial && partial.aria !== prev.aria) {
+      this.aria.setProps(this.props.aria ?? {});
+      this.mirrorSelection(false);
+    }
   }
+
+  // -- wave 5 seams -----------------------------------------------------------
+
+  /**
+   * Screen geometry for HTML placed over the canvas (chart layer, popovers):
+   * column/row edges, header sizes, scroll offsets, frozen counts and zoom.
+   * A snapshot: call again after `onViewportChange`.
+   */
+  getGeometry(): GridGeometryInfo {
+    const g = this.geo;
+    return {
+      colLeft: (c) => g.colX(c),
+      rowTop: (r) => g.rowY(r),
+      headerW: g.headerW,
+      headerH: g.headerH,
+      gutterW: g.gutterW,
+      gutterH: g.gutterH,
+      scrollX: g.scrollX,
+      scrollY: g.scrollY,
+      frozen: { rows: g.frozen.rows, cols: g.frozen.cols },
+      zoom: g.zoom,
+      width: g.width,
+      height: g.height,
+    };
+  }
+
+  /**
+   * Asks the user for a range (a dialog's "pick" button): range-pick mode
+   * stays on until a click/drag ends or Enter confirms (resolves with the
+   * range) or Escape / `cancelRangePick()` (resolves with `null`). Every
+   * phase is also reported through `onPointRange`. A second call settles
+   * the first with `null`.
+   */
+  pickRange(): Promise<RangeDto | null> {
+    this.settlePick(null);
+    return new Promise((resolve) => {
+      this.pick = { resolve };
+      this.root.dataset.rangePick = "true";
+      this.focus();
+    });
+  }
+
+  /** Ends a pending `pickRange()` with `null`. */
+  cancelRangePick(): void {
+    this.settlePick(null);
+  }
+
+  /** Whether a pick is pending or the `rangePick` prop is on. */
+  get rangePicking(): boolean {
+    return this.pick !== null || (this.props.rangePick ?? false);
+  }
+
+  /** The object overlay layer (charts and pictures mount into `objectLayer.elementFor(id)`). */
+  get objectLayer(): ObjectLayer {
+    return this.objects;
+  }
+
+  /**
+   * The axis models and zoom the object layer places anchors with
+   * (`anchorToPx` / `pxToAnchor`): W5-5's drag/resize converts a dragged
+   * content rect back into a `ChartAnchor` with these.
+   */
+  anchorAxes(): AnchorAxes {
+    return { rows: this.rows, cols: this.cols, zoom: this.zoom };
+  }
+
+  /** The content rect (CSS px from the sheet origin, zoomed) of an object by id, if shown. */
+  objectRect(id: string): { x: number; y: number; w: number; h: number } | null {
+    const node = this.objects.elementFor(id);
+    if (!node) return null;
+    return { x: parseFloat(node.style.left) || 0, y: parseFloat(node.style.top) || 0, w: parseFloat(node.style.width) || 0, h: parseFloat(node.style.height) || 0 };
+  }
+
+  /** The scrolling pane's content offset (CSS px, zoomed): where the object layer's inner origin is. */
+  contentOffset(): { x: number; y: number } {
+    return { x: this.contentX, y: this.contentY };
+  }
+
+  /** The ARIA mirror (tests and the app's announcements). */
+  get ariaMirror(): AriaMirror {
+    return this.aria;
+  }
+
+  private pointRange(range: RangeDto, phase: PointPhase): void {
+    this.props.onPointRange?.(range, phase);
+    if (phase === "end" && this.pick) this.settlePick(range);
+  }
+
+  private settlePick(range: RangeDto | null): void {
+    const pick = this.pick;
+    if (!pick) return;
+    this.pick = null;
+    delete this.root.dataset.rangePick;
+    this.interaction.resetPoint();
+    pick.resolve(range);
+  }
+
+  /** Pushes the selection into the ARIA mirror (announces when it changed). */
+  private mirrorSelection(force: boolean): void {
+    const a = this.selection.active;
+    this.aria.update(this.selection, this.props.source.getCell(a.r, a.c), force);
+  }
+
+  private emitViewport(): void {
+    const cb = this.props.onViewportChange;
+    if (!cb) return;
+    const vp = this.getViewport();
+    const key = `${vp.r0},${vp.c0},${vp.r1},${vp.c1},${vp.scrollX},${vp.scrollY},${vp.width},${vp.height},${this.zoom}`;
+    if (key === this.lastViewport) return;
+    this.lastViewport = key;
+    cb(vp);
+  }
+
+  private readonly onScrollerPointerDown = (e: PointerEvent): void => {
+    if (e.button !== 0) return;
+    const outline = this.props.outline;
+    if (outline && (this.gutterW > 0 || this.gutterH > 0)) {
+      const o = this.root.getBoundingClientRect();
+      const hit = outlineHit(this.geo, outline, e.clientX - o.left, e.clientY - o.top);
+      if (hit) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (hit.kind === "level") this.props.onOutlineLevel?.(hit.axis, hit.level);
+        else this.props.onOutlineToggle?.(hit.axis, hit.group);
+        return;
+      }
+    }
+    if (this.props.pageBreakPreview && this.props.pageBreaks && this.props.onPageBreakDrag) {
+      const o = this.root.getBoundingClientRect();
+      const hit = this.breakLineAt(e.clientX - o.left, e.clientY - o.top);
+      if (hit) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.breakDrag = { ...hit, pos: hit.axis === "row" ? e.clientY - o.top : e.clientX - o.left, pointerId: e.pointerId };
+        const target = e.currentTarget as HTMLElement;
+        try {
+          target.setPointerCapture(e.pointerId);
+        } catch {
+          // Synthetic events in tests have no active pointer.
+        }
+        target.addEventListener("pointermove", this.onBreakMove);
+        target.addEventListener("pointerup", this.onBreakUp);
+        target.addEventListener("pointercancel", this.onBreakUp);
+        this.invalidate("overlay");
+        return;
+      }
+    }
+    // A click on cells deselects the object, except while a dialog picks a range for it.
+    if (this.objects.selected !== null && this.pick === null && !this.props.rangePick) this.objects.select(null);
+  };
+
+  /** The page-break line within 4 px of a canvas point (cells area only), or `null`. */
+  private breakLineAt(x: number, y: number): { axis: "row" | "col"; from: number; manual: boolean } | null {
+    const breaks = this.props.pageBreaks;
+    const geo = this.geo;
+    if (!breaks || x < geo.headerW || y < geo.headerH) return null;
+    const tol = 4;
+    for (const b of breaks.rows) {
+      const ly = geo.rowY(b.at);
+      if (ly >= geo.headerH && Math.abs(ly - y) <= tol) return { axis: "row", from: b.at, manual: b.manual };
+    }
+    for (const b of breaks.cols) {
+      const lx = geo.colX(b.at);
+      if (lx >= geo.headerW && Math.abs(lx - x) <= tol) return { axis: "col", from: b.at, manual: b.manual };
+    }
+    return null;
+  }
+
+  private readonly onBreakMove = (e: PointerEvent): void => {
+    const d = this.breakDrag;
+    if (!d) return;
+    const o = this.root.getBoundingClientRect();
+    d.pos = d.axis === "row" ? e.clientY - o.top : e.clientX - o.left;
+    this.invalidate("overlay");
+  };
+
+  private readonly onBreakUp = (e: PointerEvent): void => {
+    const d = this.breakDrag;
+    if (!d) return;
+    this.breakDrag = null;
+    const target = e.currentTarget as HTMLElement;
+    target.removeEventListener("pointermove", this.onBreakMove);
+    target.removeEventListener("pointerup", this.onBreakUp);
+    target.removeEventListener("pointercancel", this.onBreakUp);
+    try {
+      target.releasePointerCapture(d.pointerId);
+    } catch {
+      // ignore
+    }
+    this.invalidate("overlay");
+    if (e.type === "pointercancel") return;
+    const o = this.root.getBoundingClientRect();
+    const geo = this.geo;
+    // The break goes above the row / left of the column whose first half holds the pointer.
+    let to: number;
+    if (d.axis === "row") {
+      const y = e.clientY - o.top;
+      const r = geo.rowAt(Math.max(geo.headerH, y));
+      to = y - geo.rowY(r) > geo.rowH(r) / 2 ? r + 1 : r;
+    } else {
+      const x = e.clientX - o.left;
+      const c = geo.colAt(Math.max(geo.headerW, x));
+      to = x - geo.colX(c) > geo.colW(c) / 2 ? c + 1 : c;
+    }
+    to = Math.max(1, Math.min(d.axis === "row" ? this.rowsCount - 1 : this.colsCount - 1, to));
+    if (to !== d.from) this.props.onPageBreakDrag?.(d.axis, d.from, to, d.manual);
+  };
 
   /**
    * Width (CSS px at zoom 100%) that fits the widest text in column `c`:
@@ -382,9 +636,13 @@ export class Grid {
     this.destroyed = true;
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this.lockedTimer) clearTimeout(this.lockedTimer);
+    this.settlePick(null);
     this.unsubscribe?.();
     this.resizeObserver?.disconnect();
     this.interaction.destroy();
+    this.objects.destroy();
+    this.aria.destroy();
+    this.scroller.removeEventListener("pointerdown", this.onScrollerPointerDown, { capture: true });
     this.scroller.removeEventListener("scroll", this.onScroll);
     this.scroller.removeEventListener("wheel", this.onWheel);
     this.root.remove();
@@ -417,6 +675,8 @@ export class Grid {
     this.tracker.invalidate(dirty);
     if (dirty === "all") this.reloadLayout(false);
     this.invalidate("main");
+    // The active cell's value may have changed: refresh the ARIA description.
+    this.mirrorSelection(false);
   }
 
   private reloadLayout(force: boolean): void {
@@ -464,12 +724,17 @@ export class Grid {
   /** Recomputes header sizes, scroll maps and the spacer. */
   private relayout(): void {
     const zoom = this.zoom;
-    this.headerH = Math.round(HEADER_HEIGHT * zoom);
+    // Outline gutters (wave 5): one column/strip per level, left of / above the headers.
+    const outline = this.props.outline;
+    const levelPx = (outline?.levelPx ?? OUTLINE_LEVEL_PX) * zoom;
+    this.gutterW = outline ? Math.round(outlineLevels(outline.rows) * levelPx) : 0;
+    this.gutterH = outline ? Math.round(outlineLevels(outline.cols) * levelPx) : 0;
+    this.headerH = this.gutterH + Math.round(HEADER_HEIGHT * zoom);
     // Row header fits the widest row number currently visible (≥ 3 digits).
     const lastRow = Math.min(this.rowsCount, this.rows.pxToIndex((this.contentY + this.height) / zoom) + 1);
     const digits = Math.max(3, String(lastRow).length);
     const digitW = this.renderer.measurer.measure(headerFont(this.props.theme, zoom, true), "0".repeat(digits));
-    this.headerW = Math.max(Math.round(MIN_ROW_HEADER_WIDTH * zoom), Math.ceil(digitW + 20 * zoom));
+    this.headerW = this.gutterW + Math.max(Math.round(MIN_ROW_HEADER_WIDTH * zoom), Math.ceil(digitW + 20 * zoom));
 
     const cellsW = Math.max(0, this.width - this.headerW);
     const cellsH = Math.max(0, this.height - this.headerH);
@@ -481,6 +746,8 @@ export class Grid {
     this.contentY = clamp(this.contentY, 0, this.mapY.maxContent);
     this.syncScrollPosition();
     this.geo = this.makeGeometry();
+    this.objects.sync(this.geo);
+    this.emitViewport();
     this.invalidate("all");
   }
 
@@ -497,6 +764,8 @@ export class Grid {
       this.height,
       this.frozen(),
       this.layout?.merges ?? [],
+      this.gutterW,
+      this.gutterH,
     );
   }
 
@@ -588,9 +857,13 @@ export class Grid {
     // Row numbers may need a wider header after a long jump.
     const digits = Math.max(3, String(this.geo.visibleRange().r1 + 1).length);
     const digitW = this.renderer.measurer.measure(headerFont(this.props.theme, this.zoom, true), "0".repeat(digits));
-    const want = Math.max(Math.round(MIN_ROW_HEADER_WIDTH * this.zoom), Math.ceil(digitW + 20 * this.zoom));
+    const want = this.gutterW + Math.max(Math.round(MIN_ROW_HEADER_WIDTH * this.zoom), Math.ceil(digitW + 20 * this.zoom));
     if (want !== prevHeaderW) this.relayout();
-    else this.invalidate("all");
+    else {
+      this.objects.sync(this.geo);
+      this.emitViewport();
+      this.invalidate("all");
+    }
   }
 
   private readonly onScroll = (): void => {
@@ -639,6 +912,7 @@ export class Grid {
     if (reveal) this.scrollCellIntoView(reveal);
     if (changed) {
       this.invalidate("overlay");
+      this.mirrorSelection(false);
       if (emit) this.props.onSelectionChange?.(sel);
     }
   }
@@ -667,6 +941,8 @@ export class Grid {
         filterButtons: this.props.filterButtons ?? null,
         pageBreaks: this.props.pageBreaks ?? null,
         printRange: this.props.printRange ?? null,
+        outline: this.props.outline ?? null,
+        pageBreakPreview: this.props.pageBreakPreview ?? false,
       });
       const panes = this.geo.panes();
       // The scrolling pane first (it is the largest), then frozen ones.
@@ -695,6 +971,9 @@ export class Grid {
         arrayRange: this.props.arrayRange ?? null,
         clipRange: this.editor.open ? null : (this.props.clipRange ?? null),
         lockedCell: this.lockedCell,
+        traces: this.props.traces ?? null,
+        invalidCells: this.props.invalidCells ?? null,
+        breakDrag: this.breakDrag ? { axis: this.breakDrag.axis, pos: this.breakDrag.pos } : null,
       });
       this.layoutEditor();
     }

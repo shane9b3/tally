@@ -37,6 +37,16 @@ pub(crate) struct RawCellStyle {
     hide_print: Option<bool>,
     /// `style:map` conditions (legacy conditional formatting).
     pub(crate) maps: Vec<crate::v03::RawMap>,
+    // Wave 5 (W5-2) format-cells extras.
+    rotation: Option<i16>,
+    stacked: Option<bool>,
+    shrink: Option<bool>,
+    diag_down: Option<Option<BorderLine>>,
+    diag_up: Option<Option<BorderLine>>,
+    underline_style: Option<tally_model::UnderlineStyleData>,
+    indent: Option<u8>,
+    /// `style:display-name` of a named style.
+    display_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -234,7 +244,14 @@ impl StyleSheet {
         let index = if data == StyleData::default() && maps.is_empty() {
             None
         } else {
-            let key = style_key(&data);
+            // Styles with different `style:map`s must not share one
+            // resolved index: the maps become conditional formats keyed by
+            // it (review 3, H1).
+            let key = if maps.is_empty() {
+                style_key(&data)
+            } else {
+                format!("{}|maps:{maps:?}", style_key(&data))
+            };
             match self.dedup.get(&key) {
                 Some(&i) => Some(i),
                 None => {
@@ -290,10 +307,42 @@ impl StyleSheet {
                 border_left,
                 border_right,
                 protect,
-                hide_print
+                hide_print,
+                rotation,
+                stacked,
+                shrink,
+                diag_down,
+                diag_up,
+                underline_style,
+                indent
             );
         }
-        let mut s = StyleData::default();
+        // The nearest named style (styles.xml) in the chain is the cell's
+        // base style; the rest is direct formatting.
+        let style_name = chain
+            .iter()
+            .zip(
+                std::iter::once(name.to_string())
+                    .chain(chain.iter().map(|r| r.parent.clone().unwrap_or_default())),
+            )
+            .map(|(_, n)| n)
+            .find(|n| n != name && self.common.cells.contains_key(n) && n != "Default")
+            .or_else(|| {
+                (name != "Default" && self.common.cells.contains_key(name))
+                    .then(|| name.to_string())
+            })
+            .map(|n| self.display_name_of(&n));
+        let mut s = StyleData {
+            style_name,
+            ..StyleData::default()
+        };
+        s.align.rotation_deg = m.rotation.unwrap_or(0);
+        s.align.stacked = m.stacked.unwrap_or(false);
+        s.align.shrink_to_fit = m.shrink.unwrap_or(false);
+        s.align.indent = m.indent.unwrap_or(0);
+        s.borders.diagonal_down = m.diag_down.flatten();
+        s.borders.diagonal_up = m.diag_up.flatten();
+        s.font.underline_style = m.underline_style.unwrap_or_default();
         s.font.bold = m.bold.unwrap_or(false);
         s.font.italic = m.italic.unwrap_or(false);
         s.font.underline = m.underline.unwrap_or(false);
@@ -333,6 +382,47 @@ impl StyleSheet {
                     && code.chars().count() <= tally_model::MAX_NUMBER_FORMAT_LEN
             });
         s
+    }
+
+    /// The display name of a named style (`style:display-name`, else the
+    /// decoded style name).
+    pub fn display_name_of(&self, name: &str) -> String {
+        self.common
+            .cells
+            .get(name)
+            .and_then(|r| r.display_name.clone())
+            .unwrap_or_else(|| crate::tools::display_style_name(name))
+    }
+
+    /// The named cell styles of `office:styles` (everything but
+    /// `Default`), fully resolved, with their parent chains (wave 5).
+    pub fn named_styles(&self) -> Vec<tally_model::CellStyleData> {
+        let mut names: Vec<&String> = self
+            .common
+            .cells
+            .keys()
+            .filter(|n| *n != "Default")
+            .collect();
+        names.sort();
+        names
+            .into_iter()
+            .take(10_000)
+            .map(|n| {
+                let mut style = self.build(n);
+                let display = self.display_name_of(n);
+                style.style_name = Some(display.clone());
+                tally_model::CellStyleData {
+                    name: display,
+                    parent: self
+                        .common
+                        .cells
+                        .get(n)
+                        .and_then(|r| r.parent.clone())
+                        .map(|p| self.display_name_of(&p)),
+                    style,
+                }
+            })
+            .collect()
     }
 
     /// Parses `office:font-face-decls`.
@@ -411,7 +501,7 @@ impl StyleSheet {
         loop {
             match xml.next()? {
                 Ev::Start(p) => {
-                    if p.name == "style:text-properties" {
+                    if p.name == "style:text-properties" || p.name == "style:properties" {
                         if let Some(lang) = p.attr("fo:language").filter(|l| *l != "none") {
                             let tag = match p.attr("fo:country").filter(|c| *c != "none") {
                                 Some(c) => format!("{lang}-{c}"),
@@ -440,6 +530,7 @@ impl StyleSheet {
         let mut cell = RawCellStyle {
             parent: e.attr("style:parent-style-name").map(str::to_string),
             data_style: e.attr("style:data-style-name").map(str::to_string),
+            display_name: e.attr("style:display-name").map(str::to_string),
             ..RawCellStyle::default()
         };
         let mut col_width = None;
@@ -461,6 +552,31 @@ impl StyleSheet {
                         "style:text-properties" => apply_text_props(&mut cell, &p),
                         "style:table-cell-properties" => apply_cell_props(&mut cell, &p),
                         "style:paragraph-properties" => apply_para_props(&mut cell, &p),
+                        // OOo 1.x (`.sxc`): one element holds every property.
+                        "style:properties" => {
+                            apply_text_props(&mut cell, &p);
+                            apply_cell_props(&mut cell, &p);
+                            apply_para_props(&mut cell, &p);
+                            if let Some(w) = p.attr("style:column-width").and_then(length_to_hmm) {
+                                col_width = Some(w);
+                            }
+                            if let Some(h) = p.attr("style:row-height").and_then(length_to_hmm) {
+                                row.height_hmm = Some(h);
+                            }
+                            if p.attr("style:use-optimal-row-height") == Some("false") {
+                                row.optimal = false;
+                            }
+                            if p.attr("fo:break-before") == Some("page") {
+                                if family == "table-column" {
+                                    col_break = true;
+                                } else {
+                                    row.break_before = true;
+                                }
+                            }
+                            if p.attr("table:display") == Some("false") {
+                                table.hidden = true;
+                            }
+                        }
                         "style:table-column-properties" => {
                             col_width = p.attr("style:column-width").and_then(length_to_hmm);
                             col_break = p.attr("fo:break-before") == Some("page");
@@ -539,6 +655,18 @@ fn apply_text_props(s: &mut RawCellStyle, p: &Elem) {
     }
     if let Some(v) = p.attr("style:text-underline-style") {
         s.underline = Some(v != "none");
+        let double = p.attr("style:text-underline-type") == Some("double");
+        let bold = p.attr("style:text-underline-width") == Some("bold");
+        s.underline_style = Some(match v {
+            "dotted" => tally_model::UnderlineStyleData::Dotted,
+            "dash" | "long-dash" | "dot-dash" | "dot-dot-dash" => {
+                tally_model::UnderlineStyleData::Dashed
+            }
+            "wave" => tally_model::UnderlineStyleData::Wave,
+            _ if double => tally_model::UnderlineStyleData::Double,
+            _ if bold => tally_model::UnderlineStyleData::Bold,
+            _ => tally_model::UnderlineStyleData::Single,
+        });
     }
     if let Some(v) = p.attr("style:text-line-through-style") {
         s.strike = Some(v != "none");
@@ -605,9 +733,30 @@ fn apply_cell_props(s: &mut RawCellStyle, p: &Elem) {
     if let Some(v) = p.attr("style:print-content") {
         s.hide_print = Some(v == "false");
     }
+    if let Some(v) = p.attr("style:rotation-angle") {
+        let n: f64 = v.trim().trim_end_matches("deg").parse().unwrap_or(0.0);
+        let deg = n.round().rem_euclid(360.0) as i16;
+        s.rotation = Some(if deg > 180 { deg - 360 } else { deg });
+    }
+    if let Some(v) = p.attr("style:direction") {
+        s.stacked = Some(v == "ttb");
+    }
+    if let Some(v) = p.attr("style:shrink-to-fit") {
+        s.shrink = Some(v == "true");
+    }
+    if let Some(b) = p.attr("style:diagonal-tl-br").and_then(parse_border) {
+        s.diag_down = Some(b);
+    }
+    if let Some(b) = p.attr("style:diagonal-bl-tr").and_then(parse_border) {
+        s.diag_up = Some(b);
+    }
 }
 
 fn apply_para_props(s: &mut RawCellStyle, p: &Elem) {
+    if let Some(hmm) = p.attr("fo:margin-left").and_then(length_to_hmm) {
+        // AOO's indent step is 10 pt (353 hmm).
+        s.indent = Some(u8::try_from((hmm + 176) / 353).unwrap_or(u8::MAX));
+    }
     if let Some(v) = p.attr("fo:text-align") {
         s.h = Some(match v {
             "start" | "left" => HAlign::Left,

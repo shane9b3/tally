@@ -5,9 +5,12 @@
  * rejects with an {@link ApiError} `{ code, message }` on failure.
  *
  * It also implements the shell-only commands (`wb_open_dialog`, the dialog
- * half of `wb_save`, `recent_files`, `list_templates`) and the v0.3 shell
+ * half of `wb_save`, `recent_files`, `list_templates`), the v0.3 shell
  * commands `open_url` (http/https/mailto only, validated again in Rust)
- * and `user_name`, which have no `DocumentService` method.
+ * and `user_name`, and the wave-5 shell commands `wb_export_pdf` and
+ * `wb_print`, which have no `DocumentService` method. The wave-5 queries
+ * (`EngineClientV4`) invoke `apps/desktop/src-tauri/src/commands_v4.rs`;
+ * `tauriClientV4.test.ts` checks that every method has a registered command.
  *
  * The Tauri transport is injected (`invoke` from `@tauri-apps/api/core`,
  * `listen` from `@tauri-apps/api/event`) so this package keeps no runtime
@@ -53,7 +56,30 @@ import type { PageSetupDto } from "./generated/PageSetupDto";
 import type { ProtectionInfo } from "./generated/ProtectionInfo";
 import type { ValidationDto } from "./generated/ValidationDto";
 import type { ValidationInfo } from "./generated/ValidationInfo";
-import { isApiError, type EngineClientV3, type SheetId, type Unsubscribe } from "./client";
+import type { AutocompleteDto } from "./generated/AutocompleteDto";
+import type { CalcSettingsDto } from "./generated/CalcSettingsDto";
+import type { CellStyleDto } from "./generated/CellStyleDto";
+import type { ChartDataDto } from "./generated/ChartDataDto";
+import type { ChartDto } from "./generated/ChartDto";
+import type { ChartKind } from "./generated/ChartKind";
+import type { ChartSvgDto } from "./generated/ChartSvgDto";
+import type { DatabaseRangeDto } from "./generated/DatabaseRangeDto";
+import type { DocumentStatsDto } from "./generated/DocumentStatsDto";
+import type { ImageDto } from "./generated/ImageDto";
+import type { NavigatorDto } from "./generated/NavigatorDto";
+import type { PageBreaksDto } from "./generated/PageBreaksDto";
+import type { PivotDto } from "./generated/PivotDto";
+import type { PivotFieldItemsDto } from "./generated/PivotFieldItemsDto";
+import type { PivotHit } from "./generated/PivotHit";
+import type { PivotSource } from "./generated/PivotSource";
+import type { PrintJobInfo } from "./generated/PrintJobInfo";
+import type { PrintLayoutDto } from "./generated/PrintLayoutDto";
+import type { PrintOptionsDto } from "./generated/PrintOptionsDto";
+import type { ScenarioDto } from "./generated/ScenarioDto";
+import type { SolverRequest } from "./generated/SolverRequest";
+import type { SolverResult } from "./generated/SolverResult";
+import type { TraceDto } from "./generated/TraceDto";
+import { isApiError, type EngineClientV4, type SheetId, type Unsubscribe } from "./client";
 import type { ShellClient, TemplateInfo } from "./shell";
 
 export { CANCELLED, type TemplateInfo } from "./shell";
@@ -119,7 +145,77 @@ export const COMMANDS = {
   resolveNameBoxIn: "resolve_name_box_in",
   openUrl: "open_url",
   userName: "user_name",
+  // v0.4–v0.6 (wave 5): apps/desktop/src-tauri/src/commands_v4.rs
+  charts: "charts",
+  chartData: "chart_data",
+  suggestChart: "suggest_chart",
+  images: "images",
+  pivots: "pivots",
+  pivotFieldItems: "pivot_field_items",
+  pivotAt: "pivot_at",
+  autocomplete: "autocomplete",
+  cellStyles: "cell_styles",
+  scenarios: "scenarios",
+  databaseRanges: "database_ranges",
+  navigator: "navigator",
+  documentStatistics: "document_statistics",
+  printLayout: "print_layout",
+  pageBreaks: "page_breaks",
+  preparePrintJob: "prepare_print_job",
+  printJobPagePng: "print_job_page_png",
+  printJobPdf: "print_job_pdf",
+  calcSettings: "calc_settings",
+  solver: "solver",
+  precedents: "precedents",
+  dependents: "dependents",
+  exportPdf: "wb_export_pdf",
+  print: "wb_print",
+  // W5-6 shell: prefs.rs, autosave.rs, templates.rs, l10n.rs
+  getPrefs: "get_prefs",
+  setPrefs: "set_prefs",
+  autosave: "autosave_snapshot",
+  listRecovery: "list_recovery",
+  recoverSnapshot: "recover_snapshot",
+  discardRecovery: "discard_recovery",
+  saveAsTemplate: "save_as_template",
+  listUserTemplates: "list_user_templates",
+  newFromUserTemplate: "new_from_user_template",
+  setUiLanguage: "set_ui_language",
+  clearRecent: "clear_recent",
 } as const;
+
+/**
+ * The `EngineClientV4` methods added in wave 5, each with its command
+ * (`COMMANDS` key = method name). Tests check this list against the
+ * interface and against `commands_v4.rs`.
+ */
+export const V4_METHODS = [
+  "charts",
+  "chartData",
+  "suggestChart",
+  "images",
+  "pivots",
+  "pivotFieldItems",
+  "pivotAt",
+  "autocomplete",
+  "cellStyles",
+  "scenarios",
+  "databaseRanges",
+  "navigator",
+  "documentStatistics",
+  "printLayout",
+  "pageBreaks",
+  "preparePrintJob",
+  "printJobPagePng",
+  "printJobPdf",
+  "calcSettings",
+  "solver",
+  "precedents",
+  "dependents",
+] as const satisfies readonly (keyof EngineClientV4 & keyof typeof COMMANDS)[];
+
+/** The W5-6 shell commands (prefs, autosave, templates, UI language); `w56shell.test.ts` covers them. */
+export const W56_SHELL_COMMANDS = ["getPrefs", "setPrefs", "autosave", "listRecovery", "recoverSnapshot", "discardRecovery", "saveAsTemplate", "listUserTemplates", "newFromUserTemplate", "setUiLanguage", "clearRecent"] as const satisfies readonly (keyof typeof COMMANDS)[];
 
 /** Event names, exactly as in docs/api.md. */
 export const EVENTS = { docChanged: "doc-changed", menuAction: "menu-action" } as const;
@@ -132,7 +228,7 @@ export function toApiError(e: unknown): ApiError {
   return { code: "internal", message: String(e) };
 }
 
-export class TauriClient implements EngineClientV3, ShellClient {
+export class TauriClient implements EngineClientV4, ShellClient {
   constructor(private readonly tauri: TauriTransport) {}
 
   private call<T>(cmd: string, args?: InvokeArgs): Promise<T> {
@@ -340,6 +436,165 @@ export class TauriClient implements EngineClientV3, ShellClient {
   /** The OS account name (note authors), or `null`. */
   userName(): Promise<string | null> {
     return this.call(COMMANDS.userName);
+  }
+
+  // -- v0.4–v0.6 (wave 5) ---------------------------------------------------------
+
+  charts(doc: DocId, sheet: SheetId): Promise<ChartDto[]> {
+    return this.call(COMMANDS.charts, { doc, sheet });
+  }
+
+  chartData(doc: DocId, sheet: SheetId, id: number): Promise<ChartDataDto> {
+    return this.call(COMMANDS.chartData, { doc, sheet, id });
+  }
+
+  suggestChart(doc: DocId, sheet: SheetId, sel: RangeDto, kind: ChartKind): Promise<ChartDto> {
+    return this.call(COMMANDS.suggestChart, { doc, sheet, sel, kind });
+  }
+
+  images(doc: DocId, sheet: SheetId): Promise<ImageDto[]> {
+    return this.call(COMMANDS.images, { doc, sheet });
+  }
+
+  pivots(doc: DocId): Promise<PivotDto[]> {
+    return this.call(COMMANDS.pivots, { doc });
+  }
+
+  pivotFieldItems(doc: DocId, source: PivotSource): Promise<PivotFieldItemsDto[]> {
+    return this.call(COMMANDS.pivotFieldItems, { doc, source });
+  }
+
+  pivotAt(doc: DocId, sheet: SheetId, r: number, c: number): Promise<PivotHit | null> {
+    return this.call(COMMANDS.pivotAt, { doc, sheet, r, c });
+  }
+
+  autocomplete(doc: DocId, sheet: SheetId, r: number, c: number, prefix: string): Promise<AutocompleteDto> {
+    return this.call(COMMANDS.autocomplete, { doc, sheet, r, c, prefix });
+  }
+
+  cellStyles(doc: DocId): Promise<CellStyleDto[]> {
+    return this.call(COMMANDS.cellStyles, { doc });
+  }
+
+  scenarios(doc: DocId, sheet: SheetId): Promise<ScenarioDto[]> {
+    return this.call(COMMANDS.scenarios, { doc, sheet });
+  }
+
+  databaseRanges(doc: DocId): Promise<DatabaseRangeDto[]> {
+    return this.call(COMMANDS.databaseRanges, { doc });
+  }
+
+  navigator(doc: DocId): Promise<NavigatorDto> {
+    return this.call(COMMANDS.navigator, { doc });
+  }
+
+  documentStatistics(doc: DocId): Promise<DocumentStatsDto> {
+    return this.call(COMMANDS.documentStatistics, { doc });
+  }
+
+  printLayout(doc: DocId, opts: PrintOptionsDto): Promise<PrintLayoutDto> {
+    return this.call(COMMANDS.printLayout, { doc, opts });
+  }
+
+  pageBreaks(doc: DocId, sheet: SheetId): Promise<PageBreaksDto> {
+    return this.call(COMMANDS.pageBreaks, { doc, sheet });
+  }
+
+  preparePrintJob(doc: DocId, opts: PrintOptionsDto, charts: ChartSvgDto[]): Promise<PrintJobInfo> {
+    return this.call(COMMANDS.preparePrintJob, { doc, opts, charts });
+  }
+
+  printJobPagePng(job: number, page: number, dpi: number): Promise<string> {
+    return this.call(COMMANDS.printJobPagePng, { job, page, dpi });
+  }
+
+  /** The PDF bytes (Tauri serializes `Vec<u8>` as a number array). */
+  printJobPdf(job: number): Promise<Uint8Array> {
+    return this.call<ArrayLike<number> | ArrayBuffer>(COMMANDS.printJobPdf, { job }).then((bytes) =>
+      bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : Uint8Array.from(bytes),
+    );
+  }
+
+  calcSettings(doc: DocId): Promise<CalcSettingsDto> {
+    return this.call(COMMANDS.calcSettings, { doc });
+  }
+
+  solver(doc: DocId, req: SolverRequest): Promise<SolverResult> {
+    return this.call(COMMANDS.solver, { doc, req });
+  }
+
+  precedents(doc: DocId, sheet: SheetId, r: number, c: number): Promise<TraceDto[]> {
+    return this.call(COMMANDS.precedents, { doc, sheet, r, c });
+  }
+
+  dependents(doc: DocId, sheet: SheetId, r: number, c: number): Promise<TraceDto[]> {
+    return this.call(COMMANDS.dependents, { doc, sheet, r, c });
+  }
+
+  // -- wave-5 shell ----------------------------------------------------------------
+
+  /** `wb_export_pdf`: Save dialog + the job's PDF (`unsupported` until W5-3). */
+  exportPdf(doc: DocId, job: number): Promise<void> {
+    return this.call(COMMANDS.exportPdf, { doc, job });
+  }
+
+  /** `wb_print`: the OS print dialog for the job (`unsupported` until W5-3). */
+  print(doc: DocId, job: number): Promise<void> {
+    return this.call(COMMANDS.print, { doc, job });
+  }
+
+  // -- W5-6 shell: prefs, autosave and recovery, templates, UI language --------------
+
+  /** `get_prefs`: the prefs.json text (`{}` when there is none). */
+  getPrefs(): Promise<string> {
+    return this.call(COMMANDS.getPrefs);
+  }
+
+  /** `set_prefs`: writes prefs.json (≤ 64 KiB, validated in Rust). */
+  setPrefs(json: string): Promise<void> {
+    return this.call(COMMANDS.setPrefs, { json });
+  }
+
+  /** `autosave_snapshot`: an ODS recovery snapshot of `doc` in the app data dir. */
+  autosave(doc: DocId): Promise<void> {
+    return this.call(COMMANDS.autosave, { doc });
+  }
+
+  /** `list_recovery`: snapshots left by a crashed session. */
+  listRecovery(): Promise<{ path: string; title: string; savedAt: string }[]> {
+    return this.call(COMMANDS.listRecovery);
+  }
+
+  /** `recover_snapshot`: opens a snapshot as an untitled, dirty workbook and deletes it. */
+  recoverSnapshot(path: string): Promise<WorkbookInfo> {
+    return this.call(COMMANDS.recoverSnapshot, { path });
+  }
+
+  discardRecovery(path: string): Promise<void> {
+    return this.call(COMMANDS.discardRecovery, { path });
+  }
+
+  /** `save_as_template`: writes `<name>.ots` into the user templates folder. */
+  saveAsTemplate(doc: DocId, name: string): Promise<void> {
+    return this.call(COMMANDS.saveAsTemplate, { doc, name });
+  }
+
+  listUserTemplates(): Promise<TemplateInfo[]> {
+    return this.call(COMMANDS.listUserTemplates);
+  }
+
+  /** `new_from_user_template`: opens a user template as an untitled workbook. */
+  newFromUserTemplate(id: string): Promise<WorkbookInfo> {
+    return this.call(COMMANDS.newFromUserTemplate, { id });
+  }
+
+  /** `set_ui_language`: stores the language and rebuilds the native menu. */
+  setUiLanguage(lang: string): Promise<void> {
+    return this.call(COMMANDS.setUiLanguage, { lang });
+  }
+
+  clearRecent(): Promise<void> {
+    return this.call(COMMANDS.clearRecent);
   }
 
   // -- events -----------------------------------------------------------------

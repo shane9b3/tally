@@ -1,0 +1,18 @@
+[package]
+name = "tally-io-dbf"
+description = "dBase (.dbf) import and export."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tally-model.workspace = true
+tally-types.workspace = true
+thiserror.workspace = true
+encoding_rs.workspace = true
+tally-numfmt.workspace = true
+
+[lints]
+workspace = true

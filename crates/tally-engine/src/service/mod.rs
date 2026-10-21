@@ -13,8 +13,11 @@
 //! ```
 
 pub mod assist;
+pub mod charts;
 pub mod codec;
+pub mod print;
 pub mod templates;
+pub mod tools;
 pub mod view;
 
 use std::collections::BTreeMap;
@@ -58,6 +61,8 @@ pub struct EngineService {
     rng: Rng,
     open_max_evaluated: u64,
     open_time_limit: Option<Duration>,
+    /// Prepared print jobs (an LRU of [`crate::print::JOB_LRU`]).
+    print_jobs: print::JobCache,
 }
 
 impl Default for EngineService {
@@ -91,6 +96,7 @@ impl EngineService {
             rng: Rng::from_time(),
             open_max_evaluated: RecalcBudget::OPEN_MAX_CELLS,
             open_time_limit: Some(RecalcBudget::OPEN_TIME_LIMIT),
+            print_jobs: print::JobCache::default(),
         }
     }
 
@@ -680,6 +686,191 @@ impl DocumentService for EngineService {
 
     fn set_locale(&mut self, doc: DocId, locale: &str) -> Result<ApplyResult> {
         self.document_mut(doc)?.set_locale(locale)
+    }
+
+    // ----- v0.5 (W5-2) ----------------------------------------------------
+
+    fn pivots(&self, doc: DocId) -> Result<Vec<tally_api::PivotDto>> {
+        tools::pivots(&self.document(doc)?.wb)
+    }
+
+    fn pivot_field_items(
+        &self,
+        doc: DocId,
+        source: &tally_api::PivotSource,
+    ) -> Result<Vec<tally_api::PivotFieldItemsDto>> {
+        tools::pivot_field_items(&self.document(doc)?.wb, source)
+    }
+
+    fn pivot_at(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        r: u32,
+        c: u32,
+    ) -> Result<Option<tally_api::PivotHit>> {
+        tools::pivot_at(&self.document(doc)?.wb, sheet, r, c)
+    }
+
+    fn autocomplete(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        r: u32,
+        c: u32,
+        prefix: &str,
+    ) -> Result<tally_api::AutocompleteDto> {
+        tools::autocomplete(&self.document(doc)?.wb, sheet, r, c, prefix)
+    }
+
+    fn cell_styles(&self, doc: DocId) -> Result<Vec<tally_api::CellStyleDto>> {
+        tools::cell_styles(&self.document(doc)?.wb)
+    }
+
+    fn scenarios(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+    ) -> Result<Vec<tally_api::ScenarioDto>> {
+        tools::scenarios(&self.document(doc)?.wb, sheet)
+    }
+
+    fn database_ranges(&self, doc: DocId) -> Result<Vec<tally_api::DatabaseRangeDto>> {
+        tools::database_ranges(&self.document(doc)?.wb)
+    }
+
+    fn navigator(&self, doc: DocId) -> Result<tally_api::NavigatorDto> {
+        tools::navigator(&self.document(doc)?.wb)
+    }
+
+    fn document_statistics(&self, doc: DocId) -> Result<tally_api::DocumentStatsDto> {
+        tools::document_statistics(&self.document(doc)?.wb)
+    }
+
+    fn custom_sort_lists(&self, doc: DocId) -> Result<Vec<Vec<String>>> {
+        Ok(self.document(doc)?.wb.custom_sort_lists.clone())
+    }
+
+    // ----- v0.4 charts and pictures (W5-1) ----------------------------------
+
+    fn charts(&self, doc: DocId, sheet: tally_types::SheetId) -> Result<Vec<tally_api::ChartDto>> {
+        self.charts_impl(doc, sheet)
+    }
+
+    fn chart_data(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        id: u32,
+    ) -> Result<tally_api::ChartDataDto> {
+        self.chart_data_impl(doc, sheet, id)
+    }
+
+    fn suggest_chart(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        sel: tally_api::RangeDto,
+        kind: tally_api::ChartKind,
+    ) -> Result<tally_api::ChartDto> {
+        self.suggest_chart_impl(doc, sheet, sel, kind)
+    }
+
+    fn images(&self, doc: DocId, sheet: tally_types::SheetId) -> Result<Vec<tally_api::ImageDto>> {
+        self.images_impl(doc, sheet)
+    }
+
+    fn image_data(&self, doc: DocId, sheet: tally_types::SheetId, id: u32) -> Result<String> {
+        Ok(self.image_bytes(doc, sheet, id)?.data)
+    }
+
+    // ----- v0.6 (W5-3): calculation settings, solver, detective, print -----
+
+    fn calc_settings(&self, doc: DocId) -> Result<tally_api::CalcSettingsDto> {
+        Ok(crate::calcsettings::to_api(
+            &self.document(doc)?.wb.settings,
+        ))
+    }
+
+    fn solver(
+        &self,
+        doc: DocId,
+        req: &tally_api::SolverRequest,
+    ) -> Result<tally_api::SolverResult> {
+        crate::solver::solve(&self.document(doc)?.wb, req)
+    }
+
+    fn precedents(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        r: u32,
+        c: u32,
+    ) -> Result<Vec<tally_api::TraceDto>> {
+        crate::detective::precedents(&self.document(doc)?.wb, sheet, r, c)
+    }
+
+    fn dependents(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        r: u32,
+        c: u32,
+    ) -> Result<Vec<tally_api::TraceDto>> {
+        crate::detective::dependents(&self.document(doc)?.wb, sheet, r, c)
+    }
+
+    fn print_layout(
+        &self,
+        doc: DocId,
+        opts: &tally_api::PrintOptionsDto,
+    ) -> Result<tally_api::PrintLayoutDto> {
+        print::print_layout(self, doc, opts)
+    }
+
+    fn page_breaks(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+    ) -> Result<tally_api::PageBreaksDto> {
+        print::page_breaks(self, doc, sheet)
+    }
+
+    fn prepare_print_job(
+        &mut self,
+        doc: DocId,
+        opts: &tally_api::PrintOptionsDto,
+        charts: &[tally_api::ChartSvgDto],
+    ) -> Result<tally_api::PrintJobInfo> {
+        print::prepare_print_job(self, doc, opts, charts)
+    }
+
+    fn print_job_page_png(&self, job: u32, page: u32, dpi: u32) -> Result<String> {
+        print::print_job_page_png(self, job, page, dpi)
+    }
+
+    fn print_job_pdf(&self, job: u32) -> Result<Vec<u8>> {
+        print::print_job_pdf(self, job)
+    }
+
+    fn view_options(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+    ) -> Result<tally_api::ViewOptionsDto> {
+        let d = self.document(doc)?;
+        crate::tools::view_options(&d.wb, sheet)
+            .ok_or_else(|| ApiError::not_found(format!("no sheet {sheet}")))
+    }
+
+    fn invalid_cells(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        range: Option<RangeDto>,
+    ) -> Result<Vec<CellPos>> {
+        let d = self.document(doc)?;
+        crate::validation::invalid_cells(&d.wb, sheet, range)
     }
 }
 

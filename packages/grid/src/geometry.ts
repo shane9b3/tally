@@ -81,6 +81,10 @@ export class Geometry {
     frozen: Frozen = NO_FROZEN,
     /** Merged areas of the sheet. */
     readonly merges: readonly RangeDto[] = [],
+    /** Outline gutter left of the row header (included in `headerW`), screen px. */
+    readonly gutterW: number = 0,
+    /** Outline gutter above the column header (included in `headerH`), screen px. */
+    readonly gutterH: number = 0,
   ) {
     const fr = Math.max(0, Math.min(rows.count - 1, Math.floor(frozen.rows)));
     const fc = Math.max(0, Math.min(cols.count - 1, Math.floor(frozen.cols)));

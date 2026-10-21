@@ -1,0 +1,367 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  flex: none;
+  height: 100%;
+  background: var(--tally-surface);
+  border-left: 1px solid var(--tally-border-subtle);
+  overflow-y: auto;
+  animation: slide 160ms ease-out;
+}
+
+@keyframes slide {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 16px 6px;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.sub {
+  margin-top: 2px;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+}
+
+.close {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--tally-radius-pill);
+  background: transparent;
+  color: var(--tally-text-muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.close:hover {
+  background: var(--tally-hover);
+  color: var(--tally-text);
+}
+
+.body {
+  padding: 0 12px 20px;
+}
+
+.section {
+  margin-top: 8px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-card);
+  background: var(--tally-bg);
+}
+
+.section > summary {
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: default;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.section > summary::before {
+  content: "▸";
+  color: var(--tally-text-muted);
+  font-size: 11px;
+}
+
+.section[open] > summary::before {
+  content: "▾";
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 12px 12px;
+}
+
+.kinds {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.kind {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 2px 4px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 8px;
+  background: var(--tally-bg);
+  color: var(--tally-text-muted);
+  font: inherit;
+  font-size: 10.5px;
+}
+
+.kind:hover {
+  background: var(--tally-hover);
+}
+
+.kindOn {
+  composes: kind;
+  border-color: var(--tally-accent);
+  background: var(--tally-accent-subtle);
+  color: var(--tally-accent-text);
+}
+
+.kind svg {
+  width: 28px;
+  height: 20px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--tally-text-muted);
+}
+
+.rowWide {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--tally-text-muted);
+}
+
+.input,
+.select {
+  height: 28px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--tally-border);
+  border-radius: 7px;
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+.input:focus,
+.select:focus {
+  border-color: var(--tally-accent);
+  box-shadow: 0 0 0 3px var(--tally-accent-subtle);
+}
+
+.mono {
+  font-family: var(--tally-font-mono);
+  font-size: 12px;
+}
+
+.refRow {
+  display: flex;
+  gap: 4px;
+}
+
+.refRow .input {
+  flex: 1;
+}
+
+.pick {
+  flex: none;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 7px;
+  background: var(--tally-surface);
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.pick:hover {
+  background: var(--tally-hover);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--tally-text);
+}
+
+.checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-surface);
+}
+
+.seg {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--tally-radius-pill);
+  background: transparent;
+  color: var(--tally-text-muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.segOn {
+  composes: seg;
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  box-shadow: var(--tally-shadow-pill);
+  font-weight: 600;
+}
+
+.series {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 8px;
+}
+
+.seriesHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.seriesHead .input {
+  flex: 1;
+}
+
+.swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 6px;
+  background: var(--tally-bg);
+}
+
+.remove {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--tally-radius-pill);
+  background: transparent;
+  color: var(--tally-text-muted);
+  font-size: 15px;
+}
+
+.remove:hover {
+  background: var(--tally-hover);
+  color: var(--tally-danger);
+}
+
+.add {
+  align-self: flex-start;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px dashed var(--tally-border);
+  border-radius: var(--tally-radius-pill);
+  background: transparent;
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.add:hover {
+  background: var(--tally-hover);
+}
+
+.hint {
+  color: var(--tally-text-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.problems {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--tally-chip-amber-bg);
+  color: var(--tally-chip-amber-fg);
+  font-size: 11.5px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tab {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-pill);
+  background: transparent;
+  color: var(--tally-text-muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.tabOn {
+  composes: tab;
+  border-color: var(--tally-accent);
+  color: var(--tally-accent-text);
+  background: var(--tally-accent-subtle);
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  padding: 12px 0 0;
+}
+
+.button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.button:hover {
+  background: var(--tally-hover);
+}
+
+.danger {
+  composes: button;
+  color: var(--tally-danger);
+}

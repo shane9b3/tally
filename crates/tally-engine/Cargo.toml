@@ -12,18 +12,32 @@ default = []
 # Wires the ODS and CSV readers/writers into `service::IoCodec`. Off by
 # default so the engine builds while the IO crates are in progress; the CLI
 # and the Tauri shell enable it.
-io = ["dep:tally-io-ods", "dep:tally-io-csv", "dep:tally-io-xlsx"]
+io = [
+    "dep:tally-io-ods",
+    "dep:tally-io-csv",
+    "dep:tally-io-xlsx",
+    "dep:tally-io-xls",
+    "dep:tally-io-html",
+    "dep:tally-io-dbf",
+    "pdf",
+]
+# Print preview and PDF export through `tally-io-pdf` (krilla/hayro).
+pdf = ["dep:tally-io-pdf"]
 
 [dependencies]
 tally-types.workspace = true
 tally-model.workspace = true
 tally-api.workspace = true
 tally-formula.workspace = true
-tally-functions.workspace = true
+tally-functions = { workspace = true, features = ["ref-union"] }
 tally-numfmt.workspace = true
 tally-io-ods = { workspace = true, optional = true }
 tally-io-csv = { workspace = true, optional = true }
 tally-io-xlsx = { workspace = true, optional = true }
+tally-io-xls = { workspace = true, optional = true }
+tally-io-html = { workspace = true, optional = true }
+tally-io-dbf = { workspace = true, optional = true }
+tally-io-pdf = { workspace = true, optional = true }
 slotmap.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true

@@ -756,7 +756,9 @@ fn paper_code(p: PaperData) -> u8 {
         PaperData::A3 => 8,
         PaperData::A4 => 9,
         PaperData::A5 => 11,
-        PaperData::B5 => 34,
+        // ISO B5 176 × 250 mm (ECMA-376 §18.3.1.63 code 13); 34 is JIS B5
+        // 182 × 257 (review 3, M10).
+        PaperData::B5 => 13,
         PaperData::Custom { .. } => 0,
     }
 }
@@ -861,6 +863,9 @@ fn write_setup(
     Ok(())
 }
 
+/// One relationship to add: `(Id, Type, Target)`.
+pub(crate) type RelEntry = (String, String, String);
+
 /// Post-write edits of the package for what `rust_xlsxwriter` cannot
 /// express: stored password hashes and workbook structure protection.
 #[derive(Default)]
@@ -873,6 +878,24 @@ pub(crate) struct Patches {
     pub workbook_protection: Option<String>,
     /// Set `date1904="1"`.
     pub date1904: bool,
+    /// New parts `(path, xml)` (wave 5: pivot caches and tables).
+    pub extra_parts: Vec<(String, String)>,
+    /// `[Content_Types].xml` overrides `(part name, content type)`.
+    pub content_types: Vec<(String, String)>,
+    /// Relationships to add: rels path → `(Id, Type, Target)` (the file is
+    /// created when the package has none).
+    pub rels: Vec<(String, Vec<RelEntry>)>,
+    /// XML inserted into `xl/workbook.xml` before `</workbook>` (wrapped in
+    /// `<pivotCaches>` when it holds pivot caches).
+    pub workbook_inserts: Vec<String>,
+    /// `xl/worksheets/sheetN.xml` → XML inserted at the `scenarios`
+    /// position (after `sheetProtection`).
+    pub sheet_inserts: Vec<(String, String)>,
+    /// Named cell styles to add to `xl/styles.xml`.
+    pub style_names: Vec<String>,
+    /// `xl/worksheets/sheetN.xml` → attributes to add to `<sheetView`
+    /// (view options rust_xlsxwriter has no setter for).
+    pub sheet_view_attrs: Vec<(String, String)>,
 }
 
 impl Patches {
@@ -881,7 +904,60 @@ impl Patches {
             && self.page_setup.is_empty()
             && self.workbook_protection.is_none()
             && !self.date1904
+            && self.extra_parts.is_empty()
+            && self.content_types.is_empty()
+            && self.rels.is_empty()
+            && self.workbook_inserts.is_empty()
+            && self.sheet_inserts.is_empty()
+            && self.style_names.is_empty()
+            && self.sheet_view_attrs.is_empty()
     }
+}
+
+/// The elements that may follow `scenarios` in `CT_Worksheet`, in schema
+/// order; a scenarios block is inserted before the first one present.
+const AFTER_SCENARIOS: &[&str] = &[
+    "<autoFilter",
+    "<sortState",
+    "<dataConsolidate",
+    "<customSheetViews",
+    "<mergeCells",
+    "<phoneticPr",
+    "<conditionalFormatting",
+    "<dataValidations",
+    "<hyperlinks",
+    "<printOptions",
+    "<pageMargins",
+    "<pageSetup",
+    "<headerFooter",
+    "<rowBreaks",
+    "<colBreaks",
+    "<customProperties",
+    "<cellWatches",
+    "<ignoredErrors",
+    "<smartTags",
+    "<drawing",
+    "<legacyDrawing",
+    "<tableParts",
+    "<extLst",
+    "</worksheet>",
+];
+
+fn rels_xml(entries: &[RelEntry]) -> String {
+    let mut s = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+    );
+    for (id, ty, target) in entries {
+        s.push_str(&format!(
+            r#"<Relationship Id="{}" Type="{}" Target="{}"/>"#,
+            xml_attr(id),
+            xml_attr(ty),
+            xml_attr(target)
+        ));
+    }
+    s.push_str("</Relationships>");
+    s
 }
 
 fn xml_attr(s: &str) -> String {
@@ -967,6 +1043,7 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
     use std::io::{Cursor, Read, Write};
     let mut src = zip::ZipArchive::new(Cursor::new(bytes))?;
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::with_capacity(bytes.len())));
+    let mut handled_rels: Vec<String> = Vec::new();
     for i in 0..src.len() {
         let mut file = src.by_index(i)?;
         let name = file.name()?.into_owned();
@@ -982,8 +1059,40 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             .filter(|(n, _)| *n == name)
             .map(|(_, a)| a.as_str())
             .collect();
-        let is_wb = name == "xl/workbook.xml" && (p.date1904 || p.workbook_protection.is_some());
-        if !sheet_attrs.is_empty() || !page_attrs.is_empty() || is_wb {
+        let is_wb = name == "xl/workbook.xml"
+            && (p.date1904 || p.workbook_protection.is_some() || !p.workbook_inserts.is_empty());
+        let sheet_ins: Vec<&str> = p
+            .sheet_inserts
+            .iter()
+            .filter(|(n, _)| *n == name)
+            .map(|(_, x)| x.as_str())
+            .collect();
+        let rel_adds: Vec<&RelEntry> = p
+            .rels
+            .iter()
+            .filter(|(n, _)| *n == name)
+            .flat_map(|(_, v)| v.iter())
+            .collect();
+        let view_attrs: Vec<&str> = p
+            .sheet_view_attrs
+            .iter()
+            .filter(|(n, _)| *n == name)
+            .map(|(_, a)| a.as_str())
+            .collect();
+        let is_ct = name == "[Content_Types].xml" && !p.content_types.is_empty();
+        let is_styles = name == "xl/styles.xml" && !p.style_names.is_empty();
+        if !rel_adds.is_empty() {
+            handled_rels.push(name.clone());
+        }
+        if !sheet_attrs.is_empty()
+            || !page_attrs.is_empty()
+            || is_wb
+            || !sheet_ins.is_empty()
+            || !view_attrs.is_empty()
+            || !rel_adds.is_empty()
+            || is_ct
+            || is_styles
+        {
             let mut xml = String::new();
             file.read_to_string(&mut xml)?;
             drop(file);
@@ -1021,6 +1130,54 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
                     // CT_Workbook order: … workbookPr, workbookProtection, bookViews …
                     patched = patched.replacen("<bookViews", &format!("{wp}<bookViews"), 1);
                 }
+                if !p.workbook_inserts.is_empty() {
+                    let block =
+                        format!("<pivotCaches>{}</pivotCaches>", p.workbook_inserts.concat());
+                    patched = patched.replacen("</workbook>", &format!("{block}</workbook>"), 1);
+                }
+            }
+            for a in &view_attrs {
+                patched = patched.replacen("<sheetView ", &format!("<sheetView {a} "), 1);
+            }
+            for x in &sheet_ins {
+                let at = AFTER_SCENARIOS
+                    .iter()
+                    .filter_map(|m| patched.find(m))
+                    .min()
+                    .unwrap_or(patched.len());
+                patched.insert_str(at, x);
+            }
+            if !rel_adds.is_empty() {
+                let add: String = rel_adds
+                    .iter()
+                    .map(|(id, ty, target)| {
+                        format!(
+                            r#"<Relationship Id="{}" Type="{}" Target="{}"/>"#,
+                            xml_attr(id),
+                            xml_attr(ty),
+                            xml_attr(target)
+                        )
+                    })
+                    .collect();
+                patched =
+                    patched.replacen("</Relationships>", &format!("{add}</Relationships>"), 1);
+            }
+            if is_ct {
+                let add: String = p
+                    .content_types
+                    .iter()
+                    .map(|(part, ct)| {
+                        format!(
+                            r#"<Override PartName="{}" ContentType="{}"/>"#,
+                            xml_attr(part),
+                            xml_attr(ct)
+                        )
+                    })
+                    .collect();
+                patched = patched.replacen("</Types>", &format!("{add}</Types>"), 1);
+            }
+            if is_styles {
+                patched = crate::tools::patch_styles_xml(&patched, &p.style_names);
             }
             let opts = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated);
@@ -1029,6 +1186,28 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
         } else {
             out.raw_copy_file(file)?;
         }
+    }
+    // New parts and relationship files the package did not have.
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for (path, xml) in &p.extra_parts {
+        out.start_file(path.as_str(), opts)?;
+        out.write_all(xml.as_bytes())?;
+    }
+    let mut created: Vec<String> = Vec::new();
+    for (path, _) in &p.rels {
+        if handled_rels.contains(path) || created.contains(path) {
+            continue;
+        }
+        let entries: Vec<RelEntry> = p
+            .rels
+            .iter()
+            .filter(|(n, _)| n == path)
+            .flat_map(|(_, v)| v.iter().cloned())
+            .collect();
+        out.start_file(path.as_str(), opts)?;
+        out.write_all(rels_xml(&entries).as_bytes())?;
+        created.push(path.clone());
     }
     Ok(out.finish()?.into_inner())
 }

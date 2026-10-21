@@ -16,8 +16,12 @@ import { useDataStore } from "./stores/dataStore";
 import { BORDER_PRESETS, borderLine } from "./dataOps";
 import { useV3Store } from "./stores/v3Store";
 import { HIGHLIGHT_PRESETS, UI_LOCALES } from "./v03";
+import { t } from "./i18n";
+import { useW56Store } from "./data/store";
 
 export const COMING_SOON = "Coming soon";
+/** Reason shown for the wave-5 commands registered as seams (W5-0b). */
+export const WAVE5_SOON = "coming in wave 5";
 export const FILTER_SOON = "Filtering is coming in v0.2";
 export const CHART_SOON = "Charts are coming in v0.3";
 
@@ -54,8 +58,11 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
   const editing = (): boolean => useEditStore.getState().edit !== null;
   const notEditing = { enabled: () => !editing(), reason: "Finish editing the cell first" };
   const soon = { enabled: () => false, reason: COMING_SOON };
+  const w5 = { enabled: () => false, reason: WAVE5_SOON };
+  const dialog = useUiStore.getState;
   const hasFilter = (): boolean => useDataStore.getState().filter !== null;
-  return [
+  // W5-6E: every title goes through `t("cmd.<id>")` (the English literal stays the fallback).
+  return localizeTitles([
     // Edit
     { id: "edit.undo", title: "Undo", kind: "Edit", keywords: ["revert", "back"], ...sc("edit.undo"), enabled: () => editing() || undo().undo.canUndo, run: ctl.undoAny },
     { id: "edit.redo", title: "Redo", kind: "Edit", keywords: ["again"], ...sc("edit.redo"), enabled: () => editing() || undo().undo.canRedo, run: ctl.redoAny },
@@ -148,10 +155,10 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "data.defineName", title: "Define name…", kind: "Data", keywords: ["named range", "name"], ...sc("data.defineName"), run: ctl.openDefineName },
     { id: "data.manageNames", title: "Manage names…", kind: "Data", keywords: ["named ranges", "names"], run: () => useUiStore.getState().openDialog({ kind: "manageNames" }) },
     { id: "data.recalc", title: "Recalculate all", kind: "Data", keywords: ["hard recalc", "refresh", "F9"], ...sc("data.recalc"), run: ctl.recalcAll },
-    { id: "insert.chart", title: "Chart", kind: "Chart", keywords: ["graph", "plot"], ...soon, run: () => undefined },
+    { id: "insert.chart", title: "Chart", kind: "Chart", keywords: ["graph", "plot"], ...notEditing, run: () => ctl.w5.charts.insertChart() },
     // Assist actions (run from ⌘K suggestions with args; hidden from the list).
     { id: "filter.byColumn", title: "Filter by column", kind: "Filter", hidden: true, run: (args) => ctl.filterByColumn(args) },
-    { id: "chart.byColumn", title: "Chart by column", kind: "Chart", hidden: true, run: () => void useUiStore.getState().pushToast("info", CHART_SOON) },
+    { id: "chart.byColumn", title: "Chart by column", kind: "Chart", hidden: true, run: () => ctl.w5.charts.insertChart() },
     // Sheet structure (the Sheet menu in the palette)
     { id: "sheet.insertRowAbove", title: "Insert rows above", kind: "Sheet", keywords: ["add row"], run: async () => void (await ctl.insertRows("before")) },
     { id: "sheet.insertRowBelow", title: "Insert rows below", kind: "Sheet", keywords: ["add row"], run: async () => void (await ctl.insertRows("after")) },
@@ -260,8 +267,88 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
         run: () => ctl.v3.setLocale(l.tag),
       }),
     ),
+    // Wave 5 seams (W5-0b): registered so menu.rs, the keymap and the palette
+    // agree on the ids; `enabled: false` until W5-5 / W5-6 implement them.
+    // Labels go through `t()` with the `cmd.<id>` keys of tally-l10n/ui/en.json.
+    { id: "insert.function", title: t("cmd.insert.function", "Function…"), kind: "Formula", keywords: ["wizard", "fx", "insert function"], ...sc("insert.function"), run: () => dialog().openDialog({ kind: "functionWizard" }) },
+    { id: "insert.image", title: t("cmd.insert.image", "Image…"), kind: "Insert", keywords: ["picture", "png", "jpeg"], ...notEditing, run: () => ctl.w5.objects.insertImage() },
+    { id: "chart.edit", title: t("cmd.chart.edit", "Edit chart"), kind: "Chart", keywords: ["graph"], run: () => ctl.w5.charts.openEditor() },
+    { id: "chart.delete", title: t("cmd.chart.delete", "Delete chart"), kind: "Chart", keywords: ["graph", "remove"], run: () => ctl.w5.charts.deleteSelected() },
+    { id: "chart.copyImage", title: t("cmd.chart.copyImage", "Copy chart as image"), kind: "Chart", keywords: ["png", "clipboard"], run: () => ctl.w5.charts.copyAsImage() },
+    { id: "data.dataPilot", title: t("cmd.data.dataPilot", "DataPilot…"), kind: "Data", keywords: ["pivot table", "summarise", "crosstab"], run: () => void ctl.w56.openDataPilot() },
+    { id: "data.refreshPivot", title: t("cmd.data.refreshPivot", "Refresh pivot table"), kind: "Data", keywords: ["pivot", "datapilot"], enabled: () => useW56Store.getState().activePivot !== null, reason: "Put the cursor inside a pivot table", run: () => void ctl.w56.refreshPivot() },
+    { id: "data.standardFilter", title: t("cmd.data.standardFilter", "Standard filter…"), kind: "Filter", keywords: ["conditions", "and", "or", "regex"], run: () => void ctl.w56.openStandardFilter(false) },
+    { id: "data.advancedFilter", title: t("cmd.data.advancedFilter", "Advanced filter…"), kind: "Filter", keywords: ["criteria range"], run: () => void ctl.w56.openStandardFilter(true) },
+    { id: "data.resetFilter", title: t("cmd.data.resetFilter", "Reset filter"), kind: "Filter", keywords: ["show all rows"], run: () => void ctl.w56.resetFilter() },
+    { id: "data.subtotals", title: t("cmd.data.subtotals", "Subtotals…"), kind: "Data", keywords: ["group", "sum", "outline"], run: () => void ctl.w56.openSubtotals() },
+    { id: "data.consolidate", title: t("cmd.data.consolidate", "Consolidate…"), kind: "Data", keywords: ["combine ranges", "sum sheets"], run: () => ctl.w56.openConsolidate() },
+    { id: "data.textToColumns", title: t("cmd.data.textToColumns", "Text to columns…"), kind: "Data", keywords: ["split", "csv", "delimiter"], run: () => void ctl.w56.openTextToColumns() },
+    { id: "data.removeDuplicates", title: t("cmd.data.removeDuplicates", "Remove duplicates…"), kind: "Data", keywords: ["unique", "dedupe"], run: () => void ctl.w56.openRemoveDuplicates() },
+    { id: "data.multipleOperations", title: t("cmd.data.multipleOperations", "Multiple operations…"), kind: "Data", keywords: ["what if", "data table"], run: () => ctl.w56.openMultipleOperations() },
+    { id: "data.group", title: t("cmd.data.group", "Group"), kind: "Data", keywords: ["outline", "collapse rows"], ...sc("data.group"), ...notEditing, run: () => void ctl.w56.group() },
+    { id: "data.ungroup", title: t("cmd.data.ungroup", "Ungroup"), kind: "Data", keywords: ["outline"], ...sc("data.ungroup"), ...notEditing, run: () => void ctl.w56.ungroup() },
+    { id: "data.autoOutline", title: t("cmd.data.autoOutline", "AutoOutline"), kind: "Data", keywords: ["outline", "group"], run: () => void ctl.w56.autoOutline() },
+    { id: "data.showOutlineLevel", title: t("cmd.data.showOutlineLevel", "Show outline level…"), kind: "Data", keywords: ["outline", "collapse", "expand"], run: () => ctl.w56.openShowOutlineLevel() },
+    { id: "data.defineDatabaseRange", title: t("cmd.data.defineDatabaseRange", "Define database range…"), kind: "Data", keywords: ["db range", "named range"], run: () => void ctl.w56.openDefineDatabaseRange() },
+    { id: "data.createNamesFromLabels", title: t("cmd.data.createNamesFromLabels", "Create names from labels…"), kind: "Data", keywords: ["names", "header row"], run: () => ctl.w56.openCreateNames() },
+    { id: "edit.fillSeries", title: t("cmd.edit.fillSeries", "Fill series…"), kind: "Edit", keywords: ["linear", "growth", "dates"], ...notEditing, run: () => ctl.w56.openFillSeries() },
+    { id: "format.cells", title: t("cmd.format.cells", "Format cells…"), kind: "Format", keywords: ["rotation", "indent", "shrink", "diagonal"], ...sc("format.cells"), run: () => void ctl.w56.openFormatCells() },
+    { id: "format.autoFormat", title: t("cmd.format.autoFormat", "AutoFormat…"), kind: "Format", keywords: ["table style", "preset"], run: () => void ctl.w56.openAutoFormat() },
+    { id: "view.stylesPanel", title: t("cmd.view.stylesPanel", "Styles panel"), kind: "View", keywords: ["cell styles", "heading", "result"], ...sc("view.stylesPanel"), run: () => ctl.w56.toggleStylesPanel() },
+    { id: "view.pageBreakPreview", title: t("cmd.view.pageBreakPreview", "Page break preview"), kind: "View", keywords: ["print", "pages"], run: () => ctl.w5.view.togglePageBreakPreview() },
+    { id: "view.split", title: t("cmd.view.split", "Split window"), kind: "View", keywords: ["panes", "divider"], run: () => ctl.w5.view.toggleSplit() },
+    { id: "view.removeSplit", title: t("cmd.view.removeSplit", "Remove split"), kind: "View", keywords: ["panes", "divider", "window"], run: () => ctl.w5.view.removeSplit() },
+    { id: "view.navigator", title: t("cmd.view.navigator", "Navigator"), kind: "View", keywords: ["sheets", "names", "charts", "notes"], ...sc("view.navigator"), run: () => ctl.w56.toggleNavigator() },
+    { id: "view.showFormulas", title: t("cmd.view.showFormulas", "Show formulas"), kind: "View", keywords: ["formula view"], ...sc("view.showFormulas"), run: () => ctl.w56.toggleView("showFormulas") },
+    { id: "view.valueHighlighting", title: t("cmd.view.valueHighlighting", "Value highlighting"), kind: "View", keywords: ["colour by type"], ...sc("view.valueHighlighting"), run: () => ctl.w56.toggleView("valueHighlighting") },
+    { id: "view.zeroValues", title: t("cmd.view.zeroValues", "Zero values"), kind: "View", keywords: ["show zeros", "hide zeros"], run: () => ctl.w56.toggleView("showZeroValues") },
+    { id: "view.gridLines", title: t("cmd.view.gridLines", "Grid lines"), kind: "View", keywords: ["gridlines"], run: () => ctl.w56.toggleView("showGridlines") },
+    { id: "view.headers", title: t("cmd.view.headers", "Column and row headers"), kind: "View", keywords: ["headings"], run: () => ctl.w56.toggleView("showHeaders") },
+    { id: "view.zoomOptimal", title: t("cmd.view.zoomOptimal", "Optimal zoom"), kind: "View", keywords: ["zoom", "fit selection"], run: () => ctl.w5.view.zoomOptimal() },
+    { id: "view.zoomPageWidth", title: t("cmd.view.zoomPageWidth", "Zoom to page width"), kind: "View", keywords: ["zoom"], run: () => ctl.w5.view.zoomToPage("width") },
+    { id: "view.zoomWholePage", title: t("cmd.view.zoomWholePage", "Zoom to whole page"), kind: "View", keywords: ["zoom"], run: () => ctl.w5.view.zoomToPage("both") },
+    { id: "view.fullScreen", title: t("cmd.view.fullScreen", "Full screen"), kind: "View", keywords: ["fullscreen"], run: () => ctl.w5.view.toggleFullScreen() },
+    { id: "tools.options", title: t("cmd.tools.options", "Options…"), kind: "Tools", keywords: ["preferences", "settings", "calculate", "iterations"], ...sc("tools.options"), run: () => void ctl.w56.openOptions() },
+    { id: "tools.solver", title: t("cmd.tools.solver", "Solver…"), kind: "Tools", keywords: ["optimise", "linear", "constraints"], run: () => ctl.w56.openSolver() },
+    { id: "tools.scenarios", title: t("cmd.tools.scenarios", "Scenarios…"), kind: "Tools", keywords: ["what if"], run: () => void ctl.w56.openScenarios() },
+    { id: "tools.tracePrecedents", title: t("cmd.tools.tracePrecedents", "Trace precedents"), kind: "Tools", keywords: ["detective", "arrows"], ...sc("tools.tracePrecedents"), ...notEditing, run: () => ctl.w5.detective.tracePrecedents() },
+    { id: "tools.traceDependents", title: t("cmd.tools.traceDependents", "Trace dependents"), kind: "Tools", keywords: ["detective", "arrows"], ...sc("tools.traceDependents"), ...notEditing, run: () => ctl.w5.detective.traceDependents() },
+    { id: "tools.removeTraces", title: t("cmd.tools.removeTraces", "Remove all traces"), kind: "Tools", keywords: ["detective"], run: () => ctl.w5.detective.removeTraces() },
+    { id: "tools.markInvalid", title: t("cmd.tools.markInvalid", "Mark invalid data"), kind: "Tools", keywords: ["detective", "validation", "circles"], run: () => ctl.w5.detective.markInvalid() },
+    { id: "tools.autoCorrect", title: t("cmd.tools.autoCorrect", "AutoCorrect options…"), kind: "Tools", keywords: ["capitalise", "replace"], run: () => void ctl.w56.openOptions("input") },
+    { id: "tools.autoInput", title: t("cmd.tools.autoInput", "AutoInput"), kind: "Tools", keywords: ["autocomplete", "column completion"], run: () => ctl.w56.toggleAutoInput() },
+    { id: "file.printPreview", title: t("cmd.file.printPreview", "Print preview"), kind: "File", keywords: ["pages"], run: () => ctl.w5.print.openPreview() },
+    { id: "file.print", title: t("cmd.file.print", "Print…"), kind: "File", keywords: ["printer"], ...sc("file.print"), run: () => ctl.w5.print.print() },
+    { id: "file.exportPdf", title: t("cmd.file.exportPdf", "Export as PDF…"), kind: "File", keywords: ["share", "pdf"], run: () => ctl.w5.print.exportPdf() },
+    { id: "file.saveAsTemplate", title: t("cmd.file.saveAsTemplate", "Save as template…"), kind: "File", keywords: ["ots"], run: () => ctl.w56.openSaveAsTemplate() },
+    { id: "file.templates", title: t("cmd.file.templates", "New from template…"), kind: "File", keywords: ["gallery"], run: () => useUiStore.getState().setSidebar(true) },
+    { id: "file.clearRecent", title: t("cmd.file.clearRecent", "Clear recent files"), kind: "File", keywords: ["open recent"], run: () => void ctl.w56.clearRecent() },
+    { id: "sheet.duplicate", title: t("cmd.sheet.duplicate", "Copy sheet…"), kind: "Sheet", keywords: ["duplicate", "clone"], run: () => ctl.w56.openCopySheet() },
+    { id: "sheet.hide", title: t("cmd.sheet.hide", "Hide sheet"), kind: "Sheet", keywords: ["tab"], run: () => void ctl.w56.hideSheet() },
+    { id: "sheet.show", title: t("cmd.sheet.show", "Show sheet…"), kind: "Sheet", keywords: ["unhide", "tab"], run: () => ctl.w56.openShowSheet() },
+    { id: "sheet.tabColor", title: t("cmd.sheet.tabColor", "Tab colour…"), kind: "Sheet", keywords: ["tab color"], run: () => ctl.w56.openTabColor() },
+    // Wave 5 (W5-6): shortcut parity and the dialogs reached by keys only.
+    { id: "edit.repeat", title: t("cmd.edit.repeat", "Repeat last command"), kind: "Edit", keywords: ["again", "redo action"], ...sc("edit.repeat"), run: () => ctl.w56.repeatLast() },
+    { id: "edit.deleteContents", title: t("cmd.edit.deleteContents", "Delete contents…"), kind: "Edit", keywords: ["clear", "delete key", "formats", "notes"], ...notEditing, run: () => ctl.w56.openDeleteContents() },
+    { id: "edit.selectData", title: t("cmd.edit.selectData", "Select data area"), kind: "Edit", keywords: ["current region", "table"], ...notEditing, run: () => void ctl.w56.selectDataArea() },
+    { id: "edit.selectArray", title: t("cmd.edit.selectArray", "Select array formula"), kind: "Edit", keywords: ["matrix", "block"], ...notEditing, run: () => ctl.w56.selectArrayFormula() },
+    { id: "edit.fillSelection", title: t("cmd.edit.fillSelection", "Fill selection with the active cell"), kind: "Edit", keywords: ["alt enter", "repeat value"], ...notEditing, run: () => void ctl.w56.fillSelection() },
+    { id: "edit.focusNameBox", title: t("cmd.edit.focusNameBox", "Go to the Name Box"), kind: "Edit", hidden: true, ...sc("edit.focusNameBox"), run: () => ctl.w56.focusNameBox() },
+    { id: "sheet.insertCells", title: t("cmd.sheet.insertCells", "Insert cells…"), kind: "Sheet", keywords: ["shift down", "shift right"], ...notEditing, run: () => ctl.w56.openInsertCells() },
+    { id: "sheet.deleteCells", title: t("cmd.sheet.deleteCells", "Delete cells…"), kind: "Sheet", keywords: ["shift up", "shift left"], ...notEditing, run: () => ctl.w56.openDeleteCells() },
+    { id: "data.sortOptions", title: t("cmd.data.sortOptions", "Sort with options…"), kind: "Sort", keywords: ["left to right", "custom list", "copy results"], run: () => void ctl.w56.openSortOptions() },
+    { id: "data.clearOutline", title: t("cmd.data.clearOutline", "Remove outline"), kind: "Data", keywords: ["ungroup all", "outline"], run: () => void ctl.w56.clearOutline() },
+    { id: "file.documentStats", title: t("cmd.file.documentStats", "Document statistics…"), kind: "File", keywords: ["cells", "formulas", "count"], run: () => void ctl.w56.openDocumentStats() },
     // Help
     { id: "help.shortcuts", title: "Keyboard shortcuts", kind: "Help", keywords: ["keys", "hotkeys", "cheat sheet"], ...sc("help.shortcuts"), run: () => useUiStore.getState().setShortcuts(!useUiStore.getState().shortcutsOpen) },
     { id: "help.about", title: "About Tally", kind: "Help", run: () => ui.showAbout() },
-  ];
+  ]);
+}
+
+/** Command titles in the UI language: `cmd.<id>` from the installed table, else the literal. */
+export function localizeTitles(cmds: Command[]): Command[] {
+  return cmds.map((c) => {
+    const title = t(`cmd.${c.id}`, c.title);
+    return title === c.title ? c : { ...c, title };
+  });
 }

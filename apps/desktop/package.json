@@ -10,7 +10,8 @@
     "build:web": "vite build",
     "preview:web": "vite preview --port 5173 --strictPort",
     "tauri": "tauri",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check:bundle": "vite build && sh scripts/check-bundle.sh"
   },
   "dependencies": {
     "@tally/app": "workspace:*",

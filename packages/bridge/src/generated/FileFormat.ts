@@ -3,4 +3,4 @@
 /**
  * File format for saving.
  */
-export type FileFormat = "ods" | "xlsx" | "csv";
+export type FileFormat = "ods" | "xlsx" | "csv" | "html" | "dbf";

@@ -27,7 +27,11 @@
 //! - wave 5 (v0.4–v0.6, W5-0a skeletons): [`charts`] and [`ops_v04`]
 //!   (charts, pictures), [`pivot`], [`outline`], [`scenarios`],
 //!   [`cellstyles`], [`tools`] (data tools, assists, solver) and
-//!   [`ops_v05`] (their ops), [`print`] (pagination).
+//!   [`ops_v05`] (their ops), [`print`] (pagination);
+//! - W5-3: [`calcsettings`] (iterations, precision as shown, the
+//!   `SetCalcSettings` op), [`detective`] (precedents/dependents),
+//!   [`external`] (external-link policy), [`solver`] (linear solver),
+//!   [`print`] (pagination and print jobs through `tally-io-pdf`).
 //!
 //! See `docs/architecture-plan.md` §3.2, §3.6, §4.3, §4.4 and §7 WP1.
 
@@ -35,23 +39,29 @@
 #![warn(missing_docs)]
 
 pub mod annotations;
+pub mod autocomplete;
 pub mod autofit;
+pub mod calcsettings;
 pub mod cellstyles;
 pub mod charts;
 pub mod clipboard;
 pub mod condfmt;
 pub mod convert;
 pub mod deps;
+pub mod detective;
 pub mod document;
 pub mod eval;
+pub mod external;
 pub mod fexpr;
 pub mod fill;
 pub mod filter;
 pub mod find;
 pub mod formula_cells;
 pub mod goalseek;
+pub mod images;
 pub mod moves;
 pub mod names;
+pub mod navigator;
 pub mod ops;
 pub mod ops_v03;
 pub mod ops_v04;
@@ -66,6 +76,7 @@ pub mod rangeindex;
 pub mod recalc;
 pub mod scenarios;
 pub mod service;
+pub mod solver;
 pub mod sort;
 pub mod storage;
 pub mod structure;

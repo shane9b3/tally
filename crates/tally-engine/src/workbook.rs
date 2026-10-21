@@ -204,6 +204,12 @@ pub struct Workbook {
     pub cell_styles: Vec<tally_model::CellStyleData>,
     /// Custom sort lists (v0.5).
     pub custom_sort_lists: Vec<Vec<String>>,
+    /// External links the reader disabled by policy (v0.6, W5-3; see
+    /// [`crate::external`]).
+    pub external_links: Vec<tally_api::ExternalLinkWarning>,
+    /// `MULTIPLE.OPERATIONS` sandbox evaluations in the current recalc
+    /// (capped at [`crate::tools::MAX_TABLE_OPS`]).
+    pub table_op_calls: u32,
 }
 
 impl Default for Workbook {
@@ -242,6 +248,8 @@ impl Workbook {
             load_aliases: HashMap::new(),
             cell_styles: Vec::new(),
             custom_sort_lists: Vec::new(),
+            external_links: Vec::new(),
+            table_op_calls: 0,
         }
     }
 

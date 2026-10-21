@@ -437,13 +437,7 @@ pub(crate) fn parse_dv<R: BufRead>(
             };
             match raw.strip_prefix('"').and_then(|x| x.strip_suffix('"')) {
                 Some(inner) => ValidationKindData::List {
-                    source: ListSourceData::Values(
-                        inner
-                            .replace("\"\"", "\"")
-                            .split(',')
-                            .map(|s| s.trim().to_string())
-                            .collect(),
-                    ),
+                    source: ListSourceData::Values(split_list_items(inner)),
                 },
                 None => ValidationKindData::List {
                     source: ListSourceData::Range(excel_to_of(raw, origin, r).0),
@@ -760,6 +754,34 @@ pub(crate) fn parse_comments<R: BufRead>(
     notes.sort_by_key(|n| (n.row, n.col));
     notes.dedup_by_key(|n| (n.row, n.col));
     Ok((notes, truncated))
+}
+
+/// Splits the inside of an inline list (`"a,b,c"`) into items: a comma
+/// inside a `""…""`-quoted item (the doubled quotes are the OOXML escape)
+/// does not split it (`"a,""b,c"",d"` → `a`, `b,c`, `d`; review 3, LOW).
+pub(crate) fn split_list_items(inner: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut chars = inner.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '"' {
+            if chars.peek() == Some(&'"') {
+                chars.next();
+                in_quotes = !in_quotes;
+                continue;
+            }
+            cur.push('"');
+            continue;
+        }
+        if ch == ',' && !in_quotes {
+            items.push(std::mem::take(&mut cur));
+            continue;
+        }
+        cur.push(ch);
+    }
+    items.push(cur);
+    items.into_iter().map(|s| s.trim().to_string()).collect()
 }
 
 /// `_xlnm.Print_Titles` text → (rows, cols) to repeat.

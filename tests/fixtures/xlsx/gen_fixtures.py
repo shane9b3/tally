@@ -648,6 +648,344 @@ def gen_not_xlsx():
     write_zip(os.path.join(BAD_DIR, "binary-xlsb.xlsx"), [("[Content_Types].xml", ct), ("xl/workbook.bin", b"\x83\x01\x00")])
 
 
+# ---------------------------------------------------------------------------
+# Charts and pictures (Excel 365 shaped drawing, chart and media parts;
+# wave 5, W5-1)
+# ---------------------------------------------------------------------------
+
+NS_XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+NS_C = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+CT_DRAWING = "application/vnd.openxmlformats-officedocument.drawing+xml"
+CT_CHART = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
+
+PNG_1x1 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    b"\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x02\x00\xde\xf2\x8a\xbb\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+def num_ref(f, values):
+    pts = "".join('<c:pt idx="%d"><c:v>%s</c:v></c:pt>' % (i, v) for i, v in enumerate(values))
+    return '<c:numRef><c:f>%s</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="%d"/>%s</c:numCache></c:numRef>' % (f, len(values), pts)
+
+
+def str_ref(f, values):
+    pts = "".join('<c:pt idx="%d"><c:v>%s</c:v></c:pt>' % (i, v) for i, v in enumerate(values))
+    return '<c:strRef><c:f>%s</c:f><c:strCache><c:ptCount val="%d"/>%s</c:strCache></c:strRef>' % (f, len(values), pts)
+
+
+def rich_title(parts):
+    runs = "".join('<a:r><a:rPr lang="en-US"%s/><a:t>%s</a:t></a:r>' % (' b="1"' if b else "", t) for t, b in parts)
+    return '<c:title><c:tx><c:rich><a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" vert="horz" wrap="square" anchor="ctr" anchorCtr="1"/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1400" b="0"/></a:pPr>%s</a:p></c:rich></c:tx><c:overlay val="0"/></c:title>' % runs
+
+
+def chart_space(inner):
+    return (
+        DECL
+        + '<c:chartSpace xmlns:c="%s" xmlns:a="%s" xmlns:r="%s" xmlns:c16r2="http://schemas.microsoft.com/office/drawing/2015/06/chart">' % (NS_C, NS_A, NS_R)
+        + '<c:date1904 val="0"/><c:lang val="en-US"/><c:roundedCorners val="0"/>'
+        + inner
+        + '<c:spPr><a:solidFill><a:srgbClr val="FFFFF0"/></a:solidFill><a:ln w="9525" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="tx1"><a:lumMod val="15000"/><a:lumOff val="85000"/></a:schemeClr></a:solidFill><a:round/></a:ln></c:spPr>'
+        + '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr/></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>'
+        + '<c:printSettings><c:headerFooter/><c:pageMargins b="0.75" l="0.7" r="0.7" t="0.75" header="0.3" footer="0.3"/><c:pageSetup/></c:printSettings>'
+        + "</c:chartSpace>"
+    )
+
+
+def excel_column_chart():
+    """Clustered column chart, two series with rich title, legend right,
+    value labels on series 2, series 2 in a solid colour, value axis with
+    gridlines, max and a number format."""
+    ser1 = (
+        '<c:ser><c:idx val="0"/><c:order val="0"/><c:tx>%s</c:tx>'
+        '<c:spPr><a:solidFill><a:schemeClr val="accent1"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr><c:invertIfNegative val="0"/>'
+        '<c:cat>%s</c:cat><c:val>%s</c:val></c:ser>'
+    ) % (str_ref("Data!$B$1", ["Sales"]), str_ref("Data!$A$2:$A$6", ["Jan", "Feb", "Mar", "Apr", "May"]), num_ref("Data!$B$2:$B$6", [10, 20, 35, 50, 100]))
+    ser2 = (
+        '<c:ser><c:idx val="1"/><c:order val="1"/><c:tx>%s</c:tx>'
+        '<c:spPr><a:solidFill><a:srgbClr val="FF420E"/></a:solidFill></c:spPr><c:invertIfNegative val="0"/>'
+        '<c:dLbls><c:spPr><a:noFill/></c:spPr><c:dLblPos val="outEnd"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>'
+        '<c:cat>%s</c:cat><c:val>%s</c:val></c:ser>'
+    ) % (str_ref("Data!$C$1", ["Costs"]), str_ref("Data!$A$2:$A$6", ["Jan", "Feb", "Mar", "Apr", "May"]), num_ref("Data!$C$2:$C$6", [4, 8, 12, 20, 40]))
+    inner = (
+        '<c:chart>' + rich_title([("Sales ", False), ("2026", True)]) + '<c:autoTitleDeleted val="0"/>'
+        '<c:plotArea><c:layout/>'
+        '<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/>' + ser1 + ser2
+        + '<c:dLbls><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>'
+        '<c:gapWidth val="219"/><c:overlap val="-27"/><c:axId val="111111111"/><c:axId val="222222222"/></c:barChart>'
+        '<c:catAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/>'
+        + rich_title([("Month", False)]) +
+        '<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="222222222"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>'
+        '<c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/><c:max val="120"/><c:min val="0"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines><c:spPr><a:ln w="9525"><a:solidFill><a:schemeClr val="tx1"><a:lumMod val="15000"/><a:lumOff val="85000"/></a:schemeClr></a:solidFill></a:ln></c:spPr></c:majorGridlines>'
+        + rich_title([("k€", False)]) +
+        '<c:numFmt formatCode="#,##0" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="111111111"/><c:crosses val="autoZero"/><c:crossBetween val="between"/><c:majorUnit val="20"/></c:valAx>'
+        '<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr></c:plotArea>'
+        '<c:legend><c:legendPos val="r"/><c:overlay val="0"/></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>'
+    )
+    return chart_space(inner)
+
+
+def excel_scatter_chart():
+    """XY scatter (lines and markers) with a linear trend line showing the
+    equation and R², standard-deviation error bars, a hidden legend and a
+    logarithmic value axis; plus a line series on a secondary axis in a
+    combined lineChart group."""
+    ser = (
+        '<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Fit</c:v></c:tx>'
+        '<c:spPr><a:ln w="19050" cap="rnd"><a:solidFill><a:srgbClr val="579D1C"/></a:solidFill><a:round/></a:ln></c:spPr>'
+        '<c:marker><c:symbol val="diamond"/><c:size val="5"/></c:marker>'
+        '<c:trendline><c:name>Linear fit</c:name><c:spPr><a:ln w="19050" cap="rnd"><a:solidFill><a:schemeClr val="accent1"/></a:solidFill><a:prstDash val="sysDot"/></a:ln></c:spPr><c:trendlineType val="linear"/><c:dispRSqr val="1"/><c:dispEq val="1"/></c:trendline>'
+        '<c:errBars><c:errDir val="y"/><c:errBarType val="both"/><c:errValType val="stdDev"/><c:noEndCap val="0"/><c:val val="1"/></c:errBars>'
+        '<c:xVal>%s</c:xVal><c:yVal>%s</c:yVal><c:smooth val="0"/></c:ser>'
+    ) % (num_ref("Data!$B$2:$B$6", [10, 20, 35, 50, 100]), num_ref("Data!$C$2:$C$6", [4, 8, 12, 20, 40]))
+    inner = (
+        '<c:chart><c:autoTitleDeleted val="1"/><c:plotArea><c:layout/>'
+        '<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>' + ser +
+        '<c:dLbls><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>'
+        '<c:axId val="333"/><c:axId val="444"/></c:scatterChart>'
+        '<c:valAx><c:axId val="333"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="444"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>'
+        '<c:valAx><c:axId val="444"/><c:scaling><c:logBase val="10"/><c:orientation val="minMax"/><c:max val="1000"/><c:min val="1"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:minorGridlines/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="333"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>'
+        '</c:plotArea><c:plotVisOnly val="0"/><c:dispBlanksAs val="gap"/></c:chart>'
+    )
+    return chart_space(inner)
+
+
+def excel_pie3d_chart():
+    """3D pie with percentages and a literal (cached-only) second look: the
+    categories are a string literal and the values a numeric literal."""
+    ser = (
+        '<c:ser><c:idx val="0"/><c:order val="0"/><c:tx>%s</c:tx><c:explosion val="12"/>'
+        '<c:dLbls><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="1"/><c:showSerName val="0"/><c:showPercent val="1"/><c:showBubbleSize val="0"/><c:showLeaderLines val="1"/></c:dLbls>'
+        '<c:cat><c:strLit><c:ptCount val="3"/><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt><c:pt idx="2"><c:v>C</c:v></c:pt></c:strLit></c:cat>'
+        '<c:val><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="3"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt></c:numLit></c:val></c:ser>'
+    ) % str_ref("Data!$B$1", ["Sales"])
+    inner = (
+        '<c:chart><c:autoTitleDeleted val="1"/><c:view3D><c:rotX val="30"/><c:rotY val="0"/><c:rAngAx val="0"/></c:view3D>'
+        '<c:plotArea><c:layout/><c:pie3DChart><c:varyColors val="1"/>' + ser + '</c:pie3DChart></c:plotArea>'
+        '<c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>'
+    )
+    return chart_space(inner)
+
+
+def anchor_two_cell(name, idx, c0, r0, c1, r1, inner, off=(0, 0, 0, 0)):
+    return (
+        '<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>%d</xdr:col><xdr:colOff>%d</xdr:colOff><xdr:row>%d</xdr:row><xdr:rowOff>%d</xdr:rowOff></xdr:from>'
+        '<xdr:to><xdr:col>%d</xdr:col><xdr:colOff>%d</xdr:colOff><xdr:row>%d</xdr:row><xdr:rowOff>%d</xdr:rowOff></xdr:to>%s<xdr:clientData/></xdr:twoCellAnchor>'
+    ) % (c0, off[0], r0, off[1], c1, off[2], r1, off[3], inner)
+
+
+def graphic_frame(name, idx, rid):
+    return (
+        '<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="%d" name="%s"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>'
+        '<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="%s"><c:chart xmlns:c="%s" xmlns:r="%s" r:id="%s"/></a:graphicData></a:graphic></xdr:graphicFrame>'
+    ) % (idx, name, NS_C, NS_C, NS_R, rid)
+
+
+def picture(name, idx, rid):
+    return (
+        '<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="%d" name="%s"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>'
+        '<xdr:blipFill><a:blip xmlns:r="%s" r:embed="%s"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>'
+        '<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>'
+    ) % (idx, name, NS_R, rid)
+
+
+def gen_charts():
+    d = os.path.join(HERE, "charts")
+    os.makedirs(d, exist_ok=True)
+    rows = [row(1, [c("A1", 0, 2, "s"), c("B1", 1, 2, "s"), c("C1", 2, 2, "s")])]
+    data = [("Jan", 10, 4), ("Feb", 20, 8), ("Mar", 35, 12), ("Apr", 50, 20), ("May", 100, 40)]
+    for i, (m, a, b) in enumerate(data):
+        rows.append(row(i + 2, [c("A%d" % (i + 2), 3 + i, None, "s"), c("B%d" % (i + 2), a), c("C%d" % (i + 2), b)]))
+    sst = sst_xml(["<t>Month</t>", "<t>Sales</t>", "<t>Costs</t>"] + ["<t>%s</t>" % m for m, _, _ in data])
+    sheet = (
+        DECL
+        + '<worksheet xmlns="%s" xmlns:r="%s"><dimension ref="A1:C6"/><sheetViews><sheetView tabSelected="1" workbookViewId="0"/></sheetViews>' % (NS_MAIN, NS_R)
+        + '<sheetFormatPr defaultRowHeight="14.5"/><cols><col min="1" max="1" width="12.7265625" customWidth="1"/></cols>'
+        + "<sheetData>%s</sheetData>" % "".join(rows)
+        + '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><drawing r:id="rId1"/></worksheet>'
+    )
+    sheet_rels = (
+        DECL + '<Relationships xmlns="%s"><Relationship Id="rId1" Type="%sdrawing" Target="../drawings/drawing1.xml"/></Relationships>' % (REL_PKG, RT)
+    )
+    drawing = (
+        DECL
+        + '<xdr:wsDr xmlns:xdr="%s" xmlns:a="%s">' % (NS_XDR, NS_A)
+        + anchor_two_cell("Chart 1", 2, 4, 1, 12, 16, graphic_frame("Chart 1", 2, "rId1"), (190500, 95250, 285750, 0))
+        + '<xdr:oneCellAnchor><xdr:from><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>18</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="4320000" cy="2880000"/>'
+        + graphic_frame("Chart 2", 3, "rId2") + '<xdr:clientData/></xdr:oneCellAnchor>'
+        + '<xdr:absoluteAnchor><xdr:pos x="7200000" y="7200000"/><xdr:ext cx="2880000" cy="2520000"/>' + graphic_frame("Chart 3", 4, "rId3") + '<xdr:clientData/></xdr:absoluteAnchor>'
+        + anchor_two_cell("Picture 1", 5, 14, 1, 15, 3, picture("Picture 1", 5, "rId4"), (95250, 0, 0, 0))
+        + '<xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>8</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>9</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>'
+        + '<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="6" name="TextBox 1"/><xdr:cNvSpPr txBox="1"/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>'
+        + "</xdr:wsDr>"
+    )
+    drawing_rels = (
+        DECL + '<Relationships xmlns="%s">' % REL_PKG
+        + '<Relationship Id="rId1" Type="%schart" Target="../charts/chart1.xml"/>' % RT
+        + '<Relationship Id="rId2" Type="%schart" Target="../charts/chart2.xml"/>' % RT
+        + '<Relationship Id="rId3" Type="%schart" Target="../charts/chart3.xml"/>' % RT
+        + '<Relationship Id="rId4" Type="%simage" Target="../media/image1.png"/>' % RT
+        + "</Relationships>"
+    )
+    ct_extra = (
+        '<Default Extension="png" ContentType="image/png"/>'
+        '<Override PartName="/xl/drawings/drawing1.xml" ContentType="%s"/>' % CT_DRAWING
+        + "".join('<Override PartName="/xl/charts/chart%d.xml" ContentType="%s"/>' % (i, CT_CHART) for i in (1, 2, 3))
+    )
+    write_zip(
+        os.path.join(d, "excel365-charts.xlsx"),
+        [
+            ("[Content_Types].xml", content_types(1, sst=True, extra=ct_extra)),
+            ("_rels/.rels", ROOT_RELS),
+            ("docProps/core.xml", CORE),
+            ("docProps/app.xml", APP),
+            ("xl/workbook.xml", workbook_xml([("Data", None)])),
+            ("xl/_rels/workbook.xml.rels", workbook_rels(1, sst=True)),
+            ("xl/styles.xml", EXCEL_STYLES),
+            ("xl/theme/theme1.xml", THEME),
+            ("xl/sharedStrings.xml", sst),
+            ("xl/worksheets/sheet1.xml", sheet),
+            ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels),
+            ("xl/drawings/drawing1.xml", drawing),
+            ("xl/drawings/_rels/drawing1.xml.rels", drawing_rels),
+            ("xl/charts/chart1.xml", excel_column_chart()),
+            ("xl/charts/chart2.xml", excel_scatter_chart()),
+            ("xl/charts/chart3.xml", excel_pie3d_chart()),
+            ("xl/media/image1.png", PNG_1x1),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Data tools (Excel 365 shaped: outline levels, scenarios, named cell
+# styles, format extras, a pivot cache/table; wave 5, W5-2)
+# ---------------------------------------------------------------------------
+
+TOOLS_STYLES = (
+    DECL
+    + '<styleSheet xmlns="%s">' % NS_MAIN
+    + '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><u val="double"/><sz val="16"/><name val="Calibri"/></font></fonts>'
+    + '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
+    + '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>'
+    + '<border diagonalUp="1"><left/><right/><top/><bottom/><diagonal style="thin"><color rgb="FFFF0000"/></diagonal></border></borders>'
+    + '<cellStyleXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0"/></cellStyleXfs>'
+    + '<cellXfs count="3">'
+    + '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+    + '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="1" applyFont="1"/>'
+    + '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment textRotation="45" shrinkToFit="1" indent="1"/></xf>'
+    + "</cellXfs>"
+    + '<cellStyles count="2"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="Heading" xfId="1"/></cellStyles>'
+    + '<dxfs count="0"/></styleSheet>'
+)
+
+CT_PIVOT_CACHE = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"
+CT_PIVOT_TABLE = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"
+
+
+def gen_tools():
+    def s(ref, text, st=None):
+        return c(ref, t="inlineStr", s=st, inner="<is><t>%s</t></is>" % esc(text))
+
+    rows = [
+        row(1, [s("A1", "Region", 1), s("B1", "Product"), s("C1", "Qty"), s("D1", "Amount")]),
+        row(2, [s("A2", "East"), s("B2", "Apple"), c("C2", 10), c("D2", 100, s=2)], ' outlineLevel="1"'),
+        row(3, [s("A3", "East"), s("B3", "Pear"), c("C3", 5), c("D3", 60)], ' outlineLevel="2" hidden="1"'),
+        row(4, [s("A4", "East"), s("B4", "Plum"), c("C4", 2), c("D4", 30)], ' outlineLevel="2" hidden="1"'),
+        row(5, [s("A5", "West"), s("B5", "Apple"), c("C5", 20), c("D5", 200)], ' outlineLevel="1" collapsed="1"'),
+        row(6, [s("A6", "West"), s("B6", "Pear"), c("C6", 9), c("D6", 110)]),
+        row(7, [s("A7", "West"), s("B7", "Plum"), c("C7", 3), c("D7", 35)]),
+    ]
+    scen = (
+        '<scenarios current="1" show="1">'
+        '<scenario name="Base" locked="0" hidden="0" count="2" comment="as is"><inputCells r="C2" val="10"/><inputCells r="C3" val="5"/></scenario>'
+        '<scenario name="High" locked="1" hidden="0" count="2"><inputCells r="C2" val="99"/><inputCells r="C3" val="55"/></scenario>'
+        "</scenarios>"
+    )
+    cols = '<cols><col min="2" max="3" width="12" customWidth="1" outlineLevel="1"/></cols>'
+    sheet1 = sheet_xml(
+        "".join(rows),
+        before='<sheetPr><outlinePr summaryBelow="0"/></sheetPr>',
+        after=scen,
+        views='<sheetViews><sheetView showGridLines="0" showZeros="0" workbookViewId="0"/></sheetViews>',
+        cols=cols,
+    )
+    pivot_rows = [
+        row(1, [s("A1", "Region"), s("B1", "Sum of Amount")]),
+        row(2, [s("A2", "East"), c("B2", 190)]),
+        row(3, [s("A3", "West"), c("B3", 345)]),
+        row(4, [s("A4", "Grand Total"), c("B4", 535)]),
+    ]
+    sheet2 = sheet_xml("".join(pivot_rows))
+    cache = (
+        DECL
+        + '<pivotCacheDefinition xmlns="%s" xmlns:r="%s" r:id="rId1" refreshOnLoad="1" refreshedBy="Fixture" createdVersion="6" refreshedVersion="6" minRefreshableVersion="3" recordCount="6">' % (NS_MAIN, NS_R)
+        + '<cacheSource type="worksheet"><worksheetSource ref="A1:D7" sheet="Data"/></cacheSource>'
+        + '<cacheFields count="4">'
+        + '<cacheField name="Region" numFmtId="0"><sharedItems count="2"><s v="East"/><s v="West"/></sharedItems></cacheField>'
+        + '<cacheField name="Product" numFmtId="0"><sharedItems count="3"><s v="Apple"/><s v="Pear"/><s v="Plum"/></sharedItems></cacheField>'
+        + '<cacheField name="Qty" numFmtId="0"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" containsInteger="1" minValue="2" maxValue="20"/></cacheField>'
+        + '<cacheField name="Amount" numFmtId="0"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" containsInteger="1" minValue="30" maxValue="200"/></cacheField>'
+        + "</cacheFields></pivotCacheDefinition>"
+    )
+    records = (
+        DECL
+        + '<pivotCacheRecords xmlns="%s" count="0"/>' % NS_MAIN
+    )
+    table = (
+        DECL
+        + '<pivotTableDefinition xmlns="%s" name="PivotTable1" cacheId="7" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="1" dataCaption="Values" updatedVersion="6" minRefreshableVersion="3" useAutoFormatting="1" itemPrintTitles="1" createdVersion="6" indent="0" outline="1" outlineData="1" multipleFieldFilters="0">' % NS_MAIN
+        + '<location ref="A1:B4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="1" colPageCount="1"/>'
+        + '<pivotFields count="4">'
+        + '<pivotField axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>'
+        + '<pivotField axis="axisPage" showAll="0"><items count="4"><item x="0"/><item x="1"/><item x="2"/><item t="default"/></items></pivotField>'
+        + '<pivotField showAll="0"/>'
+        + '<pivotField dataField="1" showAll="0"/>'
+        + "</pivotFields>"
+        + '<rowFields count="1"><field x="0"/></rowFields>'
+        + '<rowItems count="3"><i><x/></i><i><x v="1"/></i><i t="grand"><x/></i></rowItems>'
+        + '<colItems count="1"><i/></colItems>'
+        + '<pageFields count="1"><pageField fld="1" hier="-1"/></pageFields>'
+        + '<dataFields count="1"><dataField name="Sum of Amount" fld="3" baseField="0" baseItem="0"/></dataFields>'
+        + '<pivotTableStyleInfo name="PivotStyleLight16" showRowHeaders="1" showColHeaders="1" showRowStripes="0" showColStripes="0" showLastColumn="1"/>'
+        + "</pivotTableDefinition>"
+    )
+    wb = workbook_xml([("Data", None), ("Pivot", None)]).replace(
+        "</workbook>", '<pivotCaches><pivotCache cacheId="7" r:id="rId5"/></pivotCaches></workbook>'
+    )
+    wb_rels = workbook_rels(2, sst=False).replace(
+        "</Relationships>",
+        '<Relationship Id="rId5" Type="%spivotCacheDefinition" Target="pivotCache/pivotCacheDefinition1.xml"/></Relationships>' % RT,
+    )
+    ct_extra = (
+        '<Override PartName="/xl/pivotCache/pivotCacheDefinition1.xml" ContentType="%s"/>' % CT_PIVOT_CACHE
+        + '<Override PartName="/xl/pivotCache/pivotCacheRecords1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"/>'
+        + '<Override PartName="/xl/pivotTables/pivotTable1.xml" ContentType="%s"/>' % CT_PIVOT_TABLE
+    )
+    rel = DECL + '<Relationships xmlns="%s">%s</Relationships>'
+    write_zip(
+        os.path.join(HERE, "tools-excel.xlsx"),
+        [
+            ("[Content_Types].xml", content_types(2, sst=False, extra=ct_extra)),
+            ("_rels/.rels", ROOT_RELS),
+            ("docProps/core.xml", CORE),
+            ("docProps/app.xml", APP),
+            ("xl/workbook.xml", wb),
+            ("xl/_rels/workbook.xml.rels", wb_rels),
+            ("xl/styles.xml", TOOLS_STYLES),
+            ("xl/theme/theme1.xml", THEME),
+            ("xl/worksheets/sheet1.xml", sheet1),
+            ("xl/worksheets/sheet2.xml", sheet2),
+            ("xl/worksheets/_rels/sheet2.xml.rels", rel % (REL_PKG, '<Relationship Id="rId1" Type="%spivotTable" Target="../pivotTables/pivotTable1.xml"/>' % RT)),
+            ("xl/pivotTables/pivotTable1.xml", table),
+            ("xl/pivotTables/_rels/pivotTable1.xml.rels", rel % (REL_PKG, '<Relationship Id="rId1" Type="%spivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition1.xml"/>' % RT)),
+            ("xl/pivotCache/pivotCacheDefinition1.xml", cache),
+            ("xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels", rel % (REL_PKG, '<Relationship Id="rId1" Type="%spivotCacheRecords" Target="pivotCacheRecords1.xml"/>' % RT)),
+            ("xl/pivotCache/pivotCacheRecords1.xml", records),
+        ],
+    )
+
+
 def main():
     os.makedirs(BAD_DIR, exist_ok=True)
     gen_excel365()
@@ -663,7 +1001,9 @@ def main():
     gen_lying_eocd()
     gen_path_traversal()
     gen_not_xlsx()
-    for d in (HERE, BAD_DIR):
+    gen_charts()
+    gen_tools()
+    for d in (HERE, BAD_DIR, os.path.join(HERE, "charts")):
         for f in sorted(os.listdir(d)):
             p = os.path.join(d, f)
             if f.endswith(".xlsx"):

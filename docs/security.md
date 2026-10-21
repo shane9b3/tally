@@ -166,6 +166,38 @@ leave the package are ignored.
 | Quoted sheet names containing `:` (`'a:b'!A1`) are not read as 3-D spans | `tally-io-xlsx::security2::quoted_sheet_names_with_colons` |
 | `calcPr iterateCount` clamped to 32,767 (ODS `table:steps` too) | `tally-io-xlsx::security2::iterate_count_is_clamped`, `tally-io-ods::security2::iteration_steps_are_clamped` |
 
+## 3c. Wave-5 readers and the PDF renderer (W5-3)
+
+Every new reader validates its container before it allocates and enforces
+budgets while materializing; the limits are constants of the crates and
+tested by the malicious corpora in `crates/tally-io-xls/tests/fixtures.rs`,
+`crates/tally-io-dbf/src/lib.rs`, `crates/tally-io-html/src/lib.rs`,
+`crates/tally-io-ods/tests/sxc.rs` and `crates/tally-engine/tests/formats.rs`
+(mutated and truncated fixtures through the service).
+
+| Reader | Pre-checks | Budgets | Notes |
+|---|---|---|---|
+| XLS (`tally-io-xls`) | OLE2 signature; file ≤ 256 MiB | ≤ 1024 sheets, ≤ 10 M cells, ≤ 512 MiB text/formula bytes | calamine 0.37 decodes the CFB container and BIFF stream under `catch_unwind` (a panic is `XlsError::Malformed`, never a crash); formulas are converted by Tally's own parser, nothing is evaluated from the file. |
+| SXC (`tally-io-ods`) | zip `mimetype`; the ODS zip-bomb, XML depth/attribute and cell/text budgets | identical to ODS | names are mapped while reading; no extra allocation per element. |
+| HTML (`tally-io-html`) | input ≤ 64 MiB (`MAX_INPUT_BYTES`) | ≤ 1024 tables, ≤ 10 M cells, ≤ 64 KiB per cell, `colspan`/`rowspan` clamped to 1000 | a hand-written tokenizer: no DOM, no script execution, `<script>`/`<style>`/`<template>` bodies skipped, entities decoded without recursion; formulas stay text (the engine recognizes numbers and dates only). |
+| dBase (`tally-io-dbf`) | version byte, header length `= 32 + 32·fields + 1`, record length `= 1 + Σ field widths`, record count ≤ what the file holds (+1 for a truncated last record) | ≤ 2 M records, ≤ 1024 fields, ≤ 10 M cells, file ≤ 256 MiB | memo/binary fields are never followed (no `.dbt` is opened). |
+| PDF/print (`tally-io-pdf`, `tally-engine/src/print.rs`) | — (the input is the document) | ≤ 100,000 pages per layout (`print::MAX_PAGES`), ≤ 10,000 pages and 5 M items per job, ≤ 4 MB per chart SVG (`ChartSvgDto`), ≤ 4096 characters per text item, 1000 lines per wrapped cell, LRU of 4 jobs | SVGs come from the UI's own ECharts rendering and are parsed by usvg (no external resources: `usvg::Options` has no resource directory, `xlink:href` to files is ignored); fonts are read from the system font database only (fontdb), subsetted and embedded; the rasterizer (hayro) runs on the PDF Tally just wrote. Page previews are PNGs at 18–600 dpi (the shell clamps the dpi). |
+
+External links and DDE (`crates/tally-engine/src/external.rs`): a `DDE()`
+formula evaluates to `#N/A`, a reference into another file (`'file:///…'#$Sheet.A1`,
+`[1]Sheet!A1`) to `#REF!`, a sheet linked to another file is imported as
+values and a linked picture is dropped; nothing is ever fetched. Each case
+is counted in `WorkbookInfo.external_links` and shown once as a warning;
+the original formula text is kept in the cell for inspection.
+
+`MULTIPLE.OPERATIONS` (what-if tables) re-evaluates formulas in a sandbox
+that never writes the workbook, at most `tools::MAX_TABLE_OPS` (10,000)
+times per recalculation (then Err:512), with at most 200,000 formulas
+recomputed per call and 64 levels of nesting. Iterative calculation runs at
+most `steps` (≤ 32,767) rounds per cyclic component and per recalc. The
+solver evaluates the sandbox at most 10,000 times per request and
+branch-and-bound is bounded by `max_iterations` nodes and `timeout_ms`.
+
 ## 4. Path traversal (WP5)
 
 - Nothing is ever extracted to disk. Entries are streamed into memory by exact

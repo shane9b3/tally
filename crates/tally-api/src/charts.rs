@@ -468,7 +468,9 @@ pub struct SeriesDataDto {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct TrendDataDto {
-    /// Points `[x, y]`.
+    /// Points `[x, y]` of the fitted curve, in ascending `x`. On category
+    /// charts `x` is the 1-based category index; on scatter charts `x`
+    /// is the series' X value.
     pub points: Vec<[f64; 2]>,
     /// The equation text.
     pub equation: String,

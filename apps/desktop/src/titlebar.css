@@ -1,0 +1,80 @@
+/* Windows custom title bar (W5-5, §4 item 48). Mounted above the app; the
+   app itself fills the rest of the window (its root is 100vh otherwise). */
+:root {
+  --tally-titlebar-h: 32px;
+}
+
+#root[data-titlebar="custom"] {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+#root[data-titlebar="custom"] > .tally-app-host {
+  flex: 1;
+  min-height: 0;
+}
+
+#root[data-titlebar="custom"] > .tally-app-host > div {
+  height: 100%;
+}
+
+.tally-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--tally-titlebar-h);
+  flex: none;
+  padding-left: 10px;
+  background: var(--tally-gray-100, #f3f4f6);
+  border-bottom: 1px solid var(--tally-border-subtle, rgba(0, 0, 0, 0.06));
+  color: var(--tally-text, #111827);
+  font-family: var(--tally-font-family, "Segoe UI", system-ui, sans-serif);
+  font-size: 12px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.tally-titlebar-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--tally-accent, #2563eb);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tally-titlebar-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tally-titlebar-spacer {
+  flex: 1;
+  align-self: stretch;
+}
+
+.tally-caption {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--tally-text, #111827);
+}
+
+.tally-caption:hover {
+  background: var(--tally-hover, rgba(0, 0, 0, 0.045));
+}
+
+.tally-caption-close:hover {
+  background: #e81123;
+  color: #fff;
+}

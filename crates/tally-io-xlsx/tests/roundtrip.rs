@@ -235,21 +235,25 @@ fn sample() -> WorkbookData {
         styles: styles(),
         names: vec![
             NameData {
+                base_cell: None,
                 name: "Total".into(),
                 sheet: None,
                 formula: "of:=[$Orders.$A$2:.$B$2]".into(),
             },
             NameData {
+                base_cell: None,
                 name: "Local".into(),
                 sheet: Some(1),
                 formula: "of:=[$'Second sheet'.$A$1]".into(),
             },
             NameData {
+                base_cell: None,
                 name: "Print_Area".into(),
                 sheet: Some(0),
                 formula: "of:=[$Orders.$A$1:.$G$6]".into(),
             },
             NameData {
+                base_cell: None,
                 name: "Rate".into(),
                 sheet: None,
                 formula: "of:=0.25".into(),

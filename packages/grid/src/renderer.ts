@@ -16,7 +16,7 @@ import { fitNumber, isGeneralNumberText } from "./fitNumber";
 import { snapFill, type Geometry, type Pane, type Rect } from "./geometry";
 import { Lru } from "./lru";
 import { drawCfIcon, drawDataBar } from "./cfIcons";
-import { CELL_FLAGS, type FilterButtons, type GridDataSource, type PageBreaks, type RefHighlight, type Selection } from "./types";
+import { CELL_FLAGS, type FilterButtons, type GridDataSource, type OutlineProps, type PageBreaks, type RefHighlight, type Selection, type TraceArrow } from "./types";
 
 /** Horizontal text padding inside a cell at zoom 100%. */
 export const CELL_PADDING = 6;
@@ -167,9 +167,15 @@ export interface MainFrame {
   pageBreaks?: PageBreaks | null;
   /** The print range outline. */
   printRange?: RangeDto | null;
+  /** Outline gutter groups (wave 5 seam; the gutter sizes are in `geo`). */
+  outline?: OutlineProps | null;
+  /** Page Break Preview: a "Page N" watermark per page. */
+  pageBreakPreview?: boolean;
 }
 
 export interface OverlayFrame extends MainFrame {
+  /** Detective arrows (wave 5 seam). */
+  traces?: readonly TraceArrow[] | null;
   selection: Selection;
   /** Hide the fill handle and active-cell clearing while editing. */
   editing: boolean;
@@ -187,6 +193,10 @@ export interface OverlayFrame extends MainFrame {
   clipRange?: RangeDto | null;
   /** A cell whose edit was refused (protected): a lock badge. */
   lockedCell?: CellPos | null;
+  /** Detective "Mark invalid data": red circles around these cells (W5-5). */
+  invalidCells?: readonly CellPos[] | null;
+  /** A page-break line being dragged (Page Break Preview): its live screen position. */
+  breakDrag?: { axis: "row" | "col"; pos: number } | null;
 }
 
 /** Per-frame statistics, for the perf demo. */
@@ -668,8 +678,55 @@ export class Renderer {
       ctx.lineWidth = 2;
       ctx.strokeRect(Math.round(r.x) + 0.5, Math.round(r.y) + 0.5, Math.max(0, r.w - 2), Math.max(0, r.h - 2));
     }
+    if (f.pageBreakPreview && f.pageBreaks) this.drawPageWatermarks(f, f.pageBreaks, vis);
     ctx.restore();
     this.curFill = "";
+  }
+
+  /**
+   * Page Break Preview stub (wave 5 seam): "Page N" in the middle of every
+   * page rectangle formed by the break lines, numbered down the first column
+   * of pages, then the next (AOO's default order). Pages start at the print
+   * range's origin (else A1) and end at the last break (or the print range).
+   */
+  private drawPageWatermarks(f: MainFrame, breaks: PageBreaks, vis: RangeDto): void {
+    const ctx = this.main;
+    const { geo, theme } = f;
+    const pr = f.printRange ?? null;
+    const r0 = pr?.r0 ?? 0;
+    const c0 = pr?.c0 ?? 0;
+    const rowEdges = [r0, ...breaks.rows.map((b) => b.at).filter((at) => at > r0).sort((a, b) => a - b)];
+    const colEdges = [c0, ...breaks.cols.map((b) => b.at).filter((at) => at > c0).sort((a, b) => a - b)];
+    if (pr) {
+      rowEdges.push(pr.r1 + 1);
+      colEdges.push(pr.c1 + 1);
+    }
+    const rowPages = rowEdges.length - 1;
+    const colPages = colEdges.length - 1;
+    if (rowPages < 1 || colPages < 1) return;
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.14;
+    this.setFill(theme.colors.textMuted);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    this.setFont(`700 ${Math.round(44 * geo.zoom)}px ${theme.fonts.family}`);
+    for (let ci = 0; ci < colPages; ci++) {
+      const pc0 = colEdges[ci] ?? 0;
+      const pc1 = (colEdges[ci + 1] ?? pc0 + 1) - 1;
+      if (pc1 < pc0 || pc1 < vis.c0 || pc0 > vis.c1) continue;
+      for (let ri = 0; ri < rowPages; ri++) {
+        const prr0 = rowEdges[ri] ?? 0;
+        const prr1 = (rowEdges[ri + 1] ?? prr0 + 1) - 1;
+        if (prr1 < prr0 || prr1 < vis.r0 || prr0 > vis.r1) continue;
+        const rect = geo.rangeRect({ r0: prr0, c0: pc0, r1: prr1, c1: pc1 }, false);
+        if (rect.w <= 0 || rect.h <= 0) continue;
+        ctx.fillText(`Page ${ci * rowPages + ri + 1}`, rect.x + rect.w / 2, rect.y + rect.h / 2);
+      }
+    }
+    ctx.restore();
+    this.curFill = "";
+    this.curFont = "";
   }
 
   /** Draws one cell's text, overflowing into empty neighbours. Returns 1 if drawn. */
@@ -908,11 +965,11 @@ export class Renderer {
         // Centre the label on the visible part (a column half under a frozen pane keeps its letter).
         const vx0 = Math.max(x0, span.x0);
         const vx1 = Math.min(x1, span.x1);
-        if (vx1 - vx0 > 8) ctx.fillText(colToLetters(col), (vx0 + vx1) / 2, geo.headerH / 2 + 0.5);
+        if (vx1 - vx0 > 8) ctx.fillText(colToLetters(col), (vx0 + vx1) / 2, (geo.gutterH + geo.headerH) / 2 + 0.5);
         this.setFill(c.gridLine);
-        ctx.fillRect(snapFill(x1, dpr) - lw, 0, lw, geo.headerH);
+        ctx.fillRect(snapFill(x1, dpr) - lw, geo.gutterH, lw, geo.headerH - geo.gutterH);
         // Hidden columns before this one: a small marker on the boundary.
-        if (col > 0 && geo.cols.isHidden(col - 1)) this.hiddenMarker(x0, geo.headerH / 2, true, geo, theme, dpr);
+        if (col > 0 && geo.cols.isHidden(col - 1)) this.hiddenMarker(x0, (geo.gutterH + geo.headerH) / 2, true, geo, theme, dpr);
       }
       ctx.restore();
       this.curFill = "";
@@ -935,10 +992,10 @@ export class Renderer {
         this.setFill(c.headerText);
         const vy0 = Math.max(y0, span.y0);
         const vy1 = Math.min(y1, span.y1);
-        if (vy1 - vy0 > 6) ctx.fillText(String(row + 1), geo.headerW / 2, (vy0 + vy1) / 2 + 0.5);
+        if (vy1 - vy0 > 6) ctx.fillText(String(row + 1), (geo.gutterW + geo.headerW) / 2, (vy0 + vy1) / 2 + 0.5);
         this.setFill(c.gridLine);
-        ctx.fillRect(0, snapFill(y1, dpr) - lw, geo.headerW, lw);
-        if (row > 0 && geo.rows.isHidden(row - 1)) this.hiddenMarker(geo.headerW / 2, y0, false, geo, theme, dpr);
+        ctx.fillRect(geo.gutterW, snapFill(y1, dpr) - lw, geo.headerW - geo.gutterW, lw);
+        if (row > 0 && geo.rows.isHidden(row - 1)) this.hiddenMarker((geo.gutterW + geo.headerW) / 2, y0, false, geo, theme, dpr);
       }
       ctx.restore();
       ctx.textAlign = "left";
@@ -962,6 +1019,154 @@ export class Renderer {
     this.setFill(c.headerLine);
     ctx.fillRect(0, snapFill(geo.headerH, dpr) - lw, geo.width, lw);
     ctx.fillRect(snapFill(geo.headerW, dpr) - lw, 0, lw, geo.height);
+
+    if (f.outline && (geo.gutterW > 0 || geo.gutterH > 0)) this.drawOutlineGutter(f, f.outline);
+  }
+
+  /**
+   * Outline gutter stub (wave 5 seam): level buttons in the corner strips
+   * and, per group, a line along the group with a +/− box at its first
+   * row/column. W5-6B refines the look; the hit test is `outlineHit`.
+   */
+  private drawOutlineGutter(f: MainFrame, outline: OutlineProps): void {
+    const ctx = this.main;
+    const { geo, theme, dpr } = f;
+    const c = theme.colors;
+    const lw = Math.max(1, Math.round(dpr)) / dpr;
+    const levelPx = (outline.levelPx ?? 13) * geo.zoom;
+    const box = Math.max(6, Math.round(levelPx - 4));
+    const font = `${Math.max(8, Math.round(9 * geo.zoom))}px ${theme.fonts.family}`;
+    ctx.save();
+    this.setFont(font);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const button = (x: number, y: number, label: string, filled: boolean): void => {
+      this.setFill(filled ? c.headerActiveBg : c.bg);
+      ctx.fillRect(x, y, box, box);
+      this.setFill(c.headerLine);
+      ctx.fillRect(x, y, box, lw);
+      ctx.fillRect(x, y + box - lw, box, lw);
+      ctx.fillRect(x, y, lw, box);
+      ctx.fillRect(x + box - lw, y, lw, box);
+      this.setFill(c.headerText);
+      ctx.fillText(label, x + box / 2, y + box / 2 + 0.5);
+    };
+    if (geo.gutterW > 0) {
+      const levels = Math.round(geo.gutterW / levelPx);
+      for (let l = 1; l <= levels; l++) button((l - 1) * levelPx + 2, geo.gutterH + 2, String(l), false);
+      ctx.beginPath();
+      ctx.rect(0, geo.headerH, geo.gutterW, geo.height - geo.headerH);
+      ctx.clip();
+      for (const g of outline.rows) {
+        const x = (g.level - 1) * levelPx + 2;
+        const y0 = geo.rowY(g.start);
+        const y1 = g.collapsed ? y0 + box : geo.rowBottom(g.end);
+        if (y1 < geo.headerH || y0 > geo.height) continue;
+        this.setFill(c.headerLine);
+        if (!g.collapsed) ctx.fillRect(x + box / 2, y0 + box, lw, Math.max(0, y1 - y0 - box));
+        button(x, y0 + 1, g.collapsed ? "+" : "−", g.collapsed);
+      }
+    }
+    if (geo.gutterH > 0) {
+      const levels = Math.round(geo.gutterH / levelPx);
+      for (let l = 1; l <= levels; l++) button(geo.gutterW + 2, (l - 1) * levelPx + 2, String(l), false);
+      ctx.beginPath();
+      ctx.rect(geo.headerW, 0, geo.width - geo.headerW, geo.gutterH);
+      ctx.clip();
+      for (const g of outline.cols) {
+        const y = (g.level - 1) * levelPx + 2;
+        const x0 = geo.colX(g.start);
+        const x1 = g.collapsed ? x0 + box : geo.colRight(g.end);
+        if (x1 < geo.headerW || x0 > geo.width) continue;
+        this.setFill(c.headerLine);
+        if (!g.collapsed) ctx.fillRect(x0 + box, y + box / 2, Math.max(0, x1 - x0 - box), lw);
+        button(x0 + 1, y, g.collapsed ? "+" : "−", g.collapsed);
+      }
+    }
+    ctx.restore();
+    this.curFill = "";
+    this.curFont = "";
+  }
+
+  /**
+   * Detective arrows stub (wave 5 seam): a line from the centre of `from`
+   * to the centre of `to` with an arrowhead; precedents in the accent
+   * colour, dependents in the link colour, errors in red.
+   */
+  private drawTraces(f: OverlayFrame, traces: readonly TraceArrow[]): void {
+    const ctx = this.overlay;
+    const { geo } = f;
+    const c = f.theme.colors;
+    ctx.save();
+    ctx.lineWidth = Math.max(1, 1.25 * geo.zoom);
+    for (const t of traces) {
+      const a = geo.cellRect(t.from.r, t.from.c);
+      const b = geo.cellRect(t.to.r, t.to.c);
+      const x0 = a.x + a.w / 2;
+      const y0 = a.y + a.h / 2;
+      const x1 = b.x + b.w / 2;
+      const y1 = b.y + b.h / 2;
+      const color = t.kind === "error" ? c.chipRedFg : t.kind === "dependent" ? c.link : c.accent;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x0, y0, 2.5 * geo.zoom, 0, Math.PI * 2);
+      ctx.fill();
+      const ang = Math.atan2(y1 - y0, x1 - x0);
+      const len = 7 * geo.zoom;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x1 - len * Math.cos(ang - 0.4), y1 - len * Math.sin(ang - 0.4));
+      ctx.lineTo(x1 - len * Math.cos(ang + 0.4), y1 - len * Math.sin(ang + 0.4));
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /** Detective "Mark invalid data": a red ellipse around each listed cell. */
+  private drawInvalidCells(f: OverlayFrame, cells: readonly CellPos[]): void {
+    const ctx = this.overlay;
+    const { geo } = f;
+    const vis = geo.visibleRange();
+    ctx.save();
+    ctx.strokeStyle = f.theme.colors.chipRedFg;
+    ctx.lineWidth = Math.max(1, 1.5 * geo.zoom);
+    for (const cell of cells) {
+      if (cell.r < vis.r0 - 1 || cell.r > vis.r1 + 1 || cell.c < vis.c0 - 1 || cell.c > vis.c1 + 1) continue;
+      const r = geo.cellRect(cell.r, cell.c);
+      if (r.w <= 0 || r.h <= 0) continue;
+      ctx.beginPath();
+      ctx.ellipse(r.x + r.w / 2, r.y + r.h / 2, Math.max(4, r.w / 2 - 1), Math.max(4, r.h / 2 - 1), 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** The live position of a page-break line while it is dragged. */
+  private drawBreakDrag(f: OverlayFrame, drag: { axis: "row" | "col"; pos: number }): void {
+    const ctx = this.overlay;
+    const { geo } = f;
+    ctx.save();
+    ctx.strokeStyle = f.theme.colors.pageBreak;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 3]);
+    ctx.beginPath();
+    if (drag.axis === "row") {
+      const y = Math.round(drag.pos) - 0.5;
+      ctx.moveTo(geo.headerW, y);
+      ctx.lineTo(geo.width, y);
+    } else {
+      const x = Math.round(drag.pos) - 0.5;
+      ctx.moveTo(x, geo.headerH);
+      ctx.lineTo(x, geo.height);
+    }
+    ctx.stroke();
+    ctx.restore();
   }
 
   /**
@@ -1147,6 +1352,9 @@ export class Renderer {
     ctx.beginPath();
     ctx.rect(geo.headerW, geo.headerH, geo.cellsW, geo.cellsH);
     ctx.clip();
+    if (f.traces && f.traces.length > 0) this.drawTraces(f, f.traces);
+    if (f.invalidCells && f.invalidCells.length > 0) this.drawInvalidCells(f, f.invalidCells);
+    if (f.breakDrag) this.drawBreakDrag(f, f.breakDrag);
     const box = (rg: RangeDto): { x0: number; y0: number; x1: number; y1: number } | null => {
       const r = geo.rangeRect(rg);
       if (r.w <= 0 || r.h <= 0) return null;

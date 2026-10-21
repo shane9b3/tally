@@ -47,9 +47,34 @@ import {
 import { emulateFill } from "./mockFill";
 import { applyCfPatch, evaluateFormat, type CfDecoration } from "./mockCf";
 import { applyV3Op, cellKey, DEFAULT_VALIDATION_MESSAGE, emptyV3, MOCK_LOCALES, passes, protectionRefusal, validationAt, type V3Ext } from "./mockV3";
+import { applyW56Op, autocompleteOf, cellStylesOf, decorateSheets, emptyW56, navigatorOf, pivotFieldItemsOf, pivotHitAt, stdFilterHidden, type W56Ctx, type W56Ext } from "./mockW56";
+import { applyW5Op, BLANK_PNG, chartDataFor, chartsTouched, dependentsOf, emptyW5, pageBreaksFor, precedentsOf, printLayoutFor, renderPagePng, suggestChartFor, type W5Ext } from "./mockW5";
 import { parseAbsoluteRef } from "../dataOps";
 import type {
+  AutocompleteDto,
+  CalcSettingsDto,
+  CellStyleDto,
+  DatabaseRangeDto,
+  DocumentStatsDto,
+  NavigatorDto,
+  PivotDto,
+  PivotFieldItemsDto,
+  PivotHit,
+  PivotSource,
+  ScenarioDto,
+  WorkbookInfo,
   CellBlock,
+  ChartDataDto,
+  ChartDto,
+  ChartKind,
+  ChartSvgDto,
+  CreatedId,
+  ImageDto,
+  PageBreaksDto,
+  PrintJobInfo,
+  PrintLayoutDto,
+  PrintOptionsDto,
+  TraceDto,
   CfStyleDto,
   ConditionalFormatDto,
   DocPropertiesDto,
@@ -91,6 +116,10 @@ interface DocExt {
   names: NameInfo[];
   /** v0.3 side model (conditional formats, validations, notes, links, protection, page setup…). */
   v3: V3Ext;
+  /** W5-5 side model (charts, pictures, split). */
+  w5: W5Ext;
+  /** W5-6 side model (pivots, outline, filters, scenarios, styles, settings). */
+  w56: W56Ext;
 }
 
 const emptySheet = (): SheetExt => ({ merges: [], frozen: null, hiddenRows: [], hiddenCols: [], filter: null, filteredRows: [], arrays: [] });
@@ -210,7 +239,7 @@ export class WebMockClient extends MockClient {
   private docExt(doc: DocId): DocExt {
     let d = this.ext.get(doc);
     if (!d) {
-      d = { sheets: {}, names: [], v3: emptyV3() };
+      d = { sheets: {}, names: [], v3: emptyV3(), w5: emptyW5(), w56: emptyW56() };
       this.ext.set(doc, d);
     }
     return d;
@@ -446,6 +475,114 @@ export class WebMockClient extends MockClient {
     return "Demo User";
   }
 
+  // -- W5-6 queries and shell stand-ins (mockW56.ts) ---------------------------------
+
+  private w56Ctx(doc: DocId): W56Ctx {
+    const inputs = async (sheet: number, range: RangeDto): Promise<string[][]> => (await this.snapshot(doc, sheet, range)).inputs;
+    return {
+      cells: (sheet, range) => this.cellsOf(doc, sheet, range),
+      inputs,
+      used: async (sheet) => (await super.sheetLayout(doc, sheet)).used,
+      sheetName: (sheet) => [...(this.sheetNames.get(doc) ?? [])].find(([, id]) => id === sheet)?.[0]?.replace(/^./, (ch) => ch.toUpperCase()) ?? `Sheet${sheet}`,
+      sheets: () => (this.sheetOrder.get(doc) ?? []).map((id) => ({ id, name: [...(this.sheetNames.get(doc) ?? [])].find(([, x]) => x === id)?.[0] ?? `sheet${id}`, tabColor: null, hidden: false })),
+      notes: (sheet) => Object.keys(this.docExt(doc).v3.notes[sheet] ?? {}).map((k) => ({ r: Number(k.split(",")[0]), c: Number(k.split(",")[1]) })),
+      setHiddenRows: (sheet, rows, hidden) => {
+        const s = this.sheetExt(doc, sheet);
+        const set = new Set(s.hiddenRows);
+        for (const r of rows) hidden ? set.add(r) : set.delete(r);
+        s.hiddenRows = [...set].sort((a, b) => a - b);
+      },
+      setHiddenCols: (sheet, cols, hidden) => {
+        const s = this.sheetExt(doc, sheet);
+        const set = new Set(s.hiddenCols);
+        for (const c of cols) hidden ? set.add(c) : set.delete(c);
+        s.hiddenCols = [...set].sort((a, b) => a - b);
+      },
+    };
+  }
+
+  override async pivots(doc: DocId): Promise<PivotDto[]> {
+    await super.pivots(doc);
+    return structuredClone(this.docExt(doc).w56.pivots);
+  }
+
+  override async pivotFieldItems(doc: DocId, source: PivotSource): Promise<PivotFieldItemsDto[]> {
+    return pivotFieldItemsOf(source, this.w56Ctx(doc), this.docExt(doc).w56.dbRanges);
+  }
+
+  override async pivotAt(doc: DocId, sheet: number, r: number, c: number): Promise<PivotHit | null> {
+    await super.pivotAt(doc, sheet, r, c);
+    return pivotHitAt(this.docExt(doc).w56, sheet, r, c);
+  }
+
+  override async autocomplete(doc: DocId, sheet: number, r: number, c: number, prefix: string): Promise<AutocompleteDto> {
+    await super.autocomplete(doc, sheet, r, c, prefix);
+    const cells = await this.cellsOf(doc, sheet, { r0: Math.max(0, r - 2000), c0: c, r1: r + 2000, c1: c });
+    return autocompleteOf(cells, r, c, prefix);
+  }
+
+  override async cellStyles(doc: DocId): Promise<CellStyleDto[]> {
+    await super.cellStyles(doc);
+    return structuredClone(cellStylesOf(this.docExt(doc).w56));
+  }
+
+  override async scenarios(doc: DocId, sheet: number): Promise<ScenarioDto[]> {
+    await super.scenarios(doc, sheet);
+    return (this.docExt(doc).w56.scenarios[sheet] ?? []).map(({ values: _values, ...s }) => structuredClone(s));
+  }
+
+  override async databaseRanges(doc: DocId): Promise<DatabaseRangeDto[]> {
+    await super.databaseRanges(doc);
+    return structuredClone(this.docExt(doc).w56.dbRanges);
+  }
+
+  override async navigator(doc: DocId): Promise<NavigatorDto> {
+    await super.navigator(doc);
+    const x = this.docExt(doc);
+    const charts = Object.entries(x.w5.charts).flatMap(([sheet, list]) => list.map((c) => ({ sheet: Number(sheet), id: c.id, title: c.title ?? c.name, r: c.anchor.r, c: c.anchor.c })));
+    return navigatorOf(x.w56, this.w56Ctx(doc), x.names, charts);
+  }
+
+  override async documentStatistics(doc: DocId): Promise<DocumentStatsDto> {
+    const base = await super.documentStatistics(doc);
+    const x = this.docExt(doc);
+    return { ...base, names: x.names.length, charts: Object.values(x.w5.charts).reduce((n, l) => n + l.length, 0) };
+  }
+
+  override async calcSettings(doc: DocId): Promise<CalcSettingsDto> {
+    await super.calcSettings(doc);
+    return structuredClone(this.docExt(doc).w56.calc);
+  }
+
+  /** Shell stand-ins (`prefs.rs`, `autosave.rs`, `templates.rs`, `l10n.rs` in the desktop app). */
+  async autosave(doc: DocId): Promise<void> {
+    this.recordedCalls.push({ type: "autosave", doc });
+  }
+
+  async listRecovery(): Promise<{ path: string; title: string; savedAt: string }[]> {
+    return [];
+  }
+
+  async saveAsTemplate(doc: DocId, name: string): Promise<void> {
+    this.recordedCalls.push({ type: "saveAsTemplate", doc, name });
+    this.userTemplates.push({ id: `user:${name}`, title: name, description: "User template (browser demo)" });
+  }
+
+  private readonly userTemplates: { id: string; title: string; description: string }[] = [];
+
+  async listUserTemplates(): Promise<{ id: string; title: string; description: string }[]> {
+    return [...this.userTemplates];
+  }
+
+  async newFromUserTemplate(id: string): Promise<WorkbookInfo> {
+    this.recordedCalls.push({ type: "newFromUserTemplate", id });
+    return this.newWorkbook(null);
+  }
+
+  async setUiLanguage(lang: string): Promise<void> {
+    this.recordedCalls.push({ type: "setUiLanguage", lang });
+  }
+
   // -- cells and styles with v0.3 decorations --------------------------------------
 
   /** Synthesized cf styles: id → (base style id, patch). */
@@ -593,6 +730,22 @@ export class WebMockClient extends MockClient {
     for (const [sheet, ranges] of pre.touched) changed.push({ sheet, ranges });
     const out: ApplyResult = { ...res, errors, changed, layoutChanged: [...new Set([...res.layoutChanged, ...pre.layout])] };
     if (pre.warnings.length > 0) out.warnings = pre.warnings;
+    if (tx.ops.some((o) => o.type === "createPivot" || o.type === "updatePivot" || o.type === "refreshPivot" || o.type === "deletePivot")) out.pivotsChanged = true;
+    // W5-5: ids of added charts/pictures, object-list changes and charts whose ranges were edited.
+    if (pre.created.length > 0) out.created = pre.created;
+    if (pre.objects.size > 0) out.objectsChanged = [...pre.objects];
+    const w5 = this.docExt(doc).w5;
+    const chartsChanged = new Map<number, Set<number>>();
+    for (const [sheet, ids] of pre.chartsChanged) chartsChanged.set(sheet, new Set(ids));
+    for (const sr of changed) {
+      for (const id of chartsTouched(w5, sr.sheet, sr.ranges, (n) => this.sheetNames.get(doc)?.get(n))) {
+        const set = chartsChanged.get(sr.sheet) ?? new Set<number>();
+        set.add(id);
+        chartsChanged.set(sr.sheet, set);
+      }
+    }
+    const list = [...chartsChanged].flatMap(([sheet, ids]) => [...ids].map((id) => ({ sheet, id })));
+    if (list.length > 0) out.chartsChanged = list;
     return out;
   }
 
@@ -601,14 +754,42 @@ export class WebMockClient extends MockClient {
    * original index) and the v0.3 ones handled here: refusals (`protected`,
    * `validation`), validation warnings and side-model changes.
    */
-  private async preV3(doc: DocId, ops: readonly Op[]): Promise<{ kept: { op: Op; index: number }[]; errors: OpError[]; warnings: OpError[]; touched: Map<number, RangeDto[]>; layout: Set<number>; index: number[] }> {
+  private async preV3(doc: DocId, ops: readonly Op[]): Promise<{ kept: { op: Op; index: number }[]; errors: OpError[]; warnings: OpError[]; touched: Map<number, RangeDto[]>; layout: Set<number>; index: number[]; created: CreatedId[]; objects: Set<number>; chartsChanged: Map<number, number[]> }> {
     const x = this.docExt(doc).v3;
     const kept: { op: Op; index: number }[] = [];
     const errors: OpError[] = [];
     const warnings: OpError[] = [];
     const touched = new Map<number, RangeDto[]>();
     const layout = new Set<number>();
+    const created: CreatedId[] = [];
+    const objects = new Set<number>();
+    const chartsChanged = new Map<number, number[]>();
     for (const [i, op] of ops.entries()) {
+      // W5-6 data tools, pivots, styles and settings (emulated in mockW56.ts).
+      const w56 = await applyW56Op(this.docExt(doc).w56, op, this.w56Ctx(doc));
+      if (w56.kind === "error") {
+        errors.push({ opIndex: i, code: w56.code, message: w56.message });
+        continue;
+      }
+      if (w56.kind === "handled") {
+        for (const o of w56.ops) kept.push({ op: o, index: i });
+        for (const [sheet, rs] of w56.touched) touched.set(sheet, [...(touched.get(sheet) ?? []), ...rs]);
+        for (const sh of w56.layout) layout.add(sh);
+        continue;
+      }
+      // W5-5 objects first (they are refused on a protected sheet like the engine does).
+      const w5 = await applyW5Op(this.docExt(doc).w5, op, (sheet, range) => this.cellsOf(doc, sheet, range), (n) => this.sheetNames.get(doc)?.get(n));
+      if (w5.kind === "error") {
+        errors.push({ opIndex: i, code: w5.code, message: w5.message });
+        continue;
+      }
+      if (w5.kind === "handled") {
+        if (w5.created !== null) created.push({ opIndex: i, id: w5.created });
+        if (w5.objects) objects.add(w5.sheet);
+        if (w5.chartsChanged.length > 0) chartsChanged.set(w5.sheet, [...(chartsChanged.get(w5.sheet) ?? []), ...w5.chartsChanged]);
+        layout.add(w5.sheet);
+        continue;
+      }
       const refusal = protectionRefusal(x, op);
       if (refusal) {
         errors.push({ opIndex: i, code: "protected", message: refusal });
@@ -634,12 +815,118 @@ export class WebMockClient extends MockClient {
         if (o.layout) layout.add(sheet);
       }
     }
-    return { kept, errors, warnings, touched, layout, index: kept.map((k) => k.index) };
+    return { kept, errors, warnings, touched, layout, index: kept.map((k) => k.index), created, objects, chartsChanged };
+  }
+
+  /** Cells of a range for the W5 mock (empty cells left out). */
+  private async cellsOf(doc: DocId, sheet: number, range: RangeDto): Promise<CellView[]> {
+    const clipped = { r0: range.r0, c0: range.c0, r1: Math.min(range.r1, range.r0 + 4000), c1: Math.min(range.c1, range.c0 + 255) };
+    const [block] = await this.cells(doc, sheet, [clipped]).catch((): CellBlock[] => []);
+    return block?.cells ?? [];
+  }
+
+  // -- W5-5 queries (charts, pictures, print, detective) ------------------------
+
+  override async charts(doc: DocId, sheet: number): Promise<ChartDto[]> {
+    await super.charts(doc, sheet);
+    return structuredClone(this.docExt(doc).w5.charts[sheet] ?? []);
+  }
+
+  override async images(doc: DocId, sheet: number): Promise<ImageDto[]> {
+    await super.images(doc, sheet);
+    // Like the engine: the bytes are not in the list (the UI keeps what it inserted this session).
+    return (this.docExt(doc).w5.images[sheet] ?? []).map((im) => ({ ...im, data: "" }));
+  }
+
+  override async chartData(doc: DocId, sheet: number, id: number): Promise<ChartDataDto> {
+    const chart = (this.docExt(doc).w5.charts[sheet] ?? []).find((c) => c.id === id);
+    if (!chart) throw { code: "not_found", message: `chart ${id} not found` };
+    return chartDataFor(sheet, chart, this.versions.get(doc) ?? 0, (s, r) => this.cellsOf(doc, s, r), (n) => this.sheetNames.get(doc)?.get(n));
+  }
+
+  override async suggestChart(doc: DocId, sheet: number, sel: RangeDto, kind: ChartKind): Promise<ChartDto> {
+    const used = (await super.sheetLayout(doc, sheet)).used;
+    const name = [...(this.sheetNames.get(doc) ?? [])].find(([, id]) => id === sheet)?.[0] ?? "sheet1";
+    const proper = name.replace(/^./, (ch) => ch.toUpperCase());
+    return suggestChartFor(proper, sel, kind, used, (s, r) => this.cellsOf(doc, s, r), sheet);
+  }
+
+  private async printSheets(doc: DocId, opts: PrintOptionsDto) {
+    const order = this.sheetOrder.get(doc) ?? [this.firstSheet(doc)];
+    const active = order[0] ?? 1;
+    const ids = opts.sheets.type === "all" ? order : opts.sheets.type === "some" ? opts.sheets.ids : [active];
+    const out = [];
+    for (const id of ids) out.push({ id, setup: await this.pageSetup(doc, id), layout: await this.sheetLayout(doc, id) });
+    return out;
+  }
+
+  override async printLayout(doc: DocId, opts: PrintOptionsDto): Promise<PrintLayoutDto> {
+    this.recordedCalls.push({ type: "printLayout", opts: structuredClone(opts) });
+    return printLayoutFor(await this.printSheets(doc, opts), opts);
+  }
+
+  override async pageBreaks(doc: DocId, sheet: number): Promise<PageBreaksDto> {
+    return pageBreaksFor(await this.pageSetup(doc, sheet), await this.sheetLayout(doc, sheet));
+  }
+
+  /** Prepared print jobs (an LRU of 4, like the engine). */
+  private readonly jobs: { job: number; doc: DocId; layout: PrintLayoutDto; charts: ChartSvgDto[] }[] = [];
+  private nextJob = 1;
+
+  override async preparePrintJob(doc: DocId, opts: PrintOptionsDto, charts: ChartSvgDto[]): Promise<PrintJobInfo> {
+    this.recordedCalls.push({ type: "preparePrintJob", opts: structuredClone(opts), charts: charts.map((c) => ({ sheet: c.sheet, id: c.id, bytes: c.svg.length })) });
+    const layout = printLayoutFor(await this.printSheets(doc, opts), opts);
+    const job = this.nextJob++;
+    this.jobs.push({ job, doc, layout, charts });
+    if (this.jobs.length > 4) this.jobs.shift();
+    return { job, layout };
+  }
+
+  override async printJobPagePng(job: number, page: number, dpi: number): Promise<string> {
+    const j = this.jobs.find((x) => x.job === job);
+    const p = j?.layout.pages[page];
+    if (!j || !p) throw { code: "not_found", message: `print job ${job} page ${page} not found` };
+    const layout = await this.sheetLayout(j.doc, p.sheet);
+    const cells = await this.cellsOf(j.doc, p.sheet, { r0: p.rows[0], c0: p.cols[0], r1: p.rows[1], c1: p.cols[1] });
+    const boxes = (this.docExt(j.doc).w5.charts[p.sheet] ?? [])
+      .filter((c) => c.anchor.r >= p.rows[0] && c.anchor.r <= p.rows[1] && c.anchor.c >= p.cols[0] && c.anchor.c <= p.cols[1])
+      .map((c) => ({ id: c.id, x: p.originMm[0] + 10 + (c.anchor.c - p.cols[0]) * 20, y: p.originMm[1] + 10 + (c.anchor.r - p.rows[0]) * 6, w: c.anchor.widthMm * (p.scalePct / 100), h: c.anchor.heightMm * (p.scalePct / 100) }));
+    const png = renderPagePng(p, cells, layout, Math.min(dpi, 200), j.charts, boxes);
+    return png || BLANK_PNG;
+  }
+
+  override async precedents(doc: DocId, sheet: number, r: number, c: number): Promise<TraceDto[]> {
+    await super.precedents(doc, sheet, r, c);
+    const input = (await super.cellEditInfo(doc, sheet, r, c)).input;
+    const sheets = (n: string) => this.sheetNames.get(doc)?.get(n);
+    const isError = (s: number, rg: RangeDto): boolean => false && s === 0 && rg.r0 === 0;
+    const list = precedentsOf(input, sheet, sheets, isError);
+    const out: TraceDto[] = [];
+    for (const t of list) {
+      const cells = await this.cellsOf(doc, t.sheet, t.range);
+      out.push({ ...t, error: cells.some((v) => v.kind === "error") });
+    }
+    return out;
+  }
+
+  override async dependents(doc: DocId, sheet: number, r: number, c: number): Promise<TraceDto[]> {
+    await super.dependents(doc, sheet, r, c);
+    const used = (await super.sheetLayout(doc, sheet)).used;
+    if (!used) return [];
+    const cells = await this.cellsOf(doc, sheet, used);
+    const formulas: { r: number; c: number; input: string; error: boolean }[] = [];
+    for (const v of cells) {
+      if ((v.flags & 1) === 0) continue;
+      const input = (await super.cellEditInfo(doc, sheet, v.r, v.c)).input;
+      formulas.push({ r: v.r, c: v.c, input, error: v.kind === "error" });
+    }
+    return dependentsOf({ r, c }, formulas, sheet, (n) => this.sheetNames.get(doc)?.get(n));
   }
 
   /** The mock's own apply of the kept ops; OpError indices map back through `index`. */
   private async applyKept(doc: DocId, tx: Transaction, before: string, index: number[]): Promise<ApplyResult> {
     const mapErrors = (res: ApplyResult): ApplyResult => ({ ...res, errors: res.errors.map((e) => ({ ...e, opIndex: index[e.opIndex] ?? e.opIndex })) });
+    if (tx.ops.some((o) => "sheet" in o && o.sheet === -1)) return mapErrors(await this.applyWithNewSheet(doc, tx, before));
     if (tx.ops.some(isStructural)) {
       // One step per op (later ops see the shifted cells).
       let last: ApplyResult | null = null;
@@ -714,6 +1001,7 @@ export class WebMockClient extends MockClient {
    */
   private track(doc: DocId, res: ApplyResult, before?: string): ApplyResult {
     if (res.info) {
+      res.info = { ...res.info, sheets: decorateSheets(this.docExt(doc).w56, res.info.sheets) };
       this.sheetOrder.set(doc, res.info.sheets.map((s) => s.id));
       this.sheetNames.set(doc, new Map(res.info.sheets.map((s) => [s.name.toLowerCase(), s.id])));
     }
@@ -762,6 +1050,32 @@ export class WebMockClient extends MockClient {
         layout.add(sheet);
       }
     }
+    // W5-6: standard / advanced filters hide rows the same way.
+    for (const [id, f] of Object.entries(d.w56.stdFilters)) {
+      if (!f) continue;
+      const sheet = Number(id);
+      const s = this.sheetExt(doc, sheet);
+      const [block] = await this.cells(doc, sheet, [f.range]);
+      const hidden = stdFilterHidden(f, block?.cells ?? []);
+      const merged = [...new Set([...s.filteredRows, ...hidden])].sort((a, b) => a - b);
+      if (JSON.stringify(merged) !== JSON.stringify(s.filteredRows)) {
+        s.filteredRows = merged;
+        layout.add(sheet);
+      }
+    }
+  }
+
+  /** `addSheet` followed by ops on the new sheet (`sheet: -1`): two mock steps. */
+  private async applyWithNewSheet(doc: DocId, tx: Transaction, before: string): Promise<ApplyResult> {
+    const known = new Set(this.sheetOrder.get(doc) ?? []);
+    const add = tx.ops.find((o) => o.type === "addSheet");
+    const first = this.track(doc, await super.apply(doc, { ...tx, ops: add ? [add] : [] }), before);
+    const created = first.info?.sheets.find((sh) => !known.has(sh.id))?.id;
+    const rest = tx.ops.filter((o) => o !== add).map((o) => ("sheet" in o && o.sheet === -1 && created !== undefined ? ({ ...o, sheet: created } as Op) : o));
+    if (rest.length === 0) return first;
+    const b = JSON.stringify(this.docExt(doc));
+    const second = this.track(doc, await super.apply(doc, { ...tx, ops: rest }), b);
+    return { ...second, info: second.info ?? first.info, sheetsChanged: true, errors: [...first.errors, ...second.errors] };
   }
 
   /** Rewrites one v0.2 op into mock ops (and side-model changes). Other ops pass through. */

@@ -2,8 +2,11 @@
 //! selection (contents with relative formulas, and styles) under a random
 //! token and returns TSV and HTML renderings; pasting that token re-anchors
 //! the formulas at the target (the AST is relative, so the same formula is
-//! simply placed at the new address) and carries the styles. Only the last
-//! snapshot is kept.
+//! simply placed at the new address) and carries the styles, the
+//! conditional formats and validations covering the block (AOO
+//! `IDF_ATTRIB`: they are cell attributes) and the notes (`IDF_NOTE`),
+//! all re-anchored at the target (review 3, M4). Only the last snapshot
+//! is kept.
 
 use std::sync::Arc;
 
@@ -33,6 +36,66 @@ pub struct ClipSnapshot {
     pub styles: Vec<StyleData>,
     /// Merged areas inside the block, relative to its top-left.
     pub merges: Vec<CellRangeLocal>,
+    /// Conditional formats intersecting the block: the intersecting
+    /// ranges relative to the block, the origin relative to the block
+    /// (may be negative) and the rules.
+    pub cond_formats: Vec<ClipRules<crate::condfmt::CondFormat>>,
+    /// Validations intersecting the block, likewise.
+    pub validations: Vec<ClipRules<crate::validation::Validation>>,
+    /// Notes inside the block `(dr, dc, note)`.
+    pub notes: Vec<(u32, u32, crate::annotations::Note)>,
+}
+
+/// A conditional format or validation as copied: its ranges clipped to
+/// the block and made relative, plus the item itself (whose own ranges
+/// and origin are rewritten on paste).
+#[derive(Clone, Debug)]
+pub struct ClipRules<T> {
+    /// Ranges relative to the block's top-left.
+    pub ranges: Vec<CellRangeLocal>,
+    /// Origin relative to the block's top-left.
+    pub origin: (i64, i64),
+    /// The item (ranges/origin as in the source sheet).
+    pub item: T,
+}
+
+fn clip_rules<T: Clone>(
+    range: &CellRange,
+    ranges: &[CellRangeLocal],
+    origin: CellAddr,
+    item: &T,
+) -> Option<ClipRules<T>> {
+    let block = local(range);
+    let rel: Vec<CellRangeLocal> = ranges
+        .iter()
+        .filter_map(|r| crate::condfmt::intersect_rect(r, &block))
+        .map(|r| CellRangeLocal {
+            r0: r.r0 - range.r0,
+            c0: r.c0 - range.c0,
+            r1: r.r1 - range.r0,
+            c1: r.c1 - range.c0,
+        })
+        .collect();
+    if rel.is_empty() {
+        return None;
+    }
+    Some(ClipRules {
+        ranges: rel,
+        origin: (
+            i64::from(origin.row) - i64::from(range.r0),
+            i64::from(origin.col) - i64::from(range.c0),
+        ),
+        item: item.clone(),
+    })
+}
+
+fn local(r: &CellRange) -> CellRangeLocal {
+    CellRangeLocal {
+        r0: r.r0,
+        c0: r.c0,
+        r1: r.r1,
+        c1: r.c1,
+    }
 }
 
 /// One copied cell.
@@ -123,6 +186,27 @@ pub fn copy_range(
                 .collect()
         })
         .unwrap_or_default();
+    let (cond_formats, validations, notes) = wb
+        .sheet(range.sheet)
+        .map(|s| {
+            let cf: Vec<_> = s
+                .meta
+                .cond_formats
+                .iter()
+                .filter_map(|cf| clip_rules(&range, &cf.ranges, cf.origin, &**cf))
+                .collect();
+            let va: Vec<_> = s
+                .meta
+                .validations
+                .iter()
+                .filter_map(|v| clip_rules(&range, &v.ranges, v.origin, &**v))
+                .collect();
+            let notes: Vec<_> = crate::annotations::entries_in(&s.meta.notes, &range)
+                .map(|((r, c), n)| (r - range.r0, c - range.c0, n.clone()))
+                .collect();
+            (cf, va, notes)
+        })
+        .unwrap_or_default();
     let tsv = render_tsv(wb, range);
     let html = render_html(wb, range, &token);
     (
@@ -133,6 +217,9 @@ pub fn copy_range(
             cells,
             styles,
             merges,
+            cond_formats,
+            validations,
+            notes,
         },
         tsv,
         html,
@@ -353,6 +440,45 @@ pub fn paste_internal(
     if carry_merges {
         changes.extend(meta_parts(wb, sheet, &[crate::storage::MetaKind::Merges]));
     }
+    // Conditional formats and validations are attributes: pasted with the
+    // formats (not transposed); notes with the contents.
+    let carry_rules = formats
+        && !opts.transpose
+        && (!clip.cond_formats.is_empty()
+            || !clip.validations.is_empty()
+            || wb.sheet(sheet).is_some_and(|s| {
+                let l = local(&area);
+                s.meta.cond_formats.iter().any(|cf| {
+                    cf.ranges
+                        .iter()
+                        .any(|r| crate::condfmt::intersect_rect(r, &l).is_some())
+                }) || s.meta.validations.iter().any(|v| {
+                    v.ranges
+                        .iter()
+                        .any(|r| crate::condfmt::intersect_rect(r, &l).is_some())
+                })
+            }));
+    if carry_rules {
+        changes.extend(meta_parts(
+            wb,
+            sheet,
+            &[
+                crate::storage::MetaKind::CondFormats,
+                crate::storage::MetaKind::Validations,
+            ],
+        ));
+    }
+    let carry_notes = contents
+        && !opts.skip_empty
+        && (!clip.notes.is_empty()
+            || wb.sheet(sheet).is_some_and(|s| {
+                crate::annotations::entries_in(&s.meta.notes, &area)
+                    .next()
+                    .is_some()
+            }));
+    if carry_notes {
+        changes.extend(meta_parts(wb, sheet, &[crate::storage::MetaKind::Notes]));
+    }
     changes.push(Change::Range(capture_range(wb, area, contents, formats)));
     let place = |dr: u32, dc: u32| if opts.transpose { (dc, dr) } else { (dr, dc) };
     // Target values before the paste (for arithmetic).
@@ -434,6 +560,76 @@ pub fn paste_internal(
                 }
             }
         }
+    }
+    if carry_rules || carry_notes {
+        if let Some(s) = wb.sheet_mut(sheet) {
+            let l = local(&area);
+            if carry_rules {
+                crate::condfmt::remove_area(&mut s.meta, &l);
+            }
+            if carry_notes {
+                let map = Arc::make_mut(&mut s.meta.notes);
+                crate::annotations::clear_in(map, &area);
+            }
+            for rr in 0..reps_r {
+                for rc in 0..reps_c {
+                    let (tr, tc) = (target.r0 + rr * rows, target.c0 + rc * cols);
+                    let place_rect = |r: &CellRangeLocal| -> Option<CellRangeLocal> {
+                        let n = CellRangeLocal {
+                            r0: tr + r.r0,
+                            c0: tc + r.c0,
+                            r1: tr + r.r1,
+                            c1: tc + r.c1,
+                        };
+                        crate::condfmt::intersect_rect(&n, &l)
+                    };
+                    let origin_at = |o: (i64, i64)| {
+                        CellAddr::new(
+                            sheet,
+                            (i64::from(tr) + o.0).clamp(0, i64::from(MAX_ROWS - 1)) as u32,
+                            (i64::from(tc) + o.1).clamp(0, i64::from(MAX_COLS - 1)) as u32,
+                        )
+                    };
+                    if carry_rules {
+                        for cf in &clip.cond_formats {
+                            let ranges: Vec<CellRangeLocal> =
+                                cf.ranges.iter().filter_map(place_rect).collect();
+                            if ranges.is_empty() {
+                                continue;
+                            }
+                            let mut item = cf.item.clone();
+                            item.id = s.meta.alloc_id();
+                            item.ranges = ranges;
+                            item.origin = origin_at(cf.origin);
+                            Arc::make_mut(&mut s.meta.cond_formats).push(Arc::new(item));
+                        }
+                        for v in &clip.validations {
+                            let ranges: Vec<CellRangeLocal> =
+                                v.ranges.iter().filter_map(place_rect).collect();
+                            if ranges.is_empty() {
+                                continue;
+                            }
+                            let mut item = v.item.clone();
+                            item.id = s.meta.alloc_id();
+                            item.ranges = ranges;
+                            item.origin = origin_at(v.origin);
+                            Arc::make_mut(&mut s.meta.validations).push(Arc::new(item));
+                        }
+                    }
+                    if carry_notes {
+                        let map = Arc::make_mut(&mut s.meta.notes);
+                        for (dr, dc, note) in &clip.notes {
+                            let (a, b) = place(*dr, *dc);
+                            let (r, c) = (tr + a, tc + b);
+                            if r <= area.r1 && c <= area.c1 {
+                                map.insert((r, c), note.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        fx.layout(sheet);
     }
     wb.pending.ranges.push(area);
     Ok(changes)

@@ -1,7 +1,9 @@
 //! File codecs behind a trait, so the engine builds while the IO crates are
 //! being written. [`UnsupportedCodec`] is the default; with the `io` feature
-//! [`IoCodec`] reads and writes ODS, XLSX and CSV through `tally-io-ods`,
-//! `tally-io-xlsx` and `tally-io-csv`.
+//! [`IoCodec`] reads ODS/OTS, SXC (OOo 1.x), XLSX/XLSM, XLS (BIFF), HTML,
+//! dBase and CSV/TSV, and writes ODS, XLSX, CSV, HTML and dBase through the
+//! `tally-io-*` crates. Formats are sniffed by magic bytes first (zip
+//! `mimetype`, OLE2 signature, dBase header, HTML tags), then by extension.
 //!
 //! Wiring (one line in the shell):
 //! `let svc = EngineService::new().with_codec(Box::new(tally_engine::service::IoCodec));`
@@ -91,6 +93,54 @@ impl FileCodec for IoCodec {
                 evaluate_formulas: false,
             });
         }
+        if tally_io_ods::sniff_is_sxc(bytes) || ext == "sxc" || ext == "stc" {
+            let data = tally_io_ods::read_sxc(
+                std::io::Cursor::new(bytes),
+                &tally_io_ods::Limits::default(),
+            )
+            .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
+            return Ok(Decoded {
+                data,
+                recognize_text: false,
+                evaluate_formulas: false,
+            });
+        }
+        if tally_io_xls::sniff_is_xls(bytes) || ext == "xls" || ext == "xlt" {
+            let data = tally_io_xls::read_xls(bytes, &tally_io_xls::Limits::default())
+                .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
+            return Ok(Decoded {
+                data,
+                recognize_text: false,
+                evaluate_formulas: false,
+            });
+        }
+        if ext == "dbf" || (ext.is_empty() && tally_io_dbf::sniff_is_dbf(bytes)) {
+            let data = tally_io_dbf::read_dbf(
+                bytes,
+                &tally_io_dbf::DbfOptions::default(),
+                &tally_io_dbf::Limits::default(),
+            )
+            .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
+            return Ok(Decoded {
+                data,
+                recognize_text: false,
+                evaluate_formulas: false,
+            });
+        }
+        if matches!(ext, "html" | "htm" | "xhtml")
+            || (matches!(ext, "txt" | "") && tally_io_html::sniff_is_html(bytes))
+        {
+            let (mut data, warnings) = tally_io_html::read_html(bytes)
+                .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
+            data.warnings.extend(warnings);
+            // Cells are text: the document locale's recognizer makes
+            // numbers and dates of them (formulas stay text).
+            return Ok(Decoded {
+                data,
+                recognize_text: true,
+                evaluate_formulas: false,
+            });
+        }
         if matches!(ext, "csv" | "tsv" | "txt" | "tab" | "") {
             let delimiter = if ext == "tsv" || ext == "tab" {
                 b'\t'
@@ -151,6 +201,13 @@ impl FileCodec for IoCodec {
                 tally_io_xlsx::write_xlsx(export.data, &mut cur)
                     .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
                 Ok(cur.into_inner())
+            }
+            FileFormat::Html => tally_io_html::write_html(export.data)
+                .map(String::into_bytes)
+                .map_err(|e| ApiError::new(ApiError::IO, e.to_string())),
+            FileFormat::Dbf => {
+                tally_io_dbf::write_dbf(export.data, &tally_io_dbf::DbfOptions::default())
+                    .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))
             }
         }
     }

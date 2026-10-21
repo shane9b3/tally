@@ -67,7 +67,7 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
       <button type="button" className={styles.add} aria-label="Add sheet" title="Add sheet" onClick={() => void ctl.addSheet()}>
         <PlusIcon />
       </button>
-      {sheets.map((s, i) =>
+      {sheets.filter((s) => !s.hidden).map((s, i) =>
         renaming === s.id ? (
           <RenameInput key={s.id} initial={s.name} onDone={(name) => finishRename(s.id, name)} />
         ) : (
@@ -137,6 +137,7 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
               disabled: sheets.length <= 1,
               onSelect: () => void ctl.deleteSheet(menu.sheet),
             },
+            ...ctl.w56.sheetTabItems(menu.sheet),
           ]}
         />
       ) : null}

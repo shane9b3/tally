@@ -65,8 +65,15 @@ pub fn display_text(wb: &Workbook, addr: CellAddr) -> String {
 }
 
 /// Pixel runs of one axis; `filtered` spans (rows hidden by the AutoFilter)
-/// are split out and reported as hidden with `filtered: true`.
-fn px_runs(d: &crate::storage::DimRuns, filtered: &[(u32, u32)]) -> Vec<DimRunPx> {
+/// are split out and reported as hidden with `filtered: true`; `outline`
+/// spans (rows/columns of collapsed groups) are reported hidden without
+/// the flag.
+fn px_runs(
+    d: &crate::storage::DimRuns,
+    filtered: &[(u32, u32)],
+    outline: &[(u32, u32)],
+    default_hmm: u32,
+) -> Vec<DimRunPx> {
     let mut out: Vec<DimRunPx> = Vec::new();
     let mut push = |start: u32, end: u32, hmm: u32, hidden: bool, filt: bool| {
         let hidden = hidden || filt;
@@ -89,32 +96,36 @@ fn px_runs(d: &crate::storage::DimRuns, filtered: &[(u32, u32)]) -> Vec<DimRunPx
             filtered: filt.then_some(true),
         });
     };
-    if filtered.is_empty() {
+    if filtered.is_empty() && outline.is_empty() {
         for r in d.runs() {
             push(r.start, r.end, r.size_hmm, r.hidden, false);
         }
         return out;
     }
-    // Merge the explicit runs with the filtered spans: walk the boundaries.
-    let default_hmm = crate::units::px_to_hmm(DEFAULT_ROW_HEIGHT_PX);
+    // Merge the explicit runs with the hidden spans: walk the boundaries.
     let mut points: Vec<u32> = Vec::new();
     for r in d.runs() {
         points.push(r.start);
         points.push(r.end.saturating_add(1));
     }
-    for (a, b) in filtered {
+    for (a, b) in filtered.iter().chain(outline) {
         points.push(*a);
         points.push(b.saturating_add(1));
     }
     points.sort_unstable();
     points.dedup();
+    let covers = |spans: &[(u32, u32)], a: u32| {
+        let i = spans.partition_point(|s| s.1 < a);
+        spans.get(i).is_some_and(|s| s.0 <= a)
+    };
     for w in points.windows(2) {
         let (a, b) = (w[0], w[1] - 1);
         let run = d.get(a);
-        let filt = filtered.iter().any(|(x, y)| *x <= a && a <= *y);
+        let filt = covers(filtered, a);
+        let outl = covers(outline, a);
         match run {
-            Some(r) => push(a, b, r.size_hmm, r.hidden, filt),
-            None if filt => push(a, b, default_hmm, false, true),
+            Some(r) => push(a, b, r.size_hmm, r.hidden || outl, filt),
+            None if filt || outl => push(a, b, default_hmm, outl, filt),
             None => {}
         }
     }
@@ -129,8 +140,18 @@ pub fn sheet_layout(wb: &Workbook, sheet: SheetId) -> Result<SheetLayout, ApiErr
         used: s.used_range().map(|r| range_dto(&r)),
         default_col_width_px: DEFAULT_COL_WIDTH_PX,
         default_row_height_px: DEFAULT_ROW_HEIGHT_PX,
-        col_runs: px_runs(&s.col_dims, &[]),
-        row_runs: px_runs(&s.row_dims, s.filtered_rows.spans()),
+        col_runs: px_runs(
+            &s.col_dims,
+            &[],
+            s.outline_cols.spans(),
+            crate::units::px_to_hmm(DEFAULT_COL_WIDTH_PX),
+        ),
+        row_runs: px_runs(
+            &s.row_dims,
+            s.filtered_rows.spans(),
+            s.outline_rows.spans(),
+            crate::units::px_to_hmm(DEFAULT_ROW_HEIGHT_PX),
+        ),
         frozen: s
             .meta
             .frozen
@@ -147,6 +168,7 @@ pub fn sheet_layout(wb: &Workbook, sheet: SheetId) -> Result<SheetLayout, ApiErr
                 c1: m.c1,
             })
             .collect(),
+        outline: crate::outline::to_api(&s.meta),
     })
 }
 

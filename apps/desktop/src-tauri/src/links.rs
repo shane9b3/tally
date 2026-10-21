@@ -8,8 +8,9 @@
 //! `javascript:`, `data:`, custom schemes, relative paths, `#Sheet.A1`
 //! links, which the UI handles itself) is `invalid_argument`. The URL is
 //! passed as one argument to `open` (macOS), `xdg-open` (Linux) or
-//! `cmd /C start "" <url>` (Windows, with cmd metacharacters `^`-escaped);
-//! no shell parses it on macOS and Linux. See docs/security.md
+//! `rundll32.exe url.dll,FileProtocolHandler <url>` (Windows); no shell
+//! parses it on any platform (security review 3, LOW-11: the earlier
+//! `cmd /C start` route left `,` `;` `=` unescaped). See docs/security.md
 //! ("Hyperlinks").
 
 use std::process::Command;
@@ -71,28 +72,27 @@ pub fn check_url(url: &str) -> CmdResult<String> {
     Ok(url.to_owned())
 }
 
+/// The program and arguments that open `url` with the OS default handler
+/// (pure, for tests): `open <url>` on macOS, `xdg-open <url>` on Linux and
+/// `rundll32.exe url.dll,FileProtocolHandler <url>` on Windows. The URL is
+/// always the last, single argument; no shell is involved.
+pub fn launcher_argv(url: &str, os: &str) -> (&'static str, Vec<String>) {
+    match os {
+        "windows" => (
+            "rundll32.exe",
+            vec!["url.dll,FileProtocolHandler".to_owned(), url.to_owned()],
+        ),
+        "macos" => ("open", vec![url.to_owned()]),
+        _ => ("xdg-open", vec![url.to_owned()]),
+    }
+}
+
 /// The command that opens `url` with the OS default handler.
 pub fn launcher(url: &str) -> Command {
-    if cfg!(target_os = "windows") {
-        let mut escaped = String::with_capacity(url.len() + 8);
-        for ch in url.chars() {
-            if matches!(ch, '^' | '&' | '|' | '<' | '>' | '%' | '(' | ')' | '!') {
-                escaped.push('^');
-            }
-            escaped.push(ch);
-        }
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/C", "start", ""]).arg(escaped);
-        cmd
-    } else if cfg!(target_os = "macos") {
-        let mut cmd = Command::new("open");
-        cmd.arg(url);
-        cmd
-    } else {
-        let mut cmd = Command::new("xdg-open");
-        cmd.arg(url);
-        cmd
-    }
+    let (program, args) = launcher_argv(url, std::env::consts::OS);
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    cmd
 }
 
 /// Validates and opens `url`, via `launch` (the OS launcher in the app,
@@ -199,13 +199,28 @@ mod tests {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        if cfg!(target_os = "windows") {
-            assert_eq!(
-                args.last().map(String::as_str),
-                Some("https://example.com/?a=1^&b=2")
-            );
-        } else {
-            assert_eq!(args, vec!["https://example.com/?a=1&b=2".to_owned()]);
-        }
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("https://example.com/?a=1&b=2")
+        );
+    }
+
+    /// LOW-11: Windows uses `rundll32.exe url.dll,FileProtocolHandler <url>`
+    /// with the URL verbatim as the last argument; no `cmd`, no escaping.
+    #[test]
+    fn windows_launcher_uses_rundll32_without_a_shell() {
+        let url = "https://example.com/a,b;c=d?x=1&y=2%20z!(1)^";
+        let (program, args) = launcher_argv(url, "windows");
+        assert_eq!(program, "rundll32.exe");
+        assert_eq!(
+            args,
+            vec!["url.dll,FileProtocolHandler".to_owned(), url.to_owned()]
+        );
+        assert!(!program.contains("cmd"));
+        assert!(args.iter().all(|a| !a.contains('^') || a == url));
+        let (program, args) = launcher_argv(url, "macos");
+        assert_eq!((program, args), ("open", vec![url.to_owned()]));
+        let (program, args) = launcher_argv(url, "linux");
+        assert_eq!((program, args), ("xdg-open", vec![url.to_owned()]));
     }
 }

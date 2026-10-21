@@ -56,6 +56,8 @@ pub(crate) struct XmlReader<R: BufRead> {
     buf: Vec<u8>,
     depth: u32,
     limits: XmlLimits,
+    /// OOo 1.x names are mapped to ODF (see `sxc`).
+    legacy: bool,
 }
 
 impl<R: BufRead> XmlReader<R> {
@@ -70,7 +72,16 @@ impl<R: BufRead> XmlReader<R> {
             buf: Vec::with_capacity(4096),
             depth: 0,
             limits,
+            legacy: false,
         }
+    }
+
+    /// A reader for OOo 1.x XML: element and attribute names are mapped
+    /// to their ODF spellings as they are read.
+    pub fn new_legacy(inner: R, limits: XmlLimits) -> Self {
+        let mut r = Self::new(inner, limits);
+        r.legacy = true;
+        r
     }
 
     /// Number of currently open elements (after a `Start`, includes it).
@@ -94,7 +105,10 @@ impl<R: BufRead> XmlReader<R> {
                             limit: u64::from(self.limits.max_depth),
                         });
                     }
-                    let elem = convert_start(&start, self.limits.max_attrs)?;
+                    let mut elem = convert_start(&start, self.limits.max_attrs)?;
+                    if self.legacy {
+                        crate::sxc::map_elem(&mut elem);
+                    }
                     self.depth += 1;
                     return Ok(Ev::Start(elem));
                 }

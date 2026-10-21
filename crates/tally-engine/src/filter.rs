@@ -269,6 +269,20 @@ impl Workbook {
                 Spans::from_sorted_rows(hidden)
             }
         };
+        // The standard/advanced filter (wave 5) hides rows the same way.
+        let new = match s.meta.standard_filter.as_deref() {
+            Some(sf) => {
+                let extra = crate::tools::std_filter_hidden(self, sheet, sf);
+                if extra.is_empty() {
+                    new
+                } else {
+                    let mut v = new.spans().to_vec();
+                    v.extend_from_slice(extra.spans());
+                    Spans::from_spans(v)
+                }
+            }
+            None => new,
+        };
         match self.sheet_mut(sheet) {
             Some(s) if s.filtered_rows != new => {
                 s.filtered_rows = new;

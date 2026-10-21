@@ -51,4 +51,13 @@ export interface ShellClient {
   recentFiles(): Promise<string[]>;
   /** Templates for `newWorkbook(id)`. */
   listTemplates(): Promise<TemplateInfo[]>;
+  /**
+   * Wave 5 (W5-3): writes the PDF of print job `job` (from
+   * `preparePrintJob`) to a file chosen in a native Save dialog
+   * (`wb_export_pdf`). Rejects with {@link CANCELLED} when dismissed and
+   * with `unsupported` until the print pipeline lands.
+   */
+  exportPdf?(doc: DocId, job: number): Promise<void>;
+  /** Wave 5 (W5-3): sends print job `job` to the OS print dialog (`wb_print`). */
+  print?(doc: DocId, job: number): Promise<void>;
 }

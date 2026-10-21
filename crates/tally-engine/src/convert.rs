@@ -55,13 +55,14 @@ impl Workbook {
         wb.import_warnings = data.warnings.clone();
         wb.settings = data.settings.calc_settings.clone();
         wb.meta = data.meta.clone();
-        if let Some(l) = data
-            .settings
-            .locale
-            .as_deref()
-            .and_then(tally_numfmt::locale_by_tag)
-        {
-            wb.locale = l;
+        if let Some(tag) = data.settings.locale.as_deref() {
+            match tally_numfmt::locale_by_tag(tag) {
+                Some(l) => wb.locale = l,
+                None => wb.import_warnings.push(format!(
+                    "The document locale {tag:?} is not supported; en-US is used for \
+                     number recognition and formatting."
+                )),
+            }
         }
         wb.structure_protection = data.settings.structure_protection.clone();
         // Readers cap the sheet count too; this is the engine's own limit.
@@ -189,6 +190,20 @@ impl Workbook {
                     }
                     CellContentData::Value(v) => wb.set_value(addr, v.clone()),
                     CellContentData::Formula { text, cached } => {
+                        if let Some((kind, detail)) = crate::external::classify_formula(text) {
+                            // Disabled by policy: the text is kept, the
+                            // value is the policy error (see `external`).
+                            crate::external::record(&mut wb, kind, detail);
+                            let raw = text.strip_prefix("of:").unwrap_or(text);
+                            wb.set_formula(
+                                addr,
+                                Arc::new(Formula::new(Expr::Err(crate::external::policy_error(
+                                    kind,
+                                )))),
+                                Some(raw.into()),
+                            );
+                            continue;
+                        }
                         let f = parse(
                             text,
                             addr,
@@ -285,6 +300,7 @@ impl Workbook {
                     .into(),
             );
         }
+        crate::external::collect_import_warnings(&mut wb);
         wb.pending = Pending::default();
         wb.dirty_all();
         wb
@@ -388,7 +404,7 @@ impl Workbook {
                 }
             }
             array_formulas.sort_by_key(|b| (b.r0, b.c0));
-            sheets.push(SheetData {
+            let mut sd = SheetData {
                 name: sheet.name.to_string(),
                 cells,
                 col_widths: sheet.col_dims.runs().to_vec(),
@@ -449,7 +465,9 @@ impl Workbook {
                 subtotals: sheet.meta.subtotals.as_deref().cloned(),
                 view_options: sheet.meta.view_options.as_deref().cloned(),
                 split: sheet.meta.split,
-            });
+            };
+            crate::outline::export_hidden(self, sheet.id, &mut sd);
+            sheets.push(sd);
         }
         let mut names: Vec<NameData> = Vec::new();
         for (_, e) in self.names.defined() {
@@ -462,6 +480,7 @@ impl Workbook {
                 },
             };
             names.push(NameData {
+                base_cell: crate::names::base_cell_of(self, def),
                 name: e.name.to_string(),
                 sheet,
                 formula: print(&def.formula, def.base, Dialect::open_formula(), self),
@@ -523,6 +542,7 @@ fn load_v04(wb: &mut Workbook, sheet: tally_types::SheetId, sd: &SheetData) {
     s.meta.subtotals = sd.subtotals.clone().map(Arc::new);
     s.meta.view_options = sd.view_options.clone().map(Arc::new);
     s.meta.split = sd.split;
+    crate::outline::after_load(wb, sheet);
 }
 
 /// A sheet name from a file made valid: control characters and
@@ -775,49 +795,7 @@ pub fn truncate_utf8(s: &str, max: usize) -> &str {
 
 /// Loads interchange names (invalid, duplicate or unparsable ones are skipped).
 fn load_names(wb: &mut Workbook, names: &[NameData], ids: &[tally_types::SheetId]) {
-    for n in names.iter().take(crate::names::MAX_NAMES) {
-        let scope = match n.sheet {
-            None => None,
-            Some(i) => match ids.get(i as usize) {
-                Some(id) => Some(*id),
-                None => continue,
-            },
-        };
-        if crate::names::validate_name(wb, &n.name).is_err() {
-            continue;
-        }
-        if wb
-            .names
-            .lookup(&n.name, scope)
-            .and_then(|id| wb.names.get(id))
-            .is_some_and(|e| e.def.is_some())
-        {
-            continue;
-        }
-        // Model names are relative to A1 of the first sheet.
-        let base = CellAddr::new(ids.first().copied().unwrap_or(1), 0, 0);
-        let text = if n.formula.starts_with("of:") || n.formula.starts_with("oooc:") {
-            n.formula.clone()
-        } else {
-            format!("of:={}", n.formula.trim_start_matches('='))
-        };
-        let Ok(f) = parse(
-            &text,
-            base,
-            Dialect::open_formula(),
-            &crate::workbook::OdfResolver(wb),
-        ) else {
-            continue;
-        };
-        wb.names.define(
-            &n.name,
-            scope,
-            crate::names::NameDef {
-                formula: Arc::new(f),
-                base,
-            },
-        );
-    }
+    crate::names::load_from_data(wb, names, ids);
 }
 
 /// Valid, non-overlapping merges of more than one cell, at most

@@ -71,6 +71,21 @@ pub struct OutlineGroupDto {
     pub collapsed: bool,
 }
 
+/// The outline groups of a sheet (`SheetLayout::outline`, v0.5).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OutlineDto {
+    /// Row groups, outermost first.
+    pub rows: Vec<OutlineGroupDto>,
+    /// Column groups, outermost first.
+    pub cols: Vec<OutlineGroupDto>,
+    /// Deepest row level in use (0 = none).
+    pub row_levels: u8,
+    /// Deepest column level in use.
+    pub col_levels: u8,
+}
+
 // ---------------------------------------------------------------------------
 // Standard and advanced filter
 // ---------------------------------------------------------------------------
@@ -506,10 +521,15 @@ pub struct SortOptions {
 // ---------------------------------------------------------------------------
 
 /// Per-sheet view toggles.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ViewOptionsDto {
+    /// The Window ▸ Split position, when the sheet is split (reported by
+    /// `view_options`; ignored by `SetViewOptions`, use `SetSplit`) (v0.6).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub split: Option<SplitDto>,
     /// Show formulas instead of results.
     pub show_formulas: bool,
     /// Value highlighting.
@@ -525,6 +545,7 @@ pub struct ViewOptionsDto {
 impl Default for ViewOptionsDto {
     fn default() -> Self {
         Self {
+            split: None,
             show_formulas: false,
             value_highlighting: false,
             show_zero_values: true,

@@ -60,6 +60,11 @@ pub struct NameEntry {
 pub struct NameTable {
     entries: Vec<NameEntry>,
     index: HashMap<(String, Option<SheetId>), u32>,
+    /// Lowercase alias → entry: the original spelling of an imported name
+    /// that was renamed because it reads as a cell reference in Tally's
+    /// 16,384-column grid (review 3, H4), so the file's formulas still
+    /// resolve it.
+    aliases: HashMap<(String, Option<SheetId>), u32>,
 }
 
 /// The dependency key of a name.
@@ -75,7 +80,16 @@ impl NameTable {
 
     /// The id of `name` in exactly `scope` (defined or not).
     pub fn lookup(&self, name: &str, scope: Option<SheetId>) -> Option<NameId> {
-        self.index.get(&(name_key(name), scope)).map(|i| NameId(*i))
+        let key = (name_key(name), scope);
+        self.index
+            .get(&key)
+            .or_else(|| self.aliases.get(&key))
+            .map(|i| NameId(*i))
+    }
+
+    /// Registers `alias` (an original spelling from a file) for `id`.
+    pub fn add_alias(&mut self, alias: &str, scope: Option<SheetId>, id: NameId) {
+        self.aliases.insert((name_key(alias), scope), id.0);
     }
 
     /// The name visible from `sheet`: a defined sheet-scoped name first,
@@ -91,13 +105,25 @@ impl NameTable {
             .or(global)
     }
 
-    /// The definition used for `n` in a formula on `sheet`.
+    /// The definition used for `n` in a formula on `sheet`. A deleted
+    /// (tombstone) id falls back to the name visible from `sheet` with the
+    /// same text, as Excel does when a sheet-local name goes away and a
+    /// global one remains (review 3, M9).
     pub fn resolve(&self, n: &NameRef, sheet: SheetId) -> Option<&NameEntry> {
         let id = match n {
-            NameRef::Id(id) => *id,
+            NameRef::Id(id) => self.fallback(*id, sheet),
             NameRef::Unresolved(t) => self.visible(t, sheet)?,
         };
         self.get(id)
+    }
+
+    /// `id`, or the defined name of the same text visible from `sheet`
+    /// when `id` is a tombstone.
+    pub fn fallback(&self, id: NameId, sheet: SheetId) -> NameId {
+        match self.get(id) {
+            Some(e) if e.def.is_none() => self.visible(&e.name, sheet).unwrap_or(id),
+            _ => id,
+        }
     }
 
     /// Defines `name` in `scope` (reviving or replacing an entry).
@@ -227,7 +253,19 @@ pub fn collect_names(names: &NameTable, e: &Expr, sheet: SheetId) -> (NameDefs, 
             return;
         };
         let (id, key) = match n {
-            NameRef::Id(id) => (Some(id.0), names.get(*id).map(|e| name_key(&e.name))),
+            NameRef::Id(id) => {
+                let fb = names.fallback(*id, sheet);
+                if fb != *id {
+                    // Tombstone: alias the written id to the visible
+                    // definition (review 3, M9).
+                    if let Some(def) = names.get(fb).and_then(|e| e.def.as_ref()) {
+                        defs.by_id
+                            .entry(id.0)
+                            .or_insert_with(|| def.formula.clone());
+                    }
+                }
+                (Some(fb.0), names.get(*id).map(|e| name_key(&e.name)))
+            }
             NameRef::Unresolved(t) => {
                 let k = name_key(t);
                 if !seen_text.insert(k.clone()) {
@@ -349,6 +387,141 @@ impl tally_formula::Resolver for NoNames<'_> {
     }
     fn function(&self, name: &str) -> Option<tally_formula::FuncId> {
         tally_formula::Resolver::function(self.0, name)
+    }
+}
+
+/// `true` if `name` is a legal name in AOO 4.1's 1,024-column grid (letters,
+/// digits, `_` and `.`; not a reference there: a leading letter run of a
+/// column past `AMJ` followed by digits is a name, `AB12` is not), but reads
+/// as a cell reference in Tally's 16,384-column grid.
+pub fn is_aoo_only_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+        || name.len() > 255
+    {
+        return false;
+    }
+    let letters: String = name
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    let rest = &name[letters.len()..];
+    if letters.is_empty() || rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let Some(col) = tally_types::letters_to_col(&letters) else {
+        return false;
+    };
+    // AMJ = 1,023 (0-based): AOO's last column.
+    col > 1023 && col < tally_types::MAX_COLS
+}
+
+/// The model's base cell of a definition (`None` for A1 of the first
+/// sheet, the model default).
+pub fn base_cell_of(wb: &Workbook, def: &NameDef) -> Option<(u32, u32, u32)> {
+    let first = wb.sheets.first().map(|s| s.id).unwrap_or(1);
+    if def.base.sheet == first && def.base.row == 0 && def.base.col == 0 {
+        return None;
+    }
+    let tab = wb.tab_of(def.base.sheet)? as u32;
+    Some((tab, def.base.row, def.base.col))
+}
+
+/// Loads the names of the interchange model (`Workbook::from_data`):
+/// relative references are parsed against `base_cell` (ODS
+/// `table:base-cell-address`, review 3, H3). Names that read as cell
+/// references only in Tally's wider grid are kept under `<name>_` with
+/// the original spelling as an alias, and a warning lists them (H4);
+/// invalid names are dropped with a warning.
+pub fn load_from_data(wb: &mut Workbook, names: &[tally_model::NameData], ids: &[SheetId]) {
+    let mut renamed: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    for n in names.iter().take(MAX_NAMES) {
+        let scope = match n.sheet {
+            None => None,
+            Some(i) => match ids.get(i as usize) {
+                Some(id) => Some(*id),
+                None => continue,
+            },
+        };
+        let (name, alias) = if validate_name(wb, &n.name).is_ok() {
+            (n.name.clone(), None)
+        } else if is_aoo_only_name(&n.name) {
+            let mut candidate = format!("{}_", n.name);
+            while validate_name(wb, &candidate).is_err() {
+                candidate.push('_');
+                if candidate.len() > 255 {
+                    break;
+                }
+            }
+            if validate_name(wb, &candidate).is_err() {
+                dropped.push(n.name.clone());
+                continue;
+            }
+            (candidate, Some(n.name.clone()))
+        } else {
+            dropped.push(n.name.clone());
+            continue;
+        };
+        if wb
+            .names
+            .lookup(&name, scope)
+            .and_then(|id| wb.names.get(id))
+            .is_some_and(|e| e.def.is_some())
+        {
+            continue;
+        }
+        let first = ids.first().copied().unwrap_or(1);
+        let base = match n.base_cell {
+            Some((tab, r, c)) if r < tally_types::MAX_ROWS && c < tally_types::MAX_COLS => {
+                CellAddr::new(ids.get(tab as usize).copied().unwrap_or(first), r, c)
+            }
+            _ => CellAddr::new(first, 0, 0),
+        };
+        let text = if n.formula.starts_with("of:") || n.formula.starts_with("oooc:") {
+            n.formula.clone()
+        } else {
+            format!("of:={}", n.formula.trim_start_matches('='))
+        };
+        let Ok(f) = tally_formula::parse(
+            &text,
+            base,
+            Dialect::open_formula(),
+            &crate::workbook::OdfResolver(wb),
+        ) else {
+            continue;
+        };
+        let id = wb.names.define(
+            &name,
+            scope,
+            NameDef {
+                formula: Arc::new(f),
+                base,
+            },
+        );
+        if let Some(a) = alias {
+            wb.names.add_alias(&a, scope, id);
+            renamed.push(format!("{a} → {name}"));
+        }
+    }
+    if !renamed.is_empty() {
+        wb.import_warnings.push(format!(
+            "Names that read as cell references in Tally's 16,384-column grid were \
+             renamed (formulas from the file still resolve them): {}",
+            renamed.join(", ")
+        ));
+    }
+    if !dropped.is_empty() {
+        wb.import_warnings.push(format!(
+            "Invalid names were dropped: {}",
+            dropped.join(", ")
+        ));
     }
 }
 

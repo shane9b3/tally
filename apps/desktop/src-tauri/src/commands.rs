@@ -150,9 +150,10 @@ pub async fn wb_open(app: AppHandle, path: String) -> CmdResult<WorkbookInfo> {
 
 #[tauri::command]
 pub async fn wb_close(app: AppHandle, doc: DocId) -> CmdResult<()> {
-    blocking(app, move |_, st| {
+    blocking(app, move |app, st| {
         with_service(st, |s| s.close(doc))?;
         lock(&st.paths).remove(&doc.0);
+        crate::autosave::remove_snapshot(app, doc);
         Ok(())
     })
     .await
@@ -206,17 +207,37 @@ pub async fn cell_edit_info(
 #[tauri::command]
 pub async fn apply(app: AppHandle, doc: DocId, tx: Transaction) -> CmdResult<ApplyResult> {
     limits::transaction(&tx)?;
-    blocking(app, move |_, st| with_service(st, |s| s.apply(doc, tx))).await
+    blocking(app, move |app, st| {
+        fixed(app, st, with_service(st, |s| s.apply(doc, tx)))
+    })
+    .await
+}
+
+/// W5-6: puts the shell's path/title/dirty view onto a result's `info` (autosave.rs).
+fn fixed<R: Runtime>(
+    app: &AppHandle<R>,
+    st: &AppState,
+    res: CmdResult<ApplyResult>,
+) -> CmdResult<ApplyResult> {
+    let mut res = res?;
+    crate::autosave::fix_result(app, st, &mut res);
+    Ok(res)
 }
 
 #[tauri::command]
 pub async fn undo(app: AppHandle, doc: DocId) -> CmdResult<ApplyResult> {
-    blocking(app, move |_, st| with_service(st, |s| s.undo(doc))).await
+    blocking(app, move |app, st| {
+        fixed(app, st, with_service(st, |s| s.undo(doc)))
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn redo(app: AppHandle, doc: DocId) -> CmdResult<ApplyResult> {
-    blocking(app, move |_, st| with_service(st, |s| s.redo(doc))).await
+    blocking(app, move |app, st| {
+        fixed(app, st, with_service(st, |s| s.redo(doc)))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -336,7 +357,10 @@ pub async fn detect_header(
 
 #[tauri::command]
 pub async fn recalc_all(app: AppHandle, doc: DocId) -> CmdResult<ApplyResult> {
-    blocking(app, move |_, st| with_service(st, |s| s.recalc_all(doc))).await
+    blocking(app, move |app, st| {
+        fixed(app, st, with_service(st, |s| s.recalc_all(doc)))
+    })
+    .await
 }
 
 // ----- v0.3 (1:1 over the new DocumentService methods) ----------------------
@@ -449,8 +473,8 @@ pub async fn list_locales(app: AppHandle) -> CmdResult<Vec<LocaleInfo>> {
 #[tauri::command]
 pub async fn set_locale(app: AppHandle, doc: DocId, locale: String) -> CmdResult<ApplyResult> {
     limits::text_max("the locale", &locale, limits::MAX_LOCALE)?;
-    blocking(app, move |_, st| {
-        with_service(st, |s| s.set_locale(doc, &locale))
+    blocking(app, move |app, st| {
+        fixed(app, st, with_service(st, |s| s.set_locale(doc, &locale)))
     })
     .await
 }

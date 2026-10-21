@@ -110,7 +110,9 @@ fn named_ranges() {
     }]);
     f.set("C1", "=Data");
     assert_eq!(f.value("C1"), n(3.0));
-    // Delete: users show #NAME? and keep the text.
+    // Delete: users keep the text and re-resolve it (review 3, M9: a
+    // deleted name falls back to the one of the same text still visible,
+    // here the sheet-scoped Data = 3); without one they show #NAME?.
     round_trip(
         &mut f,
         vec![Op::DeleteName {
@@ -118,7 +120,7 @@ fn named_ranges() {
             scope: None,
         }],
     );
-    assert_eq!(f.value("B2"), Value::Error(ErrorKind::Name));
+    assert_eq!(f.value("B2"), n(6.0));
     assert_eq!(formula(&f, "B2"), "=Data*2");
     // B1 was typed before any definition, so it resolves by text: now the
     // sheet-scoped Data.

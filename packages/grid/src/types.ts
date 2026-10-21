@@ -6,6 +6,8 @@
  */
 import type { CellPos, CellView, RangeDto, SheetLayout, StyleDto } from "@tally/bridge";
 import type { Theme } from "@tally/tokens";
+import type { AriaProps } from "./aria";
+import type { GridObject, ObjectHandle } from "./objectLayer";
 
 export type { CellPos, CellView, RangeDto, SheetLayout, StyleDto };
 
@@ -83,6 +85,54 @@ export interface FilterButtons {
 export interface PageBreaks {
   rows: { at: number; manual: boolean }[];
   cols: { at: number; manual: boolean }[];
+}
+
+/** One outline group (rows or columns `start..=end` at `level` 1–8). */
+export interface OutlineGroup {
+  start: number;
+  end: number;
+  level: number;
+  collapsed: boolean;
+}
+
+/**
+ * Outline gutter (wave 5 seam; Data ▸ Group and Outline): the groups of both
+ * axes. The grid reserves `levelPx` (zoom 100%) per level left of the row
+ * header / above the column header, draws level buttons in the corner and a
+ * +/− box at each group's first row/column, and reports clicks through
+ * `onOutlineToggle` / `onOutlineLevel`.
+ */
+export interface OutlineProps {
+  rows: OutlineGroup[];
+  cols: OutlineGroup[];
+  /** Gutter width per level at zoom 100% (default 13). */
+  levelPx?: number;
+}
+
+/** A detective arrow (Tools ▸ Detective) between two cells of the sheet. */
+export interface TraceArrow {
+  from: CellPos;
+  to: CellPos;
+  kind?: "precedent" | "dependent" | "error";
+}
+
+/** Screen geometry the app reads to place HTML over the canvas (CSS px). */
+export interface GridGeometryInfo {
+  /** Screen x of column `c`'s left edge (frozen columns do not scroll). */
+  colLeft(c: number): number;
+  /** Screen y of row `r`'s top edge. */
+  rowTop(r: number): number;
+  headerW: number;
+  headerH: number;
+  /** Outline gutter sizes included in `headerW` / `headerH`. */
+  gutterW: number;
+  gutterH: number;
+  scrollX: number;
+  scrollY: number;
+  frozen: { rows: number; cols: number };
+  zoom: number;
+  width: number;
+  height: number;
 }
 
 /** A clickable decoration inside a cell: the validation ▾ or the link ↗. */
@@ -204,6 +254,28 @@ export interface GridEvents {
    * `rect` is the cell's client rect.
    */
   onNoteHover(cell: CellPos | null, rect: ClientRect | null): void;
+  // -- wave 5 seams (W5-0b) ---------------------------------------------------
+  /** The visible range or scroll position changed (after layout, scroll or zoom). */
+  onViewportChange(vp: Viewport): void;
+  /** A +/− box in the outline gutter was clicked. */
+  onOutlineToggle(axis: "rows" | "cols", group: OutlineGroup): void;
+  /** A level button (1-based) in the outline corner was clicked. */
+  onOutlineLevel(axis: "rows" | "cols", level: number): void;
+  /** The selected object (chart/picture) changed; `null` when a cell was clicked. */
+  onObjectSelect(id: string | null): void;
+  /** Pointer down on an object's body or a resize handle (W5-5 starts the drag). */
+  onObjectPointerDown(id: string, part: "body" | ObjectHandle, e: PointerEvent): void;
+  /** Double-click on an object (open its editor). */
+  onObjectDoubleClick(id: string): void;
+  /** Delete / Backspace / Escape / arrows while an object is selected. */
+  onObjectKey(id: string, key: string, e: KeyboardEvent): void;
+  /**
+   * Page Break Preview (W5-5): a break line was dragged to a new row/column
+   * (`from` is where it was, `to` where it was dropped; `manual` says
+   * whether the dragged line was a manual break). The app issues
+   * `setPageBreak` ops.
+   */
+  onPageBreakDrag(axis: "row" | "col", from: number, to: number, manual: boolean): void;
 }
 
 /** Everything the grid is configured with. */
@@ -237,6 +309,26 @@ export interface GridProps extends Partial<GridEvents> {
   pageBreaks?: PageBreaks | null;
   /** The print range, outlined (with the page breaks). */
   printRange?: RangeDto | null;
+  // -- wave 5 seams (W5-0b) ---------------------------------------------------
+  /**
+   * Range-pick mode without an open edit (dialogs asking for a range):
+   * clicks and drags on cells, and arrow keys, report `onPointRange` instead
+   * of changing the selection for good. `Grid.pickRange()` wraps it in a
+   * promise.
+   */
+  rangePick?: boolean;
+  /** Outline groups and the gutter, or `null`. */
+  outline?: OutlineProps | null;
+  /** Page Break Preview: a "Page N" watermark per page (needs `pageBreaks`). */
+  pageBreakPreview?: boolean;
+  /** Detective arrows to draw, or `null`. */
+  traces?: TraceArrow[] | null;
+  /** The ARIA mirror's inputs (sheet name, the active cell's formula). */
+  aria?: AriaProps | null;
+  /** Cell-anchored objects (charts, pictures) for the overlay layer, or `null`. */
+  objects?: GridObject[] | null;
+  /** Detective "Mark invalid data": cells circled in red (W5-5). */
+  invalidCells?: CellPos[] | null;
 }
 
 /** The visible cells (inclusive), plus pixel offsets of the scroll position. */

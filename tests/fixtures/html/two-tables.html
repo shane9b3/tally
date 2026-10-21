@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Report</title>
+<style>table { border: 1px solid black } td:after { content: "<table>" }</style>
+<script type="text/javascript">
+  var injected = "<table><tr><td>should not appear</td></tr></table>";
+  if (1 < 2) { document.write("<table><tr><td>nope</td></tr></table>"); }
+</script>
+</head>
+<body>
+<h1>Sales &amp; Returns</h1>
+<!-- <table><tr><td>in a comment</td></tr></table> -->
+<table border="1">
+  <caption>Sales</caption>
+  <tr><th>Region</th><th>Q1</th><th>Q2</th></tr>
+  <tr><td>North</td><td align="right">1,234.5</td><td>2,000</td></tr>
+  <tr><td>South &amp; East</td><td>-17.25</td><td>12/31/2026</td></tr>
+  <tr><td colspan="3">Total&nbsp;row</td></tr>
+</table>
+<p>Second table follows.</p>
+<table>
+  <tr><td rowspan="2">A<br>B</td><td>=1+1</td></tr>
+  <tr><td>true</td></tr>
+</table>
+<table></table>
+</body></html>

@@ -6,7 +6,8 @@
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./dev": "./src/dev/index.ts"
   },
   "sideEffects": [
     "*.css"
@@ -21,6 +22,7 @@
     "@tally/grid": "workspace:*",
     "@tally/tokens": "workspace:*",
     "cmdk": "1.1.1",
+    "echarts": "6.1.0",
     "zustand": "5.0.15"
   },
   "peerDependencies": {

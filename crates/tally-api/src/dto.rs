@@ -110,6 +110,12 @@ pub struct SheetLayout {
     pub frozen: Option<CellPos>,
     /// Merged areas.
     pub merges: Vec<RangeDto>,
+    /// Outline groups (v0.5, W5-2). Absent or `null` means no groups.
+    /// Rows/columns of collapsed groups are reported hidden in the runs
+    /// (with `filtered` absent).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub outline: Option<crate::tools::OutlineDto>,
 }
 
 /// A run of rows or columns `start..=end` sharing one size.
@@ -1948,6 +1954,10 @@ pub enum FileFormat {
     Xlsx,
     /// Comma-separated values (active sheet only).
     Csv,
+    /// HTML, one table per sheet (v0.6).
+    Html,
+    /// dBase table (first sheet; v0.6).
+    Dbf,
 }
 
 /// Direction for Ctrl+arrow navigation.

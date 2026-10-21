@@ -2,19 +2,17 @@
 //! scenarios, cell styles, AutoFormat, sheet extras, names extras, view
 //! options and calculation settings (wave 5, W5-2 and W5-3).
 //!
-//! W5-0a: every op is recognised and refused with `OpError { code:
-//! "unsupported" }`. Each arm names the module that implements it.
+//! Each arm delegates to the module that implements it: pivots →
+//! `crate::pivot`; outline → `crate::outline`; filters, subtotals,
+//! consolidate, text to columns, duplicates, insert/delete cells, delete
+//! contents, fill series, sheet and name extras, view options, split,
+//! sort lists → `crate::tools`; scenarios → `crate::scenarios`; cell
+//! styles and AutoFormat → `crate::cellstyles`.
 //!
-//! TODO(W5-2): pivots → `crate::pivot`; outline → `crate::outline`;
-//! filters, subtotals, consolidate, text to columns, duplicates,
-//! insert/delete cells, delete contents, fill series, AutoFormat, sheet
-//! and name extras, view options, split, sort lists → `crate::tools`;
-//! scenarios → `crate::scenarios`; cell styles → `crate::cellstyles`.
-//! TODO(W5-3): `SetCalcSettings` → `crate::tools::set_calc_settings`.
+//! W5-3: `SetCalcSettings` → `crate::calcsettings::set_calc_settings`.
 
 use tally_api::{ApiError, Op};
 
-use crate::ops_v04::unsupported;
 use crate::undo::{Change, Effects};
 use crate::workbook::Workbook;
 
@@ -24,47 +22,176 @@ pub fn apply(
     op: &Op,
     fx: &mut Effects,
 ) -> Option<Result<Vec<Change>, ApiError>> {
-    let _ = (wb, fx);
-    let what = match op {
-        Op::CreatePivot { .. }
-        | Op::UpdatePivot { .. }
-        | Op::RefreshPivot { .. }
-        | Op::DeletePivot { .. }
-        | Op::PivotDrillDown { .. } => "pivot tables",
-        Op::Group { .. }
-        | Op::Ungroup { .. }
-        | Op::SetOutlineCollapsed { .. }
-        | Op::ShowOutlineLevel { .. }
-        | Op::AutoOutline { .. }
-        | Op::ClearOutline { .. } => "outline groups",
-        Op::StandardFilter { .. } | Op::AdvancedFilter { .. } | Op::ResetFilter { .. } => {
-            "standard and advanced filters"
+    Some(match op {
+        Op::CreatePivot { pivot, overwrite } => crate::pivot::create(wb, pivot, *overwrite, fx),
+        Op::UpdatePivot {
+            id,
+            pivot,
+            overwrite,
+        } => crate::pivot::update(wb, *id, pivot, *overwrite, fx),
+        Op::RefreshPivot { id } => crate::pivot::refresh(wb, *id, fx),
+        Op::DeletePivot { id, clear_output } => crate::pivot::delete(wb, *id, *clear_output, fx),
+        Op::PivotDrillDown { id, r, c } => crate::pivot::drill_down(wb, *id, *r, *c, fx),
+        Op::Group {
+            sheet,
+            axis,
+            start,
+            end,
+        } => crate::outline::group(wb, *sheet, *axis, *start, *end, fx),
+        Op::Ungroup {
+            sheet,
+            axis,
+            start,
+            end,
+        } => crate::outline::ungroup(wb, *sheet, *axis, *start, *end, fx),
+        Op::SetOutlineCollapsed {
+            sheet,
+            axis,
+            start,
+            end,
+            collapsed,
+        } => crate::outline::set_collapsed(wb, *sheet, *axis, *start, *end, *collapsed, fx),
+        Op::ShowOutlineLevel { sheet, axis, level } => {
+            crate::outline::show_level(wb, *sheet, *axis, *level, fx)
         }
-        Op::Subtotals { .. } | Op::RemoveSubtotals { .. } => "subtotals",
-        Op::Consolidate { .. } => "consolidate",
-        Op::TextToColumns { .. } => "text to columns",
-        Op::RemoveDuplicates { .. } => "remove duplicates",
-        Op::InsertCells { .. } | Op::DeleteCells { .. } => "insert and delete cells",
-        Op::DeleteContents { .. } => "delete contents",
-        Op::FillSeries { .. } => "fill series",
-        Op::CreateScenario { .. }
-        | Op::UpdateScenario { .. }
-        | Op::ShowScenario { .. }
-        | Op::DeleteScenario { .. } => "scenarios",
-        Op::DefineCellStyle { .. } | Op::DeleteCellStyle { .. } | Op::ApplyCellStyle { .. } => {
-            "cell styles"
+        Op::AutoOutline { sheet, range } => crate::outline::auto_outline(wb, *sheet, *range, fx),
+        Op::ClearOutline { sheet, axis } => crate::outline::clear(wb, *sheet, *axis, fx),
+        Op::StandardFilter {
+            sheet,
+            range,
+            conditions,
+            options,
+        } => crate::tools::standard_filter(wb, *sheet, range, conditions, options, fx),
+        Op::AdvancedFilter {
+            sheet,
+            range,
+            criteria,
+            options,
+        } => crate::tools::advanced_filter(wb, *sheet, range, criteria, options, fx),
+        Op::ResetFilter { sheet } => crate::tools::reset_filter(wb, *sheet, fx),
+        Op::Subtotals {
+            sheet,
+            range,
+            groups,
+            options,
+        } => crate::tools::subtotals(wb, *sheet, range, groups, options, fx),
+        Op::RemoveSubtotals { sheet, range } => {
+            crate::tools::remove_subtotals(wb, *sheet, range, fx)
         }
-        Op::ApplyAutoFormat { .. } => "AutoFormat",
-        Op::CopySheet { .. } | Op::SetSheetHidden { .. } | Op::SetTabColor { .. } => "sheet extras",
-        Op::CreateNamesFromLabels { .. }
-        | Op::DefineDatabaseRange { .. }
-        | Op::DeleteDatabaseRange { .. } => "names extras",
-        Op::SetViewOptions { .. } | Op::SetSplit { .. } => "view options",
-        Op::SetCustomSortLists { .. } => "custom sort lists",
-        Op::SetCalcSettings { .. } => "calculation settings",
+        Op::Consolidate {
+            function,
+            sources,
+            dest,
+            by_row_labels,
+            by_col_labels,
+            link,
+        } => crate::tools::consolidate(
+            wb,
+            *function,
+            sources,
+            *dest,
+            *by_row_labels,
+            *by_col_labels,
+            *link,
+            fx,
+        ),
+        Op::TextToColumns {
+            sheet,
+            range,
+            options,
+        } => crate::tools::text_to_columns(wb, *sheet, range, options, fx),
+        Op::RemoveDuplicates {
+            sheet,
+            range,
+            cols,
+            has_header,
+        } => crate::tools::remove_duplicates(wb, *sheet, range, cols, *has_header, fx),
+        Op::InsertCells {
+            sheet,
+            range,
+            shift,
+        }
+        | Op::DeleteCells {
+            sheet,
+            range,
+            shift,
+        } => crate::tools::shift_range(wb, *sheet, range, *shift, fx),
+        Op::DeleteContents {
+            sheet,
+            ranges,
+            what,
+        } => crate::tools::delete_contents(wb, *sheet, ranges, what, fx),
+        Op::FillSeries {
+            sheet,
+            range,
+            direction,
+            kind,
+            unit,
+            start,
+            end,
+            increment,
+        } => crate::tools::fill_series(
+            wb,
+            *sheet,
+            range,
+            *direction,
+            *kind,
+            *unit,
+            start.as_deref(),
+            end.as_deref(),
+            increment.as_deref(),
+            fx,
+        ),
+        Op::CreateScenario { sheet, scenario } => {
+            crate::scenarios::create(wb, *sheet, scenario, fx)
+        }
+        Op::UpdateScenario {
+            sheet,
+            id,
+            scenario,
+        } => crate::scenarios::update(wb, *sheet, *id, scenario, fx),
+        Op::ShowScenario { sheet, id } => crate::scenarios::show(wb, *sheet, *id, fx),
+        Op::DeleteScenario { sheet, id } => crate::scenarios::delete(wb, *sheet, *id, fx),
+        Op::DefineCellStyle { style } => crate::cellstyles::define(wb, style),
+        Op::DeleteCellStyle { name } => crate::cellstyles::delete(wb, name),
+        Op::ApplyCellStyle {
+            sheet,
+            ranges,
+            name,
+        } => crate::cellstyles::apply(wb, *sheet, ranges, name),
+        Op::ApplyAutoFormat {
+            sheet,
+            range,
+            preset,
+            options,
+        } => crate::cellstyles::apply_auto_format(wb, *sheet, range, preset, options, fx),
+        Op::CopySheet { sheet, name, index } => {
+            crate::tools::copy_sheet(wb, *sheet, name.as_deref(), *index, fx)
+        }
+        Op::SetSheetHidden { sheet, hidden } => {
+            crate::tools::set_sheet_hidden(wb, *sheet, *hidden, fx)
+        }
+        Op::SetTabColor { sheet, color } => crate::tools::set_tab_color(wb, *sheet, *color, fx),
+        Op::CreateNamesFromLabels { sheet, range, from } => {
+            crate::tools::create_names_from_labels(wb, *sheet, range, from, fx)
+        }
+        Op::DefineDatabaseRange {
+            name,
+            sheet,
+            range,
+            has_header,
+        } => crate::tools::define_database_range(wb, name, *sheet, range, *has_header, fx),
+        Op::DeleteDatabaseRange { name } => crate::tools::delete_database_range(wb, name, fx),
+        Op::SetViewOptions { sheet, options } => {
+            crate::tools::set_view_options(wb, *sheet, options, fx)
+        }
+        Op::SetSplit { sheet, split } => crate::tools::set_split(wb, *sheet, *split, fx),
+        Op::SetCustomSortLists { lists } => crate::tools::set_custom_sort_lists(wb, lists),
+        Op::SetCalcSettings { settings } => {
+            crate::calcsettings::set_calc_settings(wb, settings, fx)
+        }
         _ => return None,
-    };
-    Some(Err(unsupported(what)))
+    })
 }
 
 #[cfg(test)]
@@ -73,7 +200,7 @@ mod tests {
     use tally_api::{Direction, SeriesKind};
 
     #[test]
-    fn new_ops_are_refused_as_unsupported_and_old_ops_pass() {
+    fn v05_ops_are_dispatched_and_old_ops_pass() {
         let mut wb = Workbook::new();
         let mut fx = Effects::default();
         let op = Op::FillSeries {
@@ -87,18 +214,20 @@ mod tests {
             direction: Direction::Down,
             kind: SeriesKind::Linear,
             unit: None,
-            start: None,
+            start: Some("1".into()),
             end: None,
             increment: None,
         };
         let r = apply(&mut wb, &op, &mut fx).expect("a v0.5 op");
-        assert_eq!(r.unwrap_err().code, ApiError::UNSUPPORTED);
-        assert!(crate::ops_v04::apply(&mut wb, &op, &mut fx).is_none());
+        assert!(r.is_ok());
+        assert_eq!(
+            wb.value(tally_types::CellAddr::new(1, 3, 0)),
+            tally_types::Value::Number(4.0)
+        );
         let old = Op::AddSheet {
             name: None,
             index: None,
         };
         assert!(apply(&mut wb, &old, &mut fx).is_none());
-        assert!(crate::ops_v04::apply(&mut wb, &old, &mut fx).is_none());
     }
 }

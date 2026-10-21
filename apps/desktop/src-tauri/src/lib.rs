@@ -6,16 +6,24 @@
 #![forbid(unsafe_code)]
 
 mod assist;
+mod autosave;
 mod commands;
+mod commands_v4;
 mod dialogs;
 mod events;
 mod files;
+mod images;
+mod l10n;
 mod limits;
 mod links;
 mod menu;
+mod prefs;
+mod print;
 mod state;
+mod templates;
 #[cfg(test)]
 mod tests;
+mod windows;
 
 use tally_api::DocumentService;
 use tauri::Manager;
@@ -30,12 +38,18 @@ pub fn run() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new(service))
+        .manage(autosave::AutosaveState::default())
         .menu(menu::build)
         .on_menu_event(menu::on_event)
+        .register_uri_scheme_protocol(print::PRINT_SCHEME, print::protocol)
         .setup(|app| {
             let recent = files::load_recent(app.handle());
             let state = app.state::<AppState>();
             *state::lock(&state.recent) = recent;
+            print::setup(app.handle());
+            if let Some(main) = app.get_webview_window("main") {
+                windows::setup(&main);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -78,6 +92,48 @@ pub fn run() {
             commands::resolve_name_box_in,
             commands::open_url,
             commands::user_name,
+            // Wave 5 (W5-0b): docs/api.md "v0.4–v0.6"; stubs until W5-1..3.
+            commands_v4::charts,
+            commands_v4::chart_data,
+            commands_v4::suggest_chart,
+            commands_v4::images,
+            commands_v4::pivots,
+            commands_v4::pivot_field_items,
+            commands_v4::pivot_at,
+            commands_v4::autocomplete,
+            commands_v4::cell_styles,
+            commands_v4::scenarios,
+            commands_v4::database_ranges,
+            commands_v4::navigator,
+            commands_v4::document_statistics,
+            commands_v4::print_layout,
+            commands_v4::page_breaks,
+            commands_v4::prepare_print_job,
+            commands_v4::print_job_page_png,
+            commands_v4::print_job_pdf,
+            commands_v4::calc_settings,
+            commands_v4::solver,
+            commands_v4::precedents,
+            commands_v4::dependents,
+            commands_v4::wb_export_pdf,
+            commands_v4::wb_print,
+            // W5-5 shell commands: pictures and the window chrome.
+            images::pick_image,
+            windows::window_chrome,
+            // Wave 5 (W5-6): prefs, autosave and recovery, templates, UI language.
+            prefs::get_prefs,
+            prefs::set_prefs,
+            autosave::autosave_snapshot,
+            autosave::list_recovery,
+            autosave::recover_snapshot,
+            autosave::discard_recovery,
+            templates::save_as_template,
+            templates::list_user_templates,
+            templates::new_from_user_template,
+            l10n::set_ui_language,
+            l10n::ui_strings,
+            l10n::localized_function_names,
+            files::clear_recent,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

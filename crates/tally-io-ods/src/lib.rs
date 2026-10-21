@@ -22,10 +22,14 @@
 #![warn(missing_docs)]
 
 mod archive;
+mod chart;
 mod content;
+mod frame;
 mod numfmt;
 mod read;
 mod styles;
+mod sxc;
+mod tools;
 mod units;
 mod v03;
 mod v04;
@@ -142,6 +146,22 @@ pub fn read_ods(reader: impl Read + Seek, limits: &Limits) -> Result<WorkbookDat
     read::read(reader, limits)
 }
 
+/// Reads a StarOffice 6 / OpenOffice.org 1.x spreadsheet (`.sxc`): the
+/// OOo 1.x names are mapped onto the ODS reader (see `sxc.rs`). Values,
+/// formulas (as OpenFormula), styles, column widths, row heights, merges,
+/// named ranges and annotations are read; the same limits apply.
+pub fn read_sxc(reader: impl Read + Seek, limits: &Limits) -> Result<WorkbookData, OdsError> {
+    read::read_with(reader, limits, true)
+}
+
+/// Returns `true` if `bytes` look like an OOo 1.x spreadsheet package
+/// (`mimetype` entry `application/vnd.sun.xml.calc`).
+pub fn sniff_is_sxc(bytes: &[u8]) -> bool {
+    sniff_mimetype(bytes, |mt| {
+        mt == sxc::MIMETYPE.as_bytes() || mt == sxc::MIMETYPE_TEMPLATE.as_bytes()
+    })
+}
+
 /// Writes an ODS package.
 pub fn write_ods(data: &WorkbookData, writer: impl Write + Seek) -> Result<(), OdsError> {
     write::write(data, writer).map(|_| ())
@@ -164,13 +184,16 @@ pub fn write_ods_with_report(
 /// central-directory size, see `archive::precheck`), so the zip index is
 /// only built for an archive that `read_ods` would also accept.
 pub fn sniff_is_ods(bytes: &[u8]) -> bool {
+    sniff_mimetype(bytes, |mt| {
+        mt == MIMETYPE.as_bytes()
+            || mt == b"application/vnd.oasis.opendocument.spreadsheet-template"
+    })
+}
+
+fn sniff_mimetype(bytes: &[u8], ok: impl Fn(&[u8]) -> bool) -> bool {
     if !bytes.starts_with(b"PK\x03\x04") {
         return false;
     }
-    let ok = |mt: &[u8]| {
-        mt == MIMETYPE.as_bytes()
-            || mt == b"application/vnd.oasis.opendocument.spreadsheet-template"
-    };
     // Fast path: a conforming file starts with a stored `mimetype` entry.
     if bytes.len() >= 30 {
         let u16_at = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]) as usize;

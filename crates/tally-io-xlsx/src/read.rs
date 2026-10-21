@@ -84,6 +84,14 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
             parse_sst(&mut XmlReader::new(r, xl), limits)
         })?
         .unwrap_or_default();
+    // A custom theme changes what `theme="N"` colours mean (item 28).
+    let theme_path = rel_target("theme", "theme1.xml");
+    let theme = pkg
+        .with_entry(&theme_path, other, |r| {
+            crate::colors::parse_theme(&mut XmlReader::new(r, xl))
+        })?
+        .flatten();
+    crate::colors::set_active_theme(theme);
     let styles_path = rel_target("styles", "styles.xml");
     let mut styles: StyleTable = pkg
         .with_entry(&styles_path, other, |r| {
@@ -93,11 +101,16 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
 
     let names: Vec<String> = info.sheets.iter().map(|s| s.name.clone()).collect();
     let resolver = XlsxResolver::new(&names);
+    let cell_styles = std::mem::take(&mut styles.cell_styles);
+    // Pivot tables are resolved once every sheet is read (their sources
+    // may be later sheets): (target tab, table part path).
+    let mut pivot_parts: Vec<(usize, String)> = Vec::new();
     let mut budget = Budget {
         warnings: std::mem::take(&mut styles.warnings),
         ..Budget::default()
     };
     let mut sheets = Vec::with_capacity(info.sheets.len());
+    let mut objects = crate::drawing_read::ObjectBudget::default();
     for (i, entry) in info.sheets.iter().enumerate() {
         let sheet_id = u32::try_from(i).unwrap_or(u32::MAX);
         let target = rels
@@ -213,9 +226,91 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
                 sheet.notes = notes;
             }
         }
+        // Charts and pictures of the sheet's drawing part (W5-1).
+        if let Some(rid) = &extras.drawing_rid {
+            if let Some(d) = sheet_rels
+                .list
+                .iter()
+                .find(|r| r.id == *rid && !r.external && r.is("drawing"))
+            {
+                crate::drawing_read::attach(
+                    &mut pkg,
+                    &d.target,
+                    &mut sheet,
+                    sheet_id,
+                    &names,
+                    &mut budget,
+                    &mut objects,
+                    xl,
+                    other,
+                )?;
+            }
+        }
+        for r in sheet_rels
+            .list
+            .iter()
+            .filter(|r| r.is("pivotTable") && !r.external)
+        {
+            if pivot_parts.len() < 10_000 {
+                pivot_parts.push((i, r.target.clone()));
+            }
+        }
         sheet.name = entry.name.clone();
         sheet.hidden = entry.hidden;
         sheets.push(sheet);
+    }
+    // Wave 5: pivot table definitions (the output cells are in the sheet).
+    for (tab, part) in pivot_parts {
+        let cache_target = pkg
+            .with_entry(&rels_path(&part), other, |r| {
+                parse_rels(&mut XmlReader::new(r, xl), part_dir(&part))
+            })?
+            .and_then(|rels| {
+                rels.list
+                    .iter()
+                    .find(|r| r.is("pivotCacheDefinition"))
+                    .map(|r| r.target.clone())
+            });
+        let cache = match cache_target {
+            Some(t) => pkg
+                .with_entry(&t, other, |r| {
+                    crate::tools::parse_cache(&mut XmlReader::new(r, xl))
+                })?
+                .unwrap_or_default(),
+            None => Default::default(),
+        };
+        let sheet_names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
+        let sheet_index =
+            |n: &str| -> Option<u32> { sheet_names.iter().position(|x| x == n).map(|i| i as u32) };
+        let db_range = |n: &str| -> Option<(u32, tally_model::CellRangeLocal)> {
+            sheets.iter().enumerate().find_map(|(i, s)| {
+                s.database_ranges
+                    .iter()
+                    .find(|d| d.name.eq_ignore_ascii_case(n))
+                    .map(|d| (i as u32, d.range))
+            })
+        };
+        let parsed = pkg.with_entry(&part, other, |r| {
+            crate::tools::parse_table(&mut XmlReader::new(r, xl), &cache, &sheet_index, &db_range)
+        })?;
+        if let (Some(Some(p)), Some(sheet)) = (parsed, sheets.get_mut(tab)) {
+            if sheet.pivots.len() < 10_000 {
+                sheet.pivots.push(p);
+            }
+        }
+    }
+    if objects.skipped > 0 {
+        budget.warn(format!(
+            "{} drawing object(s) that are not charts or pictures were skipped.",
+            objects.skipped
+        ));
+    }
+    if objects.capped {
+        budget.warn(format!(
+            "Only the first {} charts and {} pictures per sheet (256 MiB in all) were read.",
+            crate::drawing_read::MAX_CHARTS,
+            crate::drawing_read::MAX_IMAGES_PER_SHEET
+        ));
     }
     if sheets.is_empty() {
         sheets.push(SheetData {
@@ -231,6 +326,7 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
         ..WorkbookData::default()
     };
     wb.names = defined_names(&info.names, &resolver, &mut wb.sheets);
+    wb.cell_styles = cell_styles;
     wb.settings.structure_protection = info.structure_protection.clone();
     if info.date1904 {
         wb.settings.calc_settings.date_epoch = DateEpoch::D1904;
@@ -312,6 +408,7 @@ fn defined_names(
             continue;
         };
         out.push(NameData {
+            base_cell: None,
             name,
             sheet,
             formula,

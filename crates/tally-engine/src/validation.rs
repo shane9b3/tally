@@ -375,7 +375,22 @@ pub fn to_model(wb: &Workbook, sheet: SheetId, v: &Validation) -> ValidationData
 /// The list items of `src` for the cell `at`, as values.
 pub fn list_values(wb: &Workbook, src: &ListSrc, at: CellAddr) -> Vec<Value> {
     match src {
-        ListSrc::Values(v) => v.iter().map(|s| Value::text(s.as_str())).collect(),
+        // Inline items are recognised like typed input (AOO
+        // `ScValidationData::IsListValid`: `IsNumberFormat` per token), so
+        // `1.50` is the number 1.5 and matches a typed 1.5 (review 3, M5).
+        ListSrc::Values(v) => {
+            let ctx = tally_numfmt::RecognizeContext::now(wb.settings.date_epoch);
+            v.iter()
+                .map(|s| {
+                    let rec = tally_numfmt::recognize_input_with(s, wb.locale, &ctx);
+                    match rec.value {
+                        Value::Number(n) => Value::Number(n),
+                        Value::Bool(b) => Value::Bool(b),
+                        _ => Value::text(s.as_str()),
+                    }
+                })
+                .collect()
+        }
         ListSrc::Expr(f) => {
             let e = crate::names::resolve_chain(&wb.names, &f.formula.expr, at.sheet);
             if let Expr::Ref(r) = e {
@@ -671,6 +686,20 @@ impl Checker {
         addr: CellAddr,
         v: &Value,
     ) -> bool {
+        self.is_valid_input(wb, val, addr, v, None)
+    }
+
+    /// [`Self::is_valid`] with the typed text: a text-length rule measures
+    /// the input as typed (`12.50` is 5 characters; AOO
+    /// `IsDataValid(const String&)`, review 3, LOW).
+    pub fn is_valid_input(
+        &mut self,
+        wb: &mut Workbook,
+        val: &Validation,
+        addr: CellAddr,
+        v: &Value,
+        input: Option<&str>,
+    ) -> bool {
         if v.is_empty() {
             return val.allow_blank;
         }
@@ -689,7 +718,10 @@ impl Checker {
             }
             VKind::Compare { what, op, operands } => {
                 let x = match what {
-                    NumKind::TextLength => text_len(v),
+                    NumKind::TextLength => match input {
+                        Some(t) => Some(t.chars().count() as f64),
+                        None => text_len(v),
+                    },
                     _ => match v {
                         Value::Number(n) => Some(*n),
                         _ => None,
@@ -698,7 +730,8 @@ impl Checker {
                 let Some(x) = x else {
                     return false;
                 };
-                if *what == NumKind::Whole && x.fract() != 0.0 {
+                // AOO: `approxEqual(nVal, floor(nVal + 0.5))`.
+                if *what == NumKind::Whole && !tally_types::approx_equal(x, (x + 0.5).floor()) {
                     return false;
                 }
                 let mut ops: Vec<Value> = Vec::with_capacity(operands.len());
@@ -734,6 +767,17 @@ pub fn is_valid(wb: &mut Workbook, val: &Validation, addr: CellAddr, v: &Value) 
     Checker::new().is_valid(wb, val, addr, v)
 }
 
+/// [`is_valid`] with the typed text (text-length rules).
+pub fn is_valid_input(
+    wb: &mut Workbook,
+    val: &Validation,
+    addr: CellAddr,
+    v: &Value,
+    input: Option<&str>,
+) -> bool {
+    Checker::new().is_valid_input(wb, val, addr, v, input)
+}
+
 /// The first validation of `sheet` covering the cell.
 pub fn at(wb: &Workbook, sheet: SheetId, row: u32, col: u32) -> Option<&Validation> {
     wb.sheet(sheet)?
@@ -753,7 +797,19 @@ pub fn check_cells(
     sheet: SheetId,
     cells: &[(u32, u32)],
 ) -> Result<Vec<ApiError>, ApiError> {
-    check_cells_with_budget(wb, sheet, cells, MAX_VALIDATION_WORK_PER_OP)
+    check_cells_full(wb, sheet, cells, None, MAX_VALIDATION_WORK_PER_OP)
+}
+
+/// [`check_cells`] with the typed inputs per cell (text-length rules) and
+/// blank checks: a cell listed in `cells` that is empty is refused by a
+/// rule with `allow_blank = false` (AOO rejects an empty entry then).
+pub fn check_cells_inputs(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    cells: &[(u32, u32)],
+    inputs: &HashMap<(u32, u32), String>,
+) -> Result<Vec<ApiError>, ApiError> {
+    check_cells_full(wb, sheet, cells, Some(inputs), MAX_VALIDATION_WORK_PER_OP)
 }
 
 /// [`check_cells`] with a custom work budget (tests).
@@ -761,6 +817,16 @@ pub fn check_cells_with_budget(
     wb: &mut Workbook,
     sheet: SheetId,
     cells: &[(u32, u32)],
+    work_budget: u64,
+) -> Result<Vec<ApiError>, ApiError> {
+    check_cells_full(wb, sheet, cells, None, work_budget)
+}
+
+fn check_cells_full(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    cells: &[(u32, u32)],
+    inputs: Option<&HashMap<(u32, u32), String>>,
     work_budget: u64,
 ) -> Result<Vec<ApiError>, ApiError> {
     let mut notices = Vec::new();
@@ -809,14 +875,17 @@ pub fn check_cells_with_budget(
         let val = &vals[pos as usize];
         let addr = CellAddr::new(sheet, r, c);
         let v = current_value(wb, addr);
-        if v.is_empty() {
+        let input = inputs.and_then(|m| m.get(&(r, c))).map(String::as_str);
+        if v.is_empty() && (inputs.is_none() || val.allow_blank) {
+            // Pastes and fills never check empties; typed empties are
+            // refused only when blanks are not allowed (review 3, M13).
             continue;
         }
         if checker.exhausted() {
             skipped += 1;
             continue;
         }
-        if checker.is_valid(wb, val, addr, &v) {
+        if checker.is_valid_input(wb, val, addr, &v, input) {
             continue;
         }
         let Some(err) = &val.error else { continue };
@@ -850,7 +919,7 @@ pub fn check_cells_with_budget(
 
 /// The value of a cell, evaluating a just-entered (dirty) formula without
 /// committing its result.
-fn current_value(wb: &mut Workbook, addr: CellAddr) -> Value {
+pub(crate) fn current_value(wb: &mut Workbook, addr: CellAddr) -> Value {
     let dirty = wb
         .formula_at(addr)
         .filter(|(_, f)| f.state != crate::formula_cells::CellState::Clean && f.array.is_none())
@@ -862,6 +931,121 @@ fn current_value(wb: &mut Workbook, addr: CellAddr) -> Value {
         Some(f) => f.eval_fresh(wb, addr),
         None => wb.value(addr),
     }
+}
+
+/// Most cells `invalid_cells` reports.
+pub const MAX_INVALID_CELLS: usize = 10_000;
+
+/// Detective ▸ Mark Invalid Data: every non-empty cell of `range` (or the
+/// sheet) covered by a validation whose value fails the rule (lists with
+/// inline or range sources, whole/decimal/date/time/text-length, custom
+/// formulas), in row-major order, at most [`MAX_INVALID_CELLS`], within
+/// the per-op validation work budget (the rest is left unchecked). Empty
+/// cells count as invalid only when the rule refuses blanks. Rules without
+/// an error alert are checked too (AOO marks them). The document is not
+/// changed: the check runs on a copy when formulas must be evaluated.
+pub fn invalid_cells(
+    wb: &Workbook,
+    sheet: SheetId,
+    range: Option<tally_api::RangeDto>,
+) -> Result<Vec<tally_api::CellPos>, ApiError> {
+    let s = wb
+        .sheet(sheet)
+        .ok_or_else(|| ApiError::not_found(format!("no sheet {sheet}")))?;
+    let mut out = Vec::new();
+    if s.meta.validations.is_empty() {
+        return Ok(out);
+    }
+    let limit = match range {
+        Some(r) => {
+            if r.r0 > r.r1 || r.c0 > r.c1 || r.r1 >= MAX_ROWS || r.c1 >= MAX_COLS {
+                return Err(ApiError::invalid_argument("bad range"));
+            }
+            CellRangeLocal {
+                r0: r.r0,
+                c0: r.c0,
+                r1: r.r1,
+                c1: r.c1,
+            }
+        }
+        None => CellRangeLocal {
+            r0: 0,
+            c0: 0,
+            r1: MAX_ROWS - 1,
+            c1: MAX_COLS - 1,
+        },
+    };
+    // Candidate cells: the non-empty cells of every validation range
+    // inside `limit`, plus (blank rules) the empty ones of small ranges.
+    let vals: Arc<Vec<Arc<Validation>>> = s.meta.validations.clone();
+    let mut cells: Vec<(u32, u32, u32)> = Vec::new();
+    const MAX_CANDIDATES: usize = 2_000_000;
+    for (vi, v) in vals.iter().enumerate() {
+        for r in &v.ranges {
+            let Some(x) = crate::condfmt::intersect_rect(r, &limit) else {
+                continue;
+            };
+            let c1 = x.c1.min(s.columns.len().saturating_sub(1) as u32);
+            if s.columns.is_empty() && v.allow_blank {
+                continue;
+            }
+            if !v.allow_blank {
+                let n = u64::from(x.r1 - x.r0 + 1) * u64::from(x.c1 - x.c0 + 1);
+                if n <= 100_000 {
+                    for c in x.c0..=x.c1 {
+                        for row in x.r0..=x.r1 {
+                            cells.push((row, c, vi as u32));
+                        }
+                    }
+                    if cells.len() > MAX_CANDIDATES {
+                        break;
+                    }
+                    continue;
+                }
+            }
+            for c in x.c0..=c1 {
+                if let Some(col) = s.column(c) {
+                    cells.extend(
+                        col.cells
+                            .iter_range(x.r0, x.r1)
+                            .map(|(row, _)| (row, c, vi as u32)),
+                    );
+                }
+                if cells.len() > MAX_CANDIDATES {
+                    break;
+                }
+            }
+        }
+    }
+    cells.sort_unstable();
+    cells.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    if cells.is_empty() {
+        return Ok(out);
+    }
+    // Evaluating rule formulas may recalculate dirty precedents: work on
+    // a copy so the query never changes the document.
+    let mut copy = wb.clone();
+    let mut checker = Checker::new();
+    for (r, c, vi) in cells {
+        let addr = CellAddr::new(sheet, r, c);
+        let val = &vals[vi as usize];
+        if checker.exhausted() {
+            break;
+        }
+        let v = current_value(&mut copy, addr);
+        let ok = if v.is_empty() {
+            val.allow_blank
+        } else {
+            checker.is_valid(&mut copy, val, addr, &v)
+        };
+        if !ok && !checker.exhausted() {
+            out.push(tally_api::CellPos { r, c });
+            if out.len() >= MAX_INVALID_CELLS {
+                break;
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The editor view of the validation at a cell.

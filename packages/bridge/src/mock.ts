@@ -989,6 +989,16 @@ export class MockClient implements EngineClientV4, ShellClient {
     });
   }
 
+  /** Shell: `wb_export_pdf` (W5-3). The mock has no file system. */
+  exportPdf(_doc: DocId, _job: number): Promise<void> {
+    return Promise.reject(apiError("unsupported", "MockClient does not support PDF export"));
+  }
+
+  /** Shell: `wb_print` (W5-3). The mock has no printer. */
+  print(_doc: DocId, _job: number): Promise<void> {
+    return Promise.reject(apiError("unsupported", "MockClient does not support printing"));
+  }
+
   private unsupportedV4<T>(doc: DocId, what: string): Promise<T> {
     return this.run(() => {
       this.doc(doc);

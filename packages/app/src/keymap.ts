@@ -108,6 +108,27 @@ export const BINDINGS: readonly Binding[] = [
   { key: "PageUp", mod: true, shift: false, command: "sheet.prev", label: "⌃PgUp" },
   { key: "F2", mod: false, shift: true, command: "insert.note", menu: true, label: "⇧F2" },
   { key: "k", code: "KeyK", mod: true, shift: false, alt: true, command: "insert.hyperlink", menu: true, label: "⌥⌘K" },
+  // Wave 5 (W5-0b seams; the commands are disabled until W5-5/W5-6 except the Function Wizard).
+  { key: "F2", mod: true, shift: false, command: "insert.function", menu: true, label: "⌘F2" },
+  { key: "1", code: "Digit1", mod: true, shift: false, command: "format.cells", menu: true, label: "⌘1" },
+  { key: "F12", mod: false, shift: false, command: "data.group", menu: true, label: "F12" },
+  { key: "F12", mod: true, shift: false, command: "data.ungroup", menu: true, label: "⌘F12" },
+  { key: "F5", mod: false, shift: false, command: "view.navigator", menu: true, label: "F5" },
+  { key: "F7", mod: false, shift: true, command: "tools.tracePrecedents", menu: true, label: "⇧F7" },
+  { key: "F5", mod: false, shift: true, command: "tools.traceDependents", menu: true, label: "⇧F5" },
+  { key: "F8", mod: true, shift: false, command: "view.valueHighlighting", menu: true, label: "⌘F8" },
+  { key: "F11", mod: true, shift: false, command: "view.stylesPanel", menu: true, label: "⌘F11" },
+  { key: "`", code: "Backquote", mod: true, shift: false, command: "view.showFormulas", menu: true, label: "⌃`" },
+  { key: "p", mod: true, shift: false, command: "file.print", menu: true, global: true, label: "⌘P" },
+  { key: ",", code: "Comma", mod: true, shift: false, command: "tools.options", menu: true, global: true, label: "⌘," },
+  // Wave 5 (W5-6): shortcut parity (§4 item 49).
+  { key: "y", mod: true, shift: true, command: "edit.repeat", label: "⇧⌘Y" },
+  { key: "j", mod: true, shift: true, command: "view.fullScreen", global: true, label: "⇧⌘J" },
+  { key: "t", mod: true, shift: true, command: "edit.focusNameBox", global: true, label: "⇧⌘T" },
+  { key: "c", code: "KeyC", mod: true, shift: false, alt: true, command: "insert.note", label: "⌥⌘C" },
+  { key: "F11", mod: false, shift: true, command: "file.saveAsTemplate", menu: true, label: "⇧F11" },
+  { key: "F9", mod: false, shift: false, command: "data.recalc", label: "F9" },
+  { key: "m", mod: true, shift: false, command: "edit.clearFormats", label: "⌘M" },
 ];
 
 export interface KeyContext {

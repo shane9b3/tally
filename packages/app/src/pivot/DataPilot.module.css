@@ -1,0 +1,139 @@
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 200px;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.areas {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    "page page"
+    "col col"
+    "row data";
+  gap: 8px;
+}
+
+.area,
+.fieldList {
+  min-height: 56px;
+  padding: 6px;
+  border: 1px dashed var(--tally-border);
+  border-radius: 10px;
+  background: var(--tally-surface);
+}
+
+.page {
+  grid-area: page;
+}
+
+.col {
+  grid-area: col;
+}
+
+.row {
+  grid-area: row;
+  min-height: 120px;
+}
+
+.data {
+  grid-area: data;
+  min-height: 120px;
+}
+
+.fieldList {
+  border-style: solid;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.areaTitle {
+  margin: 0 2px 6px;
+  color: var(--tally-text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.areaEmpty {
+  padding: 4px 2px;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+}
+
+.chip,
+.chipOn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 4px;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 7px;
+  background: var(--tally-bg);
+  font-size: 12.5px;
+  cursor: grab;
+  user-select: none;
+}
+
+.chipOn {
+  border-color: var(--tally-accent-border);
+  background: var(--tally-accent-subtle);
+}
+
+.chipLabel {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chipHint {
+  color: var(--tally-text-muted);
+  font-size: 10.5px;
+}
+
+.chipBtns {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.chipBtns button,
+.chipMenu {
+  height: 20px;
+  min-width: 20px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--tally-text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chipBtns button:hover,
+.chipMenu:hover {
+  background: var(--tally-hover);
+  color: var(--tally-text);
+}
+
+.moveMenu {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 8px;
+}
+
+.options {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 10px;
+}

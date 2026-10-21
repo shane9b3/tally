@@ -76,7 +76,11 @@ implementations that return `unsupported`; `EngineService` implements all of the
 `MockClient` has in-memory stubs (stored, not evaluated). The commands are registered
 in `apps/desktop/src-tauri/src/lib.rs` and implemented by `TauriClient`
 (`COMMANDS.conditionalFormats` … `COMMANDS.resolveNameBoxIn`); the browser build's
-`WebMockClient` emulates them (`packages/app/src/dev/mockV3.ts`, `mockCf.ts`).
+`WebMockClient` emulates them (`packages/app/src/dev/mockV3.ts`, `mockCf.ts`). The mock
+is a dev-only entry (`@tally/app/dev`, loaded with a dynamic `import()` behind
+`import.meta.env.DEV` in `apps/desktop/src/main.tsx`); `pnpm --filter tally-desktop
+check:bundle` builds the web bundle and fails if it contains the mock or the
+`window.__tally` hook (security review 3, MEDIUM-7).
 
 | Tauri command | Arguments | Returns | `DocumentService` method | `EngineClientV3` method |
 |---|---|---|---|---|
@@ -155,7 +159,10 @@ Other v0.2 DTO additions (all optional, so older clients keep working):
 `DimRunPx.filtered?: boolean | null` (rows hidden by an AutoFilter; also `hidden`),
 `CellEditInfo.array?: boolean | null` and `arrayRange?: RangeDto | null` (array cells
 show `{=…}` in `input`), `CellView.flags & 4` for array cells, `SheetLayout.merges`
-and `SheetLayout.frozen` are now filled.
+and `SheetLayout.frozen` are now filled. v0.5 adds `SheetLayout.outline`
+(`OutlineDto { rows, cols, rowLevels, colLevels }`, absent without groups): rows and
+columns of collapsed groups are reported hidden in the runs (`filtered` absent), so
+the grid draws the outline gutter from the layout alone.
 
 ### v0.3 ops
 
@@ -291,8 +298,11 @@ detective). Until then every new `DocumentService` method answers `unsupported`,
 every new op is refused with `OpError { code: "unsupported" }` by `ops_v04`/`ops_v05`.
 `EngineClientV4` (`packages/bridge/src/client.ts`) lists the queries; `MockClient` has
 stubs (empty lists for the list queries, `unsupported` for the rest). The UI shell
-registers the commands in `apps/desktop/src-tauri/src/commands_v4.rs` (W5-0b) with the
-names below; the shell-only `wb_export_pdf` and `wb_print` take a job id.
+registers the commands in `apps/desktop/src-tauri/src/commands_v4.rs` (W5-0b, landed:
+24 commands, `commands_v4::COMMAND_NAMES`) with the names below, and `TauriClient`
+(`COMMANDS.charts` … `COMMANDS.dependents`, `V4_METHODS`) implements `EngineClientV4`;
+`packages/app/test/tauriClientV4.test.ts` checks that every interface method has a
+registered command. The shell-only `wb_export_pdf` and `wb_print` take a job id.
 
 ### Queries (`EngineClientV4`)
 
@@ -302,6 +312,7 @@ names below; the shell-only `wb_export_pdf` and `wb_print` take a job id.
 | `chart_data` | `doc, sheet, id` | `ChartDataDto` (cached values, ≤ 255 series, ≤ 32,000 points, `truncated`) | `chart_data(doc, sheet, id)` | `chartData(doc, sheet, id)` |
 | `suggest_chart` | `doc, sheet, sel: RangeDto, kind: ChartKind` | `ChartDto` (region detection, labels heuristic, anchored right of the region at 16 × 9 cm; nothing is added) | `suggest_chart(doc, sheet, sel, kind)` | `suggestChart(doc, sheet, sel, kind)` |
 | `images` | `doc, sheet` | `ImageDto[]` (`data` empty) | `images(doc, sheet)` | `images(doc, sheet)` |
+| `image_data` | `doc, sheet, id` | `string` (the picture's bytes, base64, ≤ 16 MiB decoded) | `image_data(doc, sheet, id)` | `imageData(doc, sheet, id)` |
 | `pivots` | `doc` | `PivotDto[]` | `pivots(doc)` | `pivots(doc)` |
 | `pivot_field_items` | `doc, source: PivotSource` | `PivotFieldItemsDto[]` (≤ 10,000 items per field) | `pivot_field_items(doc, &source)` | `pivotFieldItems(doc, source)` |
 | `pivot_at` | `doc, sheet, r, c` | `PivotHit \| null` | `pivot_at(doc, sheet, r, c)` | `pivotAt(doc, sheet, r, c)` |
@@ -311,6 +322,7 @@ names below; the shell-only `wb_export_pdf` and `wb_print` take a job id.
 | `database_ranges` | `doc` | `DatabaseRangeDto[]` | `database_ranges(doc)` | `databaseRanges(doc)` |
 | `navigator` | `doc` | `NavigatorDto` | `navigator(doc)` | `navigator(doc)` |
 | `document_statistics` | `doc` | `DocumentStatsDto` | `document_statistics(doc)` | `documentStatistics(doc)` |
+| `custom_sort_lists` | `doc` | `string[][]` (Tools ▸ Options ▸ Sort Lists; set with `setCustomSortLists`) | `custom_sort_lists(doc)` | `customSortLists(doc)` |
 | `print_layout` | `doc, opts: PrintOptionsDto` | `PrintLayoutDto` | `print_layout(doc, &opts)` | `printLayout(doc, opts)` |
 | `page_breaks` | `doc, sheet` | `PageBreaksDto` | `page_breaks(doc, sheet)` | `pageBreaks(doc, sheet)` |
 | `prepare_print_job` | `doc, opts: PrintOptionsDto, charts: ChartSvgDto[]` (≤ 4 MB per SVG) | `PrintJobInfo` (`{ job, layout }`; an LRU of 4 jobs) | `prepare_print_job(doc, &opts, &charts)` | `preparePrintJob(doc, opts, charts)` |
@@ -320,6 +332,29 @@ names below; the shell-only `wb_export_pdf` and `wb_print` take a job id.
 | `solver` | `doc, req: SolverRequest` | `SolverResult` (sandboxed; nothing changes) | `solver(doc, &req)` | `solver(doc, req)` |
 | `precedents` | `doc, sheet, r, c` | `TraceDto[]` | `precedents(doc, sheet, r, c)` | `precedents(doc, sheet, r, c)` |
 | `dependents` | `doc, sheet, r, c` | `TraceDto[]` | `dependents(doc, sheet, r, c)` | `dependents(doc, sheet, r, c)` |
+| `view_options` | `doc, sheet` | `ViewOptionsDto` (toggles plus the persisted `split`, `null` when not split) | `view_options(doc, sheet)` | `viewOptions(doc, sheet)` |
+| `invalid_cells` | `doc, sheet, range?: RangeDto` | `CellPos[]` (Mark Invalid Data; ≤ 10,000 cells, row-major, the validation work budget applies; nothing changes) | `invalid_cells(doc, sheet, range)` | `invalidCells(doc, sheet, range)` |
+
+Wave-5 shell commands (no `DocumentService` method; optional `ShellClient.exportPdf` /
+`print`, `packages/bridge/src/shell.ts`; stubs answering `unsupported` until W5-3):
+
+| Tauri command | Arguments | Returns | What it does |
+|---|---|---|---|
+| `wb_export_pdf` | `doc, job` | `void` | Native Save dialog, then writes `print_job_pdf(job)`; `cancelled` when dismissed. |
+| `wb_print` | `doc, job` | `void` | Sends the job's PDF to the OS print dialog (the `tally-print` window). |
+
+Wave-5 argument limits (`limits.rs`, checked before the engine; `invalid_argument`):
+
+| Argument | Limit |
+|---|---|
+| Chart series (`addChart`, `updateChart`) | ≤ 256 per chart; anchor cell inside the sheet, finite non-negative sizes |
+| Pivot fields (`createPivot`, `updatePivot`; row + column + page + data) | ≤ 64; source range / database-range name and target cell checked |
+| Solver constraints and variable ranges (`solver`) | ≤ 1,000 each; cells inside the sheet; finite epsilon |
+| Print pages (`page_from`, `page_to`, `print_job_page_png.page`) | ≤ 10,000; `page_from ≤ page_to` |
+| Chart SVGs (`prepare_print_job`) | ≤ 1,000 charts, ≤ 4 MB each |
+| `print_job_page_png.dpi` | 1–600 |
+| AutoInput prefix (`autocomplete`) | ≤ 1,024 characters |
+| Picture data (`addImage.image.data`, base64) | ≤ 64 MiB in the shell (the engine caps the decoded image at 16 MB) |
 
 ### Ops (all undoable once implemented)
 
@@ -400,3 +435,30 @@ Additive changes to existing DTOs (all optional, so older clients keep working):
 - `WorkbookInfo.externalLinks?: ExternalLinkWarning[]` (`{ kind: dde | externalReference | linkedSheet | linkedImage, count, detail }`; disabled by policy, see docs/security.md).
 
 Error codes added: `target_not_empty` (DataPilot).
+
+### W5-6 shell commands (apps/desktop/src-tauri/src/{prefs,autosave,templates,l10n,files}.rs)
+
+No `DocumentService` method; `TauriClient` exposes them as optional shell
+methods (`W56Shell` in `packages/app/src/data/w56.ts`; the browser mock has
+stand-ins).
+
+| Tauri command | Arguments | Returns | What it does |
+|---|---|---|---|
+| `get_prefs` | — | `string` | The `prefs.json` text (`{}` when none). The schema lives in `packages/app/src/options/prefs.ts`. |
+| `set_prefs` | `json` | `void` | Stores the text after checking it is a JSON object of at most 64 KiB. |
+| `autosave_snapshot` | `doc` | `void` | Writes `<app data>/autosave/doc-<id>-<name>.ods` plus a `.json` sidecar (title, original path, time). The engine's `save` moves the document's path/title/dirty flag, so `apply`/`undo`/`redo`/`recalc_all`/`set_locale` results are passed through `autosave::fix_result`, which restores the shell's path map and keeps the document dirty until a real save. |
+| `list_recovery` | — | `RecoveryFile[]` (`{ path, title, savedAt }`) | Snapshots left by a crashed session. |
+| `recover_snapshot` | `path` | `WorkbookInfo` | Opens a snapshot (only inside the autosave dir) as an untitled, dirty workbook and deletes it. |
+| `discard_recovery` | `path` | `void` | Deletes a snapshot. |
+| `save_as_template` | `doc, name` | `void` | Saves a copy as `<app data>/templates/<name>.ots` (the ODS zip re-packed with the `…spreadsheet-template` mimetype). Names: 1–80 characters, no `/ \ : * ? " < > \|`. |
+| `list_user_templates` | — | `TemplateInfo[]` (`id: "user:<name>"`) | The templates folder. |
+| `new_from_user_template` | `id` | `WorkbookInfo` | Opens a user template as an untitled workbook (no path, so Save asks). |
+| `set_ui_language` | `lang` | `void` | Stores `uiLanguage` in `prefs.json` and rebuilds the native menu with `tally_l10n::t()` labels (`cmd.<id>`, `menu.*`). |
+| `ui_strings` | `lang` | `{ key: text }` | The flat UI table of a locale (the app ships copies under `packages/app/src/i18n/`). |
+| `localized_function_names` | `lang` | `[canonical, localized][]` | The function-name table of a locale (the app ships a generated copy, `functionNames.json`). |
+| `clear_recent` | — | `void` | File ▸ Open Recent ▸ Clear Menu. |
+
+The native menu is built in the UI language from `prefs.json` at startup
+(`menu::build` → `menu::build_localized`). Function-name localisation is
+display-level: the UI shows `SUMME`/`SOMME`/`SUMA` when the document locale
+is de/fr/es and commits the canonical names; files always store English names.

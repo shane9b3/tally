@@ -408,12 +408,25 @@ fn ooxml_hash(algorithm: &str, salt: &[u8], password: &str, spin: u32) -> Option
     Some(cur)
 }
 
-/// A protection record for `password` (SHA-256, as LibreOffice writes).
+/// SHA-1 of the UTF-16LE password, as AOO's `SvPasswordHelper::GetHashPassword`
+/// (`GetHashPasswordLittleEndian`) computes ODS protection keys.
+pub fn sha1_utf16le(password: &str) -> [u8; 20] {
+    let mut buf = Vec::with_capacity(password.len() * 2);
+    for u in password.encode_utf16() {
+        buf.extend_from_slice(&u.to_le_bytes());
+    }
+    sha1(&buf)
+}
+
+/// A protection record for `password`: the ODF 1.0/1.1 SHA-1 key (of the
+/// UTF-16LE password) that Apache OpenOffice 4.1 and LibreOffice both
+/// verify, plus Excel's legacy hash for XLSX (review 3, M8). SHA-256 keys
+/// written by LibreOffice are still read and verified.
 pub fn new_protection(password: Option<&str>, opts: &ProtectionOptions) -> SheetProtectionData {
     let (hash, alg) = match password.filter(|p| !p.is_empty()) {
         Some(p) => (
-            Some(base64(&sha256(p.as_bytes()))),
-            Some(hash_algorithms::SHA256.to_string()),
+            Some(base64(&sha1_utf16le(p))),
+            Some(hash_algorithms::SHA1.to_string()),
         ),
         None => (None, None),
     };
@@ -441,7 +454,10 @@ pub fn verify(p: &SheetProtectionData, password: Option<&str>) -> bool {
             base64(&sha256(pw.as_bytes())) == hash.trim()
         }
         hash_algorithms::SHA1 | "http://www.w3.org/2000/09/xmldsig#sha1" => {
-            base64(&sha1(pw.as_bytes())) == hash.trim()
+            // AOO/LibreOffice hash the UTF-16LE password; older writers
+            // (and Tally before v0.6) the UTF-8 bytes.
+            let h = hash.trim();
+            base64(&sha1_utf16le(pw)) == h || base64(&sha1(pw.as_bytes())) == h
         }
         hash_algorithms::XLSX_LEGACY => xlsx_legacy_hash(pw).eq_ignore_ascii_case(hash.trim()),
         other => {

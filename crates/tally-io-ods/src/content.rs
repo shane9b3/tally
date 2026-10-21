@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use tally_model::{
     AutoFilterData, CellContentData, CellData, CellRangeLocal, DimRun, FilterColumnData,
-    FilterConditionData, FilterOpData, NameData, SheetData, StyleRun,
+    FilterConditionData, FilterOpData, NameData, SheetData, StandardFilterData, StyleRun,
+    SubtotalsData,
 };
 use tally_types::{
     CalcSettings, CriteriaMode, DateEpoch, ErrorKind, IterSettings, Value, MAX_COLS, MAX_ROWS,
@@ -47,6 +48,9 @@ pub(crate) struct Content {
     pub extras: Vec<SheetExtra>,
     /// What was dropped to stay within limits.
     pub warnings: Vec<String>,
+    /// Chart and picture frames with their anchor cells (W5-1; the
+    /// objects themselves are loaded by `read.rs` from the package).
+    pub frames: Vec<crate::frame::PlacedFrame>,
 }
 
 /// Most merged areas read per sheet; later ones are dropped with a warning
@@ -56,6 +60,8 @@ pub const MAX_MERGES_PER_SHEET: usize = 100_000;
 /// Sheet state resolved after content.xml (page styles live in styles.xml).
 #[derive(Debug, Default)]
 pub(crate) struct SheetExtra {
+    /// `table:scenario` of a scenario sheet (folded into the base sheet).
+    pub scenario: Option<tally_model::ScenarioData>,
     pub master_page: Option<String>,
     pub print_range: Option<CellRangeLocal>,
     pub repeat_rows: Option<(u32, u32)>,
@@ -75,6 +81,8 @@ struct CellParsed {
     note: Option<tally_model::NoteData>,
     /// The first `text:a` target.
     link: Option<String>,
+    /// `draw:frame`s anchored in the cell (W5-1).
+    frames: Vec<crate::frame::RawFrame>,
 }
 
 struct Run {
@@ -102,7 +110,12 @@ struct Parser<'a> {
     val_rects: std::collections::HashMap<String, Vec<CellRangeLocal>>,
     /// What was dropped to stay within limits (one entry per kind).
     warnings: Vec<String>,
+    /// Frames found so far (W5-1).
+    frames: Vec<crate::frame::PlacedFrame>,
 }
+
+/// Most frames kept per document.
+const MAX_FRAMES: usize = 20_000;
 
 /// Bytes of text a cell's content carries (formula text plus text value).
 fn content_bytes(c: &CellContentData) -> u64 {
@@ -139,6 +152,7 @@ pub(crate) fn parse_content<R: BufRead>(
         validations: std::collections::HashMap::new(),
         val_rects: std::collections::HashMap::new(),
         warnings: Vec::new(),
+        frames: Vec::new(),
     };
     loop {
         match xml.next()? {
@@ -168,7 +182,28 @@ pub(crate) fn parse_content<R: BufRead>(
                         });
                     }
                     p.filter_rows.push(Vec::new());
-                    let (sheet, extra) = p.parse_table(xml, &e)?;
+                    let (sheet, mut extra) = p.parse_table(xml, &e)?;
+                    // A scenario sheet folds into the sheet before it.
+                    if let (Some(mut sc), Some(base)) =
+                        (extra.scenario.take(), out.sheets.last_mut())
+                    {
+                        sc.name = sheet.name.clone();
+                        sc.cells = sheet
+                            .cells
+                            .into_iter()
+                            .filter(|c| {
+                                sc.ranges.iter().any(|r| {
+                                    r.r0 <= c.row && c.row <= r.r1 && r.c0 <= c.col && c.col <= r.c1
+                                })
+                            })
+                            .collect();
+                        if base.scenarios.len() < 1_000 {
+                            base.scenarios.push(sc);
+                        }
+                        p.filter_rows.pop();
+                        p.sheets -= 1;
+                        continue;
+                    }
                     out.sheets.push(sheet);
                     out.extras.push(extra);
                 }
@@ -179,9 +214,7 @@ pub(crate) fn parse_content<R: BufRead>(
                     parse_database_ranges(xml, &mut out.sheets)?;
                 }
                 "table:data-pilot-tables" if out.is_spreadsheet => {
-                    // TODO(W5-2): parse `table:data-pilot-table` into
-                    // `SheetData::pivots` of the target sheet.
-                    xml.skip()?;
+                    crate::tools::parse_pivot_tables(xml, &mut out.sheets)?;
                 }
                 _ => xml.skip()?,
             },
@@ -189,6 +222,7 @@ pub(crate) fn parse_content<R: BufRead>(
                 attach_filter_rows(&mut out.sheets, std::mem::take(&mut p.filter_rows));
                 out.names = std::mem::take(&mut p.names);
                 out.warnings = std::mem::take(&mut p.warnings);
+                out.frames = std::mem::take(&mut p.frames);
                 return Ok(out);
             }
             _ => {}
@@ -250,6 +284,7 @@ impl Parser<'_> {
         let mut col_defaults: Vec<(u32, u32, String)> = Vec::new();
         let mut col_runs_done = false;
         let mut row: u32 = 0;
+        let mut open_groups: Vec<crate::tools::OpenGroup> = Vec::new();
         let d = xml.depth();
         loop {
             match xml.next()? {
@@ -314,31 +349,69 @@ impl Parser<'_> {
                     "table:table-header-columns" => header_cols = Some((xml.depth(), col)),
                     "table:table-columns" | "table:table-rows" => {}
                     "table:table-column-group" | "table:table-row-group" => {
-                        // TODO(W5-2): record an outline group from the
-                        // start index to the end of the element
-                        // (`table:display="false"` = collapsed) into
-                        // `sheet.col_groups`/`row_groups`; descend as now.
+                        // An outline group: from the current index to the
+                        // end of the element (closed in the `Ev::End` arm).
+                        let rows = c.name == "table:table-row-group";
+                        if open_groups.len() < 64 {
+                            open_groups.push(crate::tools::OpenGroup {
+                                rows,
+                                start: if rows { row } else { col },
+                                depth: xml.depth(),
+                                collapsed: c.attr("table:display") == Some("false"),
+                            });
+                        }
                     }
                     "table:scenario" => {
-                        // TODO(W5-2): this sheet is a scenario of the
-                        // preceding base sheet: read
-                        // `table:scenario-ranges`, `table:is-active`,
-                        // `table:comment`, `table:border-color`,
-                        // `table:display-border`, `table:copy-back`,
-                        // `table:copy-styles`, `table:protected`; the
-                        // reader folds its cells into the base sheet's
-                        // `scenarios`.
+                        extra.scenario = Some(crate::tools::scenario_from_attrs(&c));
+                        xml.skip()?;
+                    }
+                    "table:table-source" => {
+                        // A sheet linked to another file: imported as the
+                        // values the file holds; the link is disabled by
+                        // policy (W5-3, `tally_engine::external`).
+                        let href = c.attr("xlink:href").map(str::to_string);
+                        self.warnings.push(format!(
+                            "tally:external-link:linkedSheet{}",
+                            href.map(|h| format!(":{h}")).unwrap_or_default()
+                        ));
                         xml.skip()?;
                     }
                     "table:shapes" => {
-                        // TODO(W5-1): page-anchored `draw:frame`s
-                        // (charts, pictures), converted to cell anchors.
-                        xml.skip()?;
+                        // Page-anchored frames (charts, pictures): converted
+                        // to cell anchors once the sheet's dimensions are
+                        // known (`frame::attach_objects`).
+                        let tab = self.sheets.saturating_sub(1) as u32;
+                        let sd = xml.depth();
+                        loop {
+                            match xml.next()? {
+                                Ev::Start(f) if f.name == "draw:frame" => {
+                                    let frame = crate::frame::parse_frame(xml, &f, true)?;
+                                    if self.frames.len() < MAX_FRAMES {
+                                        self.frames.push(crate::frame::PlacedFrame {
+                                            tab,
+                                            row: 0,
+                                            col: 0,
+                                            frame,
+                                        });
+                                    }
+                                }
+                                Ev::Start(_) => xml.skip()?,
+                                Ev::End if xml.depth() < sd => break,
+                                Ev::Eof => break,
+                                _ => {}
+                            }
+                        }
                     }
                     _ => xml.skip()?,
                 },
                 Ev::End if xml.depth() < d => break,
                 Ev::End => {
+                    while open_groups.last().is_some_and(|g| xml.depth() < g.depth) {
+                        let Some(g) = open_groups.pop() else { break };
+                        let end = if g.rows { row } else { col }.saturating_sub(1);
+                        let still = open_groups.iter().filter(|x| x.rows == g.rows).count();
+                        crate::tools::close_group(&mut sheet, &g, end, still);
+                    }
                     if let Some((hd, start)) = header_rows {
                         if xml.depth() < hd {
                             if row > start {
@@ -477,7 +550,8 @@ impl Parser<'_> {
                                     || cell.span != (1, 1)
                                     || cell.validation.is_some()
                                     || cell.note.is_some()
-                                    || cell.link.is_some();
+                                    || cell.link.is_some()
+                                    || !cell.frames.is_empty();
                             if keep {
                                 runs.push(Run { col, len, cell });
                             }
@@ -509,8 +583,19 @@ impl Parser<'_> {
 
         // Validations, notes and links of the runs.
         let rep_end = (*row).saturating_add(rep - 1);
+        let tab = self.sheets.saturating_sub(1) as u32;
         for run in &mut runs {
             let c1 = run.col.saturating_add(run.len - 1);
+            for frame in run.cell.frames.drain(..) {
+                if self.frames.len() < MAX_FRAMES {
+                    self.frames.push(crate::frame::PlacedFrame {
+                        tab,
+                        row: *row,
+                        col: run.col,
+                        frame,
+                    });
+                }
+            }
             if let Some(v) = run.cell.validation.take() {
                 let rects = self.val_rects.entry(v).or_default();
                 if rects.len() < 1_000_000 {
@@ -703,6 +788,7 @@ impl Parser<'_> {
         let mut budget = MAX_CELL_TEXT;
         let mut note = None;
         let mut link: Option<String> = None;
+        let mut frames: Vec<crate::frame::RawFrame> = Vec::new();
         let d = xml.depth();
         loop {
             match xml.next()? {
@@ -713,13 +799,12 @@ impl Parser<'_> {
                     } else if c.name == "office:annotation" {
                         note = Some(crate::v03::parse_annotation(xml, &c)?);
                     } else if c.name == "draw:frame" {
-                        // TODO(W5-1): a chart (`draw:object xlink:href`
-                        // matching `^\./?Object \d{1,5}$`, listed in the
-                        // manifest as a chart) or a picture (`draw:image`
-                        // in `Pictures/`) anchored to this cell; other
-                        // objects are skipped and counted. Limits: 1,000
-                        // charts per document, 16 MB per object XML.
-                        xml.skip()?;
+                        // A chart or picture anchored to this cell; the
+                        // object is loaded later from the package.
+                        let frame = crate::frame::parse_frame(xml, &c, false)?;
+                        if frames.len() < 4096 {
+                            frames.push(frame);
+                        }
                     } else {
                         xml.skip()?;
                     }
@@ -824,6 +909,7 @@ impl Parser<'_> {
                 .map(str::to_string),
             note,
             link,
+            frames,
         })
     }
 }
@@ -1010,6 +1096,7 @@ impl Parser<'_> {
                                 });
                             }
                             self.names.push(NameData {
+                                base_cell: None,
                                 name: name.to_string(),
                                 sheet,
                                 formula,
@@ -1349,22 +1436,66 @@ fn parse_database_ranges<R: BufRead>(
                     .attr("table:target-range-address")
                     .map(str::to_string)
                     .unwrap_or_default();
+                let name = c.attr("table:name").unwrap_or_default().to_string();
+                // The target range first: filters need its columns.
+                let parts = split_unquoted(target.trim(), ':');
+                let located = if parts.len() == 2 {
+                    let (s1, a) = split_sheet_cell(parts[0].trim());
+                    let (s2, b) = split_sheet_cell(parts[1].trim());
+                    match (s1.map(sheet_key), parse_cell_ref(a), parse_cell_ref(b)) {
+                        (Some(s1), Some((r0, c0)), Some((r1, c1)))
+                            if s2.is_none_or(|s| sheet_key(s) == s1) =>
+                        {
+                            sheets.iter().position(|s| s.name == s1).map(|i| {
+                                (
+                                    i,
+                                    CellRangeLocal {
+                                        r0: r0.min(r1),
+                                        c0: c0.min(c1),
+                                        r1: r0.max(r1),
+                                        c1: c0.max(c1),
+                                    },
+                                )
+                            })
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
+                let sheet_index = |n: &str| -> Option<u32> {
+                    let key = sheet_key(n);
+                    names.iter().position(|x| *x == key).map(|i| i as u32)
+                };
                 let mut tree: Option<FNode> = None;
+                let mut std_filter: Option<StandardFilterData> = None;
+                let mut subtotals: Option<SubtotalsData> = None;
                 let mut budget = MAX_FILTER_NODES;
                 let dd = xml.depth();
                 loop {
                     match xml.next()? {
                         Ev::Start(ch) => {
                             if ch.name == "table:filter" {
-                                // TODO(W5-2): a filter with
-                                // `table:condition-source-range-address`
-                                // is an advanced filter; conditions with
-                                // the 16 standard operators and `table:
-                                // case-sensitive` go to `standard_filter`.
-                                tree = parse_fnode(xml, &ch, &mut budget)?;
+                                let standard = !buttons || crate::tools::is_standard_filter(&ch);
+                                match (standard, located) {
+                                    (true, Some((_, range))) => {
+                                        std_filter = Some(crate::tools::parse_standard_filter(
+                                            xml,
+                                            &ch,
+                                            range,
+                                            &sheet_index,
+                                        )?);
+                                    }
+                                    _ => tree = parse_fnode(xml, &ch, &mut budget)?,
+                                }
                             } else if ch.name == "table:subtotal-rules" {
-                                // TODO(W5-2): `SheetData::subtotals`.
-                                xml.skip()?;
+                                if let Some((_, range)) = located {
+                                    subtotals =
+                                        Some(crate::tools::parse_subtotal_rules(xml, &ch, range)?);
+                                } else {
+                                    xml.skip()?;
+                                }
                             } else {
                                 xml.skip()?;
                             }
@@ -1374,41 +1505,42 @@ fn parse_database_ranges<R: BufRead>(
                         _ => {}
                     }
                 }
+                let Some((tab, range)) = located else {
+                    continue;
+                };
                 if !buttons {
-                    // TODO(W5-2): a named range (`table:name` not
-                    // `__Anonymous_Sheet_DB__N`) goes to
-                    // `SheetData::database_ranges` with its filter and
-                    // subtotal rules.
+                    let Some(sheet) = sheets.get_mut(tab) else {
+                        continue;
+                    };
+                    if name.starts_with("__Anonymous_Sheet_DB__") {
+                        // The sheet's own standard filter / subtotals.
+                        if let Some(f) = std_filter {
+                            sheet.standard_filter = Some(f);
+                        }
+                        if let Some(st) = subtotals {
+                            sheet.subtotals = Some(st);
+                        }
+                    } else if sheet.database_ranges.len() < 10_000 {
+                        sheet
+                            .database_ranges
+                            .push(crate::tools::database_range_from(
+                                &name, range, &c, std_filter, subtotals,
+                            ));
+                    }
                     continue;
                 }
-                let parts = split_unquoted(target.trim(), ':');
-                if parts.len() != 2 {
+                let Some(sheet) = sheets.get_mut(tab) else {
                     continue;
+                };
+                if let Some(f) = std_filter.take() {
+                    sheet.standard_filter = Some(f);
                 }
-                let (s1, a) = split_sheet_cell(parts[0].trim());
-                let (s2, b) = split_sheet_cell(parts[1].trim());
-                let Some(s1) = s1.map(sheet_key) else {
-                    continue;
-                };
-                if s2.is_some_and(|s| sheet_key(s) != s1) {
-                    continue;
+                if let Some(st) = subtotals.take() {
+                    sheet.subtotals = Some(st);
                 }
-                let (Some((r0, c0)), Some((r1, c1))) = (parse_cell_ref(a), parse_cell_ref(b))
-                else {
-                    continue;
-                };
-                let Some(sheet) = sheets.iter_mut().find(|s| s.name == s1) else {
-                    continue;
-                };
                 if sheet.auto_filter.is_some() {
                     continue;
                 }
-                let range = CellRangeLocal {
-                    r0: r0.min(r1),
-                    c0: c0.min(c1),
-                    r1: r0.max(r1),
-                    c1: c0.max(c1),
-                };
                 let mut columns = Vec::new();
                 if let Some(t) = &tree {
                     match t {

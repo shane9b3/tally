@@ -30,6 +30,7 @@ struct RawFont {
     bold: bool,
     italic: bool,
     underline: bool,
+    underline_style: tally_model::UnderlineStyleData,
     strike: bool,
     size: Option<f32>,
     name: Option<String>,
@@ -44,6 +45,8 @@ struct RawXf {
     border: usize,
     align: AlignData,
     protection: Option<CellProtectionData>,
+    /// `xfId` (the named style of a `cellXfs` entry).
+    xf_id: Option<usize>,
 }
 
 /// A differential format as read.
@@ -66,6 +69,8 @@ pub(crate) struct StyleTable {
     pub xf_date: Vec<bool>,
     /// `dxfs` (conditional formatting styles).
     pub dxfs: Vec<CfStyleData>,
+    /// Named cell styles (`cellStyles`; wave 5).
+    pub cell_styles: Vec<tally_model::CellStyleData>,
     /// What was dropped to stay within limits.
     pub warnings: Vec<String>,
 }
@@ -87,6 +92,10 @@ struct Raw {
     fills: Vec<Option<XColor>>,
     borders: Vec<RawBorders>,
     xfs: Vec<RawXf>,
+    /// `cellStyleXfs` (named styles' formats).
+    style_xfs: Vec<RawXf>,
+    /// `cellStyles`: (name, xfId, builtin).
+    cell_styles: Vec<(String, usize, bool)>,
     dxfs: Vec<RawDxf>,
     indexed: Option<Vec<u32>>,
     /// A number format was over-long and dropped.
@@ -132,7 +141,16 @@ fn parse_font<R: BufRead>(xr: &mut XmlReader<R>) -> Result<RawFont, XlsxError> {
             "b" => f.bold = val_bool(&e),
             "i" => f.italic = val_bool(&e),
             "strike" => f.strike = val_bool(&e),
-            "u" => f.underline = e.attr_local("val") != Some("none"),
+            "u" => {
+                let val = e.attr_local("val").unwrap_or("single");
+                f.underline = val != "none";
+                f.underline_style = match val {
+                    "double" => tally_model::UnderlineStyleData::Double,
+                    "singleAccounting" => tally_model::UnderlineStyleData::SingleAccounting,
+                    "doubleAccounting" => tally_model::UnderlineStyleData::DoubleAccounting,
+                    _ => tally_model::UnderlineStyleData::Single,
+                };
+            }
             "sz" => {
                 f.size = e
                     .attr_local("val")
@@ -177,10 +195,33 @@ fn parse_fill<R: BufRead>(xr: &mut XmlReader<R>) -> Result<Option<XColor>, XlsxE
     Ok(fill)
 }
 
-type RawBorders = [Option<(String, Option<XColor>)>; 4];
+/// top, bottom, left, right, diagonal; plus the diagonal directions.
+#[derive(Clone, Debug, Default)]
+struct RawBorders {
+    sides: [Option<(String, Option<XColor>)>; 5],
+    diagonal_up: bool,
+    diagonal_down: bool,
+}
 
-fn parse_border<R: BufRead>(xr: &mut XmlReader<R>) -> Result<RawBorders, XlsxError> {
-    let mut b: RawBorders = Default::default();
+impl std::ops::Index<usize> for RawBorders {
+    type Output = Option<(String, Option<XColor>)>;
+    fn index(&self, i: usize) -> &Self::Output {
+        &self.sides[i]
+    }
+}
+
+impl std::ops::IndexMut<usize> for RawBorders {
+    fn index_mut(&mut self, i: usize) -> &mut Self::Output {
+        &mut self.sides[i]
+    }
+}
+
+fn parse_border<R: BufRead>(xr: &mut XmlReader<R>, el: &Elem) -> Result<RawBorders, XlsxError> {
+    let mut b = RawBorders {
+        diagonal_up: el.attr_local("diagonalUp").is_some_and(parse_bool),
+        diagonal_down: el.attr_local("diagonalDown").is_some_and(parse_bool),
+        ..Default::default()
+    };
     children(xr, |xr, e| {
         // top, bottom, left, right (start/end are the bidi spellings).
         let slot = match e.local() {
@@ -188,6 +229,7 @@ fn parse_border<R: BufRead>(xr: &mut XmlReader<R>) -> Result<RawBorders, XlsxErr
             "bottom" => Some(1),
             "left" | "start" => Some(2),
             "right" | "end" => Some(3),
+            "diagonal" => Some(4),
             _ => None,
         };
         let Some(slot) = slot else {
@@ -232,11 +274,17 @@ fn parse_alignment(e: &Elem) -> AlignData {
             .attr_local("indent")
             .and_then(|v| v.trim().parse::<u32>().ok())
             .map_or(0, |i| u8::try_from(i.min(250)).unwrap_or(250)),
-        // TODO(W5-2): `textRotation` (0–90 ccw, 91–180 = cw, 255 =
-        // stacked) and `shrinkToFit`.
-        rotation_deg: 0,
-        stacked: false,
-        shrink_to_fit: false,
+        rotation_deg: match e
+            .attr_local("textRotation")
+            .and_then(|v| v.trim().parse::<i32>().ok())
+        {
+            Some(255) | None => 0,
+            Some(r) if (0..=90).contains(&r) => r as i16,
+            Some(r) if (91..=180).contains(&r) => (90 - r) as i16,
+            Some(_) => 0,
+        },
+        stacked: e.attr_local("textRotation").map(str::trim) == Some("255"),
+        shrink_to_fit: e.attr_local("shrinkToFit").is_some_and(parse_bool),
     }
 }
 
@@ -253,6 +301,9 @@ fn parse_xf<R: BufRead>(xr: &mut XmlReader<R>, e: &Elem) -> Result<RawXf, XlsxEr
         border: id("borderId") as usize,
         align: AlignData::default(),
         protection: None,
+        xf_id: e
+            .attr_local("xfId")
+            .and_then(|v| v.trim().parse::<usize>().ok()),
     };
     children(xr, |xr, c| {
         if c.local() == "alignment" {
@@ -322,7 +373,7 @@ fn parse_raw<R: BufRead>(xr: &mut XmlReader<R>) -> Result<Raw, XlsxError> {
                 })?,
                 "borders" => children(xr, |xr, c| {
                     if c.local() == "border" {
-                        let b = parse_border(xr)?;
+                        let b = parse_border(xr, &c)?;
                         push_checked(&mut raw.borders, b)
                     } else {
                         xr.skip()
@@ -335,6 +386,28 @@ fn parse_raw<R: BufRead>(xr: &mut XmlReader<R>) -> Result<Raw, XlsxError> {
                     } else {
                         xr.skip()
                     }
+                })?,
+                "cellStyleXfs" => children(xr, |xr, c| {
+                    if c.local() == "xf" {
+                        let xf = parse_xf(xr, &c)?;
+                        push_checked(&mut raw.style_xfs, xf)
+                    } else {
+                        xr.skip()
+                    }
+                })?,
+                "cellStyles" => children(xr, |xr, c| {
+                    if c.local() == "cellStyle" {
+                        let name = c.attr_local("name").unwrap_or_default().to_string();
+                        let xf = c
+                            .attr_local("xfId")
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        let builtin = c.attr_local("builtinId").is_some();
+                        if raw.cell_styles.len() < MAX_STYLE_ENTRIES && !name.is_empty() {
+                            raw.cell_styles.push((name, xf, builtin));
+                        }
+                    }
+                    xr.skip()
                 })?,
                 "dxfs" => children(xr, |xr, c| {
                     if c.local() == "dxf" {
@@ -400,7 +473,7 @@ fn parse_dxf<R: BufRead>(xr: &mut XmlReader<R>) -> Result<RawDxf, XlsxError> {
             })
         }
         "border" => {
-            d.border = Some(parse_border(xr)?);
+            d.border = Some(parse_border(xr, &e)?);
             Ok(())
         }
         "numFmt" => {
@@ -461,14 +534,32 @@ fn build(raw: &Raw) -> StyleTable {
     }
     let mut dedup: HashMap<String, u32> = HashMap::new();
     let mut fmt_cache: HashMap<u32, Option<String>> = HashMap::new();
-    for xf in &raw.xfs {
+    // Named styles (`cellStyles` → `cellStyleXfs`); `Normal` is `Default`.
+    let name_of_xf = |xf_id: usize| -> Option<String> {
+        raw.cell_styles
+            .iter()
+            .find(|(_, x, _)| *x == xf_id)
+            .map(|(n, _, builtin)| {
+                if *builtin && n == "Normal" {
+                    "Default".to_string()
+                } else {
+                    n.clone()
+                }
+            })
+    };
+    let all_xfs: Vec<(&RawXf, bool)> = raw
+        .xfs
+        .iter()
+        .map(|x| (x, false))
+        .chain(raw.style_xfs.iter().map(|x| (x, true)))
+        .collect();
+    for (xf, is_named) in all_xfs {
         let rf = raw.fonts.get(xf.font).cloned().unwrap_or_default();
         let font = FontData {
             bold: rf.bold,
             italic: rf.italic,
             underline: rf.underline,
-            // TODO(W5-2): `u val="double|singleAccounting|doubleAccounting"`.
-            underline_style: tally_model::UnderlineStyleData::Single,
+            underline_style: rf.underline_style,
             strike: rf.strike,
             family: rf
                 .name
@@ -506,6 +597,12 @@ fn build(raw: &Raw) -> StyleTable {
             borders.bottom = line(&b[1]);
             borders.left = line(&b[2]);
             borders.right = line(&b[3]);
+            if b.diagonal_down {
+                borders.diagonal_down = line(&b[4]);
+            }
+            if b.diagonal_up {
+                borders.diagonal_up = line(&b[4]);
+            }
         }
         let number_format = fmt_cache
             .entry(xf.num_fmt)
@@ -519,6 +616,7 @@ fn build(raw: &Raw) -> StyleTable {
             })
             .clone();
         let is_date = number_format.as_deref().is_some_and(is_date_format);
+        let style_name = xf.xf_id.and_then(name_of_xf).filter(|n| n != "Default");
         let style = StyleData {
             protection: xf.protection,
             font,
@@ -527,9 +625,33 @@ fn build(raw: &Raw) -> StyleTable {
             borders,
             number_format,
             display: None,
-            // TODO(W5-2): `xfId` → `cellStyles` name.
-            style_name: None,
+            style_name,
         };
+        if is_named {
+            // One `cellStyleXfs` entry: the named style it defines.
+            let idx = raw
+                .style_xfs
+                .iter()
+                .position(|x| std::ptr::eq(x, xf))
+                .unwrap_or(0);
+            if let Some((name, _, builtin)) = raw.cell_styles.iter().find(|(_, x, _)| *x == idx) {
+                let name = if *builtin && name == "Normal" {
+                    "Default".to_string()
+                } else {
+                    name.clone()
+                };
+                if name != "Default" && table.cell_styles.len() < 10_000 {
+                    let mut st = style.clone();
+                    st.style_name = Some(name.clone());
+                    table.cell_styles.push(tally_model::CellStyleData {
+                        name,
+                        parent: Some("Default".into()),
+                        style: st,
+                    });
+                }
+            }
+            continue;
+        }
         table.xf_date.push(is_date);
         if style == StyleData::default() {
             table.xf_style.push(None);
@@ -572,9 +694,8 @@ fn build(raw: &Raw) -> StyleTable {
                 bottom: line(&b[1]),
                 left: line(&b[2]),
                 right: line(&b[3]),
-                // TODO(W5-2): `diagonal` with `diagonalDown`/`diagonalUp`.
-                diagonal_down: None,
-                diagonal_up: None,
+                diagonal_down: if b.diagonal_down { line(&b[4]) } else { None },
+                diagonal_up: if b.diagonal_up { line(&b[4]) } else { None },
             };
             st.borders = (bd != BordersData::default()).then_some(bd);
         }

@@ -78,6 +78,7 @@ function Menu({ menu }: { menu: ContextMenuState }) {
         : { id: "merge", label: "Merge cells", disabled: single, title: single ? "Select two or more cells" : undefined, onSelect: run(ctl.mergeCells) },
       { id: "defineName", label: "Define name…", onSelect: () => ctl.openDefineName() },
       ...cellExtras(),
+      ...ctl.w56.cellMenuItems(menu.cell),
       { id: "insertRows", label: `Insert ${rows} above`, separator: true, onSelect: run(() => ctl.insertRows("before")) },
       { id: "insertCols", label: `Insert ${cols} left`, onSelect: run(() => ctl.insertCols("before")) },
       { id: "deleteRows", label: `Delete ${rows}`, danger: true, onSelect: run(ctl.deleteRows) },

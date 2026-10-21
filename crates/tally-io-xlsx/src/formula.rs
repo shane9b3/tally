@@ -247,6 +247,47 @@ fn export_weeknum(e: &mut Expr) {
     }
 }
 
+/// The Excel name of Calc's euro `CONVERT` (ODF `ORG.OPENOFFICE.CONVERT`),
+/// which has no Excel equivalent: written as an unknown function so it
+/// does not reload as Excel's unit `CONVERT` (= Calc `CONVERT_ADD`)
+/// (correctness review 3, M10).
+const AOO_CONVERT_XLSX: &str = "_xlfn.ORG.OPENOFFICE.CONVERT";
+
+fn calc_convert() -> Option<tally_functions::FuncId> {
+    tally_functions::registry().lookup("CONVERT")
+}
+
+/// Export rewrite of Calc's euro `CONVERT` to [`AOO_CONVERT_XLSX`].
+fn export_convert(e: &mut Expr) {
+    let Some(cv) = calc_convert() else {
+        return;
+    };
+    if let Expr::Call { func, .. } = e {
+        if *func == FuncRef::Known(FuncId(cv.0)) {
+            *func = FuncRef::Unknown(Arc::from(AOO_CONVERT_XLSX));
+        }
+    }
+}
+
+/// Import rewrite: [`AOO_CONVERT_XLSX`] back to Calc's euro `CONVERT`.
+fn import_convert(e: &mut Expr) {
+    if let Expr::Call {
+        func: func @ FuncRef::Unknown(_),
+        ..
+    } = e
+    {
+        let FuncRef::Unknown(n) = &*func else {
+            return;
+        };
+        let bare = n.strip_prefix("_xlfn.").unwrap_or(n);
+        if bare.eq_ignore_ascii_case("ORG.OPENOFFICE.CONVERT") {
+            if let Some(cv) = calc_convert() {
+                *func = FuncRef::Known(FuncId(cv.0));
+            }
+        }
+    }
+}
+
 /// Import rewrite: [`AOO_WEEKNUM_XLSX`] back to the built-in WEEKNUM.
 fn import_weeknum(e: &mut Expr) {
     if let Expr::Call {
@@ -304,7 +345,28 @@ pub(crate) fn parse_excel(
         },
     )?;
     for_each_expr_mut(&mut f.expr, import_weeknum);
+    for_each_expr_mut(&mut f.expr, import_convert);
     Ok(f)
+}
+
+/// ExcelA1 formula text (as a BIFF/OOXML file stores it, without `=`)
+/// written at `(sheet index, row, col)` of a workbook with `sheet_names`
+/// → model OpenFormula text (`of:=…`), or `None` when it does not parse.
+/// Used by the `.xls` reader (`tally-io-xls`).
+pub fn excel_formula_to_of(
+    text: &str,
+    sheet_names: &[String],
+    sheet: usize,
+    row: u32,
+    col: u32,
+) -> Option<String> {
+    if text.len() > 64 * 1024 {
+        return None;
+    }
+    let r = XlsxResolver::new(sheet_names);
+    let origin = CellAddr::new(sheet as SheetId, row, col);
+    let f = parse_excel(text, origin, &r).ok()?;
+    Some(print_of(&f, origin, &r))
 }
 
 /// Prints a parsed formula as model OpenFormula text (`of:=...`).
@@ -354,6 +416,7 @@ fn mark_sheets_abs(r: &mut RefExpr) {
 /// unknown `COM.MICROSOFT.X` functions as `_xlfn.X`.
 fn export_rewrites(f: &mut Formula) {
     for_each_expr_mut(&mut f.expr, export_weeknum);
+    for_each_expr_mut(&mut f.expr, export_convert);
     for_each_expr_mut(&mut f.expr, |e| {
         if let Expr::Call {
             func: FuncRef::Unknown(n),
