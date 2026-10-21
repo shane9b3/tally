@@ -205,6 +205,7 @@ export class ObjectLayer {
     if (prev) {
       prev.dataset.selected = "false";
       prev.setAttribute("aria-selected", "false");
+      prev.style.outline = "none";
       prev.querySelectorAll("[data-handle]").forEach((h) => h.remove());
     }
     this.selectedId = id;
@@ -212,6 +213,9 @@ export class ObjectLayer {
     if (node) {
       node.dataset.selected = "true";
       node.setAttribute("aria-selected", "true");
+      // A visible frame around the selected chart/picture (theme accent).
+      node.style.outline = "2px solid var(--tally-selection-border, #2563eb)";
+      node.style.outlineOffset = "-1px";
       this.addHandles(node, id as string);
       node.focus({ preventScroll: true });
     }
@@ -319,6 +323,11 @@ export class ObjectLayer {
       s.boxSizing = "border-box";
       s.pointerEvents = "auto";
       s.cursor = `${h}-resize`;
+      // Square handles: white fill, accent border, above the chart canvas.
+      s.background = "var(--tally-bg, #ffffff)";
+      s.border = "1.5px solid var(--tally-selection-border, #2563eb)";
+      s.borderRadius = "1px";
+      s.zIndex = "1";
       const half = -HANDLE_SIZE / 2;
       if (h.includes("n")) s.top = `${half}px`;
       if (h.includes("s")) s.bottom = `${half}px`;

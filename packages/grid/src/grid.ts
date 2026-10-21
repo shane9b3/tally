@@ -134,7 +134,11 @@ export class Grid {
     this.editor = new CellEditor(doc);
     root.append(main, overlay, scroller);
     this.objects = new ObjectLayer(doc, {
-      onObjectSelect: (id) => this.props.onObjectSelect?.(id),
+      onObjectSelect: (id) => {
+        // The cell cursor is hidden while an object is selected; redraw it.
+        this.invalidate("overlay");
+        this.props.onObjectSelect?.(id);
+      },
       onObjectPointerDown: (id, part, e) => this.props.onObjectPointerDown?.(id, part, e),
       onObjectDoubleClick: (id) => this.props.onObjectDoubleClick?.(id),
       onObjectKey: (id, key, e) => this.props.onObjectKey?.(id, key, e),
@@ -978,6 +982,7 @@ export class Grid {
         ...base,
         selection: this.selection,
         editing: this.editor.open,
+        objectSelected: this.objects.selected !== null,
         hoverGutter: this.hoverGutter,
         resizeGuide: this.resizeGuide,
         fillPreview: this.fillPreview,

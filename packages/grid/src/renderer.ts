@@ -183,6 +183,8 @@ export interface OverlayFrame extends MainFrame {
   selection: Selection;
   /** Hide the fill handle and active-cell clearing while editing. */
   editing: boolean;
+  /** A chart or picture is selected: the cell selection and header highlight are not drawn. */
+  objectSelected?: boolean;
   /** Header gutter under the pointer. */
   hoverGutter: { axis: "col" | "row"; index: number } | null;
   /** Live resize: the axis, index and its new far edge (screen px). */
@@ -1293,8 +1295,10 @@ export class Renderer {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, geo.width, geo.height);
     const range = selection.range;
-    const others = selection.others ?? [];
-    const ranges = [...others, range];
+    // While a chart or picture is selected the cell cursor is not shown (as in Calc).
+    const hideSel = f.objectSelected === true;
+    const others = hideSel ? [] : (selection.others ?? []);
+    const ranges = hideSel ? [] : [...others, range];
     const lw = Math.max(1, Math.round(dpr)) / dpr;
     const rect = geo.rangeRect(range);
 
@@ -1320,7 +1324,7 @@ export class Renderer {
         }
       }
     }
-    if (rect.w > 0) {
+    if (!hideSel && rect.w > 0) {
       ctx.fillStyle = c.selectionBorder;
       ctx.fillRect(rect.x, geo.headerH - 2, rect.w, 2);
     }
@@ -1342,7 +1346,7 @@ export class Renderer {
         }
       }
     }
-    if (rect.h > 0) {
+    if (!hideSel && rect.h > 0) {
       ctx.fillStyle = c.selectionBorder;
       ctx.fillRect(geo.headerW - 2, rect.y, 2, rect.h);
     }
@@ -1409,7 +1413,7 @@ export class Renderer {
         frame(b, 1);
       }
     }
-    if (rect.w > 0 && rect.h > 0) {
+    if (!hideSel && rect.w > 0 && rect.h > 0) {
       const activeMerge = geo.mergeAt(selection.active.r, selection.active.c);
       const single =
         (range.r0 === range.r1 && range.c0 === range.c1) ||
@@ -1442,7 +1446,7 @@ export class Renderer {
 
     const activeCell = f.source.getCell(selection.active.r, selection.active.c);
     // The active list cell's ▾ as a button.
-    if (!f.editing && activeCell && activeCell.flags & CELL_FLAGS.dropdown) {
+    if (!hideSel && !f.editing && activeCell && activeCell.flags & CELL_FLAGS.dropdown) {
       const db = dropdownButtonRect(geo, selection.active.r, selection.active.c);
       if (db.w > 4) this.drawDropdownActive(db, geo.zoom, theme);
     }

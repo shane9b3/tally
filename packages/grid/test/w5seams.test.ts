@@ -353,3 +353,37 @@ describe("view toggles (gridlines, headers)", () => {
     grid.destroy();
   });
 });
+
+describe("selected objects are visible and hide the cell cursor", () => {
+  it("draws a frame and handles, and the overlay skips the cell selection", () => {
+    const { grid } = make({
+      objects: [{ id: "chart-1", kind: "chart", anchor: { r: 2, c: 1, dxMm: 0, dyMm: 0, widthMm: 50, heightMm: 30 }, label: "Sales" }],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const renderer = (grid as any).renderer as { drawOverlay: (f: { objectSelected?: boolean }) => void };
+    const frames: Array<boolean | undefined> = [];
+    const orig = renderer.drawOverlay.bind(renderer);
+    renderer.drawOverlay = (f) => {
+      frames.push(f.objectSelected);
+      orig(f);
+    };
+    const layer = grid.objectLayer;
+    const node = layer.elementFor("chart-1") as HTMLElement;
+    pointer(node, "pointerdown", 0, 0);
+    grid.flush();
+    // Visible selection: a frame on the object and filled, bordered handles.
+    expect(node.style.outline).toContain("tally-selection-border");
+    const handle = node.querySelector('[data-handle="se"]') as HTMLElement;
+    expect(handle.style.background).not.toBe("");
+    expect(handle.style.border).toContain("solid");
+    // The overlay was redrawn with the cell cursor suppressed.
+    expect(frames.at(-1)).toBe(true);
+    // Deselecting brings the cell cursor back and removes the frame.
+    layer.select(null);
+    grid.flush();
+    expect(node.style.outline).not.toContain("tally-selection-border");
+    expect(frames.at(-1)).toBe(false);
+    grid.destroy();
+  });
+});
+
