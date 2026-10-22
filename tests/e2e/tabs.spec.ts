@@ -1,5 +1,5 @@
 /**
- * The sidebar's "Open" list in the browser build: there is no desktop
+ * The sidebar's "Editing" list in the browser build: there is no desktop
  * shell, so `?tabs=<n>` (dev builds only, `@tally/app/dev` mockTabs.ts)
  * fills the tab store with a mock: `n` tabs in this window plus one
  * document in another window. Rows switch and close through the (mock) tab
@@ -11,7 +11,7 @@ test("the Open list shows every document, switches and closes the others", async
   await page.goto("/?tabs=3");
   await expect(page.getByTestId("grid")).toBeVisible();
   const section = page.getByTestId("open-documents");
-  await expect(section.getByRole("heading")).toHaveText("Open");
+  await expect(section.getByRole("heading")).toHaveText("Editing");
   const list = section.getByRole("listbox", { name: "Open documents" });
   const rows = list.getByRole("option");
   await expect(rows).toHaveCount(4);

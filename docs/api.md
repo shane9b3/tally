@@ -482,7 +482,7 @@ own autosave timer), a child webview (Tauri's multi-webview API, the
 `unstable` feature) of a native window `win-<n>`. A window holds one or more
 documents as tabs and shows one at a time (the others are hidden; keyboard
 focus moves to the shown one). Tally draws its own document list, in the
-sidebar's "Open" section of each webview, from `tabs-changed`; native macOS
+sidebar's "Editing" section of each webview, from `tabs-changed`; native macOS
 window tabs are off (`NSWindow.allowsAutomaticWindowTabbing = NO`, each
 window `tabbingMode = Disallowed`, no tabbing identifier). `tauri.conf.json`
 lists no window; the first one is created at launch by the same code as the

@@ -142,7 +142,7 @@ describe("sidebar ▸ Open (OpenDocuments)", () => {
     const ctl = new AppController(new WebMockClient(), new WebMockClient(), { nativeMenu: false });
     act(() => useDocStore.getState().setInfo({ doc: 1, title: "Untitled 1", path: null, sheets: [], activeSheet: 0, dirty: false, version: 0, warnings: [], externalLinks: null } as unknown as WorkbookInfo));
     mount(ctl, null, "");
-    expect(host.querySelector("h3")?.textContent).toBe("Open");
+    expect(host.querySelector("h3")?.textContent).toBe("Editing");
     expect(rows().map((r) => r.querySelector("span:nth-child(2)")?.textContent)).toEqual(["Untitled 1"]);
     expect(rows()[0]?.getAttribute("aria-selected")).toBe("true");
     expect(host.querySelector('[data-testid^="open-doc-close-"]')).toBeNull();

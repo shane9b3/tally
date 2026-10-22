@@ -6,7 +6,7 @@ Move Tab to New Window, Merge All Windows, closing tabs and windows with
 several edited tabs, Quit across windows, Close Other Tabs, the exit plan,
 print-window ownership, the Window menu list; `windows.rs`: window size,
 cascade and webview bounds; `menu.rs`: menu routing; `prefs.rs`; and in
-`packages/app/test` the sidebar "Open" list, `tabs.test.ts`,
+`packages/app/test` the sidebar "Editing" list, `tabs.test.ts`,
 `windows.test.ts`, `unsaved.test.ts`). A scripted probe of the debug build
 checked the shell paths natively on macOS (see docs/TODO.md), but nothing
 was looked at: these checks run against the **release build**

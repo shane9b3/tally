@@ -1,5 +1,5 @@
 /**
- * Left sidebar: new workbook, the open documents ("Open": every document of
+ * Left sidebar: new workbook, the open documents ("Editing": every document of
  * the app in the desktop shell, OpenDocuments.tsx), "Open recent" (paths from
  * `recentFiles`, with when each was last open here, kept per viewer in
  * localStorage by path), templates, tip card.

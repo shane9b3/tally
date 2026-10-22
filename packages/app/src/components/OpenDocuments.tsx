@@ -1,5 +1,5 @@
 /**
- * The sidebar's "Open" section: every open document of the app (tabs.ts),
+ * The sidebar's "Editing" section: every open document of the app (tabs.ts),
  * this window's tabs first, then the other windows' documents, in the row
  * format of "Open recent". The document this webview shows is highlighted.
  * Click shows a document (another window comes to the front), × closes it
@@ -133,7 +133,7 @@ export function OpenDocuments({ dotFor, formatTag }: OpenDocumentsProps) {
   const menuHere = menu !== null && here.has(menu.label);
   return (
     <section className={styles.section} data-testid="open-documents">
-      <h3 className={styles.heading}>{t("sidebar.open", "Open")}</h3>
+      <h3 className={styles.heading}>{t("sidebar.open", "Editing")}</h3>
       <ul className={styles.list} role="listbox" aria-label={t("tabs.label", "Open documents")}>
         {docs.map((d, i) => {
           const inWindow = here.has(d.label);
