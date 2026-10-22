@@ -158,7 +158,8 @@ pub fn needed_width_px(wb: &Workbook, sheet: &Sheet, col: u32, r0: u32, r1: u32)
     best.map(|w| w.ceil().min(4000.0))
 }
 
-fn cell_text(wb: &Workbook, addr: CellAddr, style: StyleId) -> String {
+/// The displayed text of a cell (empty for an empty cell).
+pub(crate) fn cell_text(wb: &Workbook, addr: CellAddr, style: StyleId) -> String {
     let v = wb.value(addr);
     match v {
         Value::Empty => String::new(),

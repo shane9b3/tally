@@ -26,6 +26,8 @@ export const OVERFLOW_SCAN = 32;
 const MEASURE_CACHE = 5000;
 /** Inter's cap height as a fraction of the font size. */
 const CAP_HEIGHT = 0.727;
+/** Inter's descent (494 of 2048 units) as a fraction of the font size. */
+const DESCENT = 0.241;
 /** Row height (zoom 100%) whose vertical centre the text baseline is tuned for. */
 const DEFAULT_ROW_REF = 24;
 
@@ -858,13 +860,15 @@ export class Renderer {
 
     // Vertical position (alphabetic baseline). In a default-height row all
     // three alignments centre the cap height; taller rows show the difference.
+    // In a lower row bottom-aligned text comes down to a descent above the
+    // bottom (as AOO draws it) or to centred caps, so its top is not cut.
     const vAlign = style?.vAlign ?? "bottom";
     const capH = CAP_HEIGHT * fpx;
     const rowRef = DEFAULT_ROW_REF * zoom;
     let ty: number;
     if (vAlign === "top") ty = top + (rowRef + capH) / 2;
     else if (vAlign === "middle") ty = top + (h + capH) / 2;
-    else ty = top + h - Math.max(2 * zoom, (rowRef - capH) / 2);
+    else ty = top + h - Math.min(Math.max(2 * zoom, (rowRef - capH) / 2), Math.max(DESCENT * fpx, (h - capH) / 2));
 
     if (style?.wrap && cell.kind !== "number" && width > avail) {
       return this.drawWrapped(f, cell, style, font, fpx, x, top, cw, h, align, vAlign);

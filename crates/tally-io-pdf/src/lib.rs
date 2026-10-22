@@ -863,7 +863,12 @@ fn draw_text(
     };
     let ascent = ascender / upem * size;
     let descent = -descender / upem * size;
-    let line_h = (ascent + descent).max(size) * 1.15;
+    // A line is the font height, ascent plus descent, without extra
+    // leading (AOO lays cell text out with the font height, and its
+    // optimal row height is that plus a small margin). A 15 % leading put
+    // the bottom-aligned baseline 2 pt (at 13 pt) higher than AOO's, so
+    // text in a row lower than the text lost more of its top than in AOO.
+    let line_h = (ascent + descent).max(size);
     let block_h = line_h * shaped.len() as f32;
     // Horizontal box the text may occupy: the cell plus free space when it
     // does not fit (and does not wrap).
@@ -879,6 +884,9 @@ fn draw_text(
             }
         }
     }
+    // Bottom-aligned text keeps its baseline a descent (plus half the
+    // padding) above the cell bottom; a block taller than the cell is
+    // clipped at its top, as in AOO.
     let top = match v_align {
         VAlign::Top => rect.y + PAD * 0.5,
         VAlign::Middle => rect.y + (rect.h - block_h) / 2.0,

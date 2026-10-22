@@ -374,3 +374,131 @@ fn xlsx_margins_survive_an_unrelated_page_setup_edit() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Prints "Unit base price …" at 13 pt in A1 (the owner's North Side file:
+/// row style `ro1`, 0.557 cm with `use-optimal-row-height="true"`) and
+/// returns `(body top, ink top, ink bottom)` in pixels at 144 dpi, with
+/// `px` as row 1's set height (`None`: an optimal row, as ODS import
+/// leaves it) and with or without the owner's two-line header.
+fn row1_ink(px: Option<f32>, header: bool) -> (f32, f32, f32) {
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    f.set("A1", "Unit base price $16,655.00+HST");
+    f.apply(vec![Op::ApplyStyle {
+        sheet: s,
+        ranges: vec![common::range("A1")],
+        patch: tally_api::StylePatch {
+            font_size_pt: Some(13.0),
+            ..Default::default()
+        },
+    }]);
+    if let Some(px) = px {
+        f.apply(vec![Op::SetRowHeight {
+            sheet: s,
+            start: 0,
+            end: 0,
+            px,
+        }]);
+    }
+    let mut setup: PageSetupDto = f.svc.page_setup(f.doc, s).unwrap();
+    setup.margins.top_mm = 10.0;
+    setup.margins.header_mm = 7.5;
+    setup.header = header.then(|| HeaderFooter {
+        left: String::new(),
+        center: "The Pine - 10/22/2026\nBlock 90 - North Side".into(),
+        right: String::new(),
+    });
+    setup.header_area = setup.header_area.map(|mut a| {
+        a.on = header;
+        a
+    });
+    setup.footer = None;
+    f.apply(vec![Op::SetPageSetup { sheet: s, setup }]);
+    let layout = f.svc.print_layout(f.doc, &opts()).unwrap();
+    let dpi = 144u32;
+    let px_per_mm = dpi as f32 / 25.4;
+    let body_top = layout.pages[0].origin_mm[1] * px_per_mm;
+    let job = f.svc.prepare_print_job(f.doc, &opts(), &[]).unwrap();
+    let png = tally_engine::protection::base64_decode(
+        &f.svc.print_job_page_png(job.job, 0, dpi).unwrap(),
+    )
+    .unwrap();
+    let (w, _h, px) = tally_io_pdf::png_pixels(&png).unwrap();
+    let w = w as usize;
+    // Ink of the body only (the header is above it).
+    let dark: Vec<f32> = px
+        .chunks(4 * w)
+        .enumerate()
+        .filter(|(y, row)| *y as f32 >= body_top && row.chunks(4).any(|p| p[0] < 160))
+        .map(|(y, _)| y as f32)
+        .collect();
+    assert!(!dark.is_empty(), "row 1 printed");
+    (body_top, dark[0], *dark.last().unwrap())
+}
+
+/// The owner's report: the top of row 1's 13 pt text was cut off in
+/// print. An optimal row prints at the height its text needs with Tally's
+/// fonts (AOO recomputes optimal rows with its own), the text sits a
+/// descent above the cell bottom without extra leading, and so it prints
+/// whole, with or without a header, as it does in a tall row. In AOO's
+/// own 0.557 cm (a set height) it fits too.
+#[test]
+fn large_text_in_row_one_is_not_clipped() {
+    // The ink of the same text in a row far taller than it needs.
+    let (top, a, b) = row1_ink(Some(80.0), false);
+    let full = b - a;
+    assert!(a > top && full > 20.0, "{top} {a} {b}");
+    let row_px = |hmm: f32| hmm / 100.0 * 144.0 / 25.4;
+    // 13 pt × 1.21 + 0.41 mm.
+    let optimal = row_px(596.0);
+    for header in [false, true] {
+        for (px, row) in [
+            (None, optimal),
+            // 0.557 cm in screen pixels (96 dpi).
+            (Some(557.0 / 2540.0 * 96.0), row_px(557.0)),
+        ] {
+            let (top, a, b) = row1_ink(px, header);
+            // The whole glyph height is printed (not clipped at the top)…
+            assert!(
+                (b - a - full).abs() <= 1.0,
+                "{px:?} {header}: {a}..{b} vs {full}"
+            );
+            // …inside the row.
+            assert!(
+                a > top && b < top + row,
+                "{px:?} {header}: {top} {a} {b} {row}"
+            );
+        }
+    }
+    // A row lower than the text (0.35 cm, 15 px set by hand): like AOO the
+    // text keeps its baseline a descent above the bottom and only its top
+    // is cut, at the row top.
+    let (top, a, b) = row1_ink(Some(15.0), false);
+    let row = row_px(15.0 * 2540.0 / 96.0);
+    assert!(a >= top && a <= top + 1.0, "{top} {a}");
+    assert!(b < top + row && top + row - b < 4.5, "{top} {b} {row}");
+}
+
+/// Printing computes optimal heights without touching the document: the
+/// row keeps no set height (it is still written as an optimal row) and
+/// the document stays clean.
+#[test]
+fn optimal_print_heights_leave_the_document_alone() {
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    f.set("A1", "Big");
+    f.apply(vec![Op::ApplyStyle {
+        sheet: s,
+        ranges: vec![common::range("A1")],
+        patch: tally_api::StylePatch {
+            font_size_pt: Some(20.0),
+            ..Default::default()
+        },
+    }]);
+    let before = f.data();
+    let job = f.svc.prepare_print_job(f.doc, &opts(), &[]).unwrap();
+    let _ = f.svc.print_job_pdf(job.job).unwrap();
+    let after = f.data();
+    assert!(after.sheets[0].row_heights.is_empty());
+    assert_eq!(before.sheets[0].row_heights, after.sheets[0].row_heights);
+}

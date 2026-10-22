@@ -20,6 +20,12 @@
 //!   hidden and filtered rows/columns are skipped; a manual break forces
 //!   a page. Repeated rows (columns) take space on every page whose first
 //!   row (column) lies after them.
+//! - **Row heights**: a row with a set height prints at it. A row without
+//!   one is an optimal-height row (ODS `use-optimal-row-height="true"`,
+//!   XLSX without `customHeight`): like AOO, which recomputes those rows
+//!   with the fonts it has, it prints at the standard height or at the
+//!   height its content needs with the fonts Tally prints with, whichever
+//!   is larger ([`optimal_row_heights`]). The document is not changed.
 //! - **Order**: top-to-bottom-then-right (default) or left-to-right-then-down.
 //! - **Empty pages** (no cell content and no chart) are suppressed when the
 //!   options say so (the AOO default).
@@ -27,7 +33,7 @@
 //!   `first_page_number`; `&[PAGES]`, `&[SHEET]`, `&[FILE]`, `&[PATH]`,
 //!   `&[DATE]` and `&[TIME]` are resolved with the document locale.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use tally_api::{
     ApiError, BreakInfo, PageBreaksDto, PrintLayoutDto, PrintOptionsDto, PrintPageDto, PrintSheets,
@@ -36,7 +42,7 @@ use tally_api::{
 use tally_model::{
     HfAreaData, OrientationData, PageOrderData, PageScaleData, PageSetupData, PaperData,
 };
-use tally_types::{CellRange, SheetId, MAX_COLS, MAX_ROWS};
+use tally_types::{CellAddr, CellRange, SheetId, Value, MAX_COLS, MAX_ROWS};
 
 use crate::storage::{ColumnStore, Sheet};
 use crate::workbook::Workbook;
@@ -450,7 +456,87 @@ fn default_col_hmm() -> u32 {
     PRINT_DEFAULT_COL_HMM
 }
 
-/// Height of a row in hmm (0 when hidden or filtered).
+/// Printed line height of text, in em of the font size: the ascent plus
+/// descent of Inter (1984 + 494 of 2048 units), the face cell text without
+/// a family prints with; Arial, Times and Courier are lower.
+pub const PRINT_LINE_EM: f32 = 1.21;
+/// Room an optimal row has over its text (hmm): the margin AOO's optimal
+/// heights show over the font height (13 pt Arial is 14.52 pt high, its
+/// optimal row 0.557 cm = 15.79 pt; 23 twips).
+pub const OPTIMAL_ROW_EXTRA_HMM: u32 = 41;
+/// Horizontal padding of printed cell text, both sides together (px at
+/// 96 dpi; `tally_io_pdf` pads 1.5 pt each side).
+const PRINT_TEXT_PAD_PX: f32 = 4.0;
+/// Most stored cells [`optimal_row_heights`] inspects.
+const MAX_OPTIMAL_SCAN: usize = 2_000_000;
+
+/// Printed heights (hmm) of the optimal-height rows in `lo..=hi` whose
+/// content needs more than the standard height: rows without a set
+/// height holding text larger than the default size, with line breaks
+/// or wrapped over several lines (AOO recomputes optimal rows with its
+/// fonts, `ScColumn::GetOptimalHeight`; Tally's fonts differ from the
+/// author's, so the height saved in the file is not reused). Only stored
+/// cells are visited, so the cost follows the content, not the range.
+pub fn optimal_row_heights(wb: &Workbook, sheet: &Sheet, lo: u32, hi: u32) -> HashMap<u32, u32> {
+    use crate::autofit::{cell_text, line_count};
+    use crate::styles::DEFAULT_FONT_SIZE_PT;
+    let mut out: HashMap<u32, u32> = HashMap::new();
+    let mut scanned = 0usize;
+    for (ci, col) in sheet.columns.iter().enumerate() {
+        let c = ci as u32;
+        for (r, _) in col.cells.iter_range(lo, hi) {
+            scanned += 1;
+            if scanned > MAX_OPTIMAL_SCAN {
+                return out;
+            }
+            if sheet.row_dims.get(r).is_some()
+                || sheet.is_merge_covered(r, c)
+                || sheet.merge_at(r, c).is_some()
+            {
+                continue;
+            }
+            let style_id = col.styles.get(r);
+            let st = wb.styles.get(style_id);
+            let size_pt = st
+                .data
+                .font
+                .size_pt
+                .unwrap_or(DEFAULT_FONT_SIZE_PT)
+                .clamp(1.0, 400.0);
+            let wrap = st.data.align.wrap;
+            let mut lines = 1u32;
+            if wrap || matches!(wb.value(CellAddr::new(sheet.id, r, c)), Value::Text(_)) {
+                let text = cell_text(wb, CellAddr::new(sheet.id, r, c), style_id);
+                if text.is_empty() {
+                    continue;
+                }
+                if wrap || text.contains('\n') {
+                    let size_px = size_pt * 96.0 / 72.0;
+                    let width =
+                        (crate::units::hmm_to_px(col_width(sheet, c)) - PRINT_TEXT_PAD_PX).max(1.0);
+                    lines = line_count(&text, width, size_px, st.data.font.bold, wrap);
+                }
+            }
+            if lines <= 1 && size_pt <= DEFAULT_FONT_SIZE_PT {
+                continue;
+            }
+            // pt to hmm: 2540 / 72.
+            let text_hmm = lines as f32 * size_pt * PRINT_LINE_EM * 2540.0 / 72.0;
+            let h = (text_hmm.ceil() as u32 + OPTIMAL_ROW_EXTRA_HMM).min(MAX_PRINT_ROW_HMM);
+            if h > default_row_hmm() {
+                let e = out.entry(r).or_insert(0);
+                *e = (*e).max(h);
+            }
+        }
+    }
+    out
+}
+
+/// AOO's highest row (409 pt = 14,428 hmm).
+const MAX_PRINT_ROW_HMM: u32 = 14_428;
+
+/// Height of a row in hmm (0 when hidden or filtered), not counting the
+/// optimal height of its content ([`optimal_row_heights`]).
 pub fn row_height(sheet: &Sheet, r: u32) -> u32 {
     if sheet.filtered_rows.contains(r) {
         return 0;
@@ -610,6 +696,7 @@ fn used_print_area(wb: &Workbook, s: &Sheet, sheet: SheetId) -> Option<CellRange
 }
 
 fn axis_of(
+    wb: &Workbook,
     sheet: &Sheet,
     lo: u32,
     hi: u32,
@@ -617,9 +704,19 @@ fn axis_of(
     repeat: Option<(u32, u32)>,
     manual: &BTreeSet<u32>,
 ) -> Axis {
+    let mut optimal = HashMap::new();
+    if rows {
+        optimal = optimal_row_heights(wb, sheet, lo, hi);
+        if let Some((a, b)) = repeat {
+            optimal.extend(optimal_row_heights(wb, sheet, a, b.min(MAX_ROWS - 1)));
+        }
+    }
     let size = |i: u32| {
         if rows {
-            row_height(sheet, i)
+            match row_height(sheet, i) {
+                0 => 0,
+                h => optimal.get(&i).copied().unwrap_or(h),
+            }
         } else {
             col_width(sheet, i)
         }
@@ -835,8 +932,17 @@ pub fn paginate_sheet(
     let b = body_of(p);
     let (body_w, body_h) = (b.w, b.h);
     let body = (body_w, body_h);
-    let rows = axis_of(s, area.r0, area.r1, true, p.repeat_rows, &s.meta.row_breaks);
+    let rows = axis_of(
+        wb,
+        s,
+        area.r0,
+        area.r1,
+        true,
+        p.repeat_rows,
+        &s.meta.row_breaks,
+    );
     let cols = axis_of(
+        wb,
         s,
         area.c0,
         area.c1,
@@ -1073,8 +1179,17 @@ pub fn page_breaks(wb: &Workbook, sheet: SheetId) -> Result<PageBreaksDto, ApiEr
     let p = &s.meta.page_setup;
     let b = body_of(p);
     let body = (b.w, b.h);
-    let rows = axis_of(s, area.r0, area.r1, true, p.repeat_rows, &s.meta.row_breaks);
+    let rows = axis_of(
+        wb,
+        s,
+        area.r0,
+        area.r1,
+        true,
+        p.repeat_rows,
+        &s.meta.row_breaks,
+    );
     let cols = axis_of(
+        wb,
         s,
         area.c0,
         area.c1,
@@ -1167,6 +1282,63 @@ mod tests {
     fn setup(wb: &mut Workbook) -> &mut PageSetupData {
         let s = wb.sheets[0].id;
         std::sync::Arc::make_mut(&mut wb.sheet_mut(s).unwrap().meta.page_setup)
+    }
+
+    /// Sets `text` in (r, c) with a style of `size` pt (and wrap).
+    fn styled(wb: &mut Workbook, r: u32, c: u32, text: &str, size: f32, wrap: bool) {
+        let s = wb.sheets[0].id;
+        wb.set_input(CellAddr::new(s, r, c), text);
+        let mut data = tally_model::StyleData::default();
+        data.font.size_pt = Some(size);
+        data.align.wrap = wrap;
+        let st = wb.styles.intern(data);
+        wb.sheet_mut(s)
+            .unwrap()
+            .column_mut(c)
+            .unwrap()
+            .styles
+            .set(r, r, st);
+    }
+
+    #[test]
+    fn optimal_rows_print_at_the_height_their_text_needs() {
+        let mut wb = Workbook::new();
+        let s = wb.sheets[0].id;
+        styled(&mut wb, 0, 0, "Unit base price $16,655.00+HST", 13.0, false);
+        styled(&mut wb, 1, 0, "Default size", 11.0, false);
+        styled(&mut wb, 2, 0, "Set height", 20.0, false);
+        styled(&mut wb, 3, 0, "two\nlines", 11.0, false);
+        let long = "the quick brown fox jumps over the lazy dog again and again";
+        styled(&mut wb, 4, 0, long, 11.0, true);
+        wb.sheet_mut(s).unwrap().row_dims.set(2, 2, 557, false);
+        let sheet = wb.sheet(s).unwrap();
+        let h = optimal_row_heights(&wb, sheet, 0, MAX_ROWS - 1);
+        // 13 pt × 1.21 = 15.73 pt = 555 hmm, plus AOO's 41.
+        assert_eq!(h.get(&0), Some(&596));
+        // Default-size text keeps the standard height; a set height is
+        // never changed.
+        assert_eq!(h.get(&1), None);
+        assert_eq!(h.get(&2), None);
+        assert_eq!(row_height(sheet, 2), 557);
+        // Line breaks and wrapped text take their lines.
+        assert_eq!(h.get(&3), Some(&(940 + 41)), "2 × 11 pt × 1.21");
+        assert!(h[&4] > 3 * 469, "{h:?}");
+        // The page uses them.
+        let p = pages(&wb);
+        assert_eq!(&p[0].rows[..3], &[(0, 596), (1, 452), (2, 557)]);
+    }
+
+    #[test]
+    fn optimal_heights_scan_only_stored_cells() {
+        let mut wb = Workbook::new();
+        let s = wb.sheets[0].id;
+        for r in (0..100_000).step_by(7) {
+            styled(&mut wb, r, 0, "x", 14.0, false);
+        }
+        let t = std::time::Instant::now();
+        let h = optimal_row_heights(&wb, wb.sheet(s).unwrap(), 0, MAX_ROWS - 1);
+        assert_eq!(h.len(), 100_000 / 7 + 1);
+        assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
     }
 
     #[test]
