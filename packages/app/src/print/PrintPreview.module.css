@@ -25,6 +25,11 @@
   background: var(--tally-bg);
 }
 
+/* macOS overlay title bar: leave room for the traffic lights (as the toolbar does). */
+.inset {
+  padding-left: 84px;
+}
+
 .barTitle {
   margin-right: 8px;
   font-size: 14px;

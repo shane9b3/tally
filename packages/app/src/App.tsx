@@ -135,7 +135,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
         <CellPopovers />
         <Dialogs />
         <ShortcutsModal />
-        <PrintPreview />
+        <PrintPreview inset={trafficLights} />
         <W56Chrome />
         <SavePrompt />
         <Toasts />

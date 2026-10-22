@@ -11,7 +11,7 @@ import { dpiFor, fitWidthZoom, fitZoom, pageLabel, paperPx } from "./printReduce
 import { usePrintStore } from "./printStore";
 import styles from "./PrintPreview.module.css";
 
-export function PrintPreview() {
+export function PrintPreview({ inset = false }: { inset?: boolean }) {
   const open = usePrintStore((s) => s.open);
   if (!open) return null;
   return <Preview />;
@@ -53,7 +53,7 @@ function Preview() {
 
   return (
     <div className={styles.overlay} role="dialog" aria-label={t("print.preview", "Print preview")} data-testid="print-preview">
-      <div className={styles.bar}>
+      <div className={inset ? `${styles.bar} ${styles.inset}` : styles.bar} data-tauri-drag-region>
         <span className={styles.barTitle}>{t("print.preview", "Print preview")}</span>
         <button type="button" className={styles.icon} aria-label="Previous page" disabled={page <= 0} onClick={() => print.stepPage(-1)}>
           ‹
