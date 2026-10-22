@@ -13,13 +13,18 @@ formula = "=MROUND(-10;-3)"
 expect = -9
 
 [[case]]
-name = "signs differ"
+name = "signs differ: AOO rounds (Excel/LO: error)"
 formula = "=MROUND(10;-3)"
-expect = "Err:502"
+expect = 9
 
 [[case]]
+name = "negative number, positive multiple (AOO)"
 formula = "=MROUND(-10;3)"
-expect = "Err:502"
+expect = -9
+
+[[case]]
+formula = "=MROUND(-7;5)"
+expect = -5
 
 [[case]]
 formula = "=MROUND(5;0)"

@@ -210,9 +210,8 @@ fn mround(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         if m == 0.0 {
             return Ok(Value::Number(0.0));
         }
-        if (x > 0.0 && m < 0.0) || (x < 0.0 && m > 0.0) {
-            return Err(ErrorKind::InvalidArgument);
-        }
+        // AOO 4.1 (analysis add-in getMround) rounds whatever the signs:
+        // MROUND(-10;3) = -9. Excel and LibreOffice return an error instead.
         Ok(Value::Number((x / m).round() * m))
     })
 }
@@ -386,10 +385,9 @@ mod tests {
     fn rounding_and_division() {
         assert_eq!(c("MROUND", &[10.0, 3.0]), Value::Number(9.0));
         assert_eq!(c("MROUND", &[-10.0, -3.0]), Value::Number(-9.0));
-        assert_eq!(
-            c("MROUND", &[10.0, -3.0]),
-            Value::Error(ErrorKind::InvalidArgument)
-        );
+        // Signs differ: AOO rounds (Excel/LibreOffice return an error).
+        assert_eq!(c("MROUND", &[10.0, -3.0]), Value::Number(9.0));
+        assert_eq!(c("MROUND", &[-7.0, 5.0]), Value::Number(-5.0));
         assert_eq!(c("MROUND", &[5.0, 0.0]), Value::Number(0.0));
         assert_eq!(c("MROUND", &[1.5, 1.0]), Value::Number(2.0));
         assert_eq!(c("QUOTIENT", &[7.0, 2.0]), Value::Number(3.0));
