@@ -42,6 +42,21 @@ pub fn long_number_format_warning() -> String {
     )
 }
 
+/// Longest font family name kept from a file (names are matched against
+/// installed fonts, never used as paths; docs/security.md).
+pub const MAX_FONT_NAME_LEN: usize = 128;
+
+/// A font family name from a file, cleaned: quotes and surrounding blanks
+/// removed, control characters refused, at most [`MAX_FONT_NAME_LEN`]
+/// characters. `None` when nothing usable is left.
+pub fn clean_font_name(raw: &str) -> Option<String> {
+    let name = raw.trim().trim_matches(['\'', '"']).trim();
+    if name.is_empty() || name.chars().any(char::is_control) {
+        return None;
+    }
+    Some(name.chars().take(MAX_FONT_NAME_LEN).collect())
+}
+
 /// A whole workbook.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct WorkbookData {
@@ -1459,6 +1474,12 @@ pub struct DocSettings {
     /// entries in order (v0.5).
     #[serde(default)]
     pub custom_sort_lists: Vec<Vec<String>>,
+    /// The document's default font family (ODS `style:default-style` /
+    /// `Default` cell style, XLSX `fonts[0]`): what cells whose
+    /// [`FontData::family`] is `None` are drawn with. `None` for the
+    /// application font. A name from the file, never a path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_font: Option<String>,
 }
 
 /// Document metadata. Timestamps are ISO 8601 strings as stored in the file.
@@ -1520,6 +1541,21 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tally_types::{ErrorKind, IterSettings, Matrix};
+
+    #[test]
+    fn font_names_are_cleaned() {
+        assert_eq!(
+            clean_font_name(" 'Arial Unicode MS' ").as_deref(),
+            Some("Arial Unicode MS")
+        );
+        assert_eq!(clean_font_name("\"Times\""), Some("Times".into()));
+        assert_eq!(clean_font_name("  "), None);
+        assert_eq!(clean_font_name("a\nb"), None);
+        assert_eq!(
+            clean_font_name(&"x".repeat(500)).map(|s| s.len()),
+            Some(MAX_FONT_NAME_LEN)
+        );
+    }
 
     fn sample() -> WorkbookData {
         let bold = StyleData {
@@ -1942,6 +1978,7 @@ mod tests {
                 locale: Some("de-DE".into()),
                 structure_protection: None,
                 custom_sort_lists: vec![vec!["Q1".into(), "Q2".into()]],
+                default_font: Some("Arial".into()),
             },
             meta: DocMeta {
                 title: Some("Sample".into()),

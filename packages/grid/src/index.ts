@@ -30,7 +30,7 @@ export {
 } from "./selection";
 export { Geometry, HEADER_HEIGHT } from "./geometry";
 export { fillTarget, fillDirection, type FillDir } from "./fillHandle";
-export { wrapLines, luminance, textColor, cssColor, drawStyleId } from "./renderer";
+export { wrapLines, luminance, textColor, cssColor, drawStyleId, cssFontFamily, cleanFamily, fontSubstitutes } from "./renderer";
 export { drawCfIcon, drawDataBar, iconCount, ICON_COLORS } from "./cfIcons";
 export { cellsOptionsActive, EngineClientSource, type EngineClientSourceOptions } from "./engineSource";
 // Wave 5 seams (W5-0b)

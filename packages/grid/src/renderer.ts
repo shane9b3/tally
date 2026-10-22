@@ -87,10 +87,67 @@ export function fontPx(style: StyleDto | undefined, theme: Theme, zoom: number):
   return (theme.fonts.sizePx * pt * zoom) / 10;
 }
 
-/** The `ctx.font` string for a cell. */
+/**
+ * Metric-compatible stand-ins tried after a document font that may not be
+ * installed: the same groups, in the same order, as the PDF writer
+ * (`family_candidates` in crates/tally-io-pdf/src/fonts.rs).
+ */
+const FONT_GROUPS: readonly (readonly [readonly string[], readonly string[]])[] = [
+  [["arial", "liberation sans", "arimo", "helvetica", "helvetica neue"], ["Arial", "Liberation Sans", "Arimo", "Helvetica"]],
+  [["times new roman", "liberation serif", "tinos", "times"], ["Times New Roman", "Liberation Serif", "Tinos", "Times"]],
+  [["courier new", "liberation mono", "cousine", "courier"], ["Courier New", "Liberation Mono", "Cousine", "Courier"]],
+  [["calibri", "carlito"], ["Calibri", "Carlito"]],
+  [["cambria", "caladea"], ["Cambria", "Caladea"]],
+  [["menlo", "monospace"], ["Menlo", "Courier New", "Liberation Mono"]],
+];
+
+/** The substitutes of `name` (without `name` itself). */
+export function fontSubstitutes(name: string): string[] {
+  const lower = name.toLowerCase();
+  const group = FONT_GROUPS.find(([keys]) => keys.includes(lower));
+  return group ? group[1].filter((n) => n.toLowerCase() !== lower) : [];
+}
+
+/** Longest family name used (names come from untrusted files). */
+const MAX_FAMILY_LEN = 128;
+
+/**
+ * A document font family as a CSS family name: quotes, backslashes and
+ * control characters removed, at most 128 characters; `null` when nothing
+ * usable is left (the app font is used).
+ */
+export function cleanFamily(family: string | null | undefined): string | null {
+  if (!family) return null;
+  // eslint-disable-next-line no-control-regex
+  const s = family.replace(/["\\\u0000-\u001f\u007f]/g, "").trim().slice(0, MAX_FAMILY_LEN).trim();
+  return s.length > 0 ? s : null;
+}
+
+const familyCache = new Map<string, string>();
+
+/**
+ * The CSS `font-family` list for a cell: the document font, its
+ * metric-compatible substitutes, then the app font (`appFamily`). The
+ * browser falls through names that are not installed.
+ */
+export function cssFontFamily(family: string | null | undefined, appFamily: string): string {
+  const name = cleanFamily(family);
+  if (!name || /^inter( variable)?$/i.test(name)) return appFamily;
+  const key = `${name}\u0000${appFamily}`;
+  let css = familyCache.get(key);
+  if (css === undefined) {
+    const subs = fontSubstitutes(name);
+    css = [name, ...subs].map((n) => `"${n}"`).join(", ") + `, ${appFamily}`;
+    if (familyCache.size > 1024) familyCache.clear();
+    familyCache.set(key, css);
+  }
+  return css;
+}
+
+/** The `ctx.font` string for a cell (its font family, else the app font). */
 export function cellFont(style: StyleDto | undefined, theme: Theme, zoom: number): string {
   const px = Math.round(fontPx(style, theme, zoom) * 100) / 100;
-  const family = style?.fontFamily ? `"${style.fontFamily}", ${theme.fonts.family}` : theme.fonts.family;
+  const family = cssFontFamily(style?.fontFamily, theme.fonts.family);
   return `${style?.italic ? "italic " : ""}${style?.bold ? "600" : "400"} ${px}px ${family}`;
 }
 
@@ -177,6 +234,8 @@ export interface MainFrame {
   showGridlines?: boolean;
   /** View ▸ Column and row headers (default `true`). */
   showHeaders?: boolean;
+  /** The locale's decimal separator (default `.`). */
+  decimalSep?: string;
 }
 
 export interface OverlayFrame extends MainFrame {
@@ -775,13 +834,14 @@ export class Renderer {
     let width = this.measurer.measure(font, text);
     if (cell.kind === "number" && width > avail) {
       // Numbers never overflow: shrink General, otherwise ###.
-      const general = (style?.numberFormat ?? "General") === "General" || isGeneralNumberText(text);
-      const key = `${font}\u0000${text}\u0000${Math.floor(avail)}`;
+      const sep = f.decimalSep ?? ".";
+      const general = (style?.numberFormat ?? "General") === "General" || isGeneralNumberText(text, sep);
+      const key = `${font}\u0000${text}\u0000${Math.floor(avail)}\u0000${sep}`;
       let fitted = this.fitCache.get(key);
       if (fitted === undefined) {
         fitted =
           general && cell.num !== null
-            ? fitNumber(cell.num, avail, (s) => this.measurer.measure(font, s), text)
+            ? fitNumber(cell.num, avail, (s) => this.measurer.measure(font, s), text, sep)
             : "###";
         this.fitCache.set(key, fitted);
       }

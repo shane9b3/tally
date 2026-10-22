@@ -299,6 +299,7 @@ export class Grid {
     if ("traces" in partial && partial.traces !== prev.traces) this.invalidate("overlay");
     if ("invalidCells" in partial && partial.invalidCells !== prev.invalidCells) this.invalidate("overlay");
     if ("showGridlines" in partial && partial.showGridlines !== prev.showGridlines) this.invalidate("main");
+    if ("decimalSep" in partial && partial.decimalSep !== prev.decimalSep) this.invalidate("main");
     if ("showHeaders" in partial && partial.showHeaders !== prev.showHeaders) this.relayout();
     if ("objects" in partial && partial.objects !== prev.objects) {
       this.objects.setObjects(this.props.objects ?? []);
@@ -960,6 +961,7 @@ export class Grid {
         pageBreakPreview: this.props.pageBreakPreview ?? false,
         showGridlines: this.props.showGridlines !== false,
         showHeaders: this.headersShown,
+        decimalSep: this.props.decimalSep ?? ".",
       });
 
       const panes = this.geo.panes();

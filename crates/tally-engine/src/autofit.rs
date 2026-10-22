@@ -1,10 +1,13 @@
 //! Row auto-height (`Op::AutoFitRows`) without a text shaper: text is
-//! measured with an approximate advance-width table for Inter (the UI
-//! font), wrapped greedily at word boundaries for wrapped cells, and laid
-//! out with a 1.3 line height. Heights are capped at 409 pt like Excel.
+//! measured with the cell's font where it is installed ([`crate::fonts`]),
+//! else with an approximate advance-width table for Inter (the UI font),
+//! wrapped greedily at word boundaries for wrapped cells, and laid out with
+//! a 1.3 line height for Inter (scaled by the face's ascent + descent for
+//! other fonts). Heights are capped at 409 pt like Excel.
 
 use tally_types::{CellAddr, Value};
 
+use crate::fonts::{Face, Measurer};
 use crate::storage::{ColumnStore, Sheet, StyleId};
 use crate::styles::DEFAULT_FONT_SIZE_PT;
 use crate::units::{hmm_to_px, DEFAULT_COL_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX};
@@ -51,8 +54,27 @@ pub fn text_width_px(text: &str, size_px: f32, bold: bool) -> f32 {
 }
 
 /// Lines `text` needs at `width_px` (greedy word wrap; explicit line
-/// breaks always count).
+/// breaks always count), measured with Inter.
 pub fn line_count(text: &str, width_px: f32, size_px: f32, bold: bool, wrap: bool) -> u32 {
+    line_count_with(
+        &mut Measurer::new(),
+        Face::app(bold),
+        text,
+        width_px,
+        size_px,
+        wrap,
+    )
+}
+
+/// [`line_count`] measured with `face` (resolved once per cell by `m`).
+pub fn line_count_with(
+    m: &mut Measurer,
+    face: Face,
+    text: &str,
+    width_px: f32,
+    size_px: f32,
+    wrap: bool,
+) -> u32 {
     let mut lines = 0u32;
     for para in text.split('\n') {
         if !wrap {
@@ -61,9 +83,9 @@ pub fn line_count(text: &str, width_px: f32, size_px: f32, bold: bool, wrap: boo
         }
         let mut n = 1u32;
         let mut cur = 0.0f32;
-        let space = char_em(' ') * size_px;
+        let space = m.width_px(face, " ", size_px);
         for word in para.split(' ') {
-            let w = text_width_px(word, size_px, bold);
+            let w = m.width_px(face, word, size_px);
             if cur == 0.0 {
                 // A word longer than the line breaks inside the word.
                 if w > width_px && width_px > 0.0 {
@@ -98,8 +120,9 @@ fn col_width_px(sheet: &Sheet, col: u32) -> f32 {
 }
 
 /// The height row `row` needs, or `None` when it has no wrapped or
-/// larger-than-default text (it then keeps its height).
-pub fn needed_height_px(wb: &Workbook, sheet: &Sheet, row: u32) -> Option<f32> {
+/// larger-than-default text (it then keeps its height). `m` is shared by
+/// the rows of one operation.
+pub fn needed_height_px(m: &mut Measurer, wb: &Workbook, sheet: &Sheet, row: u32) -> Option<f32> {
     let mut best: Option<f32> = None;
     for (ci, col) in sheet.columns.iter().enumerate() {
         let c = ci as u32;
@@ -124,8 +147,11 @@ pub fn needed_height_px(wb: &Workbook, sheet: &Sheet, row: u32) -> Option<f32> {
         }
         let size_px = pt_to_px(size_pt);
         let width = (col_width_px(sheet, c) - H_PADDING_PX).max(1.0);
-        let lines = line_count(&text, width, size_px, st.data.font.bold, wrap);
-        let h = (lines as f32 * size_px * LINE_HEIGHT + v_padding_px()).min(MAX_ROW_HEIGHT_PX);
+        let face = m.style_face(wb, style_id.0, &st.data);
+        let lines = line_count_with(m, face, &text, width, size_px, wrap);
+        // Inter's 1.3 line height, scaled to the face's ascent + descent.
+        let line_h = LINE_HEIGHT * face.line_em / crate::fonts::INTER_LINE_EM;
+        let h = (lines as f32 * size_px * line_h + v_padding_px()).min(MAX_ROW_HEIGHT_PX);
         best = Some(best.map_or(h, |b: f32| b.max(h)));
     }
     best.map(|h| h.max(DEFAULT_ROW_HEIGHT_PX).round())
@@ -134,7 +160,14 @@ pub fn needed_height_px(wb: &Workbook, sheet: &Sheet, row: u32) -> Option<f32> {
 /// The optimal width of column `col` over rows `r0..=r1` (the widest
 /// unwrapped text plus padding, as AOO's `GetOptimalColWidth`), or `None`
 /// when no cell there has text.
-pub fn needed_width_px(wb: &Workbook, sheet: &Sheet, col: u32, r0: u32, r1: u32) -> Option<f32> {
+pub fn needed_width_px(
+    m: &mut Measurer,
+    wb: &Workbook,
+    sheet: &Sheet,
+    col: u32,
+    r0: u32,
+    r1: u32,
+) -> Option<f32> {
     let column = sheet.column(col)?;
     let mut best: Option<f32> = None;
     for (row, _) in column.cells.iter_range(r0, r1) {
@@ -148,9 +181,10 @@ pub fn needed_width_px(wb: &Workbook, sheet: &Sheet, col: u32, r0: u32, r1: u32)
             continue;
         }
         let size_px = pt_to_px(st.data.font.size_pt.unwrap_or(DEFAULT_FONT_SIZE_PT));
+        let face = m.style_face(wb, style_id.0, &st.data);
         let w = text
             .split('\n')
-            .map(|l| text_width_px(l, size_px, st.data.font.bold))
+            .map(|l| m.width_px(face, l, size_px))
             .fold(0.0f32, f32::max)
             + H_PADDING_PX;
         best = Some(best.map_or(w, |b: f32| b.max(w)));

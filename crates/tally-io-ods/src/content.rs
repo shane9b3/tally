@@ -72,6 +72,9 @@ struct CellParsed {
     repeat: u32,
     content: CellContentData,
     style: Option<String>,
+    /// The cell names a style, "Default" included (it then takes no
+    /// column default style).
+    named: bool,
     span: (u32, u32),
     /// `table:number-matrix-columns/rows-spanned` of an array formula.
     matrix: Option<(u32, u32)>,
@@ -92,6 +95,129 @@ struct Run {
     col: u32,
     len: u32,
     cell: CellParsed,
+}
+
+/// A run of a column default style that ended: `(c0, c1, style, first
+/// row, last row)`.
+type EndedRun = (u32, u32, u32, u32, u32);
+
+/// The column default cell styles of a table, applied as AOO does: to the
+/// cells the rows contain that have no style of their own (and whose row
+/// has no default style), not to the whole column, so a sheet whose rows
+/// end at its content has no formatting below it (`XMLStylesImportHelper
+/// .cxx`, `ScMyStylesImportHelper::AddDefaultRange`). Cells of adjacent
+/// rows merge into vertical runs.
+#[derive(Default)]
+struct ColDefaults {
+    /// `(first column, last column, style name)` of each column element.
+    names: Vec<(u32, u32, String)>,
+    /// The resolved styles, sorted and disjoint: `(c0, c1, style)`.
+    styles: Vec<(u32, u32, u32)>,
+    /// The runs ending at `end`: `(c0, c1, style, first row)`, sorted.
+    open: Vec<(u32, u32, u32, u32)>,
+    /// The last row of the open runs.
+    end: u32,
+    /// The unstyled cells of the last row, as column spans.
+    bare: Vec<(u32, u32)>,
+}
+
+impl ColDefaults {
+    /// The default style name of column `col`.
+    fn name(&self, col: u32) -> Option<&str> {
+        let i = self.names.partition_point(|(_, e, _)| *e < col);
+        self.names
+            .get(i)
+            .filter(|(s, _, _)| *s <= col)
+            .map(|(_, _, n)| n.as_str())
+    }
+
+    /// Extends the runs with the unstyled cells `bare` (sorted column
+    /// spans) of rows `r0..=r1`; returns the runs this ends and how many
+    /// spans it examined.
+    fn cover(&mut self, r0: u32, r1: u32, bare: Vec<(u32, u32)>) -> (Vec<EndedRun>, u64) {
+        let adjacent = !self.open.is_empty() && self.end.checked_add(1) == Some(r0);
+        if adjacent && bare == self.bare {
+            self.end = r1;
+            return (Vec::new(), 0);
+        }
+        let mut next: Vec<(u32, u32, u32)> = Vec::new();
+        for &(a, b) in &bare {
+            let mut i = self.styles.partition_point(|&(_, e, _)| e < a);
+            while let Some(&(c0, c1, st)) = self.styles.get(i) {
+                if c0 > b {
+                    break;
+                }
+                let (x, y) = (a.max(c0), b.min(c1));
+                match next.last_mut() {
+                    // Adjacent spans of one style (cells split by a
+                    // repeat) are one run.
+                    Some(l) if l.2 == st && l.1.checked_add(1) == Some(x) => l.1 = y,
+                    _ => next.push((x, y, st)),
+                }
+                i += 1;
+            }
+        }
+        // Diff the open runs against the new spans column-wise: columns in
+        // both (with one style) continue, only leaving columns end and only
+        // joining ones start, so a cell that changes in each row ends one
+        // run per change, not one per column.
+        let old = std::mem::take(&mut self.open);
+        let work = (next.len() + old.len()) as u64;
+        let mut bounds: Vec<u32> = Vec::with_capacity(2 * (old.len() + next.len()));
+        for &(a, b, _, _) in &old {
+            bounds.extend([a, b + 1]);
+        }
+        for &(a, b, _) in &next {
+            bounds.extend([a, b + 1]);
+        }
+        bounds.sort_unstable();
+        bounds.dedup();
+        let mut ended: Vec<EndedRun> = Vec::new();
+        let mut open: Vec<(u32, u32, u32, u32)> = Vec::with_capacity(next.len());
+        let (mut i, mut j) = (0, 0);
+        for w in bounds.windows(2) {
+            let (x, y) = (w[0], w[1] - 1);
+            while old.get(i).is_some_and(|o| o.1 < x) {
+                i += 1;
+            }
+            while next.get(j).is_some_and(|n| n.1 < x) {
+                j += 1;
+            }
+            let o = old.get(i).filter(|o| o.0 <= x);
+            let n = next.get(j).filter(|n| n.0 <= x);
+            let cont = adjacent && matches!((o, n), (Some(o), Some(n)) if o.2 == n.2);
+            if let Some(&(_, _, st, first)) = o.filter(|_| !cont) {
+                match ended.last_mut() {
+                    Some(l) if (l.2, l.3) == (st, first) && l.1 + 1 == x => l.1 = y,
+                    _ => ended.push((x, y, st, first, self.end)),
+                }
+            }
+            if let Some(&(_, _, st)) = n {
+                let first = match o {
+                    Some(o) if cont => o.3,
+                    _ => r0,
+                };
+                match open.last_mut() {
+                    Some(l) if (l.2, l.3) == (st, first) && l.1 + 1 == x => l.1 = y,
+                    _ => open.push((x, y, st, first)),
+                }
+            }
+        }
+        self.open = open;
+        self.end = r1;
+        self.bare = bare;
+        (ended, work)
+    }
+
+    /// Ends every run.
+    fn finish(&mut self) -> Vec<EndedRun> {
+        let end = self.end;
+        self.bare.clear();
+        std::mem::take(&mut self.open)
+            .into_iter()
+            .map(|(a, b, s, first)| (a, b, s, first, end))
+            .collect()
+    }
 }
 
 struct Parser<'a> {
@@ -284,8 +410,8 @@ impl Parser<'_> {
         let mut header_rows: Option<(u32, u32)> = None;
         let mut header_cols: Option<(u32, u32)> = None;
         let mut col: u32 = 0;
-        let mut col_defaults: Vec<(u32, u32, String)> = Vec::new();
-        let mut col_runs_done = false;
+        let mut col_defaults = ColDefaults::default();
+        let mut col_styles_done = false;
         let mut row: u32 = 0;
         let mut open_groups: Vec<crate::tools::OpenGroup> = Vec::new();
         let d = xml.depth();
@@ -317,21 +443,18 @@ impl Parser<'_> {
                                 .attr("table:default-cell-style-name")
                                 .filter(|n| *n != "Default")
                             {
-                                col_defaults.push((col, end, ds.to_string()));
+                                col_defaults.names.push((col, end, ds.to_string()));
                             }
                         }
                         col = col.saturating_add(rep);
                         xml.skip()?;
                     }
                     "table:table-row" => {
-                        if !col_runs_done {
-                            // A column default cell style formats the whole
-                            // column, empty cells included. Emitted before
-                            // the row runs, which override it.
-                            col_runs_done = true;
-                            self.push_column_defaults(&mut sheet, &col_defaults)?;
+                        if !col_styles_done {
+                            col_styles_done = true;
+                            self.resolve_column_defaults(&mut col_defaults);
                         }
-                        self.parse_row(xml, &c, &mut row, &mut sheet, &col_defaults)?;
+                        self.parse_row(xml, &c, &mut row, &mut sheet, &mut col_defaults)?;
                     }
                     "table:named-expressions" => {
                         let tab = self.sheets.saturating_sub(1) as u32;
@@ -436,9 +559,8 @@ impl Parser<'_> {
                 _ => {}
             }
         }
-        if !col_runs_done {
-            self.push_column_defaults(&mut sheet, &col_defaults)?;
-        }
+        let ended = col_defaults.finish();
+        self.push_column_runs(&mut sheet, &ended)?;
         // Cells name their validation; collect each one's ranges.
         let mut names: Vec<String> = self.val_rects.keys().cloned().collect();
         names.sort();
@@ -479,21 +601,32 @@ impl Parser<'_> {
         Ok(())
     }
 
-    fn push_column_defaults(
-        &mut self,
-        sheet: &mut SheetData,
-        col_defaults: &[(u32, u32, String)],
-    ) -> Result<(), OdsError> {
-        for (c0, c1, name) in col_defaults {
-            let Some(style) = self.styles.resolve(name) else {
+    /// Resolves the column default styles into disjoint spans.
+    fn resolve_column_defaults(&mut self, d: &mut ColDefaults) {
+        for (c0, c1, name) in &d.names {
+            let Some(st) = self.styles.resolve(name) else {
                 continue;
             };
+            match d.styles.last_mut() {
+                Some(l) if l.2 == st && l.1.checked_add(1) == Some(*c0) => l.1 = *c1,
+                _ => d.styles.push((*c0, *c1, st)),
+            }
+        }
+    }
+
+    /// Emits the runs of column default styles that ended.
+    fn push_column_runs(
+        &mut self,
+        sheet: &mut SheetData,
+        ended: &[EndedRun],
+    ) -> Result<(), OdsError> {
+        for &(c0, c1, style, start_row, end_row) in ended {
             self.count_runs(u64::from(c1 - c0) + 1)?;
-            for col in *c0..=*c1 {
+            for col in c0..=c1 {
                 sheet.style_runs.push(StyleRun {
                     col,
-                    start_row: 0,
-                    end_row: MAX_ROWS - 1,
+                    start_row,
+                    end_row,
                     style,
                 });
             }
@@ -507,9 +640,12 @@ impl Parser<'_> {
         e: &Elem,
         row: &mut u32,
         sheet: &mut SheetData,
-        col_defaults: &[(u32, u32, String)],
+        col_defaults: &mut ColDefaults,
     ) -> Result<(), OdsError> {
         let rep = parse_count(e, "table:number-rows-repeated", MAX_ROWS);
+        // A row default style (even "Default") replaces the column
+        // defaults for the row's unstyled cells.
+        let row_has_default = e.attr("table:default-cell-style-name").is_some();
         let row_default = e
             .attr("table:default-cell-style-name")
             .filter(|n| *n != "Default")
@@ -532,6 +668,8 @@ impl Parser<'_> {
         let hidden = !filtered && visibility.is_some_and(|v| v != "visible");
 
         let mut runs: Vec<Run> = Vec::new();
+        // Unstyled cells, which take the column default styles.
+        let mut bare: Vec<(u32, u32)> = Vec::new();
         let mut col: u32 = 0;
         let d = xml.depth();
         loop {
@@ -546,8 +684,18 @@ impl Parser<'_> {
                             cell.matrix = None;
                         }
                         let crep = cell.repeat;
+                        if !cell.named {
+                            cell.style.clone_from(&row_default);
+                        }
                         if col < MAX_COLS {
                             let len = crep.min(MAX_COLS - col);
+                            if !cell.named && !row_has_default {
+                                let c1 = col + (len - 1);
+                                match bare.last_mut() {
+                                    Some(l) if l.1.checked_add(1) == Some(col) => l.1 = c1,
+                                    _ => bare.push((col, c1)),
+                                }
+                            }
                             let keep =
                                 !matches!(cell.content, CellContentData::Value(Value::Empty))
                                     || cell.style.is_some()
@@ -575,6 +723,13 @@ impl Parser<'_> {
         }
         let rep = rep.min(MAX_ROWS - *row);
         let last = *row + (rep - 1);
+        if !col_defaults.styles.is_empty() {
+            let (ended, work) = col_defaults.cover(*row, last, bare);
+            // Rows of changing cells redo the spans: count them like
+            // runs so a crafted table cannot make that unbounded.
+            self.count_runs(work)?;
+            self.push_column_runs(sheet, &ended)?;
+        }
         if filtered {
             let h = height.unwrap_or(crate::DEFAULT_ROW_HEIGHT_HMM);
             if let Some(v) = self.filter_rows.last_mut() {
@@ -695,17 +850,13 @@ impl Parser<'_> {
                     c1: run.col.saturating_add(cs - 1).min(MAX_COLS - 1),
                 });
             }
+            // An unstyled value takes its column's default style (an empty
+            // one is covered by the column runs).
+            let unstyled = !run.cell.named && !row_has_default;
             let name = run.cell.style.clone().or_else(|| {
-                if non_empty {
-                    row_default.clone().or_else(|| {
-                        col_defaults
-                            .iter()
-                            .find(|(s, e, _)| (*s..=*e).contains(&run.col))
-                            .map(|(_, _, n)| n.clone())
-                    })
-                } else {
-                    None
-                }
+                (non_empty && unstyled)
+                    .then(|| col_defaults.name(run.col).map(str::to_string))
+                    .flatten()
             });
             let mut style = name.and_then(|n| self.styles.resolve(&n));
             if let Some(code) = run.cell.std_format.as_deref() {
@@ -928,6 +1079,7 @@ impl Parser<'_> {
                 .attr("table:style-name")
                 .filter(|n| *n != "Default")
                 .map(str::to_string),
+            named: e.attr("table:style-name").is_some(),
             span,
             matrix,
             validation: e

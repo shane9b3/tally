@@ -109,6 +109,7 @@ pub(crate) fn read_with(
         .clone()
         .filter(|l| !l.eq_ignore_ascii_case("en-US"));
     let named_styles = styles.named_styles();
+    let default_font = styles.default_font();
     let mut wb = WorkbookData {
         sheets,
         styles: styles.styles,
@@ -122,6 +123,7 @@ pub(crate) fn read_with(
         ..WorkbookData::default()
     };
     wb.settings.locale = locale;
+    wb.settings.default_font = default_font;
     wb.settings.structure_protection = content.structure_protection;
     if let Some(calc) = content.calc {
         wb.settings.calc_settings = calc;

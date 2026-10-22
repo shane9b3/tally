@@ -59,7 +59,7 @@ struct RawDxf {
 }
 
 /// The cell formats of a workbook, mapped to the model style table.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct StyleTable {
     /// Deduplicated model styles.
     pub styles: Vec<StyleData>,
@@ -71,8 +71,29 @@ pub(crate) struct StyleTable {
     pub dxfs: Vec<CfStyleData>,
     /// Named cell styles (`cellStyles`; wave 5).
     pub cell_styles: Vec<tally_model::CellStyleData>,
+    /// The workbook's default font family (`fonts[0]`, the `Normal`
+    /// style's font).
+    pub default_font: Option<String>,
+    /// Maximum digit width (px) of the default font: the unit of
+    /// `<col width>`.
+    pub mdw: f64,
     /// What was dropped to stay within limits.
     pub warnings: Vec<String>,
+}
+
+impl Default for StyleTable {
+    fn default() -> Self {
+        Self {
+            styles: Vec::new(),
+            xf_style: Vec::new(),
+            xf_date: Vec::new(),
+            dxfs: Vec::new(),
+            cell_styles: Vec::new(),
+            default_font: None,
+            mdw: crate::units::MDW,
+            warnings: Vec::new(),
+        }
+    }
 }
 
 impl StyleTable {
@@ -157,7 +178,9 @@ fn parse_font<R: BufRead>(xr: &mut XmlReader<R>) -> Result<RawFont, XlsxError> {
                     .and_then(|v| v.trim().parse::<f32>().ok())
                     .filter(|s| s.is_finite() && *s > 0.0 && *s < 4096.0);
             }
-            "name" | "rFont" => f.name = e.attr_local("val").map(str::to_string),
+            "name" | "rFont" => {
+                f.name = e.attr_local("val").and_then(tally_model::clean_font_name);
+            }
             "color" => f.color = Some(color_of(&e)),
             _ => {}
         }
@@ -526,7 +549,11 @@ fn build(raw: &Raw) -> StyleTable {
         None => INDEXED.to_vec(),
     };
     let default_font = raw.fonts.first().cloned().unwrap_or_default();
-    let mut table = StyleTable::default();
+    let mut table = StyleTable {
+        default_font: default_font.name.clone(),
+        mdw: crate::units::max_digit_width(default_font.name.as_deref(), default_font.size),
+        ..StyleTable::default()
+    };
     if raw.long_fmt {
         table
             .warnings
@@ -738,6 +765,28 @@ mod tests {
             },
         );
         parse_styles(&mut xr).unwrap_or_default()
+    }
+
+    #[test]
+    fn default_font_is_the_first_font() {
+        let t = table();
+        assert_eq!(t.default_font.as_deref(), Some("Calibri"));
+        // Cells in the default font keep no family; others name theirs.
+        let s = &t.styles[t.style_of(2).unwrap_or(99) as usize];
+        assert_eq!(s.font.family.as_deref(), Some("Arial"));
+        let arial_first = STYLES
+            .replacen("Calibri", "Tmp", 1)
+            .replacen("Arial", "Calibri", 1)
+            .replacen("Tmp", "Arial", 1);
+        let mut xr = XmlReader::new(
+            arial_first.as_bytes(),
+            XmlLimits {
+                max_depth: 64,
+                max_attrs: 64,
+            },
+        );
+        let t = parse_styles(&mut xr).unwrap_or_default();
+        assert_eq!(t.default_font.as_deref(), Some("Arial"));
     }
 
     #[test]

@@ -181,7 +181,7 @@ tested by the malicious corpora in `crates/tally-io-xls/tests/fixtures.rs`,
 | SXC (`tally-io-ods`) | zip `mimetype`; the ODS zip-bomb, XML depth/attribute and cell/text budgets | identical to ODS | names are mapped while reading; no extra allocation per element. |
 | HTML (`tally-io-html`) | input ≤ 64 MiB (`MAX_INPUT_BYTES`) | ≤ 1024 tables, ≤ 10 M cells, ≤ 64 KiB per cell, `colspan`/`rowspan` clamped to 1000 | a hand-written tokenizer: no DOM, no script execution, `<script>`/`<style>`/`<template>` bodies skipped, entities decoded without recursion; formulas stay text (the engine recognizes numbers and dates only). |
 | dBase (`tally-io-dbf`) | version byte, header length `= 32 + 32·fields + 1`, record length `= 1 + Σ field widths`, record count ≤ what the file holds (+1 for a truncated last record) | ≤ 2 M records, ≤ 1024 fields, ≤ 10 M cells, file ≤ 256 MiB | memo/binary fields are never followed (no `.dbt` is opened). |
-| PDF/print (`tally-io-pdf`, `tally-engine/src/print.rs`) | — (the input is the document) | ≤ 10,000 pages per layout and per job (`print::MAX_PAGES` = `tally_io_pdf::MAX_PAGES`), ≤ 20 M cell positions per job and 1 M per page, 5 M items per job, ≤ 4 MB per chart SVG (`ChartSvgDto`) and 32 MB per job, ≤ 4096 characters per text item, 1000 lines per wrapped cell, ≤ 40 Mpx per preview, LRU of 4 jobs | SVGs come from the UI's own ECharts rendering and are parsed by usvg (no external resources: no resource directory, file `href`s resolve to nothing, only `data:` images of at most 8,192 px per side / 16 Mpx, no SVGZ); fonts are read from the system font database only (fontdb), subsetted and embedded; the rasterizer (hayro) runs on the PDF Tally just wrote. Page previews are PNGs at 18–600 dpi (the shell clamps the dpi). |
+| PDF/print (`tally-io-pdf`, `tally-engine/src/print.rs`) | — (the input is the document) | ≤ 10,000 pages per layout and per job (`print::MAX_PAGES` = `tally_io_pdf::MAX_PAGES`), ≤ 20 M cell positions per job and 1 M per page, 5 M items per job, ≤ 4 MB per chart SVG (`ChartSvgDto`) and 32 MB per job, ≤ 4096 characters per text item, 1000 lines per wrapped cell, ≤ 40 Mpx per preview, LRU of 4 jobs | SVGs come from the UI's own ECharts rendering and are parsed by usvg (no external resources: no resource directory, file `href`s resolve to nothing, only `data:` images of at most 8,192 px per side / 16 Mpx, no SVGZ); fonts are read from the system font database only (fontdb; document font names are matched against installed family names, see §3d), subsetted and embedded; the rasterizer (hayro) runs on the PDF Tally just wrote. Page previews are PNGs at 18–600 dpi (the shell clamps the dpi). |
 
 External links and DDE (`crates/tally-engine/src/external.rs`): a `DDE()`
 formula evaluates to `#N/A`, a reference into another file (`'file:///…'#$Sheet.A1`,
@@ -200,6 +200,60 @@ rounds per cyclic component and at most 20M evaluations per recalc. The
 solver evaluates the sandbox at most 10,000 times per request, within
 `timeout_ms` (≤ 60 s, sampling included), and branch-and-bound is bounded
 by `max_iterations` (≤ 100,000) nodes and a depth of 1,000.
+
+## 3d. Document fonts (`tally-io-pdf/src/fonts.rs`, `tally-engine/src/fonts.rs`)
+
+Documents name the fonts they want (ODS `style:font-face` /
+`style:font-name` / `fo:font-family`, the default style's font; XLSX
+`<font><name>`), and Tally uses an installed font of that name on screen,
+in layout math and in print/PDF. The names are untrusted:
+
+- **Names, never paths.** A name is cleaned on import
+  (`tally_model::clean_font_name`: quotes and blanks trimmed, names with
+  control characters dropped, at most 128 characters; `MAX_FONT_NAME_LEN`)
+  and is only ever compared, ignoring ASCII case, with the family names of
+  fonts fontdb found in the standard font directories (macOS
+  `/System/Library/Fonts` (+ `Supplemental`), `/Library/Fonts`,
+  `~/Library/Fonts`; Windows `%WINDIR%\Fonts` and the per-user fonts
+  directory; Linux the fontconfig directories, `/usr/share/fonts`,
+  `~/.local/share/fonts`, `~/.fonts`). A name that looks like a path is just
+  a family that matches nothing (tests: `tally-io-pdf/tests/fonts.rs`
+  `missing_family_falls_back_to_inter_with_a_warning`,
+  `tally-io-ods/tests/default_font.rs` `hostile_font_names_stay_names`).
+  ODS font-face declarations are capped at 4,096 per document.
+- **Bounded loading.** Fonts are loaded into a context per operation (a
+  render, a print job, an AutoFit, a pagination: `tally_io_pdf::FontContext`,
+  `tally_engine::fonts::Measurer`), dropped with it. A context loads at most
+  `MAX_SYSTEM_FACES` (64) system faces and `MAX_FONT_BYTES` (384 MiB) of
+  font files, none larger than `MAX_FONT_FILE_BYTES` (256 MiB); faces of
+  one collection (`.ttc`) share one read. At most `MAX_FONT_REQUESTS` (256)
+  distinct (family, bold, italic) requests per context go to the system
+  fonts. Limits are sticky: past them a context uses Inter and never
+  reloads. Layout resolves each style's font once per operation and
+  measures without per-character fallback; drawing searches the system
+  fonts for at most 32 missing characters per render (a 128-character
+  block without a match is not searched again).
+- **Malformed system fonts do not take printing down.** Face parsing
+  (ttf-parser, krilla/skrifa) runs under `catch_unwind` and a face that
+  fails, panics or has nonsensical metrics is skipped (Inter is used); a
+  panic while scanning the font directories leaves the database empty. If
+  rendering a job with installed fonts fails or panics anyway (e.g. in
+  subsetting), the job is rendered again with Inter only and a warning
+  says so (`render_pdf`). Embedded fonts are subsets (krilla/subsetter).
+- **Screen.** The grid quotes the cleaned name in the canvas font string
+  (`packages/grid/src/renderer.ts` `cleanFamily`/`cssFontFamily`: quotes,
+  backslashes and control characters removed, at most 128 characters),
+  followed by metric-compatible substitutes and the app font; the webview
+  only resolves installed fonts by name (no font is fetched; CSP
+  `font-src 'self' data:`).
+- A missing font falls back silently to a metric-compatible substitute
+  (Arial ↔ Liberation Sans/Arimo, Times New Roman ↔ Liberation
+  Serif/Tinos, Courier New ↔ Liberation Mono/Cousine, Calibri ↔ Carlito,
+  Cambria ↔ Caladea; the grid uses the same groups) and then to the
+  bundled Inter, with a warning in `render_pdf`'s report (not shown in the
+  app: print jobs drop it).
+- **XLSX export** writes font names of at most 31 characters (Excel's
+  limit) and counts `<col width>` in the default font's digit width.
 
 ## 4. Path traversal (WP5)
 

@@ -56,6 +56,7 @@ pub mod fexpr;
 pub mod fill;
 pub mod filter;
 pub mod find;
+pub mod fonts;
 pub mod formula_cells;
 pub mod goalseek;
 pub mod images;

@@ -113,19 +113,40 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
     let mut s = String::new();
     s.push_str(XML_DECL);
     let _ = write!(s, r#"<office:document-styles{NS} office:version="1.2">"#);
+    // The fonts styles.xml names: the default font and the named styles'.
+    let mut faces: Vec<&str> = Vec::new();
+    for f in data.settings.default_font.iter().chain(
+        data.cell_styles
+            .iter()
+            .filter_map(|c| c.style.font.family.as_ref()),
+    ) {
+        if !faces.contains(&f.as_str()) {
+            faces.push(f);
+        }
+    }
+    font_face_decls(&mut s, faces);
     s.push_str("<office:styles>");
     s.push_str(r#"<style:default-style style:family="table-cell"><style:paragraph-properties style:tab-stop-distance="1.25cm"/>"#);
-    if let Some(tag) = &data.settings.locale {
-        let mut parts = tag.splitn(2, '-');
-        let lang = parts.next().unwrap_or("en");
-        let country = parts.next();
-        s.push_str(r#"<style:text-properties fo:language=""#);
-        escape_attr(lang, &mut s);
-        s.push('"');
-        if let Some(c) = country {
-            s.push_str(r#" fo:country=""#);
-            escape_attr(c, &mut s);
+    let default_font = data.settings.default_font.as_deref();
+    if data.settings.locale.is_some() || default_font.is_some() {
+        s.push_str("<style:text-properties");
+        if let Some(f) = default_font {
+            s.push_str(r#" style:font-name=""#);
+            escape_attr(f, &mut s);
             s.push('"');
+        }
+        if let Some(tag) = &data.settings.locale {
+            let mut parts = tag.splitn(2, '-');
+            let lang = parts.next().unwrap_or("en");
+            let country = parts.next();
+            s.push_str(r#" fo:language=""#);
+            escape_attr(lang, &mut s);
+            s.push('"');
+            if let Some(c) = country {
+                s.push_str(r#" fo:country=""#);
+                escape_attr(c, &mut s);
+                s.push('"');
+            }
         }
         s.push_str("/>");
     }
@@ -797,6 +818,19 @@ fn cell_style_xml_with(
     out.push_str("</style:style>");
 }
 
+/// `office:font-face-decls` declaring `faces` (name = family).
+fn font_face_decls<'a>(s: &mut String, faces: impl IntoIterator<Item = &'a str>) {
+    s.push_str("<office:font-face-decls>");
+    for f in faces {
+        s.push_str(r#"<style:font-face style:name=""#);
+        escape_attr(f, s);
+        s.push_str(r#"" svg:font-family=""#);
+        escape_attr(f, s);
+        s.push_str(r#""/>"#);
+    }
+    s.push_str("</office:font-face-decls>");
+}
+
 fn flush<W: Write + Seek>(buf: &mut String, zip: &mut ZipWriter<W>) -> Result<(), OdsError> {
     zip.write_all(buf.as_bytes())?;
     buf.clear();
@@ -812,15 +846,19 @@ fn write_content<W: Write + Seek>(
     let mut s = String::with_capacity(FLUSH_AT + 4096);
     s.push_str(XML_DECL);
     let _ = write!(s, r#"<office:document-content{NS} office:version="1.2">"#);
-    s.push_str("<office:font-face-decls>");
+    let mut faces: Vec<&str> = data
+        .settings
+        .default_font
+        .iter()
+        .map(String::as_str)
+        .collect();
     for f in &plan.fonts {
-        s.push_str(r#"<style:font-face style:name=""#);
-        escape_attr(f, &mut s);
-        s.push_str(r#"" svg:font-family=""#);
-        escape_attr(f, &mut s);
-        s.push_str(r#""/>"#);
+        if !faces.contains(&f.as_str()) {
+            faces.push(f);
+        }
     }
-    s.push_str("</office:font-face-decls><office:automatic-styles>");
+    font_face_decls(&mut s, faces);
+    s.push_str("<office:automatic-styles>");
     plan.automatic_styles(&mut s);
     s.push_str("</office:automatic-styles><office:body><office:spreadsheet");
     if let Some(p) = &data.settings.structure_protection {
@@ -942,11 +980,15 @@ struct RowCtx<'a> {
     matrix: &'a HashMap<(u32, u32), (u32, u32)>,
     row: u32,
     extras: &'a Extras<'a>,
+    /// Columns every row reaches: a column default style formats only the
+    /// cells the rows contain (AOO's import), so the columns that have one
+    /// get cells in every row.
+    fill: u32,
 }
 
 impl RowCtx<'_> {
     fn is_plain(&self) -> bool {
-        self.covered.is_empty() && self.anchors.is_empty()
+        self.covered.is_empty() && self.anchors.is_empty() && self.fill <= 1
     }
 
     fn covered(&self, c: u32) -> bool {
@@ -986,7 +1028,7 @@ impl RowCtx<'_> {
     fn end(&self) -> u32 {
         let a = self.covered.iter().map(|&(_, b)| b.saturating_add(1));
         let b = self.anchors.iter().map(|&(c, _, _)| c.saturating_add(1));
-        a.chain(b).max().unwrap_or(0)
+        a.chain(b).max().unwrap_or(0).max(self.fill)
     }
 }
 
@@ -1394,11 +1436,17 @@ pub(crate) fn write_sheet<W: Write + Seek>(
         .chain(repeat_rows.map(|r| r.1))
         .chain(row_walk.last_index())
         .max();
-    let end_row = max_cell_row
-        .max(max_run_row)
-        .max(max_style_row)
-        .map_or(1, |r| r.saturating_add(1))
-        .min(MAX_ROWS);
+    // Whole-column styles need rows to the end, as AOO writes them.
+    let fill = col_default.keys().next_back().map_or(0, |c| c + 1);
+    let end_row = if fill > 0 {
+        MAX_ROWS
+    } else {
+        max_cell_row
+            .max(max_run_row)
+            .max(max_style_row)
+            .map_or(1, |r| r.saturating_add(1))
+            .min(MAX_ROWS)
+    };
     let mut r = 0;
     let mut ci = 0;
     let mut vi = 0;
@@ -1459,6 +1507,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
             matrix: &matrix,
             row: r,
             extras: &extras,
+            fill,
         };
         for m in &active_m {
             if m.r0 == r {

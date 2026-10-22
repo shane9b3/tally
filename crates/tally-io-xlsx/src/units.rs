@@ -10,12 +10,42 @@
 /// Maximum digit width of the default font (Calibri 11) in pixels.
 pub(crate) const MDW: f64 = 7.0;
 
-/// `<col width>` → pixels.
-pub(crate) fn col_width_to_px(width: f64) -> f64 {
+/// Maximum digit width in pixels (96 dpi) of the workbook's default font
+/// `family` at `size_pt`, the unit `<col width>` counts in: the digit
+/// advance of common families (Calibri's for others) times the size,
+/// rounded as Excel does (Calibri 11 → 7, Arial 10 → 7, Arial 11 → 8,
+/// Courier New 11 → 9).
+pub(crate) fn max_digit_width(family: Option<&str>, size_pt: Option<f32>) -> f64 {
+    let em = match family.map(|f| f.trim().to_ascii_lowercase()).as_deref() {
+        Some("arial" | "helvetica" | "liberation sans" | "arimo" | "cambria" | "caladea") => 0.556,
+        Some("times new roman" | "times" | "liberation serif" | "tinos") => 0.5,
+        Some("courier new" | "courier" | "liberation mono" | "cousine" | "consolas" | "menlo") => {
+            0.6
+        }
+        Some("verdana") => 0.636,
+        Some("tahoma") => 0.546,
+        _ => 0.507,
+    };
+    let size = f64::from(
+        size_pt
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .unwrap_or(11.0),
+    );
+    (em * size * 96.0 / 72.0).round().clamp(1.0, 64.0)
+}
+
+/// `<col width>` → pixels, for a default font of maximum digit width
+/// `mdw` px ([`MDW`] for Calibri 11).
+pub(crate) fn col_width_to_px(width: f64, mdw: f64) -> f64 {
     if !width.is_finite() || width <= 0.0 {
         return 0.0;
     }
-    ((256.0 * width + (128.0 / MDW).trunc()) / 256.0 * MDW).trunc()
+    let mdw = if mdw.is_finite() && mdw >= 1.0 {
+        mdw
+    } else {
+        MDW
+    };
+    ((256.0 * width + (128.0 / mdw).trunc()) / 256.0 * mdw).trunc()
 }
 
 /// Pixels → 1/100 mm.
@@ -58,13 +88,20 @@ mod tests {
     #[test]
     fn widths() {
         // Excel's default column: 8.43 characters, stored 9.140625, 64 px.
-        assert_eq!(col_width_to_px(9.140625), 64.0);
+        assert_eq!(col_width_to_px(9.140625, MDW), 64.0);
         assert_eq!(px_to_hmm(64.0), 1693);
         assert_eq!(hmm_to_px(1693), 64);
         // 20 characters displayed (width 20.7109375) = 145 px.
-        assert_eq!(col_width_to_px(20.7109375), 145.0);
-        assert_eq!(col_width_to_px(-1.0), 0.0);
-        assert_eq!(col_width_to_px(f64::NAN), 0.0);
+        assert_eq!(col_width_to_px(20.7109375, MDW), 145.0);
+        assert_eq!(col_width_to_px(-1.0, MDW), 0.0);
+        assert_eq!(col_width_to_px(f64::NAN, MDW), 0.0);
+        // Arial 11 counts in 8 px digits.
+        assert_eq!(col_width_to_px(9.140625, 8.0), 73.0);
+        assert_eq!(max_digit_width(Some("Calibri"), Some(11.0)), 7.0);
+        assert_eq!(max_digit_width(None, None), 7.0);
+        assert_eq!(max_digit_width(Some("Arial"), Some(10.0)), 7.0);
+        assert_eq!(max_digit_width(Some("arial"), Some(11.0)), 8.0);
+        assert_eq!(max_digit_width(Some("Courier New"), None), 9.0);
     }
 
     #[test]

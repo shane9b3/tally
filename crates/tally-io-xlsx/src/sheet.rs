@@ -508,7 +508,7 @@ impl State<'_, '_> {
         let width = attr_f64(e, "width").filter(|w| *w > 0.0 && *w <= 256.0);
         if custom || hidden {
             let hmm = match width {
-                Some(w) if w > 0.0 => px_to_hmm(col_width_to_px(w)),
+                Some(w) if w > 0.0 => px_to_hmm(col_width_to_px(w, self.ctx.styles.mdw)),
                 _ => crate::DEFAULT_COL_WIDTH_HMM,
             };
             push_run(&mut self.out.col_widths, c0, c1, hmm, hidden);

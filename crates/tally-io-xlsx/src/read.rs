@@ -340,6 +340,7 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
     wb.names = defined_names(&info.names, &resolver, &mut wb.sheets);
     wb.cell_styles = cell_styles;
     wb.settings.structure_protection = info.structure_protection.clone();
+    wb.settings.default_font.clone_from(&styles.default_font);
     if info.date1904 {
         wb.settings.calc_settings.date_epoch = DateEpoch::D1904;
     }

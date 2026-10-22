@@ -701,9 +701,21 @@ fn apply_op_inner(
             }
             let ranges = ranges_of(*sheet, ranges)?;
             let mut inv = Vec::with_capacity(ranges.len());
+            // The UI shows the document font as the family of unstyled
+            // cells; choosing it (or clearing the family) means "the
+            // document font", so it is not baked into the styles.
+            let doc_font =
+                crate::fonts::patch_picks_document_font(patch, wb.default_font.as_deref());
             for range in ranges {
                 inv.push(Change::Range(capture_range(wb, range, false, true)));
-                map_styles(wb, range, |t, old| t.patched(old, patch));
+                map_styles(wb, range, |t, old| {
+                    let id = t.patched(old, patch);
+                    if doc_font {
+                        t.without_family(id)
+                    } else {
+                        id
+                    }
+                });
                 if let Some(b) = &patch.borders {
                     crate::styles::apply_borders(wb, range, b);
                 }

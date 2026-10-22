@@ -47,6 +47,7 @@ export function GridHost() {
   const clip = useDataStore((s) => s.clip);
   const clipRange = clip && clip.sheet === sheet ? clip.range : null;
   const pageBreaksOn = useV3Store((s) => s.pageBreaksOn);
+  const decimalSep = decimalSepOf(useV3Store((s) => s.locale));
   const pageBreaks = useV3Store((s) => s.pageBreaks);
   const printRange = useV3Store((s) => s.pageSetup?.printRange ?? null);
   // ARIA mirror (wave 5, §4 item 46): the sheet name and the active cell's formula.
@@ -111,6 +112,7 @@ export function GridHost() {
         outline={outline}
         showGridlines={showGridlines}
         showHeaders={showHeaders}
+        decimalSep={decimalSep}
         onOutlineToggle={ctl.w56.onOutlineToggle}
         onOutlineLevel={ctl.w56.onOutlineLevel}
         onCellButton={ctl.v3.onCellButton}
@@ -137,4 +139,21 @@ export function GridHost() {
       <ChartLayer />
     </div>
   );
+}
+
+const decimalSeps = new Map<string, string>();
+
+/** The decimal separator of locale `tag` (General numbers shrink to fit with it). */
+export function decimalSepOf(tag: string | null | undefined): string {
+  const key = tag || "en-US";
+  let sep = decimalSeps.get(key);
+  if (sep === undefined) {
+    try {
+      sep = new Intl.NumberFormat(key).formatToParts(1.5).find((p) => p.type === "decimal")?.value ?? ".";
+    } catch {
+      sep = ".";
+    }
+    decimalSeps.set(key, sep);
+  }
+  return sep;
 }

@@ -577,7 +577,10 @@ fn style_runs_round_trip() {
     let back = read_ods(Cursor::new(bytes), &Limits::default()).unwrap();
     let sheet = &back.sheets[0];
     assert_eq!(sheet.cells, wb.sheets[0].cells);
-    assert_eq!(sheet.style_runs, runs);
-    assert!(back.styles[sheet.style_runs[0].style as usize].font.bold);
-    assert!(back.styles[sheet.style_runs[1].style as usize].font.italic);
+    // Disjoint runs: their order does not matter.
+    let mut got = sheet.style_runs.clone();
+    got.sort_by_key(|r| (r.col, r.start_row));
+    assert_eq!(got, runs);
+    assert!(back.styles[got[0].style as usize].font.bold);
+    assert!(back.styles[got[1].style as usize].font.italic);
 }

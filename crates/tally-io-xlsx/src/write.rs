@@ -107,9 +107,48 @@ fn rgb(c: u32) -> Color {
     Color::RGB(model_to_rgb(c))
 }
 
-/// The `rust_xlsxwriter` format of a model style.
-fn format_of(s: &StyleData, report: &mut Report) -> Format {
-    let mut f = Format::new();
+/// The document's default font when it is not `rust_xlsxwriter`'s own
+/// (Calibri).
+fn default_font(data: &WorkbookData) -> Option<&str> {
+    data.settings
+        .default_font
+        .as_deref()
+        .filter(|f| !f.eq_ignore_ascii_case("Calibri"))
+}
+
+/// A font name as Excel accepts it (at most 31 characters).
+fn excel_font_name(name: &str) -> String {
+    name.chars().take(31).collect()
+}
+
+/// The format of an unstyled cell: the default font.
+fn base_format(data: &WorkbookData) -> Format {
+    match default_font(data) {
+        Some(f) => Format::new().set_font_name(excel_font_name(f)),
+        None => Format::new(),
+    }
+}
+
+/// `set_default_format`'s default column width (px) for the default font:
+/// 8.43 digits of its maximum digit width plus padding, one of the widths
+/// `rust_xlsxwriter` supports, so `<col width>` counts in that font's
+/// digits as Excel will (Calibri 11: 64 px, Arial 11: 72 px).
+fn default_col_width_px(data: &WorkbookData) -> u32 {
+    match crate::units::max_digit_width(default_font(data), Some(11.0)) as u32 {
+        0..=6 => 56,
+        7 => 64,
+        8 => 72,
+        9 | 10 => 80,
+        11 => 96,
+        12 => 104,
+        _ => 120,
+    }
+}
+
+/// The `rust_xlsxwriter` format of a model style (`base`: the format of
+/// the default look).
+fn format_of(s: &StyleData, base: &Format, report: &mut Report) -> Format {
+    let mut f = base.clone();
     if s.font.bold {
         f = f.set_bold();
     }
@@ -128,7 +167,7 @@ fn format_of(s: &StyleData, report: &mut Report) -> Format {
         f = f.set_font_strikethrough();
     }
     if let Some(family) = &s.font.family {
-        f = f.set_font_name(family.as_str());
+        f = f.set_font_name(excel_font_name(family));
     }
     if let Some(size) = s.font.size_pt {
         f = f.set_font_size(f64::from(size));
@@ -472,7 +511,7 @@ impl SheetWriter<'_> {
                 .iter()
                 .find(|c| c.row == m.r0 && c.col == m.c0)
                 .and_then(|c| c.style);
-            let default = Format::new();
+            let default = base_format(self.data);
             let fmt = self.fmt(anchor_style).unwrap_or(&default);
             if let Err(e) = ws.merge_range(m.r0, col_num(m.c0), m.r1, col_num(m.c1), "", fmt) {
                 report.warn(format!("sheet {:?}: merge skipped ({e})", sheet.name));
@@ -603,7 +642,12 @@ impl SheetWriter<'_> {
                 ));
                 continue;
             };
-            let fmt = self.fmt(cell.and_then(|c| c.style));
+            // An unstyled link is in the default font (not Calibri).
+            let link_format =
+                default_font(self.data).map(|_| base_format(self.data).set_hyperlink());
+            let fmt = self
+                .fmt(cell.and_then(|c| c.style))
+                .or(link_format.as_ref());
             if let Err(e) = ws.write_url_with_options(l.row, col_num(l.col), url, text, "", fmt) {
                 report.warn(format!(
                     "sheet {:?}: a hyperlink was skipped ({e})",
@@ -652,11 +696,17 @@ pub(crate) fn write(
     };
     let epoch = data.settings.calc_settings.date_epoch;
     let mut wb = Workbook::new();
+    // The default font becomes the `Normal` style's (fonts[0]); Calibri
+    // 11's column metrics (64 px) and row height (20 px) are kept.
+    let base = base_format(data);
+    if default_font(data).is_some() {
+        wb.set_default_format(&base, 20, default_col_width_px(data))?;
+    }
 
     let formats: Vec<Format> = data
         .styles
         .iter()
-        .map(|s| format_of(s, &mut report))
+        .map(|s| format_of(s, &base, &mut report))
         .collect();
     let date_styles: Vec<bool> = data
         .styles

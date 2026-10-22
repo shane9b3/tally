@@ -684,11 +684,13 @@ pub fn apply(
             rows.sort_unstable();
             rows.dedup();
             let mut heights: Vec<(u32, f32)> = Vec::new();
+            // One font context for the whole AutoFit.
+            let mut m = crate::fonts::Measurer::new();
             for r in rows {
                 if s.row_dims.is_hidden(r) {
                     continue;
                 }
-                if let Some(h) = crate::autofit::needed_height_px(wb, s, r) {
+                if let Some(h) = crate::autofit::needed_height_px(&mut m, wb, s, r) {
                     heights.push((r, h));
                 }
             }

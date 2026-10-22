@@ -166,6 +166,11 @@ impl Workbook {
         }
         wb.cell_styles = data.cell_styles.clone();
         wb.custom_sort_lists = data.settings.custom_sort_lists.clone();
+        wb.default_font = data
+            .settings
+            .default_font
+            .as_deref()
+            .and_then(tally_model::clean_font_name);
         let style_ids: Vec<StyleId> = data
             .styles
             .iter()
@@ -518,6 +523,7 @@ impl Workbook {
                     .then(|| self.locale.tag.to_string()),
                 structure_protection: self.structure_protection.clone(),
                 custom_sort_lists: self.custom_sort_lists.clone(),
+                default_font: self.default_font.clone(),
             },
             meta: self.meta.clone(),
             warnings: Vec::new(),

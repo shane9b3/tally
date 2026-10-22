@@ -287,6 +287,17 @@ loses.
 
 ### ODS
 
+- **Column default cell styles** (`table:table-column
+  table:default-cell-style-name`): applied as AOO applies them, to the cells
+  the rows contain that name no style of their own (and whose row has no
+  `table:default-cell-style-name`), merged into vertical runs; a cell naming
+  `Default` opts out. A sheet whose rows stop at its content has no
+  formatting below it. On export, a style covering a whole column is
+  written as the column's default style with rows to the last one, as AOO
+  writes them. Known gap: once such a column has one cell with a different
+  style, it is no longer a single whole-column run, and the next export
+  writes the rest of the column as repeated styled empty cells instead of a
+  column default (same formatting, larger `content.xml`).
 - **DataPilot**: `table:data-pilot-tables` / `table:data-pilot-table` with
   `table:source-cell-range` or `table:database-source-table`
   (`table:table-name` = a named database range), `table:target-range-address`
@@ -497,6 +508,11 @@ overflow into empty neighbours, `###` for numbers that do not fit,
 optional gridlines and row/column headers, headers and footers with
 `&[PAGE]`-style placeholders (each line of each region in its own 14 pt box
 from the top of its area; lines past a fixed height are left off), charts from the SVGs the UI supplies, notes
-on a page at the end when the page setup asks for it. Pictures and
+on a page at the end when the page setup asks for it. Without a print
+range a sheet prints from A1 to the last cell with content or a note,
+extended by fills and borders as AOO's `ScTable::GetPrintArea` does: a run
+of 84 or more equal rows below a column's data, or 30 or more equally
+formatted columns after the data, ends the area there, so formatting
+repeated down or across whole columns prints no empty pages. Pictures and
 conditional data bars/icons are not printed yet. The PDF has no outline,
 tags or links.

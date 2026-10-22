@@ -27,8 +27,9 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use krilla::color::rgb;
 use krilla::geom::{Path, PathBuilder, Point, Rect as KRect, Size, Transform};
@@ -36,9 +37,17 @@ use krilla::num::NormalizedF32;
 use krilla::page::PageSettings;
 use krilla::paint::{Fill, FillRule, LineCap, Stroke, StrokeDash};
 use krilla::surface::Surface;
-use krilla::text::{Font, GlyphId, KrillaGlyph};
+use krilla::text::{GlyphId, KrillaGlyph};
 use krilla::Document;
 use krilla_svg::{SurfaceExt, SvgSettings};
+
+mod fonts;
+
+pub use fonts::{
+    family_candidates, resolve_font, resolve_font_with, FaceId, FontContext, ResolvedFont,
+    MAX_FONT_BYTES, MAX_FONT_FILE_BYTES, MAX_FONT_REQUESTS, MAX_SYSTEM_FACES,
+};
+use fonts::{svg_db, Fonts};
 
 /// Most pages in one job.
 pub const MAX_PAGES: usize = 10_000;
@@ -58,8 +67,6 @@ pub const MAX_SVG_IMAGE_SIDE: u32 = 8192;
 pub const MAX_SVG_IMAGE_PIXELS: u64 = 16_000_000;
 /// Most lines one wrapped text item produces.
 const MAX_LINES: usize = 1000;
-/// Most system faces scanned for a missing glyph.
-const MAX_FALLBACK_SCAN: usize = 500;
 /// Horizontal cell padding in points.
 const PAD: f32 = 1.5;
 
@@ -236,6 +243,9 @@ pub struct PdfOptions {
     pub system_fonts: bool,
     /// Embed SVG text as text (else as outlines).
     pub svg_text: bool,
+    /// Extra font directories searched by family name besides the system
+    /// fonts (tests inject fonts here instead of relying on the machine's).
+    pub font_dirs: Vec<PathBuf>,
 }
 
 impl Default for PdfOptions {
@@ -243,6 +253,7 @@ impl Default for PdfOptions {
         Self {
             system_fonts: true,
             svg_text: true,
+            font_dirs: Vec::new(),
         }
     }
 }
@@ -274,340 +285,6 @@ pub enum PdfError {
     /// A font could not be loaded.
     #[error("font error: {0}")]
     Font(String),
-}
-
-// ---------------------------------------------------------------------------
-// Fonts
-// ---------------------------------------------------------------------------
-
-static INTER_REGULAR: &[u8] = include_bytes!("../fonts/Inter-Regular.ttf");
-static INTER_BOLD: &[u8] = include_bytes!("../fonts/Inter-Bold.ttf");
-static INTER_ITALIC: &[u8] = include_bytes!("../fonts/Inter-Italic.ttf");
-static INTER_BOLD_ITALIC: &[u8] = include_bytes!("../fonts/Inter-BoldItalic.ttf");
-
-/// Families treated as Inter without a system lookup.
-const INTER_ALIASES: &[&str] = &[
-    "inter",
-    "inter variable",
-    "sans-serif",
-    "sans",
-    "default",
-    "",
-];
-
-/// A family name mapped to a few likely system alternatives.
-fn family_candidates(family: &str) -> Vec<String> {
-    let f = family.trim();
-    let mut v = vec![f.to_string()];
-    match f.to_ascii_lowercase().as_str() {
-        "liberation sans" | "arial" | "helvetica" => {
-            v.extend(["Arial", "Helvetica", "Liberation Sans"].map(String::from));
-        }
-        "liberation serif" | "times new roman" | "times" => {
-            v.extend(["Times New Roman", "Times", "Liberation Serif"].map(String::from));
-        }
-        "liberation mono" | "courier new" | "courier" | "menlo" | "monospace" => {
-            v.extend(["Courier New", "Menlo", "Liberation Mono"].map(String::from));
-        }
-        "calibri" | "carlito" => v.extend(["Carlito", "Calibri"].map(String::from)),
-        "cambria" | "caladea" => v.extend(["Caladea", "Cambria"].map(String::from)),
-        _ => {}
-    }
-    v.dedup();
-    v
-}
-
-/// Preferred system faces for characters Inter lacks (CJK first).
-const FALLBACK_FAMILIES: &[&str] = &[
-    "Noto Sans CJK SC",
-    "Noto Sans CJK JP",
-    "Noto Sans CJK TC",
-    "Noto Sans CJK KR",
-    "PingFang SC",
-    "Hiragino Sans",
-    "Hiragino Kaku Gothic ProN",
-    "Apple SD Gothic Neo",
-    "Microsoft YaHei",
-    "Yu Gothic",
-    "Malgun Gothic",
-    "Noto Sans",
-    "Arial Unicode MS",
-    "DejaVu Sans",
-    "Apple Symbols",
-    "Apple Color Emoji",
-    "Segoe UI Symbol",
-];
-
-/// A loaded face: the bytes, the krilla font and the metrics we need.
-struct Face {
-    data: Arc<Vec<u8>>,
-    index: u32,
-    font: Font,
-    units_per_em: f32,
-    ascender: f32,
-    descender: f32,
-    /// Glyph id and advance (font units) per character, cached.
-    glyphs: HashMap<char, Option<(u16, u16)>>,
-}
-
-impl Face {
-    fn load(data: Arc<Vec<u8>>, index: u32) -> Option<Self> {
-        let face = ttf_parser::Face::parse(&data, index).ok()?;
-        let units_per_em = f32::from(face.units_per_em().max(1));
-        let ascender = f32::from(face.ascender());
-        let descender = f32::from(face.descender());
-        let font = Font::new(data.clone().into(), index)?;
-        Some(Self {
-            data,
-            index,
-            font,
-            units_per_em,
-            ascender,
-            descender,
-            glyphs: HashMap::new(),
-        })
-    }
-
-    /// `(glyph id, advance)` of a character, `None` when the face lacks it.
-    fn glyph(&mut self, ch: char) -> Option<(u16, u16)> {
-        if let Some(g) = self.glyphs.get(&ch) {
-            return *g;
-        }
-        let g = ttf_parser::Face::parse(&self.data, self.index)
-            .ok()
-            .and_then(|face| {
-                let id = face.glyph_index(ch)?;
-                let adv = face.glyph_hor_advance(id).unwrap_or(0);
-                Some((id.0, adv))
-            });
-        self.glyphs.insert(ch, g);
-        g
-    }
-
-    fn has(&mut self, ch: char) -> bool {
-        self.glyph(ch).is_some()
-    }
-}
-
-/// The font registry of one render.
-struct Fonts {
-    faces: Vec<Face>,
-    /// Resolved `(family lowercase, bold, italic)` → face index.
-    resolved: HashMap<(String, bool, bool), usize>,
-    /// Fallback face per character (`None`: nothing has it).
-    fallback: HashMap<char, Option<usize>>,
-    /// System faces already loaded, by fontdb id.
-    loaded_ids: HashMap<fontdb::ID, usize>,
-    db: Option<Arc<fontdb::Database>>,
-    warnings: Vec<String>,
-    missing_reported: bool,
-}
-
-/// The system font database, loaded once per process.
-fn system_db() -> Arc<fontdb::Database> {
-    static DB: OnceLock<Arc<fontdb::Database>> = OnceLock::new();
-    DB.get_or_init(|| {
-        let mut db = fontdb::Database::new();
-        db.load_system_fonts();
-        Arc::new(db)
-    })
-    .clone()
-}
-
-/// The fontdb used for SVG text: the system fonts plus Inter.
-fn svg_db(system: bool) -> Arc<fontdb::Database> {
-    static WITH: OnceLock<Arc<fontdb::Database>> = OnceLock::new();
-    static WITHOUT: OnceLock<Arc<fontdb::Database>> = OnceLock::new();
-    let slot = if system { &WITH } else { &WITHOUT };
-    slot.get_or_init(|| {
-        let mut db = if system {
-            (*system_db()).clone()
-        } else {
-            fontdb::Database::new()
-        };
-        for data in [INTER_REGULAR, INTER_BOLD, INTER_ITALIC, INTER_BOLD_ITALIC] {
-            db.load_font_data(data.to_vec());
-        }
-        db.set_sans_serif_family("Inter");
-        Arc::new(db)
-    })
-    .clone()
-}
-
-impl Fonts {
-    fn new(system: bool) -> Result<Self, PdfError> {
-        let mut f = Self {
-            faces: Vec::new(),
-            resolved: HashMap::new(),
-            fallback: HashMap::new(),
-            loaded_ids: HashMap::new(),
-            db: system.then(system_db),
-            warnings: Vec::new(),
-            missing_reported: false,
-        };
-        // Inter faces 0–3: regular, bold, italic, bold italic.
-        for (i, data) in [INTER_REGULAR, INTER_BOLD, INTER_ITALIC, INTER_BOLD_ITALIC]
-            .iter()
-            .enumerate()
-        {
-            let face = Face::load(Arc::new(data.to_vec()), 0)
-                .ok_or_else(|| PdfError::Font(format!("embedded Inter face {i} is unreadable")))?;
-            f.faces.push(face);
-        }
-        Ok(f)
-    }
-
-    fn inter(bold: bool, italic: bool) -> usize {
-        match (bold, italic) {
-            (false, false) => 0,
-            (true, false) => 1,
-            (false, true) => 2,
-            (true, true) => 3,
-        }
-    }
-
-    fn warn(&mut self, msg: String) {
-        if !self.warnings.contains(&msg) && self.warnings.len() < 100 {
-            self.warnings.push(msg);
-        }
-    }
-
-    fn load_system(&mut self, id: fontdb::ID) -> Option<usize> {
-        if let Some(i) = self.loaded_ids.get(&id) {
-            return Some(*i);
-        }
-        let db = self.db.clone()?;
-        let (source, index) = db.face_source(id)?;
-        let data: Arc<Vec<u8>> = match source {
-            fontdb::Source::Binary(b) => Arc::new(b.as_ref().as_ref().to_vec()),
-            fontdb::Source::File(p) => Arc::new(std::fs::read(p).ok()?),
-            fontdb::Source::SharedFile(_, b) => Arc::new(b.as_ref().as_ref().to_vec()),
-        };
-        let face = Face::load(data, index)?;
-        self.faces.push(face);
-        let i = self.faces.len() - 1;
-        self.loaded_ids.insert(id, i);
-        Some(i)
-    }
-
-    /// The face for a font spec (Inter when the family is unknown).
-    fn resolve(&mut self, spec: &FontSpec) -> usize {
-        let family = spec
-            .family
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase();
-        let key = (family.clone(), spec.bold, spec.italic);
-        if let Some(i) = self.resolved.get(&key) {
-            return *i;
-        }
-        let inter = Self::inter(spec.bold, spec.italic);
-        let mut chosen = inter;
-        if !INTER_ALIASES.contains(&family.as_str()) {
-            let found = self.db.clone().and_then(|db| {
-                let candidates = family_candidates(spec.family.as_deref().unwrap_or(""));
-                let names: Vec<fontdb::Family<'_>> =
-                    candidates.iter().map(|c| fontdb::Family::Name(c)).collect();
-                let q = fontdb::Query {
-                    families: &names,
-                    weight: if spec.bold {
-                        fontdb::Weight::BOLD
-                    } else {
-                        fontdb::Weight::NORMAL
-                    },
-                    stretch: fontdb::Stretch::Normal,
-                    style: if spec.italic {
-                        fontdb::Style::Italic
-                    } else {
-                        fontdb::Style::Normal
-                    },
-                };
-                let id = db.query(&q)?;
-                // fontdb falls back to any family when nothing matches the
-                // requested names: accept only a real match.
-                let info = db.face(id)?;
-                let matched = info
-                    .families
-                    .iter()
-                    .any(|(n, _)| candidates.iter().any(|c| c.eq_ignore_ascii_case(n)));
-                matched.then_some(id)
-            });
-            match found.and_then(|id| self.load_system(id)) {
-                Some(i) => chosen = i,
-                None => self.warn(format!(
-                    "Font \"{}\" is not installed; Inter was used instead.",
-                    spec.family.as_deref().unwrap_or("")
-                )),
-            }
-        }
-        self.resolved.insert(key, chosen);
-        chosen
-    }
-
-    /// A face that has `ch`, searched among the preferred fallback
-    /// families and then every system face (bounded), cached per character.
-    fn fallback_for(&mut self, ch: char) -> Option<usize> {
-        if let Some(f) = self.fallback.get(&ch) {
-            return *f;
-        }
-        let mut found: Option<usize> = None;
-        // Inter itself (another style may be the primary face).
-        for i in 0..4 {
-            if self.faces[i].has(ch) {
-                found = Some(i);
-                break;
-            }
-        }
-        if found.is_none() {
-            if let Some(db) = self.db.clone() {
-                let mut ids: Vec<fontdb::ID> = Vec::new();
-                for fam in FALLBACK_FAMILIES {
-                    let q = fontdb::Query {
-                        families: &[fontdb::Family::Name(fam)],
-                        ..fontdb::Query::default()
-                    };
-                    if let Some(id) = db.query(&q) {
-                        if db
-                            .face(id)
-                            .is_some_and(|f| f.families.iter().any(|(n, _)| n == fam))
-                        {
-                            ids.push(id);
-                        }
-                    }
-                }
-                ids.extend(db.faces().map(|f| f.id).take(MAX_FALLBACK_SCAN));
-                let mut seen = std::collections::HashSet::new();
-                for id in ids {
-                    if !seen.insert(id) {
-                        continue;
-                    }
-                    let has = db
-                        .with_face_data(id, |data, index| {
-                            ttf_parser::Face::parse(data, index)
-                                .ok()
-                                .is_some_and(|f| f.glyph_index(ch).is_some())
-                        })
-                        .unwrap_or(false);
-                    if has {
-                        if let Some(i) = self.load_system(id) {
-                            found = Some(i);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        if found.is_none() && !self.missing_reported {
-            self.missing_reported = true;
-            self.warn(format!(
-                "No installed font has the character U+{:04X}; it is drawn as a box.",
-                u32::from(ch)
-            ));
-        }
-        self.fallback.insert(ch, found);
-        found
-    }
 }
 
 /// One run of glyphs in one face.
@@ -1083,6 +760,10 @@ fn draw_svg(surface: &mut Surface<'_>, rect: &Rect, svg: &str, opts: &PdfOptions
 }
 
 /// Renders a job to PDF.
+///
+/// Installed fonts are third-party data: when rendering with them fails
+/// (an error or a panic in a font parser), the job is rendered again with
+/// Inter only and a warning says so.
 pub fn render_pdf(job: &PrintJob, opts: &PdfOptions) -> Result<Rendered, PdfError> {
     if job.pages.len() > MAX_PAGES {
         return Err(PdfError::Limit(format!("more than {MAX_PAGES} pages")));
@@ -1091,7 +772,31 @@ pub fn render_pdf(job: &PrintJob, opts: &PdfOptions) -> Result<Rendered, PdfErro
     if items > MAX_ITEMS {
         return Err(PdfError::Limit(format!("more than {MAX_ITEMS} items")));
     }
-    let mut fonts = Fonts::new(opts.system_fonts)?;
+    let first = catch_unwind(AssertUnwindSafe(|| render_inner(job, opts)));
+    let uses_installed = opts.system_fonts || !opts.font_dirs.is_empty();
+    match first {
+        Ok(Ok(r)) => Ok(r),
+        Ok(Err(e)) if !uses_installed => Err(e),
+        Err(_) if !uses_installed => Err(PdfError::Write("PDF rendering failed".into())),
+        _ => {
+            let inter_only = PdfOptions {
+                system_fonts: false,
+                font_dirs: Vec::new(),
+                ..opts.clone()
+            };
+            let mut r = catch_unwind(AssertUnwindSafe(|| render_inner(job, &inter_only)))
+                .map_err(|_| PdfError::Write("PDF rendering failed".into()))??;
+            r.warnings.insert(
+                0,
+                "An installed font could not be used; the document was printed with Inter.".into(),
+            );
+            Ok(r)
+        }
+    }
+}
+
+fn render_inner(job: &PrintJob, opts: &PdfOptions) -> Result<Rendered, PdfError> {
+    let mut fonts = Fonts::new(opts)?;
     let mut document = Document::new();
     let mut metadata = krilla::metadata::Metadata::new().creator("Tally".into());
     if let Some(t) = &job.title {
@@ -1173,20 +878,24 @@ pub fn render_pdf(job: &PrintJob, opts: &PdfOptions) -> Result<Rendered, PdfErro
 /// Width of `text` in points when drawn with `font` (single line, Inter
 /// metrics or the resolved system face), for callers that lay out text.
 pub fn measure_text(text: &str, font: &FontSpec, system_fonts: bool) -> f32 {
-    static CACHE: OnceLock<Mutex<Option<Fonts>>> = OnceLock::new();
-    let m = CACHE.get_or_init(|| Mutex::new(None));
-    let mut guard = match m.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    if guard.is_none() {
-        *guard = Fonts::new(system_fonts).ok();
-    }
-    let Some(fonts) = guard.as_mut() else {
-        return text.chars().count() as f32 * font.size_pt * 0.55;
-    };
-    let primary = fonts.resolve(font);
-    measure(fonts, primary, text, font.size_pt.clamp(1.0, 400.0))
+    measure_text_with(
+        text,
+        font,
+        &PdfOptions {
+            system_fonts,
+            ..PdfOptions::default()
+        },
+    )
+}
+
+/// [`measure_text`] with explicit options (extra font directories).
+pub fn measure_text_with(text: &str, font: &FontSpec, opts: &PdfOptions) -> f32 {
+    let size = font.size_pt.clamp(1.0, 400.0);
+    fonts::with_measuring(opts, |fonts| {
+        let primary = fonts.resolve(font);
+        fonts.measure_only(primary, text, size)
+    })
+    .unwrap_or_else(|| text.chars().count() as f32 * size * 0.55)
 }
 
 /// The pixels-per-point scale [`rasterize`] uses for a `w × h` pt page at
@@ -1244,7 +953,11 @@ mod tests {
 
     #[test]
     fn wraps_and_measures() {
-        let mut fonts = Fonts::new(false).unwrap();
+        let opts = PdfOptions {
+            system_fonts: false,
+            ..PdfOptions::default()
+        };
+        let mut fonts = Fonts::new(&opts).unwrap();
         let w = measure(&mut fonts, 0, "Hello", 10.0);
         assert!(w > 15.0 && w < 40.0, "{w}");
         let lines = wrap_paragraph(&mut fonts, 0, "one two three four five six", 10.0, 60.0);

@@ -333,6 +333,8 @@ export interface GridProps extends Partial<GridEvents> {
   showGridlines?: boolean;
   /** View ▸ Column and row headers (default `true`; off: no header strips, `headerW`/`headerH` are the outline gutters only). */
   showHeaders?: boolean;
+  /** The document locale's decimal separator (default `.`), used when General numbers shrink to fit. */
+  decimalSep?: string;
 }
 
 

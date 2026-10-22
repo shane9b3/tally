@@ -436,13 +436,19 @@ impl DocumentService for EngineService {
         let d = self.document(doc)?;
         ids.iter()
             .map(|id| {
-                if d.wb.styles.contains(*id) {
-                    Ok(d.wb.styles.to_dto(StyleId(*id)))
+                let mut dto = if d.wb.styles.contains(*id) {
+                    d.wb.styles.to_dto(StyleId(*id))
                 } else if let Some(e) = d.wb.transient.style(*id) {
-                    Ok(crate::styles::style_dto(*id, &e.data, &e.format_code))
+                    crate::styles::style_dto(*id, &e.data, &e.format_code)
                 } else {
-                    Err(ApiError::not_found(format!("no style {id}")))
+                    return Err(ApiError::not_found(format!("no style {id}")));
+                };
+                // Cells without a family are drawn with the document's
+                // default font (the grid falls back to the app font).
+                if dto.font_family.is_none() {
+                    dto.font_family.clone_from(&d.wb.default_font);
                 }
+                Ok(dto)
             })
             .collect()
     }

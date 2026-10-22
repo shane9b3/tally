@@ -204,6 +204,10 @@ pub struct Workbook {
     pub cell_styles: Vec<tally_model::CellStyleData>,
     /// Custom sort lists (v0.5).
     pub custom_sort_lists: Vec<Vec<String>>,
+    /// The document's default font family (cells whose style has no
+    /// family use it); `None` for the application font (see
+    /// [`crate::fonts`]).
+    pub default_font: Option<String>,
     /// External links the reader disabled by policy (v0.6, W5-3; see
     /// [`crate::external`]).
     pub external_links: Vec<tally_api::ExternalLinkWarning>,
@@ -251,6 +255,7 @@ impl Workbook {
             load_aliases: HashMap::new(),
             cell_styles: Vec::new(),
             custom_sort_lists: Vec::new(),
+            default_font: None,
             external_links: Vec::new(),
             table_op_calls: 0,
             table_op_work: 0,

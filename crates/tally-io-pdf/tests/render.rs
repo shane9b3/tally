@@ -37,6 +37,7 @@ fn opts() -> PdfOptions {
     PdfOptions {
         system_fonts: false,
         svg_text: true,
+        ..PdfOptions::default()
     }
 }
 

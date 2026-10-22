@@ -45,37 +45,50 @@ export function sci(num: number, mantissaDigits: number): string {
   return `${mant}E${sign}${String(Math.abs(exp)).padStart(2, "0")}`;
 }
 
-/** Fits `num` into `widthPx`. `text` is the engine's text (defaults to {@link generalText}). */
-export function fitNumber(num: number, widthPx: number, measure: Measure, text?: string): string {
-  const full = text ?? generalText(num);
+/**
+ * Fits `num` into `widthPx`. `text` is the engine's text (defaults to
+ * {@link generalText}); `sep` is the locale's decimal separator, used in
+ * `text` and in the result.
+ */
+export function fitNumber(num: number, widthPx: number, measure: Measure, text?: string, sep = "."): string {
+  const full = text ?? local(generalText(num), sep);
   if (measure(full) <= widthPx) return full;
   if (!Number.isFinite(num)) return "###";
 
   const isSci = /E[+-]\d+$/i.test(full);
   if (!isSci && num !== 0) {
-    const dot = full.indexOf(".");
-    const decimals = dot >= 0 ? full.length - dot - 1 : 0;
+    const dot = full.lastIndexOf(sep);
+    const decimals = dot >= 0 ? full.length - dot - sep.length : 0;
     for (let d = decimals - 1; d >= 0; d--) {
       const s = fixed(num, d);
       if (Number(s) === 0) break; // every significant digit is gone
-      if (measure(s) <= widthPx) return s;
+      const t = local(s, sep);
+      if (measure(t) <= widthPx) return t;
     }
   }
   if (num !== 0) {
     let start = MAX_DIGITS - 1;
     if (isSci) {
-      const m = /^-?\d(?:\.(\d+))?E/i.exec(full);
-      start = Math.max(0, (m?.[1]?.length ?? 0) - 1);
+      const mant = full.slice(0, full.search(/E/i));
+      const at = mant.lastIndexOf(sep);
+      start = Math.max(0, (at >= 0 ? mant.length - at - sep.length : 0) - 1);
     }
     for (let m = start; m >= 0; m--) {
-      const s = sci(num, m);
+      const s = local(sci(num, m), sep);
       if (measure(s) <= widthPx) return s;
     }
   }
   return "###";
 }
 
+/** `s` with its `.` as the locale's decimal separator. */
+function local(s: string, sep: string): string {
+  return sep === "." ? s : s.replace(".", sep);
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /** True if `text` looks like General output (so re-fitting cannot drop format characters). */
-export function isGeneralNumberText(text: string): boolean {
-  return /^-?\d+(\.\d+)?(E[+-]\d+)?$/i.test(text);
+export function isGeneralNumberText(text: string, sep = "."): boolean {
+  return new RegExp(`^-?\\d+(${escapeRe(sep)}\\d+)?(E[+-]\\d+)?$`, "i").test(text);
 }

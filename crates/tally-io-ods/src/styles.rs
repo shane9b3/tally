@@ -96,6 +96,10 @@ pub(crate) struct StyleSheet {
     pub master_pages: HashMap<String, crate::v03::MasterPage>,
     /// `fo:language`-`fo:country` of the default cell style.
     pub default_locale: Option<String>,
+    /// `style:font-name` / `fo:font-family` of `style:default-style`
+    /// (family `table-cell`).
+    default_font_name: Option<String>,
+    default_font_family: Option<String>,
     /// What was dropped to stay within limits.
     pub warnings: Vec<String>,
 }
@@ -374,11 +378,7 @@ impl StyleSheet {
         s.font.italic = m.italic.unwrap_or(false);
         s.font.underline = m.underline.unwrap_or(false);
         s.font.strike = m.strike.unwrap_or(false);
-        s.font.family = m
-            .font_name
-            .as_ref()
-            .map(|n| self.fonts.get(n).cloned().unwrap_or_else(|| n.clone()))
-            .or(m.font_family);
+        s.font.family = self.family_of(m.font_name.as_deref(), m.font_family.as_deref());
         s.font.size_pt = m.size_pt;
         s.font.color = m.color.flatten();
         s.fill = m.fill.flatten();
@@ -409,6 +409,31 @@ impl StyleSheet {
                     && code.chars().count() <= tally_model::MAX_NUMBER_FORMAT_LEN
             });
         s
+    }
+
+    /// A family name from `style:font-name` (through the font-face
+    /// declarations) or `fo:font-family`, cleaned.
+    fn family_of(&self, font_name: Option<&str>, font_family: Option<&str>) -> Option<String> {
+        font_name
+            .map(|n| self.fonts.get(n).map_or(n, String::as_str))
+            .and_then(tally_model::clean_font_name)
+            .or_else(|| font_family.and_then(tally_model::clean_font_name))
+    }
+
+    /// The document's default font: the `Default` cell style's font, else
+    /// the `style:default-style` one (AOO: `Default` inherits the pool
+    /// defaults the default style sets).
+    pub fn default_font(&self) -> Option<String> {
+        self.common
+            .cells
+            .get("Default")
+            .and_then(|d| self.family_of(d.font_name.as_deref(), d.font_family.as_deref()))
+            .or_else(|| {
+                self.family_of(
+                    self.default_font_name.as_deref(),
+                    self.default_font_family.as_deref(),
+                )
+            })
     }
 
     /// The display name of a named style (`style:display-name`, else the
@@ -462,8 +487,13 @@ impl StyleSheet {
                         if let (Some(n), Some(f)) =
                             (e.attr("style:name"), e.attr("svg:font-family"))
                         {
-                            let fam = f.trim().trim_matches(['\'', '"']).to_string();
-                            self.fonts.insert(n.to_string(), fam);
+                            // Bounded: one entry per declaration, at most
+                            // 4,096 (a font name is never a path).
+                            if let Some(fam) = tally_model::clean_font_name(f) {
+                                if self.fonts.len() < 4096 || self.fonts.contains_key(n) {
+                                    self.fonts.insert(n.to_string(), fam);
+                                }
+                            }
                         }
                     }
                     xml.skip()?;
@@ -535,6 +565,12 @@ impl StyleSheet {
                                 None => lang.to_string(),
                             };
                             self.default_locale = Some(tag);
+                        }
+                        if let Some(v) = p.attr("style:font-name") {
+                            self.default_font_name = Some(v.to_string());
+                        }
+                        if let Some(v) = p.attr("fo:font-family") {
+                            self.default_font_family = Some(v.to_string());
                         }
                     }
                     xml.skip()?;
@@ -708,7 +744,9 @@ fn apply_text_props(s: &mut RawCellStyle, p: &Elem) {
         s.font_name = Some(v.to_string());
     }
     if let Some(v) = p.attr("fo:font-family") {
-        s.font_family = Some(v.trim().trim_matches(['\'', '"']).to_string());
+        // A CSS-like list: the first family is the one asked for.
+        let first = v.split(',').next().unwrap_or(v);
+        s.font_family = Some(first.trim().trim_matches(['\'', '"']).to_string());
     }
 }
 

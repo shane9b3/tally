@@ -352,6 +352,7 @@ pub fn define(wb: &mut Workbook, dto: &CellStyleDto) -> Result<Vec<Change>, ApiE
         )));
     }
     let mut style = data_from_dto(&dto.style);
+    style.font.family = crate::fonts::own_family(style.font.family, wb.default_font.as_deref());
     style.style_name = Some(name.clone());
     let parent = if name == "Default" {
         None
@@ -805,11 +806,13 @@ fn fit_range(wb: &mut Workbook, range: CellRange) -> Vec<Change> {
             dims: s.row_dims.clone(),
         },
     ];
+    // One font context for the whole AutoFit.
+    let mut m = crate::fonts::Measurer::new();
     let widths: Vec<(u32, f32)> = (range.c0..=range.c1)
         .filter_map(|c| {
             Some((
                 c,
-                crate::autofit::needed_width_px(wb, s, c, range.r0, range.r1)?,
+                crate::autofit::needed_width_px(&mut m, wb, s, c, range.r0, range.r1)?,
             ))
         })
         .collect();
@@ -831,7 +834,7 @@ fn fit_range(wb: &mut Workbook, range: CellRange) -> Vec<Change> {
         rows.sort_unstable();
         rows.dedup();
         for r in rows {
-            let h = crate::autofit::needed_height_px(wb, s, r)
+            let h = crate::autofit::needed_height_px(&mut m, wb, s, r)
                 .unwrap_or(crate::units::DEFAULT_ROW_HEIGHT_PX);
             heights.push((r, h));
         }

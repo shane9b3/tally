@@ -40,11 +40,12 @@ use tally_api::{
     RangeDto,
 };
 use tally_model::{
-    HfAreaData, OrientationData, PageOrderData, PageScaleData, PageSetupData, PaperData,
+    BorderStyle, HfAreaData, OrientationData, PageOrderData, PageScaleData, PageSetupData,
+    PaperData,
 };
 use tally_types::{CellAddr, CellRange, SheetId, Value, MAX_COLS, MAX_ROWS};
 
-use crate::storage::{ColumnStore, Sheet};
+use crate::storage::{ColumnStore, Sheet, StyleId};
 use crate::workbook::Workbook;
 
 /// Points per millimetre.
@@ -458,8 +459,9 @@ fn default_col_hmm() -> u32 {
 
 /// Printed line height of text, in em of the font size: the ascent plus
 /// descent of Inter (1984 + 494 of 2048 units), the face cell text without
-/// a family prints with; Arial, Times and Courier are lower.
-pub const PRINT_LINE_EM: f32 = 1.21;
+/// a family prints with. Other installed faces use their own ascent +
+/// descent ([`crate::fonts::line_em`]; Arial, Times and Courier are lower).
+pub const PRINT_LINE_EM: f32 = crate::fonts::INTER_LINE_EM;
 /// Room an optimal row has over its text (hmm): the margin AOO's optimal
 /// heights show over the font height (13 pt Arial is 14.52 pt high, its
 /// optimal row 0.557 cm = 15.79 pt; 23 twips).
@@ -478,7 +480,19 @@ const MAX_OPTIMAL_SCAN: usize = 2_000_000;
 /// author's, so the height saved in the file is not reused). Only stored
 /// cells are visited, so the cost follows the content, not the range.
 pub fn optimal_row_heights(wb: &Workbook, sheet: &Sheet, lo: u32, hi: u32) -> HashMap<u32, u32> {
-    use crate::autofit::{cell_text, line_count};
+    optimal_row_heights_with(&mut crate::fonts::Measurer::new(), wb, sheet, lo, hi)
+}
+
+/// [`optimal_row_heights`] with a measurer shared by one pagination (each
+/// style's font is resolved once).
+pub fn optimal_row_heights_with(
+    m: &mut crate::fonts::Measurer,
+    wb: &Workbook,
+    sheet: &Sheet,
+    lo: u32,
+    hi: u32,
+) -> HashMap<u32, u32> {
+    use crate::autofit::{cell_text, line_count_with};
     use crate::styles::DEFAULT_FONT_SIZE_PT;
     let mut out: HashMap<u32, u32> = HashMap::new();
     let mut scanned = 0usize;
@@ -514,14 +528,16 @@ pub fn optimal_row_heights(wb: &Workbook, sheet: &Sheet, lo: u32, hi: u32) -> Ha
                     let size_px = size_pt * 96.0 / 72.0;
                     let width =
                         (crate::units::hmm_to_px(col_width(sheet, c)) - PRINT_TEXT_PAD_PX).max(1.0);
-                    lines = line_count(&text, width, size_px, st.data.font.bold, wrap);
+                    let face = m.style_face(wb, style_id.0, &st.data);
+                    lines = line_count_with(m, face, &text, width, size_px, wrap);
                 }
             }
             if lines <= 1 && size_pt <= DEFAULT_FONT_SIZE_PT {
                 continue;
             }
             // pt to hmm: 2540 / 72.
-            let text_hmm = lines as f32 * size_pt * PRINT_LINE_EM * 2540.0 / 72.0;
+            let line_em = m.style_face(wb, style_id.0, &st.data).line_em;
+            let text_hmm = lines as f32 * size_pt * line_em * 2540.0 / 72.0;
             let h = (text_hmm.ceil() as u32 + OPTIMAL_ROW_EXTRA_HMM).min(MAX_PRINT_ROW_HMM);
             if h > default_row_hmm() {
                 let e = out.entry(r).or_insert(0);
@@ -646,9 +662,184 @@ pub fn print_area(wb: &Workbook, sheet: SheetId) -> Option<CellRange> {
     Some(extend_for_overflow(wb, s, area))
 }
 
-/// The used area plus formatted cells and charts.
+/// AOO ignores a run of this many visually equal rows below a column's
+/// data, and everything under it (`SC_VISATTR_STOP`, attarray.cxx
+/// `GetLastVisibleAttr`).
+const VISATTR_STOP: u32 = 84;
+/// AOO stops the print area before this many visually equal columns
+/// after the data (`SC_COLUMNS_STOP`, table1.cxx `GetPrintArea`).
+const COLUMNS_STOP: u32 = 30;
+
+/// What a style shows on an empty cell, for `ScPatternAttr::IsVisibleEqual`:
+/// the fill and the four border lines (style, width, colour).
+type VisualKey = (Option<u32>, [Option<(BorderStyle, u32, u32)>; 4]);
+
+/// The sheet's columns as runs of visually equal rows, for AOO's print
+/// area rules. Built once per call: styles map to small key ids, so the
+/// runs compare without cloning style data.
+struct VisualColumns {
+    /// Per stored column: `(first row, last row, key id)`, covering every
+    /// row, merged.
+    runs: Vec<Vec<(u32, u32, u32)>>,
+    /// Per key id: whether it shows anything (`IsVisible`).
+    visible: Vec<bool>,
+    /// The runs of a column without formatting.
+    blank: Vec<(u32, u32, u32)>,
+}
+
+impl VisualColumns {
+    fn new(wb: &Workbook, s: &Sheet) -> Self {
+        let mut ids: HashMap<VisualKey, u32> = HashMap::new();
+        let mut by_style: HashMap<StyleId, u32> = HashMap::new();
+        let mut visible = Vec::new();
+        let mut key_of = |id: StyleId| -> u32 {
+            *by_style.entry(id).or_insert_with(|| {
+                let st = &wb.styles.get(id).data;
+                let b = &st.borders;
+                let line = |l: &Option<tally_model::BorderLine>| {
+                    l.as_ref().map(|l| (l.style, l.width_hmm, l.color))
+                };
+                let key = (
+                    st.fill,
+                    [line(&b.top), line(&b.bottom), line(&b.left), line(&b.right)],
+                );
+                let shows = key.0.is_some() || key.1.iter().any(Option::is_some);
+                let next = ids.len() as u32;
+                *ids.entry(key).or_insert_with(|| {
+                    visible.push(shows);
+                    next
+                })
+            })
+        };
+        let blank_id = key_of(StyleId::DEFAULT);
+        let mut runs = Vec::with_capacity(s.columns.len());
+        for c in s.columns.iter().take(MAX_COLS as usize) {
+            let mut out: Vec<(u32, u32, u32)> = Vec::new();
+            let mut push = |a: u32, b: u32, k: u32| match out.last_mut() {
+                Some(l) if l.2 == k => l.1 = b,
+                _ => out.push((a, b, k)),
+            };
+            let mut next = 0;
+            for (a, b, id) in c.styles.runs_in(0, MAX_ROWS - 1) {
+                if a > next {
+                    push(next, a - 1, blank_id);
+                }
+                push(a, b, key_of(id));
+                next = b.saturating_add(1);
+            }
+            if next < MAX_ROWS {
+                push(next, MAX_ROWS - 1, blank_id);
+            }
+            runs.push(out);
+        }
+        Self {
+            runs,
+            visible,
+            blank: vec![(0, MAX_ROWS - 1, blank_id)],
+        }
+    }
+
+    fn col(&self, c: u32) -> &[(u32, u32, u32)] {
+        self.runs.get(c as usize).unwrap_or(&self.blank)
+    }
+
+    /// `IsVisibleAttrEqual` of two columns.
+    fn equal(&self, a: u32, b: u32) -> bool {
+        self.col(a) == self.col(b)
+    }
+
+    /// The last row of a column's visible formatting that prints, given
+    /// its last data row (`0` without data, as AOO's `GetLastDataPos`):
+    /// below the data, up to the first run of [`VISATTR_STOP`] equal rows
+    /// (AOO's `GetLastVisibleAttr`, so formatting repeated down a whole
+    /// column is ignored).
+    fn last_visible(&self, c: u32, last_data: u32) -> Option<u32> {
+        if last_data >= MAX_ROWS - 1 {
+            return None;
+        }
+        let runs = self.col(c);
+        let i = runs.partition_point(|r| r.1 < last_data);
+        let mut last = None;
+        for &(a, b, k) in &runs[i..] {
+            let start = a.max(last_data + 1);
+            if (b + 1).saturating_sub(start) >= VISATTR_STOP {
+                break;
+            }
+            if self.visible[k as usize] {
+                last = Some(b);
+            }
+        }
+        last
+    }
+}
+
+/// The used area plus formatted cells and charts. Formatting extends the
+/// area as AOO's `ScTable::GetPrintArea` does: runs of many equal rows
+/// below the data and of many equal columns after it are left out, so a
+/// fill or border repeated down whole columns prints no empty pages.
+/// Notes count as data, as in AOO.
 fn used_print_area(wb: &Workbook, s: &Sheet, sheet: SheetId) -> Option<CellRange> {
     let mut area = s.used_range();
+    // Last data row per column (cells and notes).
+    let mut last_data: HashMap<u32, u32> = HashMap::new();
+    for (ci, col) in s.columns.iter().enumerate() {
+        if let Some(r) = col.cells.last_non_empty() {
+            last_data.insert(ci as u32, r);
+        }
+    }
+    for &(r, c) in s.meta.notes.keys() {
+        let e = last_data.entry(c).or_insert(r);
+        *e = (*e).max(r);
+        area = Some(match area {
+            None => CellRange::new(sheet, r, c, r, c),
+            Some(a) => CellRange::new(sheet, a.r0.min(r), a.c0.min(c), a.r1.max(r), a.c1.max(c)),
+        });
+    }
+    let data_x = area.map_or(0, |a| a.c1);
+    let mut max_x = data_x;
+    let mut max_y = area.map_or(0, |a| a.r1);
+    let mut found = area.is_some();
+    let vis = VisualColumns::new(wb, s);
+    let last_of = |c: u32| last_data.get(&c).copied().unwrap_or(0);
+    for ci in 0..vis.runs.len() as u32 {
+        if let Some(r) = vis.last_visible(ci, last_of(ci)) {
+            found = true;
+            max_x = ci;
+            max_y = max_y.max(r);
+        }
+    }
+    if max_x == MAX_COLS - 1 {
+        // Formatting to the last column: leave out the equal run at the end.
+        max_x -= 1;
+        while max_x > 0 && vis.equal(max_x, max_x + 1) {
+            max_x -= 1;
+        }
+    }
+    if max_x < data_x {
+        max_x = data_x;
+    } else if max_x > data_x {
+        // Stop before COLUMNS_STOP equally formatted columns after the
+        // data, and before the unformatted columns preceding them.
+        let mut start = data_x + 1;
+        while start < MAX_COLS - 1 {
+            let mut end = start;
+            while end < MAX_COLS - 1 && end + 1 - start < COLUMNS_STOP && vis.equal(start, end + 1)
+            {
+                end += 1;
+            }
+            if end + 1 - start >= COLUMNS_STOP {
+                max_x = start - 1;
+                while max_x > data_x && vis.last_visible(max_x, last_of(max_x)).is_none() {
+                    max_x -= 1;
+                }
+                break;
+            }
+            start = end + 1;
+        }
+    }
+    if found {
+        area = Some(CellRange::new(sheet, 0, 0, max_y, max_x));
+    }
     let mut extend = |r: CellRange| {
         area = Some(match area {
             None => r,
@@ -661,29 +852,6 @@ fn used_print_area(wb: &Workbook, s: &Sheet, sheet: SheetId) -> Option<CellRange
             ),
         });
     };
-    // Styled cells with a fill or borders.
-    for (ci, col) in s.columns.iter().enumerate() {
-        let Some(last) = col.styles.last_styled_row() else {
-            continue;
-        };
-        let mut first: Option<u32> = None;
-        let mut last_visible: Option<u32> = None;
-        for (a, b, id) in col.styles.runs_in(0, last) {
-            let st = &wb.styles.get(id).data;
-            if st.fill.is_some()
-                || st.borders.top.is_some()
-                || st.borders.bottom.is_some()
-                || st.borders.left.is_some()
-                || st.borders.right.is_some()
-            {
-                first = Some(first.map_or(a, |f| f.min(a)));
-                last_visible = Some(last_visible.map_or(b, |l| l.max(b)));
-            }
-        }
-        if let (Some(a), Some(b)) = (first, last_visible) {
-            extend(CellRange::new(sheet, a, ci as u32, b, ci as u32));
-        }
-    }
     if s.meta.page_setup.print_charts {
         for ch in s.meta.charts.iter() {
             extend(chart_cells(s, &ch.data.anchor));
@@ -706,9 +874,16 @@ fn axis_of(
 ) -> Axis {
     let mut optimal = HashMap::new();
     if rows {
-        optimal = optimal_row_heights(wb, sheet, lo, hi);
+        let mut m = crate::fonts::Measurer::new();
+        optimal = optimal_row_heights_with(&mut m, wb, sheet, lo, hi);
         if let Some((a, b)) = repeat {
-            optimal.extend(optimal_row_heights(wb, sheet, a, b.min(MAX_ROWS - 1)));
+            optimal.extend(optimal_row_heights_with(
+                &mut m,
+                wb,
+                sheet,
+                a,
+                b.min(MAX_ROWS - 1),
+            ));
         }
     }
     let size = |i: u32| {
@@ -1298,6 +1473,87 @@ mod tests {
             .unwrap()
             .styles
             .set(r, r, st);
+    }
+
+    /// Formatting repeated down whole columns, or across many columns
+    /// after the data, does not extend the print area (AOO's
+    /// `GetPrintArea`: the ODS whose sheet asked for over 10,000 pages).
+    #[test]
+    fn whole_column_formatting_prints_only_the_used_area() {
+        let mut wb = book(5, 3);
+        let s = wb.sheets[0].id;
+        let line = tally_model::BorderLine::default();
+        let grey = tally_model::StyleData {
+            fill: Some(0xeeee_eeff),
+            ..Default::default()
+        };
+        let boxed = tally_model::StyleData {
+            borders: tally_model::BordersData {
+                top: Some(line.clone()),
+                bottom: Some(line),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (grey, boxed) = (wb.styles.intern(grey), wb.styles.intern(boxed));
+        let sheet = wb.sheet_mut(s).unwrap();
+        for c in 0..=40 {
+            sheet
+                .column_mut(c)
+                .unwrap()
+                .styles
+                .set(0, MAX_ROWS - 1, grey);
+        }
+        // Near the data: printed. Below a long run of equal rows: not.
+        sheet.column_mut(2).unwrap().styles.set(8, 8, boxed);
+        sheet.column_mut(1).unwrap().styles.set(500, 500, boxed);
+        let area = print_area(&wb, s).unwrap();
+        assert_eq!((area.r0, area.c0, area.r1, area.c1), (0, 0, 8, 2));
+        assert_eq!(pages(&wb).len(), 1);
+
+        // A formatted block beside the data is printed.
+        let sheet = wb.sheet_mut(s).unwrap();
+        sheet.column_mut(4).unwrap().styles.set(0, 3, boxed);
+        let area = print_area(&wb, s).unwrap();
+        assert_eq!((area.r1, area.c1), (8, 4));
+
+        // Formatting only, to the last column: the equal tail is left out.
+        let mut wb = Workbook::new();
+        let s = wb.sheets[0].id;
+        let grey = wb.styles.intern(tally_model::StyleData {
+            fill: Some(0xeeee_eeff),
+            ..Default::default()
+        });
+        let sheet = wb.sheet_mut(s).unwrap();
+        for c in [0, MAX_COLS - 2, MAX_COLS - 1] {
+            sheet.column_mut(c).unwrap().styles.set(0, 9, grey);
+        }
+        let area = print_area(&wb, s).unwrap();
+        assert_eq!((area.r1, area.c1), (9, 0));
+
+        // A column without data measures from row 1 (AOO's last data row
+        // is 0): 84 formatted rows from row 0 are 83 below it and print.
+        let sheet = wb.sheet_mut(s).unwrap();
+        sheet.column_mut(3).unwrap().styles.set(0, 83, grey);
+        let area = print_area(&wb, s).unwrap();
+        assert_eq!((area.r1, area.c1), (83, 3));
+
+        // Notes are data.
+        let mut wb = book(2, 2);
+        let s = wb.sheets[0].id;
+        let mut notes = std::collections::BTreeMap::new();
+        notes.insert(
+            (40, 6),
+            crate::annotations::Note {
+                text: "n".into(),
+                author: None,
+                created: None,
+                shown: false,
+            },
+        );
+        wb.sheet_mut(s).unwrap().meta.notes = std::sync::Arc::new(notes);
+        let area = print_area(&wb, s).unwrap();
+        assert_eq!((area.r1, area.c1), (40, 6));
     }
 
     #[test]

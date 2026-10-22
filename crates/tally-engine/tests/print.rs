@@ -502,3 +502,42 @@ fn optimal_print_heights_leave_the_document_alone() {
     assert!(after.sheets[0].row_heights.is_empty());
     assert_eq!(before.sheets[0].row_heights, after.sheets[0].row_heights);
 }
+
+/// An ODS sheet whose column default styles carry a bordered, filled
+/// table and whose rows stop at the content (AOO formats only the cells
+/// the rows contain): it opens unformatted below the table and prints on
+/// one page, where it used to ask for more than 10,000.
+#[test]
+fn column_default_styles_print_on_one_page() {
+    use std::io::Write;
+    let content = r##"<?xml version="1.0" encoding="UTF-8"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.2"><office:automatic-styles><style:style style:name="box" style:family="table-cell"><style:table-cell-properties fo:background-color="#eeeeee" fo:border="0.002cm solid #808080"/></style:style></office:automatic-styles><office:body><office:spreadsheet><table:table table:name="Grand">
+<table:table-column/><table:table-column table:number-columns-repeated="10" table:default-cell-style-name="box"/>
+<table:table-row><table:table-cell office:value-type="string"><text:p>Foyer</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="60"/><table:table-cell table:number-columns-repeated="9"/></table:table-row>
+<table:table-row table:number-rows-repeated="20"><table:table-cell office:value-type="string"><text:p>Hall</text:p></table:table-cell><table:table-cell table:number-columns-repeated="10"/></table:table-row>
+</table:table></office:spreadsheet></office:body></office:document-content>"##;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.oasis.opendocument.spreadsheet")
+        .unwrap();
+    zip.start_file("content.xml", stored).unwrap();
+    zip.write_all(content.as_bytes()).unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+    let dir = std::env::temp_dir().join(format!("tally-print-coldefault-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("grand.ods");
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut svc = tally_engine::EngineService::with_default_codec();
+    let info = svc.open(&path).unwrap();
+    let sheet = info.sheets[0].id;
+    let breaks = svc.page_breaks(info.doc, sheet).unwrap();
+    let area = breaks.area.unwrap();
+    assert_eq!((area.r1, area.c1), (20, 10), "{area:?}");
+    let layout = svc.print_layout(info.doc, &opts()).unwrap();
+    assert_eq!(layout.pages.len(), 1);
+    let job = svc.prepare_print_job(info.doc, &opts(), &[]).unwrap();
+    assert_eq!(job.layout.pages.len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

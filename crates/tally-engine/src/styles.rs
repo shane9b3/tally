@@ -163,6 +163,17 @@ impl StyleTable {
         self.intern(d)
     }
 
+    /// The style `id` without a font family of its own (drawn with the
+    /// document font).
+    pub fn without_family(&mut self, id: StyleId) -> StyleId {
+        if self.get(id).data.font.family.is_none() {
+            return id;
+        }
+        let mut d = self.get(id).data.clone();
+        d.font.family = None;
+        self.intern(d)
+    }
+
     /// The style `id` with the given border edges replaced (`None` edges
     /// are left unchanged; an edge with `line: None` removes the border).
     pub fn with_borders(&mut self, id: StyleId, edges: [Option<&BorderEdgePatch>; 4]) -> StyleId {

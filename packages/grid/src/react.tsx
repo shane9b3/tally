@@ -71,6 +71,7 @@ const PROP_KEYS = [
   "onPageBreakDrag",
   "showGridlines",
   "showHeaders",
+  "decimalSep",
 
 ] as const satisfies readonly (keyof GridProps)[];
 
