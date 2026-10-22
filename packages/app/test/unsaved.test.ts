@@ -15,7 +15,7 @@ import { WebMockClient } from "../src/dev/webMock";
 import { useDocStore } from "../src/stores/docStore";
 import { isPendingEdit, useEditStore } from "../src/stores/editStore";
 import { useUiStore } from "../src/stores/uiStore";
-import { guardDecision, proceedAfter, useSavePromptStore, type CloseKind, type SaveChoice } from "../src/unsaved";
+import { guardDecision, isSequence, proceedAfter, useSavePromptStore, type CloseKind, type SaveChoice } from "../src/unsaved";
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -719,5 +719,29 @@ describe("uncommitted typing (in-cell editor, formula bar)", () => {
     for (let i = 0; i < 5; i++) await tick();
     expect(ctl.info?.dirty).toBe(true);
     expect(confirms).toEqual([true]);
+  });
+});
+
+describe("close-requested { kind: \"tabs\" } (a window with several tabs, Close Other Tabs)", () => {
+  it("is a sequence like a quit: Don't Save answers, Cancel aborts", async () => {
+    expect(isSequence("tabs")).toBe(true);
+    expect(isSequence("quit")).toBe(true);
+    expect(isSequence("window")).toBe(false);
+    const { ctl, client, edit, confirms, cancels } = await controller(true);
+    await edit();
+    const close = vi.spyOn(client, "close");
+    let run = ctl.closeRequested("tabs");
+    await promptOpen();
+    answer("discard");
+    expect(await run).toBe(true);
+    // Nothing is closed here: the shell closes the tabs once every one answered.
+    expect(close).not.toHaveBeenCalled();
+    expect(confirms).toEqual([true]);
+    await edit("again");
+    run = ctl.closeRequested("tabs");
+    await promptOpen();
+    answer("cancel");
+    expect(await run).toBe(false);
+    expect(cancels()).toBe(1);
   });
 });

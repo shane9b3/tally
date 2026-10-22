@@ -1,14 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal capability for the document windows (`doc-*`, one per open document; windows.rs): event listen/unlisten (menu actions, close requests, prefs changes, each webview listening to its own window), window title, and the title-bar drag region (start dragging, double-click to zoom), plus full screen (View ▸ Full Screen, W5-5). Every app command is granted here by its generated `allow-<command>` permission (build.rs app manifest), so only document windows can call them; print windows (`tally-print-*`) match no capability and can call no command. No fs/shell/http plugins are exposed to JS; file dialogs and the app menu are driven from Rust.",
-  "windows": [
+  "description": "Minimal capability for the document webviews (`doc-*`, one per open document, each a tab of a `win-*` window; windows.rs), matched by webview label only (no `windows` entry: the `win-*` windows have no webview of their own, and print windows `tally-print-*` match nothing): event listen/unlisten (menu actions, close requests, prefs and tab changes, each webview listening to its own label), the title-bar drag region (start dragging, double-click to zoom), plus full screen (View ▸ Full Screen, W5-5). Every app command is granted here by its generated `allow-<command>` permission (build.rs app manifest), so only document webviews can call them; print windows match no capability and can call no command. No fs/shell/http plugins are exposed to JS; file dialogs and the app menu are driven from Rust; the native window title is set by the shell.",
+  "webviews": [
     "doc-*"
   ],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "core:window:allow-set-title",
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize",
     "core:window:allow-set-fullscreen",
@@ -102,6 +101,12 @@
     "allow-cancel-quit",
     "allow-window-init",
     "allow-place-document",
-    "allow-broadcast-prefs"
+    "allow-broadcast-prefs",
+    "allow-tab-activate",
+    "allow-tab-close",
+    "allow-tab-close-others",
+    "allow-tab-move",
+    "allow-tab-detach",
+    "allow-merge-windows"
   ]
 }

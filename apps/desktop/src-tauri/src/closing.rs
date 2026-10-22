@@ -1,30 +1,34 @@
-//! Unsaved-changes guard for closing document windows and quitting, and the
-//! macOS "document edited" dot on each window's red close button.
+//! Unsaved-changes guard for closing tabs and windows and for quitting.
 //!
-//! Each document window's webview owns its dirty state (the engine's
+//! Each document webview owns its dirty state (the engine's
 //! `WorkbookInfo.dirty` as kept in that webview's doc store, plus uncommitted
 //! typing) and reports every change through
-//! `set_document_edited(edited, doc, title)`. The shell keeps it per window
+//! `set_document_edited(edited, doc, title)`. The shell keeps it per tab
 //! label in the [`Windows`] registry (`registry.rs`), behind a leaf lock
 //! that is never held across an engine call, a dialog or a window/menu call
 //! and never touches the service mutex: `WindowEvent::CloseRequested` and
 //! `RunEvent::ExitRequested` are handled on the main thread, which must not
 //! wait for an engine call in progress.
 //!
-//! Closing an edited window is prevented and `close-requested { kind:
-//! "window" }` is sent to *that* window, which asks Save / Don't Save /
-//! Cancel (packages/app/src/unsaved.ts). After Save or Don't Save it calls
-//! `confirm_close(false)`: the window is marked confirmed and destroyed.
-//! Cancel leaves things as they are.
+//! Closing one edited document (⌘W, its tab's ×, the red button of a
+//! one-tab window) sends `close-requested { kind: "window" }` to *that*
+//! document's webview (shown first), which asks Save / Don't Save / Cancel
+//! (packages/app/src/unsaved.ts). After Save or Don't Save it calls
+//! `confirm_close(false)`: the tab is marked confirmed and closed (its
+//! window too when it was the last tab). Cancel leaves things as they are.
 //!
-//! Quit (the app menu's Quit, ⌘Q, or an exit request while windows are
-//! open) asks the edited windows one at a time, the front one first
-//! ([`crate::registry::Registry::begin_quit`]): the shell focuses the window
-//! and sends it `close-requested { kind: "quit" }`. Save or Don't Save there
-//! calls `confirm_close(true)` and the shell moves on to the next edited
-//! window, or exits when none is left; clean windows are never asked. Cancel
-//! (or a cancelled Save As) in any window calls `cancel_quit()`, which aborts
-//! the whole quit and forgets the earlier answers.
+//! Sequences ask several edited tabs one at a time
+//! ([`crate::registry::Registry::begin_quit`] and friends): Quit (the app
+//! menu's Quit, ⌘Q, or an exit request while documents are open; every
+//! window, the front one first), the red button of a window with several
+//! tabs, and Close Other Tabs. The shell brings the tab's window to the
+//! front, shows the tab and sends it `close-requested { kind: "quit" }` (or
+//! `"tabs"`). Save or Don't Save there calls `confirm_close(true)` and the
+//! shell moves on to the next edited tab; once none is left it exits, closes
+//! the window, or closes the tabs. Clean tabs are never asked. Cancel (or a
+//! cancelled Save As) calls `cancel_quit()`, which aborts the whole sequence
+//! and forgets the earlier answers; Don't Save is only applied when the
+//! sequence completes.
 //!
 //! The app menu's Quit is a custom item ([`QUIT_ID`]) rather than the
 //! predefined one: the predefined item sends `-[NSApp terminate:]`, which
@@ -35,41 +39,34 @@
 //! snapshot of every edited, unanswered document; they are offered on the
 //! next launch.)
 //!
-//! A destroyed document window closes its document in the engine (and
-//! removes its autosave snapshot, as the in-app Close did) and destroys the
-//! print windows it opened. With no document window left, macOS keeps
-//! running (File ▸ New / Open and a Dock click open a new window); Windows
-//! and Linux exit.
+//! A closed tab (or every tab of a destroyed window) closes its document in
+//! the engine (and removes its autosave snapshot, as the in-app Close did)
+//! and destroys the print windows it opened. With no document left, macOS
+//! keeps running (File ▸ New / Open and a Dock click open a new window);
+//! Windows and Linux exit.
 
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State, Webview};
 
 use tally_api::DocId;
 
 use crate::autosave;
 use crate::commands::CmdResult;
-use crate::registry::{exit_action, is_doc_label, ExitAction, QuitStep, Windows};
+use crate::registry::{
+    exit_action, is_win_label, CloseKind, ExitAction, Goal, Gone, Step, TabClose, WindowClose,
+    Windows,
+};
 use crate::state::AppState;
 use crate::windows;
 
-/// Event sent to a document window when its close or a quit waits for the guard.
+/// Event sent to a document webview when its close or a sequence waits for the guard.
 pub const CLOSE_REQUESTED: &str = "close-requested";
 /// Menu id of the app menu's Quit item (handled here, not forwarded).
 pub const QUIT_ID: &str = "app-quit";
 /// The platform keeps the app running with no window (macOS).
 pub const KEEP_ALIVE: bool = cfg!(target_os = "macos");
-
-/// What is being closed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum CloseKind {
-    /// One document window (red button, ⌘W, Windows title bar ✕, Alt+F4).
-    Window,
-    /// The whole app (⌘Q / app menu Quit, or an exit request).
-    Quit,
-}
 
 /// Payload of [`CLOSE_REQUESTED`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -82,36 +79,93 @@ pub struct CloseRequestedEvent {
 /// `save_copy`, which runs to completion once the lock is held.
 const EXIT_LOCK_WAIT: Duration = Duration::from_millis(1500);
 
-/// Sends `close-requested` to one window (focusing it first for a quit, so
-/// the user sees which document is asking).
-fn ask<R: Runtime>(app: &AppHandle<R>, label: &str, kind: CloseKind) {
-    if kind == CloseKind::Quit {
-        windows::focus(app, label);
+/// Sends `close-requested` to one document webview (for a sequence, its
+/// window comes to the front and the tab is shown first, so the user sees
+/// which document is asking).
+pub fn ask<R: Runtime>(app: &AppHandle<R>, label: &str, kind: CloseKind) {
+    if kind != CloseKind::Window {
+        windows::reveal(app, label);
     }
     if let Err(e) = app.emit_to(label, CLOSE_REQUESTED, CloseRequestedEvent { kind }) {
         eprintln!("tally: emitting {CLOSE_REQUESTED} to {label}: {e}");
     }
 }
 
-/// Carries out a step of the quit sequence.
-fn run_quit_step<R: Runtime>(app: &AppHandle<R>, step: QuitStep) {
+/// Carries out a step of a sequence.
+pub fn run_step<R: Runtime>(app: &AppHandle<R>, step: Step) {
     match step {
-        QuitStep::Ask(label) => ask(app, &label, CloseKind::Quit),
-        QuitStep::Exit => app.exit(0),
+        Step::Ask(label, kind) => ask(app, &label, kind),
+        Step::Done(Goal::Exit) => app.exit(0),
+        Step::Done(Goal::CloseWindow(win)) => {
+            if let Some(w) = app.get_window(&win) {
+                if let Err(e) = w.destroy() {
+                    eprintln!("tally: closing the window: {e}");
+                }
+            }
+        }
+        Step::Done(Goal::CloseTabs(tabs)) => {
+            // Re-checked tab by tab against the current state: a tab closed
+            // or edited again meanwhile is skipped, never closed unasked.
+            for label in tabs {
+                match app.state::<Windows>().with(|r| r.closable(&label)) {
+                    Some(TabClose::Now) => windows::close_tab_now(app, &label),
+                    Some(TabClose::Window(win)) => {
+                        if let Some(w) = app.get_window(&win) {
+                            let _ = w.destroy();
+                        }
+                    }
+                    Some(TabClose::Ask) | None => {}
+                }
+            }
+        }
+    }
+}
+
+/// After tabs went away: their print windows close, their documents close
+/// in the engine, and a sequence that was asking one of them goes on.
+pub fn clean_up<R: Runtime>(app: &AppHandle<R>, gone: Gone) {
+    for print in &gone.prints {
+        if let Some(w) = app.get_webview_window(print) {
+            if let Err(e) = w.destroy() {
+                eprintln!("tally: closing window {print}: {e}");
+            }
+        }
+    }
+    for doc in gone.close_docs {
+        // The snapshot goes now (files only), so an exit right after (last
+        // window on Windows/Linux, ⌘Q) cannot leave it to be offered for
+        // recovery; the engine close needs the service lock and runs on a
+        // worker.
+        autosave::remove_snapshot(app, doc);
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { windows::close_doc(&app, doc).await });
+    }
+    if let Some(step) = gone.step {
+        run_step(app, step);
     }
 }
 
 /// `on_window_event` hook: guards closing a document window, tracks focus
-/// (menu routing, the window list) and cleans up after a destroyed window.
+/// (menu routing, the document list) and cleans up after a destroyed window.
 pub fn on_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri::WindowEvent) {
     let label = window.label();
     let app = window.app_handle();
     let windows = app.state::<Windows>();
     match event {
-        tauri::WindowEvent::CloseRequested { api, .. } if is_doc_label(label) => {
-            if windows.with(|r| r.must_ask(label)) {
-                api.prevent_close();
-                ask(app, label, CloseKind::Window);
+        tauri::WindowEvent::CloseRequested { api, .. } if is_win_label(label) => {
+            match windows.with(|r| r.begin_close_window(label)) {
+                WindowClose::Proceed => {}
+                WindowClose::Busy => {
+                    api.prevent_close();
+                    // Bring the pending question forward again.
+                    if let Some(step) = windows.with(|r| r.reask()) {
+                        run_step(app, step);
+                    }
+                }
+                WindowClose::Hold(step) => {
+                    api.prevent_close();
+                    run_step(app, step);
+                }
             }
         }
         tauri::WindowEvent::Focused(focused) => {
@@ -120,27 +174,11 @@ pub fn on_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri::Win
             }
         }
         tauri::WindowEvent::Destroyed => {
-            let gone = windows.with(|r| r.destroyed(label));
-            for print in &gone.prints {
-                if let Some(w) = app.get_webview_window(print) {
-                    if let Err(e) = w.destroy() {
-                        eprintln!("tally: closing window {print}: {e}");
-                    }
-                }
-            }
-            if let Some(doc) = gone.close_doc {
-                // The snapshot goes now (files only), so an exit right after
-                // (last window on Windows/Linux, ⌘Q) cannot leave it to be
-                // offered for recovery; the engine close needs the service
-                // lock and runs on a worker.
-                autosave::remove_snapshot(app, doc);
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move { windows::close_doc(&app, doc).await });
-            }
-            if let Some(step) = gone.quit {
-                run_quit_step(app, step);
-            }
-            if is_doc_label(label) {
+            let gone = windows.with(|r| r.window_destroyed(label));
+            clean_up(app, gone);
+            if is_win_label(label) {
+                // The other windows' "Open" lists lose these documents.
+                windows::notify_tabs(app);
                 windows::refresh_window_menu(app);
                 if !KEEP_ALIVE && windows.with(|r| r.is_empty()) {
                     app.exit(0);
@@ -162,9 +200,9 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &tauri::RunEvent) {
                 ExitAction::Proceed => {}
                 ExitAction::StayAlive => api.prevent_exit(),
                 ExitAction::Quit => {
-                    if let QuitStep::Ask(label) = windows.with(|r| r.begin_quit()) {
+                    if let Step::Ask(label, kind) = windows.with(|r| r.begin_quit()) {
                         api.prevent_exit();
-                        ask(app, &label, CloseKind::Quit);
+                        ask(app, &label, kind);
                     }
                 }
             }
@@ -217,107 +255,74 @@ fn snapshot_one<R: Runtime>(app: &AppHandle<R>, st: &AppState, doc: DocId, deadl
 /// The app menu's Quit ([`QUIT_ID`]).
 pub fn request_quit<R: Runtime>(app: &AppHandle<R>) {
     let step = app.state::<Windows>().with(|r| r.begin_quit());
-    run_quit_step(app, step);
+    run_step(app, step);
 }
 
-/// `set_document_edited(edited, doc, title)`: the calling window reports its
-/// dirty state, its document's id (window ↔ document, the exit snapshot) and
-/// its title (the Window menu); on macOS it also sets that window's
-/// "document edited" dot (no-op elsewhere). A synchronous command on
-/// purpose: Tauri runs those on the main thread in the order sent, so rapid
-/// true/false/true reports cannot land out of order (an async command is
-/// its own task). It never touches the service mutex, and
-/// `run_on_main_thread` runs inline when already on the main thread.
+/// `set_document_edited(edited, doc, title)`: the calling tab reports its
+/// dirty state, its document's id (tab ↔ document, the exit snapshot) and
+/// its title (document lists, window title, Window menu); on macOS its window's
+/// "edited" dot follows. A synchronous command on purpose: Tauri runs those
+/// on the main thread in the order sent, so rapid true/false/true reports
+/// cannot land out of order (an async command is its own task). It never
+/// touches the service mutex, and `run_on_main_thread` runs inline when
+/// already on the main thread.
 #[tauri::command]
 pub fn set_document_edited(
     app: AppHandle,
-    window: WebviewWindow,
+    webview: Webview,
     edited: bool,
     doc: Option<DocId>,
     title: Option<String>,
 ) -> CmdResult<()> {
-    windows::require_doc_window(window.label())?;
+    let label = webview.label();
+    windows::require_doc_window(label)?;
     if let Some(t) = &title {
         crate::limits::text_max("the title", t, crate::limits::MAX_PATH)?;
     }
-    let renamed = app
-        .state::<Windows>()
-        .with(|r| r.report(window.label(), edited, doc, title.as_deref()))
+    let state = app.state::<Windows>();
+    let changed = state
+        .with(|r| r.report(label, edited, doc, title.as_deref()))
         .map_err(|why| windows::refused(&app, why))?;
-    set_native_edited(&window, edited);
-    if renamed {
+    if changed {
+        if let Some(win) = state.with(|r| r.window_of_tab(label)) {
+            windows::update_window(&app, &win);
+            windows::notify_tabs(&app);
+        }
         windows::refresh_window_menu(&app);
     }
     Ok(())
 }
 
-/// `confirm_close(quit)`: the calling window's prompt resolved with Save or
-/// Don't Save. `quit: false` destroys the window (its document is closed
-/// in the engine on `Destroyed`); `quit: true` moves the quit on to the next
-/// edited window, or exits.
+/// `confirm_close(quit)`: the calling tab's prompt resolved with Save or
+/// Don't Save. `quit: false` closes the tab (its document is closed in the
+/// engine; the last tab closes its window); `quit: true` (a sequence step)
+/// moves on to the next edited tab, or finishes the sequence.
 #[tauri::command]
-pub async fn confirm_close(app: AppHandle, window: WebviewWindow, quit: bool) -> CmdResult<()> {
-    windows::require_doc_window(window.label())?;
-    let windows = app.state::<Windows>();
-    let label = window.label().to_owned();
+pub async fn confirm_close(app: AppHandle, webview: Webview, quit: bool) -> CmdResult<()> {
+    let label = webview.label().to_owned();
+    windows::require_doc_window(&label)?;
+    let state = app.state::<Windows>();
     if quit {
-        // Only the window the quit is asking can answer for it.
-        if let Some(step) = windows.with(|r| r.quit_answered(&label)) {
-            run_quit_step(&app, step);
+        // Only the tab the sequence is asking can answer for it.
+        if let Some(step) = state.with(|r| r.answered(&label)) {
+            run_step(&app, step);
         }
     } else {
-        windows.with(|r| r.confirm(&label));
-        if let Err(e) = window.destroy() {
-            eprintln!("tally: closing the window: {e}");
-        }
+        state.with(|r| r.confirm(&label));
+        windows::request_tab_close(&app, &label);
     }
     Ok(())
 }
 
-/// `cancel_quit()`: Cancel (or a cancelled Save As) in the window asked
-/// during a quit: the quit is over, the app keeps running. Ignored from a
-/// window the quit is not asking.
+/// `cancel_quit()`: Cancel (or a cancelled Save As) in the tab a sequence
+/// is asking: the sequence is over, nothing is closed. Ignored from a tab
+/// the sequence is not asking.
 #[tauri::command]
-pub fn cancel_quit(window: WebviewWindow, windows: State<'_, Windows>) -> CmdResult<()> {
-    windows::require_doc_window(window.label())?;
-    windows.with(|r| r.cancel_quit(window.label()));
+pub fn cancel_quit(webview: Webview, windows: State<'_, Windows>) -> CmdResult<()> {
+    windows::require_doc_window(webview.label())?;
+    windows.with(|r| r.cancel(webview.label()));
     Ok(())
 }
-
-#[cfg(target_os = "macos")]
-fn set_native_edited<R: Runtime>(window: &WebviewWindow<R>, edited: bool) {
-    let target = match window.ns_window() {
-        Ok(ptr) => ptr as usize,
-        Err(e) => {
-            eprintln!("tally: no NSWindow: {e}");
-            return;
-        }
-    };
-    let result = window.run_on_main_thread(move || {
-        use objc2::rc::Retained;
-        use objc2::MainThreadMarker;
-        use objc2_app_kit::NSApplication;
-        let Some(mtm) = MainThreadMarker::new() else {
-            return;
-        };
-        let windows = NSApplication::sharedApplication(mtm).windows();
-        for i in 0..windows.count() {
-            let w = windows.objectAtIndex(i);
-            if Retained::as_ptr(&w) as usize == target {
-                if w.isDocumentEdited() != edited {
-                    w.setDocumentEdited(edited);
-                }
-                return;
-            }
-        }
-    });
-    if let Err(e) = result {
-        eprintln!("tally: document edited: {e}");
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn set_native_edited<R: Runtime>(_window: &WebviewWindow<R>, _edited: bool) {}
 
 #[cfg(test)]
 mod tests {
@@ -325,16 +330,14 @@ mod tests {
 
     #[test]
     fn event_payload_is_camel_case() {
-        let json = serde_json::to_string(&CloseRequestedEvent {
-            kind: CloseKind::Quit,
-        })
-        .unwrap_or_default();
-        assert_eq!(json, r#"{"kind":"quit"}"#);
-        let json = serde_json::to_string(&CloseRequestedEvent {
-            kind: CloseKind::Window,
-        })
-        .unwrap_or_default();
-        assert_eq!(json, r#"{"kind":"window"}"#);
+        for (kind, json) in [
+            (CloseKind::Quit, r#"{"kind":"quit"}"#),
+            (CloseKind::Window, r#"{"kind":"window"}"#),
+            (CloseKind::Tabs, r#"{"kind":"tabs"}"#),
+        ] {
+            let got = serde_json::to_string(&CloseRequestedEvent { kind }).unwrap_or_default();
+            assert_eq!(got, json);
+        }
     }
 
     #[test]

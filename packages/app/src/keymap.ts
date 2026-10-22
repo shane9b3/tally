@@ -19,6 +19,11 @@ export interface Binding {
   key: string;
   /** Alternative match on `KeyboardEvent.code` (layout-independent keys). */
   code?: string;
+  /**
+   * Match on `code` only, never on `key` (the Alt-digit tab keys: ⌥ changes
+   * `key` on macOS, and Alt combinations give odd `key` values on Windows).
+   */
+  codeOnly?: boolean;
   /** Cmd on macOS, Ctrl elsewhere (either is accepted). */
   mod: boolean;
   shift: boolean;
@@ -31,6 +36,8 @@ export interface Binding {
   menu?: boolean;
   /** Also active while typing in a text field or editing a cell. */
   global?: boolean;
+  /** Platform restriction: `true` macOS only, `false` Windows/Linux only, absent everywhere. */
+  mac?: boolean;
   /** Label shown in menus and the palette, e.g. "⌘Z". */
   label: string;
 }
@@ -129,18 +136,41 @@ export const BINDINGS: readonly Binding[] = [
   { key: "F11", mod: false, shift: true, command: "file.saveAsTemplate", menu: true, label: "⇧F11" },
   { key: "F9", mod: false, shift: false, command: "data.recalc", label: "F9" },
   { key: "m", mod: true, shift: false, command: "edit.clearFormats", label: "⌘M" },
+  // Document tabs (desktop; tabs.ts). The native Window menu has ⌃⇥ / ⌃⇧⇥.
+  // ⌘1 stays Format Cells and ⌃PgDn/⌃PgUp switch sheets (spreadsheet
+  // conventions), so tabs by number are ⌥⌘N on macOS and Alt+N elsewhere.
+  { key: "Tab", mod: true, shift: false, command: "window.nextTab", menu: true, global: true, label: "⌃⇥" },
+  { key: "Tab", mod: true, shift: true, command: "window.prevTab", menu: true, global: true, label: "⌃⇧⇥" },
+  { key: "}", code: "BracketRight", mod: true, shift: true, command: "window.nextTab", global: true, mac: true, label: "⇧⌘]" },
+  { key: "{", code: "BracketLeft", mod: true, shift: true, command: "window.prevTab", global: true, mac: true, label: "⇧⌘[" },
+  ...tabNumberBindings(),
 ];
+
+/** ⌥⌘1–⌥⌘9 (macOS) and Alt+1–Alt+9 (Windows/Linux): show tab N, 9 = the last tab. */
+function tabNumberBindings(): Binding[] {
+  const out: Binding[] = [];
+  for (let n = 1; n <= 9; n++) {
+    const command = `window.selectTab${n}`;
+    // Top-row digits only: Alt + numeric keypad is Windows' Alt-code character input.
+    out.push({ key: String(n), code: `Digit${n}`, codeOnly: true, mod: true, shift: false, alt: true, command, global: true, mac: true, label: `⌥⌘${n}` });
+    out.push({ key: String(n), code: `Digit${n}`, codeOnly: true, mod: false, shift: false, alt: true, command, mac: false, label: `Alt+${n}` });
+  }
+  return out;
+}
 
 export interface KeyContext {
   /** Focus is in a text field (formula bar, name box, palette) or a cell edit is open. */
   typing: boolean;
   /** Running inside Tauri with the native menu (menu accelerators win). */
   nativeMenu: boolean;
+  /** macOS (platform-restricted bindings); absent counts as not macOS. */
+  mac?: boolean;
 }
 
 function matches(b: Binding, e: KeyLike): boolean {
   const mod = e.metaKey || e.ctrlKey;
   if (b.mod !== mod || b.shift !== e.shiftKey || (b.alt ?? false) !== e.altKey) return false;
+  if (b.codeOnly) return b.code !== undefined && e.code === b.code;
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   return key === b.key || (b.code !== undefined && e.code === b.code);
 }
@@ -148,6 +178,7 @@ function matches(b: Binding, e: KeyLike): boolean {
 /** The binding for a key event in a context, or `null`. */
 export function resolveBinding(e: KeyLike, ctx: KeyContext, bindings: readonly Binding[] = BINDINGS): Binding | null {
   for (const b of bindings) {
+    if (b.mac !== undefined && b.mac !== (ctx.mac ?? false)) continue;
     if (!matches(b, e)) continue;
     if (ctx.nativeMenu && b.menu) return null;
     if (ctx.typing && !b.global) return null;
@@ -161,7 +192,17 @@ export function resolveKey(e: KeyLike, ctx: KeyContext, bindings: readonly Bindi
   return resolveBinding(e, ctx, bindings)?.command ?? null;
 }
 
-/** The first shortcut label for a command (palette, tooltips). */
-export function shortcutFor(command: string, bindings: readonly Binding[] = BINDINGS): string | undefined {
-  return bindings.find((b) => b.command === command)?.label;
+/** Whether the UI runs on macOS (platform-restricted bindings and labels). */
+export function isMacPlatform(): boolean {
+  return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+}
+
+/** Pure: the bindings that apply on one platform (`mac`), in table order. */
+export function platformBindings(mac: boolean, bindings: readonly Binding[] = BINDINGS): Binding[] {
+  return bindings.filter((b) => b.mac === undefined || b.mac === mac);
+}
+
+/** The first shortcut label for a command on this platform (palette, tooltips). */
+export function shortcutFor(command: string, bindings: readonly Binding[] = BINDINGS, mac: boolean = isMacPlatform()): string | undefined {
+  return platformBindings(mac, bindings).find((b) => b.command === command)?.label;
 }

@@ -1,16 +1,16 @@
-//! The native menu. Native items (Cut/Copy/Paste/Select All, window items)
-//! are handled by the OS; every other item emits `menu-action { id }` to the
-//! front document window's webview (the most recently focused one; see
-//! [`route`]), where the id is a `CommandRegistry` command id. With no
-//! document window (macOS keeps running without one) File ▸ New and Open
-//! are handled here and open a window.
+//! The native menu. Native items (Cut/Copy/Paste/Select All, Minimize,
+//! Zoom…) are handled by the OS; every other item emits `menu-action { id }`
+//! to the front document's webview (the shown tab of the most recently
+//! focused window; see [`route`]), where the id is a `CommandRegistry`
+//! command id. With no document window (macOS keeps running without one)
+//! File ▸ New and Open are handled here and open a window.
 //!
-//! The Window menu has the id [`WINDOW_SUBMENU_ID`], so on macOS Tauri makes
-//! it `NSApp.windowsMenu` and AppKit adds the open windows (titles, a check
-//! mark on the key window) and the window-tab items (Show Previous/Next
-//! Tab, Move Tab to New Window, Merge All Windows; Show Tab Bar / Show All
-//! Tabs go to the View menu) by itself. On Windows and Linux the shell
-//! keeps its own window list there ([`set_window_list`]).
+//! The Window menu is the shell's own on every platform (not AppKit's
+//! `windowsMenu`, which would list windows rather than documents and add
+//! the native tab items): Minimize, Zoom, Show Next/Previous Tab, Move Tab
+//! to New Window, Merge All Windows, Bring All to Front, then the open
+//! documents ([`set_window_list`]; choosing one shows its window and tab).
+//! Those items are handled here and never forwarded.
 //!
 //! Wave-5 items (W5-0b) are listed already so the menu, the registry and
 //! `menuIds.test.ts` stay in sync; the registry has them `enabled: false`
@@ -20,7 +20,7 @@
 
 use tauri::menu::{
     CheckMenuItemBuilder, Menu, MenuBuilder, MenuEvent, MenuItemBuilder, MenuItemKind, Submenu,
-    SubmenuBuilder, WINDOW_SUBMENU_ID,
+    SubmenuBuilder,
 };
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -29,6 +29,20 @@ use crate::l10n;
 use crate::registry::{ListEntry, Windows};
 use crate::windows::FOCUS_PREFIX;
 use tally_l10n::Locale;
+
+/// Id of the Window menu (deliberately not `WINDOW_SUBMENU_ID`, which
+/// would make it AppKit's `windowsMenu`).
+pub const WINDOW_MENU_ID: &str = "window-menu";
+/// Window ▸ Show Next Tab (⌃Tab).
+pub const NEXT_TAB_ID: &str = "window.nextTab";
+/// Window ▸ Show Previous Tab (⌃⇧Tab).
+pub const PREV_TAB_ID: &str = "window.prevTab";
+/// Window ▸ Move Tab to New Window.
+pub const DETACH_TAB_ID: &str = "window.moveTabToNewWindow";
+/// Window ▸ Merge All Windows.
+pub const MERGE_ID: &str = "window.mergeAllWindows";
+/// Window ▸ Bring All to Front off macOS (macOS uses the predefined item).
+pub const BRING_ALL_ID: &str = "window.bringAllToFront";
 
 /// A custom menu entry. `Item` ids are `CommandRegistry` command ids
 /// (packages/app/src/commands.ts); choosing one emits `menu-action { id }`.
@@ -411,59 +425,84 @@ fn quit_label(locale: Locale) -> String {
     ui_label(locale, "app.quit", "Quit Tally")
 }
 
-/// The Window menu: Minimize, Zoom (Maximize off macOS), and on macOS Enter
-/// Full Screen and Bring All to Front; AppKit appends the windows and the
-/// tab items. Elsewhere [`set_window_list`] appends the windows after the
-/// trailing separator.
+/// The Window menu: Minimize, Zoom (Maximize off macOS), Enter Full Screen
+/// (macOS), the tab items, Bring All to Front; [`set_window_list`] appends
+/// the documents after the trailing separator.
 fn window_menu<R: Runtime>(app: &AppHandle<R>, locale: Locale) -> tauri::Result<Submenu<R>> {
     let mac = cfg!(target_os = "macos");
-    let b = SubmenuBuilder::with_id(
-        app,
-        WINDOW_SUBMENU_ID,
-        l10n::submenu_label(locale, "Window"),
-    )
-    .minimize_with_text(ui_label(locale, "menu.window.minimize", "Minimize"));
+    let item = |id: &str, key: &str, text: &str, accel: Option<&str>| {
+        let mut b = MenuItemBuilder::with_id(id, ui_label(locale, key, text));
+        if let Some(a) = accel {
+            b = b.accelerator(a);
+        }
+        b.build(app)
+    };
+    let b = SubmenuBuilder::with_id(app, WINDOW_MENU_ID, l10n::submenu_label(locale, "Window"))
+        .minimize_with_text(ui_label(locale, "menu.window.minimize", "Minimize"));
     let b = if mac {
         b.maximize_with_text(ui_label(locale, "menu.window.zoom", "Zoom"))
             .separator()
             .fullscreen()
-            .separator()
-            .bring_all_to_front_with_text(ui_label(
-                locale,
-                "menu.window.bringAllToFront",
-                "Bring All to Front",
-            ))
     } else {
         b.maximize_with_text(ui_label(locale, "menu.window.maximize", "Maximize"))
-            .separator()
     };
-    b.build()
+    let b = b
+        .separator()
+        .item(&item(
+            NEXT_TAB_ID,
+            "menu.window.showNextTab",
+            "Show Next Tab",
+            Some("Ctrl+Tab"),
+        )?)
+        .item(&item(
+            PREV_TAB_ID,
+            "menu.window.showPrevTab",
+            "Show Previous Tab",
+            Some("Ctrl+Shift+Tab"),
+        )?)
+        .item(&item(
+            DETACH_TAB_ID,
+            "menu.window.moveTabToNewWindow",
+            "Move Tab to New Window",
+            None,
+        )?)
+        .item(&item(
+            MERGE_ID,
+            "menu.window.mergeAllWindows",
+            "Merge All Windows",
+            None,
+        )?)
+        .separator();
+    let bring = ui_label(locale, "menu.window.bringAllToFront", "Bring All to Front");
+    let b = if mac {
+        b.bring_all_to_front_with_text(bring)
+    } else {
+        b.item(&MenuItemBuilder::with_id(BRING_ALL_ID, bring).build(app)?)
+    };
+    b.separator().build()
 }
 
-/// Pure: the Window menu's list items as (menu id, text, checked).
-pub fn window_list_items(
-    list: &[ListEntry],
-    windows_mnemonics: bool,
-) -> Vec<(String, String, bool)> {
+/// Pure: the Window menu's list items as (menu id, text, checked). `&`
+/// is doubled on every platform: muda reads a single `&` as a mnemonic
+/// marker (and drops it) on Windows, GTK and macOS alike.
+pub fn window_list_items(list: &[ListEntry]) -> Vec<(String, String, bool)> {
     list.iter()
         .map(|e| {
-            let text = if windows_mnemonics {
-                // `&` marks a mnemonic in Win32 menus.
-                e.title.replace('&', "&&")
-            } else {
-                e.title.clone()
-            };
-            (format!("{FOCUS_PREFIX}{}", e.label), text, e.checked)
+            (
+                format!("{FOCUS_PREFIX}{}", e.label),
+                e.title.replace('&', "&&"),
+                e.checked,
+            )
         })
         .collect()
 }
 
-/// Replaces the window list at the end of the Window menu (Windows/Linux).
+/// Replaces the document list at the end of the Window menu.
 pub fn set_window_list<R: Runtime>(app: &AppHandle<R>, list: &[ListEntry]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else {
         return Ok(());
     };
-    let Some(MenuItemKind::Submenu(window)) = menu.get(WINDOW_SUBMENU_ID) else {
+    let Some(MenuItemKind::Submenu(window)) = menu.get(WINDOW_MENU_ID) else {
         return Ok(());
     };
     for item in window.items()? {
@@ -471,7 +510,7 @@ pub fn set_window_list<R: Runtime>(app: &AppHandle<R>, list: &[ListEntry]) -> ta
             window.remove(&item)?;
         }
     }
-    for (id, text, checked) in window_list_items(list, cfg!(target_os = "windows")) {
+    for (id, text, checked) in window_list_items(list) {
         let item = CheckMenuItemBuilder::with_id(id, text)
             .checked(checked)
             .build(app)?;
@@ -558,14 +597,31 @@ pub fn build_localized<R: Runtime>(app: &AppHandle<R>, locale: Locale) -> tauri:
     menu.build()
 }
 
+/// A Window-menu action the shell carries out on the front window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowAction {
+    /// Show Next Tab.
+    NextTab,
+    /// Show Previous Tab.
+    PrevTab,
+    /// Move Tab to New Window (the front document).
+    Detach,
+    /// Merge All Windows (into the front window).
+    Merge,
+    /// Bring All to Front (off macOS).
+    BringAll,
+}
+
 /// Where a menu selection goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Route {
     /// The guarded Quit (`closing::request_quit`).
     Quit,
-    /// Bring this window to the front (the Window menu's list).
+    /// Show this document (its window and tab; the Window menu's list).
     Focus(String),
-    /// `menu-action { id }` to this document window.
+    /// A Window-menu action.
+    Window(WindowAction),
+    /// `menu-action { id }` to this document webview.
     Emit(String),
     /// No document window: open a blank one (File ▸ New).
     NewWindow,
@@ -577,14 +633,25 @@ pub enum Route {
     Ignore,
 }
 
-/// Pure: routes menu item `id` given the front document window and the
-/// key window when that is a print window.
+/// Pure: routes menu item `id` given the front document and the key
+/// window when that is a print window.
 pub fn route(id: &str, front: Option<&str>, key_print: Option<&str>) -> Route {
     if id == crate::closing::QUIT_ID {
         return Route::Quit;
     }
     if let Some(label) = id.strip_prefix(FOCUS_PREFIX) {
         return Route::Focus(label.to_owned());
+    }
+    let action = match id {
+        NEXT_TAB_ID => Some(WindowAction::NextTab),
+        PREV_TAB_ID => Some(WindowAction::PrevTab),
+        DETACH_TAB_ID => Some(WindowAction::Detach),
+        MERGE_ID => Some(WindowAction::Merge),
+        BRING_ALL_ID => Some(WindowAction::BringAll),
+        _ => None,
+    };
+    if let Some(action) = action {
+        return Route::Window(action);
     }
     if !custom_ids().contains(&id) {
         return Route::Ignore;
@@ -600,6 +667,48 @@ pub fn route(id: &str, front: Option<&str>, key_print: Option<&str>) -> Route {
     }
 }
 
+/// Carries out a Window-menu action on the front window.
+fn window_action<R: Runtime>(app: &AppHandle<R>, action: WindowAction) {
+    let windows = app.state::<Windows>();
+    let Some(win) = windows.with(|r| r.front_window()) else {
+        return;
+    };
+    match action {
+        WindowAction::NextTab | WindowAction::PrevTab => {
+            let delta = if action == WindowAction::NextTab {
+                1
+            } else {
+                -1
+            };
+            if let Some(label) = windows.with(|r| r.cycle(&win, delta)) {
+                crate::windows::show_tab(app, &label);
+            }
+        }
+        WindowAction::Detach => {
+            let Some(label) = windows.with(|r| r.active_of(&win)) else {
+                return;
+            };
+            // A new window: off the main thread (wry#583 on Windows).
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = crate::windows::detach(&app, &label) {
+                    eprintln!("tally: {}", e.message);
+                }
+            });
+        }
+        WindowAction::Merge => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { crate::windows::merge(&app, &win) });
+        }
+        WindowAction::BringAll => {
+            // Oldest first, so the front window ends up in front again.
+            for w in windows.with(|r| r.windows_mru()).iter().rev() {
+                crate::windows::focus_window(app, w);
+            }
+        }
+    }
+}
+
 /// Handles a menu selection ([`route`]).
 pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let id = event.id().as_ref();
@@ -609,10 +718,11 @@ pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     match route(id, front.as_deref(), key_print.as_deref()) {
         Route::Quit => crate::closing::request_quit(app),
         Route::Focus(label) => {
-            crate::windows::focus(app, &label);
+            crate::windows::reveal(app, &label);
             // The check item toggled itself; put the marks right.
             crate::windows::refresh_window_menu(app);
         }
+        Route::Window(action) => window_action(app, action),
         Route::Emit(label) => emit_menu_action(app, &label, id),
         Route::NewWindow => crate::windows::spawn_doc_window(app, None),
         Route::OpenDialog => crate::dialogs::spawn_open(app),
@@ -675,6 +785,31 @@ mod tests {
     }
 
     #[test]
+    fn window_menu_tab_items_are_handled_by_the_shell() {
+        for (id, action) in [
+            (NEXT_TAB_ID, WindowAction::NextTab),
+            (PREV_TAB_ID, WindowAction::PrevTab),
+            (DETACH_TAB_ID, WindowAction::Detach),
+            (MERGE_ID, WindowAction::Merge),
+            (BRING_ALL_ID, WindowAction::BringAll),
+        ] {
+            assert_eq!(
+                route(id, Some("doc-1"), None),
+                Route::Window(action),
+                "{id}"
+            );
+            assert_eq!(route(id, None, None), Route::Window(action), "{id}");
+            // Never forwarded as menu-action, and not an accidental command id clash.
+            assert!(!custom_ids().contains(&id), "{id}");
+        }
+        assert_eq!(
+            route("window.focus.doc-7", None, None),
+            Route::Focus("doc-7".into())
+        );
+        assert_ne!(WINDOW_MENU_ID, tauri::menu::WINDOW_SUBMENU_ID);
+    }
+
+    #[test]
     fn window_list_items_focus_their_window() {
         let list = [
             ListEntry {
@@ -688,15 +823,19 @@ mod tests {
                 checked: true,
             },
         ];
+        // `&` is escaped on every platform (a mnemonic marker for muda).
         assert_eq!(
-            window_list_items(&list, false),
+            window_list_items(&list),
             [
-                ("window.focus.doc-1".to_owned(), "Q&A.ods".to_owned(), false),
+                (
+                    "window.focus.doc-1".to_owned(),
+                    "Q&&A.ods".to_owned(),
+                    false
+                ),
                 ("window.focus.doc-4".to_owned(), "Untitled".to_owned(), true),
             ]
         );
-        assert_eq!(window_list_items(&list, true)[0].1, "Q&&A.ods");
-        for (id, _, _) in window_list_items(&list, false) {
+        for (id, _, _) in window_list_items(&list) {
             let label = id.strip_prefix(FOCUS_PREFIX).unwrap_or_default();
             assert!(crate::registry::is_doc_label(label));
         }
@@ -718,6 +857,10 @@ mod tests {
             "menu.window.zoom",
             "menu.window.maximize",
             "menu.window.bringAllToFront",
+            "menu.window.showNextTab",
+            "menu.window.showPrevTab",
+            "menu.window.moveTabToNewWindow",
+            "menu.window.mergeAllWindows",
         ] {
             assert!(tally_l10n::has_ui_key(key), "{key}");
             for locale in [Locale::De, Locale::Fr, Locale::Es] {
@@ -836,7 +979,13 @@ mod tests {
                 }
             }
         }
-        let mut accels = vec!["CmdOrCtrl+Z", "Shift+CmdOrCtrl+Z"];
+        // Undo/Redo and the Window menu's tab items are built outside the tables.
+        let mut accels = vec![
+            "CmdOrCtrl+Z",
+            "Shift+CmdOrCtrl+Z",
+            "Ctrl+Tab",
+            "Ctrl+Shift+Tab",
+        ];
         for group in [
             FILE, EDIT_PASTE, EDIT_TAIL, INSERT, FORMAT, DATA, VIEW, SHEET, TOOLS, HELP,
         ] {

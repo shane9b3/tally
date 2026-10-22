@@ -8,6 +8,8 @@
 export type UiLanguage = "en" | "de" | "fr" | "es";
 export type EnterMoves = "down" | "right" | "up" | "left";
 export type DefaultFormat = "ods" | "xlsx";
+/** Where the desktop app opens documents (read by the shell, `windows.rs`). */
+export type OpenDocumentsIn = "tabs" | "windows";
 
 export interface AutoCorrectPrefs {
   /** Correct TWo INitial CApitals. */
@@ -44,6 +46,8 @@ export interface AppPrefs {
   defaultLocale: string;
   /** Delete key opens the Delete Contents dialog (AOO); off = clears at once. */
   deleteKeyDialog: boolean;
+  /** Desktop: new and opened documents become tabs of the front window, or get windows of their own. */
+  openDocumentsIn: OpenDocumentsIn;
 }
 
 export const DEFAULT_AUTOCORRECT: AutoCorrectPrefs = {
@@ -66,6 +70,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   autosaveMinutes: 10,
   defaultLocale: "en-US",
   deleteKeyDialog: true,
+  openDocumentsIn: "tabs",
 };
 
 export const UI_LANGUAGES: readonly { id: UiLanguage; label: string; tag: string }[] = [
@@ -110,6 +115,7 @@ export function parsePrefs(raw: unknown): AppPrefs {
     autosaveMinutes: minutes,
     defaultLocale: locale,
     deleteKeyDialog: bool(o.deleteKeyDialog, DEFAULT_PREFS.deleteKeyDialog),
+    openDocumentsIn: oneOf(o.openDocumentsIn, ["tabs", "windows"] as const, DEFAULT_PREFS.openDocumentsIn),
   };
 }
 

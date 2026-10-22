@@ -205,7 +205,8 @@ export function FormulaBar() {
           if (e.key === "Enter") {
             e.preventDefault();
             void ctl.commitEdit(e.shiftKey ? "up" : "down");
-          } else if (e.key === "Tab") {
+          } else if (e.key === "Tab" && !e.ctrlKey && !e.metaKey) {
+            // ⌃Tab passes on to the native menu (Window ▸ Show Next Tab).
             e.preventDefault();
             void ctl.commitEdit(e.shiftKey ? "left" : "right");
           } else if (e.key === "Escape") {

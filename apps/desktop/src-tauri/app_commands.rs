@@ -2,8 +2,8 @@
 // `src/lib.rs` (a unit test checks both, and that `capabilities/default.json`
 // grants each `allow-<command>`). `build.rs` turns them into an app ACL
 // manifest: with one, Tauri checks every app command against the
-// capabilities, so a window no capability covers (a `tally-print-*`
-// window) cannot call any of them.
+// capabilities, so a webview no capability covers (a `tally-print-*`
+// window's) cannot call any of them.
 pub const APP_COMMANDS: &[&str] = &[
     "wb_new",
     "wb_open_dialog",
@@ -95,4 +95,10 @@ pub const APP_COMMANDS: &[&str] = &[
     "window_init",
     "place_document",
     "broadcast_prefs",
+    "tab_activate",
+    "tab_close",
+    "tab_close_others",
+    "tab_move",
+    "tab_detach",
+    "merge_windows",
 ];

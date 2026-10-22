@@ -25,12 +25,30 @@ export const EXTRA_KEYS: readonly GridKeyRow[] = [
   { group: "Cells", keys: "⌃⌘+ / ⌃⌘−", action: "Insert / delete cells…" },
 ];
 
+/**
+ * Document tabs (desktop): the native Window menu (handled by the shell,
+ * `apps/desktop/src-tauri/src/menu.rs`) and the sidebar's "Open" list
+ * (`components/OpenDocuments.tsx`). Next/previous and by-number switch
+ * among the tabs of the front window, also with the sidebar hidden.
+ */
+export const TAB_KEYS: readonly { keys: string; action: string }[] = [
+  { keys: "⌃⇥ / ⇧⌘] (macOS)", action: "Window ▸ Show Next Tab" },
+  { keys: "⌃⇧⇥ / ⇧⌘[ (macOS)", action: "Window ▸ Show Previous Tab" },
+  { keys: "⌥⌘1 … ⌥⌘8 (macOS), Alt+1 … Alt+8 (Windows/Linux)", action: "Show tab 1 … 8 of the window" },
+  { keys: "⌥⌘9 (macOS), Alt+9 (Windows/Linux)", action: "Show the window's last tab" },
+  { keys: "⌘W", action: "Close the tab (the window with its last tab); asks to save an edited document" },
+  { keys: "—", action: "Window ▸ Move Tab to New Window / Merge All Windows; the open documents are listed below them" },
+  { keys: "Click / ×", action: "Sidebar ▸ Open (every open document, this window's first): show it (another window comes to the front) / close it; drag to reorder this window's tabs; right-click for Close, Close Others, Move to New Window" },
+  { keys: "↑ ↓ Home End, ↩ / Space, ⌫", action: "Sidebar ▸ Open with focus: move between documents, show the focused one, close it" },
+];
+
 /** The deliberate deviations from the AOO table (listed under the tables). */
 export const DEVIATIONS: readonly string[] = [
   "⌘D stays Fill Down (Excel and macOS usage); the AOO selection list is ⌃D.",
   "⌘/ opens the shortcut reference; the AOO Select Array Formula is ⌘/ on the numeric keypad.",
   "⌘⇧F9 is the hard recalculation; plain F9 recalculates the dirty cells (AutoCalculate is always on).",
   "⌘K opens the command palette (AOO: ⌘K inserts a hyperlink, here ⌥⌘K).",
+  "⌘1 stays Format Cells and ⌃PgDn / ⌃PgUp stay Next / Previous Sheet, so document tabs use ⌥⌘1–9 (Alt+1–9 on Windows/Linux) and ⌃⇥ / ⌃⇧⇥ rather than the browser-style ⌘1–9 and ⌃PgDn / ⌃PgUp.",
   "F4 (data source browser), F7 (spelling) and ⌥F11 (macros) are not bound: those features are out of scope (docs/parity-deviations.md).",
 ];
 
@@ -41,7 +59,9 @@ function esc(s: string): string {
 /** Renders the Markdown. `titleOf(commandId)` gives the command's palette title. */
 export function renderShortcutsDoc(bindings: readonly Binding[], gridKeys: readonly GridKeyRow[], titleOf: (id: string) => string): string {
   const byCommand = new Map<string, string[]>();
-  for (const b of bindings) byCommand.set(b.command, [...(byCommand.get(b.command) ?? []), b.label]);
+  // One table for every platform: platform-only keys say which platform.
+  const labelOf = (b: Binding): string => (b.mac === undefined ? b.label : `${b.label} (${b.mac ? "macOS" : "Windows/Linux"})`);
+  for (const b of bindings) byCommand.set(b.command, [...(byCommand.get(b.command) ?? []), labelOf(b)]);
   const rows = [...byCommand.entries()].map(([id, labels]) => ({ id, keys: labels.join(" / "), title: titleOf(id) }));
   const groups = new Map<string, GridKeyRow[]>();
   for (const g of [...gridKeys, ...EXTRA_KEYS]) groups.set(g.group, [...(groups.get(g.group) ?? []), g]);
@@ -57,6 +77,14 @@ export function renderShortcutsDoc(bindings: readonly Binding[], gridKeys: reado
   lines.push("| Keys | Command | Id |");
   lines.push("|---|---|---|");
   for (const r of rows) lines.push(`| ${esc(r.keys)} | ${esc(r.title)} | \`${r.id}\` |`);
+  lines.push("");
+  lines.push("## Documents and tabs");
+  lines.push("");
+  lines.push("Desktop app. Tools ▸ Options ▸ Load / Save ▸ \"Open documents in\" chooses tabs in one window (default) or separate windows.");
+  lines.push("");
+  lines.push("| Keys | Action |");
+  lines.push("|---|---|");
+  for (const r of TAB_KEYS) lines.push(`| ${esc(r.keys)} | ${esc(r.action)} |`);
   lines.push("");
   lines.push("## Grid and editor keys");
   lines.push("");

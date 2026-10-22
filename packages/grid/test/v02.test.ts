@@ -188,6 +188,30 @@ describe("Grid pointer interactions", () => {
     expect(onCommitEdit).not.toHaveBeenCalled();
   });
 
+  it("⌃Tab / ⌘Tab in the editor neither commits nor is prevented (the native menu gets it)", () => {
+    const onCommitEdit = vi.fn();
+    const { grid, ta } = make({ onCommitEdit });
+    grid.update({ edit: { cell: { r: 0, c: 0 }, text: "12", caret: 2 } });
+    for (const init of [{ ctrlKey: true }, { ctrlKey: true, shiftKey: true }, { metaKey: true }]) {
+      const e = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true, ...init });
+      ta.dispatchEvent(e);
+      expect(e.defaultPrevented).toBe(false);
+    }
+    expect(onCommitEdit).not.toHaveBeenCalled();
+    // A plain Tab still commits and moves right.
+    const plain = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    ta.dispatchEvent(plain);
+    expect(plain.defaultPrevented).toBe(true);
+    expect(onCommitEdit).toHaveBeenCalledTimes(1);
+  });
+
+  it("⌃Tab on the idle grid is not prevented either", () => {
+    const { ta } = make();
+    const e = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true, ctrlKey: true });
+    ta.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
   it("colours the editor text through the mirror", () => {
     const { grid, ta } = make();
     grid.update({ edit: { cell: { r: 0, c: 0 }, text: "=A1+B2", caret: 6 }, editHighlights: [{ start: 1, end: 3, color: "#ff0000" }] });

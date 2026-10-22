@@ -1,11 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "windows-titlebar",
-  "description": "Windows only (W5-5, §4 item 48): the document windows (`doc-*`) run without OS decorations (windows.rs) and the React title bar drives the caption buttons through the window API: minimize, maximize/restore, close, and reading the maximized state for the button glyph.",
+  "description": "Windows only (W5-5, §4 item 48): the document windows run without OS decorations (windows.rs) and the React title bar of the document webviews (`doc-*`, matched by webview label) drives the caption buttons of its own window through the window API (called without a window label, so Tauri uses the caller's current window, also after a tab moved): minimize, maximize/restore, close, and reading the maximized state for the button glyph.",
   "platforms": [
     "windows"
   ],
-  "windows": [
+  "webviews": [
     "doc-*"
   ],
   "permissions": [

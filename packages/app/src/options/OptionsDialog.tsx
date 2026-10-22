@@ -1,8 +1,8 @@
 /**
  * Tools ▸ Options (⌘,): Calculate (document calc settings), View (per-sheet
  * view options), Input (AutoInput, AutoCorrect, Enter moves, Delete key),
- * Formula syntax, Sort lists (the document's custom lists), Load/Save and
- * Language. Document settings go through ops (`setCalcSettings`,
+ * Formula syntax, Sort lists (the document's custom lists), Load/Save (incl.
+ * "Open documents in": tabs or separate windows) and Language. Document settings go through ops (`setCalcSettings`,
  * `setViewOptions`, `setCustomSortLists`); the rest are app prefs.
  */
 import type { CalcSettingsDto, ViewOptionsDto } from "@tally/bridge";
@@ -173,6 +173,15 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
           <Field label="Save AutoRecovery information every (minutes, 0 = off)">
             <input className={dlg.input} type="number" min={0} max={120} value={prefs.autosaveMinutes} onChange={(e) => setPrefs({ ...prefs, autosaveMinutes: Math.max(0, Math.min(120, Number(e.target.value) || 0)) })} data-testid="opt-autosave" />
           </Field>
+          <Field label={t("options.openDocumentsIn", "Open documents in")}>
+            <select className={dlg.select} value={prefs.openDocumentsIn} onChange={(e) => setPrefs({ ...prefs, openDocumentsIn: e.target.value as AppPrefs["openDocumentsIn"] })} data-testid="opt-open-documents-in">
+              <option value="tabs">{t("options.openInTabs", "Tabs in one window")}</option>
+              <option value="windows">{t("options.openInWindows", "Separate windows")}</option>
+            </select>
+          </Field>
+          <p className={dlg.note} style={{ gridColumn: "1 / -1" }}>
+            {t("options.openDocumentsInNote", "Applies to documents opened from now on; Window ▸ Merge All Windows combines open windows.")}
+          </p>
         </div>
       ) : null}
       {tab === "language" ? (

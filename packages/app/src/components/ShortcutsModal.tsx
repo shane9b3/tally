@@ -1,6 +1,6 @@
 /** ⌘/: the keyboard shortcut reference (the keymap table plus the grid's own keys). */
 import { useController } from "../context";
-import { BINDINGS, GRID_KEYS } from "../keymap";
+import { GRID_KEYS, isMacPlatform, platformBindings } from "../keymap";
 import { useUiStore } from "../stores/uiStore";
 import styles from "./ShortcutsModal.module.css";
 
@@ -14,7 +14,7 @@ export function ShortcutsModal() {
   };
   // One row per command (first binding's label wins; alternates are appended).
   const commands = new Map<string, { title: string; kind: string; keys: string[] }>();
-  for (const b of BINDINGS) {
+  for (const b of platformBindings(isMacPlatform())) {
     const cmd = ctl.registry.get(b.command);
     const entry = commands.get(b.command) ?? { title: cmd?.title ?? b.command, kind: cmd?.kind ?? "Other", keys: [] };
     entry.keys.push(b.label);

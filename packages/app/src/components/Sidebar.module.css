@@ -165,3 +165,65 @@
   text-align: center;
 }
 
+
+/* "Open" section (OpenDocuments.tsx): edited dot, close × on hover, drag to reorder. */
+.openRow {
+  position: relative;
+  outline: none;
+}
+
+.openRow:focus-visible {
+  box-shadow: 0 0 0 2px var(--tally-accent-border);
+}
+
+.editedDot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--tally-text-muted);
+}
+
+.closeDoc {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  margin-right: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--tally-text-muted);
+  cursor: default;
+}
+
+.closeDoc:hover {
+  background: var(--tally-hover);
+  color: var(--tally-text);
+}
+
+/* × replaces the meta on hover / keyboard focus. */
+.openRow:hover .closeDoc,
+.openRow:focus-visible .closeDoc {
+  display: inline-flex;
+}
+
+.openRow:hover .meta,
+.openRow:focus-visible .meta {
+  display: none;
+}
+
+.dragging {
+  opacity: 0.5;
+}
+
+.dropBefore {
+  box-shadow: inset 0 2px 0 var(--tally-accent);
+}
+
+.dropAfter {
+  box-shadow: inset 0 -2px 0 var(--tally-accent);
+}

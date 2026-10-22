@@ -7,7 +7,7 @@
  * bar) or Linux (native decorations).
  */
 import { useDocStore } from "@tally/app";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import "./titlebar.css";
 
@@ -18,20 +18,24 @@ export function TitleBar() {
   const [maximized, setMaximized] = useState(false);
   const title = info ? `${info.title}${info.dirty ? " — Edited" : ""}` : "Tally";
 
+  // The webview is resized with its window, so the DOM resize event follows
+  // maximize/restore too (and keeps working after the tab moves to another
+  // window, unlike a listener on a window label).
   useEffect(() => {
-    const win = getCurrentWindow();
-    let off: (() => void) | undefined;
-    const sync = () => void win.isMaximized().then(setMaximized, () => undefined);
+    const sync = () => void invoke<boolean>("plugin:window|is_maximized").then(setMaximized, () => undefined);
     sync();
-    void win.onResized(sync).then((f) => {
-      off = f;
-    });
-    return () => off?.();
+    window.addEventListener("resize", sync);
+    return () => window.removeEventListener("resize", sync);
   }, []);
 
-  const win = () => getCurrentWindow();
+  // No window label: Tauri acts on the window this webview is in now.
+  const win = {
+    minimize: () => invoke("plugin:window|minimize"),
+    toggleMaximize: () => invoke("plugin:window|toggle_maximize"),
+    close: () => invoke("plugin:window|close"),
+  };
   return (
-    <div className="tally-titlebar" data-tauri-drag-region data-testid="title-bar" onDoubleClick={() => void win().toggleMaximize()}>
+    <div className="tally-titlebar" data-tauri-drag-region data-testid="title-bar" onDoubleClick={() => void win.toggleMaximize()}>
       <span className="tally-titlebar-logo" data-tauri-drag-region>
         T
       </span>
@@ -39,12 +43,12 @@ export function TitleBar() {
         {title}
       </span>
       <span className="tally-titlebar-spacer" data-tauri-drag-region />
-      <button type="button" className="tally-caption" aria-label="Minimize" onClick={() => void win().minimize()}>
+      <button type="button" className="tally-caption" aria-label="Minimize" onClick={() => void win.minimize()}>
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
           <path d="M0 5h10" stroke="currentColor" strokeWidth="1" />
         </svg>
       </button>
-      <button type="button" className="tally-caption" aria-label={maximized ? "Restore" : "Maximize"} onClick={() => void win().toggleMaximize()}>
+      <button type="button" className="tally-caption" aria-label={maximized ? "Restore" : "Maximize"} onClick={() => void win.toggleMaximize()}>
         {maximized ? (
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1">
             <rect x="0.5" y="2.5" width="7" height="7" />
@@ -56,7 +60,7 @@ export function TitleBar() {
           </svg>
         )}
       </button>
-      <button type="button" className="tally-caption tally-caption-close" aria-label="Close" onClick={() => void win().close()}>
+      <button type="button" className="tally-caption tally-caption-close" aria-label="Close" onClick={() => void win.close()}>
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" stroke="currentColor" strokeWidth="1.1">
           <path d="M0 0l10 10M10 0L0 10" />
         </svg>

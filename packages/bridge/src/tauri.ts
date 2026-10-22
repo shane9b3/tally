@@ -203,6 +203,13 @@ export const COMMANDS = {
   windowInit: "window_init",
   placeDocument: "place_document",
   broadcastPrefs: "broadcast_prefs",
+  // Document tabs: apps/desktop/src-tauri/src/windows.rs
+  tabActivate: "tab_activate",
+  tabClose: "tab_close",
+  tabCloseOthers: "tab_close_others",
+  tabMove: "tab_move",
+  tabDetach: "tab_detach",
+  mergeWindows: "merge_windows",
 } as const;
 
 /**
@@ -250,19 +257,61 @@ export const CLOSE_SHELL_COMMANDS = ["setDocumentEdited", "confirmClose", "cance
 /** The document-window shell commands (windows.rs, prefs.rs); `windows.test.ts` covers them. */
 export const WINDOW_SHELL_COMMANDS = ["windowInit", "placeDocument", "broadcastPrefs"] as const satisfies readonly (keyof typeof COMMANDS)[];
 
-/** Event names, exactly as in docs/api.md. */
-export const EVENTS = { docChanged: "doc-changed", menuAction: "menu-action", closeRequested: "close-requested", prefsChanged: "prefs-changed" } as const;
+/** The document-tab shell commands (windows.rs); `tabs.test.ts` covers them. */
+export const TAB_SHELL_COMMANDS = ["tabActivate", "tabClose", "tabCloseOthers", "tabMove", "tabDetach", "mergeWindows"] as const satisfies readonly (keyof typeof COMMANDS)[];
 
-/** What a document window's webview gets on start (`window_init`). */
-export interface WindowInit {
-  /** The document this window shows (the engine's summary); `null`: create a blank workbook. */
-  doc: WorkbookInfo | null;
-  /** The first window of the session offers the crash recovery. */
-  offerRecovery: boolean;
+/** Event names, exactly as in docs/api.md. */
+export const EVENTS = { docChanged: "doc-changed", menuAction: "menu-action", closeRequested: "close-requested", prefsChanged: "prefs-changed", tabsChanged: "tabs-changed" } as const;
+
+/** One open document (`tabs-changed`): a tab of some window. */
+export interface TabInfo {
+  /** The document webview's label (`doc-<n>`). */
+  label: string;
+  /** The native window it is in (`win-<n>`). */
+  window: string;
+  /** The document title; `""` while untitled (the UI shows "Untitled"). */
+  title: string;
+  /** Unsaved changes. */
+  edited: boolean;
+  /** The document's file, if any (tooltip). */
+  path: string | null;
 }
 
-/** `place_document`: shown in the calling window (`"here"`) or in a new one (`"window"`). */
-export type Placement = "here" | "window";
+/**
+ * The open documents as seen from one webview (`tabs-changed`, sent to every
+ * document webview on any change; `window_init`): its own window's tabs and
+ * every other open document.
+ */
+export interface TabsState {
+  /** The native window this webview is in (`win-<n>`). */
+  window: string;
+  /** This window's tabs, in display order. */
+  tabs: TabInfo[];
+  /** The label of this window's visible tab. */
+  active: string;
+  /** The documents of the other windows: windows in creation order, tabs in order. */
+  others: TabInfo[];
+}
+
+/** What a document webview gets on start (`window_init`). */
+export interface WindowInit {
+  /** The document this webview shows (the engine's summary); `null`: create a blank workbook. */
+  doc: WorkbookInfo | null;
+  /** The first document of the session offers the crash recovery. */
+  offerRecovery: boolean;
+  /** This webview's own label (`doc-<n>`). */
+  label?: string;
+  /** The open documents (`null` before the shell knows the window). */
+  tabs?: TabsState | null;
+  /** A close sequence is asking this document (the webview reloaded while asked): ask again with this kind. */
+  ask?: "window" | "quit" | "tabs" | null;
+}
+
+/** `place_document`: shown in the calling webview (`"here"`), as a new tab of its window (`"tab"`) or in a new window (`"window"`). */
+export type Placement = "here" | "tab" | "window";
+
+/** `close-requested` kinds: one document (`"window"`), or a sequence (`"quit"`, `"tabs"`: a window with several tabs or Close Other Tabs). */
+export type CloseRequestKind = "window" | "quit" | "tabs";
 
 /** `prefs-changed`: another window changed the prefs (re-read them) or the theme. */
 export interface PrefsChangedEvent {
@@ -717,9 +766,46 @@ export class TauriClient implements EngineClientV4, ShellClient {
     return this.subscribe(EVENTS.prefsChanged, cb);
   }
 
-  /** `close-requested { kind }`: a window close or quit is waiting for the save prompt. */
-  onCloseRequested(cb: (kind: "window" | "quit") => void): Unsubscribe {
-    return this.subscribe<{ kind: "window" | "quit" }>(EVENTS.closeRequested, (e) => cb(e.kind));
+  /** `close-requested { kind }`: closing this document, a quit or a multi-tab close is waiting for the save prompt. */
+  onCloseRequested(cb: (kind: CloseRequestKind) => void): Unsubscribe {
+    return this.subscribe<{ kind: CloseRequestKind }>(EVENTS.closeRequested, (e) => cb(e.kind));
+  }
+
+  // -- document tabs (windows.rs) --------------------------------------------------
+
+  /** `tab_activate`: shows that document (any open one: the shell brings its window to the front). */
+  tabActivate(label: string): Promise<void> {
+    return this.call(COMMANDS.tabActivate, { label });
+  }
+
+  /** `tab_close`: closes that document, in any window (a dirty one is asked first, in its own tab). */
+  tabClose(label: string): Promise<void> {
+    return this.call(COMMANDS.tabClose, { label });
+  }
+
+  /** `tab_close_others`: closes every other tab of this window (dirty ones asked in turn). */
+  tabCloseOthers(label: string): Promise<void> {
+    return this.call(COMMANDS.tabCloseOthers, { label });
+  }
+
+  /** `tab_move`: moves that tab to position `index` (0-based) in this window. */
+  tabMove(label: string, index: number): Promise<void> {
+    return this.call(COMMANDS.tabMove, { label, index });
+  }
+
+  /** `tab_detach`: Move Tab to New Window. */
+  tabDetach(label: string): Promise<void> {
+    return this.call(COMMANDS.tabDetach, { label });
+  }
+
+  /** `merge_windows`: Merge All Windows into this webview's window. */
+  mergeWindows(): Promise<void> {
+    return this.call(COMMANDS.mergeWindows);
+  }
+
+  /** `tabs-changed`: something changed among the open documents (any window). */
+  onTabsChanged(cb: (state: TabsState) => void): Unsubscribe {
+    return this.subscribe(EVENTS.tabsChanged, cb);
   }
 
   // -- events -----------------------------------------------------------------

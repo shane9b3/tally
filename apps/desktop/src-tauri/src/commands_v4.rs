@@ -344,15 +344,15 @@ pub async fn wb_export_pdf(
 
 /// `wb_print(doc, job)`: sends the job's PDF to the OS print dialog
 /// (W5-5: `print::print`); a macOS print window belongs to the calling
-/// document window.
+/// document (tab): closing it closes the print window too.
 #[tauri::command]
 pub async fn wb_print(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    webview: tauri::Webview,
     doc: DocId,
     job: u32,
 ) -> CmdResult<()> {
-    crate::print::print(app, window.label().to_owned(), doc, job).await
+    crate::print::print(app, webview.label().to_owned(), doc, job).await
 }
 
 /// Every wave-5 command name, in `generate_handler!` order (checked against

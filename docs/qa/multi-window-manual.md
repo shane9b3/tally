@@ -1,45 +1,49 @@
-# Manual QA: one document per window, native tabs, per-window guard
+# Manual QA: documents as tabs and windows, per-document guard
 
 The decisions are unit-tested (`apps/desktop/src-tauri/src/registry.rs`:
-window reuse, quit sequencing, exit plan, print-window ownership, the window
-list; `menu.rs`: menu routing; `windows.rs`, `prefs.rs`; and
-`packages/app/test/windows.test.ts` / `unsaved.test.ts` for the webview
-side). Window creation, AppKit tabs, focus and the Dock cannot be driven
-from the tests, so these checks run against the **release build**
+placement and the "Open documents in" setting, tab activate/cycle/reorder,
+Move Tab to New Window, Merge All Windows, closing tabs and windows with
+several edited tabs, Quit across windows, Close Other Tabs, the exit plan,
+print-window ownership, the Window menu list; `windows.rs`: window size,
+cascade and webview bounds; `menu.rs`: menu routing; `prefs.rs`; and in
+`packages/app/test` the sidebar "Open" list, `tabs.test.ts`,
+`windows.test.ts`, `unsaved.test.ts`). A scripted probe of the debug build
+checked the shell paths natively on macOS (see docs/TODO.md), but nothing
+was looked at: these checks run against the **release build**
 (`pnpm --filter tally-desktop tauri build`, then open
-`target/release/bundle/macos/Tally.app`). Prepare two scratch files `A.ods`
-and `B.ods` (saved once, so both are in Open recent) and leave System
-Settings ▸ Desktop & Dock ▸ "Prefer tabs when opening documents" at
-"In full screen" unless a row says otherwise.
+`.targets/<dir>/release/bundle/macos/Tally.app`). Prepare two scratch files
+`A.ods` and `B.ods` (saved once, so both are in Open recent). Tools ▸
+Options ▸ Load / Save ▸ "Open documents in" starts at **Tabs in one window**.
 
 | # | Step | Expected |
 |---|---|---|
-| 1 | Launch. | One window "Untitled" (the first window; recovery is offered here only, if there is anything to recover). |
-| 2 | File ▸ Open… `A.ods`. | `A.ods` replaces the untouched Untitled in the same window (no second window). |
-| 3 | Sidebar ▸ Open recent → `B.ods`. | `B.ods` opens in a **new** window, offset from the first; `A.ods` stays in its window. |
-| 4 | In the `B.ods` window open `A.ods` again (Open recent). | No third window: the `A.ods` window comes to the front. |
-| 5 | ⌘N, type a value in the new Untitled window, then open a template from its sidebar. | ⌘N opens a new Untitled window; the template opens in another new window (the edited Untitled is kept). |
-| 6 | Window menu. | Minimize, Zoom, Enter Full Screen, Bring All to Front, then the open windows (`A.ods`, `B.ods`, Untitled…, check mark on the front one) and the tab items (Show Previous/Next Tab, Move Tab to New Window, Merge All Windows). Choosing a window brings it to the front. |
-| 7 | Window ▸ Merge All Windows. | All document windows become tabs of one window, with the document titles on the tabs. Check that the tab bar does not cover the toolbar (overlay title bar). View ▸ Show Tab Bar / Show All Tabs are present (AppKit adds them). |
-| 8 | Drag a tab out, or Window ▸ Move Tab to New Window. | It becomes a separate window again; both keep working (type in each). |
-| 9 | Set "Prefer tabs" to **Always**, then ⌘N and open another file. | The new documents open as tabs of the front window. |
-| 10 | ⌘` (and ⌘⇧`) with three windows. | Cycles through the document windows. |
-| 11 | Edit `A.ods` (do not save). Bring `B.ods` to the front; Format ▸ Bold, ⌘W. | Bold applies to `B.ods` only; ⌘W closes the `B.ods` window at once (clean); `A.ods` and its dot are untouched. |
-| 12 | Edit two windows (`A.ods` and an Untitled); leave a third clean. ⌘Q. | The front edited window comes forward and asks; answer **Don't Save** → the other edited window comes forward and asks; answer **Save** → the Save As dialog (untitled); save it → the app quits. The clean window is never asked. |
-| 13 | Repeat 12, but answer **Cancel** in the second window. | The app keeps running with all windows; the first window's document is still open and still edited (its dot is back), and ⌘Q asks it again. |
-| 14 | Repeat 12, but cancel the Save As dialog in the second window. | Same as 13. |
-| 15 | With an edited window: red close button on it → Cancel; then on a clean window. | The prompt appears in the edited window only; the clean one closes at once. |
-| 16 | Close every window (⌘W on each). | macOS: the app keeps running (menu bar, Dock dot). File ▸ New opens a window; close it; File ▸ Open… opens the chosen file in a new window. |
-| 17 | Close every window, then click the Dock icon. | A new Untitled window. Minimise all windows and click the Dock icon: the front one comes back. |
-| 18 | In `A.ods` choose File ▸ Print (a print window opens); in `B.ods` too. Close the `A.ods` window. | Only the `A.ods` print window closes with it; the `B.ods` print window stays. |
-| 18b | Click the `B.ods` print window, press ⌘W. | Only the print window closes; `B.ods` stays open. |
-| 19 | Edit `A.ods` and an Untitled window (do not save; let one autosave interval pass or not), then `osascript -e 'quit app "Tally"'` (the Dock's Quit). Relaunch. | The app quits without asking. The first window offers recovery of **both** documents; Recover on the first takes over the untouched start-up window (the dialog stays up with the other one), the second opens in its own window. A second window opened afterwards (⌘N) offers nothing. |
-| 20 | Tools ▸ Options in one window: switch the language to Deutsch. | The menu bar and **every** window switch to German. View ▸ Theme in one window: every window follows. |
-| 21 | Set Tools ▸ Options ▸ AutoRecovery to 1 minute; edit two windows; wait 1 minute; force quit (Activity Monitor). Relaunch. | Both documents are offered for recovery. |
-| 22 | Windows/Linux build (if available): open two files, close one window, then the other. | Each window has a Window menu with the window list (check mark follows focus); closing the last window exits the app. ⌘/Ctrl+W and the title-bar ✕ ask in that window only. |
+| 1 | Launch. | One window "Untitled"; the sidebar's **Open** section has one row (Untitled), looking like the old single-document section. Recovery is offered here only, if there is anything to recover. |
+| 2 | File ▸ Open… `A.ods`. | `A.ods` replaces the untouched Untitled (still one row, one window). |
+| 3 | Sidebar ▸ Open recent → `B.ods`. | `B.ods` opens as a second document **in the same window**; the Open section lists `A.ods` and `B.ods`, `B.ods` highlighted; the window title (Dock, Window menu, Mission Control) is `B.ods`. |
+| 4 | Click `A.ods` in the Open section; then ⌃Tab, ⌃⇧Tab, ⇧⌘] and ⇧⌘[; then ⌥⌘1 and ⌥⌘9. | Each switches the shown document at once (no flicker, no blank frame); typing goes to the shown document right away (no extra click); ⌥⌘9 shows the last one. ⌘1 still opens Format ▸ Cells. ⌃PgDn/⌃PgUp still switch **sheets**. ⌃Tab also switches while typing in a cell and in the formula bar (the typing is not committed and the cursor does not move); plain Tab still commits and moves right. |
+| 5 | Hover a row: tooltip; drag `B.ods` above `A.ods`. | Tooltip shows the file path; the order changes and stays after switching documents; Window menu lists them in the new order. |
+| 6 | Arrow keys in the Open list (focus a row first), Enter, Delete. | ↑/↓/Home/End move the focus, Enter shows that document, Delete closes it (asking if edited). |
+| 7 | In `A.ods` open the same `B.ods` again (Open recent). | No second copy: `B.ods` is shown. |
+| 8 | Right-click `B.ods` ▸ Move to New Window (or Window ▸ Move Tab to New Window while it is shown). | A new window of the same size, offset, shows `B.ods`; the first window shows `A.ods`; both windows' Open sections list both documents (own window's first); typing works in each. Clicking the other window's document in a sidebar brings that window to the front with it shown. |
+| 9 | Window ▸ Merge All Windows. | Every document is back in the front window; the emptied window closes; the front window keeps showing its document. |
+| 10 | Window menu. | Minimize, Zoom, Enter Full Screen, Show Next Tab ⌃⇥, Show Previous Tab ⌃⇧⇥, Move Tab to New Window, Merge All Windows, Bring All to Front, then every open document with a check on the shown one of the front window. Choosing one shows its window and document. No AppKit window/tab items, and no View ▸ Show Tab Bar. |
+| 11 | System Settings ▸ Desktop & Dock ▸ "Prefer tabs when opening documents": **Always**. Open a file, ⌘N, Window ▸ Move Tab to New Window, go full screen. | **No native macOS tab bar ever appears** (windows never merge into AppKit tabs); only the sidebar lists documents. Reset the setting afterwards. |
+| 12 | Hide the sidebar (⌘\\). Switch documents with ⌃Tab and the Window menu. | Switching still works; the sidebar comes back with the right row highlighted. |
+| 13 | Edit `A.ods` (do not save); show `B.ods`; Format ▸ Bold; ⌘W. | Bold applies to `B.ods` only; ⌘W closes `B.ods` at once (clean); `A.ods` is shown; the red button shows the edited dot (a document of the window is edited). |
+| 14 | Edit two documents of one window, leave a third clean; click its **red close button**. | The shown edited document asks first, then the other edited one is shown and asks (`Save` / `Don't Save` / `Cancel`); after the last answer the window closes with all three. The clean one is never asked. |
+| 15 | Repeat 14, but **Cancel** at the second prompt. | Nothing closes; the first document is still edited and asks again next time. |
+| 16 | Right-click a row ▸ Close Others with two edited others. | Each edited one is shown and asks in turn; then the others close; Cancel keeps all. |
+| 17 | Hover a hidden edited row, click its ×. | That document is shown and asks; Don't Save closes it; the window shows its neighbour. |
+| 18 | Two windows, edited documents in both. ⌘Q. | The front window's shown document asks first, then the window's other edited ones, then the other window comes forward and its edited ones ask; Don't Save on all → the app quits. Repeat with Cancel in the second window: the app keeps running, everything still open and edited. |
+| 19 | Resize a window with three documents, enter and leave full screen, switch documents. | Every document fills the window (the hidden ones too, once shown); the overlay title bar and traffic lights sit as before (traffic lights at the top left, not covering the sidebar title). |
+| 20 | Tools ▸ Options ▸ Load / Save ▸ Open documents in: **Separate windows**; open a file and ⌘N. | Each opens in a new window (existing windows unchanged); Window ▸ Merge All Windows still combines them. Switch back to Tabs. |
+| 21 | Print `A.ods` (File ▸ Print, a print window opens) and `B.ods` in the same window; close `A.ods` with its ×. | Only `A.ods`'s print window closes; `B.ods`'s stays. ⌘W in a print window closes only it. |
+| 22 | Close every document (⌘W each). | macOS: the app keeps running. File ▸ New opens a window; close it; a Dock click opens a new Untitled window; minimise it and click the Dock icon: it comes back. |
+| 23 | Edit two documents (not saved), then `osascript -e 'quit app "Tally"'` (the Dock's Quit). Relaunch. | Quits without asking; the first document offers recovery of both; recovered documents open as the setting says. |
+| 24 | Tools ▸ Options: language Deutsch; View ▸ Theme. | Menu bar and every document (shown or hidden, every window) switch; the Open section heading reads "Geöffnet". |
+| 25 | Windows/Linux build (if available): steps 3, 4 (Ctrl+Tab / Ctrl+Shift+Tab, Alt+1…9), 8, 9, 14, 18, and resizing from every edge (Windows: top edge especially). | As on macOS; closing the last window exits the app; the Windows title bar buttons act on the right window after Move to New Window. |
 
-Known limitations: the Dock's Quit and log-out/shutdown still quit without the
-prompt (they send `terminate:`, which tao does not let the app veto); every
-edited document gets an exit snapshot instead (row 19). The tab items and the
-window list in the macOS Window menu are AppKit's (localised by the system),
-so an open print window ("Print") is listed there too; that is expected.
+Known limitations: the Dock's Quit and log-out/shutdown still quit without
+the prompt (`terminate:` cannot be vetoed through tao); every edited
+document gets an exit snapshot instead (row 23). Hidden documents' timers
+are throttled by WebKit (autosave may run a little late).

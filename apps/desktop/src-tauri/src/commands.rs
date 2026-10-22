@@ -111,8 +111,8 @@ pub fn doc_with_path<'a>(
 }
 
 /// Opens an allowlisted path and records it in the recent list. A file that
-/// is already open in a document window is not opened twice: that window
-/// comes to the front and the result is `cancelled` (the UI shows nothing).
+/// is already open is not opened twice: its window comes to the front with
+/// its tab shown and the result is `cancelled` (the UI shows nothing).
 pub fn open_checked<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
@@ -121,11 +121,11 @@ pub fn open_checked<R: Runtime>(
     let canon = files::check_open_allowed(state, path)?;
     let open_doc = doc_with_path(lock(&state.paths).iter(), &canon);
     if let Some(doc) = open_doc {
-        let window = app
+        let tab = app
             .try_state::<crate::registry::Windows>()
-            .and_then(|w| w.with(|r| r.window_of(doc)));
-        if let Some(label) = window {
-            crate::windows::focus(app, &label);
+            .and_then(|w| w.with(|r| r.tab_of(doc)));
+        if let Some(label) = tab {
+            crate::windows::reveal(app, &label);
             files::push_recent(app, state, &canon);
             return Err(ApiError::new(ApiError::CANCELLED, "already open"));
         }

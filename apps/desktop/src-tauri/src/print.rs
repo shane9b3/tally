@@ -259,8 +259,9 @@ pub async fn export_pdf(
 
 /// `wb_print(doc, job)`: macOS shows the PDF in a print window and opens the
 /// print dialog; other platforms hand a temporary PDF to the system viewer.
-/// The print window belongs to the document window that asked (`owner`):
-/// closing that window closes it too (`closing.rs`).
+/// The print window (a separate window) belongs to the document that asked
+/// (`owner`, its tab's label): closing that tab or its window closes it too
+/// (`closing.rs`).
 pub async fn print(app: AppHandle, owner: String, doc: DocId, job: u32) -> CmdResult<()> {
     let _ = doc;
     let bytes = blocking(app.clone(), move |_, st| pdf_bytes(st, job)).await?;

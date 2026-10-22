@@ -755,6 +755,9 @@ export class Interaction {
         this.commit(mods.shift ? "up" : "down");
         return;
       case "Tab":
+        // ⌃Tab / ⌘Tab: not for the editor; left alone so the native menu
+        // (Window ▸ Show Next/Previous Tab) gets it.
+        if (mods.mod) return;
         e.preventDefault();
         this.lastCommitKey = "Tab";
         this.commit(mods.shift ? "left" : "right");

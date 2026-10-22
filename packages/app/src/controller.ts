@@ -71,7 +71,8 @@ import { detectSumRange, sumFormula, sumScanRanges } from "./sumRange";
 import { V3Features } from "./features";
 import { useV3Store } from "./stores/v3Store";
 import { W5Features } from "./objects/w5Features";
-import { guardDecision, proceedAfter, useSavePromptStore, type CloseKind, type CloseShell } from "./unsaved";
+import { guardDecision, isSequence, proceedAfter, useSavePromptStore, type CloseKind, type CloseShell } from "./unsaved";
+import { TabsFeature, useTabsStore, type TabShell } from "./tabs";
 import { canReuseWindow, type WindowShell } from "./windows";
 import { W56Features } from "./data/w56";
 
@@ -143,6 +144,8 @@ export class AppController {
   readonly w5: W5Features;
   /** Wave 5 (W5-6): DataPilot, data tools, styles, options, assists, navigator, i18n. */
   readonly w56: W56Features;
+  /** Document tabs (tabs.ts): the strip's and the Window menu's actions. */
+  readonly tabs: TabsFeature;
 
   constructor(
     readonly client: EngineClientV3,
@@ -152,6 +155,7 @@ export class AppController {
     this.v3 = new V3Features(this);
     this.w5 = new W5Features(this);
     this.w56 = new W56Features(this);
+    this.tabs = new TabsFeature(this);
   }
 
   // -- lifecycle --------------------------------------------------------------
@@ -179,6 +183,12 @@ export class AppController {
       useEditStore.subscribe(() => this.syncDocumentEdited()),
       this.closeShell.onCloseRequested?.((kind) => void this.closeRequested(kind)) ?? (() => undefined),
       this.windowShell.onPrefsChanged?.((e) => this.prefsChangedElsewhere(e.theme)) ?? (() => undefined),
+      (this.shell as unknown as TabShell).onTabsChanged?.((state) => useTabsStore.getState().setState(state)) ?? (() => undefined),
+      // This webview became the visible tab: give the grid the keyboard.
+      useTabsStore.subscribe((s, prev) => {
+        const self = s.self;
+        if (self !== null && s.state?.active === self && prev.state?.active !== self) this.focusGrid();
+      }),
       useUiStore.subscribe((s, prev) => {
         if (s.themePref !== prev.themePref && !this.remoteTheme) this.broadcastPrefs(s.themePref);
       }),
@@ -201,9 +211,15 @@ export class AppController {
       () => undefined,
     );
     let offerRecovery = true;
+    let ask: CloseKind | null = null;
     try {
       const init = this.windowShell.windowInit ? await this.windowShell.windowInit() : null;
-      if (init) offerRecovery = init.offerRecovery;
+      if (init) {
+        offerRecovery = init.offerRecovery;
+        ask = init.ask ?? null;
+        if (init.label !== undefined) useTabsStore.getState().setSelf(init.label);
+        if (init.tabs !== undefined) useTabsStore.getState().setState(init.tabs);
+      }
       if (init?.doc) {
         this.load(init.doc);
       } else {
@@ -214,6 +230,9 @@ export class AppController {
       this.notifyError(e);
     }
     if (offerRecovery) void this.w56.offerRecovery();
+    // A close sequence was asking this document when its webview reloaded:
+    // ask again, so the sequence does not wait for an answer forever.
+    if (ask) void this.closeRequested(ask);
   }
 
   /**
@@ -1091,7 +1110,7 @@ export class AppController {
     }
     try {
       if ((await place.call(this.windowShell, info.doc, this.canReuseWindow())) === "here") this.load(info);
-      // The new window shows the engine's summary, which no longer has the
+      // The new tab or window shows the engine's summary, which no longer has the
       // open warnings (they are delivered once): show them here.
       else toastWarnings(info.warnings.map((w) => `${info.title}: ${w}`));
     } catch (e) {
@@ -1173,21 +1192,22 @@ export class AppController {
   }
 
   /**
-   * The desktop shell held back this window's close or a quit
-   * (`close-requested`): run the guard, then let the shell close the window
-   * (which closes the document in the engine and removes its autosave
-   * snapshot) or go on with the quit (`confirm_close`). Cancel during a quit
-   * tells the shell (`cancel_quit`), which aborts the whole quit.
+   * The desktop shell held back closing this document, a quit or a
+   * multi-tab close (`close-requested`): run the guard, then let the shell
+   * close this tab or window (which closes the document in the engine and
+   * removes its autosave snapshot) or go on with the sequence
+   * (`confirm_close`). Cancel during a sequence tells the shell
+   * (`cancel_quit`), which aborts the whole quit or multi-tab close.
    */
   closeRequested = async (kind: CloseKind): Promise<boolean> => {
     if (this.guarding) {
       // A prompt is already up in this window (⌘W, or the red button): it
       // answers for the quit too. Cancel there must also end the quit.
-      if (kind === "quit") this.quitWaiting = true;
+      if (isSequence(kind)) this.quitWaiting = true;
       return false;
     }
     const ok = await this.confirmUnsaved();
-    const quitAsked = kind === "quit" || this.quitWaiting;
+    const quitAsked = isSequence(kind) || this.quitWaiting;
     this.quitWaiting = false;
     if (!ok) {
       // Cancel (or a cancelled Save As) during a quit aborts the whole quit.
@@ -1197,17 +1217,17 @@ export class AppController {
     try {
       // A window close answered during a quit closes the window; the shell
       // then goes on with the quit.
-      await this.closeShell.confirmClose?.(kind === "quit");
+      await this.closeShell.confirmClose?.(isSequence(kind));
     } catch (e) {
       this.notifyError(e);
     }
     // Answered for a quit that may still be cancelled elsewhere: the next
     // change here is reported again, which re-arms the shell's guard.
-    if (kind === "quit") this.reportedEdited = null;
+    if (isSequence(kind)) this.reportedEdited = null;
     return true;
   };
 
-  /** File ▸ New: a new window in the desktop app; the browser replaces the document (guarded). */
+  /** File ▸ New: a new tab or window in the desktop app; the browser replaces the document (guarded). */
   newWorkbook = async (): Promise<void> => {
     const place = this.windowShell.placeDocument;
     if (place) {
@@ -1264,9 +1284,9 @@ export class AppController {
   };
 
   /**
-   * File ▸ Close (⌘W): closes this window in the desktop app (guarded like
-   * the red button); the browser replaces the document with a blank one
-   * (guarded in `newWorkbook`).
+   * File ▸ Close (⌘W): closes this document's tab (or its window, when it is
+   * the only tab) in the desktop app, guarded like the red button; the
+   * browser replaces the document with a blank one (guarded in `newWorkbook`).
    */
   closeDocument = async (): Promise<void> => {
     if (this.multiWindow) await this.closeRequested("window");

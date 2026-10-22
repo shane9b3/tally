@@ -99,6 +99,8 @@ pub async fn set_ui_language(app: AppHandle, lang: String) -> CmdResult<()> {
     // The fresh menu's Window list (Windows/Linux); the other windows switch
     // their own UI on `prefs-changed` (`prefs::broadcast_prefs`).
     crate::windows::refresh_window_menu(&app);
+    // "Untitled" in native window titles follows the language too.
+    crate::windows::update_all_windows(&app);
     Ok(())
 }
 

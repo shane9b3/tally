@@ -94,6 +94,10 @@ describe("reduceKey: Tab and Enter", () => {
     expect(walk("Tab", 2, mods({ shift: true }))).toEqual(["1,1", "1,0"]);
     expect(stepWithin(s0, "up", lim).active).toEqual({ r: 1, c: 1 });
   });
+
+  it("leaves ⌃Tab / ⌘Tab (± Shift) to the app: no action", () => {
+    for (const m of [mods({ mod: true }), mods({ mod: true, shift: true })]) expect(reduceKey(at(3, 3), "Tab", m, lim)).toEqual({ type: "none" });
+  });
 });
 
 describe("reduceKey: other actions", () => {

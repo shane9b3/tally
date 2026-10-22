@@ -1778,7 +1778,8 @@ mod app_acl {
 
 /// Security review (multi-window S1): with an app manifest Tauri checks every
 /// app command against the capabilities. The manifest must list exactly the
-/// registered commands, and only the document windows may call them.
+/// registered commands, and only the document webviews (`doc-*`, matched by
+/// webview label; never a `win-*` window or a print window) may call them.
 #[test]
 fn every_registered_command_is_in_the_acl_manifest_and_granted_to_document_windows() {
     let lib = include_str!("lib.rs");
@@ -1795,7 +1796,12 @@ fn every_registered_command_is_in_the_acl_manifest_and_granted_to_document_windo
 
     let caps: serde_json::Value =
         serde_json::from_str(include_str!("../capabilities/default.json")).unwrap_or_default();
-    assert_eq!(caps["windows"], serde_json::json!(["doc-*"]));
+    assert_eq!(caps["webviews"], serde_json::json!(["doc-*"]));
+    // No window pattern: a capability matches a window label OR a webview
+    // label, and the `win-*` windows / print windows must match nothing.
+    assert!(caps.get("windows").is_none());
+    // The native title is the shell's (windows.rs), not the webviews'.
+    assert!(!caps.to_string().contains("allow-set-title"));
     let granted: Vec<String> = caps["permissions"]
         .as_array()
         .map(|a| {
@@ -1814,5 +1820,7 @@ fn every_registered_command_is_in_the_acl_manifest_and_granted_to_document_windo
     // The other capability grants no app command.
     let titlebar = include_str!("../capabilities/windows-titlebar.json");
     assert!(!titlebar.contains("\"allow-"));
-    assert!(titlebar.contains("\"doc-*\""));
+    let titlebar: serde_json::Value = serde_json::from_str(titlebar).unwrap_or_default();
+    assert_eq!(titlebar["webviews"], serde_json::json!(["doc-*"]));
+    assert!(titlebar.get("windows").is_none());
 }

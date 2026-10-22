@@ -228,6 +228,8 @@ export function reduceKey(sel: Selection, key: string, mods: Mods, lim: Limits):
       return select(moveBy(sel, dr, dc, shift, lim));
     }
     case "Tab":
+      // ⌃Tab / ⌘Tab belong to the app (Window ▸ Show Next/Previous Tab).
+      if (mod) return { type: "none" };
       return select(stepWithin(sel, shift ? "left" : "right", lim));
     case "Enter":
       if (mod || alt) return { type: "none" };

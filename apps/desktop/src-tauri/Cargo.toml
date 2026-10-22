@@ -20,7 +20,9 @@ tauri-build = { workspace = true, features = [] }
 
 [dependencies]
 # Pinned in the root Cargo.toml (=2.12.4). Never `cargo add tauri` bare.
-tauri = { workspace = true, features = [] }
+# `unstable`: the multi-webview API (several document webviews per window =
+# tabs; windows.rs). It makes every webview a child webview, see docs/security.md.
+tauri = { workspace = true, features = ["unstable"] }
 tauri-plugin-dialog.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -32,7 +34,7 @@ tally-l10n.workspace = true
 zip.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# The red close button's "document edited" dot (closing.rs); safe API only.
+# The red close button's "document edited" dot and native tabs off (native.rs); safe API only.
 objc2.workspace = true
 objc2-foundation.workspace = true
 objc2-app-kit.workspace = true

@@ -177,3 +177,10 @@ export const SearchIcon = () => (
     <path d="m10.25 10.25 3.25 3.25" />
   </Svg>
 );
+
+/** A small ✕ (12 px), e.g. a document tab's close button. */
+export const CloseSmallIcon = () => (
+  <Svg width={12} height={12} viewBox="0 0 12 12" strokeWidth={1.4}>
+    <path d="M3 3l6 6M9 3l-6 6" />
+  </Svg>
+);

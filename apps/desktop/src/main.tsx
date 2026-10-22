@@ -31,7 +31,11 @@ async function pickClient(): Promise<Client | null> {
   if (import.meta.env.DEV) {
     // The browser build uses MockClient plus emulated row/column insert/delete.
     const dev = await import("@tally/app/dev");
-    return new dev.WebMockClient();
+    const client = new dev.WebMockClient();
+    // `?tabs=<n>`: a mock tab shell, to see and drive the sidebar's "Open" list.
+    const tabs = Number(params.get("tabs") ?? "0");
+    if (tabs > 0) dev.installMockTabs(client, tabs);
+    return client;
   }
   return null;
 }

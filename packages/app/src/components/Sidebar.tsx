@@ -1,5 +1,6 @@
 /**
- * Left sidebar: new workbook, the open workbook, "Open recent" (paths from
+ * Left sidebar: new workbook, the open documents ("Open": every document of
+ * the app in the desktop shell, OpenDocuments.tsx), "Open recent" (paths from
  * `recentFiles`, with when each was last open here, kept per viewer in
  * localStorage by path), templates, tip card.
  */
@@ -9,6 +10,7 @@ import { relativeTime } from "../hooks";
 import type { TemplateInfo } from "@tally/bridge";
 import { useDocStore } from "../stores/docStore";
 import { PlusIcon } from "./icons";
+import { OpenDocuments } from "./OpenDocuments";
 import styles from "./Sidebar.module.css";
 import { t } from "../i18n";
 import { useW56Store } from "../data/store";
@@ -70,7 +72,6 @@ export function Sidebar({ inset }: { inset: boolean }) {
   const [templates, setTemplates] = useState<TemplateInfo[]>([]);
   const [userTemplates, setUserTemplates] = useState<TemplateInfo[]>([]);
   useW56Store((s) => s.i18nRev);
-  const [editedAt, setEditedAt] = useState(() => Date.now());
   const [, setNow] = useState(0);
 
   useEffect(() => {
@@ -85,10 +86,6 @@ export function Sidebar({ inset }: { inset: boolean }) {
   useEffect(() => {
     void ctl.w56.listUserTemplates().then(setUserTemplates);
   }, [ctl, rev]);
-
-  useEffect(() => {
-    if (info?.dirty) setEditedAt(Date.now());
-  }, [rev, info?.dirty]);
 
   useEffect(() => {
     const t = setInterval(() => setNow((n) => n + 1), 30_000);
@@ -106,20 +103,7 @@ export function Sidebar({ inset }: { inset: boolean }) {
         {t("cmd.file.new", "New sheet")}
       </button>
 
-      <section className={styles.section}>
-        <h3 className={styles.heading}>{t("app.name", "Tally")}</h3>
-        <ul className={styles.list}>
-          {info ? (
-            <li>
-              <button type="button" className={cx(styles.row, styles.current)} onClick={() => ctl.focusGrid()}>
-                <span className={styles.dot} style={{ background: dotFor(info.title) }} />
-                <span className={styles.rowTitle}>{info.title}</span>
-                <span className={styles.meta}>{info.dirty ? relativeTime(editedAt) : "Open"}</span>
-              </button>
-            </li>
-          ) : null}
-        </ul>
-      </section>
+      <OpenDocuments dotFor={dotFor} formatTag={formatTag} />
 
       {others.length > 0 ? (
         <section className={styles.section} data-testid="open-recent">

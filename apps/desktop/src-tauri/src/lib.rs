@@ -1,4 +1,4 @@
-//! Tally desktop shell (WP7): the document windows, native menu, file dialogs,
+//! Tally desktop shell (WP7): the document windows and tabs, native menu, file dialogs,
 //! recent files, templates and one command per `DocumentService` method
 //! (docs/api.md), over the real engine (`tally-engine` with ODS/XLSX/CSV IO) and
 //! the rule-based ⌘K assist (`tally-assist`).
@@ -18,6 +18,7 @@ mod l10n;
 mod limits;
 mod links;
 mod menu;
+mod native;
 mod prefs;
 mod print;
 mod registry;
@@ -50,9 +51,13 @@ pub fn run() {
             let state = app.state::<AppState>();
             *state::lock(&state.recent) = recent;
             print::setup(app.handle());
+            // Our own document list (the sidebar) replaces native macOS window tabs.
+            native::disable_automatic_tabbing(app.handle());
             // The first document window (tauri.conf.json lists none: every
-            // window is a `doc-<n>` made by `windows::open_doc_window`).
-            windows::open_doc_window(app.handle(), None).map_err(|e| e.message)?;
+            // window is a `win-<n>` holding `doc-<n>` webviews, made by
+            // `windows::open_document`).
+            windows::open_document(app.handle(), registry::Target::NewWindow, None)
+                .map_err(|e| e.message)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -151,6 +156,13 @@ pub fn run() {
             windows::window_init,
             windows::place_document,
             prefs::broadcast_prefs,
+            // Document tabs (several documents per window).
+            windows::tab_activate,
+            windows::tab_close,
+            windows::tab_close_others,
+            windows::tab_move,
+            windows::tab_detach,
+            windows::merge_windows,
         ])
         .build(tauri::generate_context!());
     match result {

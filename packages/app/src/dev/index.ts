@@ -5,3 +5,4 @@
  * `apps/desktop/scripts/check-bundle.sh` verifies the built output).
  */
 export { WebMockClient } from "./webMock";
+export { installMockTabs } from "./mockTabs";

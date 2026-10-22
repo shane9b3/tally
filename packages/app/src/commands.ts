@@ -196,6 +196,9 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "file.exportXlsx", title: "Export Excel (XLSX)…", kind: "File", keywords: ["share", "download", "excel", "xlsx", "microsoft"], run: () => ctl.save(true, "xlsx") },
     { id: "file.exportOds", title: "Export ODS…", kind: "File", keywords: ["share", "download", "opendocument", "ods"], run: () => ctl.save(true, "ods") },
     { id: "file.close", title: "Close workbook", kind: "File", run: ctl.closeDocument },
+    // Window: document tabs (desktop only; tabs.ts). The native Window menu
+    // handles its own items in the shell; these serve the keymap and palette.
+    ...windowCommands(ctl, sc),
     // View
     { id: "view.toggleSidebar", title: "Toggle sidebar", kind: "View", keywords: ["panel", "workbooks"], ...sc("view.toggleSidebar"), run: () => useUiStore.getState().toggleSidebar() },
     { id: "view.glance", title: "At a glance", kind: "View", keywords: ["summary", "insights", "kpi", "panel", "chart"], ...sc("view.glance"), run: () => useUiStore.getState().toggleGlance() },
@@ -343,6 +346,27 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "help.shortcuts", title: "Keyboard shortcuts", kind: "Help", keywords: ["keys", "hotkeys", "cheat sheet"], ...sc("help.shortcuts"), run: () => useUiStore.getState().setShortcuts(!useUiStore.getState().shortcutsOpen) },
     { id: "help.about", title: "About Tally", kind: "Help", run: () => ui.showAbout() },
   ]);
+}
+
+/** The document-tab commands (enabled only with the desktop tab shell). */
+function windowCommands(ctl: AppController, sc: (id: string) => { shortcut?: string }): Command[] {
+  const tabs = { enabled: () => ctl.tabs.available, reason: "Tabs are available in the desktop app" };
+  const select = Array.from({ length: 9 }, (_, i): Command => ({
+    id: `window.selectTab${i + 1}`,
+    title: i === 8 ? "Show last tab" : `Show tab ${i + 1}`,
+    kind: "Window",
+    hidden: true,
+    ...sc(`window.selectTab${i + 1}`),
+    ...tabs,
+    run: () => ctl.tabs.select(i + 1),
+  }));
+  return [
+    { id: "window.nextTab", title: t("menu.window.showNextTab", "Show Next Tab"), kind: "Window", keywords: ["tab", "document", "switch"], ...sc("window.nextTab"), ...tabs, run: () => ctl.tabs.next() },
+    { id: "window.prevTab", title: t("menu.window.showPrevTab", "Show Previous Tab"), kind: "Window", keywords: ["tab", "document", "switch"], ...sc("window.prevTab"), ...tabs, run: () => ctl.tabs.prev() },
+    { id: "window.moveTabToNewWindow", title: t("menu.window.moveTabToNewWindow", "Move Tab to New Window"), kind: "Window", keywords: ["tab", "detach", "split"], ...tabs, run: () => ctl.tabs.detachCurrent() },
+    { id: "window.mergeAllWindows", title: t("menu.window.mergeAllWindows", "Merge All Windows"), kind: "Window", keywords: ["tabs", "combine", "join"], ...tabs, run: () => ctl.tabs.merge() },
+    ...select,
+  ];
 }
 
 /** Command titles in the UI language: `cmd.<id>` from the installed table, else the literal. */

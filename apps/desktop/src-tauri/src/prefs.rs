@@ -2,14 +2,16 @@
 //!
 //! The webview owns the schema (`packages/app/src/options/prefs.ts`); the
 //! shell stores the JSON text as given, after checking that it is a JSON
-//! object of at most [`MAX_PREFS_BYTES`] bytes, and reads two keys it needs
-//! itself: `uiLanguage` (the native menu) and `autosaveMinutes` (documentation
-//! only; the timer runs in the webview).
+//! object of at most [`MAX_PREFS_BYTES`] bytes, and reads the keys it needs
+//! itself: `uiLanguage` (the native menu), `openDocumentsIn` (`"tabs"`, the
+//! default, or `"windows"`: where new documents open, `windows.rs`) and
+//! `autosaveMinutes` (documentation only; the timer runs in the webview).
 //!
-//! Every document window runs its own webview with its own copy of the
-//! prefs: after a change in one window (Tools ▸ Options, View ▸ Theme) it
-//! calls `broadcast_prefs(theme)` and the other document windows get
-//! `prefs-changed { theme }`, re-read `get_prefs` and apply the theme.
+//! Every document runs its own webview with its own copy of the prefs:
+//! after a change in one (Tools ▸ Options, View ▸ Theme) it calls
+//! `broadcast_prefs(theme)` and the other document webviews (in every
+//! window, shown tab or not) get `prefs-changed { theme }`, re-read
+//! `get_prefs` and apply the theme.
 
 use std::fs;
 use std::path::PathBuf;
@@ -17,9 +19,9 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::Value;
 use tally_api::ApiError;
-use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, Runtime, Webview};
 
-use crate::registry::is_doc_label;
+use crate::registry::{is_doc_label, OpenMode};
 
 /// Event sent to the other document windows after a prefs or theme change.
 pub const PREFS_CHANGED: &str = "prefs-changed";
@@ -94,6 +96,17 @@ pub fn ui_language(json: &str) -> String {
     string_key(json, "uiLanguage").unwrap_or_else(|| "en".to_owned())
 }
 
+/// The prefs key of the "Open documents in" setting.
+pub const OPEN_MODE_KEY: &str = "openDocumentsIn";
+
+/// The "Open documents in" setting: tabs unless the prefs say `"windows"`.
+pub fn open_mode(json: &str) -> OpenMode {
+    match string_key(json, OPEN_MODE_KEY).as_deref() {
+        Some("windows") => OpenMode::Windows,
+        _ => OpenMode::Tabs,
+    }
+}
+
 /// Replaces (or adds) a string key and returns the new document.
 pub fn with_string_key(json: &str, key: &str, value: &str) -> Result<String, ApiError> {
     let mut v: Value =
@@ -127,7 +140,7 @@ pub fn check_theme(theme: Option<&str>) -> Result<(), ApiError> {
     }
 }
 
-/// Pure: the windows a change in `from` is sent to (the other document windows).
+/// Pure: the webviews a change in `from` is sent to (the other documents).
 pub fn broadcast_targets<'a>(labels: impl IntoIterator<Item = &'a str>, from: &str) -> Vec<String> {
     labels
         .into_iter()
@@ -136,18 +149,18 @@ pub fn broadcast_targets<'a>(labels: impl IntoIterator<Item = &'a str>, from: &s
         .collect()
 }
 
-/// `broadcast_prefs(theme)`: the calling window changed the prefs (already
-/// stored with `set_prefs`) or the theme; the other document windows get
-/// `prefs-changed { theme }`.
+/// `broadcast_prefs(theme)`: the calling document changed the prefs
+/// (already stored with `set_prefs`) or the theme; the other document
+/// webviews get `prefs-changed { theme }`.
 #[tauri::command]
 pub async fn broadcast_prefs(
     app: AppHandle,
-    window: WebviewWindow,
+    webview: Webview,
     theme: Option<String>,
 ) -> Result<(), ApiError> {
     check_theme(theme.as_deref())?;
-    let all = app.webview_windows();
-    let targets = broadcast_targets(all.keys().map(String::as_str), window.label());
+    let all = app.webviews();
+    let targets = broadcast_targets(all.keys().map(String::as_str), webview.label());
     for label in targets {
         let event = PrefsChangedEvent {
             theme: theme.clone(),
@@ -190,8 +203,21 @@ mod tests {
     }
 
     #[test]
+    fn documents_open_in_tabs_unless_the_prefs_say_windows() {
+        assert_eq!(open_mode("{}"), OpenMode::Tabs);
+        assert_eq!(open_mode(r#"{"openDocumentsIn":"tabs"}"#), OpenMode::Tabs);
+        assert_eq!(
+            open_mode(r#"{"openDocumentsIn":"windows"}"#),
+            OpenMode::Windows
+        );
+        assert_eq!(open_mode(r#"{"openDocumentsIn":"popups"}"#), OpenMode::Tabs);
+        assert_eq!(open_mode(r#"{"openDocumentsIn":1}"#), OpenMode::Tabs);
+        assert_eq!(open_mode("garbage"), OpenMode::Tabs);
+    }
+
+    #[test]
     fn prefs_changes_reach_the_other_document_windows() {
-        let labels = ["doc-1", "doc-2", "tally-print-4", "doc-7"];
+        let labels = ["doc-1", "doc-2", "tally-print-4", "doc-7", "win-1"];
         assert_eq!(broadcast_targets(labels, "doc-2"), ["doc-1", "doc-7"]);
         assert!(broadcast_targets(["doc-1"], "doc-1").is_empty());
         assert!(check_theme(None).is_ok());

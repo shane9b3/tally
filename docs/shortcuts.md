@@ -63,6 +63,32 @@ Generated from `packages/app/src/keymap.ts` (`BINDINGS`, `GRID_KEYS`) and `packa
 | ⇧⌘T | Go to the Name Box | `edit.focusNameBox` |
 | ⇧F11 | Save as template… | `file.saveAsTemplate` |
 | ⌘M | Clear formats | `edit.clearFormats` |
+| ⌃⇥ / ⇧⌘] (macOS) | Show Next Tab | `window.nextTab` |
+| ⌃⇧⇥ / ⇧⌘[ (macOS) | Show Previous Tab | `window.prevTab` |
+| ⌥⌘1 (macOS) / Alt+1 (Windows/Linux) | Show tab 1 | `window.selectTab1` |
+| ⌥⌘2 (macOS) / Alt+2 (Windows/Linux) | Show tab 2 | `window.selectTab2` |
+| ⌥⌘3 (macOS) / Alt+3 (Windows/Linux) | Show tab 3 | `window.selectTab3` |
+| ⌥⌘4 (macOS) / Alt+4 (Windows/Linux) | Show tab 4 | `window.selectTab4` |
+| ⌥⌘5 (macOS) / Alt+5 (Windows/Linux) | Show tab 5 | `window.selectTab5` |
+| ⌥⌘6 (macOS) / Alt+6 (Windows/Linux) | Show tab 6 | `window.selectTab6` |
+| ⌥⌘7 (macOS) / Alt+7 (Windows/Linux) | Show tab 7 | `window.selectTab7` |
+| ⌥⌘8 (macOS) / Alt+8 (Windows/Linux) | Show tab 8 | `window.selectTab8` |
+| ⌥⌘9 (macOS) / Alt+9 (Windows/Linux) | Show last tab | `window.selectTab9` |
+
+## Documents and tabs
+
+Desktop app. Tools ▸ Options ▸ Load / Save ▸ "Open documents in" chooses tabs in one window (default) or separate windows.
+
+| Keys | Action |
+|---|---|
+| ⌃⇥ / ⇧⌘] (macOS) | Window ▸ Show Next Tab |
+| ⌃⇧⇥ / ⇧⌘[ (macOS) | Window ▸ Show Previous Tab |
+| ⌥⌘1 … ⌥⌘8 (macOS), Alt+1 … Alt+8 (Windows/Linux) | Show tab 1 … 8 of the window |
+| ⌥⌘9 (macOS), Alt+9 (Windows/Linux) | Show the window's last tab |
+| ⌘W | Close the tab (the window with its last tab); asks to save an edited document |
+| — | Window ▸ Move Tab to New Window / Merge All Windows; the open documents are listed below them |
+| Click / × | Sidebar ▸ Open (every open document, this window's first): show it (another window comes to the front) / close it; drag to reorder this window's tabs; right-click for Close, Close Others, Move to New Window |
+| ↑ ↓ Home End, ↩ / Space, ⌫ | Sidebar ▸ Open with focus: move between documents, show the focused one, close it |
 
 ## Grid and editor keys
 
@@ -135,4 +161,5 @@ Generated from `packages/app/src/keymap.ts` (`BINDINGS`, `GRID_KEYS`) and `packa
 - ⌘/ opens the shortcut reference; the AOO Select Array Formula is ⌘/ on the numeric keypad.
 - ⌘⇧F9 is the hard recalculation; plain F9 recalculates the dirty cells (AutoCalculate is always on).
 - ⌘K opens the command palette (AOO: ⌘K inserts a hyperlink, here ⌥⌘K).
+- ⌘1 stays Format Cells and ⌃PgDn / ⌃PgUp stay Next / Previous Sheet, so document tabs use ⌥⌘1–9 (Alt+1–9 on Windows/Linux) and ⌃⇥ / ⌃⇧⇥ rather than the browser-style ⌘1–9 and ⌃PgDn / ⌃PgUp.
 - F4 (data source browser), F7 (spelling) and ⌥F11 (macros) are not bound: those features are out of scope (docs/parity-deviations.md).
