@@ -14,10 +14,10 @@ import styles from "./PrintPreview.module.css";
 export function PrintPreview({ inset = false }: { inset?: boolean }) {
   const open = usePrintStore((s) => s.open);
   if (!open) return null;
-  return <Preview />;
+  return <Preview inset={inset} />;
 }
 
-function Preview() {
+function Preview({ inset }: { inset: boolean }) {
   const ctl = useController();
   const status = usePrintStore((s) => s.status);
   const layout = usePrintStore((s) => s.layout);
