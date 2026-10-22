@@ -85,7 +85,7 @@ import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
 import type { CellsOptions } from "./generated/CellsOptions";
 import type { EngineClientV4, SheetId, Unsubscribe } from "./client";
 import { mockTemplate } from "./mockTemplates";
-import { BUILTIN_TEMPLATES, type ShellClient, type TemplateInfo } from "./shell";
+import { BUILTIN_TEMPLATES, FALLBACK_FONTS, type FontFamilyInfo, type ShellClient, type TemplateInfo } from "./shell";
 
 /** Grid limits, matching `tally_types::{MAX_ROWS, MAX_COLS}`. */
 export const MAX_ROWS = 1_048_576;
@@ -543,6 +543,11 @@ export class MockClient implements EngineClientV4, ShellClient {
 
   listTemplates(): Promise<TemplateInfo[]> {
     return Promise.resolve(BUILTIN_TEMPLATES.map((t) => ({ ...t })));
+  }
+
+  /** The browser build's font list (web-safe families + Inter). */
+  listFonts(_refresh?: boolean): Promise<FontFamilyInfo[]> {
+    return Promise.resolve(structuredClone(FALLBACK_FONTS as FontFamilyInfo[]));
   }
 
   // -- queries --------------------------------------------------------------

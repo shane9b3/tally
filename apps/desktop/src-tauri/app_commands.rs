@@ -101,4 +101,5 @@ pub const APP_COMMANDS: &[&str] = &[
     "tab_move",
     "tab_detach",
     "merge_windows",
+    "list_fonts",
 ];

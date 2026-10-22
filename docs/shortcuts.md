@@ -155,6 +155,14 @@ Desktop app. Tools ▸ Options ▸ Load / Save ▸ "Open documents in" chooses t
 | ⌥ + arrows | Change the row height / column width (⇧ sets the optimal size) |
 | ⌃⌘+ / ⌃⌘− | Insert / delete cells… |
 
+### Toolbars
+
+| Keys | Action |
+|---|---|
+| Type, ↑ / ↓, ↩ | Font name / font size box: filter the list, move in it, apply to the selection (a font that is not installed is applied as typed); no default shortcut, as in AOO |
+| Esc | Font boxes: close the list; again: back to the grid |
+| Right-click a bar | Visible Buttons, Customize Toolbars…, show or hide the bars (also View ▸ Toolbars); hidden buttons keep their shortcuts |
+
 ## Deliberate deviations from Apache OpenOffice
 
 - ⌘D stays Fill Down (Excel and macOS usage); the AOO selection list is ⌃D.

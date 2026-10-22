@@ -1,7 +1,8 @@
 /**
  * The application chrome:
  *
- *   sidebar | toolbar
+ *   sidebar | toolbar (or a title strip when hidden)
+ *           | formatting bar
  *           | formula bar
  *           | grid
  *           | sheet tabs ........ status bar
@@ -36,6 +37,9 @@ import { ChartEditorPanel } from "./charts/ChartEditorPanel";
 import { useChartStore } from "./charts/chartStore";
 import { PrintPreview } from "./print/PrintPreview";
 import { W56Chrome, W56Panels } from "./data/W56Chrome";
+import { useW56Store } from "./data/store";
+import { TitleStrip } from "./chrome/ChromeUi";
+import { usePeekStore } from "./chrome/chromeActions";
 import { ControllerContext } from "./context";
 import { AppController } from "./controller";
 import { useUiStore } from "./stores/uiStore";
@@ -71,6 +75,9 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const glanceOpen = useUiStore((s) => s.glanceOpen);
   const chartEditorOpen = useChartStore((s) => s.editorOpen);
+  // View ▸ Toolbars (app prefs).
+  const bars = useW56Store((s) => s.prefs.chrome.bars);
+  const peekFormulaBar = usePeekStore((s) => s.formulaBar);
 
   // "Match system": follow prefers-color-scheme changes.
   useEffect(() => {
@@ -113,9 +120,9 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
       <div className={styles.app}>
         {sidebarOpen ? <Sidebar inset={trafficLights} /> : null}
         <main className={styles.main}>
-          <Toolbar inset={trafficLights && !sidebarOpen} />
-          <FormatBar />
-          <FormulaBar />
+          {bars.toolbar ? <Toolbar inset={trafficLights && !sidebarOpen} /> : <TitleStrip inset={trafficLights && !sidebarOpen} trafficLights={trafficLights} />}
+          {bars.formatting ? <FormatBar /> : null}
+          {bars.formulaBar || peekFormulaBar ? <FormulaBar /> : null}
           <div className={styles.work}>
             <GridHost />
             <FindBar />
@@ -125,7 +132,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
           </div>
           <footer className={styles.footer}>
             <SheetTabs renaming={renaming} setRenaming={setRenaming} />
-            <StatusBar />
+            {bars.statusBar ? <StatusBar /> : null}
           </footer>
         </main>
         <CommandPalette />

@@ -6,6 +6,21 @@
  */
 import type { BorderEdgePatch, BorderLineDto, BorderStyleDto, BordersPatch, HAlign, StyleDto, StylePatch, UnderlineStyle, VAlign } from "@tally/bridge";
 import { EMPTY_PATCH } from "../formats";
+import { APP_FONT, sameFont, typefaceFields, type SelectionFont, type Typeface } from "../fonts/fontModel";
+
+/** Font fields a mixed selection leaves indeterminate (blank) in the dialog. */
+export type MixedField = "fontFamily" | "fontSizePt" | "typeface";
+export type MixedFields = Partial<Record<MixedField, true>>;
+
+/** The indeterminate fields of a selection's font. */
+export function mixedOf(sel: SelectionFont | undefined): MixedFields {
+  const m: MixedFields = {};
+  if (!sel) return m;
+  if (sel.family === null) m.fontFamily = true;
+  if (sel.sizePt === null) m.fontSizePt = true;
+  if (sel.bold === null || sel.italic === null) m.typeface = true;
+  return m;
+}
 
 export type BorderEdge = "top" | "bottom" | "left" | "right" | "innerH" | "innerV" | "diagonalDown" | "diagonalUp";
 
@@ -52,8 +67,6 @@ export const V_ALIGNS: readonly { align: VAlign; label: string }[] = [
   { align: "top", label: "Top" },
 ];
 
-export const FONT_FAMILIES: readonly string[] = ["", "Inter", "Arial", "Helvetica", "Times New Roman", "Courier New", "Georgia", "Verdana", "Liberation Sans", "Liberation Serif", "DejaVu Sans"];
-
 export interface FormatCellsState {
   numberFormat: string;
   fontFamily: string;
@@ -79,6 +92,10 @@ export interface FormatCellsState {
   fill: number | null;
   locked: boolean;
   hiddenFormula: boolean;
+  /** Font fields the selection mixed when the dialog opened. */
+  mixed: MixedFields;
+  /** Font fields still indeterminate (mixed and not set in the dialog). */
+  indeterminate: MixedFields;
 }
 
 /** Fully transparent: clears a fill / resets the font colour to Automatic. */
@@ -87,8 +104,10 @@ export const NO_COLOR = 0xffffff00;
 export const DEFAULT_BORDER_COLOR = 0x1f2937ff;
 
 /** The dialog state for the active cell's style. */
-export function stateFromStyle(s: StyleDto | undefined): FormatCellsState {
+export function stateFromStyle(s: StyleDto | undefined, mixed: MixedFields = {}): FormatCellsState {
   return {
+    mixed: { ...mixed },
+    indeterminate: { ...mixed },
     numberFormat: s?.numberFormat ?? "General",
     fontFamily: s?.fontFamily ?? "",
     fontSizePt: s?.fontSizePt ?? 11,
@@ -154,18 +173,23 @@ export function presetEdges(st: FormatCellsState, preset: "none" | "outer" | "al
   return { ...st, borders: b };
 }
 
-/** The `StylePatch` of the fields that differ from `base` (every field when `base` is undefined). */
-export function patchFromState(st: FormatCellsState, base: StyleDto | undefined): StylePatch {
+/**
+ * The `StylePatch` of the fields that differ from `base` (every field when
+ * `base` is undefined). An empty font field means the document font
+ * (`docFont`): the patch then clears the cells' own family ("").
+ */
+export function patchFromState(st: FormatCellsState, base: StyleDto | undefined, docFont: string = APP_FONT): StylePatch {
   const b = stateFromStyle(base);
   const diff = <T>(cur: T, was: T): T | null => (base === undefined || JSON.stringify(cur) !== JSON.stringify(was) ? cur : null);
+  const face = (cur: boolean, was: boolean) => (st.indeterminate.typeface ? null : st.mixed.typeface ? cur : diff(cur, was));
   const patch: StylePatch = {
     ...EMPTY_PATCH,
-    bold: diff(st.bold, b.bold),
-    italic: diff(st.italic, b.italic),
+    bold: face(st.bold, b.bold),
+    italic: face(st.italic, b.italic),
     underline: diff(st.underline, b.underline),
     strike: diff(st.strike, b.strike),
-    fontFamily: st.fontFamily === "" ? (b.fontFamily === "" ? null : "") : diff(st.fontFamily, b.fontFamily),
-    fontSizePt: diff(st.fontSizePt, b.fontSizePt),
+    fontFamily: familyPatch(st, b, base === undefined, docFont),
+    fontSizePt: st.indeterminate.fontSizePt ? null : st.mixed.fontSizePt ? st.fontSizePt : diff(st.fontSizePt, b.fontSizePt),
     // StylePatch has no "clear": an alpha-0 colour/fill is the engine-visible "Automatic" / "No fill".
     color: st.color === null && b.color !== null ? NO_COLOR : diff(st.color, b.color),
     fill: st.fill === null && b.fill !== null ? NO_COLOR : diff(st.fill, b.fill),
@@ -188,6 +212,44 @@ export function patchFromState(st: FormatCellsState, base: StyleDto | undefined)
   return patch;
 }
 
+/** The family a field means: "" is the document font (`docFont`, the app font when the document has none). */
+export function shownFamily(f: string, docFont: string = APP_FONT): string {
+  return f.trim() === "" ? docFont : f.trim();
+}
+
+/** The family field of the patch: unchanged → null (unless the selection mixed families). */
+function familyPatch(st: FormatCellsState, b: FormatCellsState, all: boolean, docFont: string): string | null {
+  if (st.indeterminate.fontFamily) return null;
+  const cur = st.fontFamily.trim();
+  if (all) return cur === "" ? null : cur;
+  if ( !st.mixed.fontFamily && sameFont(shownFamily(cur, docFont), shownFamily(b.fontFamily, docFont))) return null;
+  return cur;
+}
+
+/** A named style's family from the font field: empty or the document font → `null` (the style follows the document font). */
+export function styleFamily(field: string, docFont: string): string | null {
+  const f = field.trim();
+  return f === "" || sameFont(f, docFont) ? null : f;
+}
+
+/** Sets the typeface (bold + italic) and clears its indeterminate state. */
+export function withTypeface(st: FormatCellsState, tf: Typeface): FormatCellsState {
+  const { typeface: _done, ...rest } = st.indeterminate;
+  return { ...st, ...typefaceFields(tf), indeterminate: rest };
+}
+
+/** Sets the family and clears its indeterminate state. */
+export function withFamily(st: FormatCellsState, name: string): FormatCellsState {
+  const { fontFamily: _done, ...rest } = st.indeterminate;
+  return { ...st, fontFamily: name, indeterminate: rest };
+}
+
+/** Sets the size and clears its indeterminate state. */
+export function withSize(st: FormatCellsState, pt: number): FormatCellsState {
+  const { fontSizePt: _done, ...rest } = st.indeterminate;
+  return { ...st, fontSizePt: pt, indeterminate: rest };
+}
+
 /** Whether the patch changes anything at all. */
 export function patchIsEmpty(p: StylePatch): boolean {
   return Object.entries(p).every(([k, v]) => k === "borders" ? v === null || v === undefined : v === null || v === undefined);
@@ -195,7 +257,7 @@ export function patchIsEmpty(p: StylePatch): boolean {
 
 /** Problems with the entered values. */
 export function formatCellsError(st: FormatCellsState): string | null {
-  if (!Number.isFinite(st.fontSizePt) || st.fontSizePt < 1 || st.fontSizePt > 409) return "Font size must be between 1 and 409 pt.";
+  if (!st.indeterminate.fontSizePt && (!Number.isFinite(st.fontSizePt) || st.fontSizePt < 1 || st.fontSizePt > 409)) return "Font size must be between 1 and 409 pt.";
   if (!Number.isFinite(st.rotationDeg) || st.rotationDeg < -90 || st.rotationDeg > 90) return "Rotation must be between −90° and 90°.";
   if (!Number.isFinite(st.indent) || st.indent < 0) return "Indent must be 0 or more.";
   return null;

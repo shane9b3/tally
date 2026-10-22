@@ -19,6 +19,7 @@ import { rangeAddress } from "../sumRange";
 import { a1, parseAbsoluteRef } from "../dataOps";
 import { useDataStore } from "../stores/dataStore";
 import { ChevronIcon } from "./icons";
+import { usePeekStore } from "../chrome/chromeActions";
 import { Popover } from "./Popover";
 import styles from "./FormulaBar.module.css";
 
@@ -50,7 +51,11 @@ function NameBox() {
         setText(address);
         e.currentTarget.select();
       }}
-      onBlur={() => setText(null)}
+      onBlur={() => {
+        setText(null);
+        // A formula bar shown only for ⇧⌘T hides again.
+        usePeekStore.getState().setFormulaBar(false);
+      }}
       onChange={(e) => setText(e.target.value)}
       onKeyDown={(e) => {
         if (e.key === "Enter") {

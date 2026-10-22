@@ -3,6 +3,7 @@
  * Menu ids (apps/desktop/src-tauri/src/menu.rs) and assist action ids map
  * here one to one.
  */
+import { openCustomize, toggleBar } from "./chrome/chromeActions";
 import { columnIndex, parseA1Range } from "./a1";
 import type { AppController } from "./controller";
 import { CURRENCY_FORMAT, NUMBER_FORMATS, PERCENT_FORMAT } from "./formats";
@@ -201,6 +202,11 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     ...windowCommands(ctl, sc),
     // View
     { id: "view.toggleSidebar", title: "Toggle sidebar", kind: "View", keywords: ["panel", "workbooks"], ...sc("view.toggleSidebar"), run: () => useUiStore.getState().toggleSidebar() },
+    { id: "view.toolbar", title: t("cmd.view.toolbar", "Toolbar"), kind: "View", keywords: ["toolbars", "show", "hide", "top bar"], run: () => toggleBar(ctl, "toolbar") },
+    { id: "view.formattingBar", title: t("cmd.view.formattingBar", "Formatting bar"), kind: "View", keywords: ["toolbars", "format bar", "show", "hide"], run: () => toggleBar(ctl, "formatting") },
+    { id: "view.formulaBar", title: t("cmd.view.formulaBar", "Formula bar"), kind: "View", keywords: ["toolbars", "input line", "show", "hide"], run: () => toggleBar(ctl, "formulaBar") },
+    { id: "view.statusBar", title: t("cmd.view.statusBar", "Status bar"), kind: "View", keywords: ["toolbars", "show", "hide"], run: () => toggleBar(ctl, "statusBar") },
+    { id: "view.customizeToolbars", title: t("cmd.view.customizeToolbars", "Customize toolbars…"), kind: "View", keywords: ["toolbars", "visible buttons", "customise", "hide buttons"], run: () => openCustomize() },
     { id: "view.glance", title: "At a glance", kind: "View", keywords: ["summary", "insights", "kpi", "panel", "chart"], ...sc("view.glance"), run: () => useUiStore.getState().toggleGlance() },
     {
       id: "view.theme",

@@ -44,8 +44,10 @@ use krilla_svg::{SurfaceExt, SvgSettings};
 mod fonts;
 
 pub use fonts::{
-    family_candidates, resolve_font, resolve_font_with, FaceId, FontContext, ResolvedFont,
-    MAX_FONT_BYTES, MAX_FONT_FILE_BYTES, MAX_FONT_REQUESTS, MAX_SYSTEM_FACES,
+    family_candidates, font_families, installed_font_families, refresh_system_fonts, resolve_font,
+    resolve_font_with, FaceId, FontContext, FontFaceInfo, FontFamilyInfo, ResolvedFont,
+    MAX_FONT_BYTES, MAX_FONT_FILE_BYTES, MAX_FONT_REQUESTS, MAX_LISTED_FACES, MAX_LISTED_FAMILIES,
+    MAX_SYSTEM_FACES,
 };
 use fonts::{svg_db, Fonts};
 

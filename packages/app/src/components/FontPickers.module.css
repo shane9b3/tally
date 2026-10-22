@@ -1,0 +1,239 @@
+/* Font pickers: the toolbar combo boxes (pills like the other dropdowns of
+   the format strip) and the Format Cells font lists. */
+
+.combo {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 30px;
+  padding: 0 3px 0 10px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-bg);
+  color: var(--tally-gray-700);
+}
+
+.combo:hover {
+  background: var(--tally-hover);
+}
+
+.combo:focus-within {
+  outline: 2px solid var(--tally-accent);
+  outline-offset: 1px;
+  background: var(--tally-bg);
+}
+
+.comboInput {
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+
+.comboButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--tally-radius-pill);
+  background: transparent;
+  color: var(--tally-gray-500);
+  cursor: default;
+}
+
+.comboButton:hover {
+  background: var(--tally-gray-100);
+}
+
+.nameBox {
+  width: 124px;
+}
+
+.sizeBox {
+  width: 58px;
+  font-variant-numeric: tabular-nums;
+}
+
+.popup {
+  position: fixed;
+  z-index: 60;
+  padding: 4px;
+  background: var(--tally-bg);
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-card);
+  box-shadow: var(--tally-shadow-pop);
+  animation: pop 120ms ease-out;
+}
+
+.namePopup {
+  width: 260px;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(2px) scale(0.98);
+  }
+}
+
+.list {
+  position: relative;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.header {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 8px 4px;
+  color: var(--tally-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.option {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--tally-text);
+  font-size: 14px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.option:hover {
+  background: var(--tally-gray-100);
+}
+
+.optionOn,
+.optionOn:hover {
+  background: var(--tally-accent-subtle);
+  color: var(--tally-accent-text);
+}
+
+.optionText {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hint {
+  flex: none;
+  color: var(--tally-text-muted);
+  font-family: var(--tally-font-family);
+  font-size: 11px;
+}
+
+/* Format Cells ▸ Font */
+
+.fontGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 96px;
+  gap: 12px;
+  align-items: start;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--tally-text-muted);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldInput {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--tally-border);
+  border-radius: 6px;
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.fieldInput:focus {
+  outline: 2px solid var(--tally-accent);
+  outline-offset: -1px;
+}
+
+.fieldList {
+  padding: 2px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 6px;
+  background: var(--tally-surface);
+}
+
+.simple:focus-visible {
+  outline: 2px solid var(--tally-accent);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+
+.preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 8px;
+  background: var(--tally-bg);
+  white-space: nowrap;
+}
+
+.note {
+  margin: 6px 0 0;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+}
+
+.warn {
+  color: var(--tally-warning-text, #b45309);
+}
+
+.linkBtn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--tally-accent-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.linkBtn:hover {
+  text-decoration: underline;
+}

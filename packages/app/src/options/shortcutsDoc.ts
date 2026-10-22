@@ -23,6 +23,9 @@ export const EXTRA_KEYS: readonly GridKeyRow[] = [
   { group: "Select", keys: "⌘/ (numpad)", action: "Select the array formula around the cursor" },
   { group: "Cells", keys: "⌥ + arrows", action: "Change the row height / column width (⇧ sets the optimal size)" },
   { group: "Cells", keys: "⌃⌘+ / ⌃⌘−", action: "Insert / delete cells…" },
+  { group: "Toolbars", keys: "Type, ↑ / ↓, ↩", action: "Font name / font size box: filter the list, move in it, apply to the selection (a font that is not installed is applied as typed); no default shortcut, as in AOO" },
+  { group: "Toolbars", keys: "Esc", action: "Font boxes: close the list; again: back to the grid" },
+  { group: "Toolbars", keys: "Right-click a bar", action: "Visible Buttons, Customize Toolbars…, show or hide the bars (also View ▸ Toolbars); hidden buttons keep their shortcuts" },
 ];
 
 /**

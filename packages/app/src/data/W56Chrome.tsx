@@ -49,6 +49,7 @@ import {
   TextToColumnsDialog,
 } from "./DataDialogs";
 import { useW56Store, type W56Dialog } from "./store";
+import { CustomizeToolbarsDialog } from "../chrome/ChromeUi";
 import styles from "./W56.module.css";
 
 function DialogFor({ d }: { d: W56Dialog }) {
@@ -111,6 +112,8 @@ function DialogFor({ d }: { d: W56Dialog }) {
       return <SaveAsTemplateDialog d={d} />;
     case "selectionList":
       return <SelectionListPopover d={d} />;
+    case "customizeToolbars":
+      return <CustomizeToolbarsDialog />;
   }
 }
 

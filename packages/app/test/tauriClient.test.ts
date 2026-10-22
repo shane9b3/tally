@@ -79,6 +79,8 @@ describe("TauriClient", () => {
     await client.resolveNameBoxIn(1, 2, "Totals");
     await client.openUrl("https://example.com");
     await client.userName();
+    await client.listFonts();
+    await client.listFonts(true);
     expect(calls).toEqual([
       { cmd: "wb_new", args: { template: null } },
       { cmd: "wb_open", args: { path: "/a.ods" } },
@@ -121,6 +123,8 @@ describe("TauriClient", () => {
       { cmd: "resolve_name_box_in", args: { doc: 1, sheet: 2, text: "Totals" } },
       { cmd: "open_url", args: { url: "https://example.com" } },
       { cmd: "user_name", args: undefined },
+      { cmd: "list_fonts", args: { refresh: false } },
+      { cmd: "list_fonts", args: { refresh: true } },
     ]);
     // Wave-5 commands (`V4_METHODS`, `wb_export_pdf`, `wb_print`) are covered by tauriClientV4.test.ts.
     const v4 = new Set<string>([...V4_METHODS.map((m) => COMMANDS[m]), COMMANDS.exportPdf, COMMANDS.print, ...W56_SHELL_COMMANDS.map((m) => COMMANDS[m]), ...CLOSE_SHELL_COMMANDS.map((m) => COMMANDS[m]), ...WINDOW_SHELL_COMMANDS.map((m) => COMMANDS[m]), ...TAB_SHELL_COMMANDS.map((m) => COMMANDS[m])]);

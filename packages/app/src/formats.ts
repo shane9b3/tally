@@ -31,9 +31,6 @@ export function presetFor(code: string | undefined): NumberFormatPreset | undefi
   return NUMBER_FORMATS.find((p) => p.code.toLowerCase() === c);
 }
 
-/** Font sizes of the toolbar dropdown (points). */
-export const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36] as const;
-
 /** Zoom presets of the status bar menu. */
 export const ZOOM_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 /** Steps for zoom in/out. */

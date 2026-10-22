@@ -275,23 +275,233 @@ fn ensure_dir(db: &mut fontdb::Database, dir: &Path) {
     }
 }
 
-/// The system font database, loaded once per process. A panic while
-/// scanning (a malformed font file) leaves it empty: text prints in Inter.
-fn system_db() -> Arc<fontdb::Database> {
-    static DB: OnceLock<Arc<fontdb::Database>> = OnceLock::new();
-    DB.get_or_init(|| {
-        let db = catch_unwind(|| {
-            let mut db = fontdb::Database::new();
-            db.load_system_fonts();
-            for dir in extra_font_dirs() {
-                ensure_dir(&mut db, &dir);
-            }
-            db
-        })
-        .unwrap_or_default();
-        Arc::new(db)
+/// Scans the system font directories. A panic while scanning (a malformed
+/// font file) leaves the database empty: text prints in Inter.
+fn scan_system_fonts() -> Arc<fontdb::Database> {
+    let db = catch_unwind(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        for dir in extra_font_dirs() {
+            ensure_dir(&mut db, &dir);
+        }
+        db
     })
-    .clone()
+    .unwrap_or_default();
+    Arc::new(db)
+}
+
+fn system_slot() -> &'static Mutex<Option<Arc<fontdb::Database>>> {
+    static DB: OnceLock<Mutex<Option<Arc<fontdb::Database>>>> = OnceLock::new();
+    DB.get_or_init(|| Mutex::new(None))
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    }
+}
+
+/// The system font database, loaded once per process (and again after
+/// [`refresh_system_fonts`]).
+fn system_db() -> Arc<fontdb::Database> {
+    let mut g = lock(system_slot());
+    if let Some(db) = g.as_ref() {
+        return db.clone();
+    }
+    let db = scan_system_fonts();
+    *g = Some(db.clone());
+    db
+}
+
+/// Single flight for rescans: callers that asked while a rescan ran share
+/// its result instead of each starting a full scan of their own.
+pub(crate) struct ScanGate {
+    /// Rescans finished so far.
+    done: Mutex<u64>,
+}
+
+impl ScanGate {
+    pub(crate) const fn new() -> Self {
+        Self {
+            done: Mutex::new(0),
+        }
+    }
+
+    /// The number of rescans finished (read before asking for one).
+    pub(crate) fn generation(&self) -> u64 {
+        *lock(&self.done)
+    }
+
+    /// Runs `scan` unless a rescan finished since `seen` (a caller that
+    /// waited for a running one gets that one). Returns whether it ran.
+    pub(crate) fn rescan(&self, seen: u64, scan: impl FnOnce()) -> bool {
+        let mut g = lock(&self.done);
+        if *g != seen {
+            return false;
+        }
+        scan();
+        *g += 1;
+        true
+    }
+}
+
+static SCANS: ScanGate = ScanGate::new();
+
+fn rescan_now() {
+    let db = scan_system_fonts();
+    *lock(system_slot()) = Some(db);
+    lock(dbs()).clear();
+    *lock(family_list_slot()) = None;
+}
+
+/// Rescans the installed fonts (fonts added or removed since the first
+/// scan); later renders, measuring contexts and [`installed_font_families`]
+/// see the new set. Calls that arrive while a rescan runs wait for it and
+/// do not scan again. The chart-SVG database keeps the first scan.
+pub fn refresh_system_fonts() {
+    let seen = SCANS.generation();
+    SCANS.rescan(seen, rescan_now);
+}
+
+/// One face of an installed family, as listed for the font pickers
+/// (metadata only: no font data is read beyond what the directory scan
+/// parsed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontFaceInfo {
+    /// CSS-style weight, 100–900 (400 regular, 700 bold).
+    pub weight: u16,
+    /// Italic or oblique.
+    pub italic: bool,
+    /// Width class, 1 (ultra-condensed) – 9 (ultra-expanded); 5 is normal.
+    pub stretch: u16,
+}
+
+/// An installed font family and its faces.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontFamilyInfo {
+    /// The family name (as matched by [`resolve_font`]).
+    pub family: String,
+    /// Distinct faces, sorted by stretch, weight, then upright before italic.
+    pub faces: Vec<FontFaceInfo>,
+    /// Every face is monospaced.
+    pub monospaced: bool,
+}
+
+/// Most families listed (the rest are left out).
+pub const MAX_LISTED_FAMILIES: usize = 10_000;
+/// Most faces listed per family.
+pub const MAX_LISTED_FACES: usize = 64;
+
+/// The families in `db`, sorted ignoring case. Hidden system families
+/// (names starting with `.`) and names with control characters are left
+/// out; names are cut to 128 characters.
+fn families_of(db: &fontdb::Database) -> Vec<FontFamilyInfo> {
+    let mut by_key: HashMap<String, FontFamilyInfo> = HashMap::new();
+    for face in db.faces() {
+        let Some((name, _)) = face.families.first() else {
+            continue;
+        };
+        let name: String = name.trim().chars().take(MAX_FAMILY_LEN).collect();
+        if name.is_empty() || name.starts_with('.') || name.chars().any(char::is_control) {
+            continue;
+        }
+        let key = name.to_lowercase();
+        if !by_key.contains_key(&key) && by_key.len() >= MAX_LISTED_FAMILIES {
+            continue;
+        }
+        let entry = by_key.entry(key).or_insert_with(|| FontFamilyInfo {
+            family: name,
+            faces: Vec::new(),
+            monospaced: true,
+        });
+        entry.monospaced &= face.monospaced;
+        let info = FontFaceInfo {
+            weight: face.weight.0.clamp(1, 1000),
+            italic: face.style != fontdb::Style::Normal,
+            stretch: face.stretch.to_number(),
+        };
+        if !entry.faces.contains(&info) && entry.faces.len() < MAX_LISTED_FACES {
+            entry.faces.push(info);
+        }
+    }
+    let mut v: Vec<FontFamilyInfo> = by_key.into_values().collect();
+    for f in &mut v {
+        f.faces
+            .sort_by_key(|x| (x.stretch.abs_diff(5), x.stretch, x.weight, x.italic));
+    }
+    v.sort_by(|a, b| {
+        a.family
+            .to_lowercase()
+            .cmp(&b.family.to_lowercase())
+            .then_with(|| a.family.cmp(&b.family))
+    });
+    v
+}
+
+fn family_list_slot() -> &'static Mutex<Option<Arc<Vec<FontFamilyInfo>>>> {
+    static LIST: OnceLock<Mutex<Option<Arc<Vec<FontFamilyInfo>>>>> = OnceLock::new();
+    LIST.get_or_init(|| Mutex::new(None))
+}
+
+/// The installed font families (system and user font directories), listed
+/// once per process; `refresh` rescans the directories first
+/// ([`refresh_system_fonts`]). Inter, the bundled app font, is always
+/// included.
+pub fn installed_font_families(refresh: bool) -> Arc<Vec<FontFamilyInfo>> {
+    if refresh {
+        refresh_system_fonts();
+    }
+    // Listing holds the slot: concurrent first calls list once, and a list
+    // built from an older database never replaces a newer one.
+    let mut slot = lock(family_list_slot());
+    if let Some(list) = slot.as_ref() {
+        return list.clone();
+    }
+    let list = Arc::new(with_inter(families_of(&system_db())));
+    *slot = Some(list.clone());
+    list
+}
+
+/// The families of a set of options (`font_dirs`, plus the system fonts
+/// when enabled), with Inter; not cached beyond the database itself.
+pub fn font_families(opts: &PdfOptions) -> Vec<FontFamilyInfo> {
+    let list = database(opts)
+        .map(|db| families_of(&db))
+        .unwrap_or_default();
+    with_inter(list)
+}
+
+/// Adds the bundled Inter (four faces) unless the list already has it.
+fn with_inter(mut v: Vec<FontFamilyInfo>) -> Vec<FontFamilyInfo> {
+    if !v.iter().any(|f| f.family.eq_ignore_ascii_case("inter")) {
+        let face = |weight, italic| FontFaceInfo {
+            weight,
+            italic,
+            stretch: 5,
+        };
+        let inter = FontFamilyInfo {
+            family: "Inter".to_string(),
+            faces: vec![
+                face(400, false),
+                face(400, true),
+                face(700, false),
+                face(700, true),
+            ],
+            monospaced: false,
+        };
+        let at = v.partition_point(|f| f.family.to_lowercase().as_str() < "inter");
+        v.insert(at, inter);
+    }
+    v
+}
+
+type DbKey = (bool, Vec<PathBuf>);
+
+/// The databases of [`database`], by options.
+fn dbs() -> &'static Mutex<HashMap<DbKey, Arc<fontdb::Database>>> {
+    static DBS: OnceLock<Mutex<HashMap<DbKey, Arc<fontdb::Database>>>> = OnceLock::new();
+    DBS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// The database for a set of options: the system fonts (when enabled)
@@ -300,14 +510,8 @@ pub(crate) fn database(opts: &PdfOptions) -> Option<Arc<fontdb::Database>> {
     if opts.font_dirs.is_empty() {
         return opts.system_fonts.then(system_db);
     }
-    type Key = (bool, Vec<PathBuf>);
-    static DBS: OnceLock<Mutex<HashMap<Key, Arc<fontdb::Database>>>> = OnceLock::new();
     let key = (opts.system_fonts, opts.font_dirs.clone());
-    let m = DBS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut g = match m.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
+    let mut g = lock(dbs());
     if let Some(db) = g.get(&key) {
         return Some(db.clone());
     }
@@ -742,5 +946,84 @@ impl FontContext {
     /// Font substitutions so far, one line each.
     pub fn warnings(&self) -> &[String] {
         &self.fonts.warnings
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listing_reads_metadata_only() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fonts");
+        let opts = PdfOptions {
+            system_fonts: false,
+            font_dirs: vec![dir],
+            ..PdfOptions::default()
+        };
+        let list = font_families(&opts);
+        assert!(list.iter().any(|f| f.family == "Inter"));
+        // The scan keeps file references only: no font data is held.
+        let db = database(&opts).unwrap_or_default();
+        assert!(db.len() >= 4);
+        assert!(db
+            .faces()
+            .all(|f| !matches!(f.source, fontdb::Source::Binary(_))));
+    }
+
+    #[test]
+    fn rescans_are_single_flight() {
+        let gate = ScanGate::new();
+        let runs = std::sync::atomic::AtomicUsize::new(0);
+        let scan = || {
+            runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        };
+        // Three callers asked while no rescan had finished: one scan.
+        let seen = gate.generation();
+        assert!(gate.rescan(seen, scan));
+        assert!(!gate.rescan(seen, scan));
+        assert!(!gate.rescan(seen, scan));
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // A later request scans again.
+        assert!(gate.rescan(gate.generation(), scan));
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+        // Concurrent callers that read the generation first: one scan.
+        let gate = std::sync::Arc::new(ScanGate::new());
+        let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = gate.generation();
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                let (gate, runs) = (gate.clone(), runs.clone());
+                std::thread::spawn(move || {
+                    gate.rescan(seen, || {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    });
+                })
+            })
+            .collect();
+        for t in threads {
+            let _ = t.join();
+        }
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn inter_is_always_listed_in_order() {
+        let v = with_inter(vec![
+            FontFamilyInfo {
+                family: "Arial".into(),
+                faces: vec![],
+                monospaced: false,
+            },
+            FontFamilyInfo {
+                family: "Zapfino".into(),
+                faces: vec![],
+                monospaced: false,
+            },
+        ]);
+        let names: Vec<&str> = v.iter().map(|f| f.family.as_str()).collect();
+        assert_eq!(names, ["Arial", "Inter", "Zapfino"]);
+        assert_eq!(v[1].faces.len(), 4);
     }
 }

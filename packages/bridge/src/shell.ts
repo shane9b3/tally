@@ -37,6 +37,47 @@ export const BUILTIN_TEMPLATES: readonly TemplateInfo[] = [
   { id: "stock", title: "Stock count", description: "Items on hand and reorder levels" },
 ];
 
+/** One face of an installed font family (`list_fonts`, metadata only). */
+export interface FontFaceInfo {
+  /** 100–900 (400 regular, 700 bold). */
+  weight: number;
+  /** Italic or oblique. */
+  italic: boolean;
+  /** Width class 1–9 (5 normal). */
+  stretch: number;
+}
+
+/** An installed font family and its faces (`list_fonts`). */
+export interface FontFamilyInfo {
+  family: string;
+  faces: FontFaceInfo[];
+  /** Every face is monospaced. */
+  monospaced: boolean;
+}
+
+const FOUR_FACES: readonly FontFaceInfo[] = [
+  { weight: 400, italic: false, stretch: 5 },
+  { weight: 400, italic: true, stretch: 5 },
+  { weight: 700, italic: false, stretch: 5 },
+  { weight: 700, italic: true, stretch: 5 },
+];
+
+/**
+ * The font list of the browser build and e2e (the desktop app lists the
+ * installed fonts): common web-safe families plus Inter, the app font.
+ */
+export const FALLBACK_FONTS: readonly FontFamilyInfo[] = [
+  "Arial",
+  "Courier New",
+  "Georgia",
+  "Helvetica",
+  "Inter",
+  "Tahoma",
+  "Times New Roman",
+  "Trebuchet MS",
+  "Verdana",
+].map((family) => ({ family, faces: FOUR_FACES.map((f) => ({ ...f })), monospaced: family === "Courier New" }));
+
 /** Shell services. Every method rejects with an `ApiError` on failure. */
 export interface ShellClient {
   /** Native Open dialog, then open; `null` when the user cancels. */
@@ -60,4 +101,10 @@ export interface ShellClient {
   exportPdf?(doc: DocId, job: number): Promise<void>;
   /** Wave 5 (W5-3): sends print job `job` to the OS print dialog (`wb_print`). */
   print?(doc: DocId, job: number): Promise<void>;
+  /**
+   * The installed font families, sorted by name (`list_fonts`); `refresh`
+   * rescans the font directories. The browser build returns
+   * {@link FALLBACK_FONTS}.
+   */
+  listFonts?(refresh?: boolean): Promise<FontFamilyInfo[]>;
 }

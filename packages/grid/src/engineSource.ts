@@ -168,6 +168,16 @@ export class EngineClientSource implements GridDataSource {
     return s;
   }
 
+  /** How many styles are cached (changes when new styles arrive; cheap). */
+  styleCount(): number {
+    return this.styles.size;
+  }
+
+  /** Every style fetched so far (the font pickers' "fonts in this document"). */
+  knownStyles(): StyleDto[] {
+    return [...this.styles.values()];
+  }
+
   ensureRanges(ranges: RangeDto[]): void {
     if (this.disposed) return;
     const want: Tile[] = [];

@@ -53,7 +53,9 @@ import { formulaLangOf, localizeFunctions, toCanonicalFormula, toDisplayFormula,
 import { setUiLanguage as installUiLanguage } from "../i18n/locales";
 import { DEFAULT_PREFS, parsePrefs, readLocalPrefs, serializePrefs, writeLocalPrefs, type AppPrefs, type UiLanguage } from "../options/prefs";
 import { emptyLayout, fromPivotDto, layoutError, pivotAtCell, toPivotDto, type PivotLayoutState } from "../pivot/pivotModel";
-import { stateFromStyle } from "../styles/formatCells";
+import { mixedOf, stateFromStyle } from "../styles/formatCells";
+import { selectionFont } from "../fonts/fontModel";
+import { usePeekStore } from "../chrome/chromeActions";
 import { copySheetName, deleteContentsOp, groupAxisFor, hiddenContentCount, mergedContent, maxOutlineLevel } from "./builders";
 import { DEFAULT_VIEW, useW56Store, type OptionsTab, type RecoveryFile, type W56Dialog } from "./store";
 import type { PopoverItem } from "../components/Popover";
@@ -834,7 +836,11 @@ export class W56Features {
     try {
       const style = await this.ctl.activeStyle();
       const base: StyleDto = style ?? { ...stateFromStyle(undefined), id: 0, borders: { top: null, bottom: null, left: null, right: null }, display: null, fontFamily: null, indent: 0 } as unknown as StyleDto;
-      this.store.openDialog({ kind: "formatCells", style: base, ranges: this.ctl.ranges });
+      const source = useDocStore.getState().source;
+      const a = this.ctl.selection.active;
+      const sel = source ? selectionFont(source, this.ctl.ranges, a, source.getLayout(this.sheet).used ?? null) : undefined;
+      const sample = source?.getCell(a.r, a.c)?.text ?? "";
+      this.store.openDialog({ kind: "formatCells", style: base, ranges: this.ctl.ranges, mixed: mixedOf(sel), sample });
     } catch (e) {
       this.ctl.notifyError(e);
     }
@@ -1289,10 +1295,20 @@ export class W56Features {
     this.ctl.registry.run(id);
   }
 
+  /** ⇧⌘T. With the formula bar hidden it shows until the Name Box loses the focus. */
   focusNameBox(): void {
-    const el = typeof document === "undefined" ? null : document.querySelector<HTMLInputElement>('[data-testid="name-box"]');
-    el?.focus();
-    el?.select();
+    if (typeof document === "undefined") return;
+    const focus = (): boolean => {
+      const el = document.querySelector<HTMLInputElement>('[data-testid="name-box"]');
+      el?.focus();
+      el?.select();
+      return el !== null;
+    };
+    if (focus()) return;
+    usePeekStore.getState().setFormulaBar(true);
+    requestAnimationFrame(() => {
+      if (!focus()) usePeekStore.getState().setFormulaBar(false);
+    });
   }
 
   /** The active cell's style id (for dialogs that need the resolved style synchronously). */

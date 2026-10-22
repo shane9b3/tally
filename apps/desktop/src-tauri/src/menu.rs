@@ -280,7 +280,19 @@ const DATA: &[Entry] = &[
     Item("data.recalc", "Recalculate All", Some("Shift+CmdOrCtrl+F9")),
 ];
 
+/// View ▸ Toolbars (AOO): the bars on and off, and Customize Toolbars…
+/// (buttons per toolbar). The webview keeps the state in its prefs.
+const TOOLBARS: &[Entry] = &[
+    Item("view.toolbar", "Toolbar", None),
+    Item("view.formattingBar", "Formatting Bar", None),
+    Item("view.formulaBar", "Formula Bar", None),
+    Item("view.statusBar", "Status Bar", None),
+    Sep,
+    Item("view.customizeToolbars", "Customize Toolbars…", None),
+];
+
 const VIEW: &[Entry] = &[
+    Sub("Toolbars", TOOLBARS),
     Item(
         "view.toggleSidebar",
         "Toggle Sidebar",
@@ -909,6 +921,11 @@ mod tests {
             "file.pageSetup",
             "view.locale.deDE",
             "view.pageBreaks",
+            "view.toolbar",
+            "view.formattingBar",
+            "view.formulaBar",
+            "view.statusBar",
+            "view.customizeToolbars",
             // wave 5 (W5-0b seams)
             "insert.function",
             "insert.image",

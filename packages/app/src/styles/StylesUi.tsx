@@ -10,7 +10,7 @@ import { useMemo, useState } from "react";
 import dlg from "../components/Dialogs.module.css";
 import { cx, useController } from "../context";
 import { a1 } from "../dataOps";
-import { FONT_SIZES, NUMBER_FORMATS } from "../formats";
+import { NUMBER_FORMATS } from "../formats";
 import { t } from "../i18n";
 import { formatNumberLite } from "../numfmtLite";
 import { rgbaToHex } from "../palette";
@@ -18,7 +18,11 @@ import { useW56Store, type W56Dialog } from "../data/store";
 import { Check, ColorField, Field, Tabs, W56Shell, closeW56 } from "../data/W56Shell";
 import w56 from "../data/W56.module.css";
 import { AUTOFORMAT_OPTION_LABELS, AUTOFORMAT_PRESETS, DEFAULT_AUTOFORMAT_OPTIONS, PREVIEW_ROWS, previewCell, previewText } from "./autoformat";
-import { BORDER_EDGES, BORDER_STYLES, FONT_FAMILIES, H_ALIGNS, UNDERLINE_STYLES, V_ALIGNS, formatCellsError, patchFromState, presetEdges, stateFromStyle, toggleEdge, type FormatCellsState } from "./formatCells";
+import { BORDER_EDGES, BORDER_STYLES, H_ALIGNS, UNDERLINE_STYLES, V_ALIGNS, formatCellsError, patchFromState, presetEdges, shownFamily, stateFromStyle, styleFamily, toggleEdge, withFamily, withSize, withTypeface, type FormatCellsState } from "./formatCells";
+import { FontListField, SimpleList, fontMissing, previewFamily, useDocumentFont, useInstalledFonts } from "../components/FontPickers";
+import pick from "../components/FontPickers.module.css";
+import { APP_FONT, FONT_SIZE_LIST, TYPEFACE_LABELS, familyTypefaces, findFamily, formatFontSize, parseFontSize, typefaceOf, type Typeface } from "../fonts/fontModel";
+import { useFontStore } from "../fonts/fontStore";
 
 type D<K extends W56Dialog["kind"]> = Extract<W56Dialog, { kind: K }>;
 
@@ -105,6 +109,8 @@ export function StylesPanel() {
 
 export function StyleEditorDialog({ d }: { d: D<"styleEditor"> }) {
   const ctl = useController();
+  // Named styles keep `fontFamily: null` for "the document font".
+  const docFont = useDocumentFont();
   const styles = useW56Store((s) => s.cellStyles);
   const [name, setName] = useState(d.style.name);
   const [parent, setParent] = useState(d.style.parent ?? "Default");
@@ -120,7 +126,8 @@ export function StyleEditorDialog({ d }: { d: D<"styleEditor"> }) {
       italic: patch.italic ?? base.italic,
       underline: patch.underline ?? base.underline,
       strike: patch.strike ?? base.strike,
-      fontFamily: st.fontFamily === "" ? null : st.fontFamily,
+      // Empty or the document font: no family of its own (drawn with the document font).
+      fontFamily: styleFamily(st.fontFamily, docFont),
       fontSizePt: st.fontSizePt,
       color: st.color,
       fill: st.fill,
@@ -216,19 +223,21 @@ type CellsTab = "numbers" | "font" | "effects" | "alignment" | "borders" | "back
 
 export function FormatCellsDialog({ d }: { d: D<"formatCells"> }) {
   const ctl = useController();
-  const [st, setSt] = useState<FormatCellsState>(() => stateFromStyle(d.style));
+  const docFont = useDocumentFont();
+  const [st, setSt] = useState<FormatCellsState>(() => stateFromStyle(d.style, d.mixed));
   const [protection, setProtection] = useState<{ locked: boolean | null; hiddenFormula: boolean | null }>({ locked: null, hiddenFormula: null });
   const error = formatCellsError(st);
   return (
-    <W56Shell title={t("cells.title", "Format Cells")} ok={t("dialog.ok", "OK")} size="xwide" testId="format-cells" valid={error === null} onSubmit={() => void ctl.w56.applyFormatCells(d.ranges, patchFromState(st, d.style), protection)}>
-      <FormatCellsTabs st={st} setSt={setSt} showProtection protection={protection} setProtection={setProtection} />
+    <W56Shell title={t("cells.title", "Format Cells")} ok={t("dialog.ok", "OK")} size="xwide" testId="format-cells" valid={error === null} onSubmit={() => void ctl.w56.applyFormatCells(d.ranges, patchFromState(st, d.style, docFont), protection)}>
+      <FormatCellsTabs st={st} setSt={setSt} showProtection protection={protection} setProtection={setProtection} sample={d.sample} />
       {error ? <p className={dlg.error}>{error}</p> : null}
     </W56Shell>
   );
 }
 
-function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection }: { st: FormatCellsState; setSt: (s: FormatCellsState) => void; showProtection: boolean; protection?: { locked: boolean | null; hiddenFormula: boolean | null }; setProtection?: (p: { locked: boolean | null; hiddenFormula: boolean | null }) => void }) {
+function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection, sample }: { st: FormatCellsState; setSt: (s: FormatCellsState) => void; showProtection: boolean; protection?: { locked: boolean | null; hiddenFormula: boolean | null }; setProtection?: (p: { locked: boolean | null; hiddenFormula: boolean | null }) => void; sample?: string }) {
   const [tab, setTab] = useState<CellsTab>("numbers");
+  const docFont = useDocumentFont();
   const tabs: { id: CellsTab; label: string }[] = [
     { id: "numbers", label: t("cells.numbers", "Numbers") },
     { id: "font", label: t("cells.font", "Font") },
@@ -240,13 +249,13 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection 
   ];
   const samples = useMemo(() => [1234.5, -1234.5, 0].map((v) => formatNumberLite(v, st.numberFormat.trim() || "General")), [st.numberFormat]);
   const previewStyle: React.CSSProperties = {
-    fontWeight: st.bold ? 700 : 400,
-    fontStyle: st.italic ? "italic" : "normal",
+    fontWeight: st.bold && !st.indeterminate.typeface ? 700 : 400,
+    fontStyle: st.italic && !st.indeterminate.typeface ? "italic" : "normal",
     textDecoration: [st.underline ? "underline" : "", st.strike ? "line-through" : ""].filter(Boolean).join(" ") || undefined,
     textDecorationStyle: st.underline ? (st.underlineStyle === "double" || st.underlineStyle === "doubleAccounting" ? "double" : st.underlineStyle === "dotted" ? "dotted" : st.underlineStyle === "dashed" ? "dashed" : st.underlineStyle === "wave" ? "wavy" : "solid") : undefined,
     color: st.color === null ? undefined : rgbaToHex(st.color).slice(0, 7),
     background: st.fill === null ? undefined : rgbaToHex(st.fill).slice(0, 7),
-    fontFamily: st.fontFamily || undefined,
+    fontFamily: st.indeterminate.fontFamily ? undefined : previewFamily(shownFamily(st.fontFamily, docFont)),
     fontSize: Math.min(28, st.fontSizePt) * 1.2,
     transform: st.rotationDeg ? `rotate(${-st.rotationDeg}deg)` : undefined,
     textAlign: st.hAlign === "general" ? "left" : (st.hAlign as "left" | "center" | "right" | "justify"),
@@ -280,29 +289,7 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection 
           </div>
         </div>
       ) : null}
-      {tab === "font" ? (
-        <div className={w56.grid2}>
-          <Field label={t("toolbar.font", "Font")}>
-            <select className={dlg.select} value={st.fontFamily} onChange={(e) => setSt({ ...st, fontFamily: e.target.value })} data-testid="cells-font">
-              {FONT_FAMILIES.map((f) => (
-                <option key={f} value={f}>
-                  {f === "" ? "Default (Inter)" : f}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t("toolbar.fontSize", "Font size")}>
-            <input className={dlg.input} type="number" min={1} max={409} step={0.5} list="cells-font-sizes" value={st.fontSizePt} onChange={(e) => setSt({ ...st, fontSizePt: Number(e.target.value) })} data-testid="cells-font-size" />
-            <datalist id="cells-font-sizes">
-              {FONT_SIZES.map((s) => (
-                <option key={s} value={s} />
-              ))}
-            </datalist>
-          </Field>
-          <Check label={t("cmd.format.bold", "Bold")} checked={st.bold} onChange={(v) => setSt({ ...st, bold: v })} testId="cells-bold" />
-          <Check label={t("cmd.format.italic", "Italic")} checked={st.italic} onChange={(v) => setSt({ ...st, italic: v })} />
-        </div>
-      ) : null}
+      {tab === "font" ? <FontTab st={st} setSt={setSt} sample={sample} /> : null}
       {tab === "effects" ? (
         <div className={w56.grid2}>
           <Field label={t("toolbar.fontColor", "Font colour")}>
@@ -410,14 +397,119 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection 
           <Check label={t("cells.hideFormula", "Hide formula")} checked={protection.hiddenFormula ?? st.hiddenFormula} onChange={(v) => setProtection({ ...protection, hiddenFormula: v })} />
         </div>
       ) : null}
-      <div className={w56.section}>Preview</div>
-      <div style={{ overflow: "hidden", padding: 8, border: "1px solid var(--tally-border-subtle)", borderRadius: 8 }}>
-        <span style={previewStyle} data-testid="cells-preview">
-          {samples[0] ?? "1234.5"}
-        </span>
-      </div>
+      {tab === "font" ? null : (
+        <>
+          <div className={w56.section}>{t("font.preview", "Preview")}</div>
+          <div style={{ overflow: "hidden", padding: 8, border: "1px solid var(--tally-border-subtle)", borderRadius: 8 }}>
+            <span style={previewStyle} data-testid="cells-preview">
+              {samples[0] ?? "1234.5"}
+            </span>
+          </div>
+        </>
+      )}
     </>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Format Cells ▸ Font (AOO: Font, Typeface, Size, preview)
+// ---------------------------------------------------------------------------
+
+const TYPEFACE_KEYS: Readonly<Record<Typeface, string>> = { regular: "font.regular", italic: "font.italic", bold: "font.bold", boldItalic: "font.boldItalic" };
+
+function FontTab({ st, setSt, sample }: { st: FormatCellsState; setSt: (s: FormatCellsState) => void; sample?: string }) {
+  const families = useInstalledFonts();
+  const loaded = useFontStore((s) => s.loaded);
+  const ctl = useController();
+  const docFont = useDocumentFont();
+  // The family meant ("" = the document font); the field shows what is typed.
+  const family = st.indeterminate.fontFamily ? "" : shownFamily(st.fontFamily, docFont);
+  const info = family === "" ? undefined : findFamily(family, families);
+  const faces = familyTypefaces(info);
+  const typeface = st.indeterminate.typeface ? null : typefaceOf(st.bold, st.italic);
+  const [sizeText, setSizeText] = useState<string>(st.indeterminate.fontSizePt ? "" : formatFontSize(st.fontSizePt));
+  const missing = loaded && family !== "" && fontMissing(family, families);
+  return (
+    <div>
+      <div className={pick.fontGrid}>
+        <div className={pick.column}>
+          <span>{t("toolbar.font", "Font")}</span>
+          <FontListField value={family} testId="cells-font" onChange={(name) => setSt(withFamily(st, name))} />
+        </div>
+        <div className={pick.column}>
+          <span>{t("font.typeface", "Typeface")}</span>
+          <div className={pick.field}>
+            <input className={pick.fieldInput} readOnly tabIndex={-1} aria-hidden="true" value={typeface ? t(TYPEFACE_KEYS[typeface], TYPEFACE_LABELS[typeface]) : ""} />
+            <SimpleList
+              label={t("font.typeface", "Typeface")}
+              testId="cells-typeface"
+              value={typeface}
+              items={faces.faces.map((f) => ({
+                value: f.typeface,
+                label: t(TYPEFACE_KEYS[f.typeface], TYPEFACE_LABELS[f.typeface]),
+                hint: f.real ? undefined : t("font.synthetic", "synthesised"),
+                style: { fontFamily: family ? previewFamily(family) : undefined, fontWeight: f.typeface.startsWith("bold") ? 700 : 400, fontStyle: f.typeface === "italic" || f.typeface === "boldItalic" ? "italic" : "normal" },
+              }))}
+              onPick={(tf) => setSt(withTypeface(st, tf))}
+            />
+          </div>
+        </div>
+        <div className={pick.column}>
+          <span>{t("toolbar.fontSize", "Font size")}</span>
+          <div className={pick.field}>
+            <input
+              className={pick.fieldInput}
+              inputMode="decimal"
+              aria-label={t("toolbar.fontSize", "Font size")}
+              value={sizeText}
+              data-testid="cells-font-size"
+              onChange={(e) => {
+                setSizeText(e.target.value);
+                const pt = parseFontSize(e.target.value);
+                setSt(withSize(st, pt ?? Number.NaN));
+              }}
+            />
+            <SimpleList
+              label={t("toolbar.fontSize", "Font size")}
+              testId="cells-font-sizes"
+              value={st.indeterminate.fontSizePt ? null : (FONT_SIZE_LIST.find((x) => x === st.fontSizePt) ?? null)}
+              items={FONT_SIZE_LIST.map((pt) => ({ value: pt, label: formatFontSize(pt) }))}
+              onPick={(pt) => {
+                setSizeText(formatFontSize(pt));
+                setSt(withSize(st, pt));
+              }}
+            />
+          </div>
+        </div>
+      </div>
+      {faces.extra ? <p className={pick.note}>{t("font.extraWeights", "This family has other weights or widths; Tally stores Regular, Bold, Italic and Bold Italic only.")}</p> : null}
+      <div className={pick.preview} data-testid="cells-font-preview">
+        <span style={fontPreviewStyle(st, family)}>{(sample ?? "").trim() !== "" ? (sample ?? "").slice(0, 80) : "Tally"}</span>
+      </div>
+      <p className={cx(pick.note, missing && pick.warn)} data-testid="cells-font-note">
+        {missing ? t("font.notInstalled", "This font is not installed; a substitute will be used.") : st.indeterminate.fontFamily ? t("font.mixed", "The selection uses several fonts; pick one to change them all.") : "\u00a0"}
+        {" "}
+        <button type="button" className={pick.linkBtn} onClick={() => void useFontStore.getState().load(ctl.shell as never, true)} data-testid="cells-font-refresh">
+          {t("font.refresh", "Rescan installed fonts")}
+        </button>
+      </p>
+    </div>
+  );
+}
+
+/** The Font tab's preview: family, size (capped), typeface, colour and effects. */
+function fontPreviewStyle(st: FormatCellsState, family: string): React.CSSProperties {
+  const tf = !st.indeterminate.typeface;
+  return {
+    fontFamily: previewFamily(family || APP_FONT),
+    fontSize: Math.min(40, Math.max(6, st.indeterminate.fontSizePt || !Number.isFinite(st.fontSizePt) ? 11 : st.fontSizePt)) * (4 / 3),
+    fontWeight: tf && st.bold ? 700 : 400,
+    fontStyle: tf && st.italic ? "italic" : "normal",
+    textDecoration: [st.underline ? "underline" : "", st.strike ? "line-through" : ""].filter(Boolean).join(" ") || undefined,
+    color: st.color === null ? undefined : rgbaToHex(st.color).slice(0, 7),
+    background: st.fill === null ? undefined : rgbaToHex(st.fill).slice(0, 7),
+    padding: "2px 6px",
+  };
 }
 
 /** Keeps the CellStyleDto import referenced for the panel's types. */

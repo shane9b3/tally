@@ -3,6 +3,7 @@
  * Components call its methods (or run CommandRegistry commands); results
  * flow back into the zustand stores and the grid's data source.
  */
+import { fontFamilyPatch, fontSizePatch } from "./fonts/fontModel";
 import {
   CANCELLED,
   isApiError,
@@ -421,7 +422,9 @@ export class AppController {
     return this.apply(label, [{ type: "applyStyle", sheet: this.sheet, ranges, patch }]);
   }
 
-  setFontSize = (pt: number): Promise<ApplyResult | null> => this.applyPatch("Font size", { ...EMPTY_PATCH, fontSizePt: pt });
+  setFontSize = (pt: number): Promise<ApplyResult | null> => this.applyPatch("Font size", fontSizePatch(pt));
+  /** The font box: one undoable ApplyStyle; the document font clears the cells' own family. */
+  setFontFamily = (name: string, documentFont: string): Promise<ApplyResult | null> => this.applyPatch("Font", fontFamilyPatch(name, documentFont));
   setTextColor = (rgba: number): Promise<ApplyResult | null> => this.applyPatch("Font colour", { ...EMPTY_PATCH, color: rgba });
   setFillColor = (rgba: number): Promise<ApplyResult | null> => this.applyPatch("Fill colour", { ...EMPTY_PATCH, fill: rgba });
   setAlign = (h: HAlign): Promise<ApplyResult | null> => this.applyPatch("Align", { ...EMPTY_PATCH, hAlign: h });

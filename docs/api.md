@@ -105,6 +105,14 @@ optional in the UI's `LinkShell` interface, `packages/app/src/features.ts`):
 | `open_url` | `url: string` | `void` | Opens an `http(s)://host…` or `mailto:` link (≤ 2048 bytes) with the OS handler; anything else (`file:`, `javascript:`, …) is `invalid_argument`. See docs/security.md, "Hyperlinks". |
 | `user_name` | none | `string \| null` | The OS account name (note authors). |
 
+Font pickers (`apps/desktop/src-tauri/src/fonts.rs`; `TauriClient.listFonts`,
+optional `ShellClient.listFonts`; the browser build and `MockClient` answer
+`FALLBACK_FONTS`):
+
+| Tauri command | Arguments | Returns | What it does |
+|---|---|---|---|
+| `list_fonts` | `refresh: boolean \| null` | `{ family: string, faces: { weight: number, italic: boolean, stretch: number }[], monospaced: boolean }[]` | The installed font families (system and user font directories, the same scan `tally-io-pdf` prints with; Inter always included), sorted by name ignoring case, each with its distinct faces (weight 100–900, italic/oblique, width class 1–9). Metadata only: no font file is loaded or returned beyond fontdb's directory scan. Listed once per process; `refresh: true` rescans the directories (fonts installed while the app runs; later prints see them too). Families whose names start with "." (hidden system fonts) or contain control characters are left out; names are cut to 128 characters; at most 10,000 families and 64 faces per family. |
+
 ### Argument limits
 
 Every command checks its arguments before the engine sees them

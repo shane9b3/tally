@@ -13,6 +13,7 @@ mod commands_v4;
 mod dialogs;
 mod events;
 mod files;
+mod fonts;
 mod images;
 mod l10n;
 mod limits;
@@ -163,6 +164,8 @@ pub fn run() {
             windows::tab_move,
             windows::tab_detach,
             windows::merge_windows,
+            // Font pickers (toolbar font box, Format Cells ▸ Font).
+            fonts::list_fonts,
         ])
         .build(tauri::generate_context!());
     match result {

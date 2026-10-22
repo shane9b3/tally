@@ -1,0 +1,190 @@
+/* Toolbar customisation: overflow row, "»" panel, bar context menu, the
+   Customize dialog and the title strip. Same pills and menus as the bars. */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.slot {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-bg);
+  color: var(--tally-gray-700);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: default;
+}
+
+.more:hover,
+.more[aria-expanded="true"] {
+  background: var(--tally-hover);
+  color: var(--tally-text);
+}
+
+.panel {
+  position: fixed;
+  z-index: 55;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: min(520px, calc(100vw - 16px));
+  padding: 8px;
+  background: var(--tally-bg);
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-card);
+  box-shadow: var(--tally-shadow-pop);
+}
+
+.panelSep {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--tally-border-subtle);
+}
+
+.menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--tally-bg);
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-card);
+  box-shadow: var(--tally-shadow-pop);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.item:hover,
+.item:focus-visible,
+.item[aria-expanded="true"] {
+  background: var(--tally-gray-100);
+  outline: none;
+}
+
+.check {
+  width: 16px;
+  flex: none;
+  text-align: center;
+  color: var(--tally-accent-text);
+}
+
+.label {
+  flex: 1;
+}
+
+.hint {
+  color: var(--tally-text-muted);
+  font-size: 12px;
+}
+
+.separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--tally-border-subtle);
+}
+
+.checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 2px 12px;
+}
+
+.note {
+  margin: 12px 0 0;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+}
+
+.strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  flex: none;
+  padding: 0 16px;
+  background: var(--tally-bg);
+  border-bottom: 1px solid var(--tally-border-subtle);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* macOS overlay title bar: tall enough for the traffic lights, the title
+   centred on them (they sit 6 px below the strip's middle). */
+.stripTall {
+  height: 44px;
+  padding-top: 12px;
+}
+
+.stripInset {
+  padding-left: 84px;
+}
+
+.stripTitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tally-text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.stripEdited {
+  color: var(--tally-text-muted);
+  font-weight: 400;
+}
+
+.stripBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--tally-radius-pill);
+  background: transparent;
+  color: var(--tally-gray-500);
+}
+
+.stripBtn:hover {
+  background: var(--tally-hover);
+}

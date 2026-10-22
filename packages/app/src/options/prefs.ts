@@ -5,6 +5,8 @@
  * custom sort lists) live in the document and go through ops instead.
  */
 
+import { DEFAULT_CHROME, parseChrome, type ChromePrefs } from "../chrome/chromeModel";
+
 export type UiLanguage = "en" | "de" | "fr" | "es";
 export type EnterMoves = "down" | "right" | "up" | "left";
 export type DefaultFormat = "ods" | "xlsx";
@@ -48,6 +50,8 @@ export interface AppPrefs {
   deleteKeyDialog: boolean;
   /** Desktop: new and opened documents become tabs of the front window, or get windows of their own. */
   openDocumentsIn: OpenDocumentsIn;
+  /** Which bars and toolbar buttons show (View ▸ Toolbars, Customize Toolbars…). */
+  chrome: ChromePrefs;
 }
 
 export const DEFAULT_AUTOCORRECT: AutoCorrectPrefs = {
@@ -71,6 +75,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   defaultLocale: "en-US",
   deleteKeyDialog: true,
   openDocumentsIn: "tabs",
+  chrome: DEFAULT_CHROME,
 };
 
 export const UI_LANGUAGES: readonly { id: UiLanguage; label: string; tag: string }[] = [
@@ -116,6 +121,7 @@ export function parsePrefs(raw: unknown): AppPrefs {
     defaultLocale: locale,
     deleteKeyDialog: bool(o.deleteKeyDialog, DEFAULT_PREFS.deleteKeyDialog),
     openDocumentsIn: oneOf(o.openDocumentsIn, ["tabs", "windows"] as const, DEFAULT_PREFS.openDocumentsIn),
+    chrome: parseChrome(o.chrome),
   };
 }
 

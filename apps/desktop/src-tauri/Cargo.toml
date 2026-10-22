@@ -32,6 +32,8 @@ tally-engine = { workspace = true, features = ["io"] }
 tally-assist.workspace = true
 tally-l10n.workspace = true
 zip.workspace = true
+# The installed-font list for the font pickers (fonts.rs; metadata only).
+tally-io-pdf.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The red close button's "document edited" dot and native tabs off (native.rs); safe API only.
@@ -42,6 +44,3 @@ objc2-app-kit.workspace = true
 [lints]
 workspace = true
 
-[dev-dependencies]
-# PNG decoding for the print-preview integration test.
-tally-io-pdf.workspace = true

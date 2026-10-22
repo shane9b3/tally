@@ -68,6 +68,7 @@ pub fn submenu_label(locale: Locale, title: &str) -> String {
         "Chart" => "chart.title",
         "Detective" => "cmd.tools.detective",
         "Locale" => "options.language",
+        "Toolbars" => "menu.view.toolbars",
         _ => return title.to_owned(),
     };
     if locale == Locale::En || !tally_l10n::has_ui_key(key) {

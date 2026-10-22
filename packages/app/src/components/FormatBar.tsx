@@ -1,18 +1,25 @@
 /**
- * The formatting strip under the toolbar: B I U S, font size, font and
+ * The formatting strip under the toolbar: B I U S, font name and size
+ * (editable combo boxes, FontPickers.tsx), font and
  * fill colour, alignment, wrap, number format, $ / %, "Highlight cells"
  * (conditional formatting presets) and "Colour by value". Every toggle reflects the active cell's style; every action
- * applies to all selected ranges.
+ * applies to all selected ranges. Buttons can be hidden (right-click ▸
+ * Visible Buttons, View ▸ Toolbars ▸ Customize Toolbars…; separators
+ * collapse) and those that do not fit go into "»" (chrome/ChromeUi.tsx).
  */
 import type { HAlign } from "@tally/bridge";
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
+import { OverflowRow, useBarMenu } from "../chrome/ChromeUi";
+import { FORMATTING_SECTIONS, slotsOf, visibleSections, type Slot } from "../chrome/chromeModel";
+import { useW56Store } from "../data/store";
 import { cx, useController } from "../context";
-import { FONT_SIZES, NUMBER_FORMATS, presetFor } from "../formats";
+import { NUMBER_FORMATS, presetFor } from "../formats";
 import { useActiveStyle } from "../hooks";
 import { rgbaToHex } from "../palette";
 import { useUiStore } from "../stores/uiStore";
 import { ColorPicker } from "./ColorPicker";
 import { BordersPicker } from "./BordersPicker";
+import { FontNameBox, FontSizeBox, useFontInfo } from "./FontPickers";
 import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon, BordersIcon, ChevronIcon, ChipsIcon, FillIcon, HighlightIcon, MergeIcon, WrapIcon } from "./icons";
 import { HIGHLIGHT_PRESETS } from "../v03";
 import { useSelectionStore } from "../stores/selectionStore";
@@ -26,17 +33,19 @@ interface ToolProps {
   children: ReactNode;
   active?: boolean;
   wide?: boolean;
+  /** Icon-only form of a wide button (the label stays the tooltip and aria-label). */
+  compact?: boolean;
 }
 
 /** An icon button bound to a CommandRegistry command. */
-function Tool({ command, label, children, active, wide }: ToolProps) {
+function Tool({ command, label, children, active, wide, compact }: ToolProps) {
   const ctl = useController();
   const cmd = ctl.registry.get(command);
   const tip = [label, cmd?.shortcut].filter(Boolean).join("  ");
   return (
     <button
       type="button"
-      className={cx(styles.tool, wide && styles.wide, active && styles.on)}
+      className={cx(styles.tool, wide && styles.wide, compact && styles.compact, active && styles.on)}
       aria-label={label}
       aria-pressed={active === undefined ? undefined : active}
       data-command={command}
@@ -51,7 +60,7 @@ function Tool({ command, label, children, active, wide }: ToolProps) {
   );
 }
 
-type Menu = { kind: "size" | "format" | "color" | "fill" | "borders" | "highlight"; x: number; y: number } | null;
+type Menu = { kind: "format" | "color" | "fill" | "borders" | "highlight"; x: number; y: number } | null;
 
 export function FormatBar() {
   const ctl = useController();
@@ -64,7 +73,6 @@ export function FormatBar() {
   const h: HAlign = style?.hAlign ?? "general";
   const preset = presetFor(style?.numberFormat);
   const formatLabel = preset ? preset.label : style ? "Custom" : "General";
-  const size = style?.fontSizePt ?? 10;
   const textColor = style?.color != null ? rgbaToHex(style.color) : "var(--tally-text)";
   const fillColor = style?.fill != null && (style.fill & 255) > 0 ? rgbaToHex(style.fill) : "transparent";
   const done = () => ctl.focusGrid();
@@ -72,100 +80,126 @@ export function FormatBar() {
   useSelectionStore((s) => s.selection);
   useDocStore((s) => s.rev);
   const merged = ctl.selectionIsMerged();
+  const hidden = useW56Store((s) => s.prefs.chrome.hidden.formatting);
+  const fontInfo = useFontInfo();
+  const barMenu = useBarMenu("formatting");
 
-  return (
-    <div className={styles.bar} role="toolbar" aria-label="Format" data-testid="format-bar">
-      <div className={styles.group}>
-        <Tool command="format.bold" label="Bold" active={style?.bold ?? false}>
-          <span className={styles.bold}>B</span>
-        </Tool>
-        <Tool command="format.italic" label="Italic" active={style?.italic ?? false}>
-          <span className={styles.italic}>I</span>
-        </Tool>
-        <Tool command="format.underline" label="Underline" active={style?.underline ?? false}>
-          <span className={styles.underline}>U</span>
-        </Tool>
-        <Tool command="format.strike" label="Strikethrough" active={style?.strike ?? false}>
-          <span className={styles.strike}>S</span>
-        </Tool>
-      </div>
-      <span className={styles.sep} />
+  // The two wide buttons drop their labels when the strip is short of room (before "»").
+  const highlightButton = (compact: boolean) => (
+    <button
+      type="button"
+      className={cx(styles.tool, styles.wide, compact && styles.compact)}
+      aria-label="Highlight cells"
+      aria-haspopup="menu"
+      title="Highlight cells: conditional formatting presets"
+      data-testid="highlight-cells"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={open("highlight")}
+    >
+      <HighlightIcon />
+      {compact ? null : <span>Highlight</span>}
+      <ChevronIcon />
+    </button>
+  );
+  const colorByValueButton = (compact: boolean) => (
+    <Tool command="format.colorByValue" label="Colour by value: chip colours for each distinct value in the column" wide compact={compact}>
+      <ChipsIcon />
+      {compact ? null : <span>Colour by value</span>}
+    </Tool>
+  );
+  const items: Record<string, ReactNode> = {
+    fontName: <FontNameBox onDone={done} info={fontInfo} />,
+    fontSize: <FontSizeBox onDone={done} info={fontInfo} />,
+    bold: (
+      <Tool command="format.bold" label="Bold" active={style?.bold ?? false}>
+        <span className={styles.bold}>B</span>
+      </Tool>
+    ),
+    italic: (
+      <Tool command="format.italic" label="Italic" active={style?.italic ?? false}>
+        <span className={styles.italic}>I</span>
+      </Tool>
+    ),
+    underline: (
+      <Tool command="format.underline" label="Underline" active={style?.underline ?? false}>
+        <span className={styles.underline}>U</span>
+      </Tool>
+    ),
+    strike: (
+      <Tool command="format.strike" label="Strikethrough" active={style?.strike ?? false}>
+        <span className={styles.strike}>S</span>
+      </Tool>
+    ),
+    fontColor: (
       <button
         type="button"
-        className={cx(styles.dropdown, styles.size)}
-        aria-label="Font size"
-        aria-haspopup="menu"
-        title="Font size"
-        data-testid="font-size"
+        className={cx(styles.tool, styles.colorTool)}
+        aria-label="Font colour"
+        aria-haspopup="dialog"
+        title="Font colour"
+        data-testid="font-color"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={open("size")}
+        onClick={open("color")}
       >
-        <span>{size}</span>
-        <ChevronIcon />
+        <span className={styles.letterA}>A</span>
+        <span className={styles.colorBar} style={{ background: textColor }} />
       </button>
-      <span className={styles.sep} />
-      <div className={styles.group}>
-        <button
-          type="button"
-          className={cx(styles.tool, styles.colorTool)}
-          aria-label="Font colour"
-          aria-haspopup="dialog"
-          title="Font colour"
-          data-testid="font-color"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={open("color")}
-        >
-          <span className={styles.letterA}>A</span>
-          <span className={styles.colorBar} style={{ background: textColor }} />
-        </button>
-        <button
-          type="button"
-          className={cx(styles.tool, styles.colorTool)}
-          aria-label="Fill colour"
-          aria-haspopup="dialog"
-          title="Fill colour"
-          data-testid="fill-color"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={open("fill")}
-        >
-          <FillIcon />
-          <span className={cx(styles.colorBar, fillColor === "transparent" && styles.emptyBar)} style={{ background: fillColor }} />
-        </button>
-      </div>
-      <span className={styles.sep} />
-      <div className={styles.group}>
-        <Tool command="format.alignLeft" label="Align left" active={h === "left"}>
-          <AlignLeftIcon />
-        </Tool>
-        <Tool command="format.alignCenter" label="Align centre" active={h === "center"}>
-          <AlignCenterIcon />
-        </Tool>
-        <Tool command="format.alignRight" label="Align right" active={h === "right"}>
-          <AlignRightIcon />
-        </Tool>
-        <Tool command="format.wrap" label="Wrap text" active={style?.wrap ?? false}>
-          <WrapIcon />
-        </Tool>
-      </div>
-      <span className={styles.sep} />
-      <div className={styles.group}>
-        <Tool command="format.toggleMerge" label={merged ? "Unmerge cells" : "Merge cells"} active={merged}>
-          <MergeIcon />
-        </Tool>
-        <button
-          type="button"
-          className={styles.tool}
-          aria-label="Borders"
-          aria-haspopup="dialog"
-          title="Borders"
-          data-testid="borders"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={open("borders")}
-        >
-          <BordersIcon />
-        </button>
-      </div>
-      <span className={styles.sep} />
+    ),
+    fillColor: (
+      <button
+        type="button"
+        className={cx(styles.tool, styles.colorTool)}
+        aria-label="Fill colour"
+        aria-haspopup="dialog"
+        title="Fill colour"
+        data-testid="fill-color"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={open("fill")}
+      >
+        <FillIcon />
+        <span className={cx(styles.colorBar, fillColor === "transparent" && styles.emptyBar)} style={{ background: fillColor }} />
+      </button>
+    ),
+    alignLeft: (
+      <Tool command="format.alignLeft" label="Align left" active={h === "left"}>
+        <AlignLeftIcon />
+      </Tool>
+    ),
+    alignCenter: (
+      <Tool command="format.alignCenter" label="Align centre" active={h === "center"}>
+        <AlignCenterIcon />
+      </Tool>
+    ),
+    alignRight: (
+      <Tool command="format.alignRight" label="Align right" active={h === "right"}>
+        <AlignRightIcon />
+      </Tool>
+    ),
+    wrap: (
+      <Tool command="format.wrap" label="Wrap text" active={style?.wrap ?? false}>
+        <WrapIcon />
+      </Tool>
+    ),
+    merge: (
+      <Tool command="format.toggleMerge" label={merged ? "Unmerge cells" : "Merge cells"} active={merged}>
+        <MergeIcon />
+      </Tool>
+    ),
+    borders: (
+      <button
+        type="button"
+        className={styles.tool}
+        aria-label="Borders"
+        aria-haspopup="dialog"
+        title="Borders"
+        data-testid="borders"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={open("borders")}
+      >
+        <BordersIcon />
+      </button>
+    ),
+    numberFormat: (
       <button
         type="button"
         className={cx(styles.dropdown, styles.format)}
@@ -179,51 +213,38 @@ export function FormatBar() {
         <span>{formatLabel}</span>
         <ChevronIcon />
       </button>
-      <div className={styles.group}>
-        <Tool command="format.currency" label="Format as currency" active={preset?.id === "currency"}>
-          <span className={styles.glyph}>$</span>
-        </Tool>
-        <Tool command="format.percent" label="Format as percent" active={preset?.id === "percent"}>
-          <span className={styles.glyph}>%</span>
-        </Tool>
-      </div>
-      <span className={styles.sep} />
-      <button
-        type="button"
-        className={cx(styles.tool, styles.wide)}
-        aria-label="Highlight cells"
-        aria-haspopup="menu"
-        title="Highlight cells: conditional formatting presets"
-        data-testid="highlight-cells"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={open("highlight")}
-      >
-        <HighlightIcon />
-        <span>Highlight</span>
-        <ChevronIcon />
-      </button>
-      <Tool command="format.colorByValue" label="Colour by value: chip colours for each distinct value in the column" wide>
-        <ChipsIcon />
-        <span>Colour by value</span>
+    ),
+    currency: (
+      <Tool command="format.currency" label="Format as currency" active={preset?.id === "currency"}>
+        <span className={styles.glyph}>$</span>
       </Tool>
+    ),
+    percent: (
+      <Tool command="format.percent" label="Format as percent" active={preset?.id === "percent"}>
+        <span className={styles.glyph}>%</span>
+      </Tool>
+    ),
+    highlight: highlightButton(false),
+    colorByValue: colorByValueButton(false),
+  };
+  const slots = slotsOf(visibleSections(FORMATTING_SECTIONS, hidden));
+  const renderSlot = (s: Slot, compact: boolean): ReactNode => {
+    if (s.kind === "sep") return <span className={styles.sep} />;
+    if (compact && s.el === "highlight") return highlightButton(true);
+    if (compact && s.el === "colorByValue") return colorByValueButton(true);
+    if (typeof s.el === "string") return items[s.el];
+    return (
+      <div className={styles.group}>
+        {s.el.map((id) => (
+          <Fragment key={id}>{items[id]}</Fragment>
+        ))}
+      </div>
+    );
+  };
 
-      {menu?.kind === "size" ? (
-        <Popover
-          label="Font size"
-          x={menu.x}
-          y={menu.y}
-          onClose={() => setMenu(null)}
-          items={FONT_SIZES.map((pt) => ({
-            id: String(pt),
-            label: String(pt),
-            checked: pt === size,
-            onSelect: () => {
-              void ctl.setFontSize(pt);
-              done();
-            },
-          }))}
-        />
-      ) : null}
+  return (
+    <div className={styles.bar} role="toolbar" aria-label="Format" data-testid="format-bar" onContextMenu={barMenu.onContextMenu}>
+      <OverflowRow slots={slots} renderSlot={renderSlot} compactable={(s) => s.kind === "el" && (s.el === "highlight" || s.el === "colorByValue")} testId="format-row" className={styles.row} />
       {menu?.kind === "format" ? (
         <Popover
           label="Number format"
@@ -303,6 +324,7 @@ export function FormatBar() {
           }}
         />
       ) : null}
+      {barMenu.menu}
     </div>
   );
 }

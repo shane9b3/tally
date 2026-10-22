@@ -205,5 +205,5 @@ export type { CellsOptions } from "./generated/CellsOptions";
 export { isApiError } from "./client";
 export type { EngineClient, EngineClientV2, EngineClientV3, EngineClientV4, SheetId, Unsubscribe } from "./client";
 export { MockClient, DEFAULT_COL_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX } from "./mock";
-export { BUILTIN_TEMPLATES, CANCELLED } from "./shell";
-export type { ShellClient, TemplateInfo } from "./shell";
+export { BUILTIN_TEMPLATES, CANCELLED, FALLBACK_FONTS } from "./shell";
+export type { FontFaceInfo, FontFamilyInfo, ShellClient, TemplateInfo } from "./shell";

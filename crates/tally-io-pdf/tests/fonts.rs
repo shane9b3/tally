@@ -464,3 +464,56 @@ fn installed_arial_uses_its_own_metrics_when_present() {
         "Arial digits are narrower: {arial} vs {inter}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Font list (the pickers' `list_fonts`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn font_list_has_families_and_their_faces() {
+    let dir = font_dir(
+        "list",
+        &[
+            (
+                "A-Regular.ttf",
+                build(&[renamed(INTER_REGULAR, "Tally List Sans", "Regular", None)]),
+            ),
+            (
+                "A-Bold.ttf",
+                build(&[renamed(INTER_BOLD, "Tally List Sans", "Bold", None)]),
+            ),
+            (
+                "Hidden.ttf",
+                build(&[renamed(INTER_REGULAR, ".Tally Hidden", "Regular", None)]),
+            ),
+            (
+                "Coll.ttc",
+                build(&[
+                    renamed(INTER_REGULAR, "Tally List Coll", "Regular", None),
+                    renamed(INTER_BOLD, "Tally List Coll", "Bold", None),
+                ]),
+            ),
+        ],
+    );
+    let list = tally_io_pdf::font_families(&opts(&dir));
+    let names: Vec<&str> = list.iter().map(|f| f.family.as_str()).collect();
+    // Sorted ignoring case, hidden families left out, the app font included.
+    assert_eq!(names, ["Inter", "Tally List Coll", "Tally List Sans"]);
+    let sans = &list[2];
+    let faces: Vec<(u16, bool)> = sans.faces.iter().map(|f| (f.weight, f.italic)).collect();
+    assert_eq!(faces, [(400, false), (700, false)]);
+    assert!(sans.faces.iter().all(|f| f.stretch == 5));
+    assert!(!sans.monospaced);
+    assert_eq!(list[1].faces.len(), 2);
+    // The listed name resolves to the installed face.
+    let r = resolve_font_with(&spec("tally list sans", true, false), &opts(&dir));
+    assert_eq!(r.family, "Tally List Sans");
+}
+
+#[test]
+fn font_list_of_an_empty_directory_is_just_inter() {
+    let dir = font_dir("list-empty", &[("junk.ttf", b"not a font".to_vec())]);
+    let list = tally_io_pdf::font_families(&opts(&dir));
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].family, "Inter");
+}

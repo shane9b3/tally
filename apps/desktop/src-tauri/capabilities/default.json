@@ -107,6 +107,7 @@
     "allow-tab-close-others",
     "allow-tab-move",
     "allow-tab-detach",
-    "allow-merge-windows"
+    "allow-merge-windows",
+    "allow-list-fonts"
   ]
 }

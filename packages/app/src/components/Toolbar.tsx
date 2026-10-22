@@ -1,5 +1,11 @@
-/** Top row: (traffic-light inset), document title, action pills, panel/theme toggles, Share. */
-import { useState, type ReactNode } from "react";
+/**
+ * Top row: (traffic-light inset), document title, action pills, panel/theme
+ * toggles, Share. Buttons can be hidden (View ▸ Toolbars, right-click ▸
+ * Visible Buttons); those that do not fit go into "»" (chrome/ChromeUi.tsx).
+ */
+import { Fragment, useState, type ReactNode } from "react";
+import { OverflowRow, useBarMenu } from "../chrome/ChromeUi";
+import { TOOLBAR_RIGHT, TOOLBAR_SECTIONS, slotsOf, visibleSections } from "../chrome/chromeModel";
 import { useDataStore } from "../stores/dataStore";
 import { cx, useController } from "../context";
 import { useDocStore } from "../stores/docStore";
@@ -61,13 +67,78 @@ export function Toolbar({ inset }: { inset: boolean }) {
   const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(null);
   const filtering = useDataStore((s) => s.filter !== null);
   useW56Store((s) => s.i18nRev);
+  const hidden = useW56Store((s) => s.prefs.chrome.hidden.toolbar);
+  const barMenu = useBarMenu("toolbar");
 
   const title = info?.title ?? "Untitled";
   const folder = info?.path ? info.path.split(/[\\/]/).slice(-2, -1)[0] : undefined;
   const subtitle = `${folder ?? "Draft"} · ${info?.dirty ? "Edited" : "Saved"}`;
 
+  const items: Record<string, ReactNode> = {
+    save: <Pill command="file.save" label={t("cmd.file.save", "Save")} icon={<SaveIcon />} />,
+    undo: <Pill command="edit.undo" label={t("cmd.edit.undo", "Undo")} icon={<UndoIcon />} />,
+    redo: <Pill command="edit.redo" label={t("cmd.edit.redo", "Redo")} icon={<RedoIcon />} iconOnly />,
+    sort: (
+      <button
+        type="button"
+        className={styles.pill}
+        aria-label="Sort"
+        aria-haspopup="menu"
+        aria-expanded={sortMenu !== null}
+        data-command="data.sort"
+        title="Sort the table by the active column"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setSortMenu(sortMenu ? null : { x: r.left, y: r.bottom + 6 });
+        }}
+      >
+        <SortIcon />
+        <span>{t("sort.title", "Sort")}</span>
+      </button>
+    ),
+    filter: <Pill command="data.filter" label={t("menu.data.filter", "Filter")} icon={<FilterIcon />} active={filtering} tooltip={filtering ? "Remove the AutoFilter" : "AutoFilter: a ▾ in each header"} />,
+    addUp: (
+      <Pill command="insert.addUp" label="Add up" tooltip="Add up the numbers above (Σ)">
+        <span className={styles.glyph}>Σ</span>
+        <span>{t("toolbar.sum", "Add up")}</span>
+      </Pill>
+    ),
+    chart: <Pill command="insert.chart" label={t("chart.title", "Chart")} icon={<ChartIcon />} tooltip="Insert a chart of the data around the selection" />,
+    theme: (
+      <button
+        type="button"
+        className={cx(styles.pill, styles.iconOnly, styles.ghost)}
+        aria-label="Theme"
+        title={`Theme: ${themePref === "system" ? "match system" : themePref} (click to change)`}
+        data-testid="theme-toggle"
+        data-theme-pref={themePref}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => ctl.registry.run("view.theme")}
+      >
+        <MoonIcon />
+      </button>
+    ),
+    glance: <Pill command="view.glance" label="At a glance" icon={<GlanceIcon />} iconOnly active={glanceOpen} tooltip="At a glance" />,
+    share: (
+      <button
+        type="button"
+        className={styles.share}
+        aria-haspopup="menu"
+        aria-expanded={share !== null}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setShare(share ? null : { x: r.right, y: r.bottom + 6 });
+        }}
+      >
+        {t("menu.file.share", "Share")}
+      </button>
+    ),
+  };
+  const slots = slotsOf(visibleSections(TOOLBAR_SECTIONS, hidden));
+
   return (
-    <header className={cx(styles.toolbar, inset && styles.inset)} data-tauri-drag-region>
+    <header className={cx(styles.toolbar, inset && styles.inset)} data-tauri-drag-region onContextMenu={barMenu.onContextMenu}>
       {!sidebarOpen ? (
         <button
           type="button"
@@ -87,62 +158,19 @@ export function Toolbar({ inset }: { inset: boolean }) {
           {subtitle}
         </div>
       </div>
-      <nav className={styles.pills} aria-label="Toolbar">
-        <Pill command="file.save" label={t("cmd.file.save", "Save")} icon={<SaveIcon />} />
-        <span className={styles.sep} />
-        <Pill command="edit.undo" label={t("cmd.edit.undo", "Undo")} icon={<UndoIcon />} />
-        <Pill command="edit.redo" label={t("cmd.edit.redo", "Redo")} icon={<RedoIcon />} iconOnly />
-        <span className={styles.sep} />
-        <button
-          type="button"
-          className={styles.pill}
-          aria-label="Sort"
-          aria-haspopup="menu"
-          aria-expanded={sortMenu !== null}
-          data-command="data.sort"
-          title="Sort the table by the active column"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => {
-            const r = e.currentTarget.getBoundingClientRect();
-            setSortMenu(sortMenu ? null : { x: r.left, y: r.bottom + 6 });
-          }}
-        >
-          <SortIcon />
-          <span>{t("sort.title", "Sort")}</span>
-        </button>
-        <Pill command="data.filter" label={t("menu.data.filter", "Filter")} icon={<FilterIcon />} active={filtering} tooltip={filtering ? "Remove the AutoFilter" : "AutoFilter: a ▾ in each header"} />
-        <Pill command="insert.addUp" label="Add up" tooltip="Add up the numbers above (Σ)">
-          <span className={styles.glyph}>Σ</span>
-          <span>{t("toolbar.sum", "Add up")}</span>
-        </Pill>
-        <Pill command="insert.chart" label={t("chart.title", "Chart")} icon={<ChartIcon />} tooltip="Insert a chart of the data around the selection" />
+      <nav className={styles.pills} aria-label="Toolbar" data-tauri-drag-region>
+        <OverflowRow
+          slots={slots}
+          testId="toolbar-row"
+          className={styles.row}
+          dragRegion
+          renderSlot={(s) => (s.kind === "sep" ? <span className={styles.sep} /> : typeof s.el === "string" ? items[s.el] : null)}
+        />
       </nav>
       <div className={styles.spacer} data-tauri-drag-region />
-      <button
-        type="button"
-        className={cx(styles.pill, styles.iconOnly, styles.ghost)}
-        aria-label="Theme"
-        title={`Theme: ${themePref === "system" ? "match system" : themePref} (click to change)`}
-        data-testid="theme-toggle"
-        data-theme-pref={themePref}
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => ctl.registry.run("view.theme")}
-      >
-        <MoonIcon />
-      </button>
-      <Pill command="view.glance" label="At a glance" icon={<GlanceIcon />} iconOnly active={glanceOpen} tooltip="At a glance" />
-      <button
-        type="button"
-        className={styles.share}
-        aria-haspopup="menu"
-        aria-expanded={share !== null}
-        onClick={(e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          setShare(share ? null : { x: r.right, y: r.bottom + 6 });
-        }}
-      >
-        {t("menu.file.share", "Share")}
-      </button>
+      {TOOLBAR_RIGHT.filter((id) => !hidden.includes(id)).map((id) => (
+        <Fragment key={id}>{items[id]}</Fragment>
+      ))}
       {sortMenu ? (
         <Popover
           label="Sort"
@@ -173,6 +201,7 @@ export function Toolbar({ inset }: { inset: boolean }) {
           ]}
         />
       ) : null}
+      {barMenu.menu}
     </header>
   );
 }

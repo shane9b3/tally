@@ -254,6 +254,18 @@ in layout math and in print/PDF. The names are untrusted:
   app: print jobs drop it).
 - **XLSX export** writes font names of at most 31 characters (Excel's
   limit) and counts `<col width>` in the default font's digit width.
+- **Font list (`list_fonts`, the font pickers).** The shell lists the
+  families of the same fontdb scan (`tally_io_pdf::installed_font_families`):
+  names, weights, styles and widths only; no font file is loaded and no path
+  or data crosses to the webview. Hidden (`.`-prefixed) families and names
+  with control characters are dropped, names cut to 128 characters, at most
+  10,000 families × 64 faces. The list is cached per process; `refresh`
+  rescans the directories (one scan per call). Names typed into the pickers
+  are untrusted like document names: cleaned (control characters removed,
+  ≤ 128 characters) and only ever matched against family names. Recently
+  used fonts are kept in the webview's localStorage (≤ 8 names, re-cleaned
+  on read). Test: `tally-desktop` `fonts::tests`, `tally-io-pdf` `tests/fonts.rs`
+  `font_list_*`, `fonts::tests::listing_reads_metadata_only`.
 
 ## 4. Path traversal (WP5)
 

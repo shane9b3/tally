@@ -7,14 +7,15 @@
   padding: 0 14px;
   background: var(--tally-bg);
   border-bottom: 1px solid var(--tally-border-subtle);
-  overflow-x: auto;
-  scrollbar-width: none;
+  overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
 }
 
-.bar::-webkit-scrollbar {
-  display: none;
+/* The customisable buttons (chrome/ChromeUi.tsx OverflowRow): "»" holds what does not fit. */
+.row {
+  flex: 1 1 0;
+  align-self: stretch;
 }
 
 /* A segmented pill holding related tools. */
@@ -92,6 +93,11 @@
   padding: 0 12px;
   border: 1px solid var(--tally-border-subtle);
   background: var(--tally-bg);
+}
+
+/* A wide pill without its label (narrow windows). */
+.compact {
+  padding: 0 8px;
 }
 
 .bold {

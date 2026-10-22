@@ -87,9 +87,9 @@ import type { TraceDto } from "./generated/TraceDto";
 import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
 import type { CellsOptions } from "./generated/CellsOptions";
 import { isApiError, type EngineClientV4, type SheetId, type Unsubscribe } from "./client";
-import type { ShellClient, TemplateInfo } from "./shell";
+import type { FontFamilyInfo, ShellClient, TemplateInfo } from "./shell";
 
-export { CANCELLED, type TemplateInfo } from "./shell";
+export { CANCELLED, type FontFamilyInfo, type TemplateInfo } from "./shell";
 
 /** Arguments of a Tauri command (JSON-serializable, camelCase keys). */
 export type InvokeArgs = Record<string, unknown>;
@@ -210,6 +210,8 @@ export const COMMANDS = {
   tabMove: "tab_move",
   tabDetach: "tab_detach",
   mergeWindows: "merge_windows",
+  // Font pickers: apps/desktop/src-tauri/src/fonts.rs
+  listFonts: "list_fonts",
 } as const;
 
 /**
@@ -534,6 +536,11 @@ export class TauriClient implements EngineClientV4, ShellClient {
   /** The OS account name (note authors), or `null`. */
   userName(): Promise<string | null> {
     return this.call(COMMANDS.userName);
+  }
+
+  /** `list_fonts`: the installed font families (metadata only); `refresh` rescans. */
+  listFonts(refresh = false): Promise<FontFamilyInfo[]> {
+    return this.call(COMMANDS.listFonts, { refresh });
   }
 
   // -- v0.4–v0.6 (wave 5) ---------------------------------------------------------
