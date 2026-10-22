@@ -167,3 +167,210 @@ fn print_options_sheets_breaks_notes_and_charts() {
     o.sheets = PrintSheets::Some { ids: vec![4242] };
     assert!(f.svc.print_layout(f.doc, &o).is_err());
 }
+
+/// The owner's report: a two-line centred header over a 10 mm top margin
+/// was drawn from the page edge, clipped and over the first rows. Now the
+/// header lines sit inside the page below the top margin, the body starts
+/// after the header area and its spacing, and nothing is drawn between.
+#[test]
+fn two_line_header_is_inside_the_page_and_above_the_body() {
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    f.set("A1", "Unit base price $16,465.00+HST");
+    f.set("A2", "Finish basement");
+    let mut setup: PageSetupDto = f.svc.page_setup(f.doc, s).unwrap();
+    setup.margins.top_mm = 10.0;
+    setup.margins.header_mm = 7.5;
+    setup.header = Some(HeaderFooter {
+        left: String::new(),
+        center: "The Redwood - 10/22/2026\nBlock 90 - North Side".into(),
+        right: String::new(),
+    });
+    setup.footer = None;
+    let area = setup.header_area.unwrap();
+    assert!(area.on && area.autofit);
+    assert_eq!(area.spacing_mm, 2.5);
+    f.apply(vec![Op::SetPageSetup { sheet: s, setup }]);
+    let layout = f.svc.print_layout(f.doc, &opts()).unwrap();
+    let page = &layout.pages[0];
+    // 10 mm + 2 lines of 4.94 mm + 2.5 mm spacing.
+    assert!((page.origin_mm[1] - 22.38).abs() < 0.01, "{page:?}");
+    let job = f.svc.prepare_print_job(f.doc, &opts(), &[]).unwrap();
+    let pdf = f.svc.print_job_pdf(job.job).unwrap();
+    assert!(pdf.starts_with(b"%PDF-"));
+    // 72 dpi: one pixel per point.
+    let png =
+        tally_engine::protection::base64_decode(&f.svc.print_job_page_png(job.job, 0, 72).unwrap())
+            .unwrap();
+    let (w, _h, px) = tally_io_pdf::png_pixels(&png).unwrap();
+    let w = w as usize;
+    let dark_rows: Vec<usize> = px
+        .chunks(4 * w)
+        .enumerate()
+        .filter(|(_, row)| row.chunks(4).any(|p| p[0] < 128))
+        .map(|(y, _)| y)
+        .collect();
+    let pt = |mm: f32| mm * 72.0 / 25.4;
+    let header_top = pt(10.0);
+    let header_bottom = pt(10.0 + 2.0 * 4.94);
+    let body_top = pt(22.38);
+    let first = *dark_rows.first().unwrap() as f32;
+    assert!(first >= header_top, "ink above the header area at {first}");
+    // Both header lines are drawn (ink in each line box)…
+    let ink = |a: f32, b: f32| {
+        dark_rows
+            .iter()
+            .any(|y| (*y as f32) >= a && (*y as f32) < b)
+    };
+    assert!(ink(header_top, header_top + pt(4.94)), "line 1");
+    assert!(ink(header_top + pt(4.94), header_bottom), "line 2");
+    // …and nothing between the header and the body (the spacing).
+    assert!(!ink(header_bottom + 0.5, body_top - 0.5), "{dark_rows:?}");
+    // The first row is printed below.
+    assert!(ink(body_top, body_top + pt(4.52)), "row 1");
+}
+
+#[test]
+fn header_on_off_keeps_the_text() {
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    f.set("A1", "x");
+    let mut setup: PageSetupDto = f.svc.page_setup(f.doc, s).unwrap();
+    let mut area = setup.header_area.unwrap();
+    area.on = false;
+    setup.header_area = Some(area);
+    f.apply(vec![Op::SetPageSetup { sheet: s, setup }]);
+    let back = f.svc.page_setup(f.doc, s).unwrap();
+    assert!(!back.header_area.unwrap().on);
+    assert_eq!(back.header.as_ref().unwrap().center, "&[SHEET]");
+    let layout = f.svc.print_layout(f.doc, &opts()).unwrap();
+    assert!(layout.pages[0].header.is_none());
+    assert_eq!(layout.pages[0].origin_mm[1], 20.0);
+    // Switched on again: the text is back; "on" without a text gives an
+    // empty header.
+    let mut setup = back;
+    let mut area = setup.header_area.unwrap();
+    area.on = true;
+    setup.header_area = Some(area);
+    setup.footer = None;
+    setup.footer_area = Some(area);
+    f.apply(vec![Op::SetPageSetup { sheet: s, setup }]);
+    let back = f.svc.page_setup(f.doc, s).unwrap();
+    assert_eq!(back.header.unwrap().center, "&[SHEET]");
+    assert_eq!(back.footer.unwrap(), HeaderFooter::default());
+    // Older clients without the areas: on when a text is set.
+    let mut setup = f.svc.page_setup(f.doc, s).unwrap();
+    setup.header_area = None;
+    setup.footer_area = None;
+    setup.footer = None;
+    f.apply(vec![Op::SetPageSetup { sheet: s, setup }]);
+    let back = f.svc.page_setup(f.doc, s).unwrap();
+    assert!(back.header_area.unwrap().on);
+    assert!(!back.footer_area.unwrap().on);
+}
+
+/// A fixed-height header with more lines than fit draws only the lines
+/// that fit, never over the body.
+#[test]
+fn fixed_height_header_leaves_off_the_lines_that_do_not_fit() {
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    f.set("A1", "Unit base price");
+    let mut setup: PageSetupDto = f.svc.page_setup(f.doc, s).unwrap();
+    setup.margins.top_mm = 10.0;
+    setup.margins.header_mm = 7.5;
+    setup.header = Some(HeaderFooter {
+        left: String::new(),
+        center: "one\ntwo\nthree".into(),
+        right: String::new(),
+    });
+    setup.footer = None;
+    let mut area = setup.header_area.unwrap();
+    area.autofit = false;
+    setup.header_area = Some(area);
+    f.apply(vec![Op::SetPageSetup { sheet: s, setup }]);
+    let job = f.svc.prepare_print_job(f.doc, &opts(), &[]).unwrap();
+    assert!((job.layout.pages[0].origin_mm[1] - 17.5).abs() < 0.01);
+    let png =
+        tally_engine::protection::base64_decode(&f.svc.print_job_page_png(job.job, 0, 72).unwrap())
+            .unwrap();
+    let (w, _h, px) = tally_io_pdf::png_pixels(&png).unwrap();
+    let dark_rows: Vec<f32> = px
+        .chunks(4 * w as usize)
+        .enumerate()
+        .filter(|(_, row)| row.chunks(4).any(|p| p[0] < 128))
+        .map(|(y, _)| y as f32)
+        .collect();
+    let pt = |mm: f32| mm * 72.0 / 25.4;
+    let ink = |a: f32, b: f32| dark_rows.iter().any(|y| *y >= a && *y < b);
+    assert!(ink(pt(10.0), pt(10.0 + 4.94)), "line 1");
+    // Lines 2 and 3 would run from 14.94 mm into the body at 17.5 mm.
+    assert!(!ink(pt(10.0 + 4.94) + 0.5, pt(17.5) - 0.5), "{dark_rows:?}");
+}
+
+/// Excel's margins of an opened XLSX survive a page setup edit that leaves
+/// the margins alone (and its undo) and are saved back unchanged.
+#[test]
+fn xlsx_margins_survive_an_unrelated_page_setup_edit() {
+    use tally_model::{HeaderFooterData, MarginsData, PageSetupData, SheetData, WorkbookData};
+    let raw = MarginsData {
+        top: 1905,
+        bottom: 1905,
+        left: 1778,
+        right: 1778,
+        header: 762,
+        footer: 762,
+    };
+    let mut p = PageSetupData {
+        header: Some(HeaderFooterData {
+            center: "one\ntwo".into(),
+            ..HeaderFooterData::default()
+        }),
+        footer: None,
+        ..PageSetupData::default()
+    };
+    p.margins = raw;
+    let wb = WorkbookData {
+        sheets: vec![SheetData {
+            name: "S".into(),
+            page_setup: Some(p),
+            ..SheetData::default()
+        }],
+        ..WorkbookData::default()
+    };
+    let dir = std::env::temp_dir().join(format!("tally-hf-xlsx-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("in.xlsx");
+    tally_io_xlsx::write_xlsx(&wb, std::fs::File::create(&src).unwrap()).unwrap();
+    // What Excel's import makes of the written file.
+    let first =
+        tally_io_xlsx::read_xlsx(std::fs::File::open(&src).unwrap(), &Default::default()).unwrap();
+    let want = first.sheets[0].page_setup.clone().unwrap().excel_margins;
+    assert!(want.is_some());
+    let mut svc = tally_engine::EngineService::with_default_codec();
+    let info = svc.open(&src).unwrap();
+    let mut f = Fixture {
+        svc,
+        doc: info.doc,
+        sheet: info.sheets[0].id,
+    };
+    let s = f.sheet;
+    let mut setup = f.svc.page_setup(f.doc, s).unwrap();
+    setup.orientation = tally_api::Orientation::Landscape;
+    f.apply(vec![Op::SetPageSetup { sheet: s, setup }]);
+    f.svc.undo(f.doc).unwrap();
+    f.svc.redo(f.doc).unwrap();
+    let out = dir.join("out.xlsx");
+    f.svc
+        .save_copy(f.doc, &out, tally_api::FileFormat::Xlsx)
+        .unwrap();
+    let back =
+        tally_io_xlsx::read_xlsx(std::fs::File::open(&out).unwrap(), &Default::default()).unwrap();
+    let bp = back.sheets[0].page_setup.clone().unwrap();
+    assert_eq!(bp.excel_margins, want);
+    assert_eq!(
+        bp.margins,
+        first.sheets[0].page_setup.as_ref().unwrap().margins
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

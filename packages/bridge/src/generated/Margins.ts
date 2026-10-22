@@ -21,10 +21,11 @@ leftMm: number,
  */
 rightMm: number, 
 /**
- * Header.
+ * Header area height, its spacing included (the minimum with AutoFit
+ * height; AOO's dialog shows "Height" as this minus the spacing).
  */
 headerMm: number, 
 /**
- * Footer.
+ * Footer area height, its spacing included.
  */
 footerMm: number, };

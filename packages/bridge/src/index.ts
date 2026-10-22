@@ -80,6 +80,7 @@ export type { DocPropertiesDto } from "./generated/DocPropertiesDto";
 export type { GoalSeekRequest } from "./generated/GoalSeekRequest";
 export type { GoalSeekResult } from "./generated/GoalSeekResult";
 export type { HeaderFooter } from "./generated/HeaderFooter";
+export type { HeaderFooterArea } from "./generated/HeaderFooterArea";
 export type { IconSetKind } from "./generated/IconSetKind";
 export type { IconView } from "./generated/IconView";
 export type { ListSource } from "./generated/ListSource";

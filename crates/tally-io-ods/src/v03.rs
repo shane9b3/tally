@@ -14,9 +14,10 @@ use std::io::BufRead;
 use tally_model::{
     CellRangeLocal, CfColorStopData, CfDatePeriodData, CfKindData, CfRuleData, CfStyleData,
     CfTextOpData, CfThresholdData, CfValueKindData, CmpOpData, ConditionalFormatData,
-    HeaderFooterData, IconSetData, ListSourceData, MarginsData, NoteData, OrientationData,
-    PageOrderData, PageScaleData, PageSetupData, PaperData, SheetProtectionData, ValidationData,
-    ValidationErrorData, ValidationErrorStyleData, ValidationKindData, ValidationMessageData,
+    HeaderFooterData, HfAreaData, IconSetData, ListSourceData, MarginsData, NoteData,
+    OrientationData, PageOrderData, PageScaleData, PageSetupData, PaperData, SheetProtectionData,
+    ValidationData, ValidationErrorData, ValidationErrorStyleData, ValidationKindData,
+    ValidationMessageData,
 };
 use tally_types::{col_to_letters, MAX_COLS, MAX_ROWS};
 
@@ -1422,14 +1423,22 @@ pub(crate) struct PageLayout {
     pub first_page: Option<u32>,
     pub header_height: Option<u32>,
     pub footer_height: Option<u32>,
+    /// Header area layout (`on` unused: the master page decides).
+    pub header_area: HfAreaData,
+    /// Footer area layout.
+    pub footer_area: HfAreaData,
 }
 
 /// `style:master-page` as read.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct MasterPage {
     pub layout: String,
+    /// Header texts (also of a header switched off).
     pub header: Option<HeaderFooterData>,
     pub footer: Option<HeaderFooterData>,
+    /// `style:header` present and not `style:display="false"`.
+    pub header_on: bool,
+    pub footer_on: bool,
 }
 
 /// Parses `style:page-layout` (the element just started).
@@ -1513,14 +1522,38 @@ pub(crate) fn parse_page_layout<R: BufRead>(
                             match xml.next()? {
                                 Ev::Start(hp) => {
                                     if hp.name == "style:header-footer-properties" {
-                                        let h = hp
-                                            .attr("fo:min-height")
-                                            .and_then(length_to_hmm)
-                                            .unwrap_or(0);
+                                        let len = |k: &str| hp.attr(k).and_then(length_to_hmm);
+                                        // AutoFit height writes a minimum
+                                        // height, a fixed one `svg:height`.
+                                        let (h, autofit) = match len("fo:min-height") {
+                                            Some(h) => (h, true),
+                                            None => match len("svg:height") {
+                                                Some(h) => (h, false),
+                                                None => (0, true),
+                                            },
+                                        };
+                                        let side = len("fo:margin");
+                                        let area = HfAreaData {
+                                            on: true,
+                                            // The spacing is the margin
+                                            // towards the body.
+                                            spacing: len(if header {
+                                                "fo:margin-bottom"
+                                            } else {
+                                                "fo:margin-top"
+                                            })
+                                            .or(side)
+                                            .unwrap_or(0),
+                                            autofit,
+                                            left: len("fo:margin-left").or(side).unwrap_or(0),
+                                            right: len("fo:margin-right").or(side).unwrap_or(0),
+                                        };
                                         if header {
                                             p.header_height = Some(h);
+                                            p.header_area = area;
                                         } else {
                                             p.footer_height = Some(h);
+                                            p.footer_area = area;
                                         }
                                     }
                                     xml.skip()?;
@@ -1580,6 +1613,12 @@ fn hf_paragraphs<R: BufRead>(xml: &mut XmlReader<R>) -> Result<String, OdsError>
                         xml.skip()?;
                         continue;
                     }
+                    // Shift+Enter in AOO's header editor.
+                    "text:line-break" => {
+                        out.push('\n');
+                        xml.skip()?;
+                        continue;
+                    }
                     _ => None,
                 };
                 if let Some(f) = field {
@@ -1603,10 +1642,12 @@ fn hf_paragraphs<R: BufRead>(xml: &mut XmlReader<R>) -> Result<String, OdsError>
     }
 }
 
+/// A `style:header` / `style:footer`: its texts and whether it is shown
+/// (`style:display="false"` switches it off but keeps the texts, AOO 3+).
 fn parse_hf<R: BufRead>(
     xml: &mut XmlReader<R>,
     e: &Elem,
-) -> Result<Option<HeaderFooterData>, OdsError> {
+) -> Result<(HeaderFooterData, bool), OdsError> {
     let shown = e.attr("style:display") != Some("false");
     let mut h = HeaderFooterData::default();
     let d = xml.depth();
@@ -1631,7 +1672,7 @@ fn parse_hf<R: BufRead>(
             _ => {}
         }
     }
-    Ok(shown.then_some(h))
+    Ok((h, shown))
 }
 
 /// Parses `office:master-styles` → name → master page.
@@ -1651,8 +1692,16 @@ pub(crate) fn parse_master_styles<R: BufRead>(
                 let dd = xml.depth();
                 loop {
                     match xml.next()? {
-                        Ev::Start(c) if c.name == "style:header" => m.header = parse_hf(xml, &c)?,
-                        Ev::Start(c) if c.name == "style:footer" => m.footer = parse_hf(xml, &c)?,
+                        Ev::Start(c) if c.name == "style:header" => {
+                            let (h, on) = parse_hf(xml, &c)?;
+                            m.header_on = on;
+                            m.header = (on || !h.is_empty()).then_some(h);
+                        }
+                        Ev::Start(c) if c.name == "style:footer" => {
+                            let (f, on) = parse_hf(xml, &c)?;
+                            m.footer_on = on;
+                            m.footer = (on || !f.is_empty()).then_some(f);
+                        }
                         Ev::Start(_) => xml.skip()?,
                         Ev::End if xml.depth() < dd => break,
                         Ev::Eof => break,
@@ -1679,6 +1728,8 @@ pub(crate) fn page_setup_of(m: &MasterPage, l: Option<&PageLayout>) -> PageSetup
         ..PageSetupData::default()
     };
     if let Some(l) = l {
+        p.header_area = l.header_area;
+        p.footer_area = l.footer_area;
         p.orientation = if l.landscape {
             OrientationData::Landscape
         } else {
@@ -1706,6 +1757,10 @@ pub(crate) fn page_setup_of(m: &MasterPage, l: Option<&PageLayout>) -> PageSetup
         };
         p.first_page_number = l.first_page;
     }
+    // An absent `style:header` is no header (ODF); `display="false"` is a
+    // header switched off.
+    p.header_area.on = m.header_on;
+    p.footer_area.on = m.footer_on;
     p
 }
 
@@ -1748,13 +1803,22 @@ fn write_hf_region(s: &mut String, tag: &str, text: &str) {
     let _ = write!(s, "</style:{tag}>");
 }
 
-fn write_hf(s: &mut String, tag: &str, h: &Option<HeaderFooterData>) {
+/// A `style:header` / `style:footer`; one switched off keeps its texts
+/// under `style:display="false"` (AOO 3+).
+fn write_hf(s: &mut String, tag: &str, h: &Option<HeaderFooterData>, on: bool) {
     match h {
         None => {
             let _ = write!(s, r#"<style:{tag} style:display="false"/>"#);
         }
+        Some(h) if !on && h.is_empty() => {
+            let _ = write!(s, r#"<style:{tag} style:display="false"/>"#);
+        }
         Some(h) => {
-            let _ = write!(s, "<style:{tag}>");
+            if on {
+                let _ = write!(s, "<style:{tag}>");
+            } else {
+                let _ = write!(s, r#"<style:{tag} style:display="false">"#);
+            }
             write_hf_region(s, "region-left", &h.left);
             write_hf_region(s, "region-center", &h.center);
             write_hf_region(s, "region-right", &h.right);
@@ -1828,11 +1892,49 @@ pub(crate) fn write_page_layout(s: &mut String, layout: &str, p: &PageSetupData)
         None => s.push_str(r#" style:first-page-number="continue""#),
     }
     s.push_str(" style:writing-mode=\"lr-tb\"/>");
+    write_hf_style(
+        s,
+        "header",
+        p.header_shown().is_some(),
+        p.margins.header,
+        &p.header_area,
+    );
+    write_hf_style(
+        s,
+        "footer",
+        p.footer_shown().is_some(),
+        p.margins.footer,
+        &p.footer_area,
+    );
+    s.push_str("</style:page-layout>");
+}
+
+/// `style:header-style` / `style:footer-style`: the area's height
+/// (`fo:min-height` with AutoFit height, else `svg:height`), its side
+/// margins and its spacing towards the body. Like AOO, an area that is
+/// switched off is written empty.
+fn write_hf_style(s: &mut String, tag: &str, on: bool, height: u32, a: &HfAreaData) {
+    if !on {
+        let _ = write!(s, "<style:{tag}-style/>");
+        return;
+    }
     let _ = write!(
         s,
-        r#"<style:header-style><style:header-footer-properties fo:min-height="{}" fo:margin-bottom="0.25cm"/></style:header-style><style:footer-style><style:header-footer-properties fo:min-height="{}" fo:margin-top="0.25cm"/></style:footer-style></style:page-layout>"#,
-        hmm_to_cm(p.margins.header),
-        hmm_to_cm(p.margins.footer)
+        r#"<style:{tag}-style><style:header-footer-properties {}="{}" fo:margin-left="{}" fo:margin-right="{}" {}="{}"/></style:{tag}-style>"#,
+        if a.autofit {
+            "fo:min-height"
+        } else {
+            "svg:height"
+        },
+        hmm_to_cm(height),
+        hmm_to_cm(a.left),
+        hmm_to_cm(a.right),
+        if tag == "header" {
+            "fo:margin-bottom"
+        } else {
+            "fo:margin-top"
+        },
+        hmm_to_cm(a.spacing),
     );
 }
 
@@ -1842,8 +1944,8 @@ pub(crate) fn write_master_page(s: &mut String, name: &str, layout: &str, p: &Pa
         s,
         r#"<style:master-page style:name="{name}" style:page-layout-name="{layout}">"#
     );
-    write_hf(s, "header", &p.header);
-    write_hf(s, "footer", &p.footer);
+    write_hf(s, "header", &p.header, p.header_area.on);
+    write_hf(s, "footer", &p.footer, p.footer_area.on);
     s.push_str("</style:master-page>");
 }
 

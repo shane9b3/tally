@@ -36,10 +36,38 @@ formats are described at the end of this page.
 | Sheet protection | `table:protected`, `table:protection-key` (+ digest algorithm), `loext:table-protection` options | yes | `sheetProtection` (legacy `password`, or `algorithmName`/`hashValue`/`saltValue`/`spinCount`; flags inverted to "allowed") | `protect_with_options` + the stored hash patched in (an ODF SHA hash uses the companion legacy hash) |
 | Cell protection | `style:cell-protect`, `style:print-content` | yes | `xf/protection locked hidden` | `set_unlocked` / `set_hidden` |
 | Structure protection | `table:structure-protected` on `office:spreadsheet` | yes | `workbookProtection lockStructure` | patched into `workbook.xml` |
-| Page setup | `style:page-layout` (size → paper, orientation, margins, `style:print` grid/headers, `scale-to`, `loext:scale-to-X/Y`, centring, page order, first page number) + `style:master-page` header/footer regions (fields → `&[PAGE]` …) via the table style's master page; `table:print-ranges`; `table:table-header-rows/columns` | one page layout + master page per distinct setup | `pageMargins`, `pageSetup`, `printOptions`, `headerFooter` (`&L&C&R`, `&P &N &A &F &D &T`), `_xlnm.Print_Area` / `_xlnm.Print_Titles` | yes (first page number patched in) |
+| Page setup | `style:page-layout` (size → paper, orientation, margins, `style:print` grid/headers, `scale-to`, `loext:scale-to-X/Y`, centring, page order, first page number) + `style:master-page` header/footer regions (fields → `&[PAGE]` …) via the table style's master page, `style:display="false"` = header/footer off (texts kept), an absent `style:header` = none; `style:header-style`/`footer-style` `fo:min-height` (AutoFit height) or `svg:height` (fixed), `fo:margin-bottom`/`margin-top` (spacing), `fo:margin-left/right`; `table:print-ranges`; `table:table-header-rows/columns` | one page layout + master page per distinct setup; an area that is off is written as an empty `style:header-style` (AOO) | `pageMargins` (see below for `header`/`footer`), `pageSetup`, `printOptions`, `headerFooter` (`&L&C&R`, `&P &N &A &F &D &T`; empty = none), `_xlnm.Print_Area` / `_xlnm.Print_Titles` | yes (first page number patched in; a header/footer that is off is not written) |
 | Manual page breaks | `fo:break-before="page"` on row/column styles | yes | `rowBreaks` / `colBreaks` (`man="1"`) | yes |
 | Document properties | `meta.xml`: title, subject, keywords, description, initial creator, creator, dates | yes | `docProps/core.xml` | title, subject, author, keywords, comments |
 | Locale | default cell style `fo:language`/`fo:country` | yes | – | – |
+
+**Header and footer areas** follow AOO: the header area sits inside the
+top margin and pushes the body down; its height (`margins.header`, ODS
+`fo:min-height` as AOO writes it) includes the spacing towards the body,
+and with AutoFit height (`HfAreaData::autofit`) it grows to its lines
+(4.94 mm each, the most of the left/centre/right regions) plus the
+spacing. The footer mirrors it at the bottom. AOO's dialog shows "Height"
+without the spacing, and so does Tally's. Excel instead measures its
+`header` margin from the page edge to the header and its `top` margin to
+the body, independently: XLSX import sets Tally's top margin to Excel's
+header margin and the header area (spacing 0.25 cm, at most half; fixed
+height, since Excel's gap does not grow) to the gap up to Excel's top
+margin, so the sheet prints like Excel. The imported Excel margins are
+kept (`PageSetupData::excel_margins`) and written back unchanged while the
+margins and areas are still the ones derived from them, so an untouched
+file round-trips exactly (also when the header margin is at or below the
+top margin, which Tally cannot lay out). Otherwise export writes the
+reverse (`header` = top margin, `top` = top margin + printed header area,
+an empty header that is switched on included, so Excel's body sits where
+Tally prints it). Without a header Excel's top margin is kept and its
+header margin written as 0.3" (or the top margin if smaller). Footers map
+the same way. In ODS, `text:line-break` in a region is a new line.
+
+Lines that do not fit an area of fixed height are left off (never drawn
+over the body or off the page), and areas taller than the page leaves
+are cut down, header first, so the body keeps at least 10 mm; the page
+setup dialog refuses such values. "Same content left/right" (different left and
+right pages) is not modelled; `style:header-left` is ignored.
 
 Formulas of rules and validations are OpenFormula in the model, relative to
 `base` (ODS `base-cell-address`, XLSX the top-left cell of the first range).
@@ -467,7 +495,8 @@ fall back per character to an installed face (CJK) or are drawn as the
 fills included), borders (solid/dashed/dotted/double), alignment, wrapping,
 overflow into empty neighbours, `###` for numbers that do not fit,
 optional gridlines and row/column headers, headers and footers with
-`&[PAGE]`-style placeholders, charts from the SVGs the UI supplies, notes
+`&[PAGE]`-style placeholders (each line of each region in its own 14 pt box
+from the top of its area; lines past a fixed height are left off), charts from the SVGs the UI supplies, notes
 on a page at the end when the page setup asks for it. Pictures and
 conditional data bars/icons are not printed yet. The PDF has no outline,
 tags or links.

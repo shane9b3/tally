@@ -169,7 +169,7 @@ mod pdf {
     use tally_types::{CellAddr, SheetId, Value};
 
     use crate::document::Document;
-    use crate::print::{hmm_to_pt, PageSpec};
+    use crate::print::{hmm_to_pt, HfBlock, PageSpec, HF_LINE_HMM};
     use crate::storage::StyleId;
     use crate::workbook::Workbook;
 
@@ -185,7 +185,7 @@ mod pdf {
     /// Most cell positions on one page.
     pub const MAX_PAGE_CELLS: u64 = 1_000_000;
     /// Header/footer and note font size.
-    const HF_SIZE: f32 = 10.0;
+    const HF_SIZE: f32 = crate::print::HF_FONT_PT;
     /// Row/column header sizes in points (when printed).
     const COL_HEADER_H: f32 = crate::print::COL_HEADER_H_PT;
     const ROW_HEADER_W: f32 = crate::print::ROW_HEADER_W_PT;
@@ -415,52 +415,48 @@ mod pdf {
             .collect()
     }
 
-    fn hf_items(
+    /// The header or footer lines of a page: each line of each region in
+    /// its own box of [`HF_LINE_HMM`] from the top of the area down, so a
+    /// multi-line text is laid out like AOO's (never centred around the
+    /// area and clipped by it; AutoFit height makes the area fit its lines,
+    /// see [`crate::print::body_of`]). Lines past a fixed height are left
+    /// off so they never run over the body or off the page.
+    pub(super) fn hf_items(
         items: &mut Vec<Item>,
         texts: &Option<[String; 3]>,
-        block: Option<(u32, u32)>,
-        page: &PageSpec,
+        block: Option<HfBlock>,
     ) {
-        let (Some(t), Some((top, height))) = (texts, block) else {
+        let (Some(t), Some(b)) = (texts, block) else {
             return;
         };
-        let p = wb_margins(page);
-        let x = hmm_to_pt(p.0);
-        let w = hmm_to_pt(page.paper.0) - x - hmm_to_pt(p.1);
-        let rect = Rect::new(
-            x,
-            hmm_to_pt(top),
-            w.max(1.0),
-            hmm_to_pt(height).max(HF_SIZE),
-        );
+        let line_h = hmm_to_pt(HF_LINE_HMM);
+        let x = hmm_to_pt(b.left);
+        let w = hmm_to_pt(b.width).max(1.0);
+        let top = hmm_to_pt(b.top);
+        let fit = crate::print::hf_fitting_lines(&b);
         for (i, align) in [HAlign::Left, HAlign::Center, HAlign::Right]
             .into_iter()
             .enumerate()
         {
-            if t[i].is_empty() {
-                continue;
+            for (n, line) in t[i].split('\n').take(fit).enumerate() {
+                if line.is_empty() {
+                    continue;
+                }
+                items.push(Item::Text {
+                    rect: Rect::new(x, top + line_h * n as f32, w, line_h),
+                    text: line.to_string(),
+                    font: FontSpec {
+                        size_pt: HF_SIZE,
+                        ..FontSpec::default()
+                    },
+                    h_align: align,
+                    v_align: VAlign::Middle,
+                    wrap: false,
+                    overflow: (0.0, 0.0),
+                    clip: false,
+                });
             }
-            items.push(Item::Text {
-                rect,
-                text: t[i].clone(),
-                font: FontSpec {
-                    size_pt: HF_SIZE,
-                    ..FontSpec::default()
-                },
-                h_align: align,
-                v_align: VAlign::Middle,
-                wrap: false,
-                overflow: (0.0, 0.0),
-                clip: true,
-            });
         }
-    }
-
-    /// `(left, right)` margins of the page's sheet in hmm.
-    fn wb_margins(page: &PageSpec) -> (u32, u32) {
-        let body_left = page.origin.0;
-        let right = page.paper.0.saturating_sub(body_left + page.body.0);
-        (body_left.min(page.paper.0), right)
     }
 
     /// Builds one page's items; returns them with the number of charts
@@ -476,8 +472,8 @@ mod pdf {
             return (items, 0);
         };
         let setup = sheet.meta.page_setup.clone();
-        hf_items(&mut items, &page.header, page.header_block, page);
-        hf_items(&mut items, &page.footer, page.footer_block, page);
+        hf_items(&mut items, &page.header, page.header_block);
+        hf_items(&mut items, &page.footer, page.footer_block);
         let headers = setup.print_headers;
         let mut x0 = hmm_to_pt(page.origin.0);
         let mut y0 = hmm_to_pt(page.origin.1);

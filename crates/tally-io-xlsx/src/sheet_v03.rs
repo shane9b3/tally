@@ -8,9 +8,10 @@ use std::io::BufRead;
 use tally_model::{
     hash_algorithms, CellRangeLocal, CfColorStopData, CfDatePeriodData, CfKindData, CfRuleData,
     CfStyleData, CfTextOpData, CfThresholdData, CfValueKindData, CmpOpData, ConditionalFormatData,
-    HeaderFooterData, IconSetData, ListSourceData, MarginsData, NoteData, OrientationData,
-    PageOrderData, PageScaleData, PageSetupData, PaperData, SheetProtectionData, ValidationData,
-    ValidationErrorData, ValidationErrorStyleData, ValidationKindData, ValidationMessageData,
+    HeaderFooterData, HfAreaData, IconSetData, ListSourceData, MarginsData, NoteData,
+    OrientationData, PageOrderData, PageScaleData, PageSetupData, PaperData, SheetProtectionData,
+    ValidationData, ValidationErrorData, ValidationErrorStyleData, ValidationKindData,
+    ValidationMessageData,
 };
 use tally_types::CellAddr;
 
@@ -72,8 +73,12 @@ impl PageParts {
             footer: None,
             ..PageSetupData::default()
         };
+        p.header = self.header.clone().filter(|h| !h.is_empty());
+        p.footer = self.footer.clone().filter(|h| !h.is_empty());
+        p.header_area.on = p.header.is_some();
+        p.footer_area.on = p.footer.is_some();
         if let Some(m) = self.margins {
-            p.margins = m;
+            apply_excel_margins(&mut p, m);
         }
         if let Some(o) = self.orientation {
             p.orientation = o;
@@ -100,10 +105,57 @@ impl PageParts {
         p.print_headers = self.headings;
         p.center_h = self.center_h;
         p.center_v = self.center_v;
-        p.header.clone_from(&self.header);
-        p.footer.clone_from(&self.footer);
         Some(p)
     }
+}
+
+/// Excel's margins → the setup's margins and header/footer areas (for the
+/// header and footer `p` holds). Excel's header sits `header` below the
+/// page edge and its body starts at `top` whatever the header holds; Tally
+/// (like AOO and ODF) puts the header area inside the top margin and
+/// pushes the body down. So the top margin becomes Excel's header margin
+/// and the header area (spacing included) fills the gap to Excel's top
+/// margin, at a fixed height (Excel's gap does not grow with the text).
+/// The footer likewise. `m` is kept for an exact write-back.
+pub(crate) fn apply_excel_margins(p: &mut PageSetupData, m: MarginsData) {
+    let d = MarginsData::default();
+    p.margins = MarginsData {
+        header: d.header,
+        footer: d.footer,
+        ..m
+    };
+    p.header_area = HfAreaData {
+        on: p.header.is_some(),
+        ..HfAreaData::default()
+    };
+    p.footer_area = HfAreaData {
+        on: p.footer.is_some(),
+        ..HfAreaData::default()
+    };
+    if p.header.is_some() {
+        let (top, height, spacing) = hf_from_excel_margins(m.top, m.header);
+        p.margins.top = top;
+        p.margins.header = height;
+        p.header_area.spacing = spacing;
+        p.header_area.autofit = false;
+    }
+    if p.footer.is_some() {
+        let (bottom, height, spacing) = hf_from_excel_margins(m.bottom, m.footer);
+        p.margins.bottom = bottom;
+        p.margins.footer = height;
+        p.footer_area.spacing = spacing;
+        p.footer_area.autofit = false;
+    }
+    p.excel_margins = Some(m);
+}
+
+/// Excel's `(page margin, header margin)` → Tally's `(page margin, area
+/// height, spacing)`: the area, spacing included, starts at Excel's header
+/// margin and ends at Excel's page margin; the spacing is AOO's 0.25 cm,
+/// at most half the area.
+pub(crate) fn hf_from_excel_margins(page: u32, hf: u32) -> (u32, u32, u32) {
+    let height = page.saturating_sub(hf);
+    (hf, height, HfAreaData::default().spacing.min(height / 2))
 }
 
 fn attr<'a>(e: &'a Elem, k: &str) -> Option<&'a str> {

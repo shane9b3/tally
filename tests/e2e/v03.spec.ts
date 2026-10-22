@@ -238,6 +238,9 @@ test("page setup saves orientation, header and print range", async ({ page }) =>
   await expect(dialog).toBeVisible();
   await dialog.getByTestId("page-landscape").click();
   await dialog.getByTestId("tab-hf").click();
+  // No footer yet: its controls are disabled until "Footer on" (AOO).
+  await expect(dialog.getByTestId("footer-center")).toBeDisabled();
+  await dialog.getByTestId("footer-on").check();
   await dialog.getByTestId("footer-center").click();
   await dialog.getByTestId("footer-insert-page").click();
   await dialog.getByTestId("tab-sheet").click();
@@ -246,7 +249,7 @@ test("page setup saves orientation, header and print range", async ({ page }) =>
   await dialog.getByTestId("dialog-ok").click();
   expect((await recorded(page)).at(-1)).toMatchObject({
     type: "setPageSetup",
-    setup: { orientation: "landscape", footer: { center: "&[PAGE]" }, printRange: { r0: 0, c0: 0, r1: 14, c1: 6 }, repeatRows: [0, 0] },
+    setup: { orientation: "landscape", footer: { center: "&[PAGE]" }, footerArea: { on: true }, printRange: { r0: 0, c0: 0, r1: 14, c1: 6 }, repeatRows: [0, 0] },
   });
   // View ▸ Page breaks draws the print range.
   await run(page, "view.pageBreaks");

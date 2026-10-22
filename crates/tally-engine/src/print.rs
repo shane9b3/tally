@@ -5,8 +5,12 @@
 //! - **Area**: the print range when set; otherwise the used area (content
 //!   plus visibly formatted cells plus chart bounds). A print selection
 //!   (`PrintOptionsDto::selection`) replaces it on the active sheet.
-//! - **Body**: the paper minus the margins, minus the header block
-//!   (`margins.header`) when a header is set and the footer block likewise.
+//! - **Body**: the paper minus the margins, minus the header area when the
+//!   header is on and the footer area likewise (AOO and ODF: the areas sit
+//!   inside the page margins and push the body in). An area is
+//!   `margins.header` high, its spacing towards the body included (AOO
+//!   `ScPrintHFParam::nHeight`), grown with AutoFit height to its lines
+//!   ([`HF_LINE_HMM`] each, the most of its three regions) plus spacing.
 //! - **Scale**: `Percent` multiplies every row and column size. `FitTo{w,h}`
 //!   takes the largest integer percent from 100 % down to 10 % with pages
 //!   across ≤ w and pages down ≤ h (0 = unlimited); `FitPages(n)` the
@@ -29,7 +33,9 @@ use tally_api::{
     ApiError, BreakInfo, PageBreaksDto, PrintLayoutDto, PrintOptionsDto, PrintPageDto, PrintSheets,
     RangeDto,
 };
-use tally_model::{OrientationData, PageOrderData, PageScaleData, PageSetupData, PaperData};
+use tally_model::{
+    HfAreaData, OrientationData, PageOrderData, PageScaleData, PageSetupData, PaperData,
+};
 use tally_types::{CellRange, SheetId, MAX_COLS, MAX_ROWS};
 
 use crate::storage::{ColumnStore, Sheet};
@@ -55,6 +61,21 @@ pub const MAX_PAGES: usize = 10_000;
 pub const PRINT_DEFAULT_ROW_HMM: u32 = 452;
 /// Default column width for printing (AOO's 2.258 cm).
 pub const PRINT_DEFAULT_COL_HMM: u32 = 2258;
+/// Smallest body height, 1/100 mm.
+pub const MIN_BODY_HMM: u32 = 1000;
+
+/// Lines of a header/footer area that fit its text box (a fixed height
+/// smaller than the text, or an area cut down to keep the body, leaves the
+/// rest off rather than drawing over the body or off the page).
+pub fn hf_fitting_lines(b: &HfBlock) -> usize {
+    (b.height / HF_LINE_HMM).min(HF_MAX_LINES) as usize
+}
+
+/// Header/footer font size, points.
+pub const HF_FONT_PT: f32 = 10.0;
+/// Height of one header/footer line (the PDF draws each line in a box of
+/// this height).
+pub use tally_model::{HF_LINE_HMM, HF_MAX_LINES};
 /// Row header width (printed row numbers), points.
 pub const ROW_HEADER_W_PT: f32 = 28.0;
 /// Column header height (printed column letters), points.
@@ -141,9 +162,33 @@ pub struct Axis {
     pub repeat: Option<RepeatSpan>,
 }
 
-/// A page body: `(width, height, header block, footer block)` in hmm, the
-/// blocks as `(top, height)`.
-type Body = (u32, u32, Option<(u32, u32)>, Option<(u32, u32)>);
+/// A laid-out header or footer area, 1/100 mm from the paper's top-left.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct HfBlock {
+    /// Top of the area.
+    pub top: u32,
+    /// Height of the text box (the area without its spacing).
+    pub height: u32,
+    /// Left edge of the text.
+    pub left: u32,
+    /// Width of the text box.
+    pub width: u32,
+}
+
+/// A page body and the areas around it, 1/100 mm.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Body {
+    /// Body width (without printed row headers).
+    pub w: u32,
+    /// Body height (without printed column headers).
+    pub h: u32,
+    /// Top of the body (top margin plus the header area).
+    pub top: u32,
+    /// The header area, when the header is on.
+    pub header: Option<HfBlock>,
+    /// The footer area, when the footer is on.
+    pub footer: Option<HfBlock>,
+}
 
 impl Axis {
     fn repeat_size(&self, scale: u32) -> u32 {
@@ -242,10 +287,10 @@ pub struct PageSpec {
     pub origin: (u32, u32),
     /// Body `(w, h)` hmm.
     pub body: (u32, u32),
-    /// The header block `(top of block, height)` hmm, if a header is set.
-    pub header_block: Option<(u32, u32)>,
-    /// The footer block `(top of block, height)` hmm, if a footer is set.
-    pub footer_block: Option<(u32, u32)>,
+    /// The header area, when the header is on.
+    pub header_block: Option<HfBlock>,
+    /// The footer area, when the footer is on.
+    pub footer_block: Option<HfBlock>,
     /// Printed page number.
     pub number: u32,
     /// Resolved header texts.
@@ -607,9 +652,8 @@ fn axis_of(
     }
 }
 
-/// Body size and blocks of a page setup: `(body_w, body_h, header_block,
-/// footer_block)` in hmm.
-fn body_of(p: &PageSetupData) -> Body {
+/// The body and the header/footer areas of a page setup.
+pub fn body_of(p: &PageSetupData) -> Body {
     let (pw, ph) = paper_hmm(p);
     let m = &p.margins;
     // Printed row/column headers take their space from the body
@@ -620,18 +664,54 @@ fn body_of(p: &PageSetupData) -> Body {
     } else {
         (0, 0)
     };
-    let header = p.header.as_ref().map(|_| (m.top, m.header));
-    let footer = p
-        .footer
-        .as_ref()
-        .map(|_| (ph.saturating_sub(m.bottom + m.footer), m.footer));
-    let body_w = pw.saturating_sub(m.left + m.right + hdr_w).max(1000);
-    let body_h = ph
+    let inner_w = pw.saturating_sub(m.left + m.right);
+    let block = |a: &HfAreaData, top: u32, total: u32| HfBlock {
+        top,
+        height: total.saturating_sub(a.spacing),
+        left: m.left + a.left.min(inner_w),
+        width: inner_w
+            .saturating_sub(a.left.saturating_add(a.right))
+            .max(1000),
+    };
+    // The areas never squeeze the body below its minimum: what does not
+    // fit is taken from the header first, then the footer (their lines
+    // that no longer fit are left off, see `hf_fitting_lines`).
+    let mut room = ph.saturating_sub(m.top + m.bottom + hdr_h + MIN_BODY_HMM);
+    // Header: from the top margin down, its spacing at its foot, then the
+    // body.
+    let header_room = p
+        .header_shown()
+        .map_or(0, |h| p.header_area.printed_height(h, m.header))
+        .min(room);
+    room -= header_room;
+    let header = p
+        .header_shown()
+        .map(|_| block(&p.header_area, m.top, header_room));
+    // Footer: ends at the bottom margin, its spacing at its top.
+    let footer_room = p
+        .footer_shown()
+        .map_or(0, |f| p.footer_area.printed_height(f, m.footer))
+        .min(room);
+    let footer = p.footer_shown().map(|_| {
+        let a = &p.footer_area;
+        let top = ph
+            .saturating_sub(m.bottom.saturating_add(footer_room))
+            .saturating_add(a.spacing.min(footer_room));
+        block(a, top, footer_room)
+    });
+    let w = pw.saturating_sub(m.left + m.right + hdr_w).max(1000);
+    let h = ph
         .saturating_sub(m.top + m.bottom + hdr_h)
-        .saturating_sub(header.map_or(0, |h| h.1))
-        .saturating_sub(footer.map_or(0, |f| f.1))
-        .max(1000);
-    (body_w, body_h, header, footer)
+        .saturating_sub(header_room)
+        .saturating_sub(footer_room)
+        .max(MIN_BODY_HMM);
+    Body {
+        w,
+        h,
+        top: m.top.saturating_add(header_room),
+        header,
+        footer,
+    }
 }
 
 /// Pages `(row bands, col bands)` at `scale`.
@@ -752,7 +832,8 @@ pub fn paginate_sheet(
         return Ok(Vec::new());
     };
     let p = &s.meta.page_setup;
-    let (body_w, body_h, header_block, footer_block) = body_of(p);
+    let b = body_of(p);
+    let (body_w, body_h) = (b.w, b.h);
     let body = (body_w, body_h);
     let rows = axis_of(s, area.r0, area.r1, true, p.repeat_rows, &s.meta.row_breaks);
     let cols = axis_of(
@@ -820,7 +901,7 @@ pub fn paginate_sheet(
             .map(|r| r.1)
             .sum();
         let mut x = p.margins.left;
-        let mut y = p.margins.top + header_block.map_or(0, |h| h.1);
+        let mut y = b.top;
         if p.center_h && content_w < body_w {
             x += (body_w - content_w) / 2;
         }
@@ -837,8 +918,8 @@ pub fn paginate_sheet(
             paper,
             origin: (x, y),
             body,
-            header_block,
-            footer_block,
+            header_block: b.header,
+            footer_block: b.footer,
             number: 0,
             header: None,
             footer: None,
@@ -941,8 +1022,8 @@ pub fn layout(
                 resolve_placeholders(&h.right, number, total, &name, ctx),
             ]
         };
-        page.header = p.header.as_ref().map(resolve);
-        page.footer = p.footer.as_ref().map(resolve);
+        page.header = p.header_shown().map(resolve);
+        page.footer = p.footer_shown().map(resolve);
     }
     if let (Some(from), to) = (opts.page_from, opts.page_to) {
         let from = from.max(1) as usize;
@@ -990,8 +1071,8 @@ pub fn page_breaks(wb: &Workbook, sheet: SheetId) -> Result<PageBreaksDto, ApiEr
         });
     };
     let p = &s.meta.page_setup;
-    let (body_w, body_h, _, _) = body_of(p);
-    let body = (body_w, body_h);
+    let b = body_of(p);
+    let body = (b.w, b.h);
     let rows = axis_of(s, area.r0, area.r1, true, p.repeat_rows, &s.meta.row_breaks);
     let cols = axis_of(
         s,
@@ -1036,7 +1117,7 @@ pub fn page_breaks(wb: &Workbook, sheet: SheetId) -> Result<PageBreaksDto, ApiEr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tally_model::{HeaderFooterData, MarginsData};
+    use tally_model::{HeaderFooterData, HfAreaData, MarginsData};
     use tally_types::{CellAddr, Value};
 
     /// A4 portrait, 20 mm margins, no header/footer, 4.52 mm rows and
@@ -1378,5 +1459,156 @@ mod tests {
         assert_eq!(p[0].row_span(), [0, 9]);
         o.sheets = PrintSheets::Some { ids: vec![99] };
         assert!(layout(&wb, &o, &HfContext::default()).is_err());
+    }
+
+    /// The owner's report: a two-line centred header over a small top
+    /// margin.
+    fn two_line_header(wb: &mut Workbook) {
+        let st = setup(wb);
+        st.margins.top = 1000;
+        st.margins.header = 750;
+        st.header = Some(HeaderFooterData {
+            center: "The Redwood - 10/22/2026\nBlock 90 - North Side".into(),
+            ..HeaderFooterData::default()
+        });
+        st.header_area = HfAreaData::default();
+    }
+
+    #[test]
+    fn header_area_autofits_two_lines_and_pushes_the_body_down() {
+        let mut wb = book(200, 1);
+        two_line_header(&mut wb);
+        let p = pages(&wb);
+        let b = p[0].header_block.unwrap();
+        // Two 4.94 mm lines below the 10 mm top margin, then 2.5 mm spacing.
+        assert_eq!(
+            b,
+            HfBlock {
+                top: 1000,
+                height: 2 * HF_LINE_HMM,
+                left: 2000,
+                width: 17_000,
+            }
+        );
+        assert_eq!(p[0].origin.1, 1000 + 2 * HF_LINE_HMM + 250);
+        assert!(
+            b.top + b.height < p[0].origin.1,
+            "the header overlaps the body"
+        );
+        // Body 297 − 10 − 20 − 12.38 mm = 254.62 mm: 56 rows of 4.52 mm.
+        assert_eq!(p[0].body.1, 29_700 - 1000 - 2000 - (2 * HF_LINE_HMM + 250));
+        assert_eq!(p[0].rows.len(), 56);
+        assert_eq!(p[1].row_span()[0], 56);
+        // Page breaks agree.
+        let br = page_breaks(&wb, wb.sheets[0].id).unwrap();
+        assert_eq!(br.row_breaks[0].at, 56);
+    }
+
+    #[test]
+    fn one_line_header_keeps_its_set_height() {
+        let mut wb = book(200, 1);
+        let st = setup(&mut wb);
+        st.margins.header = 750;
+        st.header = Some(HeaderFooterData {
+            center: "x".into(),
+            ..HeaderFooterData::default()
+        });
+        let p = pages(&wb);
+        // 4.94 mm + 2.5 mm fit the 7.5 mm area: AOO's 53 rows on A4.
+        assert_eq!(p[0].header_block.unwrap().height, 500);
+        assert_eq!(p[0].origin.1, 2750);
+        assert_eq!(p[0].rows.len(), (29_700 - 4000 - 750) / 452);
+    }
+
+    #[test]
+    fn fixed_height_does_not_grow() {
+        let mut wb = book(200, 1);
+        two_line_header(&mut wb);
+        setup(&mut wb).header_area.autofit = false;
+        let p = pages(&wb);
+        assert_eq!(p[0].header_block.unwrap().height, 500);
+        assert_eq!(p[0].origin.1, 1000 + 750);
+        // Only the first line fits the 5 mm text box.
+        assert_eq!(hf_fitting_lines(&p[0].header_block.unwrap()), 1);
+        setup(&mut wb).margins.header = 200;
+        assert_eq!(hf_fitting_lines(&pages(&wb)[0].header_block.unwrap()), 0);
+    }
+
+    #[test]
+    fn oversized_areas_keep_the_minimum_body() {
+        let mut wb = book(200, 1);
+        let st = setup(&mut wb);
+        st.header = Some(HeaderFooterData {
+            center: "h".into(),
+            ..HeaderFooterData::default()
+        });
+        st.footer = Some(HeaderFooterData {
+            center: "f".into(),
+            ..HeaderFooterData::default()
+        });
+        st.margins.header = 30_000;
+        st.margins.footer = 20_000;
+        let p = pages(&wb);
+        let b = body_of(setup(&mut wb));
+        // 297 − 40 mm leaves 257 mm: 247 for the header, none for the footer.
+        assert_eq!(b.h, MIN_BODY_HMM);
+        assert_eq!(b.top, 2000 + 24_700);
+        assert_eq!(b.top + b.h, 29_700 - 2000);
+        assert_eq!(b.footer.unwrap().height, 0);
+        assert_eq!(hf_fitting_lines(&b.footer.unwrap()), 0);
+        let h = b.header.unwrap();
+        assert!(h.top + h.height <= b.top);
+        assert_eq!(p[0].rows.len() as u32, MIN_BODY_HMM / 452);
+        // Margins alone taller than the paper: no room for the areas.
+        let st = setup(&mut wb);
+        st.margins.top = 20_000;
+        st.margins.bottom = 20_000;
+        let b = body_of(st);
+        assert_eq!((b.header.unwrap().height, b.footer.unwrap().height), (0, 0));
+    }
+
+    #[test]
+    fn footer_area_ends_at_the_bottom_margin() {
+        let mut wb = book(200, 1);
+        let st = setup(&mut wb);
+        st.margins.footer = 750;
+        st.footer = Some(HeaderFooterData {
+            center: "Page &[PAGE]\nconfidential".into(),
+            ..HeaderFooterData::default()
+        });
+        st.footer_area.left = 1000;
+        st.footer_area.right = 500;
+        let p = pages(&wb);
+        let f = p[0].footer_block.unwrap();
+        let room = 2 * HF_LINE_HMM + 250;
+        assert_eq!(f.top, 29_700 - 2000 - room + 250);
+        assert_eq!(f.top + f.height, 29_700 - 2000, "ends at the bottom margin");
+        assert_eq!((f.left, f.width), (3000, 15_500));
+        assert_eq!(p[0].body.1, 29_700 - 4000 - room);
+        let body_bottom = p[0].origin.1 + p[0].body.1;
+        assert!(body_bottom + 250 <= f.top);
+        assert_eq!(p[0].rows.len() as u32, (29_700 - 4000 - room) / 452);
+        assert_eq!(p[0].footer.as_ref().unwrap()[1], "Page 1\nconfidential");
+    }
+
+    #[test]
+    fn header_off_keeps_its_text_and_gives_the_room_back() {
+        let mut wb = book(200, 1);
+        two_line_header(&mut wb);
+        setup(&mut wb).header_area.on = false;
+        let p = pages(&wb);
+        assert!(p[0].header_block.is_none());
+        assert!(p[0].header.is_none());
+        assert_eq!(p[0].origin.1, 1000);
+        assert_eq!(p[0].rows.len() as u32, (29_700 - 3000) / 452);
+        let st = setup(&mut wb);
+        assert!(st
+            .header
+            .as_ref()
+            .unwrap()
+            .center
+            .starts_with("The Redwood"));
+        st.header_area.on = true;
+        assert!(pages(&wb)[0].header_block.is_some());
     }
 }

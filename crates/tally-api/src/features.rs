@@ -693,10 +693,30 @@ pub struct Margins {
     pub left_mm: f32,
     /// Right.
     pub right_mm: f32,
-    /// Header.
+    /// Header area height, its spacing included (the minimum with AutoFit
+    /// height; AOO's dialog shows "Height" as this minus the spacing).
     pub header_mm: f32,
-    /// Footer.
+    /// Footer area height, its spacing included.
     pub footer_mm: f32,
+}
+
+/// Header or footer area layout (AOO Format ▸ Page ▸ Header / Footer).
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HeaderFooterArea {
+    /// "Header on" / "Footer on". Off keeps the texts but prints nothing
+    /// and gives the area's room to the body.
+    pub on: bool,
+    /// Spacing between the text and the body, part of the area's height.
+    pub spacing_mm: f32,
+    /// AutoFit height: the area grows to fit its lines (4.94 mm each) plus
+    /// the spacing.
+    pub autofit: bool,
+    /// Left margin of the area inside the page margins.
+    pub left_mm: f32,
+    /// Right margin of the area inside the page margins.
+    pub right_mm: f32,
 }
 
 /// A header or footer; placeholders `&[PAGE]`, `&[PAGES]`, `&[SHEET]`,
@@ -781,6 +801,15 @@ pub struct PageSetupDto {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub print_formulas: Option<bool>,
+    /// Header area (absent = on when `header` is set, 2.5 mm spacing,
+    /// AutoFit).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub header_area: Option<HeaderFooterArea>,
+    /// Footer area (absent: as for the header).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub footer_area: Option<HeaderFooterArea>,
 }
 
 /// Axis of a manual page break.

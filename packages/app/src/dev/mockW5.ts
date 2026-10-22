@@ -13,6 +13,7 @@ import { absoluteRef, parseAbsoluteRef } from "../dataOps";
 import { currentRegion } from "../glance";
 import { autoPageBreaks, defaultPageSetup, paperMm } from "../v03";
 import { AOO_PALETTE } from "../charts/toEcharts";
+import { hfShown, pageBoxes } from "../print/hfLayout";
 
 export interface W5Ext {
   charts: Record<number, ChartDto[]>;
@@ -380,9 +381,12 @@ export function printPagesFor(sheet: number, setup: PageSetupDto, layout: SheetL
   const paper = paperMm(setup);
   const pages: PrintPageDto[] = [];
   const m = setup.margins;
+  const boxes = pageBoxes(setup, paper);
   const bodyW = paper[0] - m.leftMm - m.rightMm;
-  const bodyH = paper[1] - m.topMm - m.bottomMm;
+  const bodyH = boxes.bodyHeight;
   const pct = setup.scale.type === "percent" ? setup.scale.percent : 100;
+  const head = hfShown(setup, "header");
+  const foot = hfShown(setup, "footer");
   const order: [number, number][] = [];
   if (setup.pageOrder === "leftToRight") {
     for (let ri = 0; ri < rowEdges.length - 1; ri++) for (let ci = 0; ci < colEdges.length - 1; ci++) order.push([ri, ci]);
@@ -406,9 +410,9 @@ export function printPagesFor(sheet: number, setup: PageSetupDto, layout: SheetL
       repeatCols: setup.repeatCols,
       scalePct: pct,
       paperMm: [paper[0], paper[1]],
-      originMm: [m.leftMm + (setup.centerH ? Math.max(0, bodyW) * 0 : 0), m.topMm + (setup.centerV ? Math.max(0, bodyH) * 0 : 0)],
-      header: setup.header ? [resolve(setup.header.left), resolve(setup.header.center), resolve(setup.header.right)] : null,
-      footer: setup.footer ? [resolve(setup.footer.left), resolve(setup.footer.center), resolve(setup.footer.right)] : null,
+      originMm: [m.leftMm + (setup.centerH ? Math.max(0, bodyW) * 0 : 0), boxes.bodyTop + (setup.centerV ? Math.max(0, bodyH) * 0 : 0)],
+      header: head ? [resolve(head.left), resolve(head.center), resolve(head.right)] : null,
+      footer: foot ? [resolve(foot.left), resolve(foot.center), resolve(foot.right)] : null,
     });
   }
   return pages;

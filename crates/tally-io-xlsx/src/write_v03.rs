@@ -726,6 +726,47 @@ pub(crate) fn write_protection(ws: &mut Worksheet, p: &SheetProtectionData) {
     ws.protect_with_options(&opts);
 }
 
+/// Excel's default header/footer margin (0.3"), 1/100 mm.
+const EXCEL_HF_MARGIN: u32 = 762;
+
+/// Excel's `(top, bottom, header, footer)` margins of a setup. Imported
+/// margins are written back as they were while the setup still matches
+/// them. Otherwise Excel's header margin is the header's distance from the
+/// page edge (Tally's top margin) and its top margin the body's (plus the
+/// printed header area, an empty one switched on included, so the body
+/// sits where Tally prints it); a page without a header keeps its top
+/// margin and Excel's 0.3" header margin (or less). Footers likewise.
+pub(crate) fn excel_margins(p: &PageSetupData) -> (u32, u32, u32, u32) {
+    if let Some(raw) = p.excel_margins {
+        let mut q = p.clone();
+        crate::sheet_v03::apply_excel_margins(&mut q, raw);
+        if q.margins == p.margins
+            && q.header_area == p.header_area
+            && q.footer_area == p.footer_area
+        {
+            return (raw.top, raw.bottom, raw.header, raw.footer);
+        }
+    }
+    let m = &p.margins;
+    let (top, header) = match p.header_shown() {
+        Some(h) => (
+            m.top
+                .saturating_add(p.header_area.printed_height(h, m.header)),
+            m.top,
+        ),
+        None => (m.top, m.top.min(EXCEL_HF_MARGIN)),
+    };
+    let (bottom, footer) = match p.footer_shown() {
+        Some(f) => (
+            m.bottom
+                .saturating_add(p.footer_area.printed_height(f, m.footer)),
+            m.bottom,
+        ),
+        None => (m.bottom, m.bottom.min(EXCEL_HF_MARGIN)),
+    };
+    (top, bottom, header, footer)
+}
+
 /// Model header/footer → Excel code string (`&L…&C…&R…`).
 pub(crate) fn hf_to_excel(h: &HeaderFooterData) -> String {
     let conv = |s: &str| {
@@ -811,14 +852,15 @@ fn write_setup(
         report.warn("a custom paper size was written as the default paper".into());
     }
     let inch = |hmm: u32| f64::from(hmm) / 2540.0;
+    let (top, bottom, header, footer) = excel_margins(p);
     let m = &p.margins;
     ws.set_margins(
         inch(m.left),
         inch(m.right),
-        inch(m.top),
-        inch(m.bottom),
-        inch(m.header),
-        inch(m.footer),
+        inch(top),
+        inch(bottom),
+        inch(header),
+        inch(footer),
     );
     match p.scale {
         PageScaleData::Percent(n) => {
@@ -847,10 +889,11 @@ fn write_setup(
     if let Some((a, b)) = p.repeat_cols {
         ws.set_repeat_columns(col16(a), col16(b))?;
     }
-    if let Some(h) = p.header.as_ref().filter(|h| !h.is_empty()) {
+    // Excel has no "header off": a header switched off is not written.
+    if let Some(h) = p.header_shown().filter(|h| !h.is_empty()) {
         ws.set_header(hf_to_excel(h));
     }
-    if let Some(h) = p.footer.as_ref().filter(|h| !h.is_empty()) {
+    if let Some(h) = p.footer_shown().filter(|h| !h.is_empty()) {
         ws.set_footer(hf_to_excel(h));
     }
     ws.set_print_gridlines(p.print_gridlines);

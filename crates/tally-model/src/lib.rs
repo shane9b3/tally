@@ -898,9 +898,13 @@ pub struct MarginsData {
     pub left: u32,
     /// Right.
     pub right: u32,
-    /// Header (distance of the header from the top edge).
+    /// Header height: the (minimum, with [`HfAreaData::autofit`]) height
+    /// of the header area from `top` down, its spacing towards the body
+    /// included (AOO's page item and ODS `fo:min-height` / `svg:height` as
+    /// AOO writes them; the dialog's "Height" is this minus the spacing).
     pub header: u32,
-    /// Footer.
+    /// Footer height, the footer area ending at `bottom` (likewise, its
+    /// spacing at its top).
     pub footer: u32,
 }
 
@@ -930,10 +934,79 @@ pub struct HeaderFooterData {
     pub right: String,
 }
 
+/// Height of one printed header/footer line, 1/100 mm: 10 pt text at 1.4
+/// line spacing (14 pt).
+pub const HF_LINE_HMM: u32 = 494;
+/// Most lines of one header/footer region that are laid out.
+pub const HF_MAX_LINES: u32 = 50;
+
 impl HeaderFooterData {
     /// `true` if all regions are empty.
     pub fn is_empty(&self) -> bool {
         self.left.is_empty() && self.center.is_empty() && self.right.is_empty()
+    }
+
+    /// Printed lines: the most of the three regions (at least one, at most
+    /// [`HF_MAX_LINES`]).
+    pub fn lines(&self) -> u32 {
+        [&self.left, &self.center, &self.right]
+            .iter()
+            .map(|t| u32::try_from(t.split('\n').count()).unwrap_or(u32::MAX))
+            .max()
+            .unwrap_or(1)
+            .clamp(1, HF_MAX_LINES)
+    }
+}
+
+/// The layout of a header or footer area (AOO Format ▸ Page ▸ Header /
+/// Footer). Its height, spacing included, is [`MarginsData::header`] /
+/// [`MarginsData::footer`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HfAreaData {
+    /// "Header on" / "Footer on": printed and given room on the page. Off
+    /// keeps the texts (ODS `style:display="false"`).
+    pub on: bool,
+    /// Spacing between the text and the body, part of the area's height
+    /// (ODS `fo:margin-bottom` of a header, `fo:margin-top` of a footer),
+    /// 1/100 mm.
+    pub spacing: u32,
+    /// AutoFit height: the area grows to fit its text (ODS `fo:min-height`
+    /// rather than `svg:height`; AOO's default).
+    pub autofit: bool,
+    /// Left margin of the area inside the page margins, 1/100 mm.
+    pub left: u32,
+    /// Right margin of the area inside the page margins, 1/100 mm.
+    pub right: u32,
+}
+
+impl HfAreaData {
+    /// The printed height, spacing included, of an area set to `height`
+    /// holding `text`: grown to its lines plus the spacing with AutoFit
+    /// height (AOO `ScPrintFunc::UpdateHFHeight`).
+    pub fn printed_height(&self, text: &HeaderFooterData, height: u32) -> u32 {
+        if self.autofit {
+            height.max(
+                text.lines()
+                    .saturating_mul(HF_LINE_HMM)
+                    .saturating_add(self.spacing),
+            )
+        } else {
+            height
+        }
+    }
+}
+
+impl Default for HfAreaData {
+    /// AOO's defaults: on, 0.25 cm spacing, AutoFit, no extra margins.
+    fn default() -> Self {
+        Self {
+            on: true,
+            spacing: 250,
+            autofit: true,
+            left: 0,
+            right: 0,
+        }
     }
 }
 
@@ -992,6 +1065,31 @@ pub struct PageSetupData {
     /// Print formulas instead of results (v0.4).
     #[serde(default)]
     pub print_formulas: bool,
+    /// Header area layout and "Header on" (absent in older documents:
+    /// on, AOO defaults).
+    #[serde(default)]
+    pub header_area: HfAreaData,
+    /// Footer area layout and "Footer on".
+    #[serde(default)]
+    pub footer_area: HfAreaData,
+    /// Excel's margins as an XLSX file had them (`header`/`footer` = the
+    /// distances of header and footer from the page edge). Written back
+    /// unchanged while the margins and areas are still the ones derived
+    /// from them, so an untouched sheet round-trips exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excel_margins: Option<MarginsData>,
+}
+
+impl PageSetupData {
+    /// The header when it is printed (set and switched on).
+    pub fn header_shown(&self) -> Option<&HeaderFooterData> {
+        self.header.as_ref().filter(|_| self.header_area.on)
+    }
+
+    /// The footer when it is printed (set and switched on).
+    pub fn footer_shown(&self) -> Option<&HeaderFooterData> {
+        self.footer.as_ref().filter(|_| self.footer_area.on)
+    }
 }
 
 fn default_true() -> bool {
@@ -1026,6 +1124,9 @@ impl Default for PageSetupData {
             print_notes: NotesPrintData::None,
             print_zero_values: true,
             print_formulas: false,
+            header_area: HfAreaData::default(),
+            footer_area: HfAreaData::default(),
+            excel_margins: None,
         }
     }
 }

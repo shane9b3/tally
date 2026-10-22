@@ -578,7 +578,12 @@ pub fn apply(
             // Page setup is formatting: allowed on a protected sheet only
             // when the protection permits formatting (LOW-9).
             check_sheet_action(wb, *sheet, |p| p.format_cells)?;
-            let p = crate::pagesetup::from_api(setup)?;
+            let mut p = crate::pagesetup::from_api(setup)?;
+            // Keep the XLSX margins (the export writes them only while the
+            // setup still matches them).
+            p.excel_margins = wb
+                .sheet(*sheet)
+                .and_then(|s| s.meta.page_setup.excel_margins);
             let breaks =
                 |v: &[u32], limit: u32| -> Result<std::collections::BTreeSet<u32>, ApiError> {
                     if v.len() > 10_000 {

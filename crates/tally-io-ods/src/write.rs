@@ -261,6 +261,7 @@ fn page_style_key(p: &tally_model::PageSetupData) -> tally_model::PageSetupData 
         print_range: None,
         repeat_rows: None,
         repeat_cols: None,
+        excel_margins: None,
         ..p.clone()
     }
 }

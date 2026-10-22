@@ -346,7 +346,14 @@ fn protection_page_setup_and_properties_round_trip() {
     let back = round_trip(&wb);
     let s = &back.sheets[0];
     assert_eq!(s.protection, wb.sheets[0].protection);
-    assert_eq!(s.page_setup, wb.sheets[0].page_setup);
+    // XLSX keeps Excel's margins for an exact write-back and reads the
+    // header/footer areas at a fixed height (Excel's gap does not grow).
+    let mut got = s.page_setup.clone().unwrap();
+    assert!(got.excel_margins.take().is_some());
+    assert!(!got.header_area.autofit && !got.footer_area.autofit);
+    got.header_area.autofit = true;
+    got.footer_area.autofit = true;
+    assert_eq!(Some(got), wb.sheets[0].page_setup);
     assert_eq!(s.row_breaks, vec![20, 40]);
     assert_eq!(s.col_breaks, vec![5]);
     assert_eq!(

@@ -29,6 +29,7 @@ import type {
 } from "@tally/bridge";
 import { parseA1Range } from "./a1";
 import { a1 } from "./dataOps";
+import { COL_HEADER_H_MM, pageBoxes, ROW_HEADER_W_MM } from "./print/hfLayout";
 
 // ---------------------------------------------------------------------------
 // Links
@@ -597,20 +598,36 @@ export function autoPageBreaks(
 ): { rows: number[]; cols: number[] } {
   const [wMm, hMm] = paperMm(setup);
   const m = setup.margins;
-  const availW = Math.max(10, (wMm - m.leftMm - m.rightMm) * PX_PER_MM);
-  const availH = Math.max(10, (hMm - m.topMm - m.bottomMm) * PX_PER_MM);
-  const pack = (start: number, end: number, runs: readonly DimRunPx[], dflt: number, avail: number, manual: readonly number[], fit: number | null): number[] => {
+  // As the engine's `print::body_of`: printed row/column headers and the
+  // header and footer areas take their room from the body.
+  const rowHeader = setup.printHeaders ? ROW_HEADER_W_MM : 0;
+  const colHeader = setup.printHeaders ? COL_HEADER_H_MM : 0;
+  const availW = Math.max(10, (wMm - m.leftMm - m.rightMm - rowHeader) * PX_PER_MM);
+  const availH = Math.max(10, (pageBoxes(setup, [wMm, hMm]).bodyHeight - colHeader) * PX_PER_MM);
+  const spanSize = (span: readonly [number, number] | null, runs: readonly DimRunPx[], dflt: number): number => {
+    if (!span) return 0;
+    let size = 0;
+    for (let i = span[0]; i <= span[1] && i - span[0] < 200_000; i++) size += sizeAt(runs, i, dflt);
+    return size;
+  };
+  const pack = (start: number, end: number, runs: readonly DimRunPx[], dflt: number, avail: number, manual: readonly number[], fit: number | null, repeat: readonly [number, number] | null): number[] => {
     let total = 0;
     if (fit !== null) for (let i = start; i <= end && i - start < 200_000; i++) total += sizeAt(runs, i, dflt);
     const page = fit !== null && fit > 0 ? Math.max(avail, total / fit) : avail;
+    // Repeated rows/columns take their room on every page that starts
+    // after them, when its first item still fits below them (engine `bands`).
+    const repeatSize = spanSize(repeat, runs, dflt);
+    const roomFrom = (i: number) => (repeat && i > repeat[1] && repeatSize + sizeAt(runs, i, dflt) <= page ? page - repeatSize : page);
     const out: number[] = [];
     let used = 0;
+    let cur = roomFrom(start);
     const manualSet = new Set(manual);
     for (let i = start; i <= end && out.length < limit; i++) {
       const s = sizeAt(runs, i, dflt);
-      if (i > start && (manualSet.has(i) || (used + s > page && used > 0))) {
+      if (i > start && (manualSet.has(i) || (used + s > cur && used > 0))) {
         out.push(i);
         used = 0;
+        cur = roomFrom(i);
       }
       used += s;
     }
@@ -620,8 +637,8 @@ export function autoPageBreaks(
   const fitW = setup.scale.type === "fitTo" ? setup.scale.width : null;
   const fitH = setup.scale.type === "fitTo" ? setup.scale.height : null;
   return {
-    rows: pack(area.r0, area.r1, rows.runs, rows.dflt, availH / scale, setup.rowBreaks, fitH && fitH > 0 ? fitH : null),
-    cols: pack(area.c0, area.c1, cols.runs, cols.dflt, availW / scale, setup.colBreaks, fitW && fitW > 0 ? fitW : null),
+    rows: pack(area.r0, area.r1, rows.runs, rows.dflt, availH / scale, setup.rowBreaks, fitH && fitH > 0 ? fitH : null, setup.repeatRows),
+    cols: pack(area.c0, area.c1, cols.runs, cols.dflt, availW / scale, setup.colBreaks, fitW && fitW > 0 ? fitW : null, setup.repeatCols),
   };
 }
 

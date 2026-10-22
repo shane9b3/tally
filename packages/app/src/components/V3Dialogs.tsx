@@ -17,6 +17,7 @@ import type {
   DocPropertiesDto,
   GoalSeekResult,
   HeaderFooter,
+  HeaderFooterArea,
   PageSetupDto,
   ProtectionOptions,
   ValidationDto,
@@ -25,6 +26,8 @@ import type {
 import { drawCfIcon } from "@tally/grid";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cx, useController } from "../context";
+import { t } from "../i18n";
+import { HF_LINE_MM, hfArea, hfAreaHeightMm, pageBoxes, type HfWhich } from "../print/hfLayout";
 import { rgbaToHex } from "../palette";
 import { useDocStore } from "../stores/docStore";
 import type { DialogState } from "../stores/uiStore";
@@ -1166,6 +1169,8 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
   const rc = parseSpan(repeatCols, "col");
   const err = pr === null && printRange.trim() !== "" ? "The print range is not a range (e.g. A1:G15)." : (pr?.length ?? 0) > 1 ? "Use one print range." : rr === undefined ? "Rows to repeat look like 1:2." : rc === undefined ? "Columns to repeat look like A:B." : null;
   const [w, h] = paperMm(s);
+  // The engine cuts oversized areas down to keep a 10 mm body; say so instead.
+  const hfFits = pageBoxes(s, [w, h]).fits;
   const scaleOk = s.scale.type === "percent" ? s.scale.percent >= 10 && s.scale.percent <= 400 : s.scale.type === "fitTo" ? s.scale.width >= 0 && s.scale.height >= 0 : s.scale.pages >= 1;
   const sheetName = ctl.sheetName();
   const fileName = useDocStore((st) => st.info?.title ?? "Untitled");
@@ -1185,7 +1190,7 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
       wide
       cardClass={cx(v3.xwide, v3.xxwide)}
       testId="page-setup-dialog"
-      valid={err === null && scaleOk}
+      valid={err === null && scaleOk && hfFits}
       onSubmit={() =>
         void ctl.v3.savePageSetup({
           ...s,
@@ -1277,8 +1282,6 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
                   ["bottomMm", "Bottom"],
                   ["leftMm", "Left"],
                   ["rightMm", "Right"],
-                  ["headerMm", "Header"],
-                  ["footerMm", "Footer"],
                 ] as const
               ).map(([key, label]) => (
                 <Field key={key} label={`${label} (mm)`}>
@@ -1291,8 +1294,8 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
           ) : null}
           {tab === "hf" ? (
             <>
-              <HeaderFooterEditor label="Header" value={s.header} onChange={(hf) => set({ header: hf })} ctx={{ sheet: sheetName, file: fileName }} testId="header" />
-              <HeaderFooterEditor label="Footer" value={s.footer} onChange={(hf) => set({ footer: hf })} ctx={{ sheet: sheetName, file: fileName }} testId="footer" />
+              <HeaderFooterSection which="header" setup={s} onChange={set} ctx={{ sheet: sheetName, file: fileName }} />
+              <HeaderFooterSection which="footer" setup={s} onChange={set} ctx={{ sheet: sheetName, file: fileName }} />
             </>
           ) : null}
           {tab === "sheet" ? (
@@ -1333,49 +1336,56 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
             </>
           ) : null}
           {err ? <p className={styles.error}>{err}</p> : null}
+          {!hfFits ? (
+            <p className={styles.error} data-testid="page-hf-too-tall">
+              {t("print.hfTooTall", "The header and footer do not fit on the page with these margins. Reduce their height or spacing, or the page margins.")}
+            </p>
+          ) : null}
         </div>
-        <PagePreview setup={s} size={preview} header={s.header} footer={s.footer} ctx={{ sheet: sheetName, file: fileName }} />
+        <PagePreview setup={s} size={preview} ctx={{ sheet: sheetName, file: fileName }} />
       </div>
     </Shell>
   );
 }
 
-function PagePreview({ setup, size, header, footer, ctx }: { setup: PageSetupDto; size: { w: number; h: number; scale: number }; header: HeaderFooter | null; footer: HeaderFooter | null; ctx: { sheet: string; file: string } }) {
+function PagePreview({ setup, size, ctx }: { setup: PageSetupDto; size: { w: number; h: number; scale: number }; ctx: { sheet: string; file: string } }) {
   const m = setup.margins;
   const k = size.scale;
-  const hf = (x: HeaderFooter | null) => (x ? [x.left, x.center, x.right].map((t) => previewHeaderFooter(t, ctx)) : null);
-  const head = hf(header);
-  const foot = hf(footer);
+  // The engine's layout (print::body_of): header and footer areas inside
+  // the margins, the body between them.
+  const boxes = pageBoxes(setup, [size.w / k, size.h / k]);
+  const lineH = HF_LINE_MM * k;
+  const area = (which: HfWhich) => {
+    const box = boxes[which];
+    const text = which === "header" ? setup.header : setup.footer;
+    if (!box || !text) return null;
+    return (
+      <div className={v3.hfArea} style={{ top: box.top * k, height: box.height * k, left: box.left * k, width: box.width * k, lineHeight: `${lineH}px`, fontSize: Math.max(3, lineH * 0.8) }} data-testid={`preview-${which}`}>
+        {[text.left, text.center, text.right].map((x, i) => (
+          <span key={i}>{previewHeaderFooter(x, ctx)}</span>
+        ))}
+      </div>
+    );
+  };
   return (
     <div className={v3.pagePreviewWrap} aria-label="Page preview">
       <div className={v3.paper} style={{ width: size.w, height: size.h }}>
-        {head ? (
-          <div className={v3.hfLine} style={{ top: Math.max(2, m.headerMm * k - 4), left: m.leftMm * k, right: m.rightMm * k }}>
-            {head.map((t, i) => (
-              <span key={i}>{t}</span>
-            ))}
-          </div>
-        ) : null}
+        {area("header")}
         <div
           className={cx(v3.printable, setup.printGridlines && v3.printGrid)}
           style={{
-            top: m.topMm * k,
-            bottom: m.bottomMm * k,
+            top: boxes.bodyTop * k,
+            height: boxes.bodyHeight * k,
             left: m.leftMm * k,
             right: m.rightMm * k,
             justifyContent: setup.centerH ? "center" : "flex-start",
             alignItems: setup.centerV ? "center" : "flex-start",
           }}
+          data-testid="preview-body"
         >
           <span className={v3.printBlock} />
         </div>
-        {foot ? (
-          <div className={v3.hfLine} style={{ bottom: Math.max(2, m.footerMm * k - 4), left: m.leftMm * k, right: m.rightMm * k }}>
-            {foot.map((t, i) => (
-              <span key={i}>{t}</span>
-            ))}
-          </div>
-        ) : null}
+        {area("footer")}
       </div>
       <div className={styles.note}>
         {setup.orientation === "landscape" ? "Landscape" : "Portrait"}, {setup.scale.type === "percent" ? `${setup.scale.percent} %` : setup.scale.type === "fitTo" ? `fit ${setup.scale.width || "any"} × ${setup.scale.height || "any"}` : `fit ${setup.scale.pages} pages`}
@@ -1384,13 +1394,89 @@ function PagePreview({ setup, size, header, footer, ctx }: { setup: PageSetupDto
   );
 }
 
-function HeaderFooterEditor({ label, value, onChange, ctx, testId }: { label: string; value: HeaderFooter | null; onChange: (hf: HeaderFooter | null) => void; ctx: { sheet: string; file: string }; testId: string }) {
+/** A length in mm, kept as typed while it parses to the same value. */
+function MmInput({ value, onChange, testId }: { value: number; onChange: (mm: number) => void; testId: string }) {
+  const fmt = (v: number) => String(Math.round(v * 100) / 100);
+  const [text, setText] = useState(fmt(value));
+  useEffect(() => {
+    setText((cur) => (cur.trim() !== "" && Math.round(Number(cur) * 100) === Math.round(value * 100) ? cur : fmt(value)));
+  }, [value]);
+  return (
+    <input
+      className={styles.input}
+      inputMode="decimal"
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        const n = Number(e.target.value);
+        if (e.target.value.trim() !== "" && Number.isFinite(n) && n >= 0 && n <= 200) onChange(n);
+      }}
+      data-testid={testId}
+    />
+  );
+}
+
+const EMPTY_HF: HeaderFooter = { left: "", center: "", right: "" };
+
+/**
+ * One tab half of AOO's Format ▸ Page ▸ Header / Footer: "Header on", the
+ * texts, Left margin, Right margin, Spacing, Height and AutoFit height. The
+ * Height shown is the area's without its spacing (as in AOO); the model's
+ * `margins.headerMm` holds both. Switched off, the texts are kept.
+ */
+function HeaderFooterSection({ which, setup, onChange, ctx }: { which: HfWhich; setup: PageSetupDto; onChange: (p: Partial<PageSetupDto>) => void; ctx: { sheet: string; file: string } }) {
+  const isHeader = which === "header";
+  const text = isHeader ? setup.header : setup.footer;
+  const area = hfArea(setup, which);
+  const on = area.on && text !== null;
+  const totalMm = isHeader ? setup.margins.headerMm : setup.margins.footerMm;
+  const heightMm = Math.max(0, totalMm - area.spacingMm);
+  const update = (patch: Partial<HeaderFooterArea>, newTotalMm?: number) => {
+    const next = { ...area, ...patch };
+    const p: Partial<PageSetupDto> = isHeader ? { headerArea: next } : { footerArea: next };
+    // "Header on" without a text: an empty header (it still takes its room).
+    if (next.on && text === null) Object.assign(p, isHeader ? { header: EMPTY_HF } : { footer: EMPTY_HF });
+    if (newTotalMm !== undefined) p.margins = { ...setup.margins, [isHeader ? "headerMm" : "footerMm"]: newTotalMm };
+    onChange(p);
+  };
+  return (
+    <div className={v3.section} data-testid={`${which}-section`}>
+      <div className={v3.sectionTitle}>{isHeader ? t("print.header", "Header") : t("print.footer", "Footer")}</div>
+      <Check label={isHeader ? t("print.headerOn", "Header on") : t("print.footerOn", "Footer on")} checked={on} onChange={(x) => update({ on: x })} testId={`${which}-on`} />
+      <fieldset className={v3.hfFields} disabled={!on} data-testid={`${which}-fields`}>
+        <HeaderFooterEditor value={text} onChange={(hf) => onChange(isHeader ? { header: hf } : { footer: hf })} ctx={ctx} testId={which} />
+        <div className={v3.grid4}>
+          <Field label={`${t("print.hfLeftMargin", "Left margin")} (mm)`}>
+            <MmInput value={area.leftMm} onChange={(v) => update({ leftMm: v })} testId={`${which}-left-margin`} />
+          </Field>
+          <Field label={`${t("print.hfRightMargin", "Right margin")} (mm)`}>
+            <MmInput value={area.rightMm} onChange={(v) => update({ rightMm: v })} testId={`${which}-right-margin`} />
+          </Field>
+          <Field label={`${t("print.hfSpacing", "Spacing")} (mm)`}>
+            <MmInput value={area.spacingMm} onChange={(v) => update({ spacingMm: v }, heightMm + v)} testId={`${which}-spacing`} />
+          </Field>
+          <Field label={`${t("print.hfHeight", "Height")} (mm)`}>
+            <MmInput value={heightMm} onChange={(v) => update({}, v + area.spacingMm)} testId={`${which}-height`} />
+          </Field>
+        </div>
+        <Check label={t("print.hfAutofit", "AutoFit height")} checked={area.autofit} onChange={(x) => update({ autofit: x })} testId={`${which}-autofit`} />
+      </fieldset>
+      {on && text && text.left === "" && text.center === "" && text.right === "" ? (
+        // AOO: an empty area that is on still takes its room.
+        <p className={styles.note} data-testid={`${which}-empty-note`}>
+          {t("print.hfEmptyRoom", "This area is empty but still takes {mm} mm of every page. Uncheck it to give the room to the cells.", { mm: Math.round(hfAreaHeightMm(text, totalMm, area) * 10) / 10 })}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function HeaderFooterEditor({ value, onChange, ctx, testId }: { value: HeaderFooter | null; onChange: (hf: HeaderFooter) => void; ctx: { sheet: string; file: string }; testId: string }) {
   const hf = value ?? { left: "", center: "", right: "" };
   const [focus, setFocus] = useState<keyof HeaderFooter>("center");
-  const refs = { left: useRef<HTMLInputElement>(null), center: useRef<HTMLInputElement>(null), right: useRef<HTMLInputElement>(null) };
+  const refs = { left: useRef<HTMLTextAreaElement>(null), center: useRef<HTMLTextAreaElement>(null), right: useRef<HTMLTextAreaElement>(null) };
   const update = (k: keyof HeaderFooter, text: string) => {
-    const next = { ...hf, [k]: text };
-    onChange(next.left === "" && next.center === "" && next.right === "" ? null : next);
+    onChange({ ...hf, [k]: text });
   };
   const insert = (token: string) => {
     const el = refs[focus].current;
@@ -1403,12 +1489,12 @@ function HeaderFooterEditor({ label, value, onChange, ctx, testId }: { label: st
     });
   };
   return (
-    <div className={v3.section}>
-      <div className={v3.sectionTitle}>{label}</div>
+    <>
       <div className={v3.grid3}>
         {(["left", "center", "right"] as const).map((k) => (
           <Field key={k} label={k === "left" ? "Left" : k === "center" ? "Centre" : "Right"}>
-            <input ref={refs[k]} className={cx(styles.input, styles.mono)} value={hf[k]} onFocus={() => setFocus(k)} onChange={(e) => update(k, e.target.value)} data-testid={`${testId}-${k}`} />
+            {/* A textarea: a region may hold several lines (an <input> would drop the line breaks). */}
+            <textarea ref={refs[k]} className={cx(styles.input, styles.mono, v3.hfText)} rows={2} value={hf[k]} onFocus={() => setFocus(k)} onChange={(e) => update(k, e.target.value)} data-testid={`${testId}-${k}`} />
           </Field>
         ))}
       </div>
@@ -1419,7 +1505,7 @@ function HeaderFooterEditor({ label, value, onChange, ctx, testId }: { label: st
           </button>
         ))}
       </div>
-      {value ? <p className={styles.note}>Preview: {[hf.left, hf.center, hf.right].map((t) => previewHeaderFooter(t, ctx) || "—").join("  ·  ")}</p> : null}
-    </div>
+      {value ? <p className={styles.note}>Preview: {[hf.left, hf.center, hf.right].map((x) => previewHeaderFooter(x, ctx) || "—").join("  ·  ")}</p> : null}
+    </>
   );
 }

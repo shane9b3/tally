@@ -5,12 +5,12 @@
 use std::collections::BTreeSet;
 
 use tally_api::{
-    ApiError, DocPropertiesDto, HeaderFooter, Margins, NotesPrint, Orientation, PageOrder,
-    PageScale, PageSetupDto, Paper, RangeDto,
+    ApiError, DocPropertiesDto, HeaderFooter, HeaderFooterArea, Margins, NotesPrint, Orientation,
+    PageOrder, PageScale, PageSetupDto, Paper, RangeDto,
 };
 use tally_model::{
-    CellRangeLocal, DocMeta, HeaderFooterData, MarginsData, NotesPrintData, OrientationData,
-    PageOrderData, PageScaleData, PageSetupData, PaperData,
+    CellRangeLocal, DocMeta, HeaderFooterData, HfAreaData, MarginsData, NotesPrintData,
+    OrientationData, PageOrderData, PageScaleData, PageSetupData, PaperData,
 };
 use tally_types::{MAX_COLS, MAX_ROWS};
 
@@ -52,6 +52,45 @@ fn hf_from_api(h: &HeaderFooter) -> Result<HeaderFooterData, ApiError> {
         center: h.center.clone(),
         right: h.right.clone(),
     })
+}
+
+fn area_to_api(a: &HfAreaData, set: bool) -> HeaderFooterArea {
+    HeaderFooterArea {
+        on: a.on && set,
+        spacing_mm: mm(a.spacing),
+        autofit: a.autofit,
+        left_mm: mm(a.left),
+        right_mm: mm(a.right),
+    }
+}
+
+fn area_from_api(a: &HeaderFooterArea) -> Result<HfAreaData, ApiError> {
+    Ok(HfAreaData {
+        on: a.on,
+        spacing: hmm(a.spacing_mm)?,
+        autofit: a.autofit,
+        left: hmm(a.left_mm)?,
+        right: hmm(a.right_mm)?,
+    })
+}
+
+/// A header or footer of an API setup with its area: an area switched on
+/// without texts gets an empty header (AOO: "Header on" with nothing in
+/// it still takes its room).
+fn hf_and_area(
+    hf: Option<&HeaderFooter>,
+    area: Option<&HeaderFooterArea>,
+) -> Result<(Option<HeaderFooterData>, HfAreaData), ApiError> {
+    let text = hf.map(hf_from_api).transpose()?;
+    let Some(a) = area else {
+        return Ok((text, HfAreaData::default()));
+    };
+    let a = area_from_api(a)?;
+    let text = match text {
+        None if a.on => Some(HeaderFooterData::default()),
+        t => t,
+    };
+    Ok((text, a))
 }
 
 /// The API view (with the sheet's manual breaks).
@@ -120,6 +159,8 @@ pub fn to_api(meta: &SheetMeta) -> PageSetupDto {
         }),
         print_zero_values: Some(p.print_zero_values),
         print_formulas: Some(p.print_formulas),
+        header_area: Some(area_to_api(&p.header_area, p.header.is_some())),
+        footer_area: Some(area_to_api(&p.footer_area, p.footer.is_some())),
     }
 }
 
@@ -189,6 +230,8 @@ pub fn from_api(d: &PageSetupDto) -> Result<PageSetupData, ApiError> {
         Some(_) => return Err(ApiError::invalid_argument("bad print range")),
     };
     let m = &d.margins;
+    let (header, header_area) = hf_and_area(d.header.as_ref(), d.header_area.as_ref())?;
+    let (footer, footer_area) = hf_and_area(d.footer.as_ref(), d.footer_area.as_ref())?;
     Ok(PageSetupData {
         orientation: match d.orientation {
             Orientation::Portrait => OrientationData::Portrait,
@@ -207,8 +250,8 @@ pub fn from_api(d: &PageSetupDto) -> Result<PageSetupData, ApiError> {
         print_range,
         repeat_rows: span(d.repeat_rows, MAX_ROWS)?,
         repeat_cols: span(d.repeat_cols, MAX_COLS)?,
-        header: d.header.as_ref().map(hf_from_api).transpose()?,
-        footer: d.footer.as_ref().map(hf_from_api).transpose()?,
+        header,
+        footer,
         print_gridlines: d.print_gridlines,
         print_headers: d.print_headers,
         center_h: d.center_h,
@@ -225,6 +268,9 @@ pub fn from_api(d: &PageSetupDto) -> Result<PageSetupData, ApiError> {
         },
         print_zero_values: d.print_zero_values.unwrap_or(true),
         print_formulas: d.print_formulas.unwrap_or(false),
+        header_area,
+        footer_area,
+        excel_margins: None,
     })
 }
 
