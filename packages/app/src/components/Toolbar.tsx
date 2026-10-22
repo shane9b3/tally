@@ -5,7 +5,7 @@ import { cx, useController } from "../context";
 import { useDocStore } from "../stores/docStore";
 import { useEditStore } from "../stores/editStore";
 import { useUiStore } from "../stores/uiStore";
-import { ChartIcon, FilterIcon, GlanceIcon, MoonIcon, RedoIcon, SidebarIcon, SortIcon, UndoIcon } from "./icons";
+import { ChartIcon, FilterIcon, GlanceIcon, MoonIcon, RedoIcon, SaveIcon, SidebarIcon, SortIcon, UndoIcon } from "./icons";
 import { Popover } from "./Popover";
 import { t } from "../i18n";
 import { useW56Store } from "../data/store";
@@ -88,6 +88,8 @@ export function Toolbar({ inset }: { inset: boolean }) {
         </div>
       </div>
       <nav className={styles.pills} aria-label="Toolbar">
+        <Pill command="file.save" label={t("cmd.file.save", "Save")} icon={<SaveIcon />} />
+        <span className={styles.sep} />
         <Pill command="edit.undo" label={t("cmd.edit.undo", "Undo")} icon={<UndoIcon />} />
         <Pill command="edit.redo" label={t("cmd.edit.redo", "Redo")} icon={<RedoIcon />} iconOnly />
         <span className={styles.sep} />

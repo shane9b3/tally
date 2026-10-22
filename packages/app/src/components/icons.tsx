@@ -18,6 +18,14 @@ function Svg(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export const SaveIcon = () => (
+  <Svg>
+    <path d="M3 2.5h8l2.5 2.5v8a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5Z" />
+    <path d="M5 2.5v3h5v-3" />
+    <path d="M5 13.5V9.5h6v4" />
+  </Svg>
+);
+
 export const UndoIcon = () => (
   <Svg>
     <path d="M5.5 4 2.5 7l3 3" />
