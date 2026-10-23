@@ -503,6 +503,43 @@ mod tests {
         assert_eq!(bad, "of:=SUM(Table1[Col])");
     }
 
+    /// Excel reads a space before `(` after a name as intersection, never
+    /// as a call: `MyRange (A1:B2)` imports as an intersection, and import
+    /// then export is a fixed point. (The model text brackets the name,
+    /// `(MyRange)!`, so the first export does too.)
+    #[test]
+    fn name_space_paren_is_intersection() {
+        let r = r();
+        for (x, of, out) in [
+            (
+                "MyRange (A1:B2)",
+                "of:=(MyRange)!([.A1:.B2])",
+                "(MyRange) (A1:B2)",
+            ),
+            ("SUM(A1)", "of:=SUM([.A1])", "SUM(A1)"),
+            ("SUM (A1)", "of:=(SUM)!([.A1])", "(SUM) (A1)"),
+            (
+                "SUM(MyRange (A1:B2))",
+                "of:=SUM((MyRange)!([.A1:.B2]))",
+                "SUM((MyRange) (A1:B2))",
+            ),
+        ] {
+            let (got, ok) = excel_to_of(x, at("C3"), &r);
+            assert!(ok, "{x}");
+            assert_eq!(got, of, "{x}");
+            let back = of_to_excel(&got, at("C3"), &r);
+            assert_eq!(back.as_deref(), Some(out), "{x}");
+            let (again, ok) = excel_to_of(out, at("C3"), &r);
+            assert!(ok, "{out}");
+            assert_eq!(again, got, "{x}");
+            assert_eq!(
+                of_to_excel(&again, at("C3"), &r).as_deref(),
+                Some(out),
+                "{x}"
+            );
+        }
+    }
+
     #[test]
     fn names() {
         let r = r();

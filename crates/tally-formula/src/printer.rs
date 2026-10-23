@@ -7,7 +7,8 @@
 //!
 //! [`Dialect::ExcelA1`] output is what Excel stores in OOXML cells (without
 //! the leading `=` there): `SUM(Sheet1!A1:B2,'My Sheet'!C1)`, arrays
-//! `{1,2;3,4}`, intersection as a space, union as `(A1,B1)`, 3D areas as
+//! `{1,2;3,4}`, intersection as a space (operands that would re-read
+//! differently in brackets: `(Name) (A1)`), union as `(A1,B1)`, 3D areas as
 //! `Sheet1:Sheet3!A1:B2`, no `$` before sheet names, and error literals
 //! Excel does not know (`Err:502`) as `#VALUE!`.
 
@@ -87,6 +88,28 @@ fn last_operand(mut e: &Expr) -> &Expr {
         e = r;
     }
     e
+}
+
+/// The operand printed first in `e`: follows left operands of binary
+/// operators and the operand of `%` (conservatively, as `last_operand`).
+/// An ExcelA1 union prints in parentheses, so it is its own first operand.
+fn first_operand(mut e: &Expr) -> &Expr {
+    loop {
+        e = match e {
+            Expr::Binary(BinOp::Union, _, _) => return e,
+            Expr::Binary(op, l, _) if l.precedence() >= op.precedence() => l,
+            Expr::Postfix(_, x) if x.precedence() >= POSTFIX_PRECEDENCE => x,
+            _ => return e,
+        };
+    }
+}
+
+/// A constant operand: a number, string, boolean or inline array.
+fn is_constant(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::Num(_) | Expr::Str(_) | Expr::Bool(_) | Expr::ArrayLit(_)
+    )
 }
 
 /// Schedules `e` for printing, wrapped in parentheses when `parens`.
@@ -284,19 +307,20 @@ impl Printer<'_> {
                     // `W`, whole columns, whole rows, the area `A1:B2`); the
                     // right operand then gets parentheses. (A bare `A1:B2`
                     // is already an area.)
-                    let guard_range = *op == BinOp::Range
-                        && !matches!(
-                            (l.as_ref(), r.as_ref()),
-                            (Expr::Ref(RefExpr::Cell(_)), Expr::Ref(RefExpr::Cell(_)))
-                        )
-                        && self.range_merges(last_operand(l), r);
-                    push_child(&mut stack, r, r.precedence() <= p || guard_range);
+                    let guard_range = *op == BinOp::Range && self.guard_range(l, r);
+                    // ExcelA1 intersection is a space: see `excel_isect_parens`.
+                    let (wrap_l, wrap_r) = if excel && *op == BinOp::Intersect {
+                        self.excel_isect_parens(l, r)
+                    } else {
+                        (l.precedence() < p, r.precedence() <= p)
+                    };
+                    push_child(&mut stack, r, wrap_r || guard_range);
                     stack.push(Work::Str(if excel && *op == BinOp::Intersect {
                         " "
                     } else {
                         op.symbol()
                     }));
-                    push_child(&mut stack, l, l.precedence() < p || guard_bang);
+                    push_child(&mut stack, l, wrap_l || guard_bang);
                 }
                 Expr::Postfix(PostfixOp::Percent, x) => {
                     stack.push(Work::Char('%'));
@@ -310,6 +334,65 @@ impl Printer<'_> {
                 Expr::Missing => {}
             }
         }
+    }
+
+    /// Whether the right operand of `l:r` needs parentheses because it would
+    /// merge with the left one into one reference token (`a:a`, `g:W.rq`).
+    /// (A bare `A1:B2` is already an area.)
+    fn guard_range(&self, l: &Expr, r: &Expr) -> bool {
+        !matches!(
+            (l, r),
+            (Expr::Ref(RefExpr::Cell(_)), Expr::Ref(RefExpr::Cell(_)))
+        ) && self.range_merges(last_operand(l), r)
+    }
+
+    /// ExcelA1: which operands of the intersection `l r` (written with a
+    /// space) need parentheses, as `(left, right)`.
+    ///
+    /// Besides precedence: a constant operand (`1`, `"x"`, `TRUE`, `{1}`)
+    /// is bracketed, since Excel intersects references only and a space
+    /// before a number or string does not read as the operator. A left
+    /// operand would also be bracketed if it plus ` (` lexed as a function
+    /// call; the ExcelA1 lexer, like Excel, reads `Name (A1)` as an
+    /// intersection, so this is only a guard that the real lexer decides.
+    fn excel_isect_parens(&self, l: &Expr, r: &Expr) -> (bool, bool) {
+        let p = BinOp::Intersect.precedence();
+        let first = first_operand(r);
+        let wrap_r = r.precedence() <= p || is_constant(first);
+        let r_paren = wrap_r || matches!(first, Expr::Paren(_) | Expr::Binary(BinOp::Union, _, _));
+        let last = self.excel_last_operand(l);
+        let wrap_l =
+            l.precedence() < p || is_constant(last) || (r_paren && self.lexes_as_call(last));
+        (wrap_l, wrap_r)
+    }
+
+    /// ExcelA1: the operand printed last in `e` without parentheses after
+    /// it, or the expression whose printed form ends in `)`.
+    fn excel_last_operand<'e>(&self, mut e: &'e Expr) -> &'e Expr {
+        loop {
+            let next = match e {
+                Expr::Binary(BinOp::Range, l, r)
+                    if r.precedence() > BinOp::Range.precedence() && !self.guard_range(l, r) =>
+                {
+                    r
+                }
+                Expr::Binary(BinOp::Intersect, l, r) if !self.excel_isect_parens(l, r).1 => r,
+                _ => return e,
+            };
+            e = next;
+        }
+    }
+
+    /// Whether the leaf `e` followed by ` (` lexes as a function call in
+    /// the target dialect.
+    fn lexes_as_call(&self, e: &Expr) -> bool {
+        let Some(t) = self.leaf_text(e) else {
+            return false;
+        };
+        lex(&format!("{t} ("), self.dialect)
+            .0
+            .iter()
+            .any(|t| t.kind == TokenKind::Func)
     }
 
     /// The text of a leaf operand as printed, or `None` for anything that

@@ -5,7 +5,7 @@
 mod common;
 use common::*;
 use proptest::prelude::*;
-use tally_formula::{parse, print, tokenize, BinOp, Dialect, Expr, NameRef};
+use tally_formula::{parse, print, tokenize, BinOp, Dialect, Expr, NameRef, RefExpr, SheetRef};
 
 fn check(src: &str) {
     let r = resolver();
@@ -33,6 +33,15 @@ fn check(src: &str) {
                     "{src:?} -> {printed:?}"
                 );
                 assert_eq!(print(&g, a1("C3"), calc(), &r), printed, "{src:?}");
+                check_excel(src, &f);
+            } else {
+                // OpenFormula names such as `a1` print as Excel cells; the
+                // output must still parse.
+                let x = print(&f, a1("C3"), Dialect::excel_a1(), &r);
+                assert!(
+                    parse(&x, a1("C3"), Dialect::excel_a1(), &r).is_ok(),
+                    "{src:?} -> {x:?}"
+                );
             }
             let of = print(&f, a1("C3"), Dialect::open_formula(), &r);
             assert!(
@@ -40,6 +49,49 @@ fn check(src: &str) {
                 "{src:?} -> {of:?}"
             );
         }
+    }
+    let of_prefix = src.starts_with("of:=") || src.starts_with("oooc:=");
+    if let Some(f) = parse(src, a1("C3"), Dialect::excel_a1(), &r)
+        .ok()
+        .filter(|_| !of_prefix)
+    {
+        check_excel(src, &f);
+    }
+}
+
+/// ExcelA1 print-and-reparse: the printed text re-reads in ExcelA1 as the
+/// same tree (modulo parentheses), and printing it again is a fixed point.
+fn check_excel(src: &str, f: &tally_formula::Formula) {
+    let r = resolver();
+    let excel = Dialect::excel_a1();
+    let printed = print(f, a1("C3"), excel, &r);
+    let g = parse(&printed, a1("C3"), excel, &r)
+        .unwrap_or_else(|e| panic!("{src:?} -> {printed:?}: {e}"));
+    if lossy_in_excel(&f.expr) {
+        return;
+    }
+    assert_eq!(
+        strip_parens(&g.expr),
+        strip_parens(&f.expr),
+        "{src:?} -> {printed:?}"
+    );
+    assert_eq!(print(&g, a1("C3"), excel, &r), printed, "{src:?}");
+}
+
+/// Whether `e` holds something Excel cannot spell, which prints as an
+/// error: an area from the formula's own sheet to another (`A1:Sheet2.B2`)
+/// or an OOo-only error code (`Err:502`).
+fn lossy_in_excel(e: &Expr) -> bool {
+    match e {
+        Expr::Ref(RefExpr::Area(a, b)) => {
+            a.sheet == SheetRef::Current && b.sheet != SheetRef::Current
+        }
+        Expr::Err(k) => !k.display().starts_with('#'),
+        Expr::ArrayLit(a) => a.items.iter().any(lossy_in_excel),
+        Expr::Paren(x) | Expr::Unary(_, x) | Expr::Postfix(_, x) => lossy_in_excel(x),
+        Expr::Binary(_, l, r) => lossy_in_excel(l) || lossy_in_excel(r),
+        Expr::Call { args, .. } => args.iter().any(lossy_in_excel),
+        _ => false,
     }
 }
 
@@ -68,6 +120,12 @@ const REGRESSIONS: &[&str] = &[
     "a:A1: A1:TRUE.",
     "A1: B2:C3",
     "x:A1: B2:C3",
+    // ExcelA1 (intersection printed as a space).
+    "a!(0)",
+    "a!b!(0)",
+    "a!1",
+    "(TRUE)!A1",
+    "A1!\"x\"",
 ];
 
 #[test]
@@ -116,6 +174,49 @@ fn round_trip_regression_output() {
     }
 }
 
+/// ExcelA1 writes intersection as a space. Pinned outputs for operands that
+/// would re-read differently: constants, which a space does not intersect.
+/// A space before `(` after a name is intersection, as in Excel
+/// (`=a!(0)` used to print `=A (0)`, which re-read as the call `A(0)`).
+#[test]
+fn excel_intersection_output() {
+    let r = resolver();
+    let excel = Dialect::excel_a1();
+    for (src, d, want) in [
+        ("=a!(0)", calc(), "=a (0)"),
+        ("=a!b!(0)", calc(), "=a b (0)"),
+        ("=MyRange!(A1)", calc(), "=MyRange (A1)"),
+        ("=a!(B1~C1)", calc(), "=a (B1,C1)"),
+        ("=(TRUE)!A1", calc(), "=(TRUE) A1"),
+        ("=a!1", calc(), "=a (1)"),
+        ("=A1!1", calc(), "=A1 (1)"),
+        ("=A1!\"x\"", calc(), "=A1 (\"x\")"),
+        ("=A1!{1}", calc(), "=A1 ({1})"),
+        ("=(1)!A1", calc(), "=(1) A1"),
+        ("=A:a !1", calc(), "=A:A (1)"),
+        ("=1!A1:B2", calc(), "=(1) A1:B2"),
+        // Unambiguous: no parentheses added.
+        ("=A1!(B1)", calc(), "=A1 (B1)"),
+        ("=A:A!(B1)", calc(), "=A:A (B1)"),
+        ("=SUM(A1)!(B1)", calc(), "=SUM(A1) (B1)"),
+        ("=a B1", excel, "=a B1"),
+        ("=A1:B2 B1:C3", excel, "=A1:B2 B1:C3"),
+        ("=(A) (0)", excel, "=(A) (0)"),
+        ("=#REF! A1", excel, "=#REF! A1"),
+        // As Excel does, a space before `(` after a name is intersection.
+        ("=A (0)", excel, "=A (0)"),
+        ("=SUM (A1)", excel, "=SUM (A1)"),
+        ("=SUM(A1)", excel, "=SUM(A1)"),
+    ] {
+        let f = parse(src, a1("C3"), d, &r).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let printed = print(&f, a1("C3"), excel, &r);
+        assert_eq!(printed, want, "{src}");
+        let g = parse(&printed, a1("C3"), excel, &r).unwrap_or_else(|e| panic!("{printed}: {e}"));
+        assert_eq!(strip_parens(&g.expr), strip_parens(&f.expr), "{src}");
+        assert_eq!(print(&g, a1("C3"), excel, &r), printed, "{src}");
+    }
+}
+
 /// `A:Sheet2.C` is no reference (a whole-column range cannot change
 /// sheets), so CalcA1 reads it as the names `A` and `Sheet2.C`, which
 /// evaluate to #NAME?, as AOO does; it used to be Err:501.
@@ -155,6 +256,14 @@ proptest! {
     /// spaces: the shapes where printing can merge tokens.
     #[test]
     fn reference_like_round_trips(s in "(([a-zA-Z_][a-zA-Z0-9_.]{0,4}|[0-9]{1,3}|\\$?[A-Z]{1,2}\\$?[0-9]?|TRUE|'[a-z ]{0,3}')[ ]?[:!~ .][ ]?){1,6}") {
+        check(&s);
+        check(&format!("={s}"));
+    }
+
+    /// The same shapes with brackets, calls, constants and unions: where an
+    /// ExcelA1 space (intersection) can merge with what follows it.
+    #[test]
+    fn excel_intersection_round_trips(s in "(([a-zA-Z_][a-zA-Z0-9_.]{0,4}|[0-9]{1,3}|\\$?[A-Z]{1,2}\\$?[0-9]?|TRUE|\"x\"|\\{1\\}|#REF!|[(]|[)]|SUM[(]|-|'[a-z ]{0,3}')[ ]?[:!~ ,.(%)]?[ ]?){1,8}") {
         check(&s);
         check(&format!("={s}"));
     }

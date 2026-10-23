@@ -297,7 +297,9 @@ fn excel_leniency_and_normalisation() {
         ("={1, 2; 3, 4}", "={1,2;3,4}"),
         ("={-1,+2,--3}", "={-1,2,3}"),
         ("=A1 :B2", "=A1:B2"),
-        ("=SUM (1)", "=SUM(1)"),
+        // As in Excel, a space before `(` is intersection, not a call.
+        ("=SUM (1)", "=SUM (1)"),
+        ("=MyRange (A1:B2)", "=MyRange (A1:B2)"),
         ("=_xlfn.IFS(A1>1,1,TRUE,0)", "=IFS(A1>1,1,TRUE,0)"),
         ("=_XLFN.IFS(1,2)", "=IFS(1,2)"),
         ("=_xlfn._xlws.SORT(A1:A3)", "=SORT(A1:A3)"),

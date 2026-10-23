@@ -27,7 +27,8 @@ pub enum TokenKind {
     String,
     /// A bare identifier: a named range, `TRUE`/`FALSE`, or an unknown word.
     Ident,
-    /// An identifier directly followed (whitespace allowed) by `(`.
+    /// An identifier directly followed by `(` (whitespace allowed between
+    /// them, except in ExcelA1, where a space there is intersection).
     Func,
     /// A single-cell CalcA1 reference: `A1`, `$Sheet1.$A$1`, `'My Sheet'!A1`.
     CellRef,
@@ -234,10 +235,10 @@ pub(crate) fn lex(src: &str, dialect: Dialect) -> (Vec<Token>, bool) {
             } else if let Some(q) = scan_excel_qualified(src, i) {
                 (q.kind, q.end)
             } else {
-                lex_one(src, b, i, c, of)
+                lex_one(src, b, i, c, of, true)
             }
         } else {
-            lex_one(src, b, i, c, of)
+            lex_one(src, b, i, c, of, false)
         };
         // Defensive: always make progress.
         let end = if end <= i { i + c.len_utf8() } else { end };
@@ -247,7 +248,10 @@ pub(crate) fn lex(src: &str, dialect: Dialect) -> (Vec<Token>, bool) {
     (out, of)
 }
 
-fn lex_one(src: &str, b: &[u8], i: usize, c: char, of: bool) -> (TokenKind, usize) {
+/// `excel`: ExcelA1 syntax, where an identifier is a function name only
+/// when `(` follows directly (`A (B1)` is the name `A` intersected with
+/// `(B1)`, as in Excel).
+fn lex_one(src: &str, b: &[u8], i: usize, c: char, of: bool, excel: bool) -> (TokenKind, usize) {
     if c.is_whitespace() {
         let mut j = i;
         while let Some(w) = char_at(src, j) {
@@ -313,7 +317,7 @@ fn lex_one(src: &str, b: &[u8], i: usize, c: char, of: bool) -> (TokenKind, usiz
             j += w.len_utf8();
         }
         let mut k = j;
-        while let Some(w) = char_at(src, k) {
+        while let Some(w) = char_at(src, k).filter(|_| !excel) {
             if !w.is_whitespace() {
                 break;
             }
