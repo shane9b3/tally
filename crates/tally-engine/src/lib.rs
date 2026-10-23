@@ -60,6 +60,7 @@ pub mod fonts;
 pub mod formula_cells;
 pub mod goalseek;
 pub mod images;
+pub mod lookup_cache;
 pub mod moves;
 pub mod names;
 pub mod navigator;

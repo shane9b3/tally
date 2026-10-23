@@ -23,6 +23,7 @@ pub mod coerce;
 mod context;
 pub mod criteria;
 mod eval;
+mod lookup_index;
 mod meta;
 #[cfg(any(test, feature = "test-support"))]
 pub mod mock;
@@ -34,6 +35,7 @@ pub use args::{check_arity, check_text_len, run, run_ref, sanitize, Args, MAX_TE
 pub use context::{ArgList, CellFormatInfo, EvalContext, EvalValue};
 pub use criteria::{CmpOp, Criterion};
 pub use eval::call_def;
+pub use lookup_index::LookupIndex;
 pub use meta::{function_meta, FunctionMeta, ParamMeta, LAST_USED_DEFAULT};
 pub use registry::{
     Category, EvalFn, FnFlags, FuncId, FunctionDef, NameConflict, Param, ParamKind, Registry,

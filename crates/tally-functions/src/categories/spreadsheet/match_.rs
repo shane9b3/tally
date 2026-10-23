@@ -2,7 +2,7 @@
 
 use tally_types::{ErrorKind, Value};
 
-use super::lookup::{make_key, search, Mode, Table};
+use super::lookup::{make_key, Mode, Table};
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
 use crate::{run, ArgList, Args, EvalContext, EvalValue};
 
@@ -37,9 +37,9 @@ fn match_fn(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         } else {
             Mode::Exact
         };
-        let items = table.line(a.ctx(), table.cols() == 1, 0);
+        let line = table.search_line(a.ctx(), table.cols() == 1, 0);
         let settings = a.ctx().settings().clone();
-        let pos = search(&items, &key, mode, &settings).ok_or(ErrorKind::NA)?;
+        let pos = line.search(&key, mode, &settings).ok_or(ErrorKind::NA)?;
         Ok(Value::Number(f64::from(pos) + 1.0))
     })
 }

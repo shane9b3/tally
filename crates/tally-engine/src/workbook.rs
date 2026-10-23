@@ -217,6 +217,9 @@ pub struct Workbook {
     /// `MULTIPLE.OPERATIONS` sandbox work in the current recalc (capped at
     /// `recalc::MAX_TABLE_OP_WORK`, security review 4, H3).
     pub table_op_work: u64,
+    /// Lookup indexes shared by exact-match lookups; `Some` only while a
+    /// recalc runs (see [`crate::lookup_cache`]).
+    pub(crate) lookup_cache: Option<crate::lookup_cache::LookupCache>,
 }
 
 impl Default for Workbook {
@@ -259,6 +262,7 @@ impl Workbook {
             external_links: Vec::new(),
             table_op_calls: 0,
             table_op_work: 0,
+            lookup_cache: None,
         }
     }
 

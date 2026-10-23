@@ -2,7 +2,7 @@
 
 use tally_types::{ErrorKind, Value};
 
-use super::lookup::{make_key, search, Mode, Table};
+use super::lookup::{make_key, Mode, Table};
 use crate::coerce::scalar_value;
 use crate::registry::{Category, FnFlags, FunctionDef, Param, ParamKind, Registry, ReturnKind};
 use crate::{run, run_ref, ArgList, Args, EvalContext, EvalValue};
@@ -70,9 +70,11 @@ fn lookup(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
             Some(Table::from_eval(a.any(2))?)
         };
         let wide = table.cols() > table.rows();
-        let items = table.line(a.ctx(), !wide, 0);
+        let line = table.search_line(a.ctx(), !wide, 0);
         let settings = a.ctx().settings().clone();
-        let pos = search(&items, &key, Mode::Ascending, &settings).ok_or(ErrorKind::NA)?;
+        let pos = line
+            .search(&key, Mode::Ascending, &settings)
+            .ok_or(ErrorKind::NA)?;
         let v = match results {
             Some(rt) => {
                 let (r, c) = if rt.rows() == 1 { (0, pos) } else { (pos, 0) };

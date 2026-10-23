@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use tally_types::{CalcSettings, CellAddr, CellRange, Matrix, SheetId, Value};
 
+use crate::LookupIndex;
+
 /// An argument as the evaluator hands it to a function.
 ///
 /// References stay unexpanded (`Range`) so functions can iterate them
@@ -232,6 +234,18 @@ pub trait EvalContext {
     fn filtered_row(&self, sheet: SheetId, row: u32) -> bool {
         let _ = (sheet, row);
         false
+    }
+
+    /// A shared index of the lookup line `line` (one column or one row of
+    /// a reference, unclamped) for exact-match VLOOKUP, HLOOKUP and MATCH;
+    /// its offsets are relative to the line's first cell. The engine keeps
+    /// one per line for the rest of a recalc pass, built from the values
+    /// [`EvalContext::for_each_in_range`] would visit, and only while
+    /// those values cannot change. `None` (the default) means "scan the
+    /// line": hosts without a cache stay correct.
+    fn lookup_index(&mut self, line: &CellRange) -> Option<Arc<LookupIndex>> {
+        let _ = line;
+        None
     }
 
     /// MULTIPLE.OPERATIONS (wave 5): the value of the formula cell

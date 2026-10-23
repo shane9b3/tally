@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use slotmap::SecondaryMap;
 use tally_formula::{Expr, ResolvedRef};
-use tally_functions::{CellFormatInfo, EvalContext};
+use tally_functions::{CellFormatInfo, EvalContext, LookupIndex};
 use tally_numfmt::date::now_serial;
 use tally_types::{
     CalcSettings, CellAddr, CellRange, ErrorKind, IterSettings, SheetId, Value, MAX_COLS, MAX_ROWS,
@@ -42,6 +42,7 @@ use tally_types::{
 use crate::deps::{coalesce, DepIndex};
 use crate::eval::{array_result, cell_result, eval_with, EvalEnv};
 use crate::formula_cells::{CellState, FormulaCellId};
+use crate::lookup_cache::{LookupCache, Request};
 use crate::storage::CellContent;
 use crate::workbook::Workbook;
 
@@ -134,6 +135,14 @@ pub fn recalc(wb: &mut Workbook) -> RecalcReport {
 
 /// [`recalc`] within `budget`.
 pub fn recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
+    // Lookup indexes live for this pass only (see `crate::lookup_cache`).
+    wb.lookup_cache = Some(LookupCache::default());
+    let report = recalc_pass(wb, budget);
+    wb.lookup_cache = None;
+    report
+}
+
+fn recalc_pass(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
     wb.table_op_calls = 0;
     wb.table_op_work = 0;
     let pending = std::mem::take(&mut wb.pending);
@@ -329,6 +338,8 @@ fn iterate_scc(
             break;
         }
         report.iteration_evaluations += n;
+        // Every round re-evaluates clean members: no index may outlive it.
+        clear_lookup_cache(wb);
         let before: Vec<Value> = members
             .iter()
             .map(|id| {
@@ -372,6 +383,7 @@ fn iterate_scc(
             break;
         }
     }
+    clear_lookup_cache(wb);
     if !converged {
         for id in members {
             if let Some(f) = wb.formulas.get_mut(*id) {
@@ -382,6 +394,24 @@ fn iterate_scc(
             }
         }
     }
+}
+
+/// Drops every lookup index of the running recalc.
+fn clear_lookup_cache(wb: &mut Workbook) {
+    if let Some(c) = wb.lookup_cache.as_mut() {
+        *c = LookupCache::default();
+    }
+}
+
+/// `true` if every formula cell inside `range` is clean.
+fn all_formulas_clean(wb: &Workbook, range: &CellRange) -> bool {
+    let mut found = Vec::new();
+    formulas_in(wb, range, &mut found);
+    found.iter().all(|id| {
+        wb.formulas
+            .get(*id)
+            .is_some_and(|f| f.state == CellState::Clean)
+    })
 }
 
 /// Every formula cell inside `range`.
@@ -1305,6 +1335,45 @@ impl EvalContext for CalcCtx<'_> {
         filters: &[(String, String)],
     ) -> Option<Value> {
         crate::pivot::pivot_data(&self.wb, at, field, filters, false)
+    }
+
+    /// The running recalc's index of `line` (see [`crate::lookup_cache`]):
+    /// built on the second request, once the line's formulas are all
+    /// clean; never while iterating a cyclic component or outside a recalc.
+    fn lookup_index(&mut self, line: &CellRange) -> Option<Arc<LookupIndex>> {
+        if self.iter_set.is_some() || self.wb.lookup_cache.is_none() {
+            return None;
+        }
+        let bounds = self.used_bounds(line)?;
+        let cells = bounds.cell_count();
+        if cells < LookupIndex::MIN_CELLS {
+            return None;
+        }
+        let cells = usize::try_from(cells).unwrap_or(usize::MAX);
+        match self.wb_mut()?.lookup_cache.as_mut()?.request(line, cells) {
+            Request::Hit(ix) => return Some(ix),
+            Request::Scan => return None,
+            Request::Build => {}
+        }
+        self.ensure_clean(&bounds);
+        if !all_formulas_clean(&self.wb, &bounds) {
+            // A cycle or a deferred precedent: values are not final yet.
+            self.wb_mut()?.lookup_cache.as_mut()?.not_clean(line);
+            return None;
+        }
+        let mut items = Vec::new();
+        let (r0, c0) = (line.r0, line.c0);
+        self.for_each_in_range(&bounds, true, &mut |a, v| {
+            // One of the two differences is 0: the line is one column or row.
+            items.push(((a.row - r0) + (a.col - c0), v.clone()));
+            ControlFlow::Continue(())
+        });
+        let ix = Arc::new(LookupIndex::build(items, self.wb.settings.case_sensitive));
+        self.wb_mut()?
+            .lookup_cache
+            .as_mut()?
+            .insert(*line, ix.clone());
+        Some(ix)
     }
 
     fn pivot_data_excel(

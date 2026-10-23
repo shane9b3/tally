@@ -9,16 +9,23 @@
 //! the last cell whose value is `<=` the lookup value, scanning down (or
 //! across) the sorted line and stopping at the first larger value of the
 //! same type; cells of the other type, empties and errors are skipped.
+//!
+//! When the host offers a [`LookupIndex`] for the searched line (the engine
+//! does during a recalc, see [`EvalContext::lookup_index`]), an exact
+//! search whose key compares by plain equality (a number, a boolean, or
+//! text that has no wildcard characters, with whole-cell matching and no
+//! regular expressions) is answered from the index; every other search
+//! scans the index's cached cells exactly as it would scan the line.
 
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use tally_types::{approx_equal, CalcSettings, CellRange, ErrorKind, Matrix, Value};
+use tally_types::{approx_equal, CalcSettings, CellRange, CriteriaMode, ErrorKind, Matrix, Value};
 
 use crate::coerce::{parse_unambiguous, scalar_value};
 use crate::criteria::Criterion;
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
-use crate::{run, ArgList, Args, EvalContext, EvalValue};
+use crate::{run, ArgList, Args, EvalContext, EvalValue, LookupIndex};
 
 /// A lookup table: a reference or an in-memory matrix.
 pub(super) enum Table {
@@ -68,6 +75,22 @@ impl Table {
         }
     }
 
+    /// The searchable line: the host's shared [`LookupIndex`] when it has
+    /// one for a reference, else the cells from [`Table::line`].
+    pub(super) fn search_line(&self, ctx: &mut dyn EvalContext, column: bool, index: u32) -> Line {
+        if let Table::Range(r) = self {
+            let line = if column {
+                CellRange::new(r.sheet, r.r0, r.c0 + index, r.r1, r.c0 + index)
+            } else {
+                CellRange::new(r.sheet, r.r0 + index, r.c0, r.r0 + index, r.c1)
+            };
+            if let Some(ix) = ctx.lookup_index(&line) {
+                return Line::Indexed(ix);
+            }
+        }
+        Line::Cells(self.line(ctx, column, index))
+    }
+
     /// The non-empty cells of one column (`column == true`, `index` is the
     /// column offset, items keyed by row offset) or one row, in order.
     pub(super) fn line(
@@ -113,6 +136,34 @@ impl Table {
             }
         }
         out
+    }
+}
+
+/// A line to search: its cells, or a shared index of them.
+pub(super) enum Line {
+    Cells(Vec<(u32, Value)>),
+    Indexed(Arc<LookupIndex>),
+}
+
+impl Line {
+    /// Finds the offset of the matching item: [`search`], answered from
+    /// the index when the search is an exact one by plain equality.
+    pub(super) fn search(&self, key: &Key, mode: Mode, settings: &CalcSettings) -> Option<u32> {
+        match self {
+            Line::Cells(items) => search(items, key, mode, settings),
+            Line::Indexed(ix) => {
+                if mode == Mode::Exact && ix.case_sensitive() == settings.case_sensitive {
+                    match key {
+                        Key::Num(k) => return ix.find_number(*k),
+                        Key::Text(s) if TextMatch::new(s, settings).is_equality(s, settings) => {
+                            return ix.find_text(s)
+                        }
+                        Key::Text(_) => {}
+                    }
+                }
+                search(ix.items(), key, mode, settings)
+            }
+        }
     }
 }
 
@@ -192,6 +243,29 @@ impl TextMatch {
         } else {
             // A leading "=" makes the rest literal text, whatever it starts with.
             TextMatch::Crit(Criterion::parse(&Value::text(format!("={s}")), settings))
+        }
+    }
+
+    /// `true` if this matcher (built from `s`) accepts exactly the text
+    /// cells equal to `s` under [`cmp_text`], so an index can answer it:
+    /// literal keys always; criterion keys only as plain text (not a
+    /// number in the criterion's spelling) under whole-cell matching,
+    /// without regular expressions, and without wildcard characters when
+    /// wildcards are on. Regular expressions always scan: their
+    /// case-insensitive matching folds characters differently from
+    /// lower-casing.
+    fn is_equality(&self, s: &str, settings: &CalcSettings) -> bool {
+        match self {
+            TextMatch::Literal(_) => true,
+            TextMatch::Crit(c) => {
+                !c.is_numeric()
+                    && settings.whole_cell_match
+                    && match settings.criteria_mode {
+                        CriteriaMode::Literal => true,
+                        CriteriaMode::Wildcards => !s.contains(['*', '?', '~']),
+                        CriteriaMode::Regex => false,
+                    }
+            }
         }
     }
 
@@ -285,10 +359,10 @@ fn lookup(ctx: &mut dyn EvalContext, args: &mut dyn ArgList, vertical: bool) -> 
             // AOO: illegal argument (Excel: #REF!, #VALUE! for index < 1).
             return Err(ErrorKind::InvalidArgument);
         }
-        let items = table.line(a.ctx(), vertical, 0);
+        let line = table.search_line(a.ctx(), vertical, 0);
         let mode = if sorted { Mode::Ascending } else { Mode::Exact };
         let settings = a.ctx().settings().clone();
-        let pos = search(&items, &key, mode, &settings).ok_or(ErrorKind::NA)?;
+        let pos = line.search(&key, mode, &settings).ok_or(ErrorKind::NA)?;
         let off = (index - 1) as u32;
         let v = if vertical {
             table.get(a.ctx(), pos, off)

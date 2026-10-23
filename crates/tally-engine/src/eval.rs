@@ -594,6 +594,12 @@ impl EvalContext for ArrayCtx<'_> {
     fn in_array_context(&self) -> bool {
         self.array
     }
+    fn lookup_index(
+        &mut self,
+        line: &CellRange,
+    ) -> Option<std::sync::Arc<tally_functions::LookupIndex>> {
+        self.inner.lookup_index(line)
+    }
     fn hidden_row(&self, sheet: SheetId, row: u32) -> bool {
         self.inner.hidden_row(sheet, row)
     }

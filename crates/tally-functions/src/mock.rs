@@ -87,6 +87,8 @@ pub struct MockEvalContext {
     pivot_hook: Hook<PivotDataFn>,
     table_op_hook: Hook<TableOpFn>,
     rng: u64,
+    /// Answer [`EvalContext::lookup_index`] (see [`MockEvalContext::set_lookup_index`]).
+    lookup_index: bool,
 }
 
 impl Default for MockEvalContext {
@@ -120,7 +122,16 @@ impl MockEvalContext {
             pivot_hook: Hook::default(),
             table_op_hook: Hook::default(),
             rng: 0x2545_F491_4F6C_DD1D,
+            lookup_index: false,
         }
+    }
+
+    /// With `on`, [`EvalContext::lookup_index`] builds a fresh
+    /// [`crate::LookupIndex`] for every line of any size (default off:
+    /// lookups scan), so tests can compare both paths.
+    pub fn set_lookup_index(&mut self, on: bool) -> &mut Self {
+        self.lookup_index = on;
+        self
     }
 
     /// Installs the pivot lookup behind [`EvalContext::pivot_data`]
@@ -351,6 +362,22 @@ impl EvalContext for MockEvalContext {
     fn table_op(&mut self, formula: CellAddr, subs: &[(CellAddr, Value)]) -> Option<Value> {
         self.table_op_calls.push((formula, subs.to_vec()));
         self.table_op_hook.0.as_ref().and_then(|f| f(formula, subs))
+    }
+
+    fn lookup_index(&mut self, line: &CellRange) -> Option<Arc<crate::LookupIndex>> {
+        if !self.lookup_index {
+            return None;
+        }
+        let mut items = Vec::new();
+        let (r0, c0) = (line.r0, line.c0);
+        self.for_each_in_range(line, true, &mut |a, v| {
+            items.push((a.row - r0 + a.col - c0, v.clone()));
+            ControlFlow::Continue(())
+        });
+        Some(Arc::new(crate::LookupIndex::build(
+            items,
+            self.settings.case_sensitive,
+        )))
     }
 }
 
