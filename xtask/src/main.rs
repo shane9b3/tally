@@ -12,6 +12,10 @@
 //!   JSON, `--doc` (re)writes `docs/functions/coverage.md`, and `--check`
 //!   fails when anything in scope is missing.
 //!
+//! - `perf [options]`: release-mode performance baseline (synthetic
+//!   workbooks in a temp dir); options go to the `perf` bin
+//!   (`xtask/src/bin/perf.rs`), e.g. `--quick`, `--only recalc,csv`.
+//!
 //! The argument parser and the master-list reader are hand-rolled on
 //! purpose: xtask has no dependencies (the registry is read through the CLI).
 
@@ -27,6 +31,9 @@ commands:
                                 report implemented vs AOO function list
                                 (--json: machine-readable; --doc: write
                                 docs/functions/coverage.md)
+  perf [--quick] [--only NAMES] [--runs N] [--deep]
+                                release-mode performance baseline
+                                (docs/perf-baseline.md)
   help                          show this message";
 
 /// Options of `function-coverage`.
@@ -43,6 +50,7 @@ struct CoverageOpts {
 enum Task {
     GenBindings { check: bool },
     FunctionCoverage(CoverageOpts),
+    Perf(Vec<String>),
     Help,
 }
 
@@ -51,6 +59,7 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Task, String> {
     let mut args = args.into_iter();
     let cmd = args.next().ok_or_else(|| "missing command".to_owned())?;
     match cmd.as_str() {
+        "perf" => Ok(Task::Perf(args.collect())),
         "gen-bindings" => {
             let mut check = false;
             for a in args {
@@ -503,6 +512,21 @@ fn function_coverage(o: CoverageOpts) -> Result<(), String> {
     Ok(())
 }
 
+/// Runs the `perf` bin in release mode (it needs the engine crates, which the
+/// other commands avoid, so it sits behind the `perf` feature).
+fn perf(args: &[String]) -> Result<(), String> {
+    let mut cmd = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    cmd.current_dir(workspace_root())
+        .args(["run", "--release", "--quiet", "-p", "xtask"])
+        .args(["--features", "perf", "--bin", "perf", "--"])
+        .args(args);
+    if run(&mut cmd)? {
+        Ok(())
+    } else {
+        Err("perf failed".into())
+    }
+}
+
 fn main() -> ExitCode {
     let task = match parse_args(std::env::args().skip(1)) {
         Ok(t) => t,
@@ -518,6 +542,7 @@ fn main() -> ExitCode {
         }
         Task::GenBindings { check } => gen_bindings(check),
         Task::FunctionCoverage(o) => function_coverage(o),
+        Task::Perf(args) => perf(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

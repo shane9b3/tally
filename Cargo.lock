@@ -6010,6 +6010,11 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 [[package]]
 name = "xtask"
 version = "0.1.0"
+dependencies = [
+ "tally-api",
+ "tally-engine",
+ "tally-types",
+]
 
 [[package]]
 name = "yoke"

@@ -6,8 +6,26 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+default-run = "xtask"
 
 [dependencies]
+# Only for `cargo xtask perf` (the `perf` bin); the other commands stay
+# dependency-free.
+tally-engine = { workspace = true, features = ["io"], optional = true }
+tally-api = { workspace = true, optional = true }
+tally-types = { workspace = true, optional = true }
+
+[features]
+perf = ["dep:tally-engine", "dep:tally-api", "dep:tally-types"]
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[[bin]]
+name = "perf"
+path = "src/bin/perf.rs"
+required-features = ["perf"]
 
 [lints]
 workspace = true
