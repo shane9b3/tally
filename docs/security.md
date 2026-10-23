@@ -51,10 +51,11 @@ Default limits are in `tally_io_ods::Limits`. Callers can tighten them.
 | Entry count is capped before the zip crate indexes the central directory: the end-of-central-directory record (and the zip64 locator and record) are parsed by hand from the last 64 KiB + 22 bytes, and every EOCD candidate there is checked | 10,000 entries | `tally-io-ods::malicious::too_many_entries` (20,000 entries), `tally-io-ods::hardening::zip64_entry_flood_is_rejected_before_indexing` (zip64 flood like the review's `many2m.ods`, rejected in microseconds; it used 822 MB of RSS before), `tally-io-ods::hardening::entry_cap_uses_declared_count` |
 | Central-directory size is capped the same way | 16 MiB (`archive::MAX_CENTRAL_DIRECTORY_BYTES`) | `tally-io-ods::hardening::huge_central_directory_is_rejected` |
 | `sniff_is_ods` reads only the first local header; its slow path (mimetype not first) runs the same EOCD precheck before building the archive | same limits | `tally-io-ods::hardening::sniff_is_bounded` |
-| Per-entry uncompressed bytes for `content.xml` | 512 MiB (`max_content_xml_bytes`) | `tally-io-ods::malicious::zip_bomb_hits_entry_cap_when_ratio_is_disabled` |
+| Per-entry uncompressed bytes for `content.xml` | 2 GiB (`max_content_xml_bytes`; was 512 MiB) | `tally-io-ods::malicious::zip_bomb_hits_entry_cap_when_ratio_is_disabled`, `tally-io-ods::large_entries::content_xml_cap_is_exact_and_separate`, `tally-io-ods::large_entries::defaults_admit_a_100_mb_ods`, `tally-io-ods::large_entries::fifty_mb_ods_with_700_mb_content_xml_opens` (ignored; 54 MB file, 720 MB `content.xml`, run with `--release -- --ignored`) |
 | Per-entry uncompressed bytes for every other entry | 64 MiB (`max_entry_bytes`) | same mechanism, see `archive::tests` |
-| Total uncompressed bytes across the package | 2 GiB (`max_total_bytes`) | `tally-io-ods::malicious::total_bytes_cap` |
-| Compression ratio, enforced once an entry has produced more than 10 MiB | 200:1 (`max_ratio`) | `tally-io-ods::malicious::zip_bomb_is_rejected_within_one_second` (1 GiB of zeros compressed about 1000:1, rejected in about 70 ms in a debug build), `tally-io-ods::archive::tests::ratio_trips_after_floor` |
+| Total uncompressed bytes across the package | 4 GiB (`max_total_bytes`; was 2 GiB) | `tally-io-ods::malicious::total_bytes_cap` |
+| Compression ratio, enforced once the package has produced more than 10 MiB in total (one floor per package, not per entry), as total output against the total compressed bytes pulled for the entries read | 200:1 (`max_ratio`) | `tally-io-ods::malicious::zip_bomb_is_rejected_within_one_second` (1 GiB of zeros compressed about 1000:1, rejected in about 70 ms in a debug build), `tally-io-ods::archive::tests::ratio_trips_after_floor`, `tally-io-ods::retained_strings::ratio_floor_is_per_package`, `tally-io-xlsx::retained_strings::ratio_floor_is_per_package` |
+| An entry read a second time (a picture shown twice, every sheet pointing at one part) is charged to a re-read budget | 64 MiB (`archive::MAX_REREAD_BYTES`) | `tally-io-ods::archive::tests::rereads_are_budgeted`, same in `tally-io-xlsx` |
 | Sizes declared in zip headers are never trusted | every read goes through `Read::take(limit + 1)` and a counting guard | `tally-io-ods::archive::tests::take_bounds_a_lying_entry`, `tally-io-ods::malicious::lying_size_header_is_bounded` |
 
 How it works:
@@ -62,9 +63,74 @@ How it works:
 - The ratio is checked continuously against the compressed bytes actually
   pulled from the archive. The archive reader is wrapped in a byte counter, so
   a bomb is caught after about 10 MiB of output instead of after the whole
-  entry has inflated.
+  entry has inflated. Before the 2026-10-23 security review each entry had
+  its own 10 MiB floor, so many entries just under it (or one entry read
+  many times) escaped the ratio; the floor and the ratio are now per
+  package.
 - XML is streamed from the inflating entry through a 64 KiB buffer. No entry is
   ever buffered whole, except the tiny `mimetype` entry.
+
+Why `content.xml` may reach 2 GiB (changed 2026-10-23): ODS XML compresses
+about 12:1, so the 1.0 target of opening a 50 MB ODS means a `content.xml`
+of about 600 MB, which the old 512 MiB cap refused
+(`docs/perf-baseline.md`). The entry is streamed, so the byte cap is not
+what bounds memory, but it is not only a time bound either: anything a
+parser keeps grows with the entry. The first version of this change missed
+that, and the security review of 2026-10-23 measured it (H1): a 10.4 MB ODS
+with 9,500 sheets named about 200 KiB each reached 3.4 GB RSS, and an XLSX
+with 99,000 hyperlinks whose `r:id` was 20 KB reached 2.2 GB. Memory is now
+bounded by:
+
+- the per-event cap of the XML reader (64 MiB, section 2): no single tag or
+  text run can make quick-xml buffer more than that;
+- `max_cells` (10,000,000) and `max_text_bytes` (1 GiB), checked before
+  anything is materialized. A numeric 100 MB ODS of the perf generator's
+  shape (about 11 M cells) hits `max_cells`;
+- the package attribute budget `max_attr_bytes` (256 MiB, section 2): every
+  attribute value on an element other than the per-cell ones (rows, cells,
+  text runs) is charged to it, whether the parser keeps it or not, so the
+  strings parsers keep from sheets, columns, styles, links, names, charts,
+  pivots and so on are bounded per package, not per entry;
+- per-value caps where a value is kept: sheet and style names 1 KiB
+  (refused past it), relationship ids 256 bytes and `table:table-source`
+  links 1 KiB (dropped past it), and any attribute of a cell element except
+  `office:string-value` and `table:formula` 1 KiB (read as empty past it;
+  those two have their own caps).
+
+Re-measured after the fix (release, `/usr/bin/time -l` of `perf --open-rss`,
+which runs `EngineService::open`): the 9,500-sheet file is refused
+(`sheet name bytes`) in 0.2 s at 24 MB; the same with 1,000-byte names opens
+in 0.26 s at 70 MB; the 99,000-link XLSX is refused (`XML attribute bytes`)
+in 0.27 s at 81 MB.
+
+Work, not memory: under the 200:1 ratio, 2 GiB of output needs at least
+10 MiB of real compressed input, and the reader parses about 75 - 150 MB/s
+of XML (release, cells included). A file can still make the reader spend
+tens of seconds: one ODS `content.xml` at the cap, or an XLSX whose sheets
+together reach the 4 GiB total. Before the review fix the cost could also
+be multiplied without input: each entry read had its own ratio-free 10 MiB,
+and XLSX sheets could all point at one part, so a 24.8 KB XLSX with 400
+sheets sharing one 7.8 MB part took 34 s of CPU and 1.29 GB (M1). Now the
+ratio floor is per package, an entry read again is charged to a 64 MiB
+re-read budget, and two sheets naming the same worksheet part are refused
+(`retained_strings::sheets_cannot_share_a_worksheet_part`; that file is
+refused in 0.06 s at 19 MB). So the CPU an attacker can force is roughly
+proportional to the bytes they send times the 200:1 ratio, capped by the
+4 GiB total. A small file that inflates to gigabytes is still refused by
+the ratio check after about 10 MiB of output
+(`malicious::zip_bomb_is_rejected_within_one_second`: 1 GiB of zeros in a
+1 MB file, refused in under a second). The total budget is 4 GiB so that
+`content.xml` at its cap plus every other part still fits. Entry floods are
+unaffected (EOCD precheck, `malicious::too_many_entries`,
+`hardening::zip64_entry_flood_is_rejected_before_indexing`).
+
+The limit errors of the ODS, XLSX and CSV readers and the engine's file-size
+check all read `limit exceeded: the file is too large or complex to open
+safely (<what> over <limit>)`, with byte limits in KiB/MiB/GiB
+(`large_entries::limit_message_is_readable`). The app turns a `bad_file`
+error of that shape into the localised `error.fileTooLarge` (en/de/fr/es);
+`limitDetail` in `packages/app/src/dataOps.ts` also accepts the older
+`<what> (limit <n>)` form that the XLS, dBase and HTML readers still use.
 
 ## 2. XML (WP5, `crates/tally-io-ods/src/xml.rs`)
 
@@ -79,6 +145,8 @@ Every XML stream in the package (`content.xml`, `styles.xml`, `settings.xml`,
 | Element depth is capped. | `tally-io-ods::malicious::deep_nesting_hits_depth_cap` (100,000 levels, rejected at 256) |
 | Attributes per element are capped. | `tally-io-ods::malicious::attribute_flood_hits_cap` (300 attributes, limit 256) |
 | Text is capped at 16 MiB per cell (`text:p` and `office:string-value`). A `text:s text:c="4000000000"` cannot allocate gigabytes. | `tally-io-ods::malicious::space_bomb_is_rejected`, `tally-io-ods::hardening::huge_string_value_is_rejected` |
+| Attribute values are budgeted per package: values on elements other than rows, cells and text runs count against `Limits::max_attr_bytes` (256 MiB, one budget for every XML stream of the package, `xml::AttrBudget`); values on those cell elements longer than 1 KiB read as empty (except `office:string-value` and `table:formula`, which have their own caps); sheet and style names over 1 KiB are refused; long ids and link targets that are kept are dropped. | `tally-io-ods::retained_strings::*`, `tally-io-xlsx::retained_strings::*` |
+| One XML event (a start tag with its attributes, a text run, a comment) may span at most 64 MiB of input (`xml::MAX_EVENT_BYTES`): the reader is wrapped in a byte budget that is reset before every event, so quick-xml never buffers more than that, however large the entry. This also fixes the review's `bigattr.ods` (a 400 MiB attribute on a skipped element, 818 MB RSS before; now refused in about 0.2 s at 72 MB peak RSS). | `tally-io-ods::xml::tests::*`, `tally-io-ods::large_entries::huge_attribute_is_refused_by_the_event_cap`, same tests in `tally-io-xlsx::xml::tests` |
 
 ## 3. Logical bombs (WP5, `crates/tally-io-ods/src/content.rs`; CSV limits in `tally-io-csv`)
 
@@ -143,9 +211,13 @@ has) reads as General, with a warning. Tests:
 
 `read_xlsx` is hardened like the ODS reader and shares its defaults
 (`tally_io_xlsx::Limits`): at most 10,000 zip entries (EOCD precheck before
-indexing), 512 MiB per worksheet or `sharedStrings.xml`, 64 MiB per other
-part, 2 GiB in total, a 200:1 compression ratio once an entry passes
-10 MiB, DOCTYPE rejected in every part, XML depth 256 and 256 attributes per
+indexing), 2 GiB per worksheet or `sharedStrings.xml` (was 512 MiB; same
+reasoning as ODS `content.xml` in section 1), 64 MiB per other part, 4 GiB
+in total, 64 MiB per XML event, 256 MiB of attribute values on non-cell
+elements per package (`max_attr_bytes`), sheet names 1 KiB, relationship
+ids 256 bytes (longer hyperlink and drawing ids are dropped), two sheets
+may not share one worksheet part, a 200:1 compression ratio once the package
+has inflated 10 MiB, a 64 MiB re-read budget, DOCTYPE rejected in every part, XML depth 256 and 256 attributes per
 element, 10,000,000 materialized cells, 1 GiB of materialized text (each
 cell's full text counts, even when cells share one shared string) and
 10,000 sheets. Nothing is extracted to disk; relationship targets that
@@ -153,7 +225,7 @@ leave the package are ignored.
 
 | Control | Test |
 |---|---|
-| Zip bombs, lying headers, entry floods, total bytes | `tally-io-xlsx::malicious::zip_bomb_is_rejected_within_one_second`, `tally-io-xlsx::malicious::zip_bomb_hits_entry_cap_when_ratio_is_disabled`, `tally-io-xlsx::malicious::total_bytes_cap`, `tally-io-xlsx::malicious::lying_entry_count_is_rejected_before_indexing`, `tally-io-xlsx::malicious::too_many_real_entries` |
+| Zip bombs, lying headers, entry floods, total bytes | `tally-io-xlsx::malicious::data_part_cap_is_exact_separate_and_matches_ods`, `tally-io-xlsx::malicious::zip_bomb_is_rejected_within_one_second`, `tally-io-xlsx::malicious::zip_bomb_hits_entry_cap_when_ratio_is_disabled`, `tally-io-xlsx::malicious::total_bytes_cap`, `tally-io-xlsx::malicious::lying_entry_count_is_rejected_before_indexing`, `tally-io-xlsx::malicious::too_many_real_entries` |
 | XML: DOCTYPE, depth, attributes, entities | `tally-io-xlsx::malicious::doctype_is_forbidden_in_every_part`, `tally-io-xlsx::malicious::deep_nesting_hits_depth_cap`, `tally-io-xlsx::malicious::attribute_flood_hits_cap`, `tally-io-xlsx::malicious::quick_xml_does_not_resolve_external_entities` |
 | Cell and text budgets, shared-string count | `tally-io-xlsx::malicious::cell_cap`, `tally-io-xlsx::malicious::text_budget_counts_every_shared_string_use`, `tally-io-xlsx::malicious::shared_string_count_is_capped`, `tally-io-xlsx::malicious::oversized_cell_text_is_rejected` |
 | Traversal and external targets | `tally-io-xlsx::malicious::traversal_and_external_targets_are_ignored` |

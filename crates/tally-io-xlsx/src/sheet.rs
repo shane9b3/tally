@@ -260,7 +260,10 @@ pub(crate) fn parse_sheet<R: BufRead>(
                     // Charts and pictures: the drawing part is resolved
                     // through the sheet's relationships in `read.rs`.
                     if st.extras.drawing_rid.is_none() {
-                        st.extras.drawing_rid = e.attr_local("id").map(str::to_string);
+                        st.extras.drawing_rid = e
+                            .attr_local("id")
+                            .filter(|id| id.len() <= crate::xml::MAX_ID_BYTES)
+                            .map(str::to_string);
                     }
                     xr.skip()?;
                 }

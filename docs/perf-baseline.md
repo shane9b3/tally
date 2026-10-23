@@ -17,8 +17,8 @@ everything `EngineService::open` / `save` does, i.e. read, build, recalc):
 |---|---|---|
 | Full recalc, 100k formulas in dependency chains | 77 ms (hard recalc 47 ms) | 100 chains x 1000 deep, `=A1+1` style |
 | Full recalc, one chain 100k deep | 51 ms | no stack problem |
-| Full recalc, 1M-cell sheet (100k rows x 10), SUM + VLOOKUP | 7.2 s (first recalc 7.2 - 10.5 s) | 200k formulas: 100k `SUM(A:H)` + 100k exact `VLOOKUP` into 10k rows |
-| Same sheet, SUM column only | 124 ms | so VLOOKUP is about 7.0 s, about 70 us per lookup |
+| Full recalc, 1M-cell sheet (100k rows x 10), SUM + VLOOKUP | 0.26 s (hard recalc 0.19 s); was 7.2 s before the lookup index | 200k formulas: 100k `SUM(A:H)` + 100k exact `VLOOKUP` into 10k rows |
+| Same sheet, SUM column only | 121 - 124 ms | so 100k VLOOKUPs now cost about 0.1 s, about 1.4 us per lookup (was about 70 us) |
 | Incremental recalc, 1 edit -> 10k dependents | 2.3 ms | `Workbook::set_input` + `recalc` |
 | Same edit through `DocumentService::apply` | 2.5 ms | includes undo snapshot and change report |
 | Open ODS 10 MB (93k rows x 12) | 1.67 s | |
@@ -28,10 +28,12 @@ everything `EngineService::open` / `save` does, i.e. read, build, recalc):
 | Open ODS 25 MB (232k rows) | 3.7 s | |
 | Open XLSX 25 MB (237k rows) | 3.6 s | |
 | Save ODS / XLSX 25 MB | 2.7 s / 5.5 s | |
-| Open ODS 50 MB | FAILS | `limit exceeded: zip entry uncompressed bytes (limit 536870912)` |
+| Open ODS 50 MB (465k rows) | 7.1 s (9.7 s on a busy machine) | was FAILS (`zip entry uncompressed bytes`, 512 MiB cap); `content.xml` cap raised to 2 GiB, see `docs/security.md` section 1. Re-measured after the security-review fixes (attribute budget, per-package ratio) with `--only io50`, median of 3 |
+| Save ODS 50 MB | 5.1 s (15.3 s on a busy machine) | same run |
 | Open XLSX 50 MB (474k rows) | 7.8 - 8.8 s | |
 | Save XLSX 50 MB | 7.2 - 10.4 s | |
 | Peak RSS, open XLSX 50 MB | 1.4 - 1.6 GB | `/usr/bin/time -l` of a child process |
+| Peak RSS, open ODS 50 MB | 1.37 GB | same method (XLSX 1.49 GB in that run) |
 | CSV import, 1M rows x 6 cols (47 MB) | 7.6 s | |
 | Peak RSS, CSV 1M rows | 0.94 GB | |
 
@@ -78,11 +80,11 @@ recorded baseline should also be investigated.
 | Check | Pass |
 |---|---|
 | Full recalc, 100k formulas with chains | < 250 ms |
-| Full recalc, 1M cells with SUM/VLOOKUP | < 3 s (baseline 7.2 s fails today) |
+| Full recalc, 1M cells with SUM/VLOOKUP | < 3 s (0.26 s with the lookup index; 7.2 s before) |
 | Incremental recalc, 10k dependents | < 20 ms (hard cap 50 ms) |
 | Open + save 10 MB ODS and XLSX | each < 3 s |
-| Open 50 MB XLSX and 50 MB ODS | opens, each < 12 s (ODS fails today) |
-| Save 50 MB | < 15 s |
+| Open 50 MB XLSX and 50 MB ODS | opens, each < 12 s (ODS 7.1 s, XLSX 7.4 s) |
+| Save 50 MB | < 15 s (ODS 5.1 s, XLSX 7.9 s) |
 | Peak RSS opening 50 MB | < 2 GB (aim < 1.5 GB) |
 | CSV import, 1M rows | < 10 s (aim < 5 s) |
 | Grid scroll on the real webview, 1M cells | p95 frame < 20 ms, p99 < 34 ms, no frame > 100 ms during a 10-row/frame fling |
@@ -90,15 +92,26 @@ recorded baseline should also be investigated.
 
 ## Hot spots (not fixed; reported only)
 
-1. **Exact-match VLOOKUP is linear and uncached**: 70 us per lookup into
-   10k rows; 100k lookups take 7 s while 100k SUMs take 0.12 s. Fix
-   candidates: a per-recalc sorted/hash index of the lookup column keyed by
-   range and version, shared across all VLOOKUP/MATCH/HLOOKUP calls. This is
-   the only thing that fails the proposed gate among the recalc numbers.
-2. **A 50 MB ODS cannot be opened**: the reader's limit of 512 MiB for one
-   uncompressed zip entry (`content.xml`) trips, since ODS XML compresses
-   about 12x. Either raise the limit (with a total-memory check) or accept the
-   cap and state it in the docs; the gate must say which. ODS 25 MB works.
+1. **Exact-match VLOOKUP was linear and uncached** (fixed 2026-10-23):
+   70 us per lookup into 10k rows, 100k lookups 7 s. Now a per-recalc
+   index of each lookup line (`tally_engine::lookup_cache`,
+   `tally_functions::LookupIndex`: a hash of the text plus a sorted vector
+   of the numbers, built on a line's second request, shared by VLOOKUP,
+   HLOOKUP, MATCH and LOOKUP, dropped at the end of every recalc, at most
+   256 MB of indexes per recalc, a line that does not fit is never rebuilt)
+   answers
+   exact lookups; sorted lookups and wildcard/regex keys scan its cached
+   cells. `cargo xtask perf --only recalc` on the same machine, under load
+   from other builds, went from 13.4 s to 0.26 s for the mix (hard recalc
+   11.3 s to 0.19 s).
+2. **Fixed: a 50 MB ODS could not be opened** (512 MiB cap on one
+   uncompressed zip entry; ODS XML compresses about 12x). `content.xml` and
+   XLSX worksheets/shared strings may now be 2 GiB (about a 170 MB file);
+   memory is bounded by the cell and text budgets, a 64 MiB per-XML-event
+   cap and a per-package attribute budget instead (`docs/security.md`
+   section 1). It opens in 7.1 s at 1.37 GB peak RSS. A numeric 100 MB ODS
+   of this shape (about 11 M cells) is refused by `max_cells` (10 M), not by
+   a byte cap.
 3. **Memory**: 1.4 - 1.6 GB RSS for a 474k-row x 12-column XLSX (about 5.7 M
    cells, about 280 bytes per cell). CSV 1M rows x 6 uses 0.94 GB. Cell
    storage is a BTreeMap per column with `Arc<str>` text, so text-heavy sheets

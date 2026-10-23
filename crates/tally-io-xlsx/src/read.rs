@@ -1,5 +1,6 @@
 //! `read_xlsx`: package → [`WorkbookData`].
 
+use std::collections::HashSet;
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
@@ -22,6 +23,7 @@ use crate::{Limits, XlsxError};
 const DEFAULT_WORKBOOK: &str = "xl/workbook.xml";
 
 pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<WorkbookData, XlsxError> {
+    let _attr_budget = crate::xml::AttrBudget::install(limits.max_attr_bytes);
     let mut pkg = Package::open(reader, limits)?;
     let xl = XmlLimits {
         max_depth: limits.max_xml_depth,
@@ -111,12 +113,22 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
     };
     let mut sheets = Vec::with_capacity(info.sheets.len());
     let mut objects = crate::drawing_read::ObjectBudget::default();
+    // Each worksheet part may back one sheet only: otherwise a tiny package
+    // could make every sheet re-inflate and re-parse one big part.
+    let mut seen_targets: HashSet<String> = HashSet::new();
     for (i, entry) in info.sheets.iter().enumerate() {
         let sheet_id = u32::try_from(i).unwrap_or(u32::MAX);
         let target = rels
             .iter()
             .find(|r| r.id == entry.rid)
             .map(|r| r.target.clone());
+        if let Some(t) = &target {
+            if !seen_targets.insert(t.clone()) {
+                return Err(XlsxError::Xml(format!(
+                    "two sheets use the same worksheet part {t:?}"
+                )));
+            }
+        }
         let ctx = SheetCtx {
             sheet: sheet_id,
             sst: &sst,

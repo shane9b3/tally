@@ -4,7 +4,7 @@
 use std::io::BufRead;
 
 use crate::units::parse_bool;
-use crate::xml::{Ev, XmlReader};
+use crate::xml::{capped, Ev, XmlReader, MAX_ID_BYTES, MAX_NAME_BYTES};
 use crate::XlsxError;
 
 /// Longest defined-name text we keep (longer names are dropped).
@@ -261,8 +261,12 @@ pub(crate) fn parse_workbook<R: BufRead>(
                     }
                     let state = e.attr_local("state").unwrap_or("visible");
                     wb.sheets.push(SheetEntry {
-                        name: e.attr_local("name").unwrap_or("").to_string(),
-                        rid: e.attr_local("id").unwrap_or("").to_string(),
+                        name: capped(e.attr_local("name"), MAX_NAME_BYTES, "sheet name bytes")?
+                            .unwrap_or("")
+                            .to_string(),
+                        rid: capped(e.attr_local("id"), MAX_ID_BYTES, "relationship id bytes")?
+                            .unwrap_or("")
+                            .to_string(),
                         hidden: state == "hidden" || state == "veryHidden",
                     });
                     xr.skip()?;

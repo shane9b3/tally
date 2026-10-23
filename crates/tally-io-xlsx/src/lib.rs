@@ -90,21 +90,30 @@ pub struct Limits {
     pub max_text_bytes: u64,
     /// Maximum number of sheets.
     pub max_sheets: usize,
+    /// Maximum bytes of attribute values read from elements other than cells
+    /// and rows, summed over the whole package. Parsers keep many of these
+    /// (sheet and style names, ids, references, link targets), so this bounds
+    /// what they can retain however large the XML entries are.
+    pub max_attr_bytes: u64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
         Self {
             max_entries: 10_000,
-            max_sheet_xml_bytes: 512 * 1024 * 1024,
+            // Streamed: memory is bounded by the per-event cap, the cell,
+            // text and attribute budgets, not by this. XML compresses about
+            // 12:1, so 2 GiB opens a ~170 MB file.
+            max_sheet_xml_bytes: 2 * 1024 * 1024 * 1024,
             max_entry_bytes: 64 * 1024 * 1024,
-            max_total_bytes: 2 * 1024 * 1024 * 1024,
+            max_total_bytes: 4 * 1024 * 1024 * 1024,
             max_ratio: 200,
             max_xml_depth: 256,
             max_attrs_per_element: 256,
             max_cells: 10_000_000,
             max_text_bytes: 1024 * 1024 * 1024,
             max_sheets: 10_000,
+            max_attr_bytes: 256 * 1024 * 1024,
         }
     }
 }
@@ -122,7 +131,10 @@ pub enum XlsxError {
     #[error("XML DOCTYPE declarations are not allowed")]
     ForbiddenDoctype,
     /// A resource limit was hit.
-    #[error("limit exceeded: {what} (limit {limit})")]
+    #[error(
+        "limit exceeded: the file is too large or complex to open safely ({what} over {})",
+        human_limit(what, *limit)
+    )]
     LimitExceeded {
         /// What was limited.
         what: &'static str,
@@ -245,4 +257,23 @@ pub fn sniff_is_xlsx(bytes: &[u8]) -> bool {
     }
     let ct = String::from_utf8_lossy(&ct);
     ct.contains("spreadsheetml.sheet.main+xml") || ct.contains("spreadsheetml.template.main+xml")
+}
+
+/// `limit` for messages: byte limits in KiB/MiB/GiB, counts as plain numbers.
+fn human_limit(what: &str, limit: u64) -> String {
+    const KIB: u64 = 1024;
+    if !what.contains("bytes") || limit < KIB {
+        return limit.to_string();
+    }
+    for (unit, size) in [("GiB", KIB * KIB * KIB), ("MiB", KIB * KIB), ("KiB", KIB)] {
+        if limit >= size {
+            let whole = limit / size;
+            return if limit.is_multiple_of(size) {
+                format!("{whole} {unit}")
+            } else {
+                format!("{:.1} {unit}", limit as f64 / size as f64)
+            };
+        }
+    }
+    limit.to_string()
 }

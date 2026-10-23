@@ -175,9 +175,6 @@ These are not deviations from AOO. They are listed so nobody "fixes" them.
 | U19 | Status bar | Selection-function menu | Sum / Count / Average; the choice menu and the status-bar items for signatures and selection mode are *unverified* | N | `packages/app/src/sumRange.ts` |
 | U20 | Extras AOO lacks | n/a | Command palette, "At a glance" panel, assist (rule-based, no network), sidebar, light/dark themes, Remove Duplicates, sheet-local names | D (extensions) | `docs/architecture-plan.md` |
 | U21 | Hyperlinks | Click or Ctrl-click follows | `⌘`-click opens http/https/mailto through Rust only; a plain click selects | D (security) | `docs/security.md` |
-| U22 | Process model | One process | One global lock in the Tauri shell (a slow call blocks all documents); window registry uses a small leaf mutex. Per-document locks are planned | P | `docs/TODO.md` |
-| U23 | Memory on hostile input | n/a | `bigattr.ods` (400 MiB XML attribute) peaks at about 800 MB RSS | P | `docs/TODO.md` |
-| U24 | Bundle | n/a | Main JS chunk 1.6 MB (echarts), not code-split yet | N | `docs/TODO.md` |
 
 ## Counts
 

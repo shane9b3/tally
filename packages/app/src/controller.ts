@@ -291,7 +291,7 @@ export class AppController {
     const err = errorOf(e);
     if (err.code === CANCELLED) return;
     console.warn("tally:", err);
-    useUiStore.getState().pushToast("error", err.message);
+    useUiStore.getState().pushToast("error", friendlyError(err.code, err.message));
   };
 
   requireDoc(): number {

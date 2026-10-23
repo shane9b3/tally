@@ -566,6 +566,7 @@
   "error.fileOpen": "Die Datei konnte nicht geöffnet werden.",
   "error.fileSave": "Die Datei konnte nicht gespeichert werden.",
   "error.unsupportedFormat": "Nicht unterstütztes Dateiformat.",
+  "error.fileTooLarge": "Diese Datei ist zu groß oder zu komplex, um sie sicher zu öffnen. Tally lehnt sie zum Schutz Ihres Computers ab (Grenze: {what}).",
   "chart.title": "Diagramm",
   "chart.type": "Diagrammtyp",
   "chart.column": "Säulen",

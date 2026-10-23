@@ -14,15 +14,19 @@
 //!   [`Guard`] that fails as soon as the per-entry or total uncompressed byte
 //!   budget is exceeded (declared sizes in zip headers can lie, so they are
 //!   never trusted for allocation);
-//! - the compression ratio is checked continuously once an entry has
-//!   produced more than [`RATIO_FLOOR`] bytes, against the compressed bytes
-//!   actually pulled from the archive so far (a 1000:1 bomb is rejected after
-//!   ~10 MiB of output, not after the whole entry);
+//! - the compression ratio is checked continuously once the *package* has
+//!   produced more than [`RATIO_FLOOR`] bytes, as total output against the
+//!   total compressed bytes actually pulled for the entries read so far (a
+//!   1000:1 bomb is rejected after ~10 MiB of output, not after the whole
+//!   entry; many small bombs share one floor);
+//! - reading an entry a second time is charged to a small re-read budget
+//!   ([`MAX_REREAD_BYTES`]), so references that all point at one big part
+//!   cannot multiply its cost;
 //! - entries are only ever streamed into memory by exact name; names with
 //!   `..` components, absolute paths, drive letters or backslashes are ignored.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::rc::Rc;
 
@@ -30,8 +34,13 @@ use zip::ZipArchive;
 
 use crate::{Limits, XlsxError};
 
-/// The compression ratio is only enforced once an entry has inflated past this.
+/// The compression ratio is only enforced once the package has inflated past
+/// this (one allowance for the whole package, not one per entry).
 pub(crate) const RATIO_FLOOR: u64 = 10 * 1024 * 1024;
+
+/// Most bytes inflated from entries that were already read once (a picture
+/// shown twice, say). Larger re-reads are refused.
+pub(crate) const MAX_REREAD_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Largest central directory accepted (16 MiB: ~10,000 entries need ~1 MiB).
 pub(crate) const MAX_CENTRAL_DIRECTORY_BYTES: u64 = 16 * 1024 * 1024;
@@ -185,7 +194,13 @@ pub(crate) struct Guard<R> {
     consumed: Rc<Cell<u64>>,
     consumed_start: u64,
     declared_compressed: u64,
+    /// Compressed bytes credited to the package so far (all entries).
+    credited: Rc<Cell<u64>>,
+    /// This entry's share of `credited`.
+    credited_self: u64,
     max_ratio: u64,
+    /// Package bytes inflated by re-reads, when this entry was read before.
+    reread: Option<Rc<Cell<u64>>>,
     trip: Trip,
 }
 
@@ -210,16 +225,28 @@ impl<R: Read> Read for Guard<R> {
         if self.total.get() > self.max_total {
             return Err(self.fail("total uncompressed bytes", self.max_total));
         }
-        if self.out > RATIO_FLOOR {
-            let pulled = self
-                .consumed
-                .get()
-                .saturating_sub(self.consumed_start)
-                .max(1);
-            let compressed = pulled.min(self.declared_compressed.max(1));
-            if self.out > compressed.saturating_mul(self.max_ratio) {
-                return Err(self.fail("compression ratio", self.max_ratio));
+        if let Some(re) = &self.reread {
+            re.set(re.get().saturating_add(n as u64));
+            if re.get() > MAX_REREAD_BYTES {
+                return Err(self.fail("re-read zip entry bytes", MAX_REREAD_BYTES));
             }
+        }
+        // Credit what this entry really pulled from the archive (never more
+        // than its declared compressed size: the zip reader may read ahead).
+        let pulled = self.consumed.get().saturating_sub(self.consumed_start);
+        let mine = pulled.min(self.declared_compressed);
+        let package_in = self
+            .credited
+            .get()
+            .saturating_sub(self.credited_self)
+            .saturating_add(mine);
+        self.credited.set(package_in);
+        self.credited_self = mine;
+        let package_out = self.total.get();
+        if package_out > RATIO_FLOOR
+            && package_out > package_in.max(1).saturating_mul(self.max_ratio)
+        {
+            return Err(self.fail("compression ratio", self.max_ratio));
         }
         Ok(n)
     }
@@ -239,6 +266,9 @@ pub(crate) struct Package<R: Read + Seek> {
     archive: ZipArchive<CountingReader<R>>,
     consumed: Rc<Cell<u64>>,
     total: Rc<Cell<u64>>,
+    credited: Rc<Cell<u64>>,
+    reread: Rc<Cell<u64>>,
+    read_before: HashSet<usize>,
     names: HashMap<String, usize>,
     limits: Limits,
 }
@@ -276,6 +306,9 @@ impl<R: Read + Seek> Package<R> {
             archive,
             consumed,
             total: Rc::new(Cell::new(0)),
+            credited: Rc::new(Cell::new(0)),
+            reread: Rc::new(Cell::new(0)),
+            read_before: HashSet::new(),
             names,
             limits: limits.clone(),
         })
@@ -314,7 +347,10 @@ impl<R: Read + Seek> Package<R> {
             consumed: Rc::clone(&self.consumed),
             consumed_start,
             declared_compressed,
+            credited: Rc::clone(&self.credited),
+            credited_self: 0,
             max_ratio: u64::from(self.limits.max_ratio),
+            reread: (!self.read_before.insert(index)).then(|| Rc::clone(&self.reread)),
             trip: Rc::clone(&trip),
         };
         let mut reader = BufReader::with_capacity(64 * 1024, guard);
@@ -358,7 +394,10 @@ mod tests {
                 consumed: Rc::new(Cell::new(consumed)),
                 consumed_start: 0,
                 declared_compressed: 10,
+                credited: Rc::new(Cell::new(0)),
+                credited_self: 0,
                 max_ratio: ratio,
+                reread: None,
                 trip: Rc::clone(&trip),
             },
             trip,
@@ -385,6 +424,36 @@ mod tests {
         assert!(g.read_to_end(&mut sink).is_err());
         assert!((sink.len() as u64) < RATIO_FLOOR + 1024 * 1024);
         assert_eq!(trip.get().map(|t| t.0), Some("compression ratio"));
+    }
+
+    /// An entry read many times (say, every sheet pointing at one part)
+    /// is charged to the re-read budget from the second read on.
+    #[test]
+    fn rereads_are_budgeted() {
+        use std::io::Write;
+        let mut z = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        z.start_file("big.xml", stored).unwrap();
+        z.write_all(&vec![b'x'; 1024 * 1024]).unwrap();
+        let bytes = z.finish().unwrap().into_inner();
+        let mut pkg = Package::open(io::Cursor::new(bytes), &Limits::default()).unwrap();
+        let read = |pkg: &mut Package<_>| {
+            pkg.with_entry("big.xml", 2 * 1024 * 1024, |r| {
+                io::copy(r, &mut io::sink())?;
+                Ok(())
+            })
+        };
+        let budget = (MAX_REREAD_BYTES / (1024 * 1024)) as usize;
+        for _ in 0..=budget {
+            read(&mut pkg).unwrap();
+        }
+        match read(&mut pkg) {
+            Err(XlsxError::LimitExceeded { what, .. }) => {
+                assert_eq!(what, "re-read zip entry bytes")
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

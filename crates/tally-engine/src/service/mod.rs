@@ -84,6 +84,7 @@ struct Shared {
     forks: AtomicU64,
     clipboard: Mutex<Option<Arc<ClipSnapshot>>>,
     /// Prepared print jobs (an LRU of [`crate::print::JOB_LRU`]).
+    #[cfg_attr(not(feature = "io"), allow(dead_code))]
     print_jobs: Mutex<print::JobCache>,
 }
 
@@ -374,7 +375,14 @@ impl DocumentService for EngineService {
         let meta =
             std::fs::metadata(path).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
         if meta.len() > MAX_FILE_BYTES {
-            return Err(ApiError::new(ApiError::BAD_FILE, "the file is too large"));
+            return Err(ApiError::new(
+                ApiError::BAD_FILE,
+                format!(
+                    "limit exceeded: the file is too large or complex to open safely \
+                     (file size over {} MiB)",
+                    MAX_FILE_BYTES / (1024 * 1024)
+                ),
+            ));
         }
         let bytes = std::fs::read(path).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
         let ext = path

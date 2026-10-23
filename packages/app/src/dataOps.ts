@@ -3,6 +3,7 @@
  * freeze, paste special, find) so the UI logic can be unit-tested without
  * an engine. The controller calls these and applies the result.
  */
+import { t } from "./i18n";
 import type {
   AutoFilterInfo,
   BorderLineDto,
@@ -263,6 +264,23 @@ export function fillDownRight(sel: RangeDto, dir: "down" | "right"): { source: R
 
 // -- friendly errors ------------------------------------------------------------------
 
+/**
+ * The detail of a reader's limit refusal, or `null` if `message` is not one.
+ * Current readers say "limit exceeded: … (<what> over <cap>)"; older ones
+ * (XLS, dBase, HTML) say "limit exceeded: <what> (limit <cap>)", which
+ * becomes "<what> over <cap>" too.
+ */
+export function limitDetail(message: string): string | null {
+  const m = /^\s*limit exceeded:\s*(.*?)\s*$/s.exec(message);
+  if (!m) return null;
+  const body = m[1] ?? "";
+  const over = /\(([^()]*\sover\s[^()]*)\)$/.exec(body);
+  if (over) return (over[1] ?? "").trim();
+  const old = /^(.*?)\s*\(limit:?\s*([^()]*)\)$/.exec(body);
+  if (old) return `${(old[1] ?? "").trim()} over ${(old[2] ?? "").trim()}`;
+  return body;
+}
+
 /** User-facing text for engine refusals (OpError codes). */
 export function friendlyError(code: string, message: string): string {
   switch (code) {
@@ -270,6 +288,15 @@ export function friendlyError(code: string, message: string): string {
       return "You can't change part of an array formula. Select the whole block, edit it, and press ⌃⇧↩.";
     case "merged":
       return "That would split a merged cell. Unmerge it first (Format ▸ Unmerge Cells).";
+    case "bad_file": {
+      const what = limitDetail(message);
+      if (what === null) return message;
+      return t(
+        "error.fileTooLarge",
+        "This file is too large or too complex to open safely. Tally refuses it to protect your computer (limit: {what}).",
+        { what },
+      );
+    }
     default:
       return message;
   }

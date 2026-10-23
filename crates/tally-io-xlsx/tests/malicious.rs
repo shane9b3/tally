@@ -365,3 +365,61 @@ fn quick_xml_does_not_resolve_external_entities() {
     assert!(saw_doctype);
     assert!(!text.contains("root:") && !text.contains("INTERNAL"));
 }
+
+/// The data parts (worksheets and `sharedStrings.xml`) have their own byte
+/// cap, like ODS `content.xml`: exact, separate from `max_entry_bytes`, and
+/// by default large enough for a ~100 MB file (XML compresses ~12:1). The
+/// defaults are the same as tally-io-ods.
+#[test]
+fn data_part_cap_is_exact_separate_and_matches_ods() {
+    let d = Limits::default();
+    let o = tally_io_ods::Limits::default();
+    assert_eq!(d.max_sheet_xml_bytes, o.max_content_xml_bytes);
+    assert_eq!(
+        (
+            d.max_entry_bytes,
+            d.max_total_bytes,
+            d.max_ratio,
+            d.max_cells
+        ),
+        (
+            o.max_entry_bytes,
+            o.max_total_bytes,
+            o.max_ratio,
+            o.max_cells
+        )
+    );
+    assert!(d.max_sheet_xml_bytes > 512 * 1024 * 1024, "the old cap");
+    assert!(d.max_sheet_xml_bytes >= 1_200_000_000);
+
+    let rows: String = (1..=300)
+        .map(|r| {
+            format!(
+                r#"<row r="{r}"><c r="A{r}"><v>{r}.5</v></c><c r="B{r}" t="s"><v>{}</v></c></row>"#,
+                r % 100
+            )
+        })
+        .collect();
+    let sheet = format!("{WS}{rows}{WS_END}");
+    let strings: String = (0..100)
+        .map(|i| format!("<si><t>{}</t></si>", format!("string {i} ").repeat(50)))
+        .collect();
+    let sst = format!(
+        r#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">{strings}</sst>"#
+    );
+    let bytes = package(&sheet, Some(&sst));
+    let at = |cap: usize| Limits {
+        max_sheet_xml_bytes: cap as u64,
+        max_entry_bytes: 1024,
+        ..Limits::default()
+    };
+    assert!(sst.len() > sheet.len());
+    let cap = sst.len();
+    let (r, _) = read_bytes("exact", bytes.clone(), &at(cap));
+    assert_eq!(r.unwrap().sheets[0].cells.len(), 600);
+    let (r, _) = read_bytes("one short", bytes.clone(), &at(sheet.len() - 1));
+    assert_eq!(limit_what(&r), "zip entry uncompressed bytes");
+    // sharedStrings.xml is under the same cap (it is bigger than the sheet).
+    let (r, _) = read_bytes("sst", bytes, &at(sst.len() - 1));
+    assert_eq!(limit_what(&r), "zip entry uncompressed bytes");
+}

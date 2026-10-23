@@ -242,10 +242,14 @@ Excel's 1900 date system counts 1900-01-01 as 1 and has a fictitious
 
 The reader applies the same limits as `tally-io-ods` (`Limits::default()`):
 10,000 zip entries and a 16 MiB central directory checked from the EOCD
-record before the zip index is built; 512 MiB per worksheet/shared-strings
-part and 64 MiB per other part, enforced with `Read::take`; 2 GiB total;
-200:1 compression ratio once an entry passes 10 MiB; `<!DOCTYPE>` rejected in
-every part; element depth 256 and 256 attributes per element; 10 M
+record before the zip index is built; 2 GiB per worksheet/shared-strings
+part (like ODS `content.xml`) and 64 MiB per other part, enforced with
+`Read::take`; 4 GiB total; 200:1 compression ratio once the package has
+inflated 10 MiB; 64 MiB of re-reads; two sheets may not share a worksheet
+part; `<!DOCTYPE>` rejected in every part; element depth 256, 256
+attributes per element and 64 MiB per XML event (tag or text run); 256 MiB
+of attribute values on non-cell elements per package, 1 KiB sheet names,
+256-byte relationship ids; 10 M
 materialized cells and 1 GiB of materialized text (every shared-string use
 counts); at most 10 M shared strings, 16 MiB per string, 10,000 sheets.
 Entry names with `..`, absolute paths, drive letters or backslashes are

@@ -11,6 +11,7 @@ import {
   findQuery,
   freezeAt,
   friendlyError,
+  limitDetail,
   isValidName,
   parseAbsoluteRef,
   pasteOptions,
@@ -127,6 +128,16 @@ describe("op builders", () => {
     });
     expect(friendlyError("array_block", "x")).toMatch(/array/);
     expect(friendlyError("other", "x")).toBe("x");
+    expect(
+      friendlyError("bad_file", "limit exceeded: the file is too large or complex to open safely (zip entry uncompressed bytes over 2 GiB)"),
+    ).toMatch(/too large or too complex.*limit: zip entry uncompressed bytes over 2 GiB/);
+    expect(friendlyError("bad_file", "not a zip archive")).toBe("not a zip archive");
+    expect(limitDetail("limit exceeded: the file is too large or complex to open safely (file size over 512 MiB)")).toBe(
+      "file size over 512 MiB",
+    );
+    expect(limitDetail("limit exceeded: cells (limit 1000000)")).toBe("cells over 1000000");
+    expect(limitDetail("limit exceeded: cells (limit: 1000000)")).toBe("cells over 1000000");
+    expect(limitDetail("bad header")).toBeNull();
   });
 });
 

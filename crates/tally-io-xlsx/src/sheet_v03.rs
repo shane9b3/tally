@@ -718,6 +718,14 @@ pub(crate) fn parse_breaks<R: BufRead>(
 /// A `hyperlink` element: (row, col, r:id, location).
 pub(crate) type RawLink = (CellRangeLocal, Option<String>, Option<String>);
 
+/// A hyperlink's relationship id; an over-long one (never a real id) is
+/// dropped, so the link has no target.
+fn link_id(e: &Elem) -> Option<String> {
+    attr(e, "id")
+        .filter(|id| id.len() <= crate::xml::MAX_ID_BYTES)
+        .map(str::to_string)
+}
+
 /// Reads one `hyperlink`.
 pub(crate) fn parse_link(e: &Elem) -> Option<RawLink> {
     let range = parse_range(attr(e, "ref")?)?;
@@ -725,22 +733,14 @@ pub(crate) fn parse_link(e: &Elem) -> Option<RawLink> {
     if location.len() > MAX_LOCATION {
         return None;
     }
-    Some((
-        range,
-        attr(e, "id").map(str::to_string),
-        Some(location.to_string()),
-    ))
+    Some((range, link_id(e), Some(location.to_string())))
 }
 
 /// Reads one `hyperlink` without a `location`.
 pub(crate) fn parse_link_any(e: &Elem) -> Option<RawLink> {
     match attr(e, "location") {
         Some(_) => parse_link(e),
-        None => Some((
-            parse_range(attr(e, "ref")?)?,
-            attr(e, "id").map(str::to_string),
-            None,
-        )),
+        None => Some((parse_range(attr(e, "ref")?)?, link_id(e), None)),
     }
 }
 

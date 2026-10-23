@@ -8,7 +8,7 @@ use tally_model::{BorderLine, CellProtectionData, CfStyleData, HAlign, StyleData
 
 use crate::numfmt::{DataStyle, DataStyles, Kind, Part};
 use crate::units::{font_size_pt, length_to_hmm, parse_border, parse_color};
-use crate::xml::{Elem, Ev, XmlReader};
+use crate::xml::{capped, Elem, Ev, XmlReader, MAX_NAME_BYTES};
 use crate::OdsError;
 
 /// Cell style properties as written; `None` means "inherit".
@@ -518,7 +518,7 @@ impl StyleSheet {
                     if e.name == "style:style" {
                         self.parse_style(xml, &e, origin)?;
                     } else if e.name == "style:page-layout" {
-                        let name = e.attr("style:name").unwrap_or("").to_string();
+                        let name = style_name(&e, "style:name")?.unwrap_or("").to_string();
                         let l = crate::v03::parse_page_layout(xml)?;
                         self.scope_mut(origin).page_layouts.insert(name, l);
                     } else if e.name == "style:default-style"
@@ -526,7 +526,7 @@ impl StyleSheet {
                     {
                         self.parse_default_style(xml)?;
                     } else if let Some(kind) = Kind::from_element(&e.name) {
-                        let name = e.attr("style:name").map(str::to_string);
+                        let name = style_name(&e, "style:name")?.map(str::to_string);
                         let mut ds = parse_data_style(xml, &e, kind)?;
                         // Any number of parts is allowed by the schema; a
                         // code past the limit becomes General (review 2,
@@ -588,12 +588,14 @@ impl StyleSheet {
         e: &Elem,
         origin: Origin,
     ) -> Result<(), OdsError> {
-        let name = e.attr("style:name").unwrap_or_default().to_string();
-        let family = e.attr("style:family").unwrap_or_default().to_string();
+        let name = style_name(e, "style:name")?.unwrap_or_default().to_string();
+        let family = style_name(e, "style:family")?
+            .unwrap_or_default()
+            .to_string();
         let mut cell = RawCellStyle {
-            parent: e.attr("style:parent-style-name").map(str::to_string),
-            data_style: e.attr("style:data-style-name").map(str::to_string),
-            display_name: e.attr("style:display-name").map(str::to_string),
+            parent: style_name(e, "style:parent-style-name")?.map(str::to_string),
+            data_style: style_name(e, "style:data-style-name")?.map(str::to_string),
+            display_name: style_name(e, "style:display-name")?.map(str::to_string),
             ..RawCellStyle::default()
         };
         let mut col_width = None;
@@ -604,7 +606,7 @@ impl StyleSheet {
         };
         let mut col_break = false;
         let mut table = TableStyle {
-            master_page: e.attr("style:master-page-name").map(str::to_string),
+            master_page: style_name(e, "style:master-page-name")?.map(str::to_string),
             ..TableStyle::default()
         };
         let d = xml.depth();
@@ -950,4 +952,10 @@ pub(crate) fn parse_data_style<R: BufRead>(
             _ => {}
         }
     }
+}
+
+/// A style name attribute, refused past [`MAX_NAME_BYTES`] (styles are kept
+/// in maps for the whole read).
+fn style_name<'a>(e: &'a Elem, key: &str) -> Result<Option<&'a str>, OdsError> {
+    capped(e.attr(key), MAX_NAME_BYTES, "style name bytes")
 }

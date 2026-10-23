@@ -31,6 +31,7 @@ pub(crate) fn read_with(
     limits: &Limits,
     legacy: bool,
 ) -> Result<WorkbookData, OdsError> {
+    let _attr_budget = crate::xml::AttrBudget::install(limits.max_attr_bytes);
     let mut pkg = Package::open(reader, limits)?;
     if !pkg.has("content.xml") {
         return Err(OdsError::NotOds);

@@ -15,6 +15,7 @@ use tally_api::{
 };
 use tally_types::{CellAddr, Value};
 
+#[cfg_attr(not(feature = "io"), allow(dead_code))]
 fn repo(p: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(p)
 }

@@ -19,7 +19,7 @@ use tally_types::{
 
 use crate::styles::{Origin, StyleSheet};
 use crate::units::{date_value_to_serial, duration_to_days, epoch_from_null_date};
-use crate::xml::{Elem, Ev, XmlReader};
+use crate::xml::{capped, Elem, Ev, XmlReader, MAX_NAME_BYTES};
 use crate::{Limits, OdsError, DEFAULT_COL_WIDTH_HMM};
 
 /// Maximum bytes of text in one cell.
@@ -390,7 +390,9 @@ impl Parser<'_> {
         e: &Elem,
     ) -> Result<(SheetData, SheetExtra), OdsError> {
         let mut sheet = SheetData {
-            name: e.attr("table:name").unwrap_or_default().to_string(),
+            name: capped(e.attr("table:name"), MAX_NAME_BYTES, "sheet name bytes")?
+                .unwrap_or_default()
+                .to_string(),
             ..SheetData::default()
         };
         let mut extra = SheetExtra::default();
@@ -441,7 +443,7 @@ impl Parser<'_> {
                             }
                             if let Some(ds) = c
                                 .attr("table:default-cell-style-name")
-                                .filter(|n| *n != "Default")
+                                .filter(|n| *n != "Default" && n.len() <= MAX_NAME_BYTES)
                             {
                                 col_defaults.names.push((col, end, ds.to_string()));
                             }
@@ -495,7 +497,11 @@ impl Parser<'_> {
                         // A sheet linked to another file: imported as the
                         // values the file holds; the link is disabled by
                         // policy (W5-3, `tally_engine::external`).
-                        let href = c.attr("xlink:href").map(str::to_string);
+                        // Kept in a warning: bounded like any name.
+                        let href = c
+                            .attr("xlink:href")
+                            .filter(|h| h.len() <= MAX_NAME_BYTES)
+                            .map(str::to_string);
                         self.warnings.push(format!(
                             "tally:external-link:linkedSheet{}",
                             href.map(|h| format!(":{h}")).unwrap_or_default()

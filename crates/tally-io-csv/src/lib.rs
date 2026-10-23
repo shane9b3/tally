@@ -90,7 +90,11 @@ pub enum CsvError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     /// A limit from [`CsvOptions`] was exceeded.
-    #[error("limit exceeded: {what} (limit {limit})")]
+    /// Displayed like the ODS/XLSX readers' limit errors
+    /// (`limit exceeded: … (<what> over <limit>)`), which the app localises.
+    #[error(
+        "limit exceeded: the file is too large or complex to open safely ({what} over {limit})"
+    )]
     LimitExceeded {
         /// What was limited.
         what: &'static str,
