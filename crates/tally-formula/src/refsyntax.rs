@@ -215,6 +215,27 @@ pub(crate) fn scan_endpoint(s: &str, i: usize) -> Option<(usize, RawEndpoint)> {
     ))
 }
 
+/// Whether `start:end` can form one CalcA1 range token. Cell areas may span
+/// sheets (`Sheet1.A1:Sheet2.B2`); whole columns/rows live on one sheet, so
+/// an explicit second sheet must name the first endpoint's sheet. When it
+/// does not (`g:W.rq`, `A:Sheet2.B`), the text is not a reference: like
+/// AOO's compiler, which splits an unrecognised symbol at its `:` range
+/// operator, the lexer then reads the operands separately (`g`, `:`,
+/// `W.rq`).
+fn joinable(a: &RawEndpoint, b: &RawEndpoint) -> bool {
+    if !compatible(a.part, b.part) {
+        return false;
+    }
+    if matches!(a.part, Some(Part::Cell { .. })) {
+        return true;
+    }
+    match (&a.sheet, &b.sheet) {
+        (_, None) => true,
+        (Some(x), Some(y)) => x.name.eq_ignore_ascii_case(&y.name),
+        (None, Some(_)) => false,
+    }
+}
+
 fn compatible(a: Option<Part>, b: Option<Part>) -> bool {
     matches!(
         (a, b),
@@ -230,7 +251,7 @@ pub(crate) fn scan_a1_ref(s: &str, i: usize) -> Option<(usize, RefShape, RawRef)
     let (e1, ep1) = scan_endpoint(s, i)?;
     if s.as_bytes().get(e1) == Some(&b':') {
         if let Some((e2, ep2)) = scan_endpoint(s, e1 + 1) {
-            if compatible(ep1.part, ep2.part) {
+            if joinable(&ep1, &ep2) {
                 return Some((
                     e2,
                     RefShape::Range,

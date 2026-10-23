@@ -76,6 +76,19 @@ pub(crate) fn fmt_num(x: f64) -> String {
     }
 }
 
+/// The operand printed last in `e`: follows the right operands of `:` and
+/// `!` chains, which print without parentheses (conservatively: a range
+/// operand may still get some).
+fn last_operand(mut e: &Expr) -> &Expr {
+    while let Expr::Binary(op @ (BinOp::Range | BinOp::Intersect), _, r) = e {
+        if r.precedence() <= op.precedence() {
+            break;
+        }
+        e = r;
+    }
+    e
+}
+
 /// Schedules `e` for printing, wrapped in parentheses when `parens`.
 fn push_child<'e>(stack: &mut Vec<Work<'e>>, e: &'e Expr, parens: bool) {
     if parens {
@@ -263,11 +276,21 @@ impl Printer<'_> {
                 }
                 Expr::Binary(op, l, r) => {
                     let p = op.precedence();
-                    // `Name!A1` would re-lex as a sheet qualifier.
-                    let guard_bang = !excel
-                        && *op == BinOp::Intersect
-                        && matches!(**l, Expr::Name(_) | Expr::Bool(_));
-                    push_child(&mut stack, r, r.precedence() <= p);
+                    // `Name!A1` (also `x!Name!A1`, `A:A!1`) would re-lex
+                    // with a sheet qualifier.
+                    let guard_bang = !excel && *op == BinOp::Intersect && self.ends_in_word(l);
+                    // `g:W.rq`, `a:a`, `1:1` and `x:A1` then `:B2` would
+                    // re-lex as one reference token (a column range on sheet
+                    // `W`, whole columns, whole rows, the area `A1:B2`); the
+                    // right operand then gets parentheses. (A bare `A1:B2`
+                    // is already an area.)
+                    let guard_range = *op == BinOp::Range
+                        && !matches!(
+                            (l.as_ref(), r.as_ref()),
+                            (Expr::Ref(RefExpr::Cell(_)), Expr::Ref(RefExpr::Cell(_)))
+                        )
+                        && self.range_merges(last_operand(l), r);
+                    push_child(&mut stack, r, r.precedence() <= p || guard_range);
                     stack.push(Work::Str(if excel && *op == BinOp::Intersect {
                         " "
                     } else {
@@ -286,6 +309,47 @@ impl Printer<'_> {
                 }
                 Expr::Missing => {}
             }
+        }
+    }
+
+    /// The text of a leaf operand as printed, or `None` for anything that
+    /// prints with brackets or parentheses around it.
+    fn leaf_text(&self, e: &Expr) -> Option<String> {
+        match e {
+            Expr::Name(NameRef::Unresolved(t)) => Some(t.to_string()),
+            Expr::Name(NameRef::Id(id)) => self.resolver.name_text(*id).map(|t| t.to_string()),
+            Expr::Num(x) => Some(fmt_num(*x)),
+            Expr::Bool(b) => Some((if *b { "TRUE" } else { "FALSE" }).to_string()),
+            Expr::Ref(r) => self.a1_ref(&r.clone().normalized(self.origin)),
+            _ => None,
+        }
+    }
+
+    /// Whether `left:right`, printed without parentheses, would re-lex in
+    /// the target dialect with one token spanning the `:` (`a:a`, `g:W.rq`,
+    /// `A1:B2`). Bracketed OpenFormula references never merge that way.
+    fn range_merges(&self, left: &Expr, right: &Expr) -> bool {
+        if self.dialect.is_open_formula() {
+            return false;
+        }
+        let (Some(lt), Some(rt)) = (self.leaf_text(left), self.leaf_text(right)) else {
+            return false;
+        };
+        let text = format!("{lt}:{rt}");
+        let at = lt.len();
+        lex(&text, self.dialect)
+            .0
+            .iter()
+            .any(|t| t.span.start < at && t.span.end > at)
+    }
+
+    /// Whether the printed `e` ends in a word (a name, `TRUE`, the column
+    /// letters of `A:B`) that a following `!` would turn into a sheet name.
+    fn ends_in_word(&self, e: &Expr) -> bool {
+        match last_operand(e) {
+            Expr::Name(_) | Expr::Bool(_) => true,
+            Expr::Ref(RefExpr::Cols { .. }) => !self.dialect.is_open_formula(),
+            _ => false,
         }
     }
 
