@@ -41,6 +41,55 @@ The machine-readable twin of this file is `calc-functions.json` (same data, plus
 
 Notes on the count: the built-in total includes MULTIPLE.OPERATIONS (no wizard entry, but a real function, ODF `MULTIPLE.OPERATIONS`) and NUMBERVALUE (declared but suppressed and unimplemented in AOO - see its entry). Excluding NUMBERVALUE gives 295 usable built-ins and 404 usable functions overall. Operators (`+ - * / ^ & = <> < > <= >= % ~ ! :` and unary `-`) and internal opcodes (GOALSEEK/ocBackSolver, MULTIRANGE, MVALUE, ocErrCell) are not functions and are listed in calc-features-inventory.md.
 
+## 1.0 status (checked 2026-10-23)
+
+Status key: **done** = registered and covered by conformance cases; **partial** = registered, behaviour reduced; **deviation** = registered, differs from AOO on purpose (see `docs/parity-deviations.md`); **missing**; **unverified**.
+
+How this was checked: `cargo run -p xtask -- function-coverage --check` reports 408/408 registered (all 405 AOO 4.1 functions plus 3 extensions; the generated list is `docs/functions/coverage.md`). Spot evaluations were run with `tally-cli eval`. 5,003 conformance cases live in `tests/conformance/` and `crates/tally-functions/tests/`. They were written from the AOO source; the check against a running AOO (`xtask aoo-oracle`) has not been run, so behaviour that depends on the source reading alone is **unverified** against the oracle.
+
+| Category | Tally registered | Inventory above | Note |
+|---|---:|---:|---|
+| Database | 12 | 12 | done |
+| Date&Time | 18 | 17 | +ISOWEEKNUM (one-argument Excel/OOXML function; two-argument ODF `ISOWEEKNUM` is AOO's WEEKNUM) |
+| Financial | 22 | 22 | done; ODDFPRICE and ODDFYIELD are in Add-in |
+| Information | 17 | 17 | CURRENT partial |
+| Logical | 9 | 7 | +IFERROR, +IFNA |
+| Mathematical | 68 | 68 | done |
+| Array | 14 | 14 | done |
+| Statistical | 80 | 80 | done |
+| Spreadsheet | 22 | 22 | DDE and STYLE partial |
+| Text | 37 | 37 | done; NUMBERVALUE works although AOO 4.1 suppresses it |
+| Add-in | 109 | 109 | done; ODDF* deviation |
+| **Total** | **408** | **405** | |
+
+The registry has 408 entries against the inventory's 405: the three extra functions are IFERROR, IFNA and ISOWEEKNUM. NUMBERVALUE is one of the 405 (declared in AOO 4.1 but suppressed there) and is implemented in Tally.
+
+### Functions that are not plain "done"
+
+| Function | Status | Note |
+|---|---|---|
+| DDE | partial | Registered, always `#N/A`: DDE is disabled by policy (`docs/security.md`) |
+| CURRENT | partial | Registered, always `#N/A`: no running-value hook in the evaluator |
+| STYLE | partial | Returns 0; the style is not applied (a function cannot change formatting) |
+| HYPERLINK | done | Returns the text; opening a link is a click handled in Rust (http, https, mailto only) |
+| GETPIVOTDATA | done | Both AOO and Excel forms through `EvalContext::pivot_data` (`docs/functions/engine-hooks.md`) |
+| MULTIPLE.OPERATIONS | done | Sandbox with work caps (Err:512 past the caps) |
+| EUROCONVERT, CONVERT | done | Euro table built in; the Euro Converter wizard is not (features inventory 31) |
+| ODDFPRICE, ODDFYIELD | deviation | AOO 4.1 returns `#VALUE!`; Tally implements the Excel formula |
+| NPV, IRR, MIRR | deviation | Accept inline arrays (AOO: references only, Err:504) |
+| SUBTOTAL | deviation | Codes 101-111 exist (AOO 4.1 has 1-11 only) |
+| WEEKNUM | done | AOO rule (4-day minimum; every mode other than 1 starts on Monday); XLSX export has no exact Excel equivalent |
+| MROUND | done | Differing signs round as in AOO (Excel/LO give an error) |
+| LEN, MID, LEFT, RIGHT, FIND, SEARCH, REPLACE | deviation | Unicode scalar values, not UTF-16 units |
+| COUNTIF family, MATCH, LOOKUP, D-functions | deviation | Criteria compare by code point and ignore case by default; regex uses the Rust `regex` syntax |
+| Elementwise array operators, SUMPRODUCT | deviation | Larger-extent rule (Excel/LO), not AOO's smaller extent |
+| VALUE, DATEVALUE, TIMEVALUE | unverified | Locale-aware (en/de/fr/es); behaviour for `VALUE("TRUE")`, `VALUE("")` against AOO not checked |
+| PROPER, SUBSTITUTE, TRUNC, FREQUENCY | done | Aligned to AOO after correctness reviews 1-2 |
+| BAHTTEXT, CELL, INFO, FORMULA | done | `CELL("filename")` needs a saved document; `INFO("system")` gives `MACOSX` on macOS |
+| WEBSERVICE, FILTERXML, ENCODEURL | n/a | Not in AOO 4.1, not registered |
+
+Localised function names exist for de, fr and es only (`docs/l10n.md`).
+
 ## Database (12)
 
 | Name | Signature | Description | Param types (=default) | Returns | Min..Max | Opcode (id) / ODF name |

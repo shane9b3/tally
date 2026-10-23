@@ -9,6 +9,404 @@ Scope: Apache OpenOffice Calc 4.x, taken from `github.com/apache/openoffice` (br
 
 ---
 
+## 1.0 status (checked 2026-10-23)
+
+**Status key.** *done* = implemented (tested where noted); *partial* = implemented with reduced scope; *deviation* = done differently on purpose, see `docs/parity-deviations.md` (IDs such as F1, P4); *missing* = not implemented; *unverified* = could not be confirmed from the code or tests.
+
+**How it was checked.** Commands against `packages/app/src/commands.ts` and the menu (`apps/desktop/src-tauri/src/menu.rs`); keys against `packages/app/src/keymap.ts` (`docs/shortcuts.md` is generated from it and `keymap.test.ts` passes); the model and API against `crates/tally-model/src/lib.rs`, `crates/tally-api/src/dto.rs` and `tools.rs`; functions with `cargo run -p xtask -- function-coverage --check` (408/408) and `tally-cli eval`. The AOO oracle run (`xtask aoo-oracle`) and the 200-file fidelity corpus have not been done, so behaviour that only follows the AOO source is not oracle-confirmed.
+
+The numbered sections after this block keep the original AOO text, which is the specification. Each table here refers to a section by number.
+
+### 0. Limits and defaults
+
+| Item | Status | Note |
+|---|---|---|
+| Rows per sheet 1,048,576 | done | Whole-row/column references end at row 1,048,576 |
+| Columns per sheet | deviation (P1) | 16,384 (A..XFD), not 1,024 |
+| Sheets per document 256 | unverified | |
+| 512 tokens per formula, 1,024-character symbols, nesting 42 | unverified | Err:512 is used by the work budgets |
+| CHOOSE 30 values | done | `CHOOSE` arity 2..31 |
+| Undo steps 100, configurable 1..1000 | unverified | Undo works for every op; no setting found in Options (U17) |
+| Two-digit year window 1930 | unverified | |
+| Null date 1899-12-30 (also 1900, 1904) | done | `DateEpoch`, Options > Calculate > Date |
+| Zoom 100 % default | done | |
+
+### 1. Sheet management
+
+| Item | Status | Note |
+|---|---|---|
+| Insert, delete, rename, move (within the document) | done | `sheet.insert`, `sheet.delete`, `sheet.rename`, `sheet.moveLeft/Right` |
+| Copy sheet | done | `sheet.duplicate`; charts and pivots are re-pointed |
+| Move/Copy to another document | missing | |
+| Insert sheet from file / as link | missing | X23 |
+| Hide and show sheets | done | `sheet.hide`, `sheet.show` |
+| Sheet tab colour | done | `sheet.tabColor` |
+| Multi-sheet selection editing | unverified | Planned in wave 5 item 31 |
+| Ctrl+PageUp/PageDown sheet navigation | done | Shift to extend the sheet selection is unverified |
+| Navigator (F5) | partial | Sheets, names, database ranges, charts, pivots, notes, scenarios; no images, OLE or drawing objects |
+| Sheet events | missing | No scripting (T15) |
+| Scenario sheets | done | See 17 |
+| Sheet references and quoting | done | `Sheet1.A1`, `'My Sheet'.A1`, Excel `Sheet1!A1` |
+
+### 2. Cell editing and input
+
+| Item | Status | Note |
+|---|---|---|
+| Enter and its direction | done | Options > Input |
+| Shift+Enter | done | Moves up |
+| Alt+Enter commit into the whole selection | deviation (U7) | `⌥↩` fills the selection with the active cell when not editing |
+| Ctrl+Shift+Enter array formula | done | `⌃⇧↩` |
+| Ctrl+Enter line break in a cell | deviation (U7) | `⌥↩` while editing |
+| F2, Esc | done | |
+| Backspace clears, Delete opens Delete Contents | done | An option turns the dialog off |
+| Switch to edit mode on Enter, Expand formatting, Expand references, Use Tab column, Printer metrics | missing | Not in Options > Input |
+| Show references in colour while editing | unverified | Point mode exists (`formulaEdit.ts`) |
+| Highlight selection in headers, overwrite warning when pasting, detective auto-refresh | unverified | |
+| Automatic number recognition (dates, percent, currency, fractions, booleans) | done | Locale-aware (en, de, fr, es) |
+| Leading apostrophe forces text, leading `+`/`-` starts a formula | unverified | |
+| Alt+arrows row height / column width (Shift = optimal) | done | |
+| Ctrl+Alt+Shift+arrows | missing | U5 |
+| Alt+PageUp/PageDown | done | `selection.ts` |
+| Insert / Delete Cells dialogs | done | `sheet.insertCells`, `sheet.deleteCells`, `⌃⌘+` / `⌃⌘−` |
+| Paste Special (selection types, operations, skip empty, transpose, link, shift) | partial | Paste values, Paste Special dialog, transpose; "link" and "shift cells" unverified |
+| Selection list | deviation (U1) | `⌃D` |
+| Merge cells with data prompt | done | |
+| Text to Columns | done | `data.textToColumns`; T7 notes a quote difference |
+| Recognise column/row labels in formulas | missing | P3 |
+
+### 3. Selection and navigation
+
+| Item | Status | Note |
+|---|---|---|
+| Click, Shift-click, Ctrl-click multi-range | done | Copying several ranges copies the last one only |
+| Row/column header click selects | done | |
+| Shift+Space, Ctrl+Shift+Space | missing | U5 |
+| Ctrl+A | done | Data first, then everything |
+| Ctrl+* and Ctrl+/ (numpad) | done | Also `⇧⌘8` for the data area |
+| F8 / Shift+F8 | done | |
+| Shift+Backspace, Ctrl+Backspace | missing | |
+| Ctrl+arrows, Home/End, Ctrl+Home/End, PageUp/PageDown | done | |
+| Tab / Shift+Tab | partial | Next/previous cell; skipping protected cells unverified |
+| Name Box | done | `⇧⌘T` focuses it |
+
+### 4. Fill and AutoFill
+
+| Item | Status | Note |
+|---|---|---|
+| Fill handle with AutoFill analysis (linear, dates, text+number, sort lists, formulas) | unverified | `fill.ts` and `crates/tally-engine/src/fill.rs` exist; each rule not checked |
+| Ctrl-drag copies; filtered data copies | unverified | |
+| Fill Series dialog | done | `edit.fillSeries` |
+| Fill Down / Right | done | `⌘D`, `⌘R` |
+| Fill Up / Left | unverified | Planned with the series dialog |
+| Fill Sheet | missing | |
+| Sort lists (Options) | done | |
+
+### 5. Cell formatting
+
+| Item | Status | Note |
+|---|---|---|
+| Format Cells dialog (`⌘1`) | partial | Numbers, Font, Alignment, Borders, Background, Protection; no Font Effects beyond underline, strike and colour; no Asian Typography |
+| Font family, size, bold, italic | partial | Regular and bold only (G1) |
+| Font effects (relief, outline, shadow, wave underline, emphasis) | missing | G2 |
+| Underline single / double | done | |
+| Alignment: horizontal, vertical, indent, wrap, shrink, rotation, stacked | done | |
+| Alignment: Filled, text direction, hyphenation | missing | G3 |
+| Borders: styles, colours, diagonals | partial | No spacing to contents, no shadow (G4) |
+| Background colour | done | |
+| Cell protection: Protected, Hide formula | done | "Hide all" and "Hide when printing" are in the ODS styles; the UI for them is unverified |
+| Merge and unmerge | done | |
+| Ctrl+B/I/U, L/E/R/J, Ctrl+Shift+1..6 | deviation (U6) | Different keys for alignment; no justify key |
+| Default formatting (Ctrl+M) | done | `edit.clearFormats`, `⌘M` |
+| AutoFormat | partial | Presets and options (`format.autoFormat`); adding, renaming and deleting presets unverified |
+| Row height, column width, optimal size, hide/show | done | |
+| Group and outline (F12 / Ctrl+F12), AutoOutline | done | |
+| Value highlighting (Ctrl+F8) | done | |
+
+### 6. Number format codes
+
+| Item | Status | Note |
+|---|---|---|
+| Sections, conditions, colours, literals, `_`, `*`, `@` | done | `tally-numfmt`; about 75 TEXT() pairs compared with LibreOffice/AOO output in correctness review 1 |
+| Digits, thousands, scaling, scientific, fractions | done | |
+| Date and time codes, elapsed `[h]`, AM/PM, Q, WW | done | |
+| `[$sym-LCID]` currency / locale | done | |
+| `[NatNum]`, `[DBNum]` | partial | Parsed; rendering unverified |
+| Calendar modifiers (`[~buddhist]` ...), era codes (E, G, R) | unverified | |
+| Format categories and dialog options | partial | Format dialog present; language selector unverified |
+| ODS fourth (text) section | missing | X15 |
+
+### 7. Styles
+
+| Item | Status | Note |
+|---|---|---|
+| Cell styles Default, Result, Result2, Heading, Heading1, parents | done | Styles panel `⌘F11` |
+| Create from selection, update, paint can | done | |
+| Page styles (Default, Report) | missing | Page setup is per sheet (G8) |
+| Load styles from another document | unverified | |
+| STYLE() | partial | Returns 0, applies nothing |
+| Conditional formats apply cell styles | deviation (G9) | |
+
+### 8. Conditional formatting
+
+| Item | Status | Note |
+|---|---|---|
+| Cell value / formula conditions, all operators, first match wins | done | |
+| Colour scales, data bars, icon sets | done | Not in AOO 4.x; Tally extension |
+| Three-row dialog limit | deviation | Rule count is not limited |
+
+### 9. Data validation
+
+| Item | Status | Note |
+|---|---|---|
+| Allow: whole, decimal, date, time, range, list, text length | done | |
+| Operators, min/max, allow empty, selection list | done | Sorted-list option unverified |
+| Input help, error alert Stop / Warning / Information | done | |
+| Error action Macro | missing | G10 |
+| Mark Invalid Data | done | `tools.markInvalid` |
+
+### 10. Sort
+
+| Item | Status | Note |
+|---|---|---|
+| Keys, ascending/descending, case sensitive, labels, include formats, copy to, custom order, left to right | done | Maximum number of keys unverified |
+| Collation language | deviation (F2) | Code-point order |
+| Extend-selection prompt | unverified | |
+| Sort ascending / descending buttons | done | `data.sortAsc`, `data.sortDesc` |
+
+### 11. Filters
+
+| Item | Status | Note |
+|---|---|---|
+| AutoFilter with value list and empty entry | done | |
+| AutoFilter Top 10 | unverified | The standard filter has largest / smallest |
+| Standard filter: operators, AND/OR, options | partial | Operators in T2; regex is Rust syntax (P4) |
+| Advanced filter | done | |
+| Reset filter, Hide AutoFilter | done | `data.resetFilter`, `data.clearFilters` |
+
+### 12-13. Subtotals and DataPilot
+
+| Item | Status | Note |
+|---|---|---|
+| Subtotals: 3 groups, 11 functions, page break, pre-sort, remove | done | T7 lists a grand-total difference |
+| DataPilot fields (page, column, row, data) and 11 functions | done | |
+| Show data as (difference, %, running total, index ...) | done | |
+| Field options: subtotals, sort, AutoShow, hide items, show items without data | done | |
+| Layout: tabular | done | |
+| Layout: outline | missing | T5 |
+| Captions for several data fields | partial | T5 |
+| Result options: ignore empty rows, identify categories, totals, drill to details | done | |
+| Add filter button | unverified | |
+| Grouping: numeric, dates, manual | done | |
+| Source: sheet range | done | |
+| Source: registered data source, external service | missing | T4 |
+| GETPIVOTDATA | done | |
+
+### 14. Charts
+
+| Item | Status | Note |
+|---|---|---|
+| Types: column, bar, pie, area, line, scatter, bubble, radar, stock (4 variants) | done | |
+| Stacked and percent stacked, combo (columns and lines), secondary axis | done | |
+| Donut, exploded pie | unverified | |
+| Radar "filled", cylinder / cone / pyramid shapes | unverified | |
+| 3D charts and scene settings | missing | Flag stored, not rendered (T10) |
+| Titles, legend, axes, grids, data labels | done | |
+| Axis scale: logarithmic, reverse | done | |
+| Axis scale: date axis, crossing positions | unverified | |
+| Trend lines (linear, log, exp, power), equation, R-squared | done | |
+| Mean-value line, error bars | done | Dropped on XLSX save (X5) |
+| Wizard (4 steps) | deviation (T10) | Editor panel |
+| Chart data table (internal data) | unverified | |
+| Live update from cell ranges | done | |
+
+### 15-19. Goal Seek, Solver, Scenarios, Consolidate, Multiple Operations
+
+| Item | Status | Note |
+|---|---|---|
+| Goal Seek | done | `tools.goalSeek` |
+| Solver: target, max/min/value, constraints, time limit | partial | Linear only (T9); options differ |
+| Scenarios | done | T8 lists differences |
+| Consolidate: 11 functions, labels, link | partial | T7 |
+| Multiple Operations | done | `data.multipleOperations`; capped (P14) |
+
+### 20. Names and database ranges
+
+| Item | Status | Note |
+|---|---|---|
+| Define names | done | `data.defineName` (`⌘F3`), `data.manageNames` |
+| Name options (print range, filter, repeat) | unverified | |
+| Insert Name list, Create Names from labels | done | `data.createNamesFromLabels` |
+| Label ranges | missing | P3 |
+| Database ranges (define) | done | `data.defineDatabaseRange` |
+| Select Range, Refresh Range | unverified | |
+| Registered data sources (F4) | missing | |
+| Sheet-local names | done | Extension |
+
+### 21. External data and links
+
+| Item | Status | Note |
+|---|---|---|
+| Link to External Data, Web Query, sheet links, Edit > Links | missing | Disabled by policy (P10, X23) |
+| External cell references | deviation (P10) | `#REF!` with a warning |
+| DDE | deviation (F11, P10) | |
+
+### 22. Hyperlinks, comments, detective
+
+| Item | Status | Note |
+|---|---|---|
+| Insert Hyperlink, HYPERLINK() | done | `⌥⌘K`; opens on `⌘`-click through Rust (U21) |
+| Hyperlink as a button, New Document target | unverified | |
+| Comments: insert, show/hide, indicator, author and date | done | `⇧F2`, `⌥⌘C` |
+| Comments printable | partial | T13 |
+| Trace precedents / dependents / error, remove traces, mark invalid | done | |
+| Fill Mode, Refresh Traces, AutoRefresh | unverified | T12 |
+
+### 23. Find, spelling, AutoCorrect
+
+| Item | Status | Note |
+|---|---|---|
+| Find & Replace: match case, entire cells, formulas / values, replace all | done | |
+| Regular expressions | deviation (P4, T1) | Rust `regex`, not ICU |
+| Wildcards | done | Extra mode |
+| Similarity search, search for styles | missing | T1 |
+| Search in comments, all sheets, current selection only | unverified | |
+| Find bar | done | `⌘F` |
+| Spelling, AutoSpellcheck, thesaurus, hyphenation, Hangul/Hanja | missing | U8 |
+| AutoCorrect: two initial capitals, sentences, dashes, ordinals, quotes, replacement table | done | Options > AutoCorrect (six options) |
+| AutoCorrect exceptions list, automatic bold/underline, URL recognition | missing | Not among the six options |
+| AutoInput | done | |
+| Function name suggestions while typing | done | Tab / Enter accepts |
+| Function tips in the input line | unverified | |
+
+### 24. Protection
+
+| Item | Status | Note |
+|---|---|---|
+| Protect sheet with password | done | `tools.protectSheet` |
+| Protect document structure | done | `tools.protectDocument` |
+| Cell protection attributes | done | |
+| File password to open / to modify | missing | X11 |
+| Read-only mode | unverified | |
+| Record changes, shared workbooks | missing | T14 |
+
+### 25. Printing and page setup
+
+| Item | Status | Note |
+|---|---|---|
+| Print ranges, repeat rows / columns | done | |
+| Page break preview, manual breaks | done | `view.pageBreakPreview`, `insert.pageBreak` |
+| Paper, orientation, margins, centring | done | |
+| Scaling: percent, fit width/height, fit to pages | done | |
+| Page order, first page number | done | |
+| Print headers, grid, comments, charts, formulas, zero values | done | |
+| Print objects / drawing objects switches | partial | R6 |
+| Header / footer on, margins, spacing, height, AutoFit | done | R4 |
+| Same content left/right | missing | R1 |
+| Layout (mirrored, only left/right), Borders and Background tabs | missing | R2, R3 |
+| Header/footer editor with fields and presets | partial | R5 |
+| Suppress empty pages | done | `suppress_empty_pages` |
+| Print only selected sheets | unverified | |
+| PDF export | done | `file.exportPdf`; X21 |
+| Print preview | done | `file.printPreview` |
+| Native print | partial | R7 |
+
+### 26. Keyboard shortcuts
+
+Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differences from the AOO table are U1-U7. Not bound: F4, F7, Ctrl+F7, Alt+F11, Shift+F4, Shift+Space, Ctrl+Shift+Space, Shift+Backspace, Ctrl+Backspace, Ctrl+Alt+Shift+arrows, Ctrl+;, Ctrl+Shift+R, Ctrl+J, Ctrl+Shift+B/P. The document-tab keys (`⌃⇥`, `⌃⇧⇥`, `⇧⌘]`, `⇧⌘[`, `⌥⌘1-9`) are Tally additions.
+
+### 27. Formula syntax
+
+| Item | Status | Note |
+|---|---|---|
+| Calc A1, ODF (`of:`), Excel A1 grammars | done | |
+| Excel R1C1 grammar | missing | P2 |
+| Reference forms, 3D ranges, sheet quoting | done | |
+| Whole-column references in Calc A1 | deviation (F9) | |
+| Operators and precedence (`=-2^2` = 4, `2^3^2` = 64) | done | Checked with `tally-cli` |
+| Union `~` | done | Fixed in review 2 (H5) |
+| Intersection `!` | unverified | |
+| Inline arrays (`;` columns, `\|` rows), nested array error | done | |
+| Array formulas, implicit intersection | done | |
+| Error values and Err:5xx codes | done | `Err:522`, `Err:502`, `#N/A` seen in evaluations |
+| Basic macros as functions | missing | F12 |
+| Iterations | done | |
+| Case sensitive | deviation (F3) | Default off |
+| Precision as shown | done | |
+| Whole-cell criteria matching | done | |
+| Regular expressions in formulas | deviation (P4) | `criteria_mode` setting |
+| Find labels | missing | P3 |
+| Limit decimals for General | unverified | |
+| AutoCalculate toggle | deviation (U3) | Always on |
+| Volatile functions, hard recalculation | done | `⇧⌘F9` |
+| Status-bar function choice | partial | Sum, count, average shown (U19) |
+
+### 28. View
+
+| Item | Status | Note |
+|---|---|---|
+| Freeze panes, split window | done | Split is not written to XLSX (X4) |
+| Zoom presets, full screen | done | The 20 % - 400 % range is unverified |
+| Grid lines, headers, zero values, formulas, value highlighting | done | Options > View |
+| Page breaks, guides, large handles, anchor, text-overflow indicator | unverified | |
+| Objects / charts show, hide, placeholder | unverified | |
+| Bars and toolbars on/off | done | `view.toolbar`, `view.formattingBar`, `view.formulaBar`, `view.statusBar` |
+| Scroll bars, outline symbols toggles | unverified | |
+| Measurement units | missing | G14 |
+
+### 29. Undo and redo
+
+| Item | Status | Note |
+|---|---|---|
+| Multi-level undo / redo for edits, format, structure, sort, filter, subtotals, DataPilot, sheets, names, outline, merge | done | |
+| Depth setting 1-1000, history drop-down | unverified | |
+| Repeat last command | done | `⇧⌘Y` |
+
+### 30. Import and export formats
+
+| Format | Read | Write | Note |
+|---|---|---|---|
+| ODS, OTS | done | done | |
+| SXC, STC | done | missing | X9 |
+| XLS BIFF8 / BIFF5 | partial | missing | X7; BIFF2-4 refused |
+| XLSX | done | done | Write is an extension (X1); gaps in X3 |
+| XLTX, XLT, XLSB | missing | missing | X2, X10 |
+| CSV / TXT | done | done | X17; export has an injection guard (X18) |
+| HTML | done | done | Web Query missing (X19) |
+| XHTML export | missing | missing | |
+| dBase DBF | done | done | X20 |
+| DIF, SYLK, Lotus, Quattro Pro, RTF, StarCalc 1-5, UOF, Pocket Excel, MiniCalc, SpreadsheetML 2003 | missing | missing | X10 |
+| PDF | n/a | done | |
+| CSV import options (separators, text delimiter, from row, character set, quoted as text, detect special numbers, column types, fixed width) | partial | | X17 |
+| CSV export options (character set, delimiters, as shown, quote all) | unverified | | |
+| VBA import as comments | missing | VBA is never read |
+
+### 31. Other tools
+
+| Item | Status | Note |
+|---|---|---|
+| Function Wizard (`⌘F2`): Last Used, parameters, live result | done | |
+| Navigator | partial | See section 1 |
+| Data source browser, Gallery | missing | |
+| Function List sidebar | unverified | The wizard lists functions |
+| Special Character | missing | No command |
+| Insert image, chart | done | `insert.image`, `insert.chart` |
+| OLE objects, floating frames, form controls, drawing shapes | missing | T11 |
+| Macros | missing | T15 |
+| Sort lists | done | |
+| Change tracking | missing | T14 |
+| Document statistics | done | `file.documentStats` |
+| Formula bar, status bar | done | |
+| Euro Converter wizard | missing | U9 |
+| Data > Validity, Group and Outline, Text to Columns | done | |
+| Templates, Save as Template | done | `file.templates`, `file.saveAsTemplate` (`⇧F11`) |
+| Autosave and recovery | done | Extension; interval in Options |
+
+### Items marked wrongly
+
+The original file carried no status marks, so nothing was marked wrongly. Two statements in the AOO text no longer hold for Tally and are covered by the deviations: section 24 ("password to open" is not supported, X11) and section 27.2 ("A:A only in Excel A1 syntax", F9).
+
+---
+
 ## 0. Hard limits and global defaults
 
 | Item | Value | Source |
