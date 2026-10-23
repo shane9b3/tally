@@ -171,10 +171,17 @@ describe("ARIA mirror", () => {
   it("mirrors the grid: role, counts, active descendant, live announcements", () => {
     const { grid, ta } = make({ aria: { sheetName: "Budget" } });
     const root = container.querySelector(".tally-grid") as HTMLElement;
-    expect(root.getAttribute("role")).toBe("grid");
-    expect(root.getAttribute("aria-rowcount")).toBe("1048576");
-    expect(root.getAttribute("aria-colcount")).toBe("16384");
-    expect(root.getAttribute("aria-label")).toBe("Sheet Budget");
+    // The grid role sits on an offscreen node that holds only rows (ARIA);
+    // the cell editor and the live region are its siblings in the root.
+    expect(root.getAttribute("role")).toBeNull();
+    const g = root.querySelector('[role="grid"]') as HTMLElement;
+    expect(g).toBe(grid.ariaMirror.grid);
+    expect(g.getAttribute("aria-rowcount")).toBe("1048576");
+    expect(g.getAttribute("aria-colcount")).toBe("16384");
+    expect(g.getAttribute("aria-label")).toBe("Sheet Budget");
+    expect([...g.children].every((c) => c.getAttribute("role") === "row")).toBe(true);
+    expect(g.contains(ta)).toBe(false);
+    expect(g.contains(grid.ariaMirror.live)).toBe(false);
     const id = ta.getAttribute("aria-activedescendant");
     expect(id).toBeTruthy();
     const cell = root.querySelector(`#${id}`) as HTMLElement;
@@ -192,7 +199,7 @@ describe("ARIA mirror", () => {
     grid.update({ aria: { sheetName: "Budget", activeFormula: "=A1*2" } });
     expect(grid.ariaMirror.announcement).toContain("formula =A1*2");
     grid.destroy();
-    expect(root.getAttribute("role")).toBeNull();
+    expect(root.querySelector('[role="grid"]')).toBeNull();
   });
 });
 

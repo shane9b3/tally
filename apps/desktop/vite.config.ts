@@ -15,5 +15,17 @@ export default defineConfig({
     target: "safari16",
     chunkSizeWarningLimit: 1024,
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        // Stable vendor chunks: they change only when the dependency does,
+        // so the (frequently changing) app chunk is the only one re-fetched.
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (/[\\/]node_modules[\\/](\.pnpm[\\/])?(react|react-dom|scheduler)[@\\/]/.test(id)) return "vendor-react";
+          if (id.includes("echarts") || id.includes("zrender")) return "vendor-echarts";
+          return undefined;
+        },
+      },
+    },
   },
 });

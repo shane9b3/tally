@@ -15,17 +15,14 @@ import "./global.css";
 import type { EngineClientV3, ShellClient } from "@tally/bridge";
 import { useEffect, useMemo, useState } from "react";
 import { buildCommands } from "./commands";
-import { CommandPalette } from "./components/CommandPalette";
 import { ContextMenu, openResizeDialog } from "./components/ContextMenu";
 import { CellPopovers } from "./components/CellPopovers";
-import { Dialogs } from "./components/Dialogs";
 import { FilterPopover } from "./components/FilterPopover";
 import { FindBar } from "./components/FindBar";
 import { FormatBar } from "./components/FormatBar";
 import { FormulaAssist } from "./components/FormulaAssist";
 import { FormulaBar } from "./components/FormulaBar";
 import { GlancePanel } from "./components/GlancePanel";
-import { ShortcutsModal } from "./components/ShortcutsModal";
 import { GridHost } from "./components/GridHost";
 import { SheetTabs } from "./components/SheetTabs";
 import { Sidebar } from "./components/Sidebar";
@@ -33,9 +30,7 @@ import { StatusBar } from "./components/StatusBar";
 import { SavePrompt } from "./components/SavePrompt";
 import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
-import { ChartEditorPanel } from "./charts/ChartEditorPanel";
 import { useChartStore } from "./charts/chartStore";
-import { PrintPreview } from "./print/PrintPreview";
 import { W56Chrome, W56Panels } from "./data/W56Chrome";
 import { useW56Store } from "./data/store";
 import { TitleStrip } from "./chrome/ChromeUi";
@@ -43,8 +38,20 @@ import { usePeekStore } from "./chrome/chromeActions";
 import { ControllerContext } from "./context";
 import { AppController } from "./controller";
 import { useUiStore } from "./stores/uiStore";
+import { usePrintStore } from "./print/printStore";
 import { useKeymap } from "./useKeymap";
+import * as chunks from "./lazyChunks";
+import { LazySlot, lazyPart } from "./lazyPart";
 import styles from "./App.module.css";
+
+// Dialogs, the palette, print preview and the chart editor are separate chunks.
+// Each is mounted only while open (the stores are the source of truth), and
+// `preloadChunks` has usually fetched them already by the first open.
+const CommandPalette = lazyPart(() => chunks.loadCommandPalette().then((m) => m.CommandPalette));
+const Dialogs = lazyPart(() => chunks.loadDialogs().then((m) => m.Dialogs));
+const ShortcutsModal = lazyPart(() => chunks.loadShortcutsModal().then((m) => m.ShortcutsModal));
+const PrintPreview = lazyPart(() => chunks.loadPrintPreview().then((m) => m.PrintPreview));
+const ChartEditorPanel = lazyPart(() => chunks.loadChartEditor().then((m) => m.ChartEditorPanel));
 
 export interface Platform {
   /** macOS overlay title bar: leave room for the traffic lights. */
@@ -75,6 +82,10 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const glanceOpen = useUiStore((s) => s.glanceOpen);
   const chartEditorOpen = useChartStore((s) => s.editorOpen);
+  const dialogOpen = useUiStore((s) => s.dialog !== null);
+  const paletteOpen = useUiStore((s) => s.paletteOpen);
+  const shortcutsOpen = useUiStore((s) => s.shortcutsOpen);
+  const printOpen = usePrintStore((s) => s.open);
   // View ▸ Toolbars (app prefs).
   const bars = useW56Store((s) => s.prefs.chrome.bars);
   const peekFormulaBar = usePeekStore((s) => s.formulaBar);
@@ -104,6 +115,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
     ctl.w56.setCommandRebuilder(() => buildCommands(ctl, uiHooks));
     const detach = ctl.attach();
     void ctl.start(initialTemplate);
+    chunks.preloadChunks();
     onReady?.(ctl);
     return () => {
       offCommands();
@@ -127,7 +139,11 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
             <GridHost />
             <FindBar />
             {glanceOpen ? <GlancePanel /> : null}
-            {chartEditorOpen ? <ChartEditorPanel /> : null}
+            {chartEditorOpen ? (
+              <LazySlot onFail={() => ctl.w5.charts.closeEditor()}>
+                <ChartEditorPanel />
+              </LazySlot>
+            ) : null}
             <W56Panels />
           </div>
           <footer className={styles.footer}>
@@ -135,20 +151,37 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
             {bars.statusBar ? <StatusBar /> : null}
           </footer>
         </main>
-        <CommandPalette />
+        {/* One Suspense per part: Dialogs loading from Print Preview's "Page setup…" must not hide the preview. */}
+        {paletteOpen ? (
+          <LazySlot onFail={() => (useUiStore.getState().setPalette(false), ctl.focusGrid())}>
+            <CommandPalette />
+          </LazySlot>
+        ) : null}
+        {dialogOpen ? (
+          <LazySlot onFail={() => (useUiStore.getState().openDialog(null), ctl.focusGrid())}>
+            <Dialogs />
+          </LazySlot>
+        ) : null}
+        {shortcutsOpen ? (
+          <LazySlot onFail={() => (useUiStore.getState().setShortcuts(false), ctl.focusGrid())}>
+            <ShortcutsModal />
+          </LazySlot>
+        ) : null}
+        {printOpen ? (
+          <LazySlot onFail={() => ctl.w5.print.closePreview()}>
+            <PrintPreview inset={trafficLights} />
+          </LazySlot>
+        ) : null}
         <FormulaAssist />
         <ContextMenu />
         <FilterPopover />
         <CellPopovers />
-        <Dialogs />
-        <ShortcutsModal />
-        <PrintPreview inset={trafficLights} />
         <W56Chrome />
         <SavePrompt />
         <Toasts />
         {about ? (
           <div className={styles.aboutOverlay} onMouseDown={() => setAbout(false)}>
-            <div className={styles.about} role="dialog" aria-label="About Tally">
+            <div className={styles.about} role="dialog" aria-modal="true" aria-label="About Tally" tabIndex={-1} ref={(el) => el?.focus()} onKeyDown={(e) => (e.key === "Escape" || e.key === "Enter" ? (e.preventDefault(), setAbout(false), ctl.focusGrid()) : e.key === "Tab" && e.preventDefault())} data-testid="about">
               <div className={styles.logo}>T</div>
               <div className={styles.aboutTitle}>Tally</div>
               <div className={styles.aboutText}>Version 0.3.0 (preview)</div>

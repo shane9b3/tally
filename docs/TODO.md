@@ -14,7 +14,6 @@ real-file corpus).
 - Gates at 7c29f0f: 1,567 Rust tests, 755 TS tests, 60 e2e; clippy and fmt clean; bundle check ok; release bundle builds (Tally.app 27 MiB, dmg 12.4 MiB).
 
 ## Known gaps / follow-ups
-- Formula printer round trip: `g:W.rq` (also `g:NW.rq`, `kg:NW.rq`, `u:jdM.U`) parses, but the printed `=g:W.rq` does not re-parse (Err:501). Found intermittently by the `printable_ascii_never_panics` property test in `crates/tally-formula/tests/fuzz.rs` (random seed, no persistence); pin these inputs as a regression case when fixing.
 - Documents as tabs (child webviews of `win-*` windows, Tauri `unstable` multi-webview; the sidebar's "Open" list; `windows.rs`, `registry.rs`, docs/qa/multi-window-manual.md). Verified natively on macOS only through a scripted probe of the debug build (ACL for child webviews, new tab in the front window, Show Next Tab moving focus/visibility, Move Tab to New Window, Merge All Windows, closing a clean tab, the red button asking a dirty tab, Don't Save closing the window, Quit asking dirty tabs across a window and Cancel, Separate windows mode, File ▸ New with no window). Not checked by hand: what it looks like (sidebar list, traffic lights over child webviews), drag/reorder, keyboard shortcuts through real key presses, Dock reopen, print windows per document, full screen and resizing with several tabs (owner: run the checklist on the release build).
 - Hidden tabs are hidden WKWebViews: WebKit throttles their timers (measured ~0.6 ticks/s for a 1 s interval), so a hidden document's autosave can fire a little late; `document.visibilityState` is `hidden` there.
 - Windows: undecorated windows rely on Tauri's resize handler, which tauri-runtime-wry only attaches to whole-window webviews; with child webviews the top resize edge may not work on Windows (unverified). Linux: child webviews live in a GTK box (unverified).
@@ -28,7 +27,11 @@ real-file corpus).
 - Tauri shell uses one global lock (a slow call blocks all documents); per-document locks planned.
 - `bigattr.ods` (400 MiB XML attribute) still peaks ~800 MB RSS.
 - Windows branch of `open_url`, Windows title bar, Intel macOS / Windows / Linux builds need CI.
-- Main JS chunk is 1.6 MB (echarts); code-split before 1.0.
+- ExcelA1 printing: intersection is written as a space, so a name intersected with a bracketed expression re-reads as a function call (`=a!(0)` prints `=A (0)`, re-parses as `=A(0)`); affects XLSX export of such formulas. The fuzz test only round-trips CalcA1.
+- Exact-match VLOOKUP scans the column per call (~70 µs into 10k rows); 100k lookups ≈ 7 s (docs/perf-baseline.md). Index the lookup column per recalc.
+- ODS reader caps one zip entry at 512 MiB uncompressed, so a ~50 MB ODS (content.xml ≈ 12× larger) can't open. Raise it or document it as the limit.
+- Colour contrast: secondary grey text 4.4:1 / ~3:1, accent-on-tint list rows 3.4:1 (docs/qa/a11y.md) — design-token call.
+- Grid announcements and older dialog labels (V3Dialogs, DataDialogs) still have English literals.
 - XLS import: calamine 0.37 is shielded by a pre-scan, but a hostile file within budget can still use ~1 GB, and an allocation failure there aborts; re-check the pre-scan whenever calamine is upgraded.
 - Pivot refresh keeps every previous table on the undo stack (no byte budget on undo).
 - Pivot refresh overwrite prompt is covered by a mock-level test only (no e2e of the dialog flow).
@@ -38,10 +41,10 @@ real-file corpus).
 1. Functions: keep 408/408; DDE and macro calls marked unsupported (done).
 2. Conformance ≥ 99 % against the AOO oracle (`xtask aoo-oracle --setup/--run`, isolated profile) — owner runs it locally; record deviations in `docs/functions/deviations.md`.
 3. Fidelity corpus: 200 real ODS/XLSX files, `xtask fidelity` ≥ 98 % lossless, 0 crashes — owner sources the corpus.
-4. Performance benches (100k-formula recalc < 500 ms, 50 MB ODS open < 10 s, `chart_data` 10k points < 20 ms, 20-page PDF < 1 s, 100k-row pivot < 500 ms, 60 fps scroll) gated on three OSes — needs runners.
-5. Accessibility: VoiceOver walkthrough (`docs/qa/a11y.md`), keyboard-only dialogs, accessibility-snapshot test.
+4. Performance benches (100k-formula recalc < 500 ms, 50 MB ODS open < 10 s, `chart_data` 10k points < 20 ms, 20-page PDF < 1 s, 100k-row pivot < 500 ms, 60 fps scroll) gated on three OSes — needs runners. macOS baseline: `docs/perf-baseline.md` (`cargo xtask perf`).
+5. Accessibility: keyboard-only dialogs and axe/keyboard e2e specs done; VoiceOver walkthrough (`docs/qa/a11y.md`) — owner.
 6. Security: 24 h fuzzing of ODS/XLSX/XLS readers (cargo-fuzz needs a nightly toolchain / CI); review round 4 done.
-7. Parity docs: inventory checklist marked done/deviation, `docs/shortcuts.md`, `docs/parity-deviations.md`.
+7. Parity docs: done (`docs/parity-deviations.md`, inventories marked); ~47 inventory rows still "unverified".
 8. Owner-only: Developer ID + notarization, Windows signing, updater key and hosting, CI secrets/runners (incl. x86_64 macOS), App Store decision, AOO GUI fixtures (charts, pivots, scenarios, encrypted file), Inter TTFs, AOO l10n checkout, corpus.
 
 ## How to run

@@ -9,7 +9,8 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { parseA1Range } from "../a1";
 import { hexToRgba, rgbaToHex } from "../palette";
 import { cx, useController } from "../context";
-import { trapTab } from "../components/Dialogs";
+import { trapTab } from "../components/trapTab";
+import { arrowNav, useReturnFocus, useTitleId } from "../components/dialogA11y";
 import { a1 } from "../dataOps";
 import { t } from "../i18n";
 import dlg from "../components/Dialogs.module.css";
@@ -43,6 +44,8 @@ export function W56Shell({ title, children, onSubmit, ok, valid = true, size = "
   const ctl = useController();
   const picking = useW56Store((s) => s.picking);
   const formRef = useRef<HTMLFormElement>(null);
+  const titleId = useTitleId();
+  useReturnFocus();
   const cancel = () => {
     closeW56();
     onClose?.();
@@ -60,7 +63,7 @@ export function W56Shell({ title, children, onSubmit, ok, valid = true, size = "
         className={cx(dlg.card, size === "wide" && dlg.wide, size === "xwide" && styles.xwide, picking && styles.pickingCard)}
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-labelledby={titleId}
         data-testid={testId}
         onKeyDown={(e) => {
           if (e.key === "Escape") {
@@ -69,6 +72,7 @@ export function W56Shell({ title, children, onSubmit, ok, valid = true, size = "
             cancel();
             return;
           }
+          if (arrowNav(e)) return;
           if (formRef.current) trapTab(formRef.current, e, document.activeElement);
         }}
         onSubmit={(e) => {
@@ -82,7 +86,9 @@ export function W56Shell({ title, children, onSubmit, ok, valid = true, size = "
           if (!keepOpen) ctl.focusGrid();
         }}
       >
-        <h2 className={dlg.title}>{title}</h2>
+        <h2 id={titleId} className={dlg.title}>
+          {title}
+        </h2>
         {picking ? <p className={styles.pickHint}>{t("wizard.select", "Select")}: drag over the cells, then press Enter (Esc cancels).</p> : null}
         {children}
         <div className={dlg.actions}>
@@ -123,7 +129,7 @@ export function Tabs<T extends string>({ tabs, value, onChange, label }: { tabs:
   return (
     <div className={styles.tabs} role="tablist" aria-label={label}>
       {tabs.map((tab) => (
-        <button key={tab.id} type="button" role="tab" aria-selected={value === tab.id} className={value === tab.id ? styles.tabOn : styles.tab} onClick={() => onChange(tab.id)} data-testid={`tab-${tab.id}`}>
+        <button key={tab.id} type="button" role="tab" aria-selected={value === tab.id} tabIndex={value === tab.id ? 0 : -1} className={value === tab.id ? styles.tabOn : styles.tab} onClick={() => onChange(tab.id)} data-testid={`tab-${tab.id}`}>
           {tab.label}
         </button>
       ))}

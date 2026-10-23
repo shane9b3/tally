@@ -10,7 +10,8 @@ import type { AppController } from "../controller";
 import { absoluteRef } from "../dataOps";
 import { useUiStore } from "../stores/uiStore";
 import type { ObjectFeatures } from "../objects/objectFeatures";
-import { chartPngDataUrl, chartSvgsFor, copyPngToClipboard, renderChartSvg } from "./chartSvgs";
+// ECharts is heavy: `chartSvgs` (which registers it) loads on first use.
+const loadSvgs = () => import("./chartSvgs");
 import { objectId, selectedChart, useChartStore } from "./chartStore";
 import type { ChartMounts } from "./chartMounts";
 import { DEFAULT_AXIS } from "./toEcharts";
@@ -172,6 +173,7 @@ export class ChartFeatures {
     if (!c) return;
     const inst = this.mounts?.instance(c.id);
     let ok = false;
+    const { chartPngDataUrl, copyPngToClipboard, renderChartSvg } = await loadSvgs();
     if (inst) ok = await copyPngToClipboard(chartPngDataUrl(inst));
     if (!ok && announce) {
       const data = useChartStore.getState().data[c.id];
@@ -185,17 +187,17 @@ export class ChartFeatures {
   }
 
   /** The SVG of one chart of the active sheet (empty when its data is unknown). */
-  chartSvg(id: number): string | null {
+  async chartSvg(id: number): Promise<string | null> {
     const st = useChartStore.getState();
     const chart = st.charts.find((c) => c.id === id);
     const data = st.data[id];
-    return chart && data ? renderChartSvg(chart, data) : null;
+    return chart && data ? (await loadSvgs()).renderChartSvg(chart, data) : null;
   }
 
   /** The `ChartSvgDto`s of the active sheet (for `prepare_print_job`). */
-  chartSvgsOfActiveSheet(): ChartSvgDto[] {
+  async chartSvgsOfActiveSheet(): Promise<ChartSvgDto[]> {
     const st = useChartStore.getState();
-    return chartSvgsFor(st.sheet, st.charts, st.data);
+    return (await loadSvgs()).chartSvgsFor(st.sheet, st.charts, st.data);
   }
 
   /** The `ChartSvgDto`s of any sheet (fetched; used when printing every sheet). */
@@ -214,7 +216,7 @@ export class ChartFeatures {
         }
       }),
     );
-    return chartSvgsFor(sheet, charts, data);
+    return (await loadSvgs()).chartSvgsFor(sheet, charts, data);
   }
 
   /** The editor's "pick" button: range-pick mode on the grid; resolves to reference text or `null`. */

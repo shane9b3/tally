@@ -802,5 +802,7 @@
   "chrome.item.currency": "Währung",
   "chrome.item.percent": "Prozent",
   "chrome.item.highlight": "Zellen hervorheben",
-  "chrome.item.colorByValue": "Nach Wert einfärben"
+  "chrome.item.colorByValue": "Nach Wert einfärben",
+  "app.loadFailed": "Dieser Teil von Tally konnte nicht geladen werden. Bitte erneut versuchen.",
+  "print.chartsFailed": "Einige Diagramme konnten nicht gezeichnet werden; es wird ohne sie gedruckt."
 }

@@ -204,6 +204,9 @@ export function FunctionWizard() {
                   move(-1);
                 }
               }}
+              role="combobox"
+              aria-expanded="true"
+              aria-autocomplete="list"
               aria-controls="function-wizard-list"
               aria-activedescendant={current ? `fw-${current.name}` : undefined}
               data-testid="wizard-search"

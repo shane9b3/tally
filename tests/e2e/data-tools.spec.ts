@@ -245,8 +245,8 @@ test("sheet tab menu copies, colours and hides sheets", async ({ page }) => {
   await expect.poll(() => recorded(page).then((ops) => ops.at(-1)?.type)).toBe("setTabColor");
   await run(page, "sheet.hide");
   await expect.poll(() => recorded(page).then((ops) => ops.at(-1)?.type)).toBe("setSheetHidden");
-  await expect(page.getByRole("tab")).toHaveCount(1);
+  await expect(page.getByRole("tablist", { name: "Sheets" }).getByRole("tab")).toHaveCount(1);
   await run(page, "sheet.show");
   await page.getByTestId("show-sheet").getByTestId("dialog-ok").click();
-  await expect(page.getByRole("tab")).toHaveCount(2);
+  await expect(page.getByRole("tablist", { name: "Sheets" }).getByRole("tab")).toHaveCount(2);
 });

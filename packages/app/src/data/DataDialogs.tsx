@@ -336,7 +336,7 @@ export function TextToColumnsDialog({ d }: { d: D<"textToColumns"> }) {
       )}
       <div className={styles.row}>
         <span className={styles.rowLabel}>{t("textToColumns.textDelimiter", "Text delimiter")}</span>
-        <select className={dlg.selectSmall} value={st.quote} onChange={(e) => setSt({ ...st, quote: e.target.value as '"' | "'" })}>
+        <select className={dlg.selectSmall} aria-label={t("textToColumns.textDelimiter", "Text delimiter")} value={st.quote} onChange={(e) => setSt({ ...st, quote: e.target.value as '"' | "'" })}>
           <option value='"'>"</option>
           <option value="'">'</option>
         </select>
@@ -777,7 +777,7 @@ export function ShowSheetDialog({ d }: { d: D<"showSheet"> }) {
   const [picked, setPicked] = useState<number[]>(d.hidden[0] ? [d.hidden[0].id] : []);
   return (
     <W56Shell title={t("cmd.sheet.show", "Show sheet").replace(/…$/, "")} ok={t("dialog.ok", "OK")} testId="show-sheet" valid={picked.length > 0} onSubmit={() => void ctl.w56.showSheets(picked)}>
-      <div className={styles.list} role="listbox" aria-label="Hidden sheets">
+      <div className={styles.list} role="listbox" aria-multiselectable="true" aria-label="Hidden sheets">
         {d.hidden.map((s) => {
           const on = picked.includes(s.id);
           return (

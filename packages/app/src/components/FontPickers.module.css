@@ -195,7 +195,12 @@
   background: var(--tally-surface);
 }
 
-.simple:focus-visible {
+/* The focused list's ring is drawn once, by .simple below (not also by the global :focus-visible). */
+.fieldList:focus-visible {
+  outline: none;
+}
+
+.simple:has(:focus-visible) {
   outline: 2px solid var(--tally-accent);
   outline-offset: 1px;
   border-radius: 6px;

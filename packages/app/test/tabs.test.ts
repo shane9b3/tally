@@ -136,7 +136,7 @@ describe("sidebar ▸ Open (OpenDocuments)", () => {
   }
 
   const row = (label: string) => host.querySelector<HTMLElement>(`[data-testid="open-doc-${label}"]`)!;
-  const rows = () => [...host.querySelectorAll<HTMLElement>('[role="option"]')];
+  const rows = () => [...host.querySelectorAll<HTMLElement>('[role="tab"]')];
 
   it("without a tab shell shows this document as the one row", () => {
     const ctl = new AppController(new WebMockClient(), new WebMockClient(), { nativeMenu: false });
@@ -151,7 +151,7 @@ describe("sidebar ▸ Open (OpenDocuments)", () => {
   it("lists this window's tabs first, then the other windows'; highlights this document; edited dot; tooltips", () => {
     const { ctl } = tabController();
     mount(ctl, state(3, "doc-2"), "doc-2");
-    expect(host.querySelector('[role="listbox"]')?.getAttribute("aria-label")).toBe("Open documents");
+    expect(host.querySelector('[role="tablist"]')?.getAttribute("aria-label")).toBe("Open documents");
     expect(rows().map((r) => r.dataset.testid)).toEqual(["open-doc-doc-1", "open-doc-doc-2", "open-doc-doc-3", "open-doc-doc-21"]);
     expect(rows().map((r) => r.querySelector("span:nth-child(2)")?.textContent)).toEqual(["Untitled", "Book 2.ods", "Book 3.ods", "Report.xlsx"]);
     expect(rows().map((r) => r.getAttribute("aria-selected"))).toEqual(["false", "true", "false", "false"]);
@@ -208,10 +208,17 @@ describe("sidebar ▸ Open (OpenDocuments)", () => {
     expect(document.activeElement).toBe(row("doc-1"));
     key("doc-21", "Enter");
     key("doc-3", "Delete");
+    key("doc-2", "Backspace");
     expect(calls).toEqual([
       ["tabActivate", "doc-21"],
       ["tabClose", "doc-3"],
+      ["tabClose", "doc-2"],
     ]);
+    // Nothing focusable inside a tab (the × is pointer-only and hidden from AT).
+    for (const label of ["doc-1", "doc-2", "doc-3", "doc-21"]) {
+      expect(row(label).querySelector('button, a[href], input, [tabindex]')).toBeNull();
+      expect(row(label).querySelector('[data-testid^="open-doc-close-"]')?.getAttribute("aria-hidden")).toBe("true");
+    }
   });
 
   it("drag reorders this window's tabs only (tab_move with the index in this window)", () => {

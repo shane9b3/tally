@@ -1,6 +1,6 @@
 /**
  * Accessibility (wave 5, §4 item 46; W5-0b): the grid's ARIA mirror
- * (`role=grid`, row/column counts, the active-cell descendant, the live
+ * (an offscreen `role=grid` holding only rows, row/column counts, the active-cell descendant, the live
  * region announcing address + value + formula), modal dialogs that trap
  * focus, and the range-pick seam a dialog uses to ask for a range.
  * VoiceOver walkthrough: docs/qa/a11y.md.
@@ -30,13 +30,15 @@ async function cellXY(page: Page, r: number, c: number) {
 
 test("the grid exposes an ARIA mirror and announces the active cell", async ({ page }) => {
   await ready(page);
-  const grid = page.locator(".tally-grid[role='grid']");
+  // The grid role sits on an offscreen node inside the root that owns only rows (ARIA);
+  // the cell editor and the live region are its siblings.
+  const grid = page.locator(".tally-grid [role='grid']");
   await expect(grid).toHaveAttribute("aria-rowcount", "1048576");
   await expect(grid).toHaveAttribute("aria-colcount", "16384");
   await expect(grid).toHaveAttribute("aria-multiselectable", "true");
   await expect(grid).toHaveAttribute("aria-label", /^Sheet /);
 
-  const editor = grid.locator("textarea");
+  const editor = page.locator(".tally-grid textarea");
   const activeId = await editor.getAttribute("aria-activedescendant");
   expect(activeId).toBeTruthy();
   const active = page.locator(`#${activeId}`);
@@ -71,12 +73,12 @@ test("the grid exposes an ARIA mirror and announces the active cell", async ({ p
 
   // Accessibility tree: grid › row › gridcell, plus the status region (the
   // objects layer, group "Objects", sits next to the grid root since W5-5).
-  await expect(grid).toMatchAriaSnapshot(`
+  await expect(page.locator(".tally-grid")).toMatchAriaSnapshot(`
+    - textbox "Cell editor"
     - grid /^Sheet /:
-      - textbox "Cell editor"
       - row /, formula =/:
         - gridcell /, formula =/ [selected]
-      - status
+    - status
   `);
 
   // A multi-cell selection announces its extent.

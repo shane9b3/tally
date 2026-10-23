@@ -63,10 +63,28 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
   };
 
   return (
-    <div className={styles.tabs} role="tablist" aria-label="Sheets">
+    <div className={styles.tabs}>
       <button type="button" className={styles.add} aria-label="Add sheet" title="Add sheet" onClick={() => void ctl.addSheet()}>
         <PlusIcon />
       </button>
+      {/* The tablist holds only the tabs (ARIA); ←/→/Home/End move between sheets. */}
+      <div
+        className={styles.tabList}
+        role="tablist"
+        aria-label="Sheets"
+        onKeyDown={(e) => {
+          const shown = sheets.filter((x) => !x.hidden);
+          const i = shown.findIndex((x) => x.id === active);
+          const j = e.key === "ArrowLeft" ? i - 1 : e.key === "ArrowRight" ? i + 1 : e.key === "Home" ? 0 : e.key === "End" ? shown.length - 1 : null;
+          if (j === null || !(e.target instanceof HTMLElement) || e.target.getAttribute("role") !== "tab") return;
+          e.preventDefault();
+          const list = e.currentTarget;
+          const to = shown[Math.max(0, Math.min(shown.length - 1, j))];
+          if (!to) return;
+          ctl.showSheet(to.id, false);
+          requestAnimationFrame(() => list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus());
+        }}
+      >
       {sheets.filter((s) => !s.hidden).map((s, i) =>
         renaming === s.id ? (
           <RenameInput key={s.id} initial={s.name} onDone={(name) => finishRename(s.id, name)} />
@@ -76,6 +94,7 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
             type="button"
             role="tab"
             aria-selected={s.id === active}
+            tabIndex={s.id === active ? 0 : -1}
             className={cx(
               styles.tab,
               s.id === active && styles.active,
@@ -120,6 +139,7 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
           </button>
         ),
       )}
+      </div>
       {menu ? (
         <Popover
           label="Sheet"

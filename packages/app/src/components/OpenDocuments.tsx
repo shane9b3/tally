@@ -5,7 +5,7 @@
  * Click shows a document (another window comes to the front), × closes it
  * (the shell runs that document's own save prompt), drag reorders this
  * window's tabs, right-click offers Close / Close Others / Move to New
- * Window (the last two for this window's rows only). Keyboard: a listbox
+ * Window (the last two for this window's rows only). Keyboard: a vertical tablist
  * with roving focus, ↑/↓/Home/End, ↩ shows, ⌫/Delete closes.
  *
  * Without a desktop tab shell (the browser build) it shows the one document
@@ -114,6 +114,15 @@ export function OpenDocuments({ dotFor, formatTag }: OpenDocumentsProps) {
       case "Backspace":
         if (shell) void ctl.tabs.close(d.label);
         break;
+      case "ContextMenu":
+      case "F10": {
+        // The row menu from the keyboard (⇧F10 / the menu key).
+        if (e.key === "F10" && !e.shiftKey) return;
+        if (!shell) return;
+        const r = e.currentTarget.getBoundingClientRect();
+        setMenu({ label: d.label, x: r.left + 16, y: r.bottom + 4 });
+        break;
+      }
       default:
         return;
     }
@@ -134,7 +143,7 @@ export function OpenDocuments({ dotFor, formatTag }: OpenDocumentsProps) {
   return (
     <section className={styles.section} data-testid="open-documents">
       <h3 className={styles.heading}>{t("sidebar.open", "Editing")}</h3>
-      <ul className={styles.list} role="listbox" aria-label={t("tabs.label", "Open documents")}>
+      <ul className={styles.list} role="tablist" aria-orientation="vertical" aria-label={t("tabs.label", "Open documents")}>
         {docs.map((d, i) => {
           const inWindow = here.has(d.label);
           const active = d.label === current;
@@ -145,7 +154,7 @@ export function OpenDocuments({ dotFor, formatTag }: OpenDocumentsProps) {
                 if (el) refs.current.set(d.label, el);
                 else refs.current.delete(d.label);
               }}
-              role="option"
+              role="tab"
               aria-selected={active}
               tabIndex={d.label === focused ? 0 : -1}
               title={d.edited ? `${tabTooltip(d, untitled)}\n${editedText(d)}` : tabTooltip(d, untitled)}
@@ -199,11 +208,13 @@ export function OpenDocuments({ dotFor, formatTag }: OpenDocumentsProps) {
               {d.edited ? <span className={styles.editedDot} role="img" aria-label={editedText(d)} /> : null}
               <span className={styles.meta}>{metaOf(d)}</span>
               {shell ? (
-                <button
-                  type="button"
+                // Pointer-only, so not a button: nothing focusable may sit in a tab (and an
+                // aria-hidden one fails axe's aria-hidden-focus). Keyboard users press Delete / ⌫
+                // on the focused tab, or use its menu (⇧F10).
+                <span
                   className={styles.closeDoc}
-                  tabIndex={-1}
-                  aria-label={`${t("tabs.close", "Close")}: ${titleOf(d)}`}
+                  aria-hidden="true"
+                  title={`${t("tabs.close", "Close")}: ${titleOf(d)}`}
                   data-testid={`open-doc-close-${d.label}`}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -211,7 +222,7 @@ export function OpenDocuments({ dotFor, formatTag }: OpenDocumentsProps) {
                   }}
                 >
                   <CloseSmallIcon />
-                </button>
+                </span>
               ) : null}
             </li>
           );

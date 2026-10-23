@@ -102,10 +102,35 @@ describe("dialog focus trap", () => {
     expect(document.activeElement).toBe(a);
     expect(trapTab(form, ev(true), a)).toBe(true);
     expect(document.activeElement).toBe(c);
-    // In the middle the browser's own order applies.
-    expect(trapTab(form, ev(false), a)).toBe(false);
+    // In the middle too (WebKit skips buttons on Tab unless told otherwise).
+    expect(trapTab(form, ev(false), a)).toBe(true);
+    expect(document.activeElement).toBe(form.querySelector("#b"));
     expect(trapTab(form, { key: "Enter", shiftKey: false, preventDefault: () => undefined }, a)).toBe(false);
-    expect(prevented).toBe(2);
+    expect(prevented).toBe(3);
+    form.remove();
+  });
+
+  it("skips tabindex=-1 items and stops once per radio group (the checked radio, else the first)", () => {
+    const form = document.createElement("form");
+    form.innerHTML =
+      '<input id="a"><button id="roving" type="button" tabindex="-1">r</button>' +
+      '<input type="radio" name="g" id="g1"><input type="radio" name="g" id="g2" checked><input type="radio" name="g" id="g3">' +
+      '<input type="radio" name="h" id="h1"><input type="radio" name="h" id="h2">' +
+      '<button id="ok" type="submit">OK</button>';
+    document.body.appendChild(form);
+    const $ = (id: string) => form.querySelector(`#${id}`) as HTMLElement;
+    const ev = (shift = false) => ({ key: "Tab", shiftKey: shift, preventDefault: () => undefined });
+    const order: string[] = [];
+    $("a").focus();
+    for (let i = 0; i < 4; i++) {
+      trapTab(form, ev(), document.activeElement);
+      order.push((document.activeElement as HTMLElement).id);
+    }
+    expect(order).toEqual(["g2", "h1", "ok", "a"]);
+    // From a radio that has the focus, Tab leaves its group.
+    $("g3").focus();
+    trapTab(form, ev(), $("g3"));
+    expect(document.activeElement).toBe($("h1"));
     form.remove();
   });
 });

@@ -14,6 +14,7 @@ import { CHART_KINDS, KindThumb } from "./chartKinds";
 import { selectedChart, useChartStore } from "./chartStore";
 import { DEFAULT_AXIS } from "./toEcharts";
 import styles from "./ChartEditorPanel.module.css";
+import { arrowNav } from "../components/dialogA11y";
 
 const LEGENDS: { id: LegendPos; label: string }[] = [
   { id: "none", label: "None" },
@@ -116,7 +117,7 @@ export function ChartEditorPanel() {
   const hasY2 = draft.y2Axis !== null || series.some((s) => s.secondaryAxis);
 
   return (
-    <aside className={styles.panel} aria-label={t("chart.editor", "Chart editor")} data-testid="chart-editor">
+    <aside className={styles.panel} aria-label={t("chart.editor", "Chart editor")} data-testid="chart-editor" onKeyDown={(e) => void arrowNav(e)}>
       <header className={styles.head}>
         <div>
           <div className={styles.title}>{t("chart.editor", "Chart editor")}</div>
@@ -128,7 +129,7 @@ export function ChartEditorPanel() {
       </header>
       <div className={styles.body}>
         <Section title={t("chart.type", "Type")} open testId="chart-section-type">
-          <div className={styles.kinds} role="radiogroup" aria-label="Chart type">
+          <div className={styles.kinds} role="radiogroup" aria-label="Chart type" data-select-on-focus="false">
             {CHART_KINDS.map((k) => (
               <button key={k.kind} type="button" role="radio" aria-checked={draft.kind === k.kind} className={draft.kind === k.kind ? styles.kindOn : styles.kind} data-kind={k.kind} title={k.label} onClick={() => patch(kindPatch(draft, k.kind))}>
                 <KindThumb kind={k.kind} />
@@ -390,7 +391,7 @@ function Check({ label, checked, onChange }: { label: string; checked: boolean; 
 
 function Segmented<T extends string>({ value, options, onChange }: { value: T; options: { id: T; label: string }[]; onChange: (v: T) => void }) {
   return (
-    <span className={styles.segmented} role="radiogroup">
+    <span className={styles.segmented} role="radiogroup" data-select-on-focus="false">
       {options.map((o) => (
         <button key={o.id} type="button" role="radio" aria-checked={value === o.id} className={value === o.id ? styles.segOn : styles.seg} onClick={() => onChange(o.id)}>
           {o.label}

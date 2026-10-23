@@ -16,7 +16,7 @@ export interface GridKeyRow {
 /** Keys handled by `useW56Keys` (window capture) rather than the keymap table. */
 export const EXTRA_KEYS: readonly GridKeyRow[] = [
   { group: "Edit", keys: "Delete", action: "Delete Contents dialog (⌫ clears at once; Tools ▸ Options ▸ Input turns the dialog off)" },
-  { group: "Edit", keys: "⌥↩", action: "Fill the selection with the entered text" },
+  { group: "Edit", keys: "⌥↩", action: "Not typing in a cell: fill the selection with the entered text" },
   { group: "Edit", keys: "⌃D", action: "Selection list (entries of the column)" },
   { group: "Select", keys: "F8 / ⇧F8", action: "Extend-selection mode / add-selection mode (toggle)" },
   { group: "Select", keys: "⌘* (numpad) / ⇧⌘8", action: "Select the data area" },
@@ -30,7 +30,7 @@ export const EXTRA_KEYS: readonly GridKeyRow[] = [
 
 /**
  * Document tabs (desktop): the native Window menu (handled by the shell,
- * `apps/desktop/src-tauri/src/menu.rs`) and the sidebar's "Open" list
+ * `apps/desktop/src-tauri/src/menu.rs`) and the sidebar's "Editing" list
  * (`components/OpenDocuments.tsx`). Next/previous and by-number switch
  * among the tabs of the front window, also with the sidebar hidden.
  */
@@ -42,7 +42,7 @@ export const TAB_KEYS: readonly { keys: string; action: string }[] = [
   { keys: "⌘W", action: "Close the tab (the window with its last tab); asks to save an edited document" },
   { keys: "—", action: "Window ▸ Move Tab to New Window / Merge All Windows; the open documents are listed below them" },
   { keys: "Click / ×", action: "Sidebar ▸ Open (every open document, this window's first): show it (another window comes to the front) / close it; drag to reorder this window's tabs; right-click for Close, Close Others, Move to New Window" },
-  { keys: "↑ ↓ Home End, ↩ / Space, ⌫", action: "Sidebar ▸ Open with focus: move between documents, show the focused one, close it" },
+  { keys: "↑ ↓ Home End, ↩ / Space, Delete / ⌫", action: "Sidebar ▸ Open with focus: move between documents, show the focused one, close it (asks to save an edited document); ⇧F10 opens its menu" },
 ];
 
 /** The deliberate deviations from the AOO table (listed under the tables). */

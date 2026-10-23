@@ -24,7 +24,7 @@ import type {
   ValidationErrorStyle,
 } from "@tally/bridge";
 import { drawCfIcon } from "@tally/grid";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { cx, useController } from "../context";
 import { t } from "../i18n";
 import { HF_LINE_MM, hfArea, hfAreaHeightMm, pageBoxes, type HfWhich } from "../print/hfLayout";
@@ -135,7 +135,7 @@ function Tabs<T extends string>({ tabs, value, onChange, label }: { tabs: readon
   return (
     <div className={v3.tabs} role="tablist" aria-label={label}>
       {tabs.map((t) => (
-        <button key={t.id} type="button" role="tab" aria-selected={value === t.id} className={value === t.id ? v3.tabOn : v3.tab} onClick={() => onChange(t.id)} data-testid={`tab-${t.id}`}>
+        <button key={t.id} type="button" role="tab" aria-selected={value === t.id} tabIndex={value === t.id ? 0 : -1} className={value === t.id ? v3.tabOn : v3.tab} onClick={() => onChange(t.id)} data-testid={`tab-${t.id}`}>
           {t.label}
         </button>
       ))}
@@ -378,6 +378,7 @@ function thresholdEditor(t: CfThreshold, onChange: (t: CfThreshold) => void, lab
 }
 
 function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel: () => void; onSave: (ranges: NonNullable<ReturnType<typeof parseRanges>>, rule: CfRuleDto) => void }) {
+  const lid = useId();
   const [ranges, setRanges] = useState(editing.ranges);
   const [rule, setRule] = useState<CfRuleDto>(editing.rule);
   const parsed = parseRanges(ranges);
@@ -514,8 +515,8 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
         {k.type === "iconSet" ? (
           <>
             <div className={v3.row}>
-              <span className={v3.rowLabel}>Icons</span>
-              <select className={styles.selectSmall} value={k.set} onChange={(e) => setKind({ ...k, set: e.target.value as typeof k.set, thresholds: iconThresholds(e.target.value as typeof k.set) })}>
+              <span id={`${lid}-icons`} className={v3.rowLabel}>Icons</span>
+              <select className={styles.selectSmall} aria-labelledby={`${lid}-icons`} value={k.set} onChange={(e) => setKind({ ...k, set: e.target.value as typeof k.set, thresholds: iconThresholds(e.target.value as typeof k.set) })}>
                 {ICON_SETS.map((s) => (
                   <option key={s.set} value={s.set}>
                     {s.label}
@@ -564,8 +565,8 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
         ) : null}
         {k.type === "text" ? (
           <div className={v3.row}>
-            <span className={v3.rowLabel}>Text</span>
-            <select className={styles.selectSmall} value={k.op} onChange={(e) => setKind({ ...k, op: e.target.value as typeof k.op })}>
+            <span id={`${lid}-text`} className={v3.rowLabel}>Text</span>
+            <select className={styles.selectSmall} aria-labelledby={`${lid}-text`} value={k.op} onChange={(e) => setKind({ ...k, op: e.target.value as typeof k.op })}>
               {TEXT_OPS.map((o) => (
                 <option key={o.op} value={o.op}>
                   {o.label}
@@ -577,8 +578,8 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
         ) : null}
         {k.type === "dateIs" ? (
           <div className={v3.row}>
-            <span className={v3.rowLabel}>Date is</span>
-            <select className={styles.selectSmall} value={k.period} onChange={(e) => setKind({ ...k, period: e.target.value as typeof k.period })}>
+            <span id={`${lid}-date`} className={v3.rowLabel}>Date is</span>
+            <select className={styles.selectSmall} aria-labelledby={`${lid}-date`} value={k.period} onChange={(e) => setKind({ ...k, period: e.target.value as typeof k.period })}>
               {DATE_PERIODS.map((p) => (
                 <option key={p.period} value={p.period}>
                   {p.label}
@@ -1157,6 +1158,7 @@ function PropertiesDialog({ d }: { d: Extract<DialogState, { kind: "properties" 
 type PTab = "page" | "margins" | "hf" | "sheet";
 
 function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }> }) {
+  const lid = useId();
   const ctl = useController();
   const [tab, setTab] = useState<PTab>("page");
   const [s, setS] = useState<PageSetupDto>(d.setup);
@@ -1226,8 +1228,8 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
                 </div>
               </div>
               <div className={v3.row}>
-                <span className={v3.rowLabel}>Paper</span>
-                <select className={styles.selectSmall} value={s.paper.type} onChange={(e) => set({ paper: e.target.value === "custom" ? { type: "custom", widthMm: w, heightMm: h } : ({ type: e.target.value } as PageSetupDto["paper"]) })} data-testid="page-paper">
+                <span id={`${lid}-paper`} className={v3.rowLabel}>Paper</span>
+                <select className={styles.selectSmall} aria-labelledby={`${lid}-paper`} value={s.paper.type} onChange={(e) => set({ paper: e.target.value === "custom" ? { type: "custom", widthMm: w, heightMm: h } : ({ type: e.target.value } as PageSetupDto["paper"]) })} data-testid="page-paper">
                   {PAPERS.map((p) => (
                     <option key={p.type} value={p.type}>
                       {p.label} ({p.mm[0]} × {p.mm[1]} mm)

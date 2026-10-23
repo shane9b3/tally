@@ -802,5 +802,7 @@
   "chrome.item.currency": "Monétaire",
   "chrome.item.percent": "Pourcentage",
   "chrome.item.highlight": "Mettre en évidence",
-  "chrome.item.colorByValue": "Couleur selon la valeur"
+  "chrome.item.colorByValue": "Couleur selon la valeur",
+  "app.loadFailed": "Cette partie de Tally n'a pas pu être chargée. Réessayez.",
+  "print.chartsFailed": "Certains diagrammes n'ont pas pu être dessinés ; impression sans eux."
 }

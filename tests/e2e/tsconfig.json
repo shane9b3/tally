@@ -3,7 +3,8 @@
   "compilerOptions": {
     "types": [],
     "paths": {
-      "@playwright/test": ["../../apps/desktop/node_modules/@playwright/test/index.mjs"]
+      "@playwright/test": ["../../apps/desktop/node_modules/@playwright/test/index.mjs"],
+      "@axe-core/playwright": ["../../apps/desktop/node_modules/@axe-core/playwright/dist/index.mjs"]
     }
   },
   "include": ["*.ts"]

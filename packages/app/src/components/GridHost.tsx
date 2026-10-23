@@ -6,8 +6,9 @@
 import { readTheme } from "@tally/tokens";
 import { Grid, SplitGrid } from "@tally/grid/react";
 import { useMemo } from "react";
-import { ChartLayer } from "../charts/ChartLayer";
 import { objectsFor, useChartStore } from "../charts/chartStore";
+import { loadChartLayer } from "../lazyChunks";
+import { LazySlot, lazyPart } from "../lazyPart";
 import { toGridBreaks, useW5Store } from "../objects/w5Store";
 import { useW56Store } from "../data/store";
 import { filterButtonsFor } from "../dataOps";
@@ -20,6 +21,9 @@ import { useSelectionStore } from "../stores/selectionStore";
 import { useUiStore } from "../stores/uiStore";
 import { useV3Store } from "../stores/v3Store";
 import styles from "./GridHost.module.css";
+
+// The chart layer pulls in ECharts; load it only once a sheet has a chart or picture.
+const ChartLayer = lazyPart(() => loadChartLayer().then((m) => m.ChartLayer));
 
 export function GridHost() {
   const ctl = useController();
@@ -136,7 +140,11 @@ export function GridHost() {
         onCut={ctl.onGridCut}
         onPaste={ctl.onGridPaste}
       />
-      <ChartLayer />
+      {objects.length > 0 ? (
+        <LazySlot>
+          <ChartLayer />
+        </LazySlot>
+      ) : null}
     </div>
   );
 }

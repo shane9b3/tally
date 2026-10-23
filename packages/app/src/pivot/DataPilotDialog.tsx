@@ -176,8 +176,11 @@ export function DataPilotDialog({ d }: { d: Extract<W56Dialog, { kind: "dataPilo
 
 function FieldChip({ label, hint, selected, onDragStart, onClick, onMove, onRemove, onAdd }: { label: string; hint?: string; selected?: boolean; onDragStart: (e: DragEvent) => void; onClick: () => void; onMove: () => void; onRemove?: () => void; onAdd?: { row: () => void; col: () => void; data: () => void } }) {
   return (
-    <div className={cx(styles.chip, selected && styles.chipOn)} draggable onDragStart={onDragStart} onClick={onClick} onDoubleClick={onAdd?.row} role="button" tabIndex={0} aria-pressed={selected} onKeyDown={(e) => e.key === "Enter" && onClick()} data-testid={`pivot-field-${label}`}>
-      <span className={styles.chipLabel}>{label}</span>
+    <div className={cx(styles.chip, selected && styles.chipOn)} draggable onDragStart={onDragStart} onClick={onClick} onDoubleClick={onAdd?.row} role="group" aria-label={label} data-testid={`pivot-field-${label}`}>
+      {/* The chip's own buttons sit side by side (no nested controls): the field name selects it. */}
+      <button type="button" className={cx(styles.chipPick, styles.chipLabel)} aria-pressed={selected} onClick={(e) => (e.stopPropagation(), onClick())}>
+        {label}
+      </button>
       {hint ? <span className={styles.chipHint}>{hint}</span> : null}
       {onAdd ? (
         <span className={styles.chipBtns}>

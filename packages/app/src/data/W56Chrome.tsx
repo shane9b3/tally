@@ -17,115 +17,31 @@ import { useSelectionStore } from "../stores/selectionStore";
 import { useUiStore } from "../stores/uiStore";
 import { isTypingTarget } from "../useKeymap";
 import { ghostSuffix } from "../autocorrect/autoinput";
-import { NavigatorPanel } from "../navigator/NavigatorPanel";
-import { OptionsDialog } from "../options/OptionsDialog";
-import { DataPilotDialog } from "../pivot/DataPilotDialog";
 import { pivotHeaderRanges } from "../pivot/pivotModel";
-import { AutoFormatDialog, FormatCellsDialog, StyleEditorDialog, StylesPanel } from "../styles/StylesUi";
-import {
-  ConsolidateDialog,
-  CopySheetDialog,
-  CreateNamesDialog,
-  DefineDatabaseRangeDialog,
-  DeleteCellsDialog,
-  DeleteContentsDialog,
-  DocumentStatsDialog,
-  FillSeriesDialog,
-  InsertCellsDialog,
-  MergePromptDialog,
-  MultipleOperationsDialog,
-  RecoveryDialog,
-  RemoveDuplicatesDialog,
-  SaveAsTemplateDialog,
-  ScenariosDialog,
-  SelectionListPopover,
-  ShowOutlineLevelDialog,
-  ShowSheetDialog,
-  SolverDialog,
-  SortOptionsDialog,
-  StandardFilterDialog,
-  SubtotalsDialog,
-  TabColorDialog,
-  TextToColumnsDialog,
-} from "./DataDialogs";
-import { useW56Store, type W56Dialog } from "./store";
-import { CustomizeToolbarsDialog } from "../chrome/ChromeUi";
+import { loadNavigator, loadStylesUi, loadW56Dialogs } from "../lazyChunks";
+import { LazySlot, lazyPart } from "../lazyPart";
+import { useW56Store } from "./store";
 import styles from "./W56.module.css";
 
-function DialogFor({ d }: { d: W56Dialog }) {
-  switch (d.kind) {
-    case "dataPilot":
-      return <DataPilotDialog d={d} />;
-    case "standardFilter":
-      return <StandardFilterDialog d={d} />;
-    case "subtotals":
-      return <SubtotalsDialog d={d} />;
-    case "consolidate":
-      return <ConsolidateDialog />;
-    case "textToColumns":
-      return <TextToColumnsDialog d={d} />;
-    case "removeDuplicates":
-      return <RemoveDuplicatesDialog d={d} />;
-    case "scenarios":
-      return <ScenariosDialog d={d} />;
-    case "defineDatabaseRange":
-      return <DefineDatabaseRangeDialog d={d} />;
-    case "createNamesFromLabels":
-      return <CreateNamesDialog d={d} />;
-    case "fillSeries":
-      return <FillSeriesDialog d={d} />;
-    case "sortOptions":
-      return <SortOptionsDialog d={d} />;
-    case "deleteContents":
-      return <DeleteContentsDialog d={d} />;
-    case "multipleOperations":
-      return <MultipleOperationsDialog d={d} />;
-    case "insertCells":
-      return <InsertCellsDialog d={d} />;
-    case "deleteCells":
-      return <DeleteCellsDialog d={d} />;
-    case "copySheet":
-      return <CopySheetDialog d={d} />;
-    case "showSheet":
-      return <ShowSheetDialog d={d} />;
-    case "tabColor":
-      return <TabColorDialog d={d} />;
-    case "showOutlineLevel":
-      return <ShowOutlineLevelDialog d={d} />;
-    case "solver":
-      return <SolverDialog d={d} />;
-    case "mergePrompt":
-      return <MergePromptDialog d={d} />;
-    case "autoFormat":
-      return <AutoFormatDialog d={d} />;
-    case "formatCells":
-      return <FormatCellsDialog d={d} />;
-    case "styleEditor":
-      return <StyleEditorDialog d={d} />;
-    case "options":
-      return <OptionsDialog d={d} />;
-    case "documentStats":
-      return <DocumentStatsDialog d={d} />;
-    case "recovery":
-      return <RecoveryDialog d={d} />;
-    case "saveAsTemplate":
-      return <SaveAsTemplateDialog d={d} />;
-    case "selectionList":
-      return <SelectionListPopover d={d} />;
-    case "customizeToolbars":
-      return <CustomizeToolbarsDialog />;
-  }
-}
+// The dialogs and the Styles / Navigator panels load on first use (see `lazyChunks.ts`).
+const W56DialogFor = lazyPart(() => loadW56Dialogs().then((m) => m.W56DialogFor));
+const StylesPanel = lazyPart(() => loadStylesUi().then((m) => m.StylesPanel));
+const NavigatorPanel = lazyPart(() => loadNavigator().then((m) => m.NavigatorPanel));
 
 /** Dialogs, ghost text, pivot bands, selection-mode badge and the key hook. */
 export function W56Chrome() {
+  const ctl = useController();
   const dialog = useW56Store((s) => s.dialog);
   const extend = useW56Store((s) => s.extendMode);
   const add = useW56Store((s) => s.addMode);
   useW56Keys();
   return (
     <>
-      {dialog ? <DialogFor d={dialog} /> : null}
+      {dialog ? (
+        <LazySlot onFail={() => (useW56Store.getState().openDialog(null), ctl.focusGrid())}>
+          <W56DialogFor d={dialog} />
+        </LazySlot>
+      ) : null}
       <AutoInputGhost />
       <PivotBands />
       {extend || add ? <div className={styles.modeBadge} data-testid="selection-mode">{extend ? "Extend selection (F8)" : "Add to selection (⇧F8)"}</div> : null}
@@ -136,8 +52,9 @@ export function W56Chrome() {
 /** The right-side panels (inside the grid's `.work` row). */
 export function W56Panels() {
   const panel = useW56Store((s) => s.panel);
-  if (panel === "styles") return <StylesPanel />;
-  if (panel === "navigator") return <NavigatorPanel />;
+  const fail = () => useW56Store.getState().setPanel(null);
+  if (panel === "styles") return <LazySlot onFail={fail}><StylesPanel /></LazySlot>;
+  if (panel === "navigator") return <LazySlot onFail={fail}><NavigatorPanel /></LazySlot>;
   return null;
 }
 

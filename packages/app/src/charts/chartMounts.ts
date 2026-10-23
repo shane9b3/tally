@@ -12,18 +12,20 @@ import type { ChartDataDto, ChartDto, ImageDto } from "@tally/bridge";
 import type { Grid, GridGeometryInfo } from "@tally/grid";
 import { echarts, type ECharts } from "./echarts";
 import { objectId } from "./chartStore";
+import { nodeVisible } from "./nodeVisible";
 import { toEchartsOption, type ChartTheme } from "./toEcharts";
 
 /** Live instances kept at once. */
 export const MAX_LIVE_CHARTS = 20;
 
-/** Screen rect of an object node (CSS px from the grid's top-left) and whether it intersects the viewport. */
-export function nodeVisible(rect: { x: number; y: number; w: number; h: number }, geo: GridGeometryInfo): boolean {
-  const frozenW = geo.frozen.cols > 0 ? geo.colLeft(geo.frozen.cols) - geo.headerW : 0;
-  const frozenH = geo.frozen.rows > 0 ? geo.rowTop(geo.frozen.rows) - geo.headerH : 0;
-  const sx = geo.headerW + rect.x - geo.scrollX;
-  const sy = geo.headerH + rect.y - geo.scrollY;
-  return sx + rect.w > geo.headerW + frozenW && sx < geo.width && sy + rect.h > geo.headerH + frozenH && sy < geo.height;
+export { nodeVisible };
+
+/** Disposes a chart without losing the grid's own children (selection handles) in its container, which ECharts empties. */
+function disposeKeeping(chart: ECharts): void {
+  const dom = chart.getDom();
+  const kept = [...dom.childNodes].filter((n) => n instanceof HTMLElement && n.dataset.handle !== undefined);
+  chart.dispose();
+  for (const k of kept) if (!k.parentNode) dom.appendChild(k);
 }
 
 interface Mount {
@@ -66,7 +68,7 @@ export class ChartMounts {
     }
     for (const [id, m] of this.mounts) {
       if (!wanted.has(id)) {
-        m.chart.dispose();
+        disposeKeeping(m.chart);
         this.mounts.delete(id);
         if (this.exposeHooks) expose(id, null);
       }
@@ -108,7 +110,10 @@ export class ChartMounts {
   private mountChart(node: HTMLDivElement, dto: ChartDto, data: ChartDataDto | undefined, theme: ChartTheme, w: number, h: number): void {
     let m = this.mounts.get(dto.id);
     if (!m) {
+      // ECharts clears its container; keep what the grid put there (selection handles can exist before this lazy layer loads).
+      const kept = [...node.childNodes];
       const chart = echarts.init(node, undefined, { renderer: "canvas", width: Math.max(1, w), height: Math.max(1, h) });
+      for (const k of kept) if (!k.parentNode) node.appendChild(k);
       m = { chart, dto, data, theme, w, h };
       this.mounts.set(dto.id, m);
       m.chart.setOption(toEchartsOption(dto, data ?? emptyData(dto), theme), true);
@@ -152,7 +157,7 @@ export class ChartMounts {
   /** Disposes every instance and picture (e.g. the second pane after the split is removed). */
   clear(): void {
     for (const [id, m] of this.mounts) {
-      m.chart.dispose();
+      disposeKeeping(m.chart);
       if (this.exposeHooks) expose(id, null);
     }
     this.mounts.clear();

@@ -802,5 +802,7 @@
   "chrome.item.currency": "Moneda",
   "chrome.item.percent": "Porcentaje",
   "chrome.item.highlight": "Resaltar celdas",
-  "chrome.item.colorByValue": "Color por valor"
+  "chrome.item.colorByValue": "Color por valor",
+  "app.loadFailed": "No se pudo cargar esta parte de Tally. Inténtelo de nuevo.",
+  "print.chartsFailed": "No se pudieron dibujar algunos gráficos; se imprime sin ellos."
 }

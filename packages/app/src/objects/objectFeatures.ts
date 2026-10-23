@@ -10,7 +10,7 @@
 import type { ApplyResult, ChartAnchor, ChartDataDto, ChartDto, ImageDto, Op } from "@tally/bridge";
 import { PX_PER_MM, pxToAnchor, type ObjectHandle } from "@tally/grid";
 import type { AppController } from "../controller";
-import { nodeVisible } from "../charts/chartMounts";
+import { nodeVisible } from "../charts/nodeVisible";
 import { objectId, parseObjectId, useChartStore } from "../charts/chartStore";
 import { useUiStore } from "../stores/uiStore";
 import { anchorChanged, dragRect, nudgeAnchor, roundAnchor, type Rect } from "./objectDrag";

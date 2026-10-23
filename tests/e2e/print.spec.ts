@@ -109,3 +109,29 @@ test("zoom presets: optimal fits the used area, page width uses the print layout
   await run(page, "view.zoomOptimal");
   await expect(page.getByTestId("zoom")).not.toHaveText("100%");
 });
+
+test("Page setup… from Print Preview keeps the preview up while its chunk loads; Escape returns into the preview", async ({ page }) => {
+  // Hold the dialog chunk back so its first mount really suspends (as on a cold start).
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  await page.route("**/components/Dialogs.tsx*", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await ready(page);
+  await run(page, "file.printPreview");
+  const preview = page.getByTestId("print-preview");
+  await expect(preview).toBeVisible();
+  await preview.getByRole("button", { name: "Page setup…" }).click();
+  // Still loading: the preview stays (a shared Suspense used to hide it, dropping the focus to <body>).
+  await page.waitForTimeout(300);
+  await expect(preview).toBeVisible();
+  expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+  release();
+  const dialog = page.getByTestId("page-setup-dialog");
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(preview).toBeVisible();
+  await expect.poll(() => preview.evaluate((p) => p.contains(document.activeElement))).toBe(true);
+});

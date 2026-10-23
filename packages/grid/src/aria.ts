@@ -4,9 +4,11 @@
  * The canvas draws thousands of cells, so the accessibility tree mirrors only
  * what a screen reader needs:
  *
- * - the grid root is `role="grid"` with `aria-rowcount` / `aria-colcount`
- *   (the sheet's limits), `aria-multiselectable` and an `aria-label`
- *   naming the sheet;
+ * - an offscreen `role="grid"` node inside the grid root carries
+ *   `aria-rowcount` / `aria-colcount` (the sheet's limits),
+ *   `aria-multiselectable` and an `aria-label` naming the sheet; it holds
+ *   only rows (ARIA: a grid owns rows), so the cell editor and the live
+ *   region sit next to it in the root;
  * - an offscreen `role="row"` › `role="gridcell"` node describes the active
  *   cell (address, value, formula; `aria-rowindex` / `aria-colindex` are
  *   1-based) and the focused textarea points at it with
@@ -72,6 +74,8 @@ export function describeSelection(sel: Selection, text: string | undefined, form
 let nextId = 1;
 
 export class AriaMirror {
+  /** The offscreen `role="grid"` node (named after the sheet). */
+  readonly grid: HTMLDivElement;
   /** The offscreen row holding the active-cell description. */
   readonly row: HTMLDivElement;
   /** The active-cell node (`aria-activedescendant` target). */
@@ -88,11 +92,14 @@ export class AriaMirror {
     limits: { rows: number; cols: number },
   ) {
     const id = `tally-grid-active-${nextId++}`;
-    root.setAttribute("role", "grid");
-    root.setAttribute("aria-rowcount", String(limits.rows));
-    root.setAttribute("aria-colcount", String(limits.cols));
-    root.setAttribute("aria-multiselectable", "true");
-    root.setAttribute("aria-label", "Spreadsheet");
+    const grid = doc.createElement("div");
+    grid.setAttribute("role", "grid");
+    grid.setAttribute("aria-rowcount", String(limits.rows));
+    grid.setAttribute("aria-colcount", String(limits.cols));
+    grid.setAttribute("aria-multiselectable", "true");
+    grid.setAttribute("aria-label", "Spreadsheet");
+    grid.dataset.testid = "aria-grid";
+    Object.assign(grid.style, OFFSCREEN_STYLE);
 
     const row = doc.createElement("div");
     row.setAttribute("role", "row");
@@ -103,6 +110,7 @@ export class AriaMirror {
     cell.setAttribute("aria-selected", "true");
     cell.dataset.testid = "aria-active-cell";
     row.appendChild(cell);
+    grid.appendChild(row);
 
     const live = doc.createElement("div");
     live.setAttribute("role", "status");
@@ -111,17 +119,17 @@ export class AriaMirror {
     live.dataset.testid = "aria-live";
     Object.assign(live.style, OFFSCREEN_STYLE);
 
-    root.append(row, live);
+    root.append(grid, live);
+    this.grid = grid;
     this.row = row;
     this.cell = cell;
     this.live = live;
     focusTarget.setAttribute("aria-activedescendant", id);
-    root.setAttribute("aria-activedescendant", id);
   }
 
   setProps(props: AriaProps): void {
     this.props = props;
-    this.root.setAttribute("aria-label", props.sheetName ? `Sheet ${props.sheetName}` : "Spreadsheet");
+    this.grid.setAttribute("aria-label", props.sheetName ? `Sheet ${props.sheetName}` : "Spreadsheet");
   }
 
   /**
@@ -153,11 +161,8 @@ export class AriaMirror {
   }
 
   destroy(): void {
-    this.row.remove();
+    this.grid.remove();
     this.live.remove();
     this.focusTarget.removeAttribute("aria-activedescendant");
-    for (const a of ["role", "aria-rowcount", "aria-colcount", "aria-multiselectable", "aria-label", "aria-activedescendant"]) {
-      this.root.removeAttribute(a);
-    }
   }
 }

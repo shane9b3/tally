@@ -16,6 +16,8 @@ import { useUiStore, type DialogState } from "../stores/uiStore";
 import styles from "./Dialogs.module.css";
 import { V3Dialog, isV3Dialog } from "./V3Dialogs";
 import { FunctionWizard } from "./FunctionWizard";
+import { FOCUSABLE, trapTab } from "./trapTab";
+import { arrowNav, useReturnFocus, useTitleId } from "./dialogA11y";
 
 export function Dialogs() {
   const dialog = useUiStore((s) => s.dialog);
@@ -49,35 +51,7 @@ function DialogFor({ dialog }: { dialog: DialogState }) {
   }
 }
 
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-/**
- * Keeps Tab / Shift+Tab inside `form` (every dialog is modal: §4 item 46,
- * "dialogs focus-trapped"). Returns true when the key was handled.
- */
-export function trapTab(form: HTMLElement, e: { key: string; shiftKey: boolean; preventDefault(): void }, active: Element | null): boolean {
-  if (e.key !== "Tab") return false;
-  const items = [...form.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => !el.hidden && el.getAttribute("aria-hidden") !== "true");
-  if (items.length === 0) {
-    e.preventDefault();
-    return true;
-  }
-  const first = items[0];
-  const last = items[items.length - 1];
-  if (!first || !last) return false;
-  const idx = active ? items.indexOf(active as HTMLElement) : -1;
-  if (e.shiftKey && (idx <= 0 || !active || !form.contains(active))) {
-    e.preventDefault();
-    last.focus();
-    return true;
-  }
-  if (!e.shiftKey && (idx === items.length - 1 || idx === -1)) {
-    e.preventDefault();
-    first.focus();
-    return true;
-  }
-  return false;
-}
+export { trapTab };
 
 export function close(): void {
   useUiStore.getState().openDialog(null);
@@ -106,6 +80,8 @@ export interface ShellProps {
 export function Shell({ title, children, onSubmit, ok = "Apply", valid = true, wide, danger, testId, extra, keepOpen, cancelLabel = "Cancel", cardClass, noOk }: ShellProps) {
   const ctl = useController();
   const formRef = useRef<HTMLFormElement>(null);
+  const titleId = useTitleId();
+  useReturnFocus();
   const cancel = () => {
     close();
     ctl.focusGrid();
@@ -123,7 +99,7 @@ export function Shell({ title, children, onSubmit, ok = "Apply", valid = true, w
         className={[styles.card, wide ? styles.wide : "", cardClass ?? ""].filter(Boolean).join(" ")}
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-labelledby={titleId}
         data-testid={testId}
         onKeyDown={(e) => {
           if (e.key === "Escape") {
@@ -132,6 +108,7 @@ export function Shell({ title, children, onSubmit, ok = "Apply", valid = true, w
             cancel();
             return;
           }
+          if (arrowNav(e)) return;
           if (formRef.current) trapTab(formRef.current, e, document.activeElement);
         }}
         onSubmit={(e) => {
@@ -142,7 +119,9 @@ export function Shell({ title, children, onSubmit, ok = "Apply", valid = true, w
           if (!keepOpen) ctl.focusGrid();
         }}
       >
-        <h2 className={styles.title}>{title}</h2>
+        <h2 id={titleId} className={styles.title}>
+          {title}
+        </h2>
         {children}
         <div className={styles.actions}>
           {extra ? <div className={styles.extra}>{extra}</div> : null}

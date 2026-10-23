@@ -13,7 +13,7 @@
  * - `FontRowsList`: the shared virtualised listbox.
  */
 import { cssFontFamily } from "@tally/grid";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { cx, useController } from "../context";
 import { useFontStore, type FontShell } from "../fonts/fontStore";
 import { APP_FONT, FONT_SIZE_LIST, documentFonts, fontRows, formatFontSize, isInstalled, parseFontSize, sameFont, selectionFont, stepRow, typeAheadIndex, type FontRow, type FontSection, type SelectionFont } from "../fonts/fontModel";
@@ -145,10 +145,12 @@ interface RowsListProps {
   onHover?(i: number): void;
   /** Keep `maxRows` rows of height however many rows there are (dialog lists). */
   fixed?: boolean;
+  /** Makes the listbox itself take the focus (Typeface, Size): its key handler; the active row is its `aria-activedescendant`. */
+  onListKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void;
 }
 
 /** A listbox drawing only the rows in view (plus a few), keeping the active row in view. */
-export function FontRowsList({ id, rows, active, maxRows = 12, label, testId, className, onPick, onHover, fixed = false }: RowsListProps) {
+export function FontRowsList({ id, rows, active, maxRows = 12, label, testId, className, onPick, onHover, fixed = false, onListKeyDown }: RowsListProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [top, setTop] = useState(0);
   const height = (fixed ? maxRows : Math.max(1, Math.min(rows.length, maxRows))) * ROW_H;
@@ -162,13 +164,16 @@ export function FontRowsList({ id, rows, active, maxRows = 12, label, testId, cl
   }, [active, height]);
   const first = Math.max(0, Math.floor(top / ROW_H) - OVERSCAN);
   const last = Math.min(rows.length, Math.ceil((top + height) / ROW_H) + OVERSCAN);
+  // Only the rows in view are in the DOM: tell assistive technology the option count and each option's place.
+  const setSize = rows.reduce((n, r) => n + (r.kind === "option" ? 1 : 0), 0);
+  let posInSet = rows.slice(0, first).reduce((n, r) => n + (r.kind === "option" ? 1 : 0), 0);
   const items: ReactNode[] = [];
   for (let i = first; i < last; i++) {
     const row = rows[i]!;
     const pos: CSSProperties = { top: i * ROW_H, height: ROW_H };
     if (row.kind === "header") {
       items.push(
-        <div key={i} role="presentation" className={styles.header} style={pos}>
+        <div key={i} role="presentation" aria-hidden="true" className={styles.header} style={pos}>
           {row.label}
         </div>,
       );
@@ -179,6 +184,8 @@ export function FontRowsList({ id, rows, active, maxRows = 12, label, testId, cl
           id={optionId(id, i)}
           role="option"
           aria-selected={i === active}
+          aria-setsize={setSize}
+          aria-posinset={++posInSet}
           className={cx(styles.option, i === active && styles.optionOn)}
           style={pos}
           title={row.value}
@@ -197,7 +204,17 @@ export function FontRowsList({ id, rows, active, maxRows = 12, label, testId, cl
     }
   }
   return (
-    <div ref={ref} id={id} role="listbox" aria-label={label} className={cx(styles.list, className)} style={{ height }} data-testid={testId} onScroll={(e) => setTop(e.currentTarget.scrollTop)}>
+    <div
+      ref={ref}
+      id={id}
+      role="listbox"
+      aria-label={label}
+      className={cx(styles.list, className)}
+      style={{ height }}
+      data-testid={testId}
+      onScroll={(e) => setTop(e.currentTarget.scrollTop)}
+      {...(onListKeyDown ? { tabIndex: 0, onKeyDown: onListKeyDown, "aria-activedescendant": active >= 0 ? optionId(id, active) : undefined } : {})}
+    >
       <div style={{ position: "relative", height: rows.length * ROW_H }}>{items}</div>
     </div>
   );
@@ -534,20 +551,26 @@ export function SimpleList<T extends string | number>({ items, value, onPick, la
   const rows: ComboRow[] = items.map((x) => ({ kind: "option", value: String(x.value), label: x.label, hint: x.hint, style: x.style }));
   const active = value === null ? -1 : items.findIndex((x) => x.value === value);
   return (
-    <div
-      tabIndex={0}
-      className={styles.simple}
-      aria-label={label}
-      aria-activedescendant={active >= 0 ? optionId(listId, active) : undefined}
-      onKeyDown={(e) => {
-        if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-        e.preventDefault();
-        const next = Math.max(0, Math.min(items.length - 1, active + (e.key === "ArrowDown" ? 1 : -1)));
-        const v = items[next];
-        if (v) onPick(v.value);
-      }}
-    >
-      <FontRowsList id={listId} rows={rows} active={active} maxRows={maxRows} label={label} testId={testId} className={styles.fieldList} onPick={(i) => items[i] && onPick(items[i].value)} />
+    <div className={styles.simple}>
+      <FontRowsList
+        id={listId}
+        rows={rows}
+        active={active}
+        maxRows={maxRows}
+        label={label}
+        testId={testId}
+        className={styles.fieldList}
+        onPick={(i) => items[i] && onPick(items[i].value)}
+        onListKeyDown={(e) => {
+          const last = items.length - 1;
+          const next = e.key === "ArrowDown" ? active + 1 : e.key === "ArrowUp" ? active - 1 : e.key === "Home" ? 0 : e.key === "End" ? last : null;
+          if (next === null) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const v = items[Math.max(0, Math.min(last, next))];
+          if (v) onPick(v.value);
+        }}
+      />
     </div>
   );
 }

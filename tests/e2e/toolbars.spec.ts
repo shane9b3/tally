@@ -114,14 +114,15 @@ test("the default window fits the format strip; narrower windows go compact firs
     return { lastInside: last.right <= m.left, moreInside: m.right <= bar.right };
   });
   expect(fits).toEqual({ lastInside: true, moreInside: true });
-  // Keyboard opens »; Esc closes it and the grid has the focus again.
+  // Keyboard opens » (the focus moves into the panel); Esc closes it and the focus is back on ».
   await more.focus();
   await page.keyboard.press("Enter");
   const panel = page.getByTestId("format-row-overflow");
   await expect(panel).toBeVisible();
+  await expect.poll(() => panel.evaluate((p) => p.contains(document.activeElement))).toBe(true);
   await page.keyboard.press("Escape");
   await expect(panel).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => document.activeElement?.closest('[data-testid="grid"]') != null || document.activeElement?.tagName === "BODY")).toBe(true);
+  await expect(more).toBeFocused();
   await more.click();
   await expect(panel.getByTestId("highlight-cells")).toBeVisible();
   await panel.getByTestId("highlight-cells").click();

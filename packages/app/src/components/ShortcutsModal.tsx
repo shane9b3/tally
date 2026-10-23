@@ -1,13 +1,23 @@
 /** ⌘/: the keyboard shortcut reference (the keymap table plus the grid's own keys). */
+import { useRef } from "react";
 import { useController } from "../context";
+import { t } from "../i18n";
+import { useReturnFocus, useTitleId } from "./dialogA11y";
+import { trapTab } from "./trapTab";
 import { GRID_KEYS, isMacPlatform, platformBindings } from "../keymap";
 import { useUiStore } from "../stores/uiStore";
 import styles from "./ShortcutsModal.module.css";
 
 export function ShortcutsModal() {
   const open = useUiStore((s) => s.shortcutsOpen);
+  return open ? <Shortcuts /> : null;
+}
+
+function Shortcuts() {
   const ctl = useController();
-  if (!open) return null;
+  const cardRef = useRef<HTMLDivElement>(null);
+  const titleId = useTitleId();
+  useReturnFocus();
   const close = () => {
     useUiStore.getState().setShortcuts(false);
     ctl.focusGrid();
@@ -28,20 +38,29 @@ export function ShortcutsModal() {
       <div
         className={styles.card}
         role="dialog"
-        aria-label="Keyboard shortcuts"
+        aria-modal="true"
+        aria-labelledby={titleId}
         data-testid="shortcuts"
         tabIndex={-1}
-        ref={(el) => el?.focus()}
+        ref={(el) => {
+          cardRef.current = el;
+          if (el && !el.contains(document.activeElement)) el.focus();
+        }}
         onKeyDown={(e) => {
           if (e.key === "Escape") {
             e.preventDefault();
+            e.stopPropagation();
             close();
+            return;
           }
+          if (cardRef.current) trapTab(cardRef.current, e, document.activeElement);
         }}
       >
         <header className={styles.head}>
-          <h2 className={styles.title}>Keyboard shortcuts</h2>
-          <button type="button" className={styles.close} aria-label="Close" onClick={close}>
+          <h2 id={titleId} className={styles.title}>
+            {t("cmd.help.shortcuts", "Keyboard shortcuts")}
+          </h2>
+          <button type="button" className={styles.close} aria-label={t("dialog.close", "Close")} onClick={close} data-testid="shortcuts-close">
             ×
           </button>
         </header>

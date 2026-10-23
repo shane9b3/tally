@@ -57,7 +57,7 @@ export const GRID_KEYS: readonly { keys: string; action: string; group: string }
   { group: "Select", keys: "⌘ + click", action: "Add a range to the selection" },
   { group: "Edit", keys: "F2", action: "Edit the active cell" },
   { group: "Edit", keys: "Enter / ⇧Enter", action: "Commit and move down / up" },
-  { group: "Edit", keys: "⌥Enter", action: "New line in the cell" },
+  { group: "Edit", keys: "⌥Enter", action: "While typing in a cell: new line in the cell" },
   { group: "Edit", keys: "Esc", action: "Cancel editing" },
   { group: "Edit", keys: "⌫ / Delete", action: "Clear contents" },
   { group: "Edit", keys: "⌘C / ⌘X / ⌘V", action: "Copy / cut / paste" },

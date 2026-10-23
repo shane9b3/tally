@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { cx } from "../context";
 import styles from "./Popover.module.css";
+import { arrowNav, useReturnFocus } from "./dialogA11y";
 
 export interface PopoverItem {
   id: string;
@@ -81,23 +82,26 @@ export function useFloating(x: number, y: number, above = false, alignRight = fa
 export function Popover({ x, y, above, alignRight, items, onClose, label, testId }: PopoverProps) {
   const { ref, style } = useFloating(x, y, above, alignRight);
   useDismiss(ref, onClose);
+  const restoreFocus = useReturnFocus({ overlay: true });
   useEffect(() => {
     ref.current?.querySelector<HTMLButtonElement>("button:not([disabled])")?.focus();
   }, [ref]);
   return (
-    <div ref={ref} className={styles.menu} style={style} role="menu" aria-label={label} data-testid={testId}>
+    <div ref={ref} className={styles.menu} style={style} role="menu" aria-label={label} data-testid={testId} onKeyDown={(e) => void arrowNav(e)}>
       {items.map((it) => (
-        <div key={it.id} className={styles.row}>
+        <div key={it.id} className={styles.row} role="none">
           {it.separator ? <div className={styles.separator} role="separator" /> : null}
           <button
             type="button"
-            role="menuitem"
+            role={it.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+            aria-checked={it.checked}
             className={cx(styles.item, it.danger && styles.danger, it.checked && styles.checked)}
             aria-disabled={it.disabled || undefined}
             title={it.title}
             data-item={it.id}
             onClick={() => {
               if (it.disabled) return;
+              restoreFocus();
               onClose();
               it.onSelect();
             }}

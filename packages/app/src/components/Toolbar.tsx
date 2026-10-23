@@ -41,7 +41,8 @@ function Pill({ command, label, icon, children, active, iconOnly, tooltip }: Pil
     <button
       type="button"
       className={cx(styles.pill, iconOnly && styles.iconOnly, active && styles.active)}
-      aria-label={label}
+      // With visible text of its own (Σ Add up) the button is named by that text (WCAG 2.5.3).
+      aria-label={iconOnly || !children ? label : undefined}
       aria-pressed={active === undefined ? undefined : active}
       aria-disabled={!enabled}
       data-command={command}
@@ -100,7 +101,9 @@ export function Toolbar({ inset }: { inset: boolean }) {
     filter: <Pill command="data.filter" label={t("menu.data.filter", "Filter")} icon={<FilterIcon />} active={filtering} tooltip={filtering ? "Remove the AutoFilter" : "AutoFilter: a ▾ in each header"} />,
     addUp: (
       <Pill command="insert.addUp" label="Add up" tooltip="Add up the numbers above (Σ)">
-        <span className={styles.glyph}>Σ</span>
+        <span className={styles.glyph} aria-hidden="true">
+          Σ
+        </span>
         <span>{t("toolbar.sum", "Add up")}</span>
       </Pill>
     ),

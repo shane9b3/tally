@@ -9,7 +9,7 @@ import { useEffect, useRef } from "react";
 import { cx } from "../context";
 import { t } from "../i18n";
 import { useSavePromptStore } from "../unsaved";
-import { trapTab } from "./Dialogs";
+import { trapTab } from "./trapTab";
 import dlg from "./Dialogs.module.css";
 import styles from "./SavePrompt.module.css";
 

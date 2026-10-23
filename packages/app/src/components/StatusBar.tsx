@@ -7,6 +7,7 @@ import { useDocStore } from "../stores/docStore";
 import { toSelectionDto, useSelectionStore } from "../stores/selectionStore";
 import { useUiStore } from "../stores/uiStore";
 import { Popover } from "./Popover";
+import { t } from "../i18n";
 import styles from "./StatusBar.module.css";
 
 export const STATS_DEBOUNCE_MS = 50;
@@ -58,7 +59,7 @@ export function StatusBar() {
         type="button"
         className={styles.zoom}
         aria-haspopup="menu"
-        aria-label="Zoom"
+        aria-label={`${t("toolbar.zoom", "Zoom")} ${Math.round(zoom * 100)}%`}
         data-testid="zoom"
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect();

@@ -12,6 +12,14 @@
   display: none;
 }
 
+/* The tablist inside the strip: lays the tabs out exactly as the strip did. */
+.tabList {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
 .add {
   display: inline-flex;
   align-items: center;

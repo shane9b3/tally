@@ -23,6 +23,7 @@ import { FontListField, SimpleList, fontMissing, previewFamily, useDocumentFont,
 import pick from "../components/FontPickers.module.css";
 import { APP_FONT, FONT_SIZE_LIST, TYPEFACE_LABELS, familyTypefaces, findFamily, formatFontSize, parseFontSize, typefaceOf, type Typeface } from "../fonts/fontModel";
 import { useFontStore } from "../fonts/fontStore";
+import { arrowNav } from "../components/dialogA11y";
 
 type D<K extends W56Dialog["kind"]> = Extract<W56Dialog, { kind: K }>;
 
@@ -74,7 +75,7 @@ export function StylesPanel() {
           </button>
         ) : null}
       </div>
-      <div className={w56.panelBody} role="listbox" aria-label={t("styles.cellStyles", "Cell styles")}>
+      <div className={w56.panelBody} role="listbox" aria-label={t("styles.cellStyles", "Cell styles")} onKeyDown={(e) => void arrowNav(e, { select: false })}>
         {styles.map((s) => (
           <button
             key={s.name}

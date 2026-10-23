@@ -25,6 +25,8 @@ import { HIGHLIGHT_PRESETS } from "../v03";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useDocStore } from "../stores/docStore";
 import { Popover } from "./Popover";
+import { arrowNav } from "./dialogA11y";
+import { t } from "../i18n";
 import styles from "./FormatBar.module.css";
 
 interface ToolProps {
@@ -203,7 +205,7 @@ export function FormatBar() {
       <button
         type="button"
         className={cx(styles.dropdown, styles.format)}
-        aria-label="Number format"
+        aria-label={`${t("toolbar.numberFormat", "Number format")}: ${formatLabel}`}
         aria-haspopup="menu"
         title="Number format"
         data-testid="number-format"
@@ -243,7 +245,7 @@ export function FormatBar() {
   };
 
   return (
-    <div className={styles.bar} role="toolbar" aria-label="Format" data-testid="format-bar" onContextMenu={barMenu.onContextMenu}>
+    <div className={styles.bar} role="toolbar" aria-label="Format" data-testid="format-bar" onContextMenu={barMenu.onContextMenu} onKeyDown={(e) => void arrowNav(e)}>
       <OverflowRow slots={slots} renderSlot={renderSlot} compactable={(s) => s.kind === "el" && (s.el === "highlight" || s.el === "colorByValue")} testId="format-row" className={styles.row} />
       {menu?.kind === "format" ? (
         <Popover

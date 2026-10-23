@@ -12,6 +12,7 @@ import { useW56Store } from "../data/store";
 import { Check, W56Shell } from "../data/W56Shell";
 import w56 from "../data/W56.module.css";
 import { useDismiss, useFloating } from "../components/Popover";
+import { arrowNav, focusFirst, useTitleId } from "../components/dialogA11y";
 import { useDocStore } from "../stores/docStore";
 import { useUiStore } from "../stores/uiStore";
 import { SidebarIcon } from "../components/icons";
@@ -60,7 +61,9 @@ export function OverflowRow({ slots, renderSlot, compactable, className, testId,
   const compactW = useRef(new Map<string, number>());
   const [layout, setLayout] = useState<RowLayout>({ compact: false, n: slots.length });
   const [tick, setTick] = useState(0);
-  const [panel, setPanel] = useState<{ x: number; y: number } | null>(null);
+  const [panel, setPanel] = useState<{ x: number; y: number; viaKey: boolean } | null>(null);
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const panelId = useTitleId();
   const count = Math.min(layout.n, slots.length);
   const canCompact = compactable !== undefined && slots.some((s) => compactable(s));
 
@@ -100,9 +103,9 @@ export function OverflowRow({ slots, renderSlot, compactable, className, testId,
   useEffect(() => {
     if (rest.length === 0 && panel) setPanel(null);
   }, [rest.length, panel]);
-  const toggle = (btn: HTMLElement) => {
+  const toggle = (btn: HTMLElement, viaKey: boolean) => {
     const r = btn.getBoundingClientRect();
-    setPanel(panel ? null : { x: r.right, y: r.bottom + 6 });
+    setPanel(panel ? null : { x: r.right, y: r.bottom + 6, viaKey });
   };
   return (
     <div ref={ref} className={cx(styles.row, className)} data-testid={testId} data-compact={layout.compact ? "true" : undefined} data-tauri-drag-region={dragRegion ? true : undefined}>
@@ -113,22 +116,23 @@ export function OverflowRow({ slots, renderSlot, compactable, className, testId,
       ))}
       {rest.length > 0 ? (
         <button
+          ref={moreRef}
           type="button"
           className={styles.more}
           aria-label={t("chrome.more", "More buttons")}
-          aria-haspopup="true"
           aria-expanded={panel !== null}
+          aria-controls={panel ? panelId : undefined}
           title={t("chrome.more", "More buttons")}
           data-testid={`${testId}-more`}
           onMouseDown={(e) => {
             // Mouse: open on press and keep the grid's focus.
             e.preventDefault();
             e.stopPropagation();
-            toggle(e.currentTarget);
+            toggle(e.currentTarget, false);
           }}
           onClick={(e) => {
-            // Keyboard (Enter / Space): a click without a mouse press.
-            if (e.detail === 0) toggle(e.currentTarget);
+            // Keyboard (Enter / Space): a click without a mouse press; the focus moves into the panel.
+            if (e.detail === 0) toggle(e.currentTarget, true);
           }}
         >
           »
@@ -136,14 +140,20 @@ export function OverflowRow({ slots, renderSlot, compactable, className, testId,
       ) : null}
       {panel && rest.length > 0 ? (
         <OverflowPanel
+          id={panelId}
           x={panel.x}
           y={panel.y}
+          focusIn={panel.viaKey}
           slots={rest}
           renderSlot={(s) => renderSlot(s, false)}
           testId={`${testId}-overflow`}
           onClose={(viaKey) => {
             setPanel(null);
-            if (viaKey) ctl.focusGrid();
+            // Esc: back to "»" when the panel was opened from the keyboard, else to the grid.
+            if (viaKey) {
+              if (panel.viaKey && moreRef.current) moreRef.current.focus();
+              else ctl.focusGrid();
+            }
           }}
         />
       ) : null}
@@ -152,8 +162,11 @@ export function OverflowRow({ slots, renderSlot, compactable, className, testId,
 }
 
 /** The "»" panel: closes on an outside press, or on Esc unless a combo list inside is open (Esc closes that first). */
-function OverflowPanel({ x, y, slots, renderSlot, testId, onClose }: { x: number; y: number; slots: readonly Slot[]; renderSlot(slot: Slot): ReactNode; testId: string; onClose(viaKey: boolean): void }) {
+function OverflowPanel({ id, x, y, focusIn, slots, renderSlot, testId, onClose }: { id: string; x: number; y: number; focusIn: boolean; slots: readonly Slot[]; renderSlot(slot: Slot): ReactNode; testId: string; onClose(viaKey: boolean): void }) {
   const { ref, style } = useFloating(x, y, false, true);
+  useEffect(() => {
+    if (focusIn) focusFirst(ref.current);
+  }, [focusIn, ref]);
   useEffect(() => {
     const down = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose(false);
@@ -174,10 +187,10 @@ function OverflowPanel({ x, y, slots, renderSlot, testId, onClose }: { x: number
     };
   }, [ref, onClose]);
   return (
-    <div ref={ref} className={styles.panel} style={style} role="toolbar" aria-label={t("chrome.more", "More buttons")} data-testid={testId}>
+    <div ref={ref} id={id} className={styles.panel} style={style} role="toolbar" aria-label={t("chrome.more", "More buttons")} data-testid={testId} onKeyDown={(e) => void arrowNav(e)}>
       {slots.map((s) =>
         s.kind === "sep" ? (
-          <span key={s.key} className={styles.panelSep} />
+          <span key={s.key} className={styles.panelSep} role="separator" />
         ) : (
           <div key={s.key} className={styles.slot}>
             {renderSlot(s)}

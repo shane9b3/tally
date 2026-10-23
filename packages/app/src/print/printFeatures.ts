@@ -9,6 +9,7 @@ import { CANCELLED, isApiError, type ChartSvgDto, type PrintOptionsDto } from "@
 import type { AppController } from "../controller";
 import type { ChartFeatures } from "../charts/chartFeatures";
 import { useDocStore } from "../stores/docStore";
+import { t } from "../i18n";
 import { useUiStore } from "../stores/uiStore";
 import { dpiFor, stepPage, stepPreviewZoom, THUMB_DPI, thumbWindow } from "./printReducer";
 import { usePrintStore } from "./printStore";
@@ -86,7 +87,17 @@ export class PrintFeatures {
     if (!info) return [];
     const sheets = options.sheets.type === "active" ? [this.ctl.sheet] : options.sheets.type === "all" ? info.sheets.map((s) => s.id) : options.sheets.ids;
     const out: ChartSvgDto[] = [];
-    for (const sheet of sheets) out.push(...(await this.charts.chartSvgsOf(sheet).catch((): ChartSvgDto[] => [])));
+    let failed = false;
+    for (const sheet of sheets) {
+      // A chart that cannot be drawn must not stop the print: go on without it, but say so.
+      out.push(
+        ...(await this.charts.chartSvgsOf(sheet).catch((): ChartSvgDto[] => {
+          failed = true;
+          return [];
+        })),
+      );
+    }
+    if (failed) useUiStore.getState().pushToast("warning", t("print.chartsFailed", "Some charts couldn't be drawn; printing without them."));
     return out;
   }
 

@@ -12,8 +12,8 @@ test("the Open list shows every document, switches and closes the others", async
   await expect(page.getByTestId("grid")).toBeVisible();
   const section = page.getByTestId("open-documents");
   await expect(section.getByRole("heading")).toHaveText("Editing");
-  const list = section.getByRole("listbox", { name: "Open documents" });
-  const rows = list.getByRole("option");
+  const list = section.getByRole("tablist", { name: "Open documents" });
+  const rows = list.getByRole("tab");
   await expect(rows).toHaveCount(4);
   await expect(rows.nth(0)).toContainText("Untitled");
   await expect(rows.nth(1)).toContainText("Book 2.ods");
@@ -48,7 +48,7 @@ test("the Open list shows every document, switches and closes the others", async
 test("one document: the Open section has one highlighted row", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("grid")).toBeVisible();
-  const rows = page.getByTestId("open-documents").getByRole("option");
+  const rows = page.getByTestId("open-documents").getByRole("tab");
   await expect(rows).toHaveCount(1);
   await expect(rows.nth(0)).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("open-documents").locator('[data-testid^="open-doc-close-"]')).toHaveCount(0);

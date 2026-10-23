@@ -88,7 +88,7 @@ Desktop app. Tools ▸ Options ▸ Load / Save ▸ "Open documents in" chooses t
 | ⌘W | Close the tab (the window with its last tab); asks to save an edited document |
 | — | Window ▸ Move Tab to New Window / Merge All Windows; the open documents are listed below them |
 | Click / × | Sidebar ▸ Open (every open document, this window's first): show it (another window comes to the front) / close it; drag to reorder this window's tabs; right-click for Close, Close Others, Move to New Window |
-| ↑ ↓ Home End, ↩ / Space, ⌫ | Sidebar ▸ Open with focus: move between documents, show the focused one, close it |
+| ↑ ↓ Home End, ↩ / Space, Delete / ⌫ | Sidebar ▸ Open with focus: move between documents, show the focused one, close it (asks to save an edited document); ⇧F10 opens its menu |
 
 ## Grid and editor keys
 
@@ -119,7 +119,7 @@ Desktop app. Tools ▸ Options ▸ Load / Save ▸ "Open documents in" chooses t
 |---|---|
 | F2 | Edit the active cell |
 | Enter / ⇧Enter | Commit and move down / up |
-| ⌥Enter | New line in the cell |
+| ⌥Enter | While typing in a cell: new line in the cell |
 | Esc | Cancel editing |
 | ⌫ / Delete | Clear contents |
 | ⌘C / ⌘X / ⌘V | Copy / cut / paste |
@@ -128,7 +128,7 @@ Desktop app. Tools ▸ Options ▸ Load / Save ▸ "Open documents in" chooses t
 | ⌘D / ⌘R | Fill down / right |
 | ⌘X then ⌘V | Move cells (references follow) |
 | Delete | Delete Contents dialog (⌫ clears at once; Tools ▸ Options ▸ Input turns the dialog off) |
-| ⌥↩ | Fill the selection with the entered text |
+| ⌥↩ | Not typing in a cell: fill the selection with the entered text |
 | ⌃D | Selection list (entries of the column) |
 
 ### Formulas

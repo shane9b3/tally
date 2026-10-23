@@ -7,6 +7,8 @@
 import { useEffect, useRef } from "react";
 import { useController } from "../context";
 import { t } from "../i18n";
+import { useReturnFocus, useTitleId } from "../components/dialogA11y";
+import { trapTab } from "../components/trapTab";
 import { dpiFor, fitWidthZoom, fitZoom, pageLabel, paperPx } from "./printReducer";
 import { usePrintStore } from "./printStore";
 import styles from "./PrintPreview.module.css";
@@ -27,6 +29,9 @@ function Preview({ inset }: { inset: boolean }) {
   const thumbs = usePrintStore((s) => s.thumbs);
   const error = usePrintStore((s) => s.error);
   const stage = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const titleId = useTitleId();
+  useReturnFocus();
   const print = ctl.w5.print;
   const count = layout?.pages.length ?? 0;
   const cur = layout?.pages[page];
@@ -36,6 +41,9 @@ function Preview({ inset }: { inset: boolean }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A dialog opened from the preview (Page Setup…) owns its keys.
+      const a = document.activeElement;
+      if (a && !root.current?.contains(a) && a.closest("[role=dialog], [role=alertdialog]")) return;
       if (e.key === "Escape") {
         e.stopPropagation();
         print.closePreview();
@@ -46,15 +54,30 @@ function Preview({ inset }: { inset: boolean }) {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [print]);
 
+  // Modal: the focus moves to the toolbar's Close button and stays inside.
+  useEffect(() => {
+    if (!root.current?.contains(document.activeElement)) root.current?.querySelector<HTMLElement>("[data-testid=print-close]")?.focus();
+  }, []);
+
   const viewport = () => {
     const el = stage.current;
     return el ? { width: el.clientWidth, height: el.clientHeight } : { width: 800, height: 600 };
   };
 
   return (
-    <div className={styles.overlay} role="dialog" aria-label={t("print.preview", "Print preview")} data-testid="print-preview">
+    <div
+      ref={root}
+      className={styles.overlay}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      data-testid="print-preview"
+      onKeyDown={(e) => {
+        if (root.current) trapTab(root.current, e, document.activeElement);
+      }}
+    >
       <div className={inset ? `${styles.bar} ${styles.inset}` : styles.bar} data-tauri-drag-region>
-        <span className={styles.barTitle}>{t("print.preview", "Print preview")}</span>
+        <span id={titleId} className={styles.barTitle}>{t("print.preview", "Print preview")}</span>
         <button type="button" className={styles.icon} aria-label="Previous page" disabled={page <= 0} onClick={() => print.stepPage(-1)}>
           ‹
         </button>
@@ -103,7 +126,7 @@ function Preview({ inset }: { inset: boolean }) {
             </button>
           ))}
         </nav>
-        <div ref={stage} className={styles.stage} data-testid="print-stage">
+        <div ref={stage} className={styles.stage} tabIndex={0} role="region" aria-label={t("print.page", "Page")} data-testid="print-stage">
           {cur && size ? (
             png ? (
               <img className={styles.paper} src={png} width={size.width} height={size.height} alt={`Page ${cur.number}`} data-testid="print-page" />
