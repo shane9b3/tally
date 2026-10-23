@@ -6,7 +6,7 @@
 //! `set_document_edited(edited, doc, title)`. The shell keeps it per tab
 //! label in the [`Windows`] registry (`registry.rs`), behind a leaf lock
 //! that is never held across an engine call, a dialog or a window/menu call
-//! and never touches the service mutex: `WindowEvent::CloseRequested` and
+//! and never touches a document's engine mutex: `WindowEvent::CloseRequested` and
 //! `RunEvent::ExitRequested` are handled on the main thread, which must not
 //! wait for an engine call in progress.
 //!
@@ -134,7 +134,7 @@ pub fn clean_up<R: Runtime>(app: &AppHandle<R>, gone: Gone) {
     for doc in gone.close_docs {
         // The snapshot goes now (files only), so an exit right after (last
         // window on Windows/Linux, ⌘Q) cannot leave it to be offered for
-        // recovery; the engine close needs the service lock and runs on a
+        // recovery; the engine close needs the document's lock and runs on a
         // worker.
         autosave::remove_snapshot(app, doc);
         let app = app.clone();
@@ -243,7 +243,7 @@ fn exit_snapshot<R: Runtime>(app: &AppHandle<R>) {
 
 fn snapshot_one<R: Runtime>(app: &AppHandle<R>, st: &AppState, doc: DocId, deadline: Instant) {
     if let Err(e) = autosave::write_snapshot_by(app, st, doc, true, |save| {
-        autosave::try_with_service(st, deadline, save)
+        autosave::try_with_doc(st, doc, deadline, save)
     }) {
         eprintln!(
             "tally: exit snapshot of document {} skipped: {}",
@@ -264,7 +264,7 @@ pub fn request_quit<R: Runtime>(app: &AppHandle<R>) {
 /// "edited" dot follows. A synchronous command on purpose: Tauri runs those
 /// on the main thread in the order sent, so rapid true/false/true reports
 /// cannot land out of order (an async command is its own task). It never
-/// touches the service mutex, and `run_on_main_thread` runs inline when
+/// touches a document's engine mutex, and `run_on_main_thread` runs inline when
 /// already on the main thread.
 #[tauri::command]
 pub fn set_document_edited(

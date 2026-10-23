@@ -29,15 +29,15 @@ mod templates;
 mod tests;
 mod windows;
 
-use tally_api::DocumentService;
 use tauri::Manager;
 
 pub use state::AppState;
 
 /// Starts the app.
 pub fn run() {
-    // The engine with ODS/CSV IO and the ⌘K rule provider installed.
-    let service: Box<dyn DocumentService + Send> = Box::new(assist::build_service());
+    // The engine with ODS/CSV IO and the ⌘K rule provider installed; each
+    // document gets its own fork of it (per-document locks, `state.rs`).
+    let service = assist::build_service();
 
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

@@ -10,7 +10,7 @@
 //!
 //! On the final exit (`RunEvent::Exit`, which also covers the Dock's Quit and
 //! log-out) `closing.rs` writes one more snapshot of an edited document the
-//! user did not answer for, through `try_with_service` (bounded wait).
+//! user did not answer for, through `try_with_doc` (bounded wait).
 //!
 //! Snapshots are written with the engine's `save_copy`, which leaves the
 //! document's path, title and dirty flag alone; a recovered snapshot is
@@ -18,7 +18,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, TryLockError};
 use std::time::{Duration, Instant};
@@ -27,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use tally_api::{ApiError, DocId, DocumentService, FileFormat, WorkbookInfo};
 use tauri::{AppHandle, Manager, Runtime};
 
-use crate::commands::{blocking, with_service, CmdResult};
+use crate::commands::{blocking, guarded, with_doc, with_new_doc, CmdResult};
 use crate::state::{lock, AppState};
 
 const DIR: &str = "autosave";
@@ -141,7 +140,7 @@ pub fn write_snapshot<R: Runtime>(
     st: &AppState,
     doc: DocId,
 ) -> CmdResult<Snapshot> {
-    let snap = write_snapshot_by(app, st, doc, false, |save| with_service(st, save))?;
+    let snap = write_snapshot_by(app, st, doc, false, |save| with_doc(st, doc, save))?;
     snap.ok_or_else(|| ApiError::new(ApiError::INTERNAL, "no snapshot written"))
 }
 
@@ -192,16 +191,20 @@ pub fn write_snapshot_by<R: Runtime>(
     Ok(Some(snap))
 }
 
-/// Runs `f` on the service, waiting for its lock no longer than until
-/// `deadline` (`try_lock` in a short retry loop): for the exit path, which
-/// must not hang on a busy or hung engine.
-pub fn try_with_service(
+/// Runs `f` on `doc`'s service, waiting for that document's lock no longer
+/// than until `deadline` (`try_lock` in a short retry loop): for the exit
+/// path, which must not hang on a busy or hung engine. Only `doc`'s lock is
+/// tried, so a busy document does not hold up the snapshot of another
+/// beyond the shared deadline.
+pub fn try_with_doc(
     st: &AppState,
+    doc: DocId,
     deadline: Instant,
     f: &mut dyn FnMut(&mut dyn DocumentService) -> CmdResult<()>,
 ) -> CmdResult<()> {
+    let slot = st.doc(doc)?;
     let mut guard = loop {
-        match st.service.try_lock() {
+        match slot.try_lock() {
             Ok(g) => break g,
             Err(TryLockError::Poisoned(p)) => break p.into_inner(),
             Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
@@ -212,9 +215,7 @@ pub fn try_with_service(
             }
         }
     };
-    let svc: &mut dyn DocumentService = guard.as_mut();
-    catch_unwind(AssertUnwindSafe(|| f(svc)))
-        .unwrap_or_else(|_| Err(ApiError::new(ApiError::INTERNAL, "the engine failed")))
+    guarded(&mut *guard, f)
 }
 
 /// Deletes this session's snapshot of `doc` (a clean close or a real save), and the
@@ -292,7 +293,7 @@ pub async fn list_recovery(app: AppHandle) -> CmdResult<Vec<RecoveryFile>> {
 pub async fn recover_snapshot(app: AppHandle, path: String) -> CmdResult<WorkbookInfo> {
     let canon = check_inside(&app, Path::new(&path))?;
     blocking(app, move |_, st| {
-        let info = with_service(st, |s| s.open_untitled(&canon, true))?;
+        let info = with_new_doc(st, |s| s.open_untitled(&canon, true))?;
         lock(&st.paths).remove(&info.doc.0);
         // Keep the snapshot until the recovered document is saved, autosaved or closed.
         lock(recovered()).insert(info.doc.0, canon);
@@ -314,17 +315,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn try_with_service_gives_up_when_the_engine_stays_locked() {
-        let st = AppState::new(Box::new(crate::assist::build_service()));
-        let held = lock(&st.service);
+    fn try_with_doc_gives_up_when_the_document_stays_locked() {
+        let st = AppState::new(crate::assist::build_service());
+        let a = crate::commands::new_workbook(&st, None).unwrap().doc;
+        let b = crate::commands::new_workbook(&st, None).unwrap().doc;
+        let slot = st.doc(a).unwrap();
+        let held = lock(&slot);
         let soon = Instant::now() + Duration::from_millis(60);
-        let r = try_with_service(&st, soon, &mut |_| Ok(()));
+        let r = try_with_doc(&st, a, soon, &mut |_| Ok(()));
         assert!(r.is_err());
-        drop(held);
-        let r = try_with_service(&st, Instant::now() + Duration::from_millis(60), &mut |_| {
-            Ok(())
-        });
+        // Another document is not held up by `a`'s lock, even past the deadline.
+        let r = try_with_doc(&st, b, Instant::now(), &mut |s| s.is_dirty(b).map(|_| ()));
         assert!(r.is_ok());
+        drop(held);
+        let r = try_with_doc(
+            &st,
+            a,
+            Instant::now() + Duration::from_millis(60),
+            &mut |_| Ok(()),
+        );
+        assert!(r.is_ok());
+        assert!(try_with_doc(&st, DocId(9_999), Instant::now(), &mut |_| Ok(())).is_err());
     }
 
     #[test]

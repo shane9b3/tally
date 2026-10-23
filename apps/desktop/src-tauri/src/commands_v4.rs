@@ -5,7 +5,7 @@
 //!
 //! Every command validates its arguments with [`limits`] first, then runs the
 //! engine call on a blocking worker under `catch_unwind`
-//! ([`commands::blocking`], [`commands::with_service`]). Until W5-1..W5-3
+//! ([`commands::blocking`], [`commands::with_doc`]). Until W5-1..W5-3
 //! land, the engine answers `unsupported` for all of them; the shell layer
 //! is complete so the UI packages can be wired against it now.
 
@@ -19,14 +19,17 @@ use tally_api::{
 use tally_types::SheetId;
 use tauri::AppHandle;
 
-use crate::commands::{blocking, with_service, CmdResult};
+use crate::commands::{blocking, with_doc, with_engine, CmdResult};
 use crate::limits;
 
 // ----- v0.4 charts and pictures (W5-1) ---------------------------------------
 
 #[tauri::command]
 pub async fn charts(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<Vec<ChartDto>> {
-    blocking(app, move |_, st| with_service(st, |s| s.charts(doc, sheet))).await
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.charts(doc, sheet))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -37,7 +40,7 @@ pub async fn chart_data(
     id: u32,
 ) -> CmdResult<ChartDataDto> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.chart_data(doc, sheet, id))
+        with_doc(st, doc, |s| s.chart_data(doc, sheet, id))
     })
     .await
 }
@@ -52,21 +55,24 @@ pub async fn suggest_chart(
 ) -> CmdResult<ChartDto> {
     limits::range("suggest_chart", &sel)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.suggest_chart(doc, sheet, sel, kind))
+        with_doc(st, doc, |s| s.suggest_chart(doc, sheet, sel, kind))
     })
     .await
 }
 
 #[tauri::command]
 pub async fn images(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<Vec<ImageDto>> {
-    blocking(app, move |_, st| with_service(st, |s| s.images(doc, sheet))).await
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.images(doc, sheet))
+    })
+    .await
 }
 
 // ----- v0.5 DataPilot, data tools, styles, scenarios, navigator (W5-2) -------
 
 #[tauri::command]
 pub async fn pivots(app: AppHandle, doc: DocId) -> CmdResult<Vec<PivotDto>> {
-    blocking(app, move |_, st| with_service(st, |s| s.pivots(doc))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.pivots(doc))).await
 }
 
 #[tauri::command]
@@ -77,7 +83,7 @@ pub async fn pivot_field_items(
 ) -> CmdResult<Vec<PivotFieldItemsDto>> {
     limits::pivot_source("pivot_field_items", &source)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.pivot_field_items(doc, &source))
+        with_doc(st, doc, |s| s.pivot_field_items(doc, &source))
     })
     .await
 }
@@ -92,7 +98,7 @@ pub async fn pivot_at(
 ) -> CmdResult<Option<PivotHit>> {
     limits::pos("pivot_at", r, c)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.pivot_at(doc, sheet, r, c))
+        with_doc(st, doc, |s| s.pivot_at(doc, sheet, r, c))
     })
     .await
 }
@@ -109,20 +115,20 @@ pub async fn autocomplete(
     limits::pos("autocomplete", r, c)?;
     limits::chars_max("the prefix", &prefix, limits::MAX_AUTOCOMPLETE_CHARS)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.autocomplete(doc, sheet, r, c, &prefix))
+        with_doc(st, doc, |s| s.autocomplete(doc, sheet, r, c, &prefix))
     })
     .await
 }
 
 #[tauri::command]
 pub async fn cell_styles(app: AppHandle, doc: DocId) -> CmdResult<Vec<CellStyleDto>> {
-    blocking(app, move |_, st| with_service(st, |s| s.cell_styles(doc))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.cell_styles(doc))).await
 }
 
 #[tauri::command]
 pub async fn scenarios(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<Vec<ScenarioDto>> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.scenarios(doc, sheet))
+        with_doc(st, doc, |s| s.scenarios(doc, sheet))
     })
     .await
 }
@@ -130,20 +136,20 @@ pub async fn scenarios(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<
 #[tauri::command]
 pub async fn database_ranges(app: AppHandle, doc: DocId) -> CmdResult<Vec<DatabaseRangeDto>> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.database_ranges(doc))
+        with_doc(st, doc, |s| s.database_ranges(doc))
     })
     .await
 }
 
 #[tauri::command]
 pub async fn navigator(app: AppHandle, doc: DocId) -> CmdResult<NavigatorDto> {
-    blocking(app, move |_, st| with_service(st, |s| s.navigator(doc))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.navigator(doc))).await
 }
 
 #[tauri::command]
 pub async fn document_statistics(app: AppHandle, doc: DocId) -> CmdResult<DocumentStatsDto> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.document_statistics(doc))
+        with_doc(st, doc, |s| s.document_statistics(doc))
     })
     .await
 }
@@ -158,7 +164,7 @@ pub async fn print_layout(
 ) -> CmdResult<PrintLayoutDto> {
     limits::print_options(&opts)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.print_layout(doc, &opts))
+        with_doc(st, doc, |s| s.print_layout(doc, &opts))
     })
     .await
 }
@@ -166,7 +172,7 @@ pub async fn print_layout(
 #[tauri::command]
 pub async fn page_breaks(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<PageBreaksDto> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.page_breaks(doc, sheet))
+        with_doc(st, doc, |s| s.page_breaks(doc, sheet))
     })
     .await
 }
@@ -181,7 +187,7 @@ pub async fn prepare_print_job(
     limits::print_options(&opts)?;
     limits::chart_svgs(&charts)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.prepare_print_job(doc, &opts, &charts))
+        with_doc(st, doc, |s| s.prepare_print_job(doc, &opts, &charts))
     })
     .await
 }
@@ -196,25 +202,28 @@ pub async fn print_job_page_png(
     limits::print_page("print_job_page_png", page)?;
     limits::dpi(dpi)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.print_job_page_png(job, page, dpi))
+        with_engine(st, |s| s.print_job_page_png(job, page, dpi))
     })
     .await
 }
 
 #[tauri::command]
 pub async fn print_job_pdf(app: AppHandle, job: u32) -> CmdResult<Vec<u8>> {
-    blocking(app, move |_, st| with_service(st, |s| s.print_job_pdf(job))).await
+    blocking(app, move |_, st| with_engine(st, |s| s.print_job_pdf(job))).await
 }
 
 #[tauri::command]
 pub async fn calc_settings(app: AppHandle, doc: DocId) -> CmdResult<CalcSettingsDto> {
-    blocking(app, move |_, st| with_service(st, |s| s.calc_settings(doc))).await
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.calc_settings(doc))
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn solver(app: AppHandle, doc: DocId, req: SolverRequest) -> CmdResult<SolverResult> {
     limits::solver_request(&req)?;
-    blocking(app, move |_, st| with_service(st, |s| s.solver(doc, &req))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.solver(doc, &req))).await
 }
 
 #[tauri::command]
@@ -227,7 +236,7 @@ pub async fn precedents(
 ) -> CmdResult<Vec<TraceDto>> {
     limits::pos("precedents", r, c)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.precedents(doc, sheet, r, c))
+        with_doc(st, doc, |s| s.precedents(doc, sheet, r, c))
     })
     .await
 }
@@ -242,7 +251,7 @@ pub async fn dependents(
 ) -> CmdResult<Vec<TraceDto>> {
     limits::pos("dependents", r, c)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.dependents(doc, sheet, r, c))
+        with_doc(st, doc, |s| s.dependents(doc, sheet, r, c))
     })
     .await
 }
@@ -253,7 +262,7 @@ pub async fn dependents(
 #[tauri::command]
 pub async fn image_data(app: AppHandle, doc: DocId, sheet: SheetId, id: u32) -> CmdResult<String> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.image_data(doc, sheet, id))
+        with_doc(st, doc, |s| s.image_data(doc, sheet, id))
     })
     .await
 }
@@ -262,7 +271,7 @@ pub async fn image_data(app: AppHandle, doc: DocId, sheet: SheetId, id: u32) -> 
 #[tauri::command]
 pub async fn view_options(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<ViewOptionsDto> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.view_options(doc, sheet))
+        with_doc(st, doc, |s| s.view_options(doc, sheet))
     })
     .await
 }
@@ -279,7 +288,7 @@ pub async fn invalid_cells(
         limits::range("invalid_cells", r)?;
     }
     blocking(app, move |_, st| {
-        with_service(st, |s| s.invalid_cells(doc, sheet, range))
+        with_doc(st, doc, |s| s.invalid_cells(doc, sheet, range))
     })
     .await
 }
@@ -288,7 +297,7 @@ pub async fn invalid_cells(
 #[tauri::command]
 pub async fn custom_sort_lists(app: AppHandle, doc: DocId) -> CmdResult<Vec<Vec<String>>> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.custom_sort_lists(doc))
+        with_doc(st, doc, |s| s.custom_sort_lists(doc))
     })
     .await
 }
@@ -304,7 +313,7 @@ pub async fn cells_with(
 ) -> CmdResult<Vec<CellBlock>> {
     limits::ranges("cells_with", &ranges)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.cells_with(doc, sheet, &ranges, &opts))
+        with_doc(st, doc, |s| s.cells_with(doc, sheet, &ranges, &opts))
     })
     .await
 }
@@ -322,7 +331,7 @@ pub async fn preview_formula(
     limits::pos("preview_formula", r, c)?;
     limits::text("preview_formula", &text)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.preview_formula(doc, sheet, r, c, &text))
+        with_doc(st, doc, |s| s.preview_formula(doc, sheet, r, c, &text))
     })
     .await
 }

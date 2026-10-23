@@ -429,11 +429,12 @@ while it runs (the lifted scalar calls inside `tally-functions` are capped
 at 2^21 cells each). Nothing interrupts evaluation by time, and there is no
 cancellation from the UI.
 
-The desktop shell runs every command under one service mutex
-(`apps/desktop/src-tauri/src/commands.rs` `with_service`), so a slow
-operation on one document blocks every other document until it finishes.
-The budgets above bound how long that can be; per-document locks (so other
-windows stay responsive) are planned for the shell.
+The desktop shell gives every document its own engine service and lock
+(`apps/desktop/src-tauri/src/state.rs`, `commands.rs` `with_doc`), so a slow
+operation on one document blocks only further commands on that document;
+other windows stay responsive, and opening a file runs with no lock held.
+The budgets above bound how long one document stays busy. The lock order is
+documented in `state.rs`.
 
 ## Review 2 fixes
 

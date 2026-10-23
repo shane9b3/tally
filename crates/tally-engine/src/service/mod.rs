@@ -22,6 +22,8 @@ pub mod view;
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use tally_api::{
@@ -52,19 +54,54 @@ pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_CSV_EXPORT_CELLS: u64 = 10_000_000;
 
 /// The engine behind the `DocumentService` facade.
+///
+/// One service can hold any number of documents. The desktop shell instead
+/// gives every document its own service, made with [`EngineService::fork`]
+/// and locked on its own, so a long recalc or save in one document does not
+/// block the others. Forks share what crosses documents ([`Shared`]).
 pub struct EngineService {
     docs: BTreeMap<u32, Document>,
-    next_doc: u32,
-    clipboard: Option<ClipSnapshot>,
-    codec: Box<dyn FileCodec>,
-    assist: Option<AssistProvider>,
+    shared: Arc<Shared>,
+    codec: Arc<dyn FileCodec>,
+    assist: Option<Arc<AssistProvider>>,
     rng: Rng,
     open_max_evaluated: u64,
     open_time_limit: Option<Duration>,
-    /// Prepared print jobs (an LRU of [`crate::print::JOB_LRU`]).
-    print_jobs: print::JobCache,
     /// `chart_data` responses per document version (`charts.rs`).
-    chart_cache: std::sync::Mutex<charts::ChartDataCache>,
+    chart_cache: Mutex<charts::ChartDataCache>,
+}
+
+/// What every fork of one service shares: document ids (unique across
+/// forks), the internal clipboard (copy in one document, paste in another)
+/// and the prepared print jobs (looked up by job id alone).
+///
+/// Its mutexes are leaf locks: held only to read, swap or push a value,
+/// never across a document operation, a codec call or a PDF render, and no
+/// other lock is taken while one is held.
+struct Shared {
+    next_doc: AtomicU32,
+    /// Forks made so far (mixed into each fork's clipboard-token seed).
+    forks: AtomicU64,
+    clipboard: Mutex<Option<Arc<ClipSnapshot>>>,
+    /// Prepared print jobs (an LRU of [`crate::print::JOB_LRU`]).
+    print_jobs: Mutex<print::JobCache>,
+}
+
+impl Default for Shared {
+    fn default() -> Self {
+        Self {
+            next_doc: AtomicU32::new(1),
+            forks: AtomicU64::new(0),
+            clipboard: Mutex::new(None),
+            print_jobs: Mutex::new(print::JobCache::default()),
+        }
+    }
+}
+
+/// Locks one of the [`Shared`] leaf mutexes, recovering from poisoning
+/// (each holds a plain value that a panic cannot leave half-written).
+fn leaf<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Default for EngineService {
@@ -77,7 +114,7 @@ impl std::fmt::Debug for EngineService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EngineService")
             .field("docs", &self.docs.len())
-            .field("next_doc", &self.next_doc)
+            .field("next_doc", &self.shared.next_doc.load(Ordering::Relaxed))
             .finish_non_exhaustive()
     }
 }
@@ -91,16 +128,41 @@ impl EngineService {
     pub fn new() -> Self {
         Self {
             docs: BTreeMap::new(),
-            next_doc: 1,
-            clipboard: None,
-            codec: Box::new(UnsupportedCodec),
+            shared: Arc::default(),
+            codec: Arc::new(UnsupportedCodec),
             assist: None,
             rng: Rng::from_time(),
             open_max_evaluated: RecalcBudget::OPEN_MAX_CELLS,
             open_time_limit: Some(RecalcBudget::OPEN_TIME_LIMIT),
-            print_jobs: print::JobCache::default(),
-            chart_cache: std::sync::Mutex::default(),
+            chart_cache: Mutex::default(),
         }
+    }
+
+    /// A new service with no documents that shares this one's document ids,
+    /// internal clipboard and print jobs ([`Shared`]) and has the same codec,
+    /// ⌘K provider and open limits (changing those later on one service
+    /// does not reach forks already made). Documents opened or created on a
+    /// fork live in that fork only; any fork can serve any print job.
+    pub fn fork(&self) -> Self {
+        let n = self.shared.forks.fetch_add(1, Ordering::Relaxed) + 1;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+        Self {
+            docs: BTreeMap::new(),
+            shared: Arc::clone(&self.shared),
+            codec: Arc::clone(&self.codec),
+            assist: self.assist.clone(),
+            rng: Rng::new(nanos ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15)),
+            open_max_evaluated: self.open_max_evaluated,
+            open_time_limit: self.open_time_limit,
+            chart_cache: Mutex::default(),
+        }
+    }
+
+    /// The next document id (unique across all forks).
+    fn next_doc_id(&self) -> DocId {
+        DocId(self.shared.next_doc.fetch_add(1, Ordering::Relaxed))
     }
 
     /// Sets the recalc watchdog used by [`DocumentService::open`]: at most
@@ -124,19 +186,18 @@ impl EngineService {
 
     /// Replaces the file codec.
     pub fn with_codec(mut self, codec: Box<dyn FileCodec>) -> Self {
-        self.codec = codec;
+        self.codec = Arc::from(codec);
         self
     }
 
     /// Installs the ⌘K provider used by `assist_suggest`.
     pub fn set_assist_provider(&mut self, provider: AssistProvider) {
-        self.assist = Some(provider);
+        self.assist = Some(Arc::new(provider));
     }
 
     /// Opens a workbook built elsewhere (tests, the CLI).
     pub fn open_workbook(&mut self, wb: Workbook, title: &str) -> WorkbookInfo {
-        let id = DocId(self.next_doc);
-        self.next_doc += 1;
+        let id = self.next_doc_id();
         let doc = Document::new(id, wb, title);
         let info = doc.info();
         self.docs.insert(id.0, doc);
@@ -347,8 +408,7 @@ impl DocumentService for EngineService {
             decoded.recognize_text,
             decoded.evaluate_formulas,
         );
-        let id = DocId(self.next_doc);
-        self.next_doc += 1;
+        let id = self.next_doc_id();
         let budget = RecalcBudget::within(self.open_max_evaluated, self.open_time_limit);
         let mut doc = Document::with_budget(id, wb, &file_title(path), &budget);
         doc.path = Some(path.to_path_buf());
@@ -464,12 +524,13 @@ impl DocumentService for EngineService {
     }
 
     fn apply(&mut self, doc: DocId, tx: Transaction) -> Result<ApplyResult> {
-        let clip = self.clipboard.as_ref();
+        // A clone of the Arc: the clipboard lock is not held during the apply.
+        let clip = leaf(&self.shared.clipboard).clone();
         let d = self
             .docs
             .get_mut(&doc.0)
             .ok_or_else(|| not_found_doc(doc))?;
-        Ok(d.apply(tx, clip))
+        Ok(d.apply(tx, clip.as_deref()))
     }
 
     fn undo(&mut self, doc: DocId) -> Result<ApplyResult> {
@@ -503,7 +564,7 @@ impl DocumentService for EngineService {
         }
         let (snap, tsv, html) = copy_range(&d.wb, range, &mut self.rng);
         let token = snap.token.clone();
-        self.clipboard = Some(snap);
+        *leaf(&self.shared.clipboard) = Some(Arc::new(snap));
         Ok(ClipboardOut { tsv, html, token })
     }
 

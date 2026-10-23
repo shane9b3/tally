@@ -1,14 +1,16 @@
-//! One `#[tauri::command]` per entry in docs/api.md. Each locks the service
-//! and forwards to the matching [`DocumentService`] method. Errors are
+//! One `#[tauri::command]` per entry in docs/api.md. Each locks its
+//! document's service ([`with_doc`]; see `state.rs` for the per-document
+//! locks and the lock order) and forwards to the matching
+//! [`DocumentService`] method. Errors are
 //! [`ApiError`] (`{ code, message }`), which Tauri serializes as the
 //! rejection value of the JS promise.
 //!
 //! Commands are `async` so they run on Tauri's async runtime instead of the
 //! main (UI) thread, and each engine call runs on a blocking worker
-//! ([`blocking`]): the service mutex is a std `Mutex` and an open or recalc
+//! ([`blocking`]): a document's mutex is a std `Mutex` and an open or recalc
 //! can take seconds, which must not park the async runtime's workers.
 //!
-//! Every engine call runs under `catch_unwind` ([`with_service`]): a panic
+//! Every engine call runs under `catch_unwind` ([`with_doc`]): a panic
 //! becomes an `internal` error for that one call, and the other documents
 //! (and their unsaved work) stay usable.
 
@@ -43,15 +45,13 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "unknown panic".to_owned())
 }
 
-/// Runs `f` with the locked service. A panic inside `f` is caught while the
-/// guard is still held, so the mutex is not poisoned, and is returned as an
-/// `internal` error.
-pub fn with_service<T>(
-    state: &AppState,
+/// Runs `f` on `svc`; a panic inside `f` is returned as an `internal` error.
+/// Callers hold `svc`'s lock across this, so the panic is caught before the
+/// guard drops and the mutex is not poisoned.
+pub fn guarded<T>(
+    svc: &mut dyn DocumentService,
     f: impl FnOnce(&mut dyn DocumentService) -> CmdResult<T>,
 ) -> CmdResult<T> {
-    let mut guard = lock(&state.service);
-    let svc: &mut dyn DocumentService = guard.as_mut();
     match catch_unwind(AssertUnwindSafe(|| f(svc))) {
         Ok(result) => result,
         Err(payload) => Err(ApiError::new(
@@ -59,6 +59,48 @@ pub fn with_service<T>(
             format!("the engine failed: {}", panic_message(payload.as_ref())),
         )),
     }
+}
+
+/// Runs `f` with `doc`'s service locked (only that document's lock; an
+/// unknown `doc` is `not_found`). Other documents stay usable meanwhile.
+pub fn with_doc<T>(
+    state: &AppState,
+    doc: DocId,
+    f: impl FnOnce(&mut dyn DocumentService) -> CmdResult<T>,
+) -> CmdResult<T> {
+    let slot = state.doc(doc)?;
+    let mut guard = lock(&slot);
+    guarded(&mut *guard, f)
+}
+
+/// Runs a document-free call (function list, locales, a print job's pages
+/// or PDF) on a detached service: no lock is held while `f` runs.
+pub fn with_engine<T>(
+    state: &AppState,
+    f: impl FnOnce(&mut dyn DocumentService) -> CmdResult<T>,
+) -> CmdResult<T> {
+    guarded(&mut state.detached(), f)
+}
+
+/// Opens or creates one document with `f` on a fresh detached service
+/// (no lock held, so a slow open blocks nobody), then files that service as
+/// the new document's.
+pub fn with_new_doc(
+    state: &AppState,
+    f: impl FnOnce(&mut dyn DocumentService) -> CmdResult<WorkbookInfo>,
+) -> CmdResult<WorkbookInfo> {
+    let mut svc = state.detached();
+    let info = guarded(&mut svc, f)?;
+    state.insert_doc(info.doc, svc);
+    Ok(info)
+}
+
+/// Closes `doc` in the engine and forgets its service (also when the engine
+/// close fails, so a broken document cannot linger).
+pub fn close_engine_doc(state: &AppState, doc: DocId) -> CmdResult<()> {
+    let result = with_doc(state, doc, |s| s.close(doc));
+    state.remove_doc(doc);
+    result
 }
 
 /// Runs `f` on a blocking worker thread with the app state.
@@ -93,7 +135,7 @@ pub fn track_path(state: &AppState, info: &WorkbookInfo) -> CmdResult<()> {
 /// Opens a path through the engine and remembers it for Save (no allowlist
 /// check; callers check first).
 pub fn open_path(state: &AppState, path: &std::path::Path) -> CmdResult<WorkbookInfo> {
-    let info = with_service(state, |s| s.open(path))?;
+    let info = with_new_doc(state, |s| s.open(path))?;
     track_path(state, &info)?;
     Ok(info)
 }
@@ -138,7 +180,7 @@ pub fn open_checked<R: Runtime>(
 /// `wb_new`: a blank workbook, or one built by the engine from a template
 /// id (`invoices`, `budget`, `stock`; unknown ids are `not_found`).
 pub fn new_workbook(state: &AppState, template: Option<&str>) -> CmdResult<WorkbookInfo> {
-    let info = with_service(state, |s| s.new_workbook(template))?;
+    let info = with_new_doc(state, |s| s.new_workbook(template))?;
     track_path(state, &info)?;
     Ok(info)
 }
@@ -151,7 +193,7 @@ pub fn save_to(
     path: &std::path::Path,
     format: FileFormat,
 ) -> CmdResult<WorkbookInfo> {
-    let info = with_service(state, |s| s.save(doc, Some(path), format))?;
+    let info = with_doc(state, doc, |s| s.save(doc, Some(path), format))?;
     track_path(state, &info)?;
     Ok(info)
 }
@@ -176,7 +218,7 @@ pub async fn wb_open(app: AppHandle, path: String) -> CmdResult<WorkbookInfo> {
 #[tauri::command]
 pub async fn wb_close(app: AppHandle, doc: DocId) -> CmdResult<()> {
     blocking(app, move |app, st| {
-        with_service(st, |s| s.close(doc))?;
+        close_engine_doc(st, doc)?;
         lock(&st.paths).remove(&doc.0);
         crate::autosave::remove_snapshot(app, doc);
         Ok(())
@@ -187,7 +229,7 @@ pub async fn wb_close(app: AppHandle, doc: DocId) -> CmdResult<()> {
 #[tauri::command]
 pub async fn sheet_layout(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<SheetLayout> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.sheet_layout(doc, sheet))
+        with_doc(st, doc, |s| s.sheet_layout(doc, sheet))
     })
     .await
 }
@@ -201,7 +243,7 @@ pub async fn get_cells(
 ) -> CmdResult<Vec<CellBlock>> {
     limits::ranges("get_cells", &ranges)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.cells(doc, sheet, &ranges))
+        with_doc(st, doc, |s| s.cells(doc, sheet, &ranges))
     })
     .await
 }
@@ -211,7 +253,7 @@ pub async fn get_styles(app: AppHandle, doc: DocId, ids: Vec<u32>) -> CmdResult<
     if ids.len() > limits::MAX_STYLE_IDS {
         return Err(ApiError::invalid_argument("too many style ids"));
     }
-    blocking(app, move |_, st| with_service(st, |s| s.styles(doc, &ids))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.styles(doc, &ids))).await
 }
 
 #[tauri::command]
@@ -224,7 +266,7 @@ pub async fn cell_edit_info(
 ) -> CmdResult<CellEditInfo> {
     limits::pos("cell_edit_info", r, c)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.cell_edit_info(doc, sheet, r, c))
+        with_doc(st, doc, |s| s.cell_edit_info(doc, sheet, r, c))
     })
     .await
 }
@@ -232,17 +274,17 @@ pub async fn cell_edit_info(
 #[tauri::command]
 pub async fn apply(app: AppHandle, doc: DocId, tx: Transaction) -> CmdResult<ApplyResult> {
     limits::transaction(&tx)?;
-    blocking(app, move |_, st| with_service(st, |s| s.apply(doc, tx))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.apply(doc, tx))).await
 }
 
 #[tauri::command]
 pub async fn undo(app: AppHandle, doc: DocId) -> CmdResult<ApplyResult> {
-    blocking(app, move |_, st| with_service(st, |s| s.undo(doc))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.undo(doc))).await
 }
 
 #[tauri::command]
 pub async fn redo(app: AppHandle, doc: DocId) -> CmdResult<ApplyResult> {
-    blocking(app, move |_, st| with_service(st, |s| s.redo(doc))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.redo(doc))).await
 }
 
 #[tauri::command]
@@ -253,7 +295,7 @@ pub async fn selection_stats(
 ) -> CmdResult<SelectionStats> {
     limits::selection("selection_stats", &sel)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.selection_stats(doc, &sel))
+        with_doc(st, doc, |s| s.selection_stats(doc, &sel))
     })
     .await
 }
@@ -265,7 +307,7 @@ pub async fn clipboard_copy(
     sel: SelectionDto,
 ) -> CmdResult<ClipboardOut> {
     limits::selection("clipboard_copy", &sel)?;
-    blocking(app, move |_, st| with_service(st, |s| s.copy(doc, &sel))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.copy(doc, &sel))).await
 }
 
 #[tauri::command]
@@ -278,7 +320,7 @@ pub async fn navigate_edge(
 ) -> CmdResult<CellPos> {
     limits::cell("navigate_edge", &from)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.navigate_edge(doc, sheet, from, dir))
+        with_doc(st, doc, |s| s.navigate_edge(doc, sheet, from, dir))
     })
     .await
 }
@@ -287,7 +329,7 @@ pub async fn navigate_edge(
 pub async fn resolve_name_box(app: AppHandle, doc: DocId, text: String) -> CmdResult<SelectionDto> {
     limits::chars_max("the name box text", &text, limits::MAX_NAME_BOX_CHARS)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.resolve_name_box(doc, &text))
+        with_doc(st, doc, |s| s.resolve_name_box(doc, &text))
     })
     .await
 }
@@ -295,7 +337,7 @@ pub async fn resolve_name_box(app: AppHandle, doc: DocId, text: String) -> CmdRe
 #[tauri::command]
 pub async fn list_functions(app: AppHandle) -> CmdResult<Vec<FunctionInfo>> {
     blocking(app, move |_, st| {
-        with_service(st, |s| Ok(s.list_functions()))
+        with_engine(st, |s| Ok(s.list_functions()))
     })
     .await
 }
@@ -310,7 +352,7 @@ pub async fn assist_suggest(
     limits::text("the question", &query)?;
     limits::selection("assist_suggest", &sel)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.assist_suggest(doc, &query, &sel))
+        with_doc(st, doc, |s| s.assist_suggest(doc, &query, &sel))
     })
     .await
 }
@@ -329,13 +371,13 @@ pub async fn list_templates() -> CmdResult<Vec<TemplateInfo>> {
 
 #[tauri::command]
 pub async fn names(app: AppHandle, doc: DocId) -> CmdResult<Vec<NameInfo>> {
-    blocking(app, move |_, st| with_service(st, |s| s.names(doc))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.names(doc))).await
 }
 
 #[tauri::command]
 pub async fn filter_info(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<AutoFilterInfo> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.filter_info(doc, sheet))
+        with_doc(st, doc, |s| s.filter_info(doc, sheet))
     })
     .await
 }
@@ -343,7 +385,7 @@ pub async fn filter_info(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResul
 #[tauri::command]
 pub async fn find(app: AppHandle, doc: DocId, query: FindQuery) -> CmdResult<FindResult> {
     limits::find_query(&query)?;
-    blocking(app, move |_, st| with_service(st, |s| s.find(doc, &query))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.find(doc, &query))).await
 }
 
 #[tauri::command]
@@ -355,14 +397,14 @@ pub async fn detect_header(
 ) -> CmdResult<bool> {
     limits::range("detect_header", &range)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.detect_header(doc, sheet, range))
+        with_doc(st, doc, |s| s.detect_header(doc, sheet, range))
     })
     .await
 }
 
 #[tauri::command]
 pub async fn recalc_all(app: AppHandle, doc: DocId) -> CmdResult<ApplyResult> {
-    blocking(app, move |_, st| with_service(st, |s| s.recalc_all(doc))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.recalc_all(doc))).await
 }
 
 // ----- v0.3 (1:1 over the new DocumentService methods) ----------------------
@@ -374,7 +416,7 @@ pub async fn conditional_formats(
     sheet: SheetId,
 ) -> CmdResult<Vec<ConditionalFormatDto>> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.conditional_formats(doc, sheet))
+        with_doc(st, doc, |s| s.conditional_formats(doc, sheet))
     })
     .await
 }
@@ -386,7 +428,7 @@ pub async fn validations(
     sheet: SheetId,
 ) -> CmdResult<Vec<ValidationDto>> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.validations(doc, sheet))
+        with_doc(st, doc, |s| s.validations(doc, sheet))
     })
     .await
 }
@@ -401,7 +443,7 @@ pub async fn validation_at(
 ) -> CmdResult<Option<ValidationInfo>> {
     limits::pos("validation_at", r, c)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.validation_at(doc, sheet, r, c))
+        with_doc(st, doc, |s| s.validation_at(doc, sheet, r, c))
     })
     .await
 }
@@ -416,14 +458,14 @@ pub async fn note(
 ) -> CmdResult<Option<NoteDto>> {
     limits::pos("note", r, c)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.note(doc, sheet, r, c))
+        with_doc(st, doc, |s| s.note(doc, sheet, r, c))
     })
     .await
 }
 
 #[tauri::command]
 pub async fn notes(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<Vec<NoteDto>> {
-    blocking(app, move |_, st| with_service(st, |s| s.notes(doc, sheet))).await
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.notes(doc, sheet))).await
 }
 
 #[tauri::command]
@@ -433,7 +475,7 @@ pub async fn protection_info(
     sheet: SheetId,
 ) -> CmdResult<ProtectionInfo> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.protection_info(doc, sheet))
+        with_doc(st, doc, |s| s.protection_info(doc, sheet))
     })
     .await
 }
@@ -441,7 +483,7 @@ pub async fn protection_info(
 #[tauri::command]
 pub async fn page_setup(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<PageSetupDto> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.page_setup(doc, sheet))
+        with_doc(st, doc, |s| s.page_setup(doc, sheet))
     })
     .await
 }
@@ -449,7 +491,7 @@ pub async fn page_setup(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult
 #[tauri::command]
 pub async fn document_properties(app: AppHandle, doc: DocId) -> CmdResult<DocPropertiesDto> {
     blocking(app, move |_, st| {
-        with_service(st, |s| s.document_properties(doc))
+        with_doc(st, doc, |s| s.document_properties(doc))
     })
     .await
 }
@@ -462,21 +504,21 @@ pub async fn goal_seek(
 ) -> CmdResult<GoalSeekResult> {
     limits::goal_seek(&req)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.goal_seek(doc, &req))
+        with_doc(st, doc, |s| s.goal_seek(doc, &req))
     })
     .await
 }
 
 #[tauri::command]
 pub async fn list_locales(app: AppHandle) -> CmdResult<Vec<LocaleInfo>> {
-    blocking(app, move |_, st| with_service(st, |s| Ok(s.list_locales()))).await
+    blocking(app, move |_, st| with_engine(st, |s| Ok(s.list_locales()))).await
 }
 
 #[tauri::command]
 pub async fn set_locale(app: AppHandle, doc: DocId, locale: String) -> CmdResult<ApplyResult> {
     limits::text_max("the locale", &locale, limits::MAX_LOCALE)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.set_locale(doc, &locale))
+        with_doc(st, doc, |s| s.set_locale(doc, &locale))
     })
     .await
 }
@@ -490,7 +532,7 @@ pub async fn resolve_name_box_in(
 ) -> CmdResult<SelectionDto> {
     limits::chars_max("the name box text", &text, limits::MAX_NAME_BOX_CHARS)?;
     blocking(app, move |_, st| {
-        with_service(st, |s| s.resolve_name_box_in(doc, sheet, &text))
+        with_doc(st, doc, |s| s.resolve_name_box_in(doc, sheet, &text))
     })
     .await
 }

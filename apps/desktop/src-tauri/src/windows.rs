@@ -44,7 +44,7 @@ use tally_api::{ApiError, DocId, WorkbookInfo};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, Webview, Window};
 
 use crate::closing;
-use crate::commands::{blocking, with_service, CmdResult};
+use crate::commands::{blocking, close_engine_doc, with_doc, CmdResult};
 use crate::registry::{
     is_doc_label, CloseKind, Created, OpenMode, Placement, Refused, TabClose, TabsState, Target,
     Windows,
@@ -311,7 +311,7 @@ pub fn spawn_doc_window<R: Runtime>(app: &AppHandle<R>, doc: Option<WorkbookInfo
 
 /// The engine's summary of an open document (`DocumentService::info`).
 pub async fn engine_info<R: Runtime>(app: &AppHandle<R>, doc: DocId) -> CmdResult<WorkbookInfo> {
-    blocking(app.clone(), move |_, st| with_service(st, |s| s.info(doc))).await
+    blocking(app.clone(), move |_, st| with_doc(st, doc, |s| s.info(doc))).await
 }
 
 /// Brings a window to the front (un-minimising it).
@@ -445,7 +445,7 @@ pub fn update_all_windows<R: Runtime>(app: &AppHandle<R>) {
 /// engine no longer has is fine.
 pub async fn close_doc<R: Runtime>(app: &AppHandle<R>, doc: DocId) {
     let result = blocking(app.clone(), move |app, st| {
-        let _ = with_service(st, |s| s.close(doc));
+        let _ = close_engine_doc(st, doc);
         lock(&st.paths).remove(&doc.0);
         crate::autosave::remove_snapshot(app, doc);
         Ok(())

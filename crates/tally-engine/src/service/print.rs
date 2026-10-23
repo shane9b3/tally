@@ -76,16 +76,17 @@ pub fn prepare_print_job(
         let ctx = hf_context(d);
         let (pages, warnings) = crate::print::layout(&d.wb, opts, &ctx)?;
         let (job, layout) = pdf::build_job(d, &pages, warnings, charts)?;
-        let id = svc.print_jobs.next.wrapping_add(1).max(1);
-        svc.print_jobs.next = id;
-        if svc.print_jobs.jobs.len() >= crate::print::JOB_LRU {
-            svc.print_jobs.jobs.remove(0);
+        let mut jobs = super::leaf(&svc.shared.print_jobs);
+        let id = jobs.next.wrapping_add(1).max(1);
+        jobs.next = id;
+        if jobs.jobs.len() >= crate::print::JOB_LRU {
+            jobs.jobs.remove(0);
         }
         let info = PrintJobInfo {
             job: id,
             layout: layout.clone(),
         };
-        svc.print_jobs.jobs.push((
+        jobs.jobs.push((
             id,
             std::sync::Arc::new(pdf::CachedJob {
                 layout,
@@ -145,7 +146,7 @@ pub fn print_job_page_png(svc: &EngineService, job: u32, page: u32, dpi: u32) ->
 #[cfg(feature = "pdf")]
 impl EngineService {
     fn job(&self, id: u32) -> Result<std::sync::Arc<pdf::CachedJob>> {
-        self.print_jobs
+        super::leaf(&self.shared.print_jobs)
             .jobs
             .iter()
             .find(|(i, _)| *i == id)

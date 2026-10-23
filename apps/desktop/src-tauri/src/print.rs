@@ -21,7 +21,7 @@ use tauri::http::{Request, Response, StatusCode};
 use tauri::{AppHandle, Manager, Runtime, State, UriSchemeContext};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::commands::{blocking, with_service, CmdResult};
+use crate::commands::{blocking, with_engine, CmdResult};
 use crate::state::{lock, AppState};
 
 /// The custom URI scheme the print window loads its PDF from.
@@ -52,7 +52,7 @@ fn io_err(what: &str, e: &std::io::Error) -> ApiError {
 
 /// The PDF bytes of a prepared job from the engine (`print_job_pdf`).
 pub fn pdf_bytes(state: &AppState, job: u32) -> CmdResult<Vec<u8>> {
-    let bytes = with_service(state, |s| s.print_job_pdf(job))?;
+    let bytes = with_engine(state, |s| s.print_job_pdf(job))?;
     if bytes.len() > MAX_PDF_BYTES {
         return Err(ApiError::invalid_argument(format!(
             "the PDF is too large ({} bytes)",
@@ -435,7 +435,7 @@ mod tests {
     /// never a panic.
     #[test]
     fn export_pdf_job_bytes() {
-        let st = AppState::new(Box::new(build_service()));
+        let st = AppState::new(build_service());
         let err = pdf_bytes(&st, 4_000_000).unwrap_err();
         assert!(
             err.code == ApiError::UNSUPPORTED || err.code == ApiError::NOT_FOUND,

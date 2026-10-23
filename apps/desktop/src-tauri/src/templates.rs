@@ -17,7 +17,7 @@ use tally_api::{ApiError, DocId, FileFormat, WorkbookInfo};
 use tauri::{AppHandle, Manager, Runtime};
 use zip::write::SimpleFileOptions;
 
-use crate::commands::{blocking, with_service, CmdResult};
+use crate::commands::{blocking, with_doc, with_new_doc, CmdResult};
 use crate::files::TemplateInfo;
 use crate::state::{lock, AppState};
 
@@ -158,7 +158,7 @@ pub fn save_template<R: Runtime>(
     let folder = dir(app)?;
     fs::create_dir_all(&folder).map_err(|e| io_err("creating the templates dir", &e))?;
     let tmp = folder.join(format!(".{name}.tmp.ods"));
-    with_service(st, |s| s.save_copy(doc, &tmp, FileFormat::Ods))?;
+    with_doc(st, doc, |s| s.save_copy(doc, &tmp, FileFormat::Ods))?;
     let ods = fs::read(&tmp).map_err(|e| io_err("reading the saved copy", &e));
     let _ = fs::remove_file(&tmp);
     let ots = ods_to_ots(&ods?)?;
@@ -214,7 +214,7 @@ pub fn path_of<R: Runtime>(app: &AppHandle<R>, id: &str) -> CmdResult<PathBuf> {
 
 /// Opens a template file as an untitled workbook (no path, so Save asks).
 pub fn open_as_untitled(st: &AppState, path: &Path) -> CmdResult<WorkbookInfo> {
-    let info = with_service(st, |s| s.open_untitled(path, false))?;
+    let info = with_new_doc(st, |s| s.open_untitled(path, false))?;
     lock(&st.paths).remove(&info.doc.0);
     Ok(info)
 }

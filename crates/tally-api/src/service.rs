@@ -2,8 +2,8 @@
 //!
 //! Implemented by the engine (WP1) and wrapped 1:1 by the Tauri commands
 //! (WP7, see `docs/api.md`) and later by `tally-wasm`. It is synchronous and
-//! transport-agnostic; the shell decides threading (a `Mutex` in Tauri's
-//! managed state).
+//! transport-agnostic; the shell decides threading (the desktop shell keeps
+//! one engine service per document, each behind its own `Mutex`).
 
 use std::path::Path;
 
