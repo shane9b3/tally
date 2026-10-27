@@ -49,7 +49,7 @@ real-file corpus).
 - A whole-column style split by one styled cell is written cell by cell after re-import (docs/file-formats.md).
 - Excel export: an intersection imported from XLSX is written as `(Name) (A1:B2)` on the first save (valid; stable afterwards). ExcelA1 never reads `SUM (A1)` with a space as a call (Excel rejects it too).
 - Lookup index: overlapping ranges over one column (`$A$1:$A$n`, `$A$2:$A$n`, `A:A`) get separate indexes within the 256 MB budget.
-- Perf (docs/perf-baseline.md hot spots 3–5): ~280 bytes per cell (1.4–1.6 GB for a 50 MB XLSX); CSV import ~6 MB/s; grid fling drops frames in headless Chromium — re-measure in the Tauri webview.
+- Perf (docs/perf-baseline.md hot spots 3–5): 50 MB XLSX/ODS open peaks at 0.9–1.1 GB RSS (was 1.4–1.6 GB; further cuts need a block column store and a compact formula-cell table); CSV import 1M rows in ~1.2 s (was 7.6 s); grid fling drops frames in headless Chromium — re-measure in the Tauri webview.
 - Not built yet from the plan: multithreaded recalc, auto-update (tauri-plugin-updater), opt-in crash reporting.
 - Inventory gaps found 2026-10-27 (docs/calc-features-inventory.md 1.0 status; deviation IDs in docs/parity-deviations.md). Sizes: S < 1 day, M a few days, L a week or more.
   - Input and editing: leading `+`/`-` starts a formula (P18, S); paste-over-data warning with an Input option (U22, S); Tab / Shift+Tab skip locked cells on a protected sheet (U7, S); Paste Special Link and Shift cells, and Text / Numbers / Date / Formulas / Comments choices (M); two-digit year window option (P17, S).
@@ -65,7 +65,7 @@ real-file corpus).
 1. Functions: keep 408/408; DDE and macro calls marked unsupported (done).
 2. Conformance ≥ 99 % against the AOO oracle (`xtask aoo-oracle --setup/--run`, isolated profile) — owner runs it locally; record deviations in `docs/functions/deviations.md`.
 3. Fidelity corpus: 200 real ODS/XLSX files, `xtask fidelity` ≥ 98 % lossless, 0 crashes — owner sources the corpus.
-4. Performance benches (100k-formula recalc < 500 ms, 50 MB ODS open < 10 s, `chart_data` 10k points < 20 ms, 20-page PDF < 1 s, 100k-row pivot < 500 ms, 60 fps scroll) gated on three OSes — needs runners. macOS baseline and proposed thresholds: `docs/perf-baseline.md` (`cargo xtask perf`, `pnpm perf:e2e`); all recalc/open/save checks pass on an M4 Pro. Not yet measured: `chart_data`, 20-page PDF, 100k-row pivot, scroll in the real webview.
+4. Performance benches (100k-formula recalc < 500 ms, 50 MB ODS open < 10 s, `chart_data` 10k points < 20 ms, 20-page PDF < 1 s, 100k-row pivot < 500 ms, 60 fps scroll) gated on three OSes — needs runners. macOS baseline and proposed thresholds: `docs/perf-baseline.md` (`cargo xtask perf`, `pnpm perf:e2e`); all recalc/open/save checks pass on an M4 Pro, and so do `chart_data` 10k points (~3 ms), a 20-page PDF (~12 ms) and a 100k-row DataPilot refresh (~30 ms) (`cargo xtask perf --only chart,pdf,pivot`). Not yet measured: scroll in the real webview.
 5. Accessibility: keyboard-only dialogs, axe/keyboard e2e specs and WCAG AA contrast done; VoiceOver walkthrough (`docs/qa/a11y.md`) — owner.
 6. Security: 24 h fuzzing of ODS/XLSX/XLS readers (cargo-fuzz needs a nightly toolchain / CI); review round 4 done.
 7. Parity docs: done (`docs/parity-deviations.md`, inventories marked); ~47 inventory rows still "unverified".

@@ -87,6 +87,18 @@ pub struct BTreeColumn {
     cells: BTreeMap<u32, CellContent>,
 }
 
+impl BTreeColumn {
+    /// Rebuilds the map from its sorted entries. Inserting rows in
+    /// ascending order (as loading does) leaves the B-tree's leaves a bit
+    /// over half full; a bulk build packs them, which takes about 40 % less
+    /// memory per cell. The content is unchanged.
+    pub fn compact(&mut self) {
+        if self.cells.len() > 64 {
+            self.cells = std::mem::take(&mut self.cells).into_iter().collect();
+        }
+    }
+}
+
 impl ColumnStore for BTreeColumn {
     fn get(&self, row: u32) -> Option<&CellContent> {
         self.cells.get(&row)
@@ -907,6 +919,16 @@ pub struct Sheet {
 }
 
 impl Sheet {
+    /// Packs the cell maps (see [`BTreeColumn::compact`]); after a load.
+    pub fn compact(&mut self) {
+        for col in &mut self.columns {
+            col.cells.compact();
+            if col.formula_rows.len() > 64 {
+                col.formula_rows = std::mem::take(&mut col.formula_rows).into_iter().collect();
+            }
+        }
+    }
+
     /// An empty sheet.
     pub fn new(id: SheetId, name: &str) -> Self {
         Self {

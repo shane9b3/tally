@@ -384,12 +384,18 @@ impl DocumentService for EngineService {
                 ),
             ));
         }
-        let bytes = std::fs::read(path).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
         let ext = path
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
-        let mut decoded = self.codec.read(&bytes, &ext)?;
+        // The file bytes are dropped as soon as they are decoded and the
+        // decoded cells while they are loaded, so neither adds to the peak
+        // memory of an open.
+        let mut decoded = {
+            let bytes =
+                std::fs::read(path).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+            self.codec.read(&bytes, &ext)?
+        };
         if decoded.data.sheets.len() > crate::workbook::MAX_SHEETS {
             return Err(ApiError::new(
                 ApiError::BAD_FILE,
@@ -411,8 +417,8 @@ impl DocumentService for EngineService {
                 .file_stem()
                 .map_or_else(|| "Sheet1".to_owned(), |s| s.to_string_lossy().into_owned());
         }
-        let wb = Workbook::from_data_opts(
-            &decoded.data,
+        let wb = Workbook::from_data_owned(
+            decoded.data,
             decoded.recognize_text,
             decoded.evaluate_formulas,
         );

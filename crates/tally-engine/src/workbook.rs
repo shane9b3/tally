@@ -11,7 +11,7 @@ use tally_formula::{
 };
 use tally_functions::{registry, FnFlags, FuncId, ParamKind};
 use tally_model::DocMeta;
-use tally_numfmt::{recognize_input_with, Locale, RecognizeContext, EN_US};
+use tally_numfmt::{recognize_input_with, Locale, RecognizeContext, Recognized, EN_US};
 use tally_types::{CalcSettings, CellAddr, CellRange, SheetId, Value, MAX_COLS, MAX_ROWS};
 
 use crate::deps::{DepIndex, HashDepIndex};
@@ -158,6 +158,81 @@ pub struct Pending {
     pub dirty: Vec<FormulaCellId>,
     /// Ranges whose display changed without a value change (styles).
     pub display_only: Vec<CellRange>,
+}
+
+/// State shared by the cells of one bulk load (see
+/// [`Workbook::set_input_bulk`]).
+#[derive(Debug)]
+pub(crate) struct BulkInput {
+    /// Recognition context (today's date), read once.
+    pub ctx: RecognizeContext,
+    /// `(style, implied format code)` → the derived style.
+    pub formats: HashMap<(StyleId, String), StyleId>,
+    /// Inputs already recognized in this load (a function of the input,
+    /// the locale and `ctx` only), at most [`BULK_RECOGNIZED_CAP`] of at
+    /// most [`BULK_RECOGNIZED_MAX_LEN`] bytes. A
+    /// repeated text also shares one allocation.
+    pub recognized: HashMap<Arc<str>, Recognized>,
+}
+
+/// Most distinct inputs remembered by [`BulkInput::recognized`].
+const BULK_RECOGNIZED_CAP: usize = 1 << 16;
+
+/// Longest input (bytes) remembered by [`BulkInput::recognized`], as for
+/// the readers' text interners: long unique texts (descriptions) are not
+/// worth a copy.
+const BULK_RECOGNIZED_MAX_LEN: usize = 64;
+
+impl BulkInput {
+    pub(crate) fn new(epoch: tally_types::DateEpoch) -> Self {
+        Self {
+            ctx: RecognizeContext::now(epoch),
+            formats: HashMap::new(),
+            recognized: HashMap::new(),
+        }
+    }
+}
+
+/// `input` as a number when it is a plain decimal number (`-?d+(.d+)?`,
+/// the `.` only where it is the locale's decimal separator) that the input
+/// recognizer would read as exactly that number with no implied format;
+/// `None` sends the input through the full recognizer.
+pub(crate) fn plain_number(input: &str, locale: &Locale) -> Option<f64> {
+    let b = input.as_bytes();
+    let (neg, digits) = match b.first()? {
+        b'-' => (true, &b[1..]),
+        _ => (false, b),
+    };
+    let dot_ok = locale.decimal_sep == '.' && !locale.is_group_char('.');
+    let mut int_len = 0;
+    while int_len < digits.len() && digits[int_len].is_ascii_digit() {
+        int_len += 1;
+    }
+    if int_len == 0 || int_len > 15 {
+        return None;
+    }
+    if int_len < digits.len() {
+        let frac = &digits[int_len + 1..];
+        if !dot_ok
+            || digits[int_len] != b'.'
+            || frac.is_empty()
+            || frac.len() > 15
+            || !frac.iter().all(u8::is_ascii_digit)
+        {
+            return None;
+        }
+    }
+    // The recognizer checks the boolean names and a currency prefix first;
+    // none of the supported locales spells them with digits, but stay on
+    // the full path if one ever does.
+    let numeric = |s: &str| s.is_empty() || s.bytes().any(|c| c.is_ascii_digit() || c == b'-');
+    if numeric(locale.true_name) || numeric(locale.false_name) || numeric(locale.currency_symbol) {
+        return None;
+    }
+    // `digits` is ASCII digits with at most one `.`, as the recognizer's
+    // own `parse_unsigned` builds it.
+    let v: f64 = std::str::from_utf8(digits).ok()?.parse().ok()?;
+    Some(if neg { -v } else { v })
 }
 
 /// The workbook.
@@ -896,19 +971,48 @@ impl Workbook {
     }
 
     fn set_input_opts(&mut self, addr: CellAddr, input: &str, formulas: bool) {
+        self.set_input_inner(addr, input, formulas, None, None);
+    }
+
+    /// [`Self::set_input`] (`formulas`) or [`Self::set_constant_input`]
+    /// for bulk loads (CSV import): `bulk` holds the recognition context
+    /// (today's date, read once per load instead of once per cell) and the
+    /// styles already derived by an implied number format; a text result
+    /// equal to the input reuses `input`'s allocation. The result is the
+    /// same as the per-cell calls.
+    pub(crate) fn set_input_bulk(
+        &mut self,
+        addr: CellAddr,
+        input: &Arc<str>,
+        formulas: bool,
+        bulk: &mut BulkInput,
+    ) {
+        self.set_input_inner(addr, input, formulas, Some(bulk), Some(input));
+    }
+
+    fn set_input_inner(
+        &mut self,
+        addr: CellAddr,
+        input: &str,
+        formulas: bool,
+        mut bulk: Option<&mut BulkInput>,
+        shared: Option<&Arc<str>>,
+    ) {
+        // `input` as a text value, sharing the caller's allocation if any.
+        let as_text = || shared.map_or_else(|| Value::text(input), |a| Value::Text(Arc::clone(a)));
         if input.is_empty() {
             self.clear_content(addr);
             return;
         }
         if !formulas && input.starts_with('=') {
-            self.set_value(addr, Value::text(input));
+            self.set_value(addr, as_text());
             return;
         }
         let style = self.style_at(addr);
         // A Text-formatted (`@`) cell keeps its input as typed, formulas
         // included (AOO).
         if self.styles.get(style).is_text_format() {
-            self.set_value(addr, Value::text(input));
+            self.set_value(addr, as_text());
             return;
         }
         if input.starts_with('=') && input.len() > 1 {
@@ -922,12 +1026,46 @@ impl Workbook {
             }
             return;
         }
-        let ctx = RecognizeContext::now(self.settings.date_epoch);
-        let rec = recognize_input_with(input, self.locale, &ctx);
+        if let Some(n) = plain_number(input, self.locale) {
+            // What the recognizer returns for plain decimal numbers,
+            // without its allocations (no implied format).
+            self.set_value(addr, Value::Number(n));
+            return;
+        }
+        let rec = match &mut bulk {
+            Some(b) if b.ctx.epoch == self.settings.date_epoch => {
+                if let Some(r) = b.recognized.get(input) {
+                    r.clone()
+                } else {
+                    let mut r = recognize_input_with(input, self.locale, &b.ctx);
+                    if matches!(&r.value, Value::Text(t) if **t == *input) {
+                        r.value = as_text();
+                    }
+                    if input.len() <= BULK_RECOGNIZED_MAX_LEN
+                        && b.recognized.len() < BULK_RECOGNIZED_CAP
+                    {
+                        let key = shared.map_or_else(|| input.into(), Arc::clone);
+                        b.recognized.insert(key, r.clone());
+                    }
+                    r
+                }
+            }
+            _ => recognize_input_with(
+                input,
+                self.locale,
+                &RecognizeContext::now(self.settings.date_epoch),
+            ),
+        };
         self.set_value(addr, rec.value);
         if let Some(code) = rec.implied_format {
             if self.styles.get(style).is_general() {
-                let new = self.styles.with_format(style, &code);
+                let new = match bulk {
+                    Some(b) => *b
+                        .formats
+                        .entry((style, code))
+                        .or_insert_with_key(|(st, code)| self.styles.with_format(*st, code)),
+                    None => self.styles.with_format(style, &code),
+                };
                 if let Some(s) = self.sheet_mut(addr.sheet) {
                     if let Some(col) = s.column_mut(addr.col) {
                         col.styles.set(addr.row, addr.row, new);
@@ -967,6 +1105,14 @@ impl Workbook {
             }
         }
         self.pending.dirty.extend(ids);
+    }
+
+    /// Packs the cell storage of every sheet after a bulk load (same
+    /// content, less memory; see [`crate::storage::BTreeColumn::compact`]).
+    pub fn compact_storage(&mut self) {
+        for s in &mut self.sheets {
+            s.compact();
+        }
     }
 
     /// Marks every formula dirty (hard recalc).

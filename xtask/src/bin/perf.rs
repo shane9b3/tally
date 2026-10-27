@@ -7,11 +7,17 @@
 //! under `/usr/bin/time -l`).
 //!
 //! ```text
-//! perf [--quick] [--only NAME[,NAME]] [--dir DIR] [--runs N] [--deep]
+//! perf [--quick] [--only NAME[,NAME]] [--dir DIR] [--runs N] [--deep] [--keep]
 //! perf --open-rss FILE        (internal: open FILE once and exit)
+//! perf --dump FILE            (open FILE and print a digest of the loaded
+//!                              workbook, to diff two builds)
+//! perf --mem FILE             (open FILE step by step and print the RSS
+//!                              and live malloc bytes after each step)
 //! ```
 //!
-//! Scenario names: recalc, incremental, io10, io25, io50, csv, rss, deep.
+//! Scenario names: recalc, incremental, io10, io25, io50, csv, rss, deep,
+//! chart, pdf, pivot (the last three are the 1.0 gate's `chart_data` for
+//! 10k points, a 20-page PDF export and a 100k-row DataPilot refresh).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -31,6 +37,9 @@ struct Opts {
     runs: usize,
     deep: bool,
     open_rss: Option<PathBuf>,
+    mem: Option<PathBuf>,
+    keep: bool,
+    dump: Option<PathBuf>,
 }
 
 fn parse() -> Res<Opts> {
@@ -41,12 +50,16 @@ fn parse() -> Res<Opts> {
         runs: 3,
         deep: false,
         open_rss: None,
+        mem: None,
+        keep: false,
+        dump: None,
     };
     let mut a = std::env::args().skip(1);
     while let Some(x) = a.next() {
         match x.as_str() {
             "--quick" => o.quick = true,
             "--deep" => o.deep = true,
+            "--keep" => o.keep = true,
             "--only" => {
                 let v = a.next().ok_or("--only needs a value")?;
                 o.only = Some(v.split(',').map(str::to_owned).collect());
@@ -58,6 +71,8 @@ fn parse() -> Res<Opts> {
                     .and_then(|v| v.parse().ok())
                     .ok_or("--runs needs a number")?
             }
+            "--dump" => o.dump = Some(a.next().ok_or("--dump needs a file")?.into()),
+            "--mem" => o.mem = Some(a.next().ok_or("--mem needs a file")?.into()),
             "--open-rss" => o.open_rss = Some(a.next().ok_or("--open-rss needs a file")?.into()),
             other => return Err(format!("unknown option {other}")),
         }
@@ -261,13 +276,21 @@ fn wants(o: &Opts, name: &str) -> bool {
 
 fn run(o: &Opts) -> Res<()> {
     let scale = if o.quick { 10 } else { 1 };
-    let dir = o
-        .dir
-        .clone()
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("tally-perf-{}", std::process::id())));
+    // Files go in a fresh subdirectory that perf creates (inside `--dir`
+    // or the temp dir) and deletes afterwards; a directory given with
+    // `--dir` is never deleted itself.
+    let base = o.dir.clone().unwrap_or_else(std::env::temp_dir);
+    let dir = base.join(format!("tally-perf-{}", std::process::id()));
+    if dir.exists() {
+        return Err(format!("{} already exists", dir.display()));
+    }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let res = scenarios(o, &dir, scale);
-    let _ = std::fs::remove_dir_all(&dir);
+    if o.keep {
+        eprintln!("perf: generated files kept in {}", dir.display());
+    } else {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     res
 }
 
@@ -496,6 +519,16 @@ fn scenarios(o: &Opts, dir: &Path, scale: u32) -> Res<()> {
         }
     }
 
+    if wants(o, "chart") {
+        bench_chart(o, scale)?;
+    }
+    if wants(o, "pdf") {
+        bench_pdf(o)?;
+    }
+    if wants(o, "pivot") {
+        bench_pivot(o, scale)?;
+    }
+
     if o.deep || wants_exact(o, "deep") {
         let n = 100_000 / scale;
         let mut wb = build_deep(n);
@@ -507,6 +540,508 @@ fn scenarios(o: &Opts, dir: &Path, scale: u32) -> Res<()> {
             &format!("{} formulas, depth {n}", rep.evaluated),
         );
     }
+    Ok(())
+}
+
+fn tx(ops: Vec<tally_api::Op>) -> tally_api::Transaction {
+    tally_api::Transaction {
+        ops,
+        label: None,
+        selection_before: None,
+        selection_after: None,
+    }
+}
+
+fn apply(
+    svc: &mut EngineService,
+    doc: tally_api::DocId,
+    ops: Vec<tally_api::Op>,
+) -> Res<tally_api::ApplyResult> {
+    let r = svc.apply(doc, tx(ops)).map_err(|e| e.to_string())?;
+    if !r.errors.is_empty() {
+        return Err(format!("{:?}", r.errors));
+    }
+    Ok(r)
+}
+
+fn created_id(r: &tally_api::ApplyResult) -> Res<u32> {
+    r.created
+        .as_ref()
+        .and_then(|v| v.first())
+        .map(|c| c.id)
+        .ok_or_else(|| "no id created".to_owned())
+}
+
+fn chart_axis() -> tally_api::ChartAxisDto {
+    tally_api::ChartAxisDto {
+        visible: true,
+        title: None,
+        min: None,
+        max: None,
+        major: None,
+        minor_count: None,
+        log: false,
+        reverse: false,
+        major_grid: true,
+        minor_grid: false,
+        number_format: None,
+    }
+}
+
+/// `chart_data` of a line chart with 10 000 points (one series plus text
+/// categories) read through the service, as the UI does on every repaint
+/// of a changed chart.
+fn bench_chart(o: &Opts, scale: u32) -> Res<()> {
+    use tally_api::{
+        ChartAnchor, ChartDto, ChartKind, ChartSeriesDto, DataLabelsDto, LegendPos, Op, SeriesName,
+        Stacking,
+    };
+    let n = 10_000 / scale;
+    let mut wb = Workbook::empty();
+    let s = new_sheet(&mut wb);
+    wb.set_value(addr(s, 0, 0), Value::text("Day"));
+    wb.set_value(addr(s, 0, 1), Value::text("Value"));
+    for r in 1..=n {
+        wb.set_value(addr(s, r, 0), Value::text(format!("d{r}")));
+        wb.set_value(
+            addr(s, r, 1),
+            Value::Number(f64::from((r * 37) % 1000) / 10.0),
+        );
+    }
+    let (mut svc, doc) = svc_with(wb);
+    let last = n + 1;
+    let chart = ChartDto {
+        id: 0,
+        name: String::new(),
+        anchor: ChartAnchor {
+            r: 1,
+            c: 4,
+            dx_mm: 0.0,
+            dy_mm: 0.0,
+            width_mm: 160.0,
+            height_mm: 90.0,
+        },
+        kind: ChartKind::Line,
+        stacking: Stacking::None,
+        lines: true,
+        markers: false,
+        smooth: false,
+        hole: None,
+        exploded: false,
+        filled: false,
+        stock: None,
+        three_d: false,
+        source: None,
+        categories: Some(format!("$Sheet1.$A$2:$A${last}")),
+        series: vec![ChartSeriesDto {
+            name: Some(SeriesName::Ref {
+                r#ref: "$Sheet1.$B$1".into(),
+            }),
+            values: format!("$Sheet1.$B$2:$B${last}"),
+            x_values: None,
+            sizes: None,
+            kind: None,
+            secondary_axis: false,
+            color: None,
+            marker: None,
+            labels: DataLabelsDto::default(),
+            trend: None,
+            error_bars: None,
+            mean_line: false,
+        }],
+        title: Some("Perf".into()),
+        subtitle: None,
+        legend: LegendPos::Right,
+        x_axis: chart_axis(),
+        y_axis: chart_axis(),
+        y2_axis: None,
+        background: None,
+        plot_background: None,
+        include_hidden: false,
+    };
+    let r = apply(&mut svc, doc, vec![Op::AddChart { sheet: s, chart }])?;
+    let id = created_id(&r)?;
+    let mut t = Vec::new();
+    let mut hit = Vec::new();
+    let mut points = 0;
+    for i in 0..o.runs.max(5) {
+        // Edit a series cell first so the document version moves and the
+        // service's chart-data cache misses (what a repaint after an edit
+        // pays).
+        apply(
+            &mut svc,
+            doc,
+            vec![Op::SetCellInput {
+                sheet: s,
+                r: 1,
+                c: 1,
+                input: format!("{}", i + 1),
+            }],
+        )?;
+        let st = Instant::now();
+        let d = svc.chart_data(doc, s, id).map_err(|e| e.to_string())?;
+        t.push(ms(st));
+        points = d.series.iter().map(|x| x.values.len()).sum::<usize>();
+        let st = Instant::now();
+        svc.chart_data(doc, s, id).map_err(|e| e.to_string())?;
+        hit.push(ms(st));
+    }
+    if points != n as usize {
+        return Err(format!("chart_data returned {points} points, wanted {n}"));
+    }
+    row(
+        "chart_data, 10k points",
+        median(t),
+        &format!(
+            "{points} points (1 series + text categories), cache miss after an edit; cached repeat {:.2} ms",
+            median(hit)
+        ),
+    );
+    Ok(())
+}
+
+/// A 20-page PDF: `prepare_print_job` (pagination + cell layout) plus
+/// `print_job_pdf` (krilla), which is what File > Export as PDF does.
+fn bench_pdf(o: &Opts) -> Res<()> {
+    use tally_api::{PrintOptionsDto, PrintSheets};
+    let opts = PrintOptionsDto {
+        sheets: PrintSheets::Active,
+        selection: None,
+        suppress_empty_pages: true,
+        page_from: None,
+        page_to: None,
+    };
+    // Six columns fit one A4 portrait page across; find the rows per page
+    // from a probe and size the sheet for 20 pages.
+    let build = |rows: u32| {
+        let mut wb = Workbook::empty();
+        let s = new_sheet(&mut wb);
+        for r in 0..rows {
+            wb.set_value(addr(s, r, 0), Value::text(format!("Item {r}")));
+            wb.set_value(addr(s, r, 1), Value::text(format!("Group {}", r % 17)));
+            for c in 2..5u32 {
+                wb.set_value(
+                    addr(s, r, c),
+                    Value::Number(f64::from((r * 31 + c * 7) % 10_000) / 100.0),
+                );
+            }
+            wb.set_input(addr(s, r, 5), &format!("=C{}*D{}", r + 1, r + 1));
+        }
+        svc_with(wb)
+    };
+    let (svc, doc) = build(500);
+    let probe = svc.print_layout(doc, &opts).map_err(|e| e.to_string())?;
+    let per_page = probe
+        .pages
+        .first()
+        .map_or(50, |p| p.rows[1].saturating_sub(p.rows[0]) + 1);
+    let (mut svc, doc) = build(per_page * 20);
+    let mut t = Vec::new();
+    let mut pages = 0;
+    let mut bytes = 0;
+    for _ in 0..o.runs.max(3) {
+        let st = Instant::now();
+        let job = svc
+            .prepare_print_job(doc, &opts, &[])
+            .map_err(|e| e.to_string())?;
+        let pdf = svc.print_job_pdf(job.job).map_err(|e| e.to_string())?;
+        t.push(ms(st));
+        pages = job.layout.pages.len();
+        bytes = pdf.len();
+    }
+    row(
+        "PDF export, 20 pages",
+        median(t),
+        &format!(
+            "{pages} pages, {} rows x 6 cols, {:.0} KB; prepare_print_job + print_job_pdf",
+            per_page * 20,
+            bytes as f64 / 1024.0
+        ),
+    );
+    Ok(())
+}
+
+/// A DataPilot over 100 000 source rows (two row fields, one column field,
+/// two data fields): create, then `RefreshPivot` through the service.
+fn bench_pivot(o: &Opts, scale: u32) -> Res<()> {
+    use tally_api::{
+        AggFn, CellPos, DataLayout, Op, PivotDataFieldDto, PivotDto, PivotFieldDto, PivotLayout,
+        PivotSort, PivotSource, PivotSubtotals, RangeDto,
+    };
+    let n = 100_000 / scale;
+    let mut wb = Workbook::empty();
+    let s = new_sheet(&mut wb);
+    let t = wb.add_sheet(Some("Report"), None);
+    for (c, h) in ["Region", "Product", "Quarter", "Units", "Revenue"]
+        .iter()
+        .enumerate()
+    {
+        wb.set_value(addr(s, 0, c as u32), Value::text(*h));
+    }
+    for r in 1..=n {
+        wb.set_value(addr(s, r, 0), Value::text(format!("R{}", r % 12)));
+        wb.set_value(addr(s, r, 1), Value::text(format!("P{}", (r * 7) % 50)));
+        wb.set_value(addr(s, r, 2), Value::text(format!("Q{}", r % 4 + 1)));
+        wb.set_value(addr(s, r, 3), Value::Number(f64::from(r % 97)));
+        wb.set_value(
+            addr(s, r, 4),
+            Value::Number(f64::from((r * 13) % 10_000) / 10.0),
+        );
+    }
+    let (mut svc, doc) = svc_with(wb);
+    let field = |col: u32, name: &str| PivotFieldDto {
+        source_col: col,
+        name: name.into(),
+        subtotals: PivotSubtotals::Auto,
+        show_empty: false,
+        sort: PivotSort::Name { ascending: true },
+        hidden_items: Vec::new(),
+        page_item: None,
+        layout: PivotLayout::Tabular,
+        empty_line_after: false,
+        auto_show: None,
+        group: None,
+    };
+    let data = |col: u32, function: AggFn| PivotDataFieldDto {
+        source_col: col,
+        function,
+        caption: None,
+        show_as: None,
+    };
+    let pivot = PivotDto {
+        id: 0,
+        name: String::new(),
+        source: PivotSource::Range {
+            sheet: s,
+            range: RangeDto {
+                r0: 0,
+                c0: 0,
+                r1: n,
+                c1: 4,
+            },
+        },
+        target_sheet: t,
+        target: CellPos { r: 0, c: 0 },
+        output: None,
+        row_fields: vec![field(0, "Region"), field(1, "Product")],
+        col_fields: vec![field(2, "Quarter")],
+        page_fields: Vec::new(),
+        data_fields: vec![data(4, AggFn::Sum), data(3, AggFn::Count)],
+        data_layout: DataLayout::Row,
+        row_totals: true,
+        col_totals: true,
+        ignore_empty_rows: false,
+        identify_categories: false,
+        show_filter_button: false,
+        drill_down: true,
+    };
+    let st = Instant::now();
+    let r = apply(
+        &mut svc,
+        doc,
+        vec![Op::CreatePivot {
+            pivot,
+            overwrite: false,
+        }],
+    )?;
+    let create = ms(st);
+    let id = created_id(&r)?;
+    let mut times = Vec::new();
+    for i in 0..o.runs.max(3) {
+        // Change a source value so the refresh has something to do.
+        apply(
+            &mut svc,
+            doc,
+            vec![Op::SetCellInput {
+                sheet: s,
+                r: 1,
+                c: 4,
+                input: format!("{}", i + 1),
+            }],
+        )?;
+        let st = Instant::now();
+        apply(
+            &mut svc,
+            doc,
+            vec![Op::RefreshPivot {
+                id,
+                overwrite: false,
+            }],
+        )?;
+        times.push(ms(st));
+    }
+    row(
+        "DataPilot refresh, 100k rows",
+        median(times),
+        &format!(
+            "{n} rows x 5 cols, 12x50 row items x 4 quarters, Sum + Count; RefreshPivot via apply (create took {create:.0} ms)"
+        ),
+    );
+    Ok(())
+}
+
+/// Feeds formatted text into a hasher.
+struct HashWriter(std::collections::hash_map::DefaultHasher);
+
+impl std::fmt::Write for HashWriter {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        use std::hash::Hasher;
+        self.0.write(s.as_bytes());
+        Ok(())
+    }
+}
+
+/// Opens `path` through the service and prints a digest of the loaded
+/// workbook (`Workbook::to_data`, cells and styles with their Debug text),
+/// so the same file opened by two builds can be compared.
+fn dump(path: &Path) -> Res<()> {
+    use std::fmt::Write as _;
+    use std::hash::Hasher;
+    let mut svc = EngineService::with_default_codec();
+    let info = svc.open(path).map_err(|e| e.to_string())?;
+    let data = svc
+        .document(info.doc)
+        .map_err(|e| e.to_string())?
+        .wb
+        .to_data();
+    let mut all = HashWriter(std::collections::hash_map::DefaultHasher::new());
+    let mut cells = 0usize;
+    for s in &data.sheets {
+        for c in &s.cells {
+            let _ = write!(all, "{c:?}");
+            cells += 1;
+        }
+        let _ = write!(all, "{:?}{:?}", s.style_runs, s.name);
+    }
+    let mut styles = HashWriter(std::collections::hash_map::DefaultHasher::new());
+    let _ = write!(styles, "{:?}", data.styles);
+    println!(
+        "{}: {cells} cells, {} styles, cells+runs digest {:016x}, styles digest {:016x}",
+        path.display(),
+        data.styles.len(),
+        all.0.finish(),
+        styles.0.finish()
+    );
+    Ok(())
+}
+
+/// Current RSS (MB, from `ps`), physical footprint (`footprint`, which
+/// also counts compressed pages) and live malloc bytes / allocation count
+/// (from the malloc zone table of `vmmap --summary`) of this process.
+fn mem_now() -> String {
+    let pid = std::process::id().to_string();
+    let rss = Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid])
+        .output()
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<f64>()
+                .ok()
+        })
+        .map_or(f64::NAN, |kb| kb / 1024.0);
+    let vm = Command::new("vmmap")
+        .args(["--summary", &pid])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    // The zone table ends with a TOTAL row when there are several zones;
+    // otherwise take the single zone row.
+    let mut in_zones = false;
+    let mut zone = String::new();
+    for l in vm.lines() {
+        if l.starts_with("MALLOC ZONE") {
+            in_zones = true;
+            continue;
+        }
+        if in_zones && !l.starts_with('=') && !l.trim().is_empty() {
+            zone = l.to_owned();
+            if l.starts_with("TOTAL") {
+                break;
+            }
+        }
+    }
+    let fp = Command::new("footprint")
+        .arg(&pid)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let fp = fp
+        .split("Footprint: ")
+        .nth(1)
+        .and_then(|r| r.split(" (").next())
+        .unwrap_or("?")
+        .to_owned();
+    let f: Vec<&str> = zone.split_whitespace().collect();
+    let (count, alloc) = if f.len() >= 7 {
+        (f[5].to_owned(), f[6].to_owned())
+    } else {
+        ("?".into(), "?".into())
+    };
+    format!("RSS {rss:.0} MB, footprint {fp}, malloc live {alloc} in {count} blocks")
+}
+
+/// Opens `path` step by step (read, decode, build, recalc) and prints the
+/// memory after each step, to see where the peak of an open comes from.
+fn mem_phases(path: &Path) -> Res<()> {
+    use tally_engine::FileCodec;
+    println!(
+        "sizes: Value {} B, CellContent {} B, FormulaCell {} B",
+        std::mem::size_of::<Value>(),
+        std::mem::size_of::<tally_engine::storage::CellContent>(),
+        std::mem::size_of::<tally_engine::formula_cells::FormulaCell>(),
+    );
+    println!("start: {}", mem_now());
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    println!("file read ({:.1} MB): {}", size_mb(path), mem_now());
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let t = Instant::now();
+    let decoded = tally_engine::IoCodec
+        .read(&bytes, &ext)
+        .map_err(|e| e.to_string())?;
+    let cells: usize = decoded.data.sheets.iter().map(|s| s.cells.len()).sum();
+    let cap: usize = decoded.data.sheets.iter().map(|s| s.cells.capacity()).sum();
+    if let Some(c) = decoded.data.sheets.iter().find_map(|s| s.cells.first()) {
+        println!(
+            "model cell {} B, cells capacity {cap} ({:.0} MB)",
+            std::mem::size_of_val(c),
+            (cap * std::mem::size_of_val(c)) as f64 / 1_048_576.0
+        );
+    }
+    println!("decoded ({cells} cells, {:.0} ms): {}", ms(t), mem_now());
+    drop(bytes);
+    println!("file bytes dropped: {}", mem_now());
+    let t = Instant::now();
+    let mut wb = Workbook::from_data_owned(
+        decoded.data,
+        decoded.recognize_text,
+        decoded.evaluate_formulas,
+    );
+    println!(
+        "workbook built, model freed while loading ({:.0} ms): {}",
+        ms(t),
+        mem_now()
+    );
+
+    // `PERF_MEM_STOP=build` exits here, so `/usr/bin/time -l` shows the
+    // peak of reading and building alone.
+    if std::env::var("PERF_MEM_STOP").is_ok_and(|v| v == "build") {
+        return Ok(());
+    }
+    let t = Instant::now();
+    let rep = recalc(&mut wb);
+    println!(
+        "recalc ({} formulas, {:.0} ms): {}",
+        rep.evaluated,
+        ms(t),
+        mem_now()
+    );
+    drop(wb);
+    println!("workbook dropped: {}", mem_now());
     Ok(())
 }
 
@@ -522,6 +1057,24 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if let Some(f) = &o.dump {
+        return match dump(f) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("perf: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Some(f) = &o.mem {
+        return match mem_phases(f) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("perf: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if let Some(f) = &o.open_rss {
         return match open_once(f) {
             Ok(_) => ExitCode::SUCCESS,

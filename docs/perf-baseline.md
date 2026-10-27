@@ -1,7 +1,10 @@
 # Performance baseline (1.0 gate)
 
 Measured 2026-10-23 on the commit after `c992a3d`, release build
-(`lto = "thin"`, `codegen-units = 1`).
+(`lto = "thin"`, `codegen-units = 1`). Re-measured 2026-10-27 on top of
+`c53b362` after the memory and CSV work below (open/save, RSS and CSV rows
+updated; the machine was busy with a VM and a backup, so +-15 % still
+applies and RSS varied by up to 0.2 GB between runs).
 
 Machine: Apple M4 Pro (`sysctl -n machdep.cpu.brand_string`), 12 cores,
 24 GB RAM (`hw.memsize` = 25769803776), macOS (Darwin 25.5.0), internal SSD
@@ -21,21 +24,25 @@ everything `EngineService::open` / `save` does, i.e. read, build, recalc):
 | Same sheet, SUM column only | 121 - 124 ms | so 100k VLOOKUPs now cost about 0.1 s, about 1.4 us per lookup (was about 70 us) |
 | Incremental recalc, 1 edit -> 10k dependents | 2.3 ms | `Workbook::set_input` + `recalc` |
 | Same edit through `DocumentService::apply` | 2.5 ms | includes undo snapshot and change report |
-| Open ODS 10 MB (93k rows x 12) | 1.67 s | |
-| Save ODS 10 MB | 0.97 s | |
-| Open XLSX 10 MB (95k rows x 12) | 1.93 s | |
-| Save XLSX 10 MB | 1.73 s | |
-| Open ODS 25 MB (232k rows) | 3.7 s | |
-| Open XLSX 25 MB (237k rows) | 3.6 s | |
-| Save ODS / XLSX 25 MB | 2.7 s / 5.5 s | |
+| Open ODS 10 MB (93k rows x 12) | 1.27 s (was 1.67 s) | |
+| Save ODS 10 MB | 0.92 s | |
+| Open XLSX 10 MB (95k rows x 12) | 1.22 s (was 1.93 s) | |
+| Save XLSX 10 MB | 1.18 s | |
+| Open ODS 25 MB (232k rows) | 3.8 s | |
+| Open XLSX 25 MB (237k rows) | 3.2 s (was 3.6 s) | |
+| Save ODS / XLSX 25 MB | 2.5 s / 2.8 s | |
 | Open ODS 50 MB (465k rows) | 7.1 s (9.7 s on a busy machine) | was FAILS (`zip entry uncompressed bytes`, 512 MiB cap); `content.xml` cap raised to 2 GiB, see `docs/security.md` section 1. Re-measured after the security-review fixes (attribute budget, per-package ratio) with `--only io50`, median of 3 |
 | Save ODS 50 MB | 5.1 s (15.3 s on a busy machine) | same run |
-| Open XLSX 50 MB (474k rows) | 7.8 - 8.8 s | |
-| Save XLSX 50 MB | 7.2 - 10.4 s | |
-| Peak RSS, open XLSX 50 MB | 1.4 - 1.6 GB | `/usr/bin/time -l` of a child process |
-| Peak RSS, open ODS 50 MB | 1.37 GB | same method (XLSX 1.49 GB in that run) |
-| CSV import, 1M rows x 6 cols (47 MB) | 7.6 s | |
-| Peak RSS, CSV 1M rows | 0.94 GB | |
+| Open ODS 50 MB, 2026-10-27 | 7.0 - 7.7 s | same file, after the memory work |
+| Open XLSX 50 MB (474k rows) | 6.6 - 7.6 s (was 7.8 - 8.8 s) | |
+| Save XLSX 50 MB | 7.2 - 10.4 s | 7.6 s on 2026-10-27 |
+| Peak RSS, open XLSX 50 MB | 0.90 - 1.08 GB (was 1.25 - 1.6 GB) | `/usr/bin/time -l` of a child process; peak memory footprint 0.92 - 1.19 GB (was 1.93 GB) |
+| Peak RSS, open ODS 50 MB | 0.95 - 1.10 GB (was 1.24 - 1.37 GB) | footprint 1.0 - 1.15 GB (was 1.94 GB) |
+| CSV import, 1M rows x 6 cols (47 MB) | 1.15 - 1.35 s (was 7.6 s; 3.9 s on the same machine on 2026-10-27 before the change) | about 35 - 40 MB/s |
+| Peak RSS, CSV 1M rows | 0.61 - 0.74 GB (was 0.94 - 1.12 GB) | |
+| `chart_data`, line chart with 10k points | 2.6 - 3.7 ms (cache miss after an edit); 0.3 ms cached | gate: < 20 ms |
+| PDF export, 20 pages (1060 rows x 6 cols) | 11 - 12 ms | `prepare_print_job` + `print_job_pdf`; gate: < 1 s |
+| DataPilot refresh, 100k source rows | 29 ms (create 29 - 33 ms) | 2 row fields (12 x 50 items), 1 column field (4), Sum + Count, `RefreshPivot` through `apply`; gate: < 500 ms |
 
 Grid scroll (`pnpm perf:e2e`, headless Chromium 1280x820 against
 `dev:web`/MockClient, 1M cells = 50k rows x 20 cols loaded in about 2 s;
@@ -59,8 +66,11 @@ real number to gate on is a run in the Tauri webview on a Mac (not measured).
 export CARGO_TARGET_DIR=$PWD/.targets/perf
 cargo xtask perf                      # everything above, release mode, ~3 min
 cargo xtask perf --quick --runs 1     # 1/10 sizes, smoke test
-cargo xtask perf --only recalc,csv    # scenarios: recalc incremental io10 io25 io50 csv rss deep
+cargo xtask perf --only recalc,csv    # scenarios: recalc incremental io10 io25 io50 csv rss deep chart pdf pivot
 cargo xtask perf --dir /path/on/big/disk
+cargo xtask perf --only io50,csv --keep --dir DIR   # files in DIR/tally-perf-<pid>, kept; DIR itself is never deleted
+.targets/perf/release/perf --mem FILE   # RSS, footprint and live malloc bytes after each open step
+.targets/perf/release/perf --dump FILE  # digest of the loaded workbook, to diff two builds
 pnpm perf:e2e                         # grid scroll frame times (starts dev:web itself)
 ```
 
@@ -85,12 +95,15 @@ recorded baseline should also be investigated.
 | Open + save 10 MB ODS and XLSX | each < 3 s |
 | Open 50 MB XLSX and 50 MB ODS | opens, each < 12 s (ODS 7.1 s, XLSX 7.4 s) |
 | Save 50 MB | < 15 s (ODS 5.1 s, XLSX 7.9 s) |
-| Peak RSS opening 50 MB | < 2 GB (aim < 1.5 GB) |
-| CSV import, 1M rows | < 10 s (aim < 5 s) |
+| Peak RSS opening 50 MB | < 2 GB (aim < 1 GB; 0.9 - 1.1 GB now) |
+| CSV import, 1M rows | < 3 s (1.2 - 1.35 s now) |
+| `chart_data`, 10k points | < 20 ms (about 3 ms) |
+| PDF export, 20 pages | < 1 s (about 12 ms) |
+| DataPilot refresh, 100k rows | < 500 ms (about 30 ms) |
 | Grid scroll on the real webview, 1M cells | p95 frame < 20 ms, p99 < 34 ms, no frame > 100 ms during a 10-row/frame fling |
 | Grid scroll in headless Chromium (this spec) | p95 < 67 ms, p99 < 100 ms, to catch regressions only |
 
-## Hot spots (1 and 2 fixed; 3–5 open)
+## Hot spots (1 - 3 fixed, 4 partly; 5 open)
 
 1. **Exact-match VLOOKUP was linear and uncached** (fixed 2026-10-23):
    70 us per lookup into 10k rows, 100k lookups 7 s. Now a per-recalc
@@ -112,17 +125,85 @@ recorded baseline should also be investigated.
    section 1). It opens in 7.1 s at 1.37 GB peak RSS. A numeric 100 MB ODS
    of this shape (about 11 M cells) is refused by `max_cells` (10 M), not by
    a byte cap.
-3. **Memory**: 1.4 - 1.6 GB RSS for a 474k-row x 12-column XLSX (about 5.7 M
-   cells, about 280 bytes per cell). CSV 1M rows x 6 uses 0.94 GB. Cell
-   storage is a BTreeMap per column with `Arc<str>` text, so text-heavy sheets
-   are the likely culprit.
+3. **Memory** (fixed 2026-10-27, more possible): was 1.4 - 1.6 GB RSS
+   (1.93 GB peak footprint) for a 474k-row x 12-column XLSX, about 280
+   bytes per cell; now 0.9 - 1.1 GB RSS. `perf --mem` showed where it went
+   (live malloc bytes, 5.7M cells, 948k formulas): the decoded model was
+   613 MB (64-byte `CellData` in a Vec grown to 8.4M slots, plus one formula
+   text per formula cell), the workbook 1.1 GB, and the open held both, plus
+   the 50 MB file, at the peak. Changes, each with the same result (see
+   "Guards" below):
+   - `EngineService::open` drops the file bytes after decoding and builds
+     with `Workbook::from_data_owned`, which frees each cell's model data
+     (formula texts, unshared texts) as it is loaded and shrinks the model
+     list as it goes.
+   - Formula ASTs: equal neighbouring formulas in a column (a fill-down of
+     `=A1*B1`, `=A2*B2`, which parse to the same AST because relative
+     references are offsets) share one `Arc<Formula>`, as shared-formula
+     groups already did.
+   - Cell maps are packed after a load (`BTreeColumn::compact`: a bulk
+     build of the B-tree; ascending inserts leave leaves about 6/11 full).
+   - The load no longer grows the edit log to one entry per cell (it was
+     discarded at the end of the load anyway).
+   - Recalc: single-member SCCs are inline (`SmallVec`), and Tarjan frees a
+     node's successor list when the node is finished, instead of holding
+     two small allocations per formula until the end (the recalc after an
+     open grew the footprint by 230 MB, now 160 MB).
+   - ODS and CSV readers share the allocation of repeated cell texts (at
+     most 65,536 distinct texts of up to 64 bytes).
+   Workbook after open: 1.1 GB -> about 600 MB live. CSV 1M rows: peak RSS
+   0.94 - 1.12 GB -> 0.61 - 0.74 GB.
+   **Remaining** (about 105 bytes per cell in the engine, plus the model
+   while loading): `FormulaCell` is 160 bytes (rarely used fields such as
+   `strict_precedents`, `dynamic_deps`, `invalid_text`, `array`,
+   `array_result` take about 80 of them; boxing them is about 70 MB on this
+   file but touches about 100 call sites), the dependency back-index keeps a
+   `SmallVec<[Loc; 4]>` (about 112 bytes) per formula (about 110 MB here),
+   `Value` and `CellContent` are 24 bytes because `Arc<str>` is a fat
+   pointer, the model's `CellData` is 64 bytes, and on macOS freed large
+   blocks (Vec growth, hash-table resizes) stay in the footprint, so the
+   peak is 0.2 - 0.4 GB above the live bytes. Getting well under 1 GB needs
+   a block column store (dense runs of numbers as `Vec<f64>` per block,
+   strings as interned ids) and a compact formula-cell table; that is a
+   storage rewrite (estimated 40 - 60 bytes per numeric cell instead of
+   about 80), not done here.
 4. **Open and save time is roughly linear at 14 - 17 us per row**, with XLSX
-   save slower than ODS save at 25 MB (5.5 s vs 2.7 s). Nothing alarming, but
-   XLSX save (rust_xlsxwriter) and the CSV import (7.6 s for 47 MB, about
-   6 MB/s) are the next slowest after VLOOKUP.
+   save slower than ODS save at 50 MB (7.6 s vs 5.1 s). The CSV import was
+   7.6 s for 47 MB (3.9 s on a quiet machine on 2026-10-27); it is now
+   1.15 - 1.35 s (about 3x on the same machine). Profiling (`sample`) showed
+   the time in the cell loop, not in parsing: per cell, the input
+   recognizer (lower-casing the boolean names, `parse_unsigned` building a
+   String), `Local::now()` for the recognizer's "today", and for every date
+   a style intern keyed by a `Debug` string. Now plain decimal numbers
+   (`-?d+(.d+)?`, `.` only where it is the locale's decimal separator) skip
+   the recognizer, a load reads today's date once, remembers up to 65,536
+   recognized inputs of up to 64 bytes (a text result reuses the reader's
+   allocation) and the style each implied format leads to. What is
+   left: B-tree inserts, freeing the model, and the recognizer for distinct
+   texts; reading the CSV straight into the workbook (no model) would save
+   the model's memory and roughly 0.2 s more. XLSX/ODS opens spend about
+   4.2 s of 7 s in the readers (XML parsing) and 0.7 s in recalc.
 5. **Scrolling**: a fast vertical fling drops to 2+ vsyncs on about 40 % of
    frames in headless software rendering; worth re-measuring in the Tauri
    webview before deciding whether the tile renderer needs work.
 
 Incremental recalc, deep chains and plain SUM recalc are all fast; nothing to
-do there.
+do there. `chart_data`, PDF export and the DataPilot refresh are 10 - 100x
+under their gates, so they were not profiled.
+
+### Guards for the 2026-10-27 changes
+
+- Full suite (1,756 tests) passes, including the new
+  `crates/tally-engine/tests/bulk_load.rs`: plain numbers give bitwise the
+  recognizer's value and format in all six locales (fixed list plus 400
+  proptest cases of number-like strings); a CSV-like sheet of every input
+  kind (numbers, grouped, percent, currency, booleans, dates, times,
+  fractions, `'`, `=`, spaces), repeated and on General / percent / `@`
+  columns, loads to the same `to_data()` as typing each cell, with and
+  without "Evaluate formulas", in all six locales; owned and borrowed loads
+  agree on every fixture under `tests/fixtures`; fill-down formulas share
+  an AST and still evaluate per row.
+- Before/after differential: `perf --dump` (digest of `to_data()` cells,
+  style runs and styles) of the build at `c53b362` and of this build agree
+  on the 47 MB CSV, the 50 MB XLSX and ODS, and two random CSVs (2.6M and
+  0.4M cells, 27 kinds of fields).

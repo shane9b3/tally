@@ -32,6 +32,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use slotmap::SecondaryMap;
+use smallvec::SmallVec;
 use tally_formula::{Expr, ResolvedRef};
 use tally_functions::{CellFormatInfo, EvalContext, LookupIndex};
 use tally_numfmt::date::now_serial;
@@ -300,7 +301,9 @@ pub fn hard_recalc_with(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcRepor
 /// One strongly connected component, in evaluation order.
 #[derive(Debug)]
 struct Scc {
-    members: Vec<FormulaCellId>,
+    /// Inline for the usual single-member component, so a recalc of n
+    /// formulas does not make n small allocations.
+    members: SmallVec<[FormulaCellId; 1]>,
     /// Members on a cycle of strict precedents: Err:522 without evaluation.
     strict: Vec<FormulaCellId>,
     /// Several members or a self-edge (iterated when iterations are on).
@@ -507,7 +510,7 @@ fn topo_order(wb: &Workbook, dirty: &[FormulaCellId]) -> Vec<Scc> {
     });
     let mut out = Vec::with_capacity(sccs.len());
     for (members, cyclic) in sccs {
-        let members: Vec<FormulaCellId> = members.into_iter().map(|i| dirty[i]).collect();
+        let members: SmallVec<[FormulaCellId; 1]> = members.into_iter().map(|i| dirty[i]).collect();
         let strict = if cyclic {
             strict_cycle_members(wb, &members, &mut scratch)
         } else {
@@ -549,14 +552,17 @@ fn strict_cycle_members(
 
 /// Iterative Tarjan over nodes `0..n`; components come out successors
 /// first, each with whether it is cyclic (several members or a self-edge).
-fn tarjan(n: usize, mut edges: impl FnMut(usize) -> Vec<usize>) -> Vec<(Vec<usize>, bool)> {
+fn tarjan(
+    n: usize,
+    mut edges: impl FnMut(usize) -> Vec<usize>,
+) -> Vec<(SmallVec<[usize; 1]>, bool)> {
     const UNSEEN: usize = usize::MAX;
     let mut index = vec![UNSEEN; n];
     let mut low = vec![0usize; n];
     let mut on_stack = vec![false; n];
     let mut succ: Vec<Option<Vec<usize>>> = vec![None; n];
     let mut stack: Vec<usize> = Vec::new();
-    let mut out: Vec<(Vec<usize>, bool)> = Vec::new();
+    let mut out: Vec<(SmallVec<[usize; 1]>, bool)> = Vec::new();
     let mut counter = 0usize;
 
     for start in 0..n {
@@ -595,7 +601,7 @@ fn tarjan(n: usize, mut edges: impl FnMut(usize) -> Vec<usize>) -> Vec<(Vec<usiz
                 low[u] = low[u].min(low[v]);
             }
             if low[v] == index[v] {
-                let mut members = Vec::new();
+                let mut members = SmallVec::new();
                 while let Some(w) = stack.pop() {
                     on_stack[w] = false;
                     members.push(w);
@@ -609,6 +615,10 @@ fn tarjan(n: usize, mut edges: impl FnMut(usize) -> Vec<usize>) -> Vec<(Vec<usiz
                         .is_some_and(|s| s.binary_search(&v).is_ok());
                 out.push((members, cyclic));
             }
+            // `v` is finished: its successors are never read again (a node
+            // is entered once), so free them now rather than holding one
+            // list per formula until the end.
+            succ[v] = None;
         }
     }
     out

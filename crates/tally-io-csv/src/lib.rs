@@ -273,6 +273,8 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<SheetData, CsvError> 
     let mut first = true;
     let mut cells: u64 = 0;
     let mut record = csv::StringRecord::new();
+    // Repeated field texts (categories, dates, codes) share one allocation.
+    let mut texts = TextInterner::default();
     while reader.read_record(&mut record)? {
         let end = usize::try_from(reader.position().byte())
             .unwrap_or(usize::MAX)
@@ -329,13 +331,41 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<SheetData, CsvError> 
             sheet.cells.push(CellData {
                 row: row as u32,
                 col: col as u32,
-                content: CellContentData::Value(Value::text(field)),
+                content: CellContentData::Value(Value::Text(texts.get(field))),
                 style: None,
             });
         }
         row += 1;
     }
     Ok(sheet)
+}
+
+/// Shares the allocation of repeated field texts while reading. At most
+/// [`TextInterner::CAP`] distinct texts are remembered (after that, new
+/// texts are allocated as usual), and texts longer than
+/// [`TextInterner::MAX_LEN`] bytes are never remembered.
+#[derive(Default)]
+struct TextInterner {
+    seen: std::collections::HashSet<std::sync::Arc<str>>,
+}
+
+impl TextInterner {
+    const CAP: usize = 1 << 16;
+    const MAX_LEN: usize = 64;
+
+    fn get(&mut self, s: &str) -> std::sync::Arc<str> {
+        if s.len() > Self::MAX_LEN {
+            return s.into();
+        }
+        if let Some(t) = self.seen.get(s) {
+            return t.clone();
+        }
+        let t: std::sync::Arc<str> = s.into();
+        if self.seen.len() < Self::CAP {
+            self.seen.insert(t.clone());
+        }
+        t
+    }
 }
 
 /// Counts line breaks (`\r\n`, `\n` or a lone `\r`).

@@ -241,6 +241,37 @@ struct Parser<'a> {
     warnings: Vec<String>,
     /// Frames found so far (W5-1).
     frames: Vec<crate::frame::PlacedFrame>,
+    /// Shares the allocation of repeated cell texts.
+    texts: TextInterner,
+}
+
+/// Shares the allocation of repeated cell texts while reading (a column
+/// of categories or codes then costs one allocation per distinct text). At
+/// most [`TextInterner::CAP`] distinct texts of up to
+/// [`TextInterner::MAX_LEN`] bytes are remembered; others are allocated as
+/// usual.
+#[derive(Default)]
+struct TextInterner {
+    seen: std::collections::HashSet<Arc<str>>,
+}
+
+impl TextInterner {
+    const CAP: usize = 1 << 16;
+    const MAX_LEN: usize = 64;
+
+    fn text(&mut self, s: &str) -> Value {
+        if s.len() > Self::MAX_LEN {
+            return Value::text(s);
+        }
+        if let Some(t) = self.seen.get(s) {
+            return Value::Text(t.clone());
+        }
+        let t: Arc<str> = s.into();
+        if self.seen.len() < Self::CAP {
+            self.seen.insert(t.clone());
+        }
+        Value::Text(t)
+    }
 }
 
 /// Most frames kept per document.
@@ -282,6 +313,7 @@ pub(crate) fn parse_content<R: BufRead>(
         val_rects: std::collections::HashMap::new(),
         warnings: Vec::new(),
         frames: Vec::new(),
+        texts: TextInterner::default(),
     };
     loop {
         match xml.next()? {
@@ -1006,7 +1038,7 @@ impl Parser<'_> {
         let mut value = match vt {
             Some("float" | "percentage" | "currency") => match number("office:value") {
                 Some(n) => Value::Number(n),
-                None => text.as_deref().map_or(Value::Empty, Value::text),
+                None => text.as_deref().map_or(Value::Empty, |t| self.texts.text(t)),
             },
             Some("date") => match e
                 .attr("office:date-value")
@@ -1014,7 +1046,7 @@ impl Parser<'_> {
                 .or_else(|| number("office:value"))
             {
                 Some(n) => Value::Number(n),
-                None => text.as_deref().map_or(Value::Empty, Value::text),
+                None => text.as_deref().map_or(Value::Empty, |t| self.texts.text(t)),
             },
             Some("time") => match e
                 .attr("office:time-value")
@@ -1022,7 +1054,7 @@ impl Parser<'_> {
                 .or_else(|| number("office:value"))
             {
                 Some(n) => Value::Number(n),
-                None => text.as_deref().map_or(Value::Empty, Value::text),
+                None => text.as_deref().map_or(Value::Empty, |t| self.texts.text(t)),
             },
             Some("boolean") => match e.attr("office:boolean-value").map(str::trim) {
                 Some("true" | "1") => Value::Bool(true),
@@ -1030,10 +1062,10 @@ impl Parser<'_> {
                 _ => number("office:value").map_or(Value::Empty, |n| Value::Bool(n != 0.0)),
             },
             Some("string") => match e.attr("office:string-value") {
-                Some(s) => Value::text(s),
-                None => Value::text(text.as_deref().unwrap_or_default()),
+                Some(s) => self.texts.text(s),
+                None => self.texts.text(text.as_deref().unwrap_or_default()),
             },
-            _ => text.as_deref().map_or(Value::Empty, Value::text),
+            _ => text.as_deref().map_or(Value::Empty, |t| self.texts.text(t)),
         };
         let display = text
             .as_deref()

@@ -19,7 +19,7 @@ use tally_types::{CellAddr, Matrix, Value, MAX_COLS, MAX_ROWS};
 
 use crate::formula_cells::CellState;
 use crate::storage::{CellContent, ColumnStore, DimRuns, Sheet, Spans, StyleId};
-use crate::workbook::{Pending, SheetNamer, Workbook, MAX_SHEETS};
+use crate::workbook::{BulkInput, Pending, SheetNamer, Workbook, MAX_SHEETS};
 
 /// Style runs of at least this many rows are exported as [`StyleRun`]s
 /// instead of styled empty cells.
@@ -31,6 +31,14 @@ pub const MAX_MERGES_PER_SHEET: usize = 100_000;
 /// Most cells covered by array formula blocks in one loaded workbook (the
 /// readers count block areas against their `max_cells`, 10M by default).
 pub const MAX_ARRAY_CELLS: u64 = 10_000_000;
+
+/// An owned model's cell list is shrunk while loading only while it holds
+/// at least this many cells (smaller lists are freed at the end).
+const RELEASE_MIN: usize = 1 << 16;
+
+/// Edit-log entries after which loading clears the log (it is discarded
+/// at the end of a load anyway).
+const PENDING_FLUSH: usize = 1 << 16;
 
 /// Most iteration steps taken from a file (AOO's default is 100).
 pub const MAX_FILE_ITERATION_STEPS: u32 = 1_000;
@@ -54,6 +62,28 @@ impl Workbook {
     /// "Evaluate formulas" import option, off by default because a CSV from
     /// an untrusted source would otherwise run its formulas on open).
     pub fn from_data_opts(data: &WorkbookData, recognize: bool, formulas: bool) -> Workbook {
+        Self::build_from_data(data, None, recognize, formulas)
+    }
+
+    /// [`Self::from_data_opts`] taking the data by value: each sheet's
+    /// cells are freed while they are loaded, so opening a large file does
+    /// not hold the whole interchange model and the whole workbook at once
+    /// (the result is the same).
+    pub fn from_data_owned(mut data: WorkbookData, recognize: bool, formulas: bool) -> Workbook {
+        let cells: Vec<Vec<CellData>> = data
+            .sheets
+            .iter_mut()
+            .map(|s| std::mem::take(&mut s.cells))
+            .collect();
+        Self::build_from_data(&data, Some(cells), recognize, formulas)
+    }
+
+    fn build_from_data(
+        data: &WorkbookData,
+        mut owned_cells: Option<Vec<Vec<CellData>>>,
+        recognize: bool,
+        formulas: bool,
+    ) -> Workbook {
         let mut wb = Workbook::empty();
         wb.import_warnings = data.warnings.clone();
         wb.settings = data.settings.calc_settings.clone();
@@ -180,8 +210,16 @@ impl Workbook {
         let mut array_cells: u64 = 0;
         // Parsed shared-formula groups: (text allocation, anchor) → AST.
         let mut shared: HashMap<(usize, u32, u32), Option<Arc<Formula>>> = HashMap::new();
-        for (sd, &sheet) in sheet_data.iter().zip(&ids) {
+        // The last formula parsed in each column: a fill-down column of
+        // `=A1*B1`, `=A2*B2`, … parses to equal ASTs (relative references
+        // are stored as offsets), so equal neighbours share one `Arc`
+        // instead of allocating one AST per cell. Equal ASTs mean equal
+        // formulas, as for the shared formula groups below.
+        let mut last_in_col: Vec<Option<Arc<Formula>>> = Vec::new();
+        let mut bulk = BulkInput::new(wb.settings.date_epoch);
+        for (tab, (sd, &sheet)) in sheet_data.iter().zip(&ids).enumerate() {
             shared.clear();
+            last_in_col.clear();
             // Runs first: a cell's own style wins over a run covering it.
             for run in &sd.style_runs {
                 let Some(st) = style_ids.get(run.style as usize) else {
@@ -194,106 +232,34 @@ impl Workbook {
                     col.styles.set(run.start_row, run.end_row, *st);
                 }
             }
-            for cell in &sd.cells {
-                let addr = CellAddr::new(sheet, cell.row, cell.col);
-                if !addr.is_valid() {
-                    continue;
+            let mut cx = CellLoad {
+                sheet,
+                style_ids: &style_ids,
+                recognize,
+                formulas,
+                shared: &mut shared,
+                last_in_col: &mut last_in_col,
+                bulk: &mut bulk,
+            };
+            match owned_cells.as_mut().and_then(|v| v.get_mut(tab)) {
+                // Owned cells are released as they are loaded, so the
+                // model and the workbook are not both whole in memory.
+                Some(cells) => {
+                    let mut cells = std::mem::take(cells);
+                    cells.reverse();
+                    while let Some(cell) = cells.pop() {
+                        cx.load(&mut wb, &cell);
+                        // Halve the list's memory once half of it is
+                        // loaded: at most log2(n) reallocations even where
+                        // a shrink copies, so the total copy stays O(n).
+                        if cells.len() >= RELEASE_MIN && cells.len() < cells.capacity() / 2 {
+                            cells.shrink_to_fit();
+                        }
+                    }
                 }
-                if let Some(st) = cell.style.and_then(|i| style_ids.get(i as usize)) {
-                    if let Some(col) = wb.sheet_mut(sheet).and_then(|s| s.column_mut(cell.col)) {
-                        col.styles.set(cell.row, cell.row, *st);
-                    }
-                }
-                match &cell.content {
-                    CellContentData::Value(Value::Text(t)) if recognize && formulas => {
-                        wb.set_input(addr, t);
-                    }
-                    CellContentData::Value(Value::Text(t)) if recognize => {
-                        wb.set_constant_input(addr, t);
-                    }
-                    CellContentData::Value(v) => wb.set_value(addr, v.clone()),
-                    CellContentData::Formula { text, cached } => {
-                        if let Some((kind, detail)) = crate::external::classify_formula(text) {
-                            // Disabled by policy: the text is kept, the
-                            // value is the policy error (see `external`).
-                            crate::external::record(&mut wb, kind, detail);
-                            let raw = text.strip_prefix("of:").unwrap_or(text);
-                            wb.set_formula(
-                                addr,
-                                Arc::new(Formula::new(Expr::Err(crate::external::policy_error(
-                                    kind,
-                                )))),
-                                Some(raw.into()),
-                            );
-                            continue;
-                        }
-                        let f = parse(
-                            text,
-                            addr,
-                            Dialect::open_formula(),
-                            &crate::workbook::OdfResolver(&wb),
-                        );
-                        match f {
-                            Ok(f) => wb.set_formula(addr, Arc::new(f), None),
-                            Err(e) => {
-                                let raw = text.strip_prefix("of:").unwrap_or(text);
-                                wb.set_formula(
-                                    addr,
-                                    Arc::new(Formula::new(Expr::Err(e.kind))),
-                                    Some(raw.into()),
-                                );
-                            }
-                        }
-                        if let (Some(c), Some((id, _))) = (cached, wb.formula_at(addr)) {
-                            if let Some(fc) = wb.formulas.get_mut(id) {
-                                fc.cached = c.clone();
-                            }
-                        }
-                    }
-                    CellContentData::SharedFormula {
-                        text,
-                        anchor_row,
-                        anchor_col,
-                        cached,
-                    } => {
-                        // One parse per group: the AST stores relative
-                        // references as offsets, so the anchor's AST is the
-                        // member's formula as is (review 2, MEDIUM-1).
-                        let key = (
-                            Arc::as_ptr(text) as *const u8 as usize,
-                            *anchor_row,
-                            *anchor_col,
-                        );
-                        let f = shared
-                            .entry(key)
-                            .or_insert_with(|| {
-                                let at = CellAddr::new(sheet, *anchor_row, *anchor_col);
-                                parse(
-                                    text,
-                                    at,
-                                    Dialect::open_formula(),
-                                    &crate::workbook::OdfResolver(&wb),
-                                )
-                                .ok()
-                                .map(Arc::new)
-                            })
-                            .clone();
-                        match f {
-                            Some(f) => {
-                                wb.set_formula(addr, f, None);
-                                if let (Some(c), Some((id, _))) = (cached, wb.formula_at(addr)) {
-                                    if let Some(fc) = wb.formulas.get_mut(id) {
-                                        fc.cached = c.clone();
-                                    }
-                                }
-                            }
-                            // The group's formula does not parse: keep the value.
-                            None => {
-                                if let Some(c) = cached {
-                                    wb.set_value(addr, c.clone());
-                                }
-                            }
-                        }
+                None => {
+                    for cell in &sd.cells {
+                        cx.load(&mut wb, cell);
                     }
                 }
             }
@@ -326,6 +292,7 @@ impl Workbook {
         crate::external::collect_import_warnings(&mut wb);
         wb.pending = Pending::default();
         wb.dirty_all();
+        wb.compact_storage();
         wb
     }
 
@@ -874,6 +841,147 @@ fn clean_merges(merges: &[CellRangeLocal]) -> Vec<CellRangeLocal> {
     }
     out.sort_by_key(|m| (m.r0, m.c0));
     out
+}
+
+/// What loading one cell of a sheet needs (see [`Workbook::from_data_opts`]).
+struct CellLoad<'a> {
+    sheet: tally_types::SheetId,
+    style_ids: &'a [StyleId],
+    recognize: bool,
+    formulas: bool,
+    shared: &'a mut HashMap<(usize, u32, u32), Option<Arc<Formula>>>,
+    last_in_col: &'a mut Vec<Option<Arc<Formula>>>,
+    bulk: &'a mut BulkInput,
+}
+
+impl CellLoad<'_> {
+    fn load(&mut self, wb: &mut Workbook, cell: &CellData) {
+        let (sheet, style_ids, recognize, formulas) =
+            (self.sheet, self.style_ids, self.recognize, self.formulas);
+        let shared = &mut *self.shared;
+        let last_in_col = &mut *self.last_in_col;
+        let bulk = &mut *self.bulk;
+        let addr = CellAddr::new(sheet, cell.row, cell.col);
+        if !addr.is_valid() {
+            return;
+        }
+        // The edit log is reset below (`Pending::default()` and
+        // `dirty_all`), so it need not grow to one entry per cell
+        // while loading.
+        if wb.pending.cells.len() >= PENDING_FLUSH {
+            wb.pending.cells.clear();
+            wb.pending.dirty.clear();
+        }
+        if let Some(st) = cell.style.and_then(|i| style_ids.get(i as usize)) {
+            if let Some(col) = wb.sheet_mut(sheet).and_then(|s| s.column_mut(cell.col)) {
+                col.styles.set(cell.row, cell.row, *st);
+            }
+        }
+        match &cell.content {
+            CellContentData::Value(Value::Text(t)) if recognize && formulas => {
+                wb.set_input_bulk(addr, t, true, bulk);
+            }
+            CellContentData::Value(Value::Text(t)) if recognize => {
+                wb.set_input_bulk(addr, t, false, bulk);
+            }
+            CellContentData::Value(v) => wb.set_value(addr, v.clone()),
+            CellContentData::Formula { text, cached } => {
+                if let Some((kind, detail)) = crate::external::classify_formula(text) {
+                    // Disabled by policy: the text is kept, the
+                    // value is the policy error (see `external`).
+                    crate::external::record(wb, kind, detail);
+                    let raw = text.strip_prefix("of:").unwrap_or(text);
+                    wb.set_formula(
+                        addr,
+                        Arc::new(Formula::new(Expr::Err(crate::external::policy_error(kind)))),
+                        Some(raw.into()),
+                    );
+                    return;
+                }
+                let f = parse(
+                    text,
+                    addr,
+                    Dialect::open_formula(),
+                    &crate::workbook::OdfResolver(wb),
+                );
+                match f {
+                    Ok(f) => {
+                        let col = cell.col as usize;
+                        if last_in_col.len() <= col {
+                            last_in_col.resize(col + 1, None);
+                        }
+                        let f = match &last_in_col[col] {
+                            Some(prev) if **prev == f => Arc::clone(prev),
+                            _ => {
+                                let f = Arc::new(f);
+                                last_in_col[col] = Some(Arc::clone(&f));
+                                f
+                            }
+                        };
+                        wb.set_formula(addr, f, None);
+                    }
+                    Err(e) => {
+                        let raw = text.strip_prefix("of:").unwrap_or(text);
+                        wb.set_formula(
+                            addr,
+                            Arc::new(Formula::new(Expr::Err(e.kind))),
+                            Some(raw.into()),
+                        );
+                    }
+                }
+                if let (Some(c), Some((id, _))) = (cached, wb.formula_at(addr)) {
+                    if let Some(fc) = wb.formulas.get_mut(id) {
+                        fc.cached = c.clone();
+                    }
+                }
+            }
+            CellContentData::SharedFormula {
+                text,
+                anchor_row,
+                anchor_col,
+                cached,
+            } => {
+                // One parse per group: the AST stores relative
+                // references as offsets, so the anchor's AST is the
+                // member's formula as is (review 2, MEDIUM-1).
+                let key = (
+                    Arc::as_ptr(text) as *const u8 as usize,
+                    *anchor_row,
+                    *anchor_col,
+                );
+                let f = shared
+                    .entry(key)
+                    .or_insert_with(|| {
+                        let at = CellAddr::new(sheet, *anchor_row, *anchor_col);
+                        parse(
+                            text,
+                            at,
+                            Dialect::open_formula(),
+                            &crate::workbook::OdfResolver(wb),
+                        )
+                        .ok()
+                        .map(Arc::new)
+                    })
+                    .clone();
+                match f {
+                    Some(f) => {
+                        wb.set_formula(addr, f, None);
+                        if let (Some(c), Some((id, _))) = (cached, wb.formula_at(addr)) {
+                            if let Some(fc) = wb.formulas.get_mut(id) {
+                                fc.cached = c.clone();
+                            }
+                        }
+                    }
+                    // The group's formula does not parse: keep the value.
+                    None => {
+                        if let Some(c) = cached {
+                            wb.set_value(addr, c.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Turns the formula at a block's anchor into an array formula, keeping the
