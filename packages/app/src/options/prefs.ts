@@ -48,6 +48,8 @@ export interface AppPrefs {
   defaultLocale: string;
   /** Delete key opens the Delete Contents dialog (AOO); off = clears at once. */
   deleteKeyDialog: boolean;
+  /** AOO "Show overwrite warning when pasting data": ask before a paste replaces cells that hold data. */
+  pasteOverwriteWarning: boolean;
   /** Desktop: new and opened documents become tabs of the front window, or get windows of their own. */
   openDocumentsIn: OpenDocumentsIn;
   /** Which bars and toolbar buttons show (View ▸ Toolbars, Customize Toolbars…). */
@@ -74,6 +76,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   autosaveMinutes: 10,
   defaultLocale: "en-US",
   deleteKeyDialog: true,
+  pasteOverwriteWarning: true,
   openDocumentsIn: "tabs",
   chrome: DEFAULT_CHROME,
 };
@@ -120,6 +123,7 @@ export function parsePrefs(raw: unknown): AppPrefs {
     autosaveMinutes: minutes,
     defaultLocale: locale,
     deleteKeyDialog: bool(o.deleteKeyDialog, DEFAULT_PREFS.deleteKeyDialog),
+    pasteOverwriteWarning: bool(o.pasteOverwriteWarning, DEFAULT_PREFS.pasteOverwriteWarning),
     openDocumentsIn: oneOf(o.openDocumentsIn, ["tabs", "windows"] as const, DEFAULT_PREFS.openDocumentsIn),
     chrome: parseChrome(o.chrome),
   };

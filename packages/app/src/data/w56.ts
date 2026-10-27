@@ -649,7 +649,9 @@ export class W56Features {
           const input = mergedContent(texts, range);
           const tl = { r: range.r0, c: range.c0 };
           await this.ctl.apply(t("cmd.format.merge", "Merge cells"), [
-            { type: "setCellInput", sheet, r: tl.r, c: tl.c, input },
+            // Moved content, not typed input (AOO ScDocFunc::MergeCells): a 1×1 block, so
+            // "-1-2" stays text instead of becoming a formula (P18).
+            { type: "setRangeInputs", sheet, r: tl.r, c: tl.c, rows: [[input]] },
             { type: "mergeCells", sheet, range: { ...range } },
           ], { range: { ...range }, active: tl, anchor: tl });
         })();

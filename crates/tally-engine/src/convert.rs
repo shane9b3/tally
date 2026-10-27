@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use tally_formula::{parse, print, Dialect, Expr, Formula};
 use tally_model::{
-    CellContentData, CellData, CellRangeLocal, DocSettings, LinkData, NameData, PageSetupData,
-    SheetData, StyleData, StyleRun, WorkbookData,
+    AutoFilterData, CellContentData, CellData, CellRangeLocal, DocSettings, LinkData, NameData,
+    PageSetupData, SheetData, StyleData, StyleRun, WorkbookData,
 };
 use tally_types::{CellAddr, Matrix, Value, MAX_COLS, MAX_ROWS};
 
@@ -62,7 +62,7 @@ impl Workbook {
     /// "Evaluate formulas" import option, off by default because a CSV from
     /// an untrusted source would otherwise run its formulas on open).
     pub fn from_data_opts(data: &WorkbookData, recognize: bool, formulas: bool) -> Workbook {
-        Self::build_from_data(data, None, recognize, formulas)
+        Self::build_from_data(data, None, None, recognize, formulas)
     }
 
     /// [`Self::from_data_opts`] taking the data by value: each sheet's
@@ -75,12 +75,18 @@ impl Workbook {
             .iter_mut()
             .map(|s| std::mem::take(&mut s.cells))
             .collect();
-        Self::build_from_data(&data, Some(cells), recognize, formulas)
+        let filters: Vec<Option<AutoFilterData>> = data
+            .sheets
+            .iter_mut()
+            .map(|s| s.auto_filter.take())
+            .collect();
+        Self::build_from_data(&data, Some(cells), Some(filters), recognize, formulas)
     }
 
     fn build_from_data(
         data: &WorkbookData,
         mut owned_cells: Option<Vec<Vec<CellData>>>,
+        mut owned_filters: Option<Vec<Option<AutoFilterData>>>,
         recognize: bool,
         formulas: bool,
     ) -> Workbook {
@@ -153,7 +159,23 @@ impl Workbook {
         // Names before formulas, so formulas resolve them while parsing.
         load_names(&mut wb, &data.names, &ids);
         let mut merges_capped = false;
-        for (sd, &sheet) in sheet_data.iter().zip(&ids) {
+        for (i, (sd, &sheet)) in sheet_data.iter().zip(&ids).enumerate() {
+            // The AutoFilter (taken when the data is owned, so its value
+            // lists are not copied), its area clamped to the sheet's cells:
+            // a file's `A1:XFD1048576` must not make every refresh walk a
+            // million rows (review: wide AutoFilter).
+            let af = match owned_filters.as_mut().and_then(|v| v.get_mut(i)) {
+                Some(slot) => slot.take(),
+                None => sd.auto_filter.clone(),
+            };
+            let af = af.map(|mut af| {
+                let cells: &[CellData] = owned_cells
+                    .as_ref()
+                    .and_then(|c| c.get(i))
+                    .map_or(&sd.cells[..], |c| &c[..]);
+                af.range = crate::filter::clamp_to_cells(af.range, cells);
+                af
+            });
             if let Some(s) = wb.sheet_mut(sheet) {
                 s.meta.merges = Arc::new(clean_merges(&sd.merges));
                 merges_capped |= sd.merges.len() > MAX_MERGES_PER_SHEET
@@ -161,10 +183,9 @@ impl Workbook {
                 s.meta.frozen = sd
                     .frozen
                     .filter(|(r, c)| (*r > 0 || *c > 0) && *r < MAX_ROWS && *c < MAX_COLS);
-                if let Some(af) = &sd.auto_filter {
+                if let Some(af) = af {
                     let r = af.range;
                     if r.r0 <= r.r1 && r.c0 <= r.c1 && r.r1 < MAX_ROWS && r.c1 < MAX_COLS {
-                        s.meta.auto_filter = Some(Arc::new(crate::filter::from_model(af)));
                         s.filtered_rows = Spans::from_spans(
                             af.filtered_rows
                                 .iter()
@@ -172,6 +193,7 @@ impl Workbook {
                                 .filter(|(a, b)| *a > r.r0 && *b <= r.r1)
                                 .collect(),
                         );
+                        s.meta.auto_filter = Some(Arc::new(crate::filter::from_model(af)));
                     }
                 }
             }

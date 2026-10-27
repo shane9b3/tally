@@ -45,11 +45,14 @@ import {
   type Transaction,
 } from "@tally/bridge";
 import { emulateFill } from "./mockFill";
+import { signedFormulaInput } from "./mockSignedInput";
 import { applyCfPatch, evaluateFormat, type CfDecoration } from "./mockCf";
 import { applyV3Op, cellKey, DEFAULT_VALIDATION_MESSAGE, emptyV3, MOCK_LOCALES, passes, protectionRefusal, validationAt, type V3Ext } from "./mockV3";
 import { applyW56Op, autocompleteOf, cellStylesOf, decorateSheets, emptyW56, navigatorOf, pivotFieldItemsOf, pivotHitAt, stdFilterHidden, type W56Ctx, type W56Ext } from "./mockW56";
 import { applyW5Op, BLANK_PNG, chartDataFor, chartsTouched, dependentsOf, emptyW5, pageBreaksFor, precedentsOf, printLayoutFor, renderPagePng, suggestChartFor, type W5Ext } from "./mockW5";
 import { parseAbsoluteRef } from "../dataOps";
+import { nextUnlocked as walkUnlocked } from "./nextUnlocked";
+import { pasteArea } from "@tally/bridge";
 import { previewCall, WIZARD_FUNCTIONS, type MockValue } from "./mockWizard";
 import type {
   FunctionInfo,
@@ -93,7 +96,7 @@ import type {
 } from "@tally/bridge";
 import { defaultPageSetup } from "../v03";
 import { INVALID_SCAN_CAP, invalidCells as invalidCellsOf } from "../detective/detective";
-import type { CellPos, CellsOptions, ViewOptionsDto } from "@tally/bridge";
+import type { CellPos, CellsOptions, Direction, PasteOptions, PastePayload, ViewOptionsDto } from "@tally/bridge";
 
 /** Synthesized conditional-format style ids start here (as in the engine). */
 export const CF_STYLE_BASE = 0x4000_0000;
@@ -203,7 +206,47 @@ function passesCondition(text: string, cond: FilterCondition): boolean {
       return text === "";
     case "notEmpty":
       return text !== "";
+    // Top/bottom N need the whole column: `topThreshold` (reapplyFilters).
+    case "topValues":
+    case "bottomValues":
+    case "topPercent":
+    case "bottomPercent":
+      return true;
   }
+}
+
+/**
+ * The engine's top/bottom-N threshold (AOO `ScTable::TopTenQuery`): numbers
+ * sorted ascending, the value at the offset; ties pass (`>=` / `<=`).
+ */
+function topThreshold(nums: number[], cond: FilterCondition): { ge: boolean; value: number } {
+  const v = [...nums].sort((a, b) => a - b);
+  const valid = v.length;
+  const parsed = Number(cond.value.trim());
+  const n = Number.isFinite(parsed) && cond.value.trim() !== "" ? (parsed >= 1 ? Math.floor(parsed) : 1) : 10;
+  let ge = true;
+  let offset: number;
+  switch (cond.op) {
+    case "bottomValues":
+      ge = false;
+      offset = Math.min(n, valid) - 1;
+      break;
+    case "topPercent":
+      offset = Math.min(valid - Math.floor((valid * Math.min(n, 100)) / 100), valid - 1);
+      break;
+    case "bottomPercent":
+      ge = false;
+      offset = Math.min(Math.floor((valid * Math.min(n, 100)) / 100), valid - 1);
+      break;
+    default:
+      offset = valid - Math.min(n, valid);
+  }
+  return { ge, value: v[Math.max(0, offset)] ?? Number.NaN };
+}
+
+/** `true` if `(r, c)` is in one of the "current selection only" ranges (always without). */
+function inSelection(sel: readonly RangeDto[] | null, r: number, c: number): boolean {
+  return sel === null || sel.some((x) => r >= x.r0 && r <= x.r1 && c >= x.c0 && c <= x.c1);
 }
 
 /** A matcher for a find query (literal, wildcards or regex; case; whole cell). */
@@ -410,14 +453,23 @@ export class WebMockClient extends MockClient {
     const match = matcher(query);
     if (!match || query.text === "") return { hits: [], truncated: false };
     const order = this.sheetOrder.get(doc) ?? [this.firstSheet(doc)];
-    const sheets = query.sheet === null ? order : [query.sheet];
+    const sel = query.selection ?? null;
+    const sheets = query.sheet === null ? (sel ? [this.firstSheet(doc)] : order) : [query.sheet];
     const hits: FindHit[] = [];
     for (const sheet of sheets) {
+      if (query.inNotes) {
+        // Search in Notes (engine `find.rs`): the note text of each cell.
+        for (const n of Object.values(this.docExt(doc).v3.notes[sheet] ?? {})) {
+          if (inSelection(sel, n.r, n.c) && match(n.text)) hits.push({ sheet, r: n.r, c: n.c });
+        }
+        continue;
+      }
       const layout = await super.sheetLayout(doc, sheet);
       if (!layout.used) continue;
       const [block] = await this.cells(doc, sheet, [layout.used]);
       for (const v of block?.cells ?? []) {
         if (v.text === "" && v.kind === "empty") continue;
+        if (!inSelection(sel, v.r, v.c)) continue;
         const text = query.inFormulas ? (await super.cellEditInfo(doc, sheet, v.r, v.c)).input : v.text;
         if (text !== "" && match(text)) hits.push({ sheet, r: v.r, c: v.c });
       }
@@ -503,6 +555,39 @@ export class WebMockClient extends MockClient {
       structureProtected: !!x.structure,
       structureHasPassword: !!x.structure?.password,
     };
+  }
+
+  override async nextUnlocked(doc: DocId, sheet: number, from: CellPos, dir: Direction, within: RangeDto | null): Promise<CellPos | null> {
+    await super.nextUnlocked(doc, sheet, from, dir, within);
+    const x = this.docExt(doc).v3;
+    if (!x.protection[sheet]) return null;
+    const ext = this.sheetExt(doc, sheet);
+    const hiddenRows = new Set([...ext.hiddenRows, ...ext.filteredRows]);
+    const hiddenCols = new Set(ext.hiddenCols);
+    return walkUnlocked(
+      {
+        unlocked: x.unlocked[sheet] ?? [],
+        rowHidden: (r) => hiddenRows.has(r),
+        colHidden: (c) => hiddenCols.has(c),
+        covered: (r, c) => ext.merges.some((m) => r >= m.r0 && r <= m.r1 && c >= m.c0 && c <= m.c1 && (m.r0 !== r || m.c0 !== c)),
+        rows: 1_048_576,
+        cols: 16_384,
+      },
+      from,
+      dir,
+      within,
+    );
+  }
+
+  override async pasteOverwrites(doc: DocId, sheet: number, target: RangeDto, payload: PastePayload, options: PasteOptions): Promise<boolean> {
+    const snap = payload.type === "internal" ? this.clips.get(payload.token) : undefined;
+    const clip = snap ? { rows: snap.inputs.length, cols: Math.max(1, ...snap.inputs.map((r) => r.length)) } : null;
+    const area = pasteArea(target, payload, options, clip);
+    if (!area) return false;
+    const used = (await super.sheetLayout(doc, sheet)).used;
+    if (!used || area.r0 > used.r1 || area.r1 < used.r0 || area.c0 > used.c1 || area.c1 < used.c0) return false;
+    const [block] = await this.cells(doc, sheet, [{ r0: Math.max(area.r0, used.r0), c0: Math.max(area.c0, used.c0), r1: Math.min(area.r1, used.r1), c1: Math.min(area.c1, used.c1) }]);
+    return (block?.cells ?? []).some((v) => v.kind !== "empty" || v.text !== "");
   }
 
   override async pageSetup(doc: DocId, sheet: number): Promise<PageSetupDto> {
@@ -936,12 +1021,23 @@ export class WebMockClient extends MockClient {
     return suggestChartFor(proper, sel, kind, used, (s, r) => this.cellsOf(doc, s, r), sheet);
   }
 
+  /** The sheet the UI last reported (`set_active_sheet`), per document. */
+  private readonly activeSheets = new Map<DocId, number>();
+
+  override async setActiveSheet(doc: DocId, sheet: number): Promise<void> {
+    this.recordedCalls.push({ type: "setActiveSheet", sheet });
+    await super.setActiveSheet(doc, sheet);
+    this.activeSheets.set(doc, sheet);
+  }
+
   private async printSheets(doc: DocId, opts: PrintOptionsDto) {
     const order = this.sheetOrder.get(doc) ?? [this.firstSheet(doc)];
-    const active = order[0] ?? 1;
+    // Like the engine: `activeSheet` (the sheet the user is on) wins over the reported one.
+    const active = opts.activeSheet ?? this.activeSheets.get(doc) ?? order[0] ?? 1;
+    if (!order.includes(active)) throw { code: "not_found", message: `no sheet ${active}` };
     const ids = opts.sheets.type === "all" ? order : opts.sheets.type === "some" ? opts.sheets.ids : [active];
     const out = [];
-    for (const id of ids) out.push({ id, setup: await this.pageSetup(doc, id), layout: await this.sheetLayout(doc, id) });
+    for (const id of ids) out.push({ id, active: id === active, setup: await this.pageSetup(doc, id), layout: await this.sheetLayout(doc, id) });
     return out;
   }
 
@@ -1119,11 +1215,30 @@ export class WebMockClient extends MockClient {
       const body = { ...f.range, r0: f.range.r0 + 1 };
       const [block] = await this.cells(doc, sheet, [body]);
       const rows: number[] = [];
+      const numAt = (r: number, col: number): number | null => {
+        const v = block?.cells.find((x) => x.r === r && x.c === col);
+        return v?.kind === "number" ? (v.num ?? numberOf(v.text)) : null;
+      };
+      const tops = new Map<number, { ge: boolean; value: number }>();
+      for (const [col, cf] of Object.entries(f.columns)) {
+        const op = cf.condition?.op;
+        if (cf.condition && (op === "topValues" || op === "bottomValues" || op === "topPercent" || op === "bottomPercent")) {
+          const nums: number[] = [];
+          for (let r = body.r0; r <= body.r1; r++) {
+            const n = numAt(r, Number(col));
+            if (n !== null) nums.push(n);
+          }
+          tops.set(Number(col), topThreshold(nums, cf.condition));
+        }
+      }
       for (let r = body.r0; r <= body.r1; r++) {
         for (const [col, cf] of Object.entries(f.columns)) {
           const text = block?.cells.find((v) => v.r === r && v.c === Number(col))?.text ?? "";
           const okValues = cf.values === null || cf.values.includes(text);
-          const okCond = cf.condition === null || passesCondition(text, cf.condition);
+          const top = tops.get(Number(col));
+          const n = top ? numAt(r, Number(col)) : null;
+          const okTop = !top || (n !== null && (n === top.value || (top.ge ? n > top.value : n < top.value)));
+          const okCond = okTop && (cf.condition === null || passesCondition(text, cf.condition));
           if (!okValues || !okCond) {
             rows.push(r);
             break;
@@ -1180,7 +1295,13 @@ export class WebMockClient extends MockClient {
           }
           return fail("array_block", "You cannot change part of an array.");
         }
-        return [op];
+        // A typed `+B1+B2` is a formula (P18; the engine's set_typed_input).
+        const names = this.ext.get(doc)?.names ?? [];
+        const signed = signedFormulaInput(op.input, {
+          isName: (n) => names.some((x) => x.name.toLowerCase() === n.toLowerCase()),
+          isFunction: (n) => WIZARD_FUNCTIONS.some((f) => f.name === n),
+        });
+        return [signed === null ? op : { ...op, input: signed }];
       }
       case "defineName": {
         const d = this.docExt(doc);
@@ -1295,11 +1416,22 @@ export class WebMockClient extends MockClient {
         } catch {
           return fail("invalid_argument", "Invalid regular expression.");
         }
+        const sel = q.selection ?? null;
         for (const sheet of sheets) {
+          if (q.inNotes) {
+            // Edits the side model's notes in place (the ext snapshot makes it undoable).
+            for (const n of Object.values(this.docExt(doc).v3.notes[sheet] ?? {})) {
+              if (!inSelection(sel, n.r, n.c)) continue;
+              re.lastIndex = 0;
+              n.text = n.text.replace(re, op.replace);
+            }
+            continue;
+          }
           const used = (await super.sheetLayout(doc, sheet)).used;
           if (!used) continue;
           const [block] = await this.cells(doc, sheet, [used]);
           for (const v of block?.cells ?? []) {
+            if (!inSelection(sel, v.r, v.c)) continue;
             const input = (await super.cellEditInfo(doc, sheet, v.r, v.c)).input;
             if (input === "") continue;
             re.lastIndex = 0;
@@ -1347,7 +1479,7 @@ export class WebMockClient extends MockClient {
         return out;
       }
       case "fillRange":
-        return emulateFill({ client: this, doc, sheet: op.sheet }, op.source, op.target);
+        return emulateFill({ client: this, doc, sheet: op.sheet }, op.source, op.target, op.mode);
       case "applyStyle":
         return op.patch.borders ? this.borderOps(doc, op.sheet, op.ranges, op.patch) : [op];
       default:

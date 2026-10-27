@@ -541,3 +541,63 @@ fn empty_rows_are_bare_line_breaks() {
     };
     assert_eq!(write(vec![vec![], vec![CsvCell::value("a")]], &lf), "\na\n");
 }
+
+/// AOO's Text Export options: quote all text cells (numbers stay bare),
+/// no text delimiter, other delimiters.
+#[test]
+fn export_options_quote_text_and_no_quotes() {
+    let row = || {
+        vec![vec![
+            CsvCell::text("a"),
+            CsvCell::value("1.5"),
+            CsvCell::text("x;y"),
+        ]]
+    };
+    let text = CsvWriteOptions {
+        quote_text: true,
+        ..CsvWriteOptions::default()
+    };
+    assert_eq!(write(row(), &text), "\"a\",1.5,\"x;y\"\r\n");
+    let semi_none = CsvWriteOptions {
+        delimiter: b';',
+        no_quotes: true,
+        ..CsvWriteOptions::default()
+    };
+    assert_eq!(write(row(), &semi_none), "a;1.5;x;y\r\n");
+    let single = CsvWriteOptions {
+        quote: b'\'',
+        delimiter: b'\t',
+        ..CsvWriteOptions::default()
+    };
+    assert_eq!(
+        write(
+            vec![vec![CsvCell::text("it's"), CsvCell::text("b\tc")]],
+            &single
+        ),
+        "'it''s'\t'b\tc'\r\n"
+    );
+    // A row of one empty field stays distinguishable from an empty row.
+    assert_eq!(
+        write(
+            vec![vec![CsvCell::text("")], vec![]],
+            &CsvWriteOptions::default()
+        ),
+        "\"\"\r\n\r\n"
+    );
+}
+
+#[test]
+fn export_charsets() {
+    let s = "Café €5 ✓".as_bytes();
+    assert_eq!(encode_output(s, OutputCharset::Utf8), s);
+    assert_eq!(
+        encode_output(s, OutputCharset::Windows1252),
+        b"Caf\xe9 \x805 ?".to_vec()
+    );
+    assert_eq!(
+        encode_output(s, OutputCharset::Iso88591),
+        b"Caf\xe9 ?5 ?".to_vec()
+    );
+    let u16 = encode_output("A€".as_bytes(), OutputCharset::Utf16Le);
+    assert_eq!(u16, vec![0xFF, 0xFE, 0x41, 0x00, 0xAC, 0x20]);
+}

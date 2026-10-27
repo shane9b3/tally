@@ -481,6 +481,56 @@ fn local(r: &CellRange) -> CellRangeLocal {
     }
 }
 
+/// Which end (and unit) of a top/bottom-N filter.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TopKind {
+    /// The N largest.
+    Largest,
+    /// The N smallest.
+    Smallest,
+    /// The largest N %.
+    LargestPct,
+    /// The smallest N %.
+    SmallestPct,
+}
+
+/// The threshold of a top/bottom-N condition over a column's numbers, as
+/// AOO's `ScTable::TopTenQuery` (`table3.cxx:1280-1375`): numbers only,
+/// sorted ascending; N is truncated and at least 1 (10 when not a number);
+/// the threshold is the value at the offset and ties pass (`>=` / `<=`),
+/// so "Top 10" of a column whose 10th and 11th largest are equal keeps
+/// both. Returns `(ge, threshold)`; the threshold is `NaN` (nothing
+/// passes) when the column has no numbers.
+pub(crate) fn top_threshold(mut vals: Vec<f64>, kind: TopKind, operand: &str) -> (bool, f64) {
+    vals.sort_by(|a, b| a.total_cmp(b));
+    let valid = vals.len();
+    let n = match operand.trim().parse::<f64>() {
+        Ok(x) if x.is_finite() => x,
+        _ => 10.0,
+    };
+    let n = if n >= 1.0 { n.min(1e15) as usize } else { 1 };
+    let (ge, offset) = match kind {
+        TopKind::Largest => (true, valid.saturating_sub(n.min(valid))),
+        TopKind::Smallest => (false, n.min(valid).saturating_sub(1)),
+        TopKind::LargestPct => {
+            let o = valid - valid * n.min(100) / 100;
+            (true, o.min(valid.saturating_sub(1)))
+        }
+        TopKind::SmallestPct => {
+            let o = valid * n.min(100) / 100;
+            (false, o.min(valid.saturating_sub(1)))
+        }
+    };
+    (ge, vals.get(offset).copied().unwrap_or(f64::NAN))
+}
+
+/// `true` if `num` passes a [`top_threshold`].
+pub(crate) fn passes_threshold(num: Option<f64>, ge: bool, value: f64) -> bool {
+    num.is_some_and(|a| {
+        tally_types::approx_equal(a, value) || if ge { a > value } else { a < value }
+    })
+}
+
 /// One prepared condition.
 enum Test {
     Cmp {
@@ -538,11 +588,7 @@ fn prepare_tests(
                 | StdFilterOpData::Smallest
                 | StdFilterOpData::LargestPct
                 | StdFilterOpData::SmallestPct => {
-                    // AOO `ScTable::TopTenQuery` (`table3.cxx:1280-1375`):
-                    // numbers only, sorted ascending; N is truncated and at
-                    // least 1 (10 when not a number); the threshold is the
-                    // value at the offset and ties pass (`>=` / `<=`).
-                    let mut vals: Vec<f64> = rows
+                    let vals: Vec<f64> = rows
                         .clone()
                         .filter_map(|r| match wb.value(CellAddr::new(sheet, r, c.col)) {
                             Value::Number(x) => Some(x),
@@ -550,29 +596,14 @@ fn prepare_tests(
                             _ => None,
                         })
                         .collect();
-                    vals.sort_by(|a, b| a.total_cmp(b));
-                    let valid = vals.len();
-                    let n = match c.value.trim().parse::<f64>() {
-                        Ok(x) if x.is_finite() => x,
-                        _ => 10.0,
+                    let kind = match c.op {
+                        StdFilterOpData::Largest => TopKind::Largest,
+                        StdFilterOpData::Smallest => TopKind::Smallest,
+                        StdFilterOpData::LargestPct => TopKind::LargestPct,
+                        _ => TopKind::SmallestPct,
                     };
-                    let n = if n >= 1.0 { n.min(1e15) as usize } else { 1 };
-                    let (ge, offset) = match c.op {
-                        StdFilterOpData::Largest => (true, valid.saturating_sub(n.min(valid))),
-                        StdFilterOpData::Smallest => (false, n.min(valid).saturating_sub(1)),
-                        StdFilterOpData::LargestPct => {
-                            let o = valid - valid * n.min(100) / 100;
-                            (true, o.min(valid.saturating_sub(1)))
-                        }
-                        _ => {
-                            let o = valid * n.min(100) / 100;
-                            (false, o.min(valid.saturating_sub(1)))
-                        }
-                    };
-                    Test::Threshold {
-                        ge,
-                        value: vals.get(offset).copied().unwrap_or(f64::NAN),
-                    }
+                    let (ge, value) = top_threshold(vals, kind, &c.value);
+                    Test::Threshold { ge, value }
                 }
                 op if f.options.regex
                     && !matches!(
@@ -629,9 +660,7 @@ fn test_passes(t: &Test, v: &Value, input: &str, cs: bool) -> bool {
         _ => None,
     };
     match t {
-        Test::Threshold { ge, value } => num.is_some_and(|a| {
-            tally_types::approx_equal(a, *value) || if *ge { a > *value } else { a < *value }
-        }),
+        Test::Threshold { ge, value } => passes_threshold(num, *ge, *value),
         Test::Regex { op, re } => {
             let hit = re.is_match(input);
             match op {

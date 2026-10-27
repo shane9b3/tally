@@ -632,6 +632,8 @@ fn merge_names_find() -> CmdResult<()> {
                 whole_cell: true,
                 mode: tally_api::FindMode::Literal,
                 from: None,
+                in_notes: None,
+                selection: None,
             },
         )
     })?;
@@ -983,6 +985,8 @@ fn oversized_arguments_are_rejected_before_the_engine() -> CmdResult<()> {
         whole_cell: false,
         mode,
         from: None,
+        in_notes: None,
+        selection: None,
     };
     assert!(
         limits::find_query(&query("a".repeat(limits::MAX_TEXT + 1), FindMode::Literal)).is_err()
@@ -1500,6 +1504,8 @@ mod wave5 {
             suppress_empty_pages: true,
             page_from: None,
             page_to: None,
+            active_sheet: None,
+            page_ranges: None,
         }
     }
 
@@ -1522,6 +1528,57 @@ mod wave5 {
         let (w, h, pixels) = tally_io_pdf::png_pixels(&png).expect("a PNG");
         assert!(w > 500 && h > 700, "{w}×{h} at 72 dpi");
         assert!(pixels.chunks(4).any(|p| p[0] < 128), "ink on the page");
+        Ok(())
+    }
+
+    /// The owner's report: print and the preview took the first sheet. The
+    /// UI names the sheet it is on (`active_sheet`); the job that `wb_print`
+    /// and `wb_export_pdf` send is built from those options, so it holds that
+    /// sheet's pages only, and "All sheets" holds every sheet.
+    #[test]
+    fn print_job_follows_the_users_sheet() -> CmdResult<()> {
+        let st = state();
+        let info = new_workbook(&st, None)?;
+        apply_ok(
+            &st,
+            info.doc,
+            vec![Op::AddSheet {
+                name: Some("Two".into()),
+                index: None,
+            }],
+        )?;
+        let ids: Vec<SheetId> = with_doc(&st, info.doc, |s| s.info(info.doc))?
+            .sheets
+            .iter()
+            .map(|s| s.id)
+            .collect();
+        let fill = |sheet: SheetId, rows: u32| {
+            (0..rows)
+                .map(|r| Op::SetCellInput {
+                    sheet,
+                    r,
+                    c: 0,
+                    input: format!("{sheet}/{r}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        apply_ok(&st, info.doc, fill(ids[0], 3))?;
+        apply_ok(&st, info.doc, fill(ids[1], 120))?;
+        let opts = PrintOptionsDto {
+            sheets: PrintSheets::Active,
+            active_sheet: Some(ids[1]),
+            ..PrintOptionsDto::default()
+        };
+        crate::limits::print_options(&opts)?;
+        let job = with_doc(&st, info.doc, |s| s.prepare_print_job(info.doc, &opts, &[]))?;
+        assert!(job.layout.pages.len() > 1);
+        assert!(job.layout.pages.iter().all(|p| p.sheet == ids[1]));
+        assert!(crate::print::pdf_bytes(&st, job.job)?.starts_with(b"%PDF"));
+        let all = with_doc(&st, info.doc, |s| {
+            s.prepare_print_job(info.doc, &all_sheets(), &[])
+        })?;
+        assert_eq!(all.layout.pages.len(), job.layout.pages.len() + 1);
+        assert_eq!(all.layout.pages[0].sheet, ids[0]);
         Ok(())
     }
 
@@ -1939,4 +1996,16 @@ fn every_registered_command_is_in_the_acl_manifest_and_granted_to_document_windo
     let titlebar: serde_json::Value = serde_json::from_str(titlebar).unwrap_or_default();
     assert_eq!(titlebar["webviews"], serde_json::json!(["doc-*"]));
     assert!(titlebar.get("windows").is_none());
+}
+
+/// A CSV save waiting for its Text Export options is dropped with the
+/// document (review L5).
+#[test]
+fn closing_a_document_drops_its_pending_csv_save() -> CmdResult<()> {
+    let st = state();
+    let info = new_workbook(&st, None)?;
+    crate::state::lock(&st.pending_csv).insert(info.doc.0, temp_path("p.csv"));
+    crate::commands::close_engine_doc(&st, info.doc)?;
+    assert!(crate::state::lock(&st.pending_csv).is_empty());
+    Ok(())
 }

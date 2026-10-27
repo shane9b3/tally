@@ -217,7 +217,7 @@ export class ViewFeatures {
     const info = this.ctl.info;
     if (!info) return null;
     try {
-      const layout = await clientV4(this.ctl).printLayout(info.doc, DEFAULT_PRINT_OPTIONS);
+      const layout = await clientV4(this.ctl).printLayout(info.doc, { ...DEFAULT_PRINT_OPTIONS, activeSheet: this.ctl.sheet });
       const p = layout.pages.find((pg) => pg.sheet === this.ctl.sheet) ?? layout.pages[0];
       if (p) return p;
     } catch {

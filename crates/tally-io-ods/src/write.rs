@@ -1676,6 +1676,10 @@ fn filter_operator(op: FilterOpData) -> &'static str {
         FilterOpData::EndsWith => "ends",
         FilterOpData::Empty => "empty",
         FilterOpData::NotEmpty => "!empty",
+        FilterOpData::TopValues => "top values",
+        FilterOpData::BottomValues => "bottom values",
+        FilterOpData::TopPercent => "top percent",
+        FilterOpData::BottomPercent => "bottom percent",
     }
 }
 

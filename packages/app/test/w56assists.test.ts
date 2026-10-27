@@ -36,6 +36,8 @@ describe("AutoCorrect", () => {
       expect(applyAutoCorrect(s), s).toBe(s);
     }
     expect(applyAutoCorrect("teh", { ...DEFAULT_AUTOCORRECT, replacementTable: false, capitalizeSentence: false })).toBe("teh");
+    // Typed with a leading + or -: AOO's formula mode turns AutoCorrect off.
+    for (const s of ["-teh", "+B1+B2", "- note -- here"]) expect(applyAutoCorrect(s), s).toBe(s);
   });
 });
 
@@ -54,6 +56,9 @@ describe("AutoInput", () => {
     expect(wantsCompletion("=SUM")).toBe(false);
     expect(wantsCompletion("12")).toBe(false);
     expect(wantsCompletion("Ap")).toBe(true);
+    // A leading + or - is formula mode (AOO): no column completion.
+    expect(wantsCompletion("-Ap")).toBe(false);
+    expect(wantsCompletion("+Ap")).toBe(false);
   });
 });
 

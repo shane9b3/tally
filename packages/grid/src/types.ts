@@ -222,6 +222,12 @@ export interface GridEvents {
   onEditorKeyDown(e: KeyboardEvent): boolean;
   /** Ctrl/Cmd+arrow: resolve the data edge (engine `navigateEdge`). */
   onNavigateEdge(from: CellPos, dir: Dir): Promise<CellPos>;
+  /**
+   * Protected sheet (`protectedNav`): the next unlocked cell from `from` for Tab / Enter
+   * (`right`/`left` along rows, `down`/`up` down columns), wrapping, inside `within` when
+   * given (a multi-cell selection); `null` stays put.
+   */
+  onNextUnlocked(from: CellPos, dir: Dir, within: RangeDto | null): Promise<CellPos | null>;
   /** Right click (selection already updated). Coordinates are client px. */
   onContextMenu(cell: CellPos, x: number, y: number, area: ContextArea): void;
   /** Delete/Backspace outside the editor: clear the selection's contents. */
@@ -309,6 +315,11 @@ export interface GridProps extends Partial<GridEvents> {
   pageBreaks?: PageBreaks | null;
   /** The print range, outlined (with the page breaks). */
   printRange?: RangeDto | null;
+  /**
+   * Protected sheet: Tab, Shift+Tab and Enter ask `onNextUnlocked` for the next cell (AOO moves
+   * between unlocked cells only) instead of stepping by one.
+   */
+  protectedNav?: boolean;
   // -- wave 5 seams (W5-0b) ---------------------------------------------------
   /**
    * Range-pick mode without an open edit (dialogs asking for a range):

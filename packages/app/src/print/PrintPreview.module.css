@@ -179,3 +179,66 @@
   color: var(--tally-chip-amber-fg);
   font-size: 12.5px;
 }
+
+/* Print range: the bar's sheet menu and page list, and the range dialog. */
+.select {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 8px;
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.pages {
+  width: 92px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 8px;
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.pages:focus,
+.select:focus {
+  border-color: var(--tally-accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--tally-accent-subtle);
+}
+
+.pagesBad {
+  border-color: var(--tally-danger);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  margin-bottom: 6px;
+  padding: 0;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.pagesField {
+  margin-left: 24px;
+}

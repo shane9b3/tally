@@ -733,7 +733,7 @@ pub(crate) fn input_string(wb: &Workbook, addr: tally_types::CellAddr) -> String
     edit_text(wb, &v, wb.styles.get(s.style(addr.row, addr.col)))
 }
 
-fn edit_text(wb: &Workbook, v: &Value, st: &StyleEntry) -> String {
+pub(crate) fn edit_text(wb: &Workbook, v: &Value, st: &StyleEntry) -> String {
     match v {
         Value::Empty => String::new(),
         Value::Number(n) => {

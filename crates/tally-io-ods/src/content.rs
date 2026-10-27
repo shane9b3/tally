@@ -1559,6 +1559,10 @@ fn filter_op(op: &str) -> Option<FilterOpData> {
         "ends" => FilterOpData::EndsWith,
         "empty" => FilterOpData::Empty,
         "!empty" => FilterOpData::NotEmpty,
+        "top values" => FilterOpData::TopValues,
+        "bottom values" => FilterOpData::BottomValues,
+        "top percent" => FilterOpData::TopPercent,
+        "bottom percent" => FilterOpData::BottomPercent,
         _ => return None,
     })
 }

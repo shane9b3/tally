@@ -4,11 +4,11 @@
 
 use std::path::{Path, PathBuf};
 
-use tally_api::{ApiError, DocId, FileFormat, WorkbookInfo};
+use tally_api::{ApiError, CsvExportOptions, DocId, FileFormat, WorkbookInfo};
 use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::commands::{blocking, open_checked, save_to, CmdResult};
+use crate::commands::{blocking, open_checked, save_to, with_doc, CmdResult};
 use crate::files;
 use crate::state::{lock, AppState};
 
@@ -38,12 +38,27 @@ pub fn format_for(path: &Path) -> FileFormat {
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        Some("csv") => FileFormat::Csv,
+        // The text family is saved as CSV with the import's delimiter (a
+        // `.tsv` keeps its tabs), never as an ODS zip in a text file.
+        Some("csv" | "tsv" | "txt" | "tab") => FileFormat::Csv,
         Some("xlsx") => FileFormat::Xlsx,
         Some("html") | Some("htm") => FileFormat::Html,
         Some("dbf") => FileFormat::Dbf,
         _ => FileFormat::Ods,
     }
+}
+
+/// `true` if Save can write `path` in its own format; a file Tally only
+/// reads (XLS, SXC, …) is saved through the Save As dialog instead of
+/// being overwritten with another format.
+pub fn writable_in_place(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("ods" | "ots" | "xlsx" | "csv" | "tsv" | "txt" | "tab" | "html" | "htm" | "dbf")
+    )
 }
 
 /// Open dialog filters: every supported format first, then one per format
@@ -194,15 +209,20 @@ pub async fn wb_save(
     doc: DocId,
     save_as: bool,
     format: Option<FileFormat>,
+    csv: Option<CsvExportOptions>,
 ) -> CmdResult<WorkbookInfo> {
+    if let Some(o) = &csv {
+        o.delimiters()?;
+    }
     let current: Option<PathBuf> = lock(&state.paths).get(&doc.0).cloned();
+    let mut from_dialog = false;
     // Exporting to another format always asks where.
     let format_change = match (&current, format) {
         (Some(p), Some(f)) => format_for(p) != f,
         _ => false,
     };
     let target = match current {
-        Some(p) if !save_as && !format_change => p,
+        Some(p) if !save_as && !format_change && writable_in_place(&p) => p,
         current => {
             let plan = save_plan(current.as_deref(), format);
             let handle = app.clone();
@@ -230,15 +250,57 @@ pub async fn wb_save(
                 path.set_extension(plan.ext);
             }
             files::allow(&state, &path)?;
+            from_dialog = true;
             path
         }
     };
     let fmt = format.unwrap_or_else(|| format_for(&target));
+    if fmt == FileFormat::Csv && csv.is_none() && from_dialog {
+        // As AOO: the Text Export options are asked after the file is
+        // chosen; the webview answers with `wb_save_csv` (or drops it).
+        let name = target
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        lock(&state.pending_csv).insert(doc.0, target);
+        return Err(ApiError::new(ApiError::CSV_OPTIONS, name));
+    }
+    lock(&state.pending_csv).remove(&doc.0);
     blocking(app, move |app, st| {
+        if let Some(o) = &csv {
+            with_doc(st, doc, |s| s.set_csv_options(doc, o))?;
+        }
         let info = save_to(st, doc, &target, fmt)?;
         files::push_recent(app, st, &target);
         crate::autosave::remove_snapshot(app, doc);
         Ok(info)
+    })
+    .await
+}
+
+/// Finishes a Save whose CSV file was picked by `wb_save` (code
+/// `csv_options`): sets the Text Export options and writes the file.
+/// `csv: None` drops the pending save (the options dialog was cancelled).
+#[tauri::command]
+pub async fn wb_save_csv(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    doc: DocId,
+    csv: Option<CsvExportOptions>,
+) -> CmdResult<Option<WorkbookInfo>> {
+    let Some(csv) = csv else {
+        lock(&state.pending_csv).remove(&doc.0);
+        return Ok(None);
+    };
+    csv.delimiters()?;
+    let target = lock(&state.pending_csv)
+        .remove(&doc.0)
+        .ok_or_else(|| ApiError::not_found("no CSV save is waiting for options"))?;
+    blocking(app, move |app, st| {
+        with_doc(st, doc, |s| s.set_csv_options(doc, &csv))?;
+        let info = save_to(st, doc, &target, FileFormat::Csv)?;
+        files::push_recent(app, st, &target);
+        crate::autosave::remove_snapshot(app, doc);
+        Ok(Some(info))
     })
     .await
 }
@@ -288,6 +350,12 @@ mod tests {
     fn format_follows_the_extension() {
         assert_eq!(format_for(Path::new("a.XLSX")), FileFormat::Xlsx);
         assert_eq!(format_for(Path::new("a.csv")), FileFormat::Csv);
+        assert_eq!(format_for(Path::new("a.tsv")), FileFormat::Csv);
+        assert_eq!(format_for(Path::new("a.TXT")), FileFormat::Csv);
+        assert!(writable_in_place(Path::new("a.tsv")));
+        assert!(!writable_in_place(Path::new("a.xls")));
+        assert!(!writable_in_place(Path::new("a.sxc")));
+        assert!(!writable_in_place(Path::new("a")));
         assert_eq!(format_for(Path::new("a.ods")), FileFormat::Ods);
         assert_eq!(format_for(Path::new("a")), FileFormat::Ods);
         assert!(has_known_ext(Path::new("a.Xlsx")));

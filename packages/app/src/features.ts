@@ -476,7 +476,9 @@ export class V3Features {
     const ops: Op[] = [];
     const current = await this.client.cellEditInfo(this.doc, sheet, cell.r, cell.c).catch(() => null);
     const display = text.trim() === "" && (current?.input ?? "") === "" ? url : text;
-    if (display !== "" && display !== (current?.input ?? "")) ops.push({ type: "setCellInput", sheet, r: cell.r, c: cell.c, input: display });
+    // Not typed input (AOO inserts a text field, not through EnterData): a 1×1 block, so a
+    // leading +/- ("+1-555-1234") stays text instead of becoming a formula (P18).
+    if (display !== "" && display !== (current?.input ?? "")) ops.push({ type: "setRangeInputs", sheet, r: cell.r, c: cell.c, rows: [[display]] });
     ops.push({ type: "setLink", sheet, r: cell.r, c: cell.c, url });
     const res = await this.ctl.apply(t("hyperlink.title", "Hyperlink"), ops);
     return res !== null && res.errors.length === 0;

@@ -13,9 +13,14 @@
 //!   the old formula and is reported as an `OpError` warning. Array
 //!   formula cells are skipped (reported). Values mode never touches
 //!   formulas. Undo restores every changed cell.
+//! - Search in Notes (`in_notes`, AOO's "Notes" choice) matches the note
+//!   text of each cell with a note; Replace All rewrites the note text
+//!   (one undo entry per sheet restores the old notes).
+//! - Current selection only (`selection`) restricts the search to the
+//!   given ranges of one sheet.
 
 use regex::{Regex, RegexBuilder};
-use tally_api::{ApiError, FindHit, FindMode, FindQuery, FindResult};
+use tally_api::{ApiError, FindHit, FindMode, FindQuery, FindResult, RangeDto};
 use tally_types::{CellAddr, SheetId};
 
 use crate::service::view::{cell_edit_info, display_text};
@@ -40,6 +45,8 @@ pub const MAX_REPLACE_TX: u64 = 10_000_000;
 pub const MAX_REPLACED_CELL_CHARS: usize = 32_767;
 /// Most bytes of new text one Replace All may produce in total.
 pub const MAX_REPLACE_BYTES: usize = 256 * 1024 * 1024;
+/// Most ranges in a "current selection only" query.
+pub const MAX_SELECTION_RANGES: usize = 10_000;
 
 fn wildcard_to_regex(p: &str) -> String {
     let mut out = String::with_capacity(p.len() * 2);
@@ -118,26 +125,86 @@ fn searched_text(
     }
 }
 
+/// `true` if `(r, c)` lies in one of `sel` (always when there is none).
+fn in_selection(sel: Option<&[RangeDto]>, r: u32, c: u32) -> bool {
+    sel.is_none_or(|ranges| {
+        ranges
+            .iter()
+            .any(|x| r >= x.r0 && r <= x.r1 && c >= x.c0 && c <= x.c1)
+    })
+}
+
+/// The rows of column `c` covered by `ranges`, as sorted, disjoint
+/// intervals.
+fn merged_rows(ranges: &[RangeDto], c: u32) -> Vec<(u32, u32)> {
+    let mut v: Vec<(u32, u32)> = ranges
+        .iter()
+        .filter(|x| c >= x.c0 && c <= x.c1)
+        .map(|x| (x.r0, x.r1))
+        .collect();
+    v.sort_unstable();
+    let mut out: Vec<(u32, u32)> = Vec::with_capacity(v.len());
+    for (a, b) in v {
+        match out.last_mut() {
+            Some(last) if a <= last.1.saturating_add(1) => last.1 = last.1.max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    out
+}
+
 /// Every matching cell in `sheets` order, row-major, at most `cap`.
 fn scan(
     wb: &Workbook,
     sheets: &[SheetId],
     re: &Regex,
-    in_formulas: bool,
+    q: &FindQuery,
     cap: usize,
 ) -> (Vec<FindHit>, bool) {
     let mut hits = Vec::new();
+    // Identical selection ranges count once.
+    let sel: Option<Vec<RangeDto>> = q.selection.as_ref().map(|v| {
+        let mut v = v.clone();
+        v.sort_unstable_by_key(|r| (r.c0, r.r0, r.c1, r.r1));
+        v.dedup();
+        v
+    });
+    let sel = sel.as_deref();
     for &sid in sheets {
         let Some(sheet) = wb.sheet(sid) else {
             continue;
         };
+        if q.in_notes == Some(true) {
+            // BTreeMap order is row-major.
+            for (&(r, c), note) in sheet.meta.notes.iter() {
+                if in_selection(sel, r, c) && re.is_match(&note.text) {
+                    if hits.len() >= cap {
+                        return (hits, true);
+                    }
+                    hits.push(FindHit { sheet: sid, r, c });
+                }
+            }
+            continue;
+        }
         let mut cells: Vec<(u32, u32)> = Vec::new();
         for (ci, col) in sheet.columns.iter().enumerate() {
-            cells.extend(
-                col.cells
-                    .iter_range(0, tally_types::MAX_ROWS - 1)
-                    .map(|(r, _)| (r, ci as u32)),
-            );
+            let ci = ci as u32;
+            if col.cells.is_empty() {
+                continue;
+            }
+            if let Some(ranges) = sel {
+                // Merged row intervals of this column: overlapping ranges
+                // read each cell once (review: 10,000 whole-sheet ranges).
+                for (r0, r1) in merged_rows(ranges, ci) {
+                    cells.extend(col.cells.iter_range(r0, r1).map(|(r, _)| (r, ci)));
+                }
+            } else {
+                cells.extend(
+                    col.cells
+                        .iter_range(0, tally_types::MAX_ROWS - 1)
+                        .map(|(r, _)| (r, ci)),
+                );
+            }
         }
         cells.sort_unstable();
         for (r, c) in cells {
@@ -145,7 +212,7 @@ fn scan(
                 continue;
             };
             let addr = CellAddr::new(sid, r, c);
-            if let Some(t) = searched_text(wb, addr, content, in_formulas) {
+            if let Some(t) = searched_text(wb, addr, content, q.in_formulas) {
                 if re.is_match(&t) {
                     if hits.len() >= cap {
                         return (hits, true);
@@ -158,11 +225,32 @@ fn scan(
     (hits, false)
 }
 
-fn sheets_for(wb: &Workbook, sheet: Option<SheetId>) -> Vec<SheetId> {
+/// The sheets a query searches: one with a selection (`sheet`, else the
+/// active sheet), else `sheet` or every sheet in tab order.
+fn sheets_for(wb: &Workbook, sheet: Option<SheetId>, q: &FindQuery) -> Vec<SheetId> {
     match sheet {
         Some(s) => vec![s],
+        None if q.selection.is_some() => vec![wb.active_sheet],
         None => wb.sheets.iter().map(|s| s.id).collect(),
     }
+}
+
+/// Checks the query's selection ranges.
+fn check_selection(q: &FindQuery) -> Result<(), ApiError> {
+    if let Some(sel) = &q.selection {
+        if sel.len() > MAX_SELECTION_RANGES {
+            return Err(ApiError::invalid_argument("too many selection ranges"));
+        }
+        if sel.iter().any(|r| {
+            r.r0 > r.r1
+                || r.c0 > r.c1
+                || r.r1 >= tally_types::MAX_ROWS
+                || r.c1 >= tally_types::MAX_COLS
+        }) {
+            return Err(ApiError::invalid_argument("bad selection range"));
+        }
+    }
+    Ok(())
 }
 
 /// Runs a find query.
@@ -172,9 +260,10 @@ pub fn find(wb: &Workbook, q: &FindQuery) -> Result<FindResult, ApiError> {
             return Err(ApiError::not_found(format!("no sheet {s}")));
         }
     }
+    check_selection(q)?;
     let re = build_regex(q)?;
-    let sheets = sheets_for(wb, q.sheet);
-    let (mut hits, mut truncated) = scan(wb, &sheets, &re, q.in_formulas, MAX_REPLACE);
+    let sheets = sheets_for(wb, q.sheet, q);
+    let (mut hits, mut truncated) = scan(wb, &sheets, &re, q, MAX_REPLACE);
     if let Some(from) = q.from {
         let fs = q.sheet.unwrap_or(wb.active_sheet);
         let tab = |s: SheetId| wb.tab_of(s).unwrap_or(usize::MAX);
@@ -246,9 +335,13 @@ pub fn replace_all(
             "one step may replace at most {MAX_REPLACE_TX} cells"
         )));
     }
+    check_selection(query)?;
     let rep = replacement(query.mode, replace);
-    let sheets = sheets_for(wb, sheet);
-    let (hits, _) = scan(wb, &sheets, &re, query.in_formulas, left);
+    let sheets = sheets_for(wb, sheet, query);
+    let (hits, _) = scan(wb, &sheets, &re, query, left);
+    if query.in_notes == Some(true) {
+        return replace_in_notes(wb, hits, &re, &rep, fx);
+    }
     let mut changes = Vec::new();
     let mut failed = 0usize;
     let mut rejected = 0usize;
@@ -380,6 +473,90 @@ pub fn replace_all(
     Ok(changes)
 }
 
+/// New note texts of one sheet by cell.
+type NoteEdits = Vec<((u32, u32), String)>;
+
+/// Replace All in note text: one undo entry per sheet with the old notes
+/// of the changed cells. Notes of protected cells refuse the whole op, as
+/// a cell replace does.
+fn replace_in_notes(
+    wb: &mut Workbook,
+    hits: Vec<FindHit>,
+    re: &Regex,
+    rep: &str,
+    fx: &mut Effects,
+) -> Result<Vec<Change>, ApiError> {
+    let mut per_sheet: Vec<(SheetId, NoteEdits)> = Vec::new();
+    let mut bytes = 0usize;
+    let mut too_long = 0usize;
+    for h in hits {
+        let Some(note) = wb
+            .sheet(h.sheet)
+            .and_then(|s| s.meta.notes.get(&(h.r, h.c)))
+        else {
+            continue;
+        };
+        let new_text = re.replace_all(&note.text, rep).into_owned();
+        if *new_text == *note.text {
+            continue;
+        }
+        if new_text.len() > crate::ops_v03::MAX_NOTE_LEN {
+            too_long += 1;
+            continue;
+        }
+        bytes += new_text.len();
+        if bytes > MAX_REPLACE_BYTES {
+            let done: usize = per_sheet.iter().map(|(_, l)| l.len()).sum();
+            fx.warnings.push(ApiError::unsupported(format!(
+                "Replace All stopped after {done} notes: the replacements would hold more \
+                 than {} MiB of text",
+                MAX_REPLACE_BYTES >> 20
+            )));
+            break;
+        }
+        match per_sheet.last_mut() {
+            Some((s, list)) if *s == h.sheet => list.push(((h.r, h.c), new_text)),
+            _ => per_sheet.push((h.sheet, vec![((h.r, h.c), new_text)])),
+        }
+    }
+    let cells: Vec<tally_types::CellRange> = per_sheet
+        .iter()
+        .flat_map(|(s, list)| {
+            list.iter()
+                .map(|((r, c), _)| tally_types::CellRange::single(CellAddr::new(*s, *r, *c)))
+        })
+        .collect();
+    crate::protection::check_edit(wb, &cells)?;
+    let mut changes = Vec::new();
+    let mut n = 0u32;
+    for (sheet, list) in per_sheet {
+        let keys: Vec<(u32, u32)> = list.iter().map(|(k, _)| *k).collect();
+        n = n.saturating_add(u32::try_from(list.len()).unwrap_or(u32::MAX));
+        changes.extend(crate::ops_v03::with_meta_cells(
+            wb,
+            sheet,
+            fx,
+            Some((crate::ops_v03::CellMap::Notes, &keys)),
+            move |_, meta| {
+                let notes = std::sync::Arc::make_mut(&mut meta.notes);
+                for (k, text) in list {
+                    if let Some(note) = notes.get_mut(&k) {
+                        note.text = text.into();
+                    }
+                }
+                Ok(())
+            },
+        )?);
+    }
+    if too_long > 0 {
+        fx.warnings.push(ApiError::invalid_argument(format!(
+            "{too_long} notes were left unchanged: the result would be too long"
+        )));
+    }
+    *fx.replaced.get_or_insert(0) += n;
+    Ok(changes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,6 +570,8 @@ mod tests {
             whole_cell: false,
             mode,
             from: None,
+            in_notes: None,
+            selection: None,
         }
     }
 

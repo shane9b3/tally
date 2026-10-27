@@ -694,6 +694,8 @@ fn query(text: &str) -> FindQuery {
         whole_cell: false,
         mode: FindMode::Literal,
         from: None,
+        in_notes: None,
+        selection: None,
     }
 }
 

@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{input, range, Fixture};
+use common::{input, range, sel, Fixture};
 use tally_api::{
     cell_flags, BreakAxis, CellPos, CellView, CfColorStop, CfRuleDto, CfRuleKind, CfStyleDto,
     CfThreshold, CfValueKind, CmpOp, DocPropertiesDto, DocumentService, GoalSeekRequest,
@@ -1129,4 +1129,138 @@ fn cell_protect_info() {
     }]);
     f.svc.recalc_all(f.doc).unwrap();
     assert_eq!(f.value("A1"), Value::Number(0.0));
+}
+
+#[test]
+fn next_unlocked_skips_locked_hidden_and_covered_cells() {
+    use tally_api::{CellPos, Direction};
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    let next = |f: &Fixture, from: &str, dir: Direction, within: Option<&str>| {
+        let a = tally_types::CellAddr::from_a1(s, from).unwrap();
+        f.svc
+            .next_unlocked(
+                f.doc,
+                s,
+                CellPos { r: a.row, c: a.col },
+                dir,
+                within.map(range),
+            )
+            .unwrap()
+            .map(|p| tally_types::CellAddr::new(s, p.r, p.c).to_a1())
+    };
+    // B2:C2 merged and unlocked, D2 locked, E2 and B4:B5 unlocked, row 4 hidden later.
+    f.apply(vec![
+        Op::MergeCells {
+            sheet: s,
+            range: range("B2:C2"),
+        },
+        Op::SetCellProtection {
+            sheet: s,
+            ranges: vec![range("B2:C2"), range("E2"), range("B4:B5")],
+            locked: Some(false),
+            hidden_formula: None,
+        },
+    ]);
+    // Not protected: no answer.
+    assert_eq!(next(&f, "A1", Direction::Right, None), None);
+    f.apply(vec![Op::ProtectSheet {
+        sheet: s,
+        password: None,
+        options: None,
+    }]);
+    assert_eq!(
+        next(&f, "A1", Direction::Right, None).as_deref(),
+        Some("B2")
+    );
+    // From the merge anchor: the covered C2 and the locked D2 are skipped.
+    assert_eq!(
+        next(&f, "B2", Direction::Right, None).as_deref(),
+        Some("E2")
+    );
+    assert_eq!(
+        next(&f, "E2", Direction::Right, None).as_deref(),
+        Some("B4")
+    );
+    assert_eq!(
+        next(&f, "B5", Direction::Right, None).as_deref(),
+        Some("B2")
+    );
+    assert_eq!(next(&f, "E2", Direction::Left, None).as_deref(), Some("B2"));
+    assert_eq!(next(&f, "B2", Direction::Down, None).as_deref(), Some("B4"));
+    assert_eq!(next(&f, "B5", Direction::Down, None).as_deref(), Some("E2"));
+    assert_eq!(
+        next(&f, "B2", Direction::Right, Some("B4:B5")).as_deref(),
+        Some("B4")
+    );
+    assert_eq!(
+        next(&f, "B4", Direction::Right, Some("B4:B5")).as_deref(),
+        Some("B5")
+    );
+    // Unlocked cells in hidden rows are not stops.
+    f.apply(vec![
+        Op::UnprotectSheet {
+            sheet: s,
+            password: None,
+        },
+        Op::SetRowsHidden {
+            sheet: s,
+            start: 3,
+            end: 3,
+            hidden: true,
+        },
+        Op::ProtectSheet {
+            sheet: s,
+            password: None,
+            options: None,
+        },
+    ]);
+    assert_eq!(
+        next(&f, "E2", Direction::Right, None).as_deref(),
+        Some("B5")
+    );
+    // No unlocked cell inside the selection.
+    assert_eq!(next(&f, "A1", Direction::Right, Some("F9:G9")), None);
+}
+
+#[test]
+fn paste_overwrites_matches_the_engine_target() {
+    use tally_api::{PasteOptions, PastePayload};
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    f.apply(vec![
+        input(s, "A5", "x"),
+        input(s, "D1", "1"),
+        input(s, "D2", "2"),
+    ]);
+    let tsv = |t: &str| PastePayload::Tsv { text: t.into() };
+    let o = PasteOptions::default();
+    // External text is never tiled: only A1 is written.
+    assert!(!f
+        .svc
+        .paste_overwrites(f.doc, s, range("A1:A10"), tsv("x"), o.clone())
+        .unwrap());
+    assert!(f
+        .svc
+        .paste_overwrites(f.doc, s, range("A5"), tsv("x"), o.clone())
+        .unwrap());
+    assert!(f
+        .svc
+        .paste_overwrites(f.doc, s, range("A4"), tsv("a\nb"), o.clone())
+        .unwrap());
+    // Internal blocks tile over whole multiples of their size.
+    let out = f.svc.copy(f.doc, &sel(s, "D1:D2")).unwrap();
+    let internal = PastePayload::Internal { token: out.token };
+    assert!(!f
+        .svc
+        .paste_overwrites(f.doc, s, range("A1"), internal.clone(), o.clone())
+        .unwrap());
+    assert!(f
+        .svc
+        .paste_overwrites(f.doc, s, range("A1:A6"), internal.clone(), o.clone())
+        .unwrap());
+    assert!(!f
+        .svc
+        .paste_overwrites(f.doc, s, range("A1:A3"), internal, o)
+        .unwrap());
 }

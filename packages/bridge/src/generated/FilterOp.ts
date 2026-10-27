@@ -3,4 +3,4 @@
 /**
  * Filter comparisons.
  */
-export type FilterOp = "eq" | "ne" | "gt" | "ge" | "lt" | "le" | "contains" | "beginsWith" | "endsWith" | "empty" | "notEmpty";
+export type FilterOp = "eq" | "ne" | "gt" | "ge" | "lt" | "le" | "contains" | "beginsWith" | "endsWith" | "empty" | "notEmpty" | "topValues" | "bottomValues" | "topPercent" | "bottomPercent";

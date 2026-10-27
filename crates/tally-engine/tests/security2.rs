@@ -326,6 +326,8 @@ fn find_query(text: &str) -> tally_api::FindQuery {
         whole_cell: false,
         mode: tally_api::FindMode::Literal,
         from: None,
+        in_notes: None,
+        selection: None,
     }
 }
 

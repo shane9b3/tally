@@ -158,7 +158,15 @@ export const FILTER_OPS: readonly { op: FilterOp; label: string; value: boolean 
   { op: "endsWith", get label() { return t("filter.op.endsWith", "ends with"); }, value: true },
   { op: "empty", get label() { return t("filter.op.empty", "is empty"); }, value: false },
   { op: "notEmpty", get label() { return t("filter.op.notEmpty", "is not empty"); }, value: false },
+  // AOO's Largest / Smallest / Largest % / Smallest % (N in the value; "Top 10" is largest 10).
+  { op: "topValues", get label() { return t("filter.op.topValues", "largest"); }, value: true },
+  { op: "bottomValues", get label() { return t("filter.op.bottomValues", "smallest"); }, value: true },
+  { op: "topPercent", get label() { return t("filter.op.topPercent", "largest %"); }, value: true },
+  { op: "bottomPercent", get label() { return t("filter.op.bottomPercent", "smallest %"); }, value: true },
 ];
+
+/** AOO's AutoFilter "Top 10": the 10 largest values of the column (ties included). */
+export const TOP_10_FILTER: ColumnFilter = { values: null, condition: { op: "topValues", value: "10" } };
 
 /**
  * The column filter from the popover state: `values` only when some (not
@@ -209,22 +217,38 @@ export interface FindOptions {
   matchCase: boolean;
   wholeCell: boolean;
   inFormulas: boolean;
+  /** AOO's Search in "Notes": search note (comment) text instead of the cells. */
+  inNotes?: boolean;
   mode: FindMode;
   /** Search every sheet instead of the active one. */
   allSheets: boolean;
+  /**
+   * "Current selection only": the sheet and ranges selected when it was
+   * turned on (stepping through hits moves the selection, so it is kept here).
+   */
+  scope?: { sheet: number; ranges: RangeDto[] } | null;
 }
 
-export const DEFAULT_FIND: FindOptions = { matchCase: false, wholeCell: false, inFormulas: false, mode: "literal", allSheets: false };
+export const DEFAULT_FIND: FindOptions = { matchCase: false, wholeCell: false, inFormulas: false, inNotes: false, mode: "literal", allSheets: false, scope: null };
+
+/** AOO's Find & Replace "Search in" choice of `opts`. */
+export function searchIn(opts: FindOptions): "formulas" | "values" | "notes" {
+  return opts.inNotes ? "notes" : opts.inFormulas ? "formulas" : "values";
+}
 
 export function findQuery(text: string, opts: FindOptions, sheet: number, from: CellPos | null): FindQuery {
+  const scope = opts.scope ?? null;
   return {
     text,
-    sheet: opts.allSheets ? null : sheet,
-    inFormulas: opts.inFormulas,
+    // Current selection only searches the selection's sheet (as AOO, not all sheets).
+    sheet: scope ? scope.sheet : opts.allSheets ? null : sheet,
+    inFormulas: opts.inFormulas && !opts.inNotes,
     matchCase: opts.matchCase,
     wholeCell: opts.wholeCell,
     mode: opts.mode,
     from,
+    inNotes: opts.inNotes ? true : null,
+    selection: scope ? scope.ranges.map((r) => ({ ...r })) : null,
   };
 }
 

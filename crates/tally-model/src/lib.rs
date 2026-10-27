@@ -1206,6 +1206,14 @@ pub enum FilterOpData {
     Empty,
     /// `!empty`
     NotEmpty,
+    /// `top values`: the N largest numbers (ties included).
+    TopValues,
+    /// `bottom values`: the N smallest numbers (ties included).
+    BottomValues,
+    /// `top percent`: the largest N % of the numbers.
+    TopPercent,
+    /// `bottom percent`: the smallest N % of the numbers.
+    BottomPercent,
 }
 
 /// A vertical run of one style in one column, rows `start_row..=end_row`.

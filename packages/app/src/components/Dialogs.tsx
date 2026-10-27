@@ -8,12 +8,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useController } from "../context";
 import { useW56Store } from "../data/store";
 import { t } from "../i18n";
-import { a1, DEFAULT_PASTE_SPECIAL, isValidName, type PasteSpecialChoice } from "../dataOps";
+import { a1, DEFAULT_PASTE_SPECIAL, isValidName, searchIn, type PasteSpecialChoice } from "../dataOps";
 import { useDataStore } from "../stores/dataStore";
 import { NUMBER_FORMATS } from "../formats";
 import { formatNumberLite } from "../numfmtLite";
 import { useDocStore } from "../stores/docStore";
-import { useSelectionStore } from "../stores/selectionStore";
+import { selectionRanges, useSelectionStore } from "../stores/selectionStore";
 import { useUiStore, type DialogState } from "../stores/uiStore";
 import styles from "./Dialogs.module.css";
 import { V3Dialog, isV3Dialog } from "./V3Dialogs";
@@ -74,26 +74,32 @@ export interface ShellProps {
   /** Keep the dialog open after submitting. */
   keepOpen?: boolean;
   cancelLabel?: string;
+  /** Focus the primary button on open (Enter confirms), as AOO's Yes / No boxes do. */
+  focusOk?: boolean;
+  /** Runs when the dialog is cancelled (Cancel, Escape, a click outside). */
+  onCancel?: () => void;
   /** Extra class on the card (larger dialogs). */
   cardClass?: string;
   /** Hide the primary button (dialogs with their own actions). */
   noOk?: boolean;
 }
 
-export function Shell({ title, children, onSubmit, ok, valid = true, wide, danger, testId, extra, keepOpen, cancelLabel, cardClass, noOk }: ShellProps) {
+export function Shell({ title, children, onSubmit, ok, valid = true, wide, danger, testId, extra, keepOpen, cancelLabel, onCancel, focusOk, cardClass, noOk }: ShellProps) {
   const ctl = useController();
   const formRef = useRef<HTMLFormElement>(null);
   const titleId = useTitleId();
   useReturnFocus();
   const cancel = () => {
     close();
+    onCancel?.();
     ctl.focusGrid();
   };
   // Modal: focus starts inside the dialog (the first field, else the first button).
   useEffect(() => {
     const form = formRef.current;
     if (!form || form.contains(document.activeElement)) return;
-    form.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+    const okBtn = focusOk ? form.querySelector<HTMLElement>('[data-testid="dialog-ok"]') : null;
+    (okBtn ?? form.querySelector<HTMLElement>(FOCUSABLE))?.focus();
   }, []);
   return (
     <div className={styles.overlay} onMouseDown={(e) => e.target === e.currentTarget && cancel()}>
@@ -334,6 +340,15 @@ function FindReplaceDialog({ d }: { d: Extract<DialogState, { kind: "findReplace
   const [replace, setReplace] = useState("");
   const ref = useAutoFocus();
   const setOpt = (o: Partial<typeof options>) => patch({ options: { ...options, ...o }, searched: null });
+  const scopeNow = () => ({ sheet: ctl.sheet, ranges: selectionRanges(useSelectionStore.getState().selection) });
+  // As AOO: "Current selection only" starts checked when several cells are selected.
+  useEffect(() => {
+    const ranges = selectionRanges(useSelectionStore.getState().selection);
+    const multi = ranges.length > 1 || ranges.some((r) => r.r1 > r.r0 || r.c1 > r.c0);
+    const o = useDataStore.getState().find.options;
+    patch({ options: { ...o, scope: multi ? scopeNow() : null }, searched: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <Shell
       title={t("dlg.findReplace", "Find & replace")}
@@ -345,17 +360,22 @@ function FindReplaceDialog({ d }: { d: Extract<DialogState, { kind: "findReplace
       valid={text !== ""}
       onSubmit={() => void ctl.replaceAll(text, replace)}
       extra={
-        <button
-          type="button"
-          className={styles.secondary}
-          disabled={text === ""}
-          onClick={() => {
-            patch({ text, searched: null, index: -1 });
-            void ctl.findStep(1);
-          }}
-        >
-          {t("cmd.edit.findNext", "Find next")}
-        </button>
+        <>
+          <button
+            type="button"
+            className={styles.secondary}
+            disabled={text === ""}
+            onClick={() => {
+              patch({ text, searched: null, index: -1 });
+              void ctl.findStep(1);
+            }}
+          >
+            {t("cmd.edit.findNext", "Find next")}
+          </button>
+          <button type="button" className={styles.secondary} disabled={text === ""} onClick={() => void ctl.replaceOne(text, replace)} data-testid="replace-one">
+            {t("dlg.replace", "Replace")}
+          </button>
+        </>
       }
     >
       <label className={styles.field}>
@@ -376,8 +396,25 @@ function FindReplaceDialog({ d }: { d: Extract<DialogState, { kind: "findReplace
           <span>{t("findbar.wholeCell", "Whole cell")}</span>
         </label>
         <label className={styles.checkRow}>
-          <input type="checkbox" checked={options.allSheets} onChange={(e) => setOpt({ allSheets: e.target.checked })} />
+          <input type="checkbox" checked={options.allSheets} disabled={!!options.scope} onChange={(e) => setOpt({ allSheets: e.target.checked })} />
           <span>{t("find.allSheets", "All sheets")}</span>
+        </label>
+        <label className={styles.checkRow}>
+          <input type="checkbox" checked={!!options.scope} onChange={(e) => setOpt({ scope: e.target.checked ? scopeNow() : null })} data-testid="find-selection-only" />
+          <span>{t("find.selectionOnly", "Current selection only")}</span>
+        </label>
+        <label className={styles.checkRow}>
+          <span>{t("find.searchIn", "Search in")}</span>
+          <select
+            className={styles.selectSmall}
+            value={searchIn(options)}
+            onChange={(e) => setOpt({ inFormulas: e.target.value === "formulas", inNotes: e.target.value === "notes" })}
+            data-testid="find-search-in"
+          >
+            <option value="formulas">{t("find.inFormulas", "Formulas")}</option>
+            <option value="values">{t("find.inValues", "Values")}</option>
+            <option value="notes">{t("find.inNotes", "Notes")}</option>
+          </select>
         </label>
         <label className={styles.checkRow}>
           <span>{t("dlg.match", "Match")}</span>
@@ -558,7 +595,7 @@ function ManageNamesDialog() {
 
 function ConfirmDialog({ d }: { d: Extract<DialogState, { kind: "confirm" }> }) {
   return (
-    <Shell title={d.title} ok={d.ok} danger={d.danger} testId="confirm-dialog" onSubmit={d.onConfirm}>
+    <Shell title={d.title} ok={d.ok} danger={d.danger} testId="confirm-dialog" onSubmit={d.onConfirm} {...(d.cancel ? { cancelLabel: d.cancel } : {})} {...(d.focusOk ? { focusOk: true } : {})} {...(d.onCancel ? { onCancel: d.onCancel } : {})}>
       <p className={styles.lead}>{d.message}</p>
     </Shell>
   );

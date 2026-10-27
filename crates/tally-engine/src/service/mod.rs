@@ -228,7 +228,7 @@ impl EngineService {
     /// the cap are refused.
     /// Serializes `doc` in `format` and writes it to `target` atomically;
     /// the document itself (path, title, dirty flag) is not touched.
-    fn write_doc(&self, doc: DocId, target: &Path, format: FileFormat) -> Result<()> {
+    fn write_doc(&self, doc: DocId, target: &Path, format: FileFormat) -> Result<Vec<String>> {
         let d = self.docs.get(&doc.0).ok_or_else(|| not_found_doc(doc))?;
         let mut data = d.wb.to_data();
         data.meta.generator = Some(format!("Tally/{}", env!("CARGO_PKG_VERSION")));
@@ -237,21 +237,30 @@ impl EngineService {
             data.meta.created = data.meta.modified.clone();
         }
         let csv_rows = if format == FileFormat::Csv {
-            Some(Self::csv_rows(&d.wb)?)
+            Some(Self::csv_rows(&d.wb, d.csv_options.as_shown)?)
         } else {
             None
         };
+        let warnings = csv_rows
+            .as_deref()
+            .map(|rows| codec::csv_warnings(rows, &d.csv_options))
+            .unwrap_or_default();
         let bytes = self.codec.write(
             &Export {
                 data: &data,
                 csv_rows,
+                csv_options: Some(d.csv_options.clone()),
             },
             format,
         )?;
-        write_atomically(target, &bytes).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))
+        write_atomically(target, &bytes).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+        Ok(warnings)
     }
 
-    fn csv_rows(wb: &Workbook) -> Result<Vec<Vec<(String, bool)>>> {
+    /// The active sheet's rows for CSV: the displayed text (`as_shown`),
+    /// else as AOO's `GetInputString` (numbers at full precision, dates in
+    /// the input-line format), with a text-cell flag.
+    fn csv_rows(wb: &Workbook, as_shown: bool) -> Result<Vec<Vec<(String, bool)>>> {
         let too_large = || ApiError::unsupported("the sheet is too large to export as CSV");
         let sheet_id = wb.active_sheet;
         let Some(sheet) = wb.sheet(sheet_id) else {
@@ -299,8 +308,14 @@ impl EngineService {
                 next.next();
                 row.resize(c as usize, (String::new(), false));
                 let addr = CellAddr::new(sheet_id, r, c);
-                let is_text = matches!(wb.value(addr), Value::Text(_));
-                row.push((view::display_text(wb, addr), is_text));
+                let v = wb.value(addr);
+                let is_text = matches!(v, Value::Text(_));
+                let text = match &v {
+                    _ if as_shown => view::display_text(wb, addr),
+                    Value::Text(t) => t.to_string(),
+                    _ => view::edit_text(wb, &v, wb.styles.get(sheet.style(r, c))),
+                };
+                row.push((text, is_text));
             }
             if dense {
                 row.resize(width as usize, (String::new(), false));
@@ -426,6 +441,9 @@ impl DocumentService for EngineService {
         let budget = RecalcBudget::within(self.open_max_evaluated, self.open_time_limit);
         let mut doc = Document::with_budget(id, wb, &file_title(path), &budget);
         doc.path = Some(path.to_path_buf());
+        if let Some(o) = decoded.csv_options {
+            doc.csv_options = o;
+        }
         let info = doc.info();
         // Warnings are delivered once, with the open result.
         doc.warnings.clear();
@@ -447,7 +465,7 @@ impl DocumentService for EngineService {
                 .clone()
                 .ok_or_else(|| ApiError::invalid_argument("the document has no file path yet"))?,
         };
-        self.write_doc(doc, &target, format)?;
+        let warnings = self.write_doc(doc, &target, format)?;
         let d = self
             .docs
             .get_mut(&doc.0)
@@ -455,7 +473,10 @@ impl DocumentService for EngineService {
         d.title = file_title(&target);
         d.path = Some(target);
         d.dirty = false;
-        Ok(d.info())
+        let mut info = d.info();
+        // Save warnings (CSV: unquoted delimiters, unmappable characters).
+        info.warnings.extend(warnings);
+        Ok(info)
     }
 
     fn open_untitled(&mut self, path: &Path, dirty: bool) -> Result<WorkbookInfo> {
@@ -479,7 +500,13 @@ impl DocumentService for EngineService {
     }
 
     fn save_copy(&self, doc: DocId, path: &Path, format: FileFormat) -> Result<()> {
-        self.write_doc(doc, path, format)
+        self.write_doc(doc, path, format).map(|_| ())
+    }
+
+    fn set_csv_options(&mut self, doc: DocId, options: &tally_api::CsvExportOptions) -> Result<()> {
+        options.delimiters()?;
+        self.document_mut(doc)?.csv_options = options.clone();
+        Ok(())
     }
 
     fn close(&mut self, doc: DocId) -> Result<()> {
@@ -592,6 +619,45 @@ impl DocumentService for EngineService {
         view::navigate_edge(&self.document(doc)?.wb, sheet, from, dir)
     }
 
+    fn next_unlocked(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        from: CellPos,
+        dir: Direction,
+        within: Option<RangeDto>,
+    ) -> Result<Option<CellPos>> {
+        let wb = &self.document(doc)?.wb;
+        sheet_of(wb, sheet)?;
+        Ok(
+            crate::protection::next_unlocked(wb, sheet, (from.r, from.c), dir, within.as_ref())
+                .map(|(r, c)| CellPos { r, c }),
+        )
+    }
+
+    fn paste_overwrites(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        target: RangeDto,
+        payload: tally_api::PastePayload,
+        options: tally_api::PasteOptions,
+    ) -> Result<bool> {
+        let wb = &self.document(doc)?.wb;
+        let s = sheet_of(wb, sheet)?;
+        let clip = leaf(&self.shared.clipboard).clone();
+        let target = to_range(sheet, &target)?;
+        let Some(area) =
+            crate::clipboard::paste_area(sheet, target, &payload, &options, clip.as_deref())?
+        else {
+            return Ok(false);
+        };
+        Ok((area.c0..=area.c1).any(|c| {
+            s.column(c)
+                .is_some_and(|col| col.cells.iter_range(area.r0, area.r1).next().is_some())
+        }))
+    }
+
     fn resolve_name_box(&self, doc: DocId, text: &str) -> Result<SelectionDto> {
         view::resolve_name_box(&self.document(doc)?.wb, text)
     }
@@ -603,6 +669,19 @@ impl DocumentService for EngineService {
         text: &str,
     ) -> Result<SelectionDto> {
         view::resolve_name_box_in(&self.document(doc)?.wb, sheet, text)
+    }
+
+    fn set_active_sheet(&mut self, doc: DocId, sheet: tally_types::SheetId) -> Result<()> {
+        // View state only: no undo step, no dirty flag, no cache to drop.
+        let d = self
+            .docs
+            .get_mut(&doc.0)
+            .ok_or_else(|| not_found_doc(doc))?;
+        if d.wb.sheet(sheet).is_none() {
+            return Err(ApiError::not_found(format!("no sheet {sheet}")));
+        }
+        d.wb.active_sheet = sheet;
+        Ok(())
     }
 
     fn list_functions(&self) -> Vec<FunctionInfo> {
@@ -889,6 +968,8 @@ impl DocumentService for EngineService {
             suppress_empty_pages: true,
             page_from: None,
             page_to: None,
+            active_sheet: None,
+            page_ranges: None,
         };
         let ctx = crate::print::HfContext::now(&d.wb, &d.title, None);
         stats.pages = crate::print::layout(&d.wb, &opts, &ctx)

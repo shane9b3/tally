@@ -271,6 +271,14 @@ pub(crate) fn parse_sheet<R: BufRead>(
                 "scenarios" => {
                     crate::tools::parse_scenarios(xr, &e, &mut st.out.scenarios)?;
                 }
+                "autoFilter" => {
+                    let mut warnings = Vec::new();
+                    st.out.auto_filter =
+                        crate::autofilter::parse_autofilter(xr, &e, &mut warnings)?;
+                    for w in warnings {
+                        st.budget.warn(w);
+                    }
+                }
                 "outlinePr" => {
                     // `summaryBelow`/`summaryRight`: Tally's groups carry
                     // no summary side; nothing to keep.
@@ -323,6 +331,7 @@ pub(crate) fn parse_sheet<R: BufRead>(
         out.cells.sort_by_key(|c| (c.row, c.col));
     }
     dedup_last(&mut out.cells);
+    crate::autofilter::attach_filtered_rows(&mut out);
     out.row_breaks.sort_unstable();
     out.row_breaks.dedup();
     out.col_breaks.sort_unstable();

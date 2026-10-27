@@ -46,6 +46,9 @@ pub struct AppState {
     pub allowed: Mutex<HashSet<PathBuf>>,
     /// Current file of each open document (doc id → path), for Save.
     pub paths: Mutex<HashMap<u32, PathBuf>>,
+    /// CSV files picked in a Save dialog that wait for the Text Export
+    /// options (`wb_save` → code `csv_options` → `wb_save_csv`).
+    pub pending_csv: Mutex<HashMap<u32, PathBuf>>,
 }
 
 impl AppState {
@@ -57,6 +60,7 @@ impl AppState {
             recent: Mutex::new(Vec::new()),
             allowed: Mutex::new(HashSet::new()),
             paths: Mutex::new(HashMap::new()),
+            pending_csv: Mutex::new(HashMap::new()),
         }
     }
 

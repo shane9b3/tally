@@ -21,8 +21,9 @@ use tally_api::{
     ApiError, ApplyResult, AutoFilterInfo, CellBlock, CellEditInfo, CellPos, ClipboardOut,
     ConditionalFormatDto, Direction, DocId, DocPropertiesDto, DocumentService, FindQuery,
     FindResult, FunctionInfo, GoalSeekRequest, GoalSeekResult, LocaleInfo, NameInfo, NoteDto,
-    PageSetupDto, ProtectionInfo, RangeDto, SelectionDto, SelectionStats, SheetLayout, StyleDto,
-    Suggestion, Transaction, ValidationDto, ValidationInfo, WorkbookInfo,
+    PageSetupDto, PasteOptions, PastePayload, ProtectionInfo, RangeDto, SelectionDto,
+    SelectionStats, SheetLayout, StyleDto, Suggestion, Transaction, ValidationDto, ValidationInfo,
+    WorkbookInfo,
 };
 use tally_types::SheetId;
 use tauri::{AppHandle, Manager, Runtime};
@@ -100,6 +101,8 @@ pub fn with_new_doc(
 pub fn close_engine_doc(state: &AppState, doc: DocId) -> CmdResult<()> {
     let result = with_doc(state, doc, |s| s.close(doc));
     state.remove_doc(doc);
+    // A CSV save waiting for its options dies with the document.
+    lock(&state.pending_csv).remove(&doc.0);
     result
 }
 
@@ -326,6 +329,44 @@ pub async fn navigate_edge(
 }
 
 #[tauri::command]
+pub async fn next_unlocked(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    from: CellPos,
+    dir: Direction,
+    within: Option<RangeDto>,
+) -> CmdResult<Option<CellPos>> {
+    limits::cell("next_unlocked", &from)?;
+    if let Some(w) = &within {
+        limits::range("next_unlocked", w)?;
+    }
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.next_unlocked(doc, sheet, from, dir, within))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn paste_overwrites(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    target: RangeDto,
+    payload: PastePayload,
+    options: PasteOptions,
+) -> CmdResult<bool> {
+    limits::range("paste_overwrites", &target)?;
+    limits::paste_payload(&payload)?;
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| {
+            s.paste_overwrites(doc, sheet, target, payload, options)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn resolve_name_box(app: AppHandle, doc: DocId, text: String) -> CmdResult<SelectionDto> {
     limits::chars_max("the name box text", &text, limits::MAX_NAME_BOX_CHARS)?;
     blocking(app, move |_, st| {
@@ -533,6 +574,17 @@ pub async fn resolve_name_box_in(
     limits::chars_max("the name box text", &text, limits::MAX_NAME_BOX_CHARS)?;
     blocking(app, move |_, st| {
         with_doc(st, doc, |s| s.resolve_name_box_in(doc, sheet, &text))
+    })
+    .await
+}
+
+/// `set_active_sheet(doc, sheet)`: the sheet the user switched to (view
+/// state; no undo step, the document stays unmodified). The arguments are
+/// two ids, checked by the engine (`not_found`).
+#[tauri::command]
+pub async fn set_active_sheet(app: AppHandle, doc: DocId, sheet: SheetId) -> CmdResult<()> {
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.set_active_sheet(doc, sheet))
     })
     .await
 }

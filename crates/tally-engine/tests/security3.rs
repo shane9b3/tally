@@ -1025,6 +1025,8 @@ fn protection_gates_page_setup_names_undo_and_find() {
         whole_cell: false,
         mode: FindMode::Literal,
         from: None,
+        in_notes: None,
+        selection: None,
     };
     assert!(f.svc.find(f.doc, &q).unwrap().hits.is_empty());
     f.apply(vec![Op::UnprotectSheet {

@@ -418,18 +418,34 @@ export function printPagesFor(sheet: number, setup: PageSetupDto, layout: SheetL
   return pages;
 }
 
-export function printLayoutFor(sheets: { id: number; setup: PageSetupDto; layout: SheetLayout }[], opts: PrintOptionsDto): PrintLayoutDto {
+/** Paginates `sheets` in order; the selection applies on the `active` one (the user's sheet), as in the engine. */
+export function printLayoutFor(sheets: { id: number; active?: boolean; setup: PageSetupDto; layout: SheetLayout }[], opts: PrintOptionsDto): PrintLayoutDto {
   let pages: PrintPageDto[] = [];
+  const onSheet = sheets.some((s) => s.active) ? sheets.filter((s) => s.active) : sheets.slice(0, 1);
   for (const s of sheets) {
-    const setup = opts.selection ? { ...s.setup, printRange: opts.selection } : s.setup;
-    pages.push(...printPagesFor(s.id, setup, s.layout, pages.length, s.setup.firstPageNumber ?? 1));
-  }
-  if (opts.pageFrom !== null || opts.pageTo !== null) {
-    const from = (opts.pageFrom ?? 1) - 1;
-    const to = (opts.pageTo ?? pages.length) - 1;
-    pages = pages.filter((p) => p.index >= from && p.index <= to).map((p, i) => ({ ...p, index: i }));
+    // Each selected range is its own print range; whole columns / rows end at the data (as the engine).
+    const used = s.layout.used;
+    const clip = (r: RangeDto): RangeDto | null => {
+      if (!used) return null;
+      const out = { ...r, r1: r.r1 >= 1_048_575 ? Math.min(r.r1, used.r1) : r.r1, c1: r.c1 >= 16_383 ? Math.min(r.c1, used.c1) : r.c1 };
+      return out.r1 >= out.r0 && out.c1 >= out.c0 ? out : null;
+    };
+    const areas = opts.selection && onSheet.includes(s) ? opts.selection.map(clip) : [undefined];
+    for (const area of areas) {
+      if (area === null) continue;
+      const setup = area ? { ...s.setup, printRange: area } : s.setup;
+      pages.push(...printPagesFor(s.id, setup, s.layout, pages.length, s.setup.firstPageNumber ?? 1));
+    }
   }
   const warnings: string[] = [];
+  const ranges = opts.pageRanges ?? null;
+  if (opts.pageFrom !== null || opts.pageTo !== null || ranges !== null) {
+    const from = opts.pageFrom ?? 1;
+    const to = opts.pageTo ?? Number.MAX_SAFE_INTEGER;
+    const keep = (pos: number) => pos >= from && pos <= to && (ranges === null || ranges.some(([a, b]) => pos >= Math.min(a, b) && pos <= Math.max(a, b)));
+    pages = pages.filter((p) => keep(p.index + 1)).map((p, i) => ({ ...p, index: i }));
+    if (pages.length === 0) warnings.push("The page range selects no pages.");
+  }
   if (pages.length > 10_000) warnings.push("The print has more than 10,000 pages; only the first are shown.");
   return { pages: pages.slice(0, 10_000), warnings };
 }

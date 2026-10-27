@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useController } from "../context";
 import { useW56Store } from "../data/store";
 import { t } from "../i18n";
-import { columnFilterFrom, FILTER_OPS } from "../dataOps";
+import { columnFilterFrom, FILTER_OPS, TOP_10_FILTER } from "../dataOps";
 import { useDataStore } from "../stores/dataStore";
 import { useDocStore } from "../stores/docStore";
 import { useUiStore, type FilterPopoverState } from "../stores/uiStore";
@@ -54,6 +54,14 @@ function opLabel(op: FilterOp, fallback: string): string {
       return t("filter.op.empty", "is empty");
     case "notEmpty":
       return t("filter.op.notEmpty", "is not empty");
+    case "topValues":
+      return t("filter.op.topValues", "largest");
+    case "bottomValues":
+      return t("filter.op.bottomValues", "smallest");
+    case "topPercent":
+      return t("filter.op.topPercent", "largest %");
+    case "bottomPercent":
+      return t("filter.op.bottomPercent", "smallest %");
     default:
       return fallback;
   }
@@ -106,6 +114,12 @@ function Panel({ pop }: { pop: FilterPopoverState }) {
     void ctl.setColumnFilter(pop.col, result);
     ctl.focusGrid();
   };
+  // AOO's "Top 10" entry: applies at once, replacing this column's filter.
+  const top10 = () => {
+    close();
+    void ctl.setColumnFilter(pop.col, TOP_10_FILTER);
+    ctl.focusGrid();
+  };
   const sort = (asc: boolean) => {
     const range = filter?.range;
     close();
@@ -137,6 +151,11 @@ function Panel({ pop }: { pop: FilterPopoverState }) {
         </button>
         <button type="button" className={styles.chip} onClick={() => sort(false)} title={t("filter.sortZA", "Sort the table by this column, Z to A")}>
           Z→A
+        </button>
+      </div>
+      <div className={styles.row}>
+        <button type="button" className={styles.chip} onClick={top10} title={t("filter.top10Tip", "Show the 10 largest values")} data-testid="filter-top10">
+          {t("filter.top10", "Top 10")}
         </button>
       </div>
       <input

@@ -28,7 +28,8 @@ Types come from `crates/tally-api/src/dto.rs` and are generated into
 | `wb_new` | `template?: string` (id: `invoices`, `budget`, `stock`) | `WorkbookInfo` | `new_workbook(template)` (id passed through; the engine builds it) | `newWorkbook(template?)` |
 | `wb_open_dialog` | none | `WorkbookInfo \| null` | shell only: native dialog (filters: ODS/OTS, XLSX, XLS, SXC, CSV/TSV, HTML, dBase), then `open(path)`; `null` when cancelled or when the file is already open in a window (brought to the front) | `ShellClient.openDialog()` |
 | `wb_open` | `path: string` | `WorkbookInfo` | `open(path)` | `open(path)` |
-| `wb_save` | `doc, saveAs: boolean, format?: FileFormat` | `WorkbookInfo` | shell shows a dialog when `saveAs`, no path or a format change (Save As offers ODS, XLSX, CSV, HTML and dBase; without `format` the chosen extension decides), then `save(doc, path, format)` | `save(doc, path \| null, format)`; `ShellClient.saveWithDialog(doc, saveAs, format)` |
+| `wb_save` | `doc, saveAs: boolean, format?: FileFormat, csv?: CsvExportOptions` | `WorkbookInfo` | shell shows a dialog when `saveAs`, no path or a format change (Save As offers ODS, XLSX, CSV, HTML and dBase; without `format` the chosen extension decides), then `save(doc, path, format)`; with `csv`, `set_csv_options(doc, csv)` first. A CSV file picked in the dialog without `csv` is kept pending and the call rejects with code `csv_options` (message: the file name) | `save(doc, path \| null, format)`; `ShellClient.saveWithDialog(doc, saveAs, format, csv?)` |
+| `wb_save_csv` | `doc, csv: CsvExportOptions \| null` | `WorkbookInfo \| null` | finishes the pending CSV save of `wb_save`: `set_csv_options(doc, csv)` then `save(doc, path, Csv)`; `null` drops it (Text Export dialog cancelled) | `ShellClient.saveCsv(doc, csv)` |
 | `wb_close` | `doc` | `void` | `close(doc)` | `close(doc)` |
 | `sheet_layout` | `doc, sheet` | `SheetLayout` | `sheet_layout(doc, sheet)` | `sheetLayout(doc, sheet)` |
 | `get_cells` | `doc, sheet, ranges: RangeDto[]` | `CellBlock[]` | `cells(doc, sheet, ranges)` | `cells(doc, sheet, ranges)` |
@@ -96,6 +97,7 @@ check:bundle` builds the web bundle and fails if it contains the mock or the
 | `list_locales` | none | `LocaleInfo[]` | `list_locales()` | `listLocales()` |
 | `set_locale` | `doc, locale` | `ApplyResult` (every sheet's used area changed) | `set_locale(doc, locale)` | `setLocale(doc, locale)` |
 | `resolve_name_box_in` | `doc, sheet, text` | `SelectionDto` | `resolve_name_box_in(doc, sheet, text)` (names and unqualified refs relative to `sheet`, not the engine's active sheet; the name box uses it with the sheet the UI shows) | `resolveNameBoxIn(doc, sheet, text)` |
+| `set_active_sheet` | `doc, sheet` | `()` | `set_active_sheet(doc, sheet)` (view state: the sheet the user switched to; saved as the active sheet and used by CSV save, Find across sheets and `PrintSheets::Active`. No undo step, the document stays unmodified; `not_found` for an unknown sheet) | `setActiveSheet(doc, sheet)` (the controller sends it on every sheet switch, latest wins, and awaits it before a save or a Find) |
 
 v0.3 shell commands (no `DocumentService` method; `TauriClient.openUrl` / `userName`,
 optional in the UI's `LinkShell` interface, `packages/app/src/features.ts`):
@@ -372,7 +374,7 @@ Wave-5 argument limits (`limits.rs`, checked before the engine; `invalid_argumen
 | Chart series (`addChart`, `updateChart`) | ≤ 256 per chart; anchor cell inside the sheet, finite non-negative sizes |
 | Pivot fields (`createPivot`, `updatePivot`; row + column + page + data) | ≤ 64; source range / database-range name and target cell checked |
 | Solver constraints and variable ranges (`solver`) | ≤ 1,000 each; cells inside the sheet; finite epsilon |
-| Print pages (`page_from`, `page_to`, `print_job_page_png.page`) | ≤ 10,000; `page_from ≤ page_to` |
+| Print pages (`page_from`, `page_to`, `page_ranges`, `print_job_page_png.page`) | ≤ 10,000; `page_from ≤ page_to`; at most 256 `page_ranges` |
 | Chart SVGs (`prepare_print_job`) | ≤ 1,000 charts, ≤ 4 MB each |
 | `print_job_page_png.dpi` | 1–600 |
 | AutoInput prefix (`autocomplete`) | ≤ 1,024 characters |

@@ -23,6 +23,7 @@
 #![warn(missing_docs)]
 
 mod archive;
+mod autofilter;
 mod chart_read;
 mod chart_write;
 mod colors;

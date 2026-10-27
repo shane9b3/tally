@@ -3,7 +3,7 @@
  * print store.
  */
 import { describe, expect, it } from "vitest";
-import { clampPage, clampPreviewZoom, dpiFor, fitWidthZoom, fitZoom, pageLabel, paperPx, stepPage, stepPreviewZoom, thumbWindow } from "../src/print/printReducer";
+import { clampPage, clampPreviewZoom, DEFAULT_PRINT_SCOPE, dpiFor, fitWidthZoom, fitZoom, MAX_PAGE_RANGES, MAX_PRINT_PAGE, pageLabel, paperPx, parsePageRanges, printOptionsFor, stepPage, stepPreviewZoom, thumbWindow } from "../src/print/printReducer";
 import { usePrintStore } from "../src/print/printStore";
 
 describe("print preview reducers", () => {
@@ -52,6 +52,62 @@ describe("print preview reducers", () => {
     st.setOpen(false);
     expect(usePrintStore.getState().job).toBeNull();
     expect(usePrintStore.getState().open).toBe(false);
+  });
+});
+
+describe("print range", () => {
+  it("parses page lists like AOO's Pages field", () => {
+    expect(parsePageRanges("")).toEqual({ ok: true, ranges: null });
+    expect(parsePageRanges("   ")).toEqual({ ok: true, ranges: null });
+    expect(parsePageRanges("1-3,5")).toEqual({ ok: true, ranges: [[1, 3], [5, 5]] });
+    expect(parsePageRanges(" 2 - 4 ; 7 ")).toEqual({ ok: true, ranges: [[2, 4], [7, 7]] });
+    expect(parsePageRanges("4-")).toEqual({ ok: true, ranges: [[4, MAX_PRINT_PAGE]] });
+    expect(parsePageRanges("4-", 6)).toEqual({ ok: true, ranges: [[4, 6]] });
+    // Tolerant of empty items, as AOO.
+    expect(parsePageRanges("1, ")).toEqual({ ok: true, ranges: [[1, 1]] });
+    expect(parsePageRanges("1,,2;")).toEqual({ ok: true, ranges: [[1, 1], [2, 2]] });
+    expect(parsePageRanges(" , ;")).toEqual({ ok: true, ranges: null });
+  });
+  it("rejects invalid page lists", () => {
+    for (const [spec, error] of [
+      ["abc", "syntax"],
+      ["1-2-3", "syntax"],
+      ["-3", "syntax"],
+      ["1.5", "syntax"],
+      ["0", "zero"],
+      ["0-2", "zero"],
+      ["5-3", "reversed"],
+      [String(MAX_PRINT_PAGE + 1), "tooLarge"],
+      [Array.from({ length: MAX_PAGE_RANGES + 1 }, (_, i) => String(i + 1)).join(","), "tooMany"],
+    ] as const) {
+      const r = parsePageRanges(spec);
+      expect(r.ok, spec).toBe(false);
+      if (!r.ok) expect(r.error, spec).toBe(error);
+    }
+  });
+  it("checks page lists against the page count", () => {
+    expect(parsePageRanges("2-9", 4)).toEqual({ ok: true, ranges: [[2, 4]] });
+    expect(parsePageRanges("5", 4)).toMatchObject({ ok: false, error: "outOfRange", part: "5" });
+    expect(parsePageRanges("1, 6-8", 4)).toMatchObject({ ok: false, error: "outOfRange", part: "6-8" });
+    expect(parsePageRanges("4", 4)).toEqual({ ok: true, ranges: [[4, 4]] });
+  });
+  it("builds engine options on the user's sheet", () => {
+    expect(DEFAULT_PRINT_SCOPE).toBe("selected");
+    const sel = [{ r0: 1, c0: 1, r1: 4, c1: 2 }];
+    expect(printOptionsFor("selected", null, 2, sel)).toEqual({ sheets: { type: "active" }, selection: null, suppressEmptyPages: true, pageFrom: null, pageTo: null, activeSheet: 2, pageRanges: null });
+    expect(printOptionsFor("all", [[1, 3]], 2, sel)).toMatchObject({ sheets: { type: "all" }, selection: null, activeSheet: 2, pageRanges: [[1, 3]] });
+    expect(printOptionsFor("selection", null, 3, sel)).toMatchObject({ sheets: { type: "active" }, selection: sel, activeSheet: 3 });
+  });
+  it("the store keeps the chosen range when the preview closes", () => {
+    const st = usePrintStore.getState();
+    st.reset();
+    expect(usePrintStore.getState().scope).toBe("selected");
+    st.setRange(1, "all", "1-2");
+    st.setOpen(true);
+    st.setOpen(false);
+    expect(usePrintStore.getState()).toMatchObject({ scope: "all", pageSpec: "1-2", scopeDoc: 1 });
+    st.reset();
+    expect(usePrintStore.getState()).toMatchObject({ scope: "selected", pageSpec: "", scopeDoc: null });
   });
 });
 

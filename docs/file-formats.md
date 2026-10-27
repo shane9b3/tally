@@ -40,6 +40,7 @@ formats are described at the end of this page.
 | Manual page breaks | `fo:break-before="page"` on row/column styles | yes | `rowBreaks` / `colBreaks` (`man="1"`) | yes |
 | Document properties | `meta.xml`: title, subject, keywords, description, initial creator, creator, dates | yes | `docProps/core.xml` | title, subject, author, keywords, comments |
 | Locale | default cell style `fo:language`/`fo:country` | yes | – | – |
+| AutoFilter (value lists, one condition per column, Top 10 / top and bottom N and N %) | `table:database-range` with `table:display-filter-buttons`; `table:filter-condition` operators `=` `!=` `<` `>` `<=` `>=` `contains` `begins` `ends` `empty` `!empty` and `top values`, `bottom values`, `top percent`, `bottom percent` (AOO's "Top 10" is `top values` with 10); `table:filter-set-item` value lists; rows with `table:visibility="filter"` | yes | `autoFilter ref` with `filterColumn`: `filters` (+ `blank="1"`), one `customFilter` (`*x*` / `x*` / `*x` → contains / begins / ends, `notEqual " "` → not empty, `~` escapes); a column with two custom conditions opens unfiltered with a warning; `top10 top percent val`; `_xHHHH_` escapes decoded; value lists capped (docs/security.md 3b); rows Excel hid inside the area become the filter's rows; `_xlnm._FilterDatabase` is not shown as a name. An area reaching the sheet's last row or column (whole-column, whole-row or whole-sheet ref, any format) is cut down in that direction to the sheet's cells at load; any other area is kept and saved back exactly as written | patched in (`autofilter.rs`; rust_xlsxwriter has no `top10`) with the hidden `_xlnm._FilterDatabase` name (`localSheetId`); filtered rows are written hidden; tab/LF/CR in values as `&#9;` `&#10;` `&#13;`, other control characters as `_xHHHH_`. A column with both a value list and a condition keeps the list (reported) |
 
 **Header and footer areas** follow AOO: the header area sits inside the
 top margin and pushes the body down; its height (`margins.header`, ODS
@@ -71,6 +72,25 @@ right pages) is not modelled; `style:header-left` is ignored.
 
 Formulas of rules and validations are OpenFormula in the model, relative to
 `base` (ODS `base-cell-address`, XLSX the top-left cell of the first range).
+
+**CSV export** writes the active sheet only (the UI says so, as AOO's
+"Only the active sheet could be saved" warning) with AOO's Text Export
+options (`CsvExportOptions`, `DocumentService::set_csv_options`; the
+document keeps them for the next Save): field delimiter (any one ASCII
+character), text delimiter (`"`, `'`, another, or none: fields are then
+never quoted), "Quote all text cells" (numbers stay bare), "Save cell
+content as shown" (off: numbers at full precision and dates in the input
+line format, AOO's `GetInputString`) and the character set: UTF-8 (no
+BOM), UTF-16 (little-endian with a BOM), Windows-1252 or ISO-8859-1
+(unmappable characters become `?`). Defaults: comma, `"` where needed, as
+shown, UTF-8, CRLF. The formula-injection guard (`'` prefix) applies to
+every option set. An opened CSV keeps the delimiter (tab for `.tsv`) and
+character set found on import, so Save writes it back the same way (AOO
+reuses the import's filter options); `.csv`, `.tsv`, `.txt` and `.tab`
+files save as CSV (after the "Keep current format" prompt), and a file
+Tally only reads (`.xls`, `.sxc`) goes through Save As. Saving warns when
+cells hold the field delimiter or a line break with no text delimiter,
+and counts the characters the character set cannot hold.
 
 ## XLSX (`crates/tally-io-xlsx`)
 

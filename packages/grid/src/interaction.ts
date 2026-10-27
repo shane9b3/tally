@@ -574,8 +574,32 @@ export class Interaction {
     if (move === "none") return;
     const sel = host.selection();
     const lim = host.limits();
+    const key = this.lastCommitKey;
+    if ((key === "Enter" || key === "Tab") && lim.protectedNav && host.events().onNextUnlocked && (move === "down" || move === "up" || move === "left" || move === "right")) {
+      this.lastCommitKey = "";
+      const seq = ++this.edgeSeq;
+      void this.stepProtected(sel, move, lim).then((next) => {
+        if (next && seq === this.edgeSeq) host.select(next, { emit: true, reveal: next.active });
+      });
+      return;
+    }
     const next = move === "down" || move === "up" || move === "left" || move === "right" ? this.moveAfterCommit(sel, move, lim) : sel;
     host.select(next, { emit: true, reveal: next.active });
+  }
+
+  /** Protected sheet: the selection after Tab / Enter (`null` when the engine finds no cell or fails). */
+  private async stepProtected(sel: Selection, dir: Dir, lim: Limits): Promise<Selection | null> {
+    const handler = this.host.events().onNextUnlocked;
+    if (!handler) return null;
+    const rg = sel.range;
+    const single = (rg.r0 === rg.r1 && rg.c0 === rg.c1) || (lim.merges ?? []).some((m) => m.r0 === rg.r0 && m.c0 === rg.c0 && m.r1 === rg.r1 && m.c1 === rg.c1);
+    try {
+      const cell = await handler(sel.active, dir, single ? null : { ...sel.range });
+      if (!cell) return null;
+      return single ? cellSelection(cell) : { range: { ...sel.range }, active: cell, anchor: { ...cell } };
+    } catch {
+      return null;
+    }
   }
 
   private moveAfterCommit(sel: Selection, move: Dir, lim: Limits): Selection {
@@ -680,6 +704,16 @@ export class Interaction {
         host.cancelPick();
         return;
       }
+    }
+    if (lim.protectedNav && host.events().onNextUnlocked && (e.key === "Tab" || e.key === "Enter") && !mods.mod && !mods.alt) {
+      // Protected sheet: the engine knows which cell is next (unlocked, visible, not covered).
+      e.preventDefault();
+      const dir: Dir = e.key === "Tab" ? (mods.shift ? "left" : "right") : mods.shift ? "up" : "down";
+      const seq = ++this.edgeSeq;
+      void this.stepProtected(sel, dir, lim).then((next) => {
+        if (next && seq === this.edgeSeq) host.select(next, { emit: true, reveal: next.active });
+      });
+      return;
     }
     const action = reduceKey(sel, e.key, mods, lim);
     switch (action.type) {

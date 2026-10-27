@@ -24,6 +24,8 @@ fn opts() -> PrintOptionsDto {
         suppress_empty_pages: true,
         page_from: None,
         page_to: None,
+        active_sheet: None,
+        page_ranges: None,
     }
 }
 

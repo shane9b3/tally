@@ -6,9 +6,13 @@
  * list (the browser mock and tests) and build the ghost text.
  */
 
-/** Whether AutoInput should look for a completion for `text` (plain text, not a formula or number). */
+/**
+ * Whether AutoInput should look for a completion for `text` (plain text,
+ * not a formula or number). A leading `+` or `-` is formula mode in AOO
+ * (`ScInputHandler::UpdateFormulaMode`), which offers no column data.
+ */
 export function wantsCompletion(text: string): boolean {
-  if (text === "" || text.startsWith("=") || text.startsWith("'")) return false;
+  if (text === "" || /^[=+\-']/.test(text)) return false;
   if (/^[-+\d.,\s%:/]+$/.test(text)) return false;
   return /\S/.test(text);
 }

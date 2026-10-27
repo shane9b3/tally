@@ -341,6 +341,56 @@ pub fn paste(
     }
 }
 
+/// The cells [`paste`] writes for `payload` at `target`: a TSV block at the
+/// top-left (never tiled), an internal block tiled over a target that is a
+/// whole multiple of its size.
+pub fn paste_area(
+    sheet: SheetId,
+    target: CellRange,
+    payload: &PastePayload,
+    opts: &PasteOptions,
+    clip: Option<&ClipSnapshot>,
+) -> Result<Option<CellRange>, ApiError> {
+    match payload {
+        PastePayload::Tsv { text } => {
+            let mut rows = parse_tsv(text);
+            if rows.is_empty() {
+                return Ok(None);
+            }
+            if opts.transpose {
+                rows = transpose_rows(&rows);
+            }
+            block_range(sheet, target.r0, target.c0, &rows).map(Some)
+        }
+        PastePayload::Internal { token } => {
+            let clip = clip
+                .filter(|c| c.token == *token)
+                .ok_or_else(|| ApiError::not_found("the clipboard token is no longer valid"))?;
+            let (crows, ccols) = (clip.rows.max(1), clip.cols.max(1));
+            let (rows, cols) = if opts.transpose {
+                (ccols, crows)
+            } else {
+                (crows, ccols)
+            };
+            let reps_r = if target.rows().is_multiple_of(rows) {
+                target.rows() / rows
+            } else {
+                1
+            };
+            let reps_c = if target.cols().is_multiple_of(cols) {
+                target.cols() / cols
+            } else {
+                1
+            };
+            let r1 = (u64::from(target.r0) + u64::from(rows * reps_r) - 1)
+                .min(u64::from(MAX_ROWS - 1)) as u32;
+            let c1 = (u64::from(target.c0) + u64::from(cols * reps_c) - 1)
+                .min(u64::from(MAX_COLS - 1)) as u32;
+            Ok(Some(CellRange::new(sheet, target.r0, target.c0, r1, c1)))
+        }
+    }
+}
+
 fn transpose_rows(rows: &[Vec<String>]) -> Vec<Vec<String>> {
     let w = rows.iter().map(Vec::len).max().unwrap_or(0);
     (0..w)

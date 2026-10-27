@@ -710,6 +710,8 @@ fn bench_pdf(o: &Opts) -> Res<()> {
         suppress_empty_pages: true,
         page_from: None,
         page_to: None,
+        active_sheet: None,
+        page_ranges: None,
     };
     // Six columns fit one A4 portrait page across; find the rows per page
     // from a probe and size the sheet for 20 pages.

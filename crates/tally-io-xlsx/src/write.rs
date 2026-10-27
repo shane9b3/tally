@@ -480,6 +480,24 @@ impl SheetWriter<'_> {
                 }
             }
         }
+        // Rows hidden by the AutoFilter are hidden rows in Excel.
+        if let Some(af) = &sheet.auto_filter {
+            let mut n = 0u32;
+            'spans: for &(a, b) in &af.filtered_rows {
+                for row in a..=b.min(MAX_ROWS - 1) {
+                    if n >= MAX_SIZED_ROWS {
+                        report.warn(format!(
+                            "sheet {:?}: only the first {MAX_SIZED_ROWS} filtered rows were \
+                             written hidden",
+                            sheet.name
+                        ));
+                        break 'spans;
+                    }
+                    n += 1;
+                    ws.set_row_hidden(row)?;
+                }
+            }
+        }
         // Formatting of blank areas.
         for run in &sheet.style_runs {
             let Some(fmt) = self.fmt(Some(run.style)) else {
@@ -814,6 +832,7 @@ pub(crate) fn write(
     patches.date1904 = epoch == DateEpoch::D1904;
     // Wave 5 parts added through the patches pass (placeholders).
     crate::write_v04::scenario_patches(data, &mut patches, &mut report);
+    crate::autofilter::autofilter_patches(data, &mut patches, &mut report);
     crate::write_v04::pivot_patches(data, &mut patches, &mut report);
     crate::tools::style_patches(data, &mut patches);
     crate::tools::view_patches(data, &mut patches);

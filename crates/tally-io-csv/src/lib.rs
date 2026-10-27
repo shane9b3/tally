@@ -11,7 +11,6 @@
 #![warn(missing_docs)]
 
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::io::Write;
 
 use tally_model::{CellContentData, CellData, SheetData};
@@ -147,6 +146,26 @@ pub fn decode(bytes: &[u8], encoding: Encoding) -> Cow<'_, str> {
                 }
             }
         }
+    }
+}
+
+/// The encoding [`Encoding::Auto`] picks for `bytes`: UTF-8 (with a BOM or
+/// valid), UTF-16 (a BOM or the NUL pattern), else Windows-1252. A later
+/// CSV save of the document reuses it.
+pub fn detect_encoding(bytes: &[u8]) -> Encoding {
+    if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+        return Encoding::Utf8;
+    }
+    if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
+        return Encoding::Utf16;
+    }
+    if looks_like_utf16(bytes).is_some() {
+        return Encoding::Utf16;
+    }
+    if std::str::from_utf8(bytes).is_ok() {
+        Encoding::Utf8
+    } else {
+        Encoding::Windows1252
     }
 }
 
@@ -442,6 +461,12 @@ pub struct CsvWriteOptions {
     /// Prefix `'` to fields that a spreadsheet would run as a formula
     /// (default `true`; see `docs/security.md`). Turn it off for raw output.
     pub injection_guard: bool,
+    /// Quote every text cell ([`CsvCell::is_text`]), as AOO's "Quote all
+    /// text cells"; other fields are quoted only when they need it.
+    pub quote_text: bool,
+    /// Never quote (AOO's empty text delimiter): fields are written as
+    /// they are, even when they hold the delimiter or a line break.
+    pub no_quotes: bool,
 }
 
 impl Default for CsvWriteOptions {
@@ -452,6 +477,8 @@ impl Default for CsvWriteOptions {
             quote_all: false,
             line_ending: LineEnding::Crlf,
             injection_guard: true,
+            quote_text: false,
+            no_quotes: false,
         }
     }
 }
@@ -531,24 +558,14 @@ pub fn is_plain_number(text: &str) -> bool {
     i == b.len()
 }
 
-/// A `Write` over a shared writer.
-struct Shared<'a, W>(&'a RefCell<W>);
-
-impl<W: Write> Write for Shared<'_, W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.borrow_mut().write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.0.borrow_mut().flush()
-    }
-}
-
 /// Writes rows of formatted cells as CSV.
 ///
 /// Fields containing the delimiter, the quote character or a line break are
-/// quoted, with embedded quotes doubled. With
-/// [`CsvWriteOptions::injection_guard`], every field for which
+/// quoted, with embedded quotes doubled; [`CsvWriteOptions::quote_all`]
+/// quotes every field, [`CsvWriteOptions::quote_text`] every text cell and
+/// [`CsvWriteOptions::no_quotes`] none. A row holding one empty field is
+/// written as `""` (unless quoting is off), an empty row as a bare line
+/// break. With [`CsvWriteOptions::injection_guard`], every field for which
 /// [`needs_injection_guard`] holds gets a `'` prefix, whatever the cell's
 /// type (a number format can display a number as formula text).
 pub fn write_csv<W: Write>(
@@ -556,46 +573,113 @@ pub fn write_csv<W: Write>(
     opts: &CsvWriteOptions,
     w: W,
 ) -> Result<(), CsvError> {
-    // Shared so that bare line breaks can bypass the csv writer.
-    let out = RefCell::new(w);
-    let mut writer = csv::WriterBuilder::new()
-        .delimiter(opts.delimiter)
-        .quote(opts.quote)
-        .double_quote(true)
-        .flexible(true)
-        .quote_style(if opts.quote_all {
-            csv::QuoteStyle::Always
-        } else {
-            csv::QuoteStyle::Necessary
-        })
-        .terminator(match opts.line_ending {
-            LineEnding::Crlf => csv::Terminator::CRLF,
-            LineEnding::Lf => csv::Terminator::Any(b'\n'),
-        })
-        .from_writer(Shared(&out));
+    let mut w = std::io::BufWriter::new(w);
     let terminator: &[u8] = match opts.line_ending {
         LineEnding::Crlf => b"\r\n",
         LineEnding::Lf => b"\n",
     };
+    let q = opts.quote;
     for row in rows {
-        if row.is_empty() {
-            // A bare line break: `write_record` would emit `""` here.
-            writer.flush()?;
-            out.borrow_mut().write_all(terminator)?;
-            continue;
-        }
-        let fields: Vec<Cow<'_, str>> = row
-            .iter()
-            .map(|cell| {
-                if opts.injection_guard && needs_injection_guard(&cell.text) {
-                    Cow::Owned(format!("'{}", cell.text))
-                } else {
-                    Cow::Borrowed(cell.text.as_str())
+        let single = row.len() == 1;
+        for (i, cell) in row.iter().enumerate() {
+            if i > 0 {
+                w.write_all(&[opts.delimiter])?;
+            }
+            let text: Cow<'_, str> = if opts.injection_guard && needs_injection_guard(&cell.text) {
+                Cow::Owned(format!("'{}", cell.text))
+            } else {
+                Cow::Borrowed(cell.text.as_str())
+            };
+            let quote = !opts.no_quotes
+                && (opts.quote_all
+                    || (opts.quote_text && cell.is_text)
+                    || (single && text.is_empty())
+                    || text
+                        .bytes()
+                        .any(|b| b == opts.delimiter || b == q || b == b'\r' || b == b'\n'));
+            if quote {
+                w.write_all(&[q])?;
+                let bytes = text.as_bytes();
+                let mut from = 0;
+                for (j, &b) in bytes.iter().enumerate() {
+                    if b == q {
+                        w.write_all(&bytes[from..=j])?;
+                        w.write_all(&[q])?;
+                        from = j + 1;
+                    }
                 }
-            })
-            .collect();
-        writer.write_record(fields.iter().map(|f| f.as_bytes()))?;
+                w.write_all(&bytes[from..])?;
+                w.write_all(&[q])?;
+            } else {
+                w.write_all(text.as_bytes())?;
+            }
+        }
+        w.write_all(terminator)?;
     }
-    writer.flush()?;
+    w.flush()?;
     Ok(())
+}
+
+/// Character set of CSV output.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum OutputCharset {
+    /// UTF-8 without a byte-order mark.
+    #[default]
+    Utf8,
+    /// UTF-16 little-endian with a byte-order mark.
+    Utf16Le,
+    /// Windows-1252; unmappable characters become `?`.
+    Windows1252,
+    /// ISO-8859-1 (Latin-1); characters above U+00FF become `?`.
+    Iso88591,
+}
+
+/// How many characters of `text` `charset` cannot hold (written as `?`).
+pub fn unmappable_count(text: &str, charset: OutputCharset) -> usize {
+    match charset {
+        OutputCharset::Utf8 | OutputCharset::Utf16Le => 0,
+        OutputCharset::Iso88591 => text.chars().filter(|c| u32::from(*c) > 0xFF).count(),
+        OutputCharset::Windows1252 => {
+            let mut buf = [0u8; 4];
+            text.chars()
+                .filter(|c| {
+                    !c.is_ascii() && encoding_rs::WINDOWS_1252.encode(c.encode_utf8(&mut buf)).2
+                })
+                .count()
+        }
+    }
+}
+
+/// Encodes UTF-8 CSV output in `charset`.
+pub fn encode_output(utf8: &[u8], charset: OutputCharset) -> Vec<u8> {
+    let text = String::from_utf8_lossy(utf8);
+    match charset {
+        OutputCharset::Utf8 => text.into_owned().into_bytes(),
+        OutputCharset::Utf16Le => {
+            let mut out = Vec::with_capacity(2 + text.len() * 2);
+            out.extend_from_slice(&[0xFF, 0xFE]);
+            for u in text.encode_utf16() {
+                out.extend_from_slice(&u.to_le_bytes());
+            }
+            out
+        }
+        OutputCharset::Iso88591 => text
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+            .collect(),
+        OutputCharset::Windows1252 => {
+            let mut out = Vec::with_capacity(text.len());
+            let mut buf = [0u8; 4];
+            for c in text.chars() {
+                let s = c.encode_utf8(&mut buf);
+                let (bytes, _, unmappable) = encoding_rs::WINDOWS_1252.encode(s);
+                if unmappable {
+                    out.push(b'?');
+                } else {
+                    out.extend_from_slice(&bytes);
+                }
+            }
+            out
+        }
+    }
 }

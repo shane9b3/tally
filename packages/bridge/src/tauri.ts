@@ -38,8 +38,11 @@ import type { CellEditInfo } from "./generated/CellEditInfo";
 import type { CellPos } from "./generated/CellPos";
 import type { ClipboardOut } from "./generated/ClipboardOut";
 import type { Direction } from "./generated/Direction";
+import type { PasteOptions } from "./generated/PasteOptions";
+import type { PastePayload } from "./generated/PastePayload";
 import type { DocChangedEvent } from "./generated/DocChangedEvent";
 import type { DocId } from "./generated/DocId";
+import type { CsvExportOptions } from "./generated/CsvExportOptions";
 import type { FileFormat } from "./generated/FileFormat";
 import type { FunctionInfo } from "./generated/FunctionInfo";
 import type { MenuActionEvent } from "./generated/MenuActionEvent";
@@ -117,6 +120,7 @@ export const COMMANDS = {
   openDialog: "wb_open_dialog",
   open: "wb_open",
   save: "wb_save",
+  saveCsv: "wb_save_csv",
   close: "wb_close",
   sheetLayout: "sheet_layout",
   cells: "get_cells",
@@ -128,6 +132,8 @@ export const COMMANDS = {
   selectionStats: "selection_stats",
   copy: "clipboard_copy",
   navigateEdge: "navigate_edge",
+  nextUnlocked: "next_unlocked",
+  pasteOverwrites: "paste_overwrites",
   resolveNameBox: "resolve_name_box",
   listFunctions: "list_functions",
   assistSuggest: "assist_suggest",
@@ -150,6 +156,7 @@ export const COMMANDS = {
   listLocales: "list_locales",
   setLocale: "set_locale",
   resolveNameBoxIn: "resolve_name_box_in",
+  setActiveSheet: "set_active_sheet",
   openUrl: "open_url",
   userName: "user_name",
   // v0.4–v0.6 (wave 5): apps/desktop/src-tauri/src/commands_v4.rs
@@ -371,7 +378,7 @@ export class TauriClient implements EngineClientV4, ShellClient {
    * user's choice.
    */
   save(doc: DocId, path: string | null, format: FileFormat): Promise<WorkbookInfo> {
-    return this.call(COMMANDS.save, { doc, saveAs: path !== null, format });
+    return this.call(COMMANDS.save, { doc, saveAs: path !== null, format, csv: null });
   }
 
   close(doc: DocId): Promise<void> {
@@ -386,8 +393,13 @@ export class TauriClient implements EngineClientV4, ShellClient {
   }
 
   /** `wb_save` with explicit dialog control; rejects with code `cancelled` if dismissed. */
-  saveWithDialog(doc: DocId, saveAs: boolean, format: FileFormat | null): Promise<WorkbookInfo> {
-    return this.call(COMMANDS.save, { doc, saveAs, format });
+  saveWithDialog(doc: DocId, saveAs: boolean, format: FileFormat | null, csv: CsvExportOptions | null = null): Promise<WorkbookInfo> {
+    return this.call(COMMANDS.save, { doc, saveAs, format, csv });
+  }
+
+  /** `wb_save_csv`: the CSV file picked by `wb_save` with the Text Export options. */
+  saveCsv(doc: DocId, csv: CsvExportOptions | null): Promise<WorkbookInfo | null> {
+    return this.call(COMMANDS.saveCsv, { doc, csv });
   }
 
   recentFiles(): Promise<string[]> {
@@ -426,6 +438,14 @@ export class TauriClient implements EngineClientV4, ShellClient {
 
   navigateEdge(doc: DocId, sheet: SheetId, from: CellPos, dir: Direction): Promise<CellPos> {
     return this.call(COMMANDS.navigateEdge, { doc, sheet, from, dir });
+  }
+
+  nextUnlocked(doc: DocId, sheet: SheetId, from: CellPos, dir: Direction, within: RangeDto | null): Promise<CellPos | null> {
+    return this.call(COMMANDS.nextUnlocked, { doc, sheet, from, dir, within });
+  }
+
+  pasteOverwrites(doc: DocId, sheet: SheetId, target: RangeDto, payload: PastePayload, options: PasteOptions): Promise<boolean> {
+    return this.call(COMMANDS.pasteOverwrites, { doc, sheet, target, payload, options });
   }
 
   resolveNameBox(doc: DocId, text: string): Promise<SelectionDto> {
@@ -524,6 +544,10 @@ export class TauriClient implements EngineClientV4, ShellClient {
 
   resolveNameBoxIn(doc: DocId, sheet: SheetId, text: string): Promise<SelectionDto> {
     return this.call(COMMANDS.resolveNameBoxIn, { doc, sheet, text });
+  }
+
+  setActiveSheet(doc: DocId, sheet: SheetId): Promise<void> {
+    return this.call(COMMANDS.setActiveSheet, { doc, sheet });
   }
 
   // -- v0.3 shell ----------------------------------------------------------------

@@ -22,6 +22,9 @@ pub struct Decoded {
     /// With `recognize_text`: `=…` text becomes a formula (CSV
     /// `evaluate_formulas`; off by default, so `=1+2` stays text).
     pub evaluate_formulas: bool,
+    /// CSV: the delimiters and character set found on import, which a
+    /// later CSV save reuses (AOO keeps the import's filter options).
+    pub csv_options: Option<tally_api::CsvExportOptions>,
 }
 
 /// What a codec needs to write a file.
@@ -33,6 +36,8 @@ pub struct Export<'a> {
     /// telling whether the cell holds text (informational; the injection
     /// guard judges the text itself).
     pub csv_rows: Option<Vec<Vec<(String, bool)>>>,
+    /// For CSV: the delimiters, quoting and character set.
+    pub csv_options: Option<tally_api::CsvExportOptions>,
 }
 
 /// Reads and writes files.
@@ -79,6 +84,7 @@ impl FileCodec for IoCodec {
                 data,
                 recognize_text: false,
                 evaluate_formulas: false,
+                csv_options: None,
             });
         }
         if tally_io_xlsx::sniff_is_xlsx(bytes) || ext == "xlsx" || ext == "xlsm" {
@@ -91,6 +97,7 @@ impl FileCodec for IoCodec {
                 data,
                 recognize_text: false,
                 evaluate_formulas: false,
+                csv_options: None,
             });
         }
         if tally_io_ods::sniff_is_sxc(bytes) || ext == "sxc" || ext == "stc" {
@@ -103,6 +110,7 @@ impl FileCodec for IoCodec {
                 data,
                 recognize_text: false,
                 evaluate_formulas: false,
+                csv_options: None,
             });
         }
         if tally_io_xls::sniff_is_xls(bytes) || ext == "xls" || ext == "xlt" {
@@ -112,6 +120,7 @@ impl FileCodec for IoCodec {
                 data,
                 recognize_text: false,
                 evaluate_formulas: false,
+                csv_options: None,
             });
         }
         if ext == "dbf" || (ext.is_empty() && tally_io_dbf::sniff_is_dbf(bytes)) {
@@ -125,6 +134,7 @@ impl FileCodec for IoCodec {
                 data,
                 recognize_text: false,
                 evaluate_formulas: false,
+                csv_options: None,
             });
         }
         if matches!(ext, "html" | "htm" | "xhtml")
@@ -139,6 +149,7 @@ impl FileCodec for IoCodec {
                 data,
                 recognize_text: true,
                 evaluate_formulas: false,
+                csv_options: None,
             });
         }
         if matches!(ext, "csv" | "tsv" | "txt" | "tab" | "") {
@@ -153,6 +164,19 @@ impl FileCodec for IoCodec {
             };
             let sheet = tally_io_csv::read_csv(bytes, &opts)
                 .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
+            let charset = match tally_io_csv::detect_encoding(bytes) {
+                tally_io_csv::Encoding::Utf16 => tally_api::CsvCharset::Utf16,
+                tally_io_csv::Encoding::Windows1252 => tally_api::CsvCharset::Windows1252,
+                tally_io_csv::Encoding::Latin1 => tally_api::CsvCharset::Iso88591,
+                _ => tally_api::CsvCharset::Utf8,
+            };
+            let csv_options = Some(tally_api::CsvExportOptions {
+                field_delimiter: char::from(delimiter).to_string(),
+                text_delimiter: char::from(opts.quote).to_string(),
+                charset,
+                ..tally_api::CsvExportOptions::default()
+            })
+            .filter(|o| o.delimiters().is_ok());
             return Ok(Decoded {
                 data: WorkbookData {
                     sheets: vec![sheet],
@@ -160,6 +184,7 @@ impl FileCodec for IoCodec {
                 },
                 recognize_text: true,
                 evaluate_formulas: opts.evaluate_formulas,
+                csv_options,
             });
         }
         Err(ApiError::unsupported(format!(
@@ -177,6 +202,21 @@ impl FileCodec for IoCodec {
             }
             FileFormat::Csv => {
                 let rows = export.csv_rows.clone().unwrap_or_default();
+                let o = export.csv_options.clone().unwrap_or_default();
+                let (delimiter, text) = o.delimiters()?;
+                let opts = tally_io_csv::CsvWriteOptions {
+                    delimiter,
+                    quote: text.unwrap_or(b'"'),
+                    no_quotes: text.is_none(),
+                    quote_text: o.quote_all_text,
+                    ..tally_io_csv::CsvWriteOptions::default()
+                };
+                let charset = match o.charset {
+                    tally_api::CsvCharset::Utf8 => tally_io_csv::OutputCharset::Utf8,
+                    tally_api::CsvCharset::Utf16 => tally_io_csv::OutputCharset::Utf16Le,
+                    tally_api::CsvCharset::Windows1252 => tally_io_csv::OutputCharset::Windows1252,
+                    tally_api::CsvCharset::Iso88591 => tally_io_csv::OutputCharset::Iso88591,
+                };
                 let mut out = Vec::new();
                 tally_io_csv::write_csv(
                     rows.into_iter().map(|row| {
@@ -190,11 +230,14 @@ impl FileCodec for IoCodec {
                             })
                             .collect()
                     }),
-                    &tally_io_csv::CsvWriteOptions::default(),
+                    &opts,
                     &mut out,
                 )
                 .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
-                Ok(out)
+                Ok(match charset {
+                    tally_io_csv::OutputCharset::Utf8 => out,
+                    cs => tally_io_csv::encode_output(&out, cs),
+                })
             }
             FileFormat::Xlsx => {
                 let mut cur = std::io::Cursor::new(Vec::new());
@@ -211,4 +254,46 @@ impl FileCodec for IoCodec {
             }
         }
     }
+}
+
+/// Warnings for a CSV export with `o`: fields that break the file without a
+/// text delimiter, and characters the character set cannot hold (`?`).
+pub fn csv_warnings(rows: &[Vec<(String, bool)>], o: &tally_api::CsvExportOptions) -> Vec<String> {
+    let mut out = Vec::new();
+    if o.text_delimiter.is_empty() {
+        let d = o.field_delimiter.chars().next().unwrap_or(',');
+        let broken = rows
+            .iter()
+            .flatten()
+            .filter(|(t, _)| t.contains(d) || t.contains(['\r', '\n']))
+            .count();
+        if broken > 0 {
+            out.push(format!(
+                "{broken} cells contain the field delimiter or a line break, and no text \
+                 delimiter is set: the CSV file will not read back as this sheet."
+            ));
+        }
+    }
+    #[cfg(feature = "io")]
+    {
+        let charset = match o.charset {
+            tally_api::CsvCharset::Windows1252 => Some(tally_io_csv::OutputCharset::Windows1252),
+            tally_api::CsvCharset::Iso88591 => Some(tally_io_csv::OutputCharset::Iso88591),
+            _ => None,
+        };
+        if let Some(cs) = charset {
+            let n: usize = rows
+                .iter()
+                .flatten()
+                .map(|(t, _)| tally_io_csv::unmappable_count(t, cs))
+                .sum();
+            if n > 0 {
+                out.push(format!(
+                    "{n} characters cannot be written in the chosen character set and were \
+                     saved as \"?\"."
+                ));
+            }
+        }
+    }
+    out
 }

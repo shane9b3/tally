@@ -11,8 +11,13 @@ import { REPLACEMENTS } from "./replacements";
 
 const TABLE = new Map(REPLACEMENTS.map(([from, to]) => [from.toLowerCase(), to]));
 
-/** Inputs AutoCorrect leaves alone: formulas, numbers, dates, booleans, quoted text. */
+/**
+ * Inputs AutoCorrect leaves alone: formulas, numbers, dates, booleans,
+ * quoted text. Input starting with `+` or `-` is typed in AOO's formula
+ * mode, where AutoCorrect is off (`ScInputHandler::UpdateAutoCorrFlag`).
+ */
 export function isPlainText(input: string): boolean {
+  if (/^[+-]/.test(input)) return false;
   const t = input.trim();
   if (t === "" || t.startsWith("=") || t.startsWith("{") || t.startsWith("'")) return false;
   if (/^[-+]?[\d.,]+(e[-+]?\d+)?%?$/i.test(t)) return false;

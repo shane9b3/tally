@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUILTIN_TEMPLATES, isApiError, MockClient, type Op, type SelectionDto, type ShellClient, type Transaction } from "../src/index";
+import { BUILTIN_TEMPLATES, CSV_OPTIONS, isApiError, MockClient, type Op, type SelectionDto, type ShellClient, type Transaction } from "../src/index";
 
 const tx = (...ops: Op[]): Transaction => ({ ops, label: null, selectionBefore: null, selectionAfter: null });
 const set = (sheet: number, r: number, c: number, input: string): Op => ({ type: "setCellInput", sheet, r, c, input });
@@ -207,9 +207,22 @@ describe("MockClient", () => {
     expect(await shell.recentFiles()).toEqual([]);
     const openErr: unknown = await shell.openDialog().catch((e: unknown) => e);
     expect(isApiError(openErr) && openErr.code).toBe("unsupported");
-    const saved = await shell.saveWithDialog(inv.doc, true, "csv");
-    expect(saved.title).toBe("Invoices.csv");
-    expect(saved.dirty).toBe(false);
+    // Like the shell, a picked CSV file waits for the Text Export options.
+    const pending: unknown = await shell.saveWithDialog(inv.doc, true, "csv").catch((e: unknown) => e);
+    expect(isApiError(pending) && pending.code).toBe(CSV_OPTIONS);
+    expect(isApiError(pending) && pending.message).toBe("Invoices.csv");
+    const csv = { fieldDelimiter: ";", textDelimiter: '"', quoteAllText: true, asShown: false, charset: "windows1252" as const };
+    const saved = await shell.saveCsv(inv.doc, csv);
+    expect(saved?.title).toBe("Invoices.csv");
+    expect(saved?.dirty).toBe(false);
+    expect(client.savedCsv.at(-1)).toEqual({ doc: inv.doc, title: "Invoices.csv", csv });
+    // Cancelled options: nothing is saved.
+    await shell.saveWithDialog(inv.doc, true, "csv").catch(() => null);
+    expect(await shell.saveCsv(inv.doc, null)).toBeNull();
+    expect(client.savedCsv).toHaveLength(1);
+    // Options given up front save at once.
+    const direct = await shell.saveWithDialog(inv.doc, true, "csv", csv);
+    expect(direct.title).toBe("Invoices.csv");
   });
 });
 

@@ -1,10 +1,12 @@
 /**
- * Fill handle (AutoFill), ⌘D and ⌘R: one engine `fillRange` op (mode
- * `auto`: the engine continues numbers, dates, weekday/month names and
- * "Item 1" text, and copies formulas re-anchored). The browser demo engine
- * emulates the op (dev/mockFill.ts).
+ * Fill handle (AutoFill), ⌘D and ⌘R: one engine `fillRange` op. The fill
+ * handle uses mode `auto` (the engine continues numbers, dates, sort-list
+ * entries and "Item 1" text, and copies formulas re-anchored); ⌘D / ⌘R use
+ * mode `copy` (AOO Edit ▸ Fill ▸ Down / Right is `FillSimple`: a copy, with
+ * relative references adjusted). The browser demo engine emulates the op
+ * (dev/mockFill.ts).
  */
-import type { CellView, Op, RangeDto } from "@tally/bridge";
+import type { CellView, FillMode, Op, RangeDto } from "@tally/bridge";
 import type { FillDir } from "@tally/grid";
 
 export interface FillContext {
@@ -26,9 +28,9 @@ export function extensionOf(source: RangeDto, target: RangeDto, dir: FillDir): R
 }
 
 /** The op that fills `target` (which contains `source` and extends it along one axis). */
-export function fillRange(ctx: FillContext, source: RangeDto, target: RangeDto): Op[] {
+export function fillRange(ctx: FillContext, source: RangeDto, target: RangeDto, mode: FillMode = "auto"): Op[] {
   if (source.r0 === target.r0 && source.c0 === target.c0 && source.r1 === target.r1 && source.c1 === target.c1) return [];
-  return [{ type: "fillRange", sheet: ctx.sheet, source: { ...source }, target: { ...target }, mode: "auto" }];
+  return [{ type: "fillRange", sheet: ctx.sheet, source: { ...source }, target: { ...target }, mode }];
 }
 
 /**

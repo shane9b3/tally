@@ -12,8 +12,9 @@ use tally_types::SheetId;
 use crate::charts::{ChartDataDto, ChartDto, ChartKind, ImageDto};
 use crate::dto::{
     ApiError, ApplyResult, AutoFilterInfo, CellBlock, CellEditInfo, CellPos, ClipboardOut,
-    Direction, DocId, FileFormat, FindQuery, FindResult, FunctionInfo, NameInfo, RangeDto,
-    SelectionDto, SelectionStats, SheetLayout, StyleDto, Suggestion, Transaction, WorkbookInfo,
+    Direction, DocId, FileFormat, FindQuery, FindResult, FunctionInfo, NameInfo, PasteOptions,
+    PastePayload, RangeDto, SelectionDto, SelectionStats, SheetLayout, StyleDto, Suggestion,
+    Transaction, WorkbookInfo,
 };
 use crate::features::{
     ConditionalFormatDto, DocPropertiesDto, GoalSeekRequest, GoalSeekResult, LocaleInfo, NoteDto,
@@ -78,6 +79,15 @@ pub trait DocumentService {
         Err(ApiError::unsupported("save_copy is not supported"))
     }
 
+    /// Sets the options of `doc`'s CSV exports (AOO's Text Export dialog);
+    /// later CSV saves of the document use them until changed.
+    fn set_csv_options(&mut self, doc: DocId, options: &crate::CsvExportOptions) -> Result<()> {
+        let _ = (doc, options);
+        Err(ApiError::unsupported(
+            "CSV export options are not supported",
+        ))
+    }
+
     /// Closes a document and frees its memory.
     ///
     /// Returns `Result` (the plan had `()`) so that closing an unknown
@@ -120,6 +130,30 @@ pub trait DocumentService {
         dir: Direction,
     ) -> Result<CellPos>;
 
+    /// Tab / Enter on a protected sheet: the next unlocked, visible,
+    /// non-covered cell from `from` in reading order (`Right`/`Left`: along
+    /// rows, `Down`/`Up`: down columns), wrapping, optionally inside
+    /// `within`. `None` when the sheet is not protected or has no such cell.
+    fn next_unlocked(
+        &self,
+        doc: DocId,
+        sheet: SheetId,
+        from: CellPos,
+        dir: Direction,
+        within: Option<RangeDto>,
+    ) -> Result<Option<CellPos>>;
+
+    /// Whether a paste of `payload` at `target` with `options` would write
+    /// over at least one cell that holds data (the paste-over-data warning).
+    fn paste_overwrites(
+        &self,
+        doc: DocId,
+        sheet: SheetId,
+        target: RangeDto,
+        payload: PastePayload,
+        options: PasteOptions,
+    ) -> Result<bool>;
+
     /// Resolves name box text: `B12`, `A1:C5`, `Sheet2.A1`, a named range.
     fn resolve_name_box(&self, doc: DocId, text: &str) -> Result<SelectionDto>;
 
@@ -129,6 +163,16 @@ pub trait DocumentService {
     fn resolve_name_box_in(&self, doc: DocId, sheet: SheetId, text: &str) -> Result<SelectionDto> {
         let _ = sheet;
         self.resolve_name_box(doc, text)
+    }
+
+    /// Records the sheet the user is on (view state, like AOO's view
+    /// settings): the next save writes it as the active sheet, and calls that
+    /// default to the active sheet (CSV save, Find across sheets,
+    /// `PrintSheets::Active`) start there. Not undoable; does not mark the
+    /// document modified. `not_found` for an unknown sheet.
+    fn set_active_sheet(&mut self, doc: DocId, sheet: SheetId) -> Result<()> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("set_active_sheet is not supported"))
     }
 
     /// Every registered function.

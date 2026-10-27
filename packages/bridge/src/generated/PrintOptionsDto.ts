@@ -11,9 +11,11 @@ export type PrintOptionsDto = {
  */
 sheets: PrintSheets, 
 /**
- * Print only this selection (on the active sheet).
+ * Print only these selected ranges of the active sheet (AOO's
+ * "Selected cells"), each as its own print range, in this order. A
+ * whole-row or whole-column range ends at the sheet's data.
  */
-selection: RangeDto | null, 
+selection: Array<RangeDto> | null, 
 /**
  * Skip pages without content (AOO default `true`).
  */
@@ -25,4 +27,16 @@ pageFrom: number | null,
 /**
  * Last page to print (1-based).
  */
-pageTo: number | null, };
+pageTo: number | null, 
+/**
+ * The sheet the user is on. [`PrintSheets::Active`] and `selection`
+ * resolve against it; `None` uses the workbook's stored active sheet,
+ * which only follows sheet switches that went through an edit.
+ */
+activeSheet?: number | null, 
+/**
+ * Pages to print as inclusive 1-based `[first, last]` ranges over the
+ * job ("1-3,5" is `[[1, 3], [5, 5]]`), or all. Pages keep their job
+ * order and numbering; ranges past the end select nothing.
+ */
+pageRanges?: Array<[number, number]> | null, };

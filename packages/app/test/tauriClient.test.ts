@@ -51,11 +51,14 @@ describe("TauriClient", () => {
     await client.selectionStats(1, sel);
     await client.copy(1, sel);
     await client.navigateEdge(1, 2, { r: 0, c: 0 }, "down");
+    await client.nextUnlocked(1, 2, { r: 0, c: 0 }, "right", null);
+    await client.pasteOverwrites(1, 2, { r0: 0, c0: 0, r1: 0, c1: 0 }, { type: "tsv", text: "x" }, { valuesOnly: false, formatsOnly: false, transpose: false, skipEmpty: false, operation: "none" });
     await client.resolveNameBox(1, "B12");
     await client.listFunctions();
     await client.assistSuggest(1, "total", sel);
     await client.openDialog();
     await client.saveWithDialog(1, true, null);
+    await client.saveCsv(1, { fieldDelimiter: ";", textDelimiter: "", quoteAllText: false, asShown: true, charset: "utf16" });
     await client.recentFiles();
     await client.listTemplates();
     const query = { text: "Paid", sheet: null, inFormulas: false, matchCase: false, wholeCell: true, mode: "literal" as const, from: null };
@@ -77,6 +80,7 @@ describe("TauriClient", () => {
     await client.listLocales();
     await client.setLocale(1, "de-DE");
     await client.resolveNameBoxIn(1, 2, "Totals");
+    await client.setActiveSheet(1, 2);
     await client.openUrl("https://example.com");
     await client.userName();
     await client.listFonts();
@@ -84,8 +88,8 @@ describe("TauriClient", () => {
     expect(calls).toEqual([
       { cmd: "wb_new", args: { template: null } },
       { cmd: "wb_open", args: { path: "/a.ods" } },
-      { cmd: "wb_save", args: { doc: 1, saveAs: false, format: "ods" } },
-      { cmd: "wb_save", args: { doc: 1, saveAs: true, format: "csv" } },
+      { cmd: "wb_save", args: { doc: 1, saveAs: false, format: "ods", csv: null } },
+      { cmd: "wb_save", args: { doc: 1, saveAs: true, format: "csv", csv: null } },
       { cmd: "wb_close", args: { doc: 1 } },
       { cmd: "sheet_layout", args: { doc: 1, sheet: 2 } },
       { cmd: "get_cells", args: { doc: 1, sheet: 2, ranges: [{ r0: 0, c0: 0, r1: 63, c1: 31 }] } },
@@ -97,11 +101,14 @@ describe("TauriClient", () => {
       { cmd: "selection_stats", args: { doc: 1, sel } },
       { cmd: "clipboard_copy", args: { doc: 1, sel } },
       { cmd: "navigate_edge", args: { doc: 1, sheet: 2, from: { r: 0, c: 0 }, dir: "down" } },
+      { cmd: "next_unlocked", args: { doc: 1, sheet: 2, from: { r: 0, c: 0 }, dir: "right", within: null } },
+      { cmd: "paste_overwrites", args: { doc: 1, sheet: 2, target: { r0: 0, c0: 0, r1: 0, c1: 0 }, payload: { type: "tsv", text: "x" }, options: { valuesOnly: false, formatsOnly: false, transpose: false, skipEmpty: false, operation: "none" } } },
       { cmd: "resolve_name_box", args: { doc: 1, text: "B12" } },
       { cmd: "list_functions", args: undefined },
       { cmd: "assist_suggest", args: { doc: 1, query: "total", sel } },
       { cmd: "wb_open_dialog", args: undefined },
-      { cmd: "wb_save", args: { doc: 1, saveAs: true, format: null } },
+      { cmd: "wb_save", args: { doc: 1, saveAs: true, format: null, csv: null } },
+      { cmd: "wb_save_csv", args: { doc: 1, csv: { fieldDelimiter: ";", textDelimiter: "", quoteAllText: false, asShown: true, charset: "utf16" } } },
       { cmd: "recent_files", args: undefined },
       { cmd: "list_templates", args: undefined },
       { cmd: "names", args: { doc: 1 } },
@@ -121,6 +128,7 @@ describe("TauriClient", () => {
       { cmd: "list_locales", args: undefined },
       { cmd: "set_locale", args: { doc: 1, locale: "de-DE" } },
       { cmd: "resolve_name_box_in", args: { doc: 1, sheet: 2, text: "Totals" } },
+      { cmd: "set_active_sheet", args: { doc: 1, sheet: 2 } },
       { cmd: "open_url", args: { url: "https://example.com" } },
       { cmd: "user_name", args: undefined },
       { cmd: "list_fonts", args: { refresh: false } },

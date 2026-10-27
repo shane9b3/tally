@@ -28,6 +28,7 @@ import { SheetTabs } from "./components/SheetTabs";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { SavePrompt } from "./components/SavePrompt";
+import { CsvExportPrompts } from "./components/CsvExportDialog";
 import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
 import { useChartStore } from "./charts/chartStore";
@@ -86,7 +87,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
   const dialogOpen = useUiStore((s) => s.dialog !== null);
   const paletteOpen = useUiStore((s) => s.paletteOpen);
   const shortcutsOpen = useUiStore((s) => s.shortcutsOpen);
-  const printOpen = usePrintStore((s) => s.open);
+  const printOpen = usePrintStore((s) => s.open || s.rangeDialog !== null);
   // View ▸ Toolbars (app prefs).
   const bars = useW56Store((s) => s.prefs.chrome.bars);
   const peekFormulaBar = usePeekStore((s) => s.formulaBar);
@@ -179,6 +180,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
         <CellPopovers />
         <W56Chrome />
         <SavePrompt />
+        <CsvExportPrompts />
         <Toasts />
         {about ? (
           <div className={styles.aboutOverlay} onMouseDown={() => setAbout(false)}>

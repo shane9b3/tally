@@ -10,6 +10,7 @@
  *
  * Templates themselves are created with `EngineClient.newWorkbook(id)`.
  */
+import type { CsvExportOptions } from "./generated/CsvExportOptions";
 import type { DocId } from "./generated/DocId";
 import type { FileFormat } from "./generated/FileFormat";
 import type { WorkbookInfo } from "./generated/WorkbookInfo";
@@ -29,6 +30,14 @@ export interface TemplateInfo {
  * (`ApiError::CANCELLED` in Rust). The UI ignores it.
  */
 export const CANCELLED = "cancelled";
+
+/**
+ * Rejection code of `saveWithDialog` when the user picked a CSV file and
+ * the shell waits for the Text Export options (`ApiError::CSV_OPTIONS`):
+ * the UI shows the dialog, then calls `saveCsv` (the message is the file
+ * name).
+ */
+export const CSV_OPTIONS = "csv_options";
 
 /** The templates the engine builds (`tally_engine::service::templates::CATALOG`). */
 export const BUILTIN_TEMPLATES: readonly TemplateInfo[] = [
@@ -87,7 +96,13 @@ export interface ShellClient {
    * document has no file yet. `format` defaults to the file's extension
    * (else ODS). Rejects with code {@link CANCELLED} if the dialog is dismissed.
    */
-  saveWithDialog(doc: DocId, saveAs: boolean, format: FileFormat | null): Promise<WorkbookInfo>;
+  saveWithDialog(doc: DocId, saveAs: boolean, format: FileFormat | null, csv?: CsvExportOptions | null): Promise<WorkbookInfo>;
+  /**
+   * Finishes a save rejected with {@link CSV_OPTIONS}: writes the picked
+   * CSV file with `csv` (`wb_save_csv`); `null` drops it (the options
+   * dialog was cancelled) and resolves `null`.
+   */
+  saveCsv(doc: DocId, csv: CsvExportOptions | null): Promise<WorkbookInfo | null>;
   /** Recently opened or saved files, most recent first. */
   recentFiles(): Promise<string[]>;
   /** Templates for `newWorkbook(id)`. */

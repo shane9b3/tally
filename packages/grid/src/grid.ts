@@ -674,6 +674,8 @@ export class Grid {
       pageRows: this.geo.pageRows(),
       pageCols: this.geo.pageCols(),
       used: this.layout?.used ?? null,
+      protectedNav: this.props.protectedNav === true,
+      merges: this.layout?.merges ?? [],
     };
   }
 

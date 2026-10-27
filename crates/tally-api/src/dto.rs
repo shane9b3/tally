@@ -1413,6 +1413,15 @@ pub enum FilterOp {
     Empty,
     /// The cell is not empty.
     NotEmpty,
+    /// The N largest numbers, N in `value` (AutoFilter "Top 10": `10`);
+    /// ties at the threshold pass, as in AOO.
+    TopValues,
+    /// The N smallest numbers (ties pass).
+    BottomValues,
+    /// The largest N % of the numbers.
+    TopPercent,
+    /// The smallest N % of the numbers.
+    BottomPercent,
 }
 
 /// Options of [`Op::PasteSpecial`].
@@ -1955,6 +1964,18 @@ pub struct FindQuery {
     /// Hits after this cell (row-major, on `sheet` or the active sheet) come
     /// first, wrapping around.
     pub from: Option<CellPos>,
+    /// Search the text of notes (comments) instead of the cells (AOO's
+    /// Search in "Notes"; `in_formulas` is then ignored). A hit is the
+    /// note's cell; Replace All edits the note text.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub in_notes: Option<bool>,
+    /// "Current selection only": search just these ranges of `sheet` (or
+    /// of the active sheet when `sheet` is `None`; other sheets are not
+    /// searched).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub selection: Option<Vec<RangeDto>>,
 }
 
 /// Find results.
@@ -1996,6 +2017,82 @@ pub enum FileFormat {
     Html,
     /// dBase table (first sheet; v0.6).
     Dbf,
+}
+
+/// Character set of a CSV export (AOO's Text Export "Character set").
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum CsvCharset {
+    /// Unicode (UTF-8), no byte-order mark.
+    #[default]
+    Utf8,
+    /// Unicode (UTF-16 little-endian with a byte-order mark).
+    Utf16,
+    /// Western Europe (Windows-1252); unmappable characters become `?`.
+    Windows1252,
+    /// Western Europe (ISO-8859-1); unmappable characters become `?`.
+    Iso88591,
+}
+
+/// Options of a CSV export: AOO's Text Export dialog (field and text
+/// delimiters, "Quote all text cells", "Save cell content as shown",
+/// character set). The document keeps the last ones for the next Save.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CsvExportOptions {
+    /// Field delimiter: one ASCII character other than the text delimiter,
+    /// CR or LF (`,` `;` tab, space or another).
+    pub field_delimiter: String,
+    /// Text delimiter: `"`, `'`, another ASCII character, or `""` for none
+    /// (fields are then never quoted).
+    pub text_delimiter: String,
+    /// Quote every text cell, not just those that need it.
+    pub quote_all_text: bool,
+    /// Write the cells as displayed (formatted); off writes numbers and
+    /// dates as in the input line (full precision).
+    pub as_shown: bool,
+    /// Character set.
+    pub charset: CsvCharset,
+}
+
+impl Default for CsvExportOptions {
+    fn default() -> Self {
+        Self {
+            field_delimiter: ",".into(),
+            text_delimiter: "\"".into(),
+            quote_all_text: false,
+            as_shown: true,
+            charset: CsvCharset::Utf8,
+        }
+    }
+}
+
+impl CsvExportOptions {
+    /// Checks the delimiters; returns `(field, text)` as bytes.
+    pub fn delimiters(&self) -> Result<(u8, Option<u8>), ApiError> {
+        let one = |s: &str| -> Option<u8> {
+            let b = s.as_bytes();
+            (b.len() == 1 && b[0].is_ascii() && b[0] != b'\r' && b[0] != b'\n').then(|| b[0])
+        };
+        let field = one(&self.field_delimiter).ok_or_else(|| {
+            ApiError::invalid_argument("the field delimiter must be one ASCII character")
+        })?;
+        let text = if self.text_delimiter.is_empty() {
+            None
+        } else {
+            Some(one(&self.text_delimiter).ok_or_else(|| {
+                ApiError::invalid_argument("the text delimiter must be one ASCII character")
+            })?)
+        };
+        if text == Some(field) {
+            return Err(ApiError::invalid_argument(
+                "the field and text delimiters must differ",
+            ));
+        }
+        Ok((field, text))
+    }
 }
 
 /// Direction for Ctrl+arrow navigation.
@@ -2065,6 +2162,9 @@ impl ApiError {
     pub const INTERNAL: &'static str = "internal";
     /// The user dismissed a native dialog (shell only; the UI ignores it).
     pub const CANCELLED: &'static str = "cancelled";
+    /// A Save picked a CSV file: the shell waits for the Text Export
+    /// options (`wb_save_csv`); the message is the file name.
+    pub const CSV_OPTIONS: &'static str = "csv_options";
 
     /// Creates an error.
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
@@ -2196,6 +2296,7 @@ mod tests {
         ActionArg::export_all(&cfg).unwrap();
         ClipboardOut::export_all(&cfg).unwrap();
         FileFormat::export_all(&cfg).unwrap();
+        CsvExportOptions::export_all(&cfg).unwrap();
         Direction::export_all(&cfg).unwrap();
         DocChangedEvent::export_all(&cfg).unwrap();
         MenuActionEvent::export_all(&cfg).unwrap();

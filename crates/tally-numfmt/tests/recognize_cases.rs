@@ -30,6 +30,11 @@ const CASES: &[(&str, Exp)] = &[
     ("123", N(123.0, None)),
     ("-123", N(-123.0, None)),
     ("+123", N(123.0, None)),
+    // Blanks after the sign are skipped (AOO ScanStartString).
+    ("- 5", N(-5.0, None)),
+    ("+ 5", N(5.0, None)),
+    ("-", T("-")),
+    ("- ", T("- ")),
     ("  42  ", N(42.0, None)),
     ("1.5", N(1.5, None)),
     (".5", N(0.5, None)),

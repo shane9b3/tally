@@ -12,7 +12,7 @@
  *      numbers (+1 day, constant day step or month step), text dates,
  *      weekday and month names, "Item 1"-style text (and 1st/2nd…).
  */
-import type { CellView, DocId, EngineClient, Op, RangeDto } from "@tally/bridge";
+import type { CellView, DocId, EngineClient, FillMode, Op, RangeDto } from "@tally/bridge";
 import { fillDirection, type FillDir } from "@tally/grid";
 import { extensionOf } from "../fill";
 import { isDateCode } from "../numfmtLite";
@@ -30,7 +30,7 @@ export interface FillContext {
  * Existing ops that emulate `FillRange` over `target` (which contains
  * `source` and extends it along one axis).
  */
-export async function emulateFill(ctx: FillContext, source: RangeDto, target: RangeDto): Promise<Op[]> {
+export async function emulateFill(ctx: FillContext, source: RangeDto, target: RangeDto, mode: FillMode = "auto"): Promise<Op[]> {
   const dir = fillDirection(source, target);
   if (!dir) return [];
   const { client, doc, sheet } = ctx;
@@ -59,7 +59,8 @@ export async function emulateFill(ctx: FillContext, source: RangeDto, target: Ra
     ops.push({ type: "paste", sheet, target: ext, payload: { type: "internal", token: await tokenFor(source) } });
   }
 
-  // 2. Continue recognised series line by line.
+  // 2. Continue recognised series line by line (mode `copy`, ⌘D / ⌘R: the copies stay).
+  if (mode === "copy") return ops;
   const [block] = await client.cells(doc, sheet, [source]);
   const byPos = new Map<string, CellView>();
   for (const c of block?.cells ?? []) byPos.set(`${c.r},${c.c}`, c);
@@ -67,6 +68,9 @@ export async function emulateFill(ctx: FillContext, source: RangeDto, target: Ra
   const formats = new Map<number, string>();
   if (styleIds.length > 0) for (const st of await client.styles(doc, styleIds)) formats.set(st.id, st.numberFormat);
 
+  // Options ▸ Sort Lists fill too (AOO ScUserList), after the built-in names.
+  const custom = client as Partial<{ customSortLists(d: DocId): Promise<string[][]> }>;
+  const userLists = custom.customSortLists ? await custom.customSortLists(doc).catch(() => []) : [];
   const lines = vertical ? range(source.c0, source.c1) : range(source.r0, source.r1);
   for (const line of lines) {
     const values: SourceValue[] = range(0, L - 1).map((i) => {
@@ -75,7 +79,7 @@ export async function emulateFill(ctx: FillContext, source: RangeDto, target: Ra
       const cell = byPos.get(`${r},${c}`);
       return toSourceValue(cell, cell ? (formats.get(cell.style) ?? "General") : "General");
     });
-    const gen = planSeries(values);
+    const gen = planSeries(values, userLists);
     if (!gen) continue;
     // Offsets of the extension cells relative to the source start.
     const offsets = dir === "down" || dir === "right" ? range(L, L + N - 1) : range(-N, -1);
@@ -173,7 +177,7 @@ function constantStep(xs: readonly number[]): number | null {
  * Continues a source line, or returns `null` to keep the copied pattern.
  * Exported for tests.
  */
-export function planSeries(values: readonly SourceValue[]): SeriesGen | null {
+export function planSeries(values: readonly SourceValue[], userLists: readonly (readonly string[])[] = []): SeriesGen | null {
   if (values.length === 0 || values.some((v) => v.kind === "empty" || v.kind === "other")) return null;
   if (values.every((v) => v.kind === "number")) {
     const nums = values.map((v) => (v as { num: number }).num);
@@ -186,7 +190,7 @@ export function planSeries(values: readonly SourceValue[]): SeriesGen | null {
   }
   if (values.every((v) => v.kind === "text")) {
     const texts = values.map((v) => (v as { text: string }).text);
-    return listSeries(texts) ?? textDateSeries(texts) ?? numberedTextSeries(texts);
+    return listSeries(texts, userLists) ?? textDateSeries(texts) ?? numberedTextSeries(texts);
   }
   return null;
 }
@@ -232,11 +236,12 @@ function dateSeries(serials: readonly number[]): SeriesGen | null {
 
 // -- text: day and month names ----------------------------------------------
 
+/** AOO ScUserList order: abbreviated before full names ("May" fills "Jun"). */
 const LISTS: readonly (readonly string[])[] = [
-  ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
   ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
-  ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+  ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
   ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+  ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
 ];
 
 function matchCase(word: string, like: string): string {
@@ -245,8 +250,8 @@ function matchCase(word: string, like: string): string {
   return word;
 }
 
-function listSeries(texts: readonly string[]): SeriesGen | null {
-  for (const list of LISTS) {
+function listSeries(texts: readonly string[], userLists: readonly (readonly string[])[]): SeriesGen | null {
+  for (const list of [...LISTS, ...userLists.filter((l) => l.length > 0)]) {
     const idx = texts.map((t) => list.findIndex((w) => w.toLowerCase() === t.trim().toLowerCase()));
     if (idx.some((i) => i < 0)) continue;
     const n = list.length;
@@ -326,7 +331,8 @@ function numberedTextSeries(texts: readonly string[]): SeriesGen | null {
     const trailing = /^(.*?)(\d+)(\D*)$/.exec(t);
     if (!trailing) return null;
     const post = trailing[3] ?? "";
-    const ord = /^(st|nd|rd|th)$/i.test(post) && (trailing[1] ?? "") === "";
+    // An ordinal only when the suffix is the number's own ("1st", not "1th"; AOO GetOrdinalSuffix).
+    const ord = (trailing[1] ?? "") === "" && post.toLowerCase() === ordinal(Number(trailing[2]));
     // Only a number at the very start or end counts ("Item 1", "1st", "Q3"), not "A1B".
     if (post !== "" && !ord && (trailing[1] ?? "") !== "") return null;
     return { pre: trailing[1] ?? "", num: Number(trailing[2]), digits: (trailing[2] ?? "").length, post, ord };

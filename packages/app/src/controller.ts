@@ -6,20 +6,25 @@
 import { fontFamilyPatch, fontSizePatch } from "./fonts/fontModel";
 import {
   CANCELLED,
+  CSV_OPTIONS,
   isApiError,
   type ApiError,
   type ApplyResult,
   type CellPos,
   type CellView,
   type ColumnFilter,
+  type Direction,
   type DocId,
   type EngineClientV3,
   type FileFormat,
+  type FillMode,
   type FilterOp,
   type NameInfo,
   type HAlign,
   type ShellClient,
   type Op,
+  type PasteOptions,
+  type PastePayload,
   type RangeDto,
   type StyleDto,
   type StylePatch,
@@ -51,6 +56,7 @@ import {
   freezeAt,
   friendlyError,
   isValidName,
+  DEFAULT_PASTE_SPECIAL,
   pasteOptions,
   sortOp,
   stepHit,
@@ -61,6 +67,7 @@ import {
 } from "./dataOps";
 import { cappedRange, currentRegion } from "./glance";
 import { useDataStore } from "./stores/dataStore";
+import { useW56Store } from "./data/store";
 import { applyCompletion, applyPoint, assistFor, assistKey } from "./formulaEdit";
 import { chipColorsFor } from "./palette";
 import { useDocStore } from "./stores/docStore";
@@ -77,6 +84,7 @@ import { TabsFeature, useTabsStore, type TabShell } from "./tabs";
 import { canReuseWindow, type WindowShell } from "./windows";
 import { W56Features } from "./data/w56";
 import { t } from "./i18n";
+import { useCsvPromptStore } from "./csvExport";
 
 export interface ControllerOptions {
   /** Inside Tauri: the native menu owns its accelerators. */
@@ -703,10 +711,10 @@ export class AppController {
   // -- fill handle ------------------------------------------------------------------
 
   /** Fill-handle drag: see fill.ts (`fillRange` is the engine-swap point). */
-  onFill = async (source: RangeDto, target: RangeDto): Promise<void> => {
+  onFill = async (source: RangeDto, target: RangeDto, mode: FillMode = "auto"): Promise<void> => {
     try {
       this.requireDoc();
-      const ops = fillRange({ sheet: this.sheet }, source, target);
+      const ops = fillRange({ sheet: this.sheet }, source, target, mode);
       if (ops.length === 0) return;
       const sel: Selection = { range: { ...target }, active: { ...this.selection.active }, anchor: { r: target.r0, c: target.c0 } };
       await this.apply(t("menu.edit.fill", "Fill"), ops, sel);
@@ -921,6 +929,55 @@ export class AppController {
     if ((valuesOnly || !token) && text === "") return Promise.resolve(null);
     const target = { ...this.selection.range };
     const clip = useDataStore.getState().clip;
+    // A cut-paste onto the same sheet moves the range (AOO asks there too); the move writes the block at the top-left.
+    const moving = !valuesOnly && token !== null && clip?.cut === true && clip.token === token && clip.sheet === this.sheet;
+    const payload: PastePayload = token ? { type: "internal", token } : { type: "tsv", text };
+    const check = moving ? this.confirmPasteOverData({ r0: target.r0, c0: target.c0, r1: target.r0, c1: target.c0 }, payload, pasteOptions(DEFAULT_PASTE_SPECIAL)) : this.confirmPasteOverData(target, payload, pasteOptions(DEFAULT_PASTE_SPECIAL));
+    return check.then((ok) => (ok ? this.pasteNow(text, token, valuesOnly, target) : null));
+  }
+
+  /**
+   * AOO's "You are pasting data into cells that already contain data."
+   * confirmation (Options ▸ Input, on by default). Asks the engine whether the
+   * paste would write over data (one query, the engine's own target area);
+   * resolves `true` to go on.
+   */
+  async confirmPasteOverData(target: RangeDto, payload: PastePayload, options: PasteOptions): Promise<boolean> {
+    if (!useW56Store.getState().prefs.pasteOverwriteWarning) return true;
+    const info = this.info;
+    if (!info) return true;
+    try {
+      if (!(await this.client.pasteOverwrites(info.doc, this.sheet, target, payload, options))) return true;
+    } catch {
+      return true;
+    }
+    return this.askPasteOverData();
+  }
+
+  /** Tab / Enter on a protected sheet: the engine's next unlocked cell (grid `onNextUnlocked`). */
+  nextUnlocked = async (from: CellPos, dir: Direction, within: RangeDto | null): Promise<CellPos | null> => {
+    const info = this.info;
+    if (!info) return null;
+    return this.client.nextUnlocked(info.doc, this.sheet, from, dir, within);
+  };
+
+  private askPasteOverData(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      useUiStore.getState().openDialog({
+        kind: "confirm",
+        title: t("cmd.edit.paste", "Paste"),
+        message: t("dialog.pasteOverData", "You are pasting data into cells that already contain data."),
+        ok: t("dialog.yes", "Yes"),
+        cancel: t("dialog.no", "No"),
+        focusOk: true,
+        onConfirm: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+  }
+
+  private pasteNow(text: string, token: string | null, valuesOnly: boolean, target: RangeDto): Promise<ApplyResult | null> {
+    const clip = useDataStore.getState().clip;
     if (!valuesOnly && token && clip?.cut && clip.token === token) {
       useDataStore.getState().setClip(null);
       if (clip.sheet === this.sheet) {
@@ -1002,17 +1059,27 @@ export class AppController {
     }
     const payload = token ? { type: "internal" as const, token } : { type: "tsv" as const, text: text ?? "" };
     const target = { ...this.selection.range };
+    // AOO asks when contents are pasted without an arithmetic operation (not for formats only).
+    if (choice.what !== "formats" && choice.operation === "none" && !(await this.confirmPasteOverData(target, payload, pasteOptions(choice)))) {
+      this.focusGrid();
+      return;
+    }
     await this.apply(t("dlg.pasteSpecial", "Paste special"), [{ type: "pasteSpecial", sheet: this.sheet, target, payload, options: pasteOptions(choice) }], undefined, true);
     this.focusGrid();
   };
 
   // -- sheets -------------------------------------------------------------------
 
-  /** Switches the visible sheet (UI state). */
+  /**
+   * Switches the visible sheet and tells the engine (`set_active_sheet`,
+   * view state: no undo step, no modified flag), so a save, CSV export and
+   * Find across sheets use the sheet the user is on.
+   */
   showSheet(sheet: number, focus = true): void {
     const doc = useDocStore.getState();
     if (useEditStore.getState().edit) useEditStore.getState().end();
     if (doc.activeSheet !== sheet) doc.setActiveSheet(sheet);
+    this.syncActiveSheet(sheet);
     doc.source?.setSheet(sheet);
     useSelectionStore.getState().reset();
     useDataStore.getState().setFilter(null);
@@ -1023,6 +1090,33 @@ export class AppController {
     this.w5.refreshSheet();
     this.w56.onSheet();
     if (focus) this.focusGrid();
+  }
+
+  private pendingActive: { doc: DocId; sheet: number } | null = null;
+  private activeSync: Promise<void> = Promise.resolve();
+
+  /**
+   * Sends the user's sheet to the engine: one call at a time, in order, and
+   * only the latest of a burst (Ctrl+PgDn held down). Failures are ignored
+   * (an older engine, a closed document): the print options name the sheet
+   * themselves.
+   */
+  private syncActiveSheet(sheet: number): void {
+    const doc = this.info?.doc;
+    if (doc === undefined) return;
+    const queued = this.pendingActive !== null;
+    this.pendingActive = { doc, sheet };
+    if (queued) return;
+    this.activeSync = this.activeSync.then(async () => {
+      const p = this.pendingActive;
+      this.pendingActive = null;
+      if (p) await this.client.setActiveSheet(p.doc, p.sheet).catch(() => undefined);
+    });
+  }
+
+  /** Resolves once the engine knows the user's sheet (awaited before a save and a Find). */
+  activeSheetSynced(): Promise<void> {
+    return this.activeSync;
   }
 
   stepSheet(delta: 1 | -1): void {
@@ -1186,12 +1280,56 @@ export class AppController {
     const info = this.info;
     if (!info) return true;
     try {
-      const res = await this.shell.saveWithDialog(info.doc, false, null);
+      const res = await this.runSave(false, null);
+      if (!res) return false;
       useDocStore.getState().setInfo(res);
       return !res.dirty;
     } catch (e) {
       this.notifyError(e);
       return false;
+    }
+  }
+
+  /**
+   * Saves through the shell with AOO's CSV prompts: Save of a CSV file asks
+   * "Keep current format"; a CSV file picked in the Save dialog (code
+   * `csv_options`) asks it too (not for File ▸ Export as CSV), then the
+   * Text Export options, and the shell writes it (`saveCsv`). `null` when
+   * one of the prompts was cancelled.
+   */
+  private async runSave(saveAs: boolean, format: FileFormat | null): Promise<WorkbookInfo | null> {
+    const info = this.info;
+    if (!info) return null;
+    // The file keeps the sheet the user is on; CSV writes that sheet.
+    await this.activeSheetSynced();
+    const doc = info.doc;
+    const multi = info.sheets.length > 1;
+    const sheet = this.sheetName();
+    const prompts = useCsvPromptStore.getState();
+    // The text family (.csv, .tsv, .txt, .tab) saves as CSV: AOO asks first.
+    if (!saveAs && format === null && info.path !== null && /\.(csv|tsv|txt|tab)$/i.test(info.path)) {
+      const keep = await prompts.askKeep(info.title, multi, sheet);
+      if (keep === "cancel") return null;
+      if (keep === "odf") return this.runSave(true, "ods");
+    }
+    try {
+      return await this.shell.saveWithDialog(doc, saveAs, format);
+    } catch (e) {
+      if (errorOf(e).code !== CSV_OPTIONS) throw e;
+      const file = errorOf(e).message;
+      if (format !== "csv") {
+        const keep = await prompts.askKeep(file, multi, sheet);
+        if (keep !== "keep") {
+          await this.shell.saveCsv(doc, null);
+          return keep === "odf" ? this.runSave(true, "ods") : null;
+        }
+      }
+      const opts = await prompts.askOptions(file, multi, sheet);
+      if (!opts) {
+        await this.shell.saveCsv(doc, null);
+        return null;
+      }
+      return await this.shell.saveCsv(doc, opts);
     }
   }
 
@@ -1279,8 +1417,11 @@ export class AppController {
     try {
       const info = this.info;
       if (!info) return;
-      const res = await this.shell.saveWithDialog(info.doc, saveAs, format);
+      const res = await this.runSave(saveAs, format);
+      if (!res) return;
       useDocStore.getState().setInfo(res);
+      // Save warnings (CSV without a text delimiter, unmappable characters).
+      toastWarnings(res.warnings);
       if (format !== null) useUiStore.getState().pushToast("info", t("msg.toast.exported", "Exported {title}", { title: res.title }));
     } catch (e) {
       this.notifyError(e);
@@ -1627,6 +1768,8 @@ export class AppController {
       const key = JSON.stringify([text, options, this.sheet, options.allSheets ? null : this.sheet]);
       let { hits, index } = st.find;
       if (st.find.searched !== key) {
+        // All sheets: the hits rotate from the engine's active sheet.
+        await this.activeSheetSynced();
         const res = await this.client.find(doc, findQuery(text, options, this.sheet, { ...this.selection.active }));
         hits = res.hits;
         // Hits come rotated to start after the active cell.
@@ -1651,6 +1794,29 @@ export class AppController {
     }
   };
 
+  /**
+   * Replace (AOO's single Replace): when the active cell (or its note, in
+   * Search in Notes) is a match, replaces in it, then finds the next match.
+   */
+  replaceOne = async (text: string, replace: string): Promise<void> => {
+    try {
+      const doc = this.requireDoc();
+      const st = useDataStore.getState();
+      const a = this.selection.active;
+      const query = { ...findQuery(text, st.find.options, this.sheet, null), sheet: this.sheet, selection: [{ r0: a.r, c0: a.c, r1: a.r, c1: a.c }] };
+      const scope = st.find.options.scope;
+      const inScope = !scope || (scope.sheet === this.sheet && scope.ranges.some((r) => a.r >= r.r0 && a.r <= r.r1 && a.c >= r.c0 && a.c <= r.c1));
+      const hit = inScope ? await this.client.find(doc, query) : { hits: [] };
+      if (hit.hits.length > 0) {
+        await this.apply(t("dlg.replace", "Replace"), [{ type: "replaceAll", sheet: this.sheet, query, replace }]);
+      }
+      useDataStore.getState().patchFind({ text, searched: null, hits: [], index: -1 });
+      await this.findStep(1);
+    } catch (e) {
+      this.notifyError(e);
+    }
+  };
+
   /** Replace All; returns how many cells changed (hits found minus refusals). */
   replaceAll = async (text: string, replace: string): Promise<number> => {
     try {
@@ -1658,7 +1824,7 @@ export class AppController {
       const { options } = useDataStore.getState().find;
       const query = findQuery(text, options, this.sheet, null);
       const before = await this.client.find(doc, { ...query, inFormulas: true });
-      const res = await this.apply(t("dlg.replaceAll", "Replace all"), [{ type: "replaceAll", sheet: options.allSheets ? null : this.sheet, query, replace }]);
+      const res = await this.apply(t("dlg.replaceAll", "Replace all"), [{ type: "replaceAll", sheet: query.sheet, query, replace }]);
       if (!res) return 0;
       const n = res.replaced ?? Math.max(0, before.hits.length - res.errors.length);
       const skipped = res.errors.length;
@@ -1708,11 +1874,11 @@ export class AppController {
     await this.apply(t("msg.undo.arrayFormula", "Array formula"), [op], { range, active: tl, anchor: tl });
   };
 
-  /** ⌘D / ⌘R. */
+  /** ⌘D / ⌘R: a copy, not AutoFill (AOO Edit ▸ Fill ▸ Down / Right is `FillSimple`). */
   fillDir = async (dir: "down" | "right"): Promise<void> => {
     const plan = fillDownRight(this.selection.range, dir);
     if (!plan) return;
-    await this.onFill(plan.source, plan.target);
+    await this.onFill(plan.source, plan.target, "copy");
   };
 
   /** ⇧⌘F9: hard recalculation. */

@@ -282,6 +282,8 @@ fn m12_replace_all_validation() {
         whole_cell: true,
         mode: FindMode::Literal,
         from: None,
+        in_notes: None,
+        selection: None,
     };
     let res = f.apply(vec![Op::ReplaceAll {
         sheet: Some(s),

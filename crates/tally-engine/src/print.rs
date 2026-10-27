@@ -662,6 +662,33 @@ pub fn print_area(wb: &Workbook, sheet: SheetId) -> Option<CellRange> {
     Some(extend_for_overflow(wb, s, area))
 }
 
+/// A selected range to print: whole columns end at the last data row and
+/// whole rows at the last data column (AOO `ScPrintFunc::AdjustPrintArea`
+/// with `GetPrintArea`), so Select All or a column prints the data, not a
+/// million empty rows. `None` when nothing of it holds data.
+fn clip_to_data(wb: &Workbook, s: &Sheet, sheet: SheetId, sel: CellRange) -> Option<CellRange> {
+    // A range that runs to the sheet's last row (whole columns) or last
+    // column (whole rows).
+    let whole_cols = sel.r1 >= MAX_ROWS - 1;
+    let whole_rows = sel.c1 >= MAX_COLS - 1;
+    if !whole_cols && !whole_rows {
+        return Some(sel);
+    }
+    let data = used_print_area(wb, s, sheet)?;
+    let data = extend_for_overflow(wb, s, CellRange::new(sheet, 0, 0, data.r1, data.c1));
+    let r1 = if whole_cols {
+        sel.r1.min(data.r1)
+    } else {
+        sel.r1
+    };
+    let c1 = if whole_rows {
+        sel.c1.min(data.c1)
+    } else {
+        sel.c1
+    };
+    (r1 >= sel.r0 && c1 >= sel.c0).then(|| CellRange::new(sheet, sel.r0, sel.c0, r1, c1))
+}
+
 /// AOO ignores a run of this many visually equal rows below a column's
 /// data, and everything under it (`SC_VISATTR_STOP`, attarray.cxx
 /// `GetLastVisibleAttr`).
@@ -1100,7 +1127,11 @@ pub fn paginate_sheet(
     let s = wb
         .sheet(sheet)
         .ok_or_else(|| ApiError::not_found(format!("no sheet {sheet}")))?;
-    let Some(area) = selection.or_else(|| print_area(wb, sheet)) else {
+    let area = match selection {
+        Some(sel) => clip_to_data(wb, s, sheet, sel),
+        None => print_area(wb, sheet),
+    };
+    let Some(area) = area else {
         return Ok(Vec::new());
     };
     let p = &s.meta.page_setup;
@@ -1226,10 +1257,20 @@ pub fn paginate_sheet(
     Ok(pages)
 }
 
+/// The sheet a print treats as active: the caller's
+/// ([`PrintOptionsDto::active_sheet`]) when given, else the workbook's.
+pub fn active_of(wb: &Workbook, opts: &PrintOptionsDto) -> Result<SheetId, ApiError> {
+    match opts.active_sheet {
+        Some(id) if wb.sheet(id).is_none() => Err(ApiError::not_found(format!("no sheet {id}"))),
+        Some(id) => Ok(id),
+        None => Ok(wb.active_sheet),
+    }
+}
+
 /// The sheets a print covers, in tab order.
 pub fn sheets_of(wb: &Workbook, opts: &PrintOptionsDto) -> Result<Vec<SheetId>, ApiError> {
     Ok(match &opts.sheets {
-        PrintSheets::Active => vec![wb.active_sheet],
+        PrintSheets::Active => vec![active_of(wb, opts)?],
         PrintSheets::All => wb
             .sheets
             .iter()
@@ -1261,18 +1302,36 @@ pub fn layout(
     let mut warnings = Vec::new();
     let mut pages: Vec<PageSpec> = Vec::new();
     let selection = match &opts.selection {
-        Some(r) => Some(crate::ops::to_range(wb.active_sheet, r)?),
+        Some(rs) => {
+            let active = active_of(wb, opts)?;
+            let mut out = Vec::with_capacity(rs.len());
+            for r in rs {
+                out.push(crate::ops::to_range(active, r)?);
+            }
+            Some(out)
+        }
         None => None,
     };
     for sheet in sheets_of(wb, opts)? {
-        let sel = selection.filter(|s| s.sheet == sheet);
-        let mut sp = paginate_sheet(wb, sheet, sel, opts.suppress_empty_pages)?;
-        if pages.len() + sp.len() > MAX_PAGES {
-            return Err(ApiError::unsupported(format!(
-                "the print would have more than {MAX_PAGES} pages"
-            )));
+        // The selected ranges print on their sheet, one after another; an
+        // empty selection list prints nothing.
+        let sels: Vec<Option<CellRange>> = match &selection {
+            Some(rs) if rs.iter().any(|r| r.sheet == sheet) || rs.is_empty() => rs
+                .iter()
+                .filter(|r| r.sheet == sheet)
+                .map(|r| Some(*r))
+                .collect(),
+            _ => vec![None],
+        };
+        for sel in sels {
+            let mut sp = paginate_sheet(wb, sheet, sel, opts.suppress_empty_pages)?;
+            if pages.len() + sp.len() > MAX_PAGES {
+                return Err(ApiError::unsupported(format!(
+                    "the print would have more than {MAX_PAGES} pages"
+                )));
+            }
+            pages.append(&mut sp);
         }
-        pages.append(&mut sp);
     }
     let total = pages.len() as u32;
     // Page numbers run through the job; a sheet's first page number restarts
@@ -1306,19 +1365,31 @@ pub fn layout(
         page.header = p.header_shown().map(resolve);
         page.footer = p.footer_shown().map(resolve);
     }
-    if let (Some(from), to) = (opts.page_from, opts.page_to) {
-        let from = from.max(1) as usize;
-        let to = to.map_or(pages.len(), |t| (t as usize).min(pages.len()));
-        if from > pages.len() || from > to {
+    if opts.page_from.is_some() || opts.page_to.is_some() || opts.page_ranges.is_some() {
+        let mut pos = 0u32;
+        pages.retain(|_| {
+            pos += 1;
+            in_page_range(opts, pos)
+        });
+        if pages.is_empty() {
             warnings.push("The page range selects no pages.".into());
-            pages.clear();
-        } else {
-            pages = pages.drain(from - 1..to).collect();
         }
-    } else if let Some(to) = opts.page_to {
-        pages.truncate(to as usize);
     }
     Ok((pages, warnings))
+}
+
+/// Whether the 1-based job position `pos` is inside the page window
+/// (`page_from`..=`page_to`) and, when given, one of `page_ranges`
+/// (a reversed range counts as its two ends swapped).
+fn in_page_range(opts: &PrintOptionsDto, pos: u32) -> bool {
+    let from = opts.page_from.unwrap_or(1);
+    let to = opts.page_to.unwrap_or(u32::MAX);
+    pos >= from
+        && pos <= to
+        && opts
+            .page_ranges
+            .as_ref()
+            .is_none_or(|rs| rs.iter().any(|&[a, b]| pos >= a.min(b) && pos <= a.max(b)))
 }
 
 /// `print_layout`: pagination metadata only.
@@ -1447,6 +1518,8 @@ mod tests {
             suppress_empty_pages: true,
             page_from: None,
             page_to: None,
+            active_sheet: None,
+            page_ranges: None,
         }
     }
 
@@ -1876,17 +1949,129 @@ mod tests {
         assert_eq!(p.last().unwrap().sheet, s2);
         assert_eq!(p.len(), 5);
         o.sheets = PrintSheets::Active;
-        o.selection = Some(RangeDto {
+        o.selection = Some(vec![RangeDto {
             r0: 0,
             c0: 0,
             r1: 9,
             c1: 1,
-        });
+        }]);
         let (p, _) = layout(&wb, &o, &HfContext::default()).unwrap();
         assert_eq!(p.len(), 1);
         assert_eq!(p[0].row_span(), [0, 9]);
         o.sheets = PrintSheets::Some { ids: vec![99] };
         assert!(layout(&wb, &o, &HfContext::default()).is_err());
+    }
+
+    /// Select All or a whole column printed "more than 10000 pages"; AOO
+    /// clips them to the data. Several selected ranges print one after
+    /// another, in order.
+    #[test]
+    fn whole_column_and_multi_range_selections() {
+        let wb = book(100, 10);
+        let r = |r0, c0, r1, c1| RangeDto { r0, c0, r1, c1 };
+        let mut o = opts();
+        let all = layout(&wb, &o, &HfContext::default()).unwrap().0;
+        o.selection = Some(vec![r(0, 0, MAX_ROWS - 1, MAX_COLS - 1)]);
+        let (p, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!(p.len(), all.len());
+        assert_eq!(p.last().unwrap().row_span()[1], 99);
+        // Column B, and rows 11.. to the end of the sheet.
+        o.selection = Some(vec![r(0, 1, MAX_ROWS - 1, 1)]);
+        let (p, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert!(!p.is_empty() && p.iter().all(|p| p.col_span() == [1, 1]));
+        assert_eq!(p.last().unwrap().row_span()[1], 99);
+        o.selection = Some(vec![r(10, 0, 19, MAX_COLS - 1)]);
+        let (p, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!(p.len(), 2, "two pages across");
+        assert!(p.iter().all(|p| p.row_span() == [10, 19]));
+        assert_eq!(p[1].col_span()[1], 9);
+        // An empty column prints nothing; so does an empty list.
+        o.selection = Some(vec![r(0, 40, MAX_ROWS - 1, 40)]);
+        assert!(layout(&wb, &o, &HfContext::default()).unwrap().0.is_empty());
+        o.selection = Some(vec![]);
+        assert!(layout(&wb, &o, &HfContext::default()).unwrap().0.is_empty());
+        // Two ranges, in the given order.
+        o.selection = Some(vec![r(49, 3, 51, 4), r(0, 0, 4, 1)]);
+        let (p, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!(p.len(), 2);
+        assert_eq!((p[0].row_span(), p[1].row_span()), ([49, 51], [0, 4]));
+        assert_eq!((p[0].number, p[1].number), (1, 2));
+    }
+
+    /// The owner's report: the UI switched to another sheet (no edit, so the
+    /// stored active sheet stayed on the first) and the preview printed the
+    /// first sheet. `active_sheet` names the sheet the user is on.
+    #[test]
+    fn active_sheet_option_overrides_the_stored_one() {
+        let mut wb = book(100, 10);
+        let s1 = wb.sheets[0].id;
+        let s2 = wb.add_sheet(Some("Two"), None);
+        wb.set_value(CellAddr::new(s2, 0, 0), Value::Number(1.0));
+        assert_eq!(wb.active_sheet, s1);
+        let mut o = opts();
+        let (p, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert!(p.iter().all(|p| p.sheet == s1));
+        o.active_sheet = Some(s2);
+        let (p, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].sheet, s2);
+        // The selection resolves on the user's sheet too.
+        wb.set_value(CellAddr::new(s2, 30, 0), Value::Number(2.0));
+        o.selection = Some(vec![RangeDto {
+            r0: 30,
+            c0: 0,
+            r1: 30,
+            c1: 0,
+        }]);
+        let (p, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!(p.len(), 1);
+        assert_eq!((p[0].sheet, p[0].row_span()), (s2, [30, 30]));
+        // All sheets ignore it; an unknown sheet is an error.
+        o.selection = None;
+        o.sheets = PrintSheets::All;
+        assert_eq!(layout(&wb, &o, &HfContext::default()).unwrap().0.len(), 5);
+        o.sheets = PrintSheets::Active;
+        o.active_sheet = Some(99);
+        assert!(layout(&wb, &o, &HfContext::default()).is_err());
+    }
+
+    #[test]
+    fn page_ranges_pick_job_positions() {
+        let mut wb = book(100, 10);
+        let s2 = wb.add_sheet(Some("Two"), None);
+        wb.set_value(CellAddr::new(s2, 0, 0), Value::Number(1.0));
+        let mut o = opts();
+        o.sheets = PrintSheets::All;
+        let all = layout(&wb, &o, &HfContext::default()).unwrap().0;
+        assert_eq!(all.len(), 5);
+        let numbers = |o: &PrintOptionsDto| {
+            let (p, w) = layout(&wb, o, &HfContext::default()).unwrap();
+            (p.iter().map(|p| p.number).collect::<Vec<_>>(), w)
+        };
+        // "1-2,5": job order, numbers unchanged, sheet 2's page last.
+        o.page_ranges = Some(vec![[1, 2], [5, 5]]);
+        assert_eq!(numbers(&o), (vec![1, 2, 5], vec![]));
+        // Overlapping, reversed and partly out-of-range ranges.
+        o.page_ranges = Some(vec![[3, 2], [2, 3], [4, 40]]);
+        assert_eq!(numbers(&o).0, vec![2, 3, 4, 5]);
+        // Combined with the from/to window.
+        o.page_from = Some(3);
+        assert_eq!(numbers(&o).0, vec![3, 4, 5]);
+        o.page_from = None;
+        // Wholly out of range: no pages and a warning.
+        o.page_ranges = Some(vec![[6, 9]]);
+        let (p, w) = numbers(&o);
+        assert!(p.is_empty());
+        assert_eq!(w, vec!["The page range selects no pages.".to_string()]);
+        // An empty list selects nothing.
+        o.page_ranges = Some(vec![]);
+        assert!(numbers(&o).0.is_empty());
+        // Page ranges apply after the sheet scope.
+        o.sheets = PrintSheets::Active;
+        o.active_sheet = Some(s2);
+        o.page_ranges = Some(vec![[1, 1]]);
+        let (p, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!((p.len(), p[0].sheet), (1, s2));
     }
 
     /// The owner's report: a two-line centred header over a small top

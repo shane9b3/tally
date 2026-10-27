@@ -52,14 +52,13 @@ real-file corpus).
 - Perf (docs/perf-baseline.md hot spots 3–5): 50 MB XLSX/ODS open peaks at 0.9–1.1 GB RSS (was 1.4–1.6 GB; further cuts need a block column store and a compact formula-cell table); CSV import 1M rows in ~1.2 s (was 7.6 s); grid fling drops frames in headless Chromium — re-measure in the Tauri webview.
 - Not built yet from the plan: multithreaded recalc, auto-update (tauri-plugin-updater), opt-in crash reporting.
 - Inventory gaps found 2026-10-27 (docs/calc-features-inventory.md 1.0 status; deviation IDs in docs/parity-deviations.md). Sizes: S < 1 day, M a few days, L a week or more.
-  - Input and editing: leading `+`/`-` starts a formula (P18, S); paste-over-data warning with an Input option (U22, S); Tab / Shift+Tab skip locked cells on a protected sheet (U7, S); Paste Special Link and Shift cells, and Text / Numbers / Date / Formulas / Comments choices (M); two-digit year window option (P17, S).
+  - Input and editing: Paste Special Link and Shift cells, and Text / Numbers / Date / Formulas / Comments choices (M); two-digit year window option (P17, S).
   - Sheets and view: multi-sheet selection and editing, Shift+Ctrl+PgUp/PgDn (wave 5 item 31, L); read-only mode (M); zoom 20-400 % (U18, S); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, M).
-  - Fill: AutoFill uses Options sort lists, ordinals (`1st` → `2nd`), single number dragged up/left counts down (bug vs AOO and the TS mock), Ctrl-drag copies, filtered ranges copy (T16, M); Edit > Fill > Up / Left commands (S); Fill Sheet (needs multi-sheet selection).
+  - Fill: Ctrl-drag copies, filtered ranges copy (T16, M); Edit > Fill > Up / Left commands (S); Fill Sheet (needs multi-sheet selection).
   - Formatting: Numbers tab category list, option controls and language selector (G14, M); Hide all / Hide when printing in the UI and applied on screen and in print (G15, M); `[NatNum]` / `[DBNum]` / calendar modifiers rendered (G7, L); AutoFormat add / rename / delete (M); Load Styles from another document (M).
-  - Data: validity "sort entries ascending" incl. ODS `sorted` round trip (G16, S); sort extend-selection prompt (S); AutoFilter Top 10 (S); DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M); Data > Select Range and Refresh Range (S).
+  - Data: validity "sort entries ascending" incl. ODS `sorted` round trip (G16, S); sort extend-selection prompt (S); DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M); Data > Select Range and Refresh Range (S).
   - Charts: date axis and axis crossing position (T18, M); chart data table editor for internal data (T18, M); cylinder / cone / pyramid shapes (T10, L).
-  - Tools: Find in comments and current-selection scope (T1, S); detective Fill Mode, Refresh Traces, AutoRefresh (T12, M); hyperlink as button and New Document target (M, button needs form controls T11); Function List sidebar (S); Limit decimals for General incl. ODS `table:decimal-places` (S).
-  - Print and files: print / PDF scope All sheets / Selected sheets / Selection in the UI (R11, S, the engine already supports it); CSV export options dialog (X24, S, the writer already supports delimiters and quote-all).
+  - Tools: detective Fill Mode, Refresh Traces, AutoRefresh (T12, M); hyperlink as button and New Document target (M, button needs form controls T11); Function List sidebar (S); Limit decimals for General incl. ODS `table:decimal-places` (S).
 
 ## Remaining for 1.0 (docs/wave5-plan.md §5)
 1. Functions: keep 408/408; DDE and macro calls marked unsupported (done).

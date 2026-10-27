@@ -573,7 +573,7 @@ fn apply_op_inner(
             let range = CellRange::new(*sheet, r, c, r, c);
             check_array_blocks(wb, &[range])?;
             let inv = capture_range(wb, range, true, true);
-            wb.set_input(CellAddr::new(*sheet, r, c), input);
+            wb.set_typed_input(CellAddr::new(*sheet, r, c), input);
             Ok(vec![Change::Range(inv)])
         }
         Op::SetRangeInputs { sheet, r, c, rows } => {

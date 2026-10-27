@@ -116,6 +116,7 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
             </select>
           </Field>
           <Check label={t("od.deleteKeyDialog", "Delete key opens the Delete Contents dialog (⌫ always clears at once)")} checked={prefs.deleteKeyDialog} onChange={(v) => setPrefs({ ...prefs, deleteKeyDialog: v })} testId="opt-delete-dialog" />
+          <Check label={t("od.pasteOverwriteWarning", "Show overwrite warning when pasting data")} checked={prefs.pasteOverwriteWarning} onChange={(v) => setPrefs({ ...prefs, pasteOverwriteWarning: v })} testId="opt-paste-warning" />
           <div className={w56.section}>{t("options.autoCorrect", "AutoCorrect")}</div>
           {AUTOCORRECT_OPTIONS.map((o) => (
             <Check key={o.key} label={`${t(`od.ac.${o.key}`, o.label)} (${o.example})`} checked={prefs.autoCorrect[o.key]} onChange={(v) => setPrefs({ ...prefs, autoCorrect: { ...prefs.autoCorrect, [o.key]: v } })} testId={`opt-ac-${o.key}`} />

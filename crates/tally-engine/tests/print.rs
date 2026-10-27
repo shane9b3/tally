@@ -20,6 +20,8 @@ fn opts() -> PrintOptionsDto {
         suppress_empty_pages: true,
         page_from: None,
         page_to: None,
+        active_sheet: None,
+        page_ranges: None,
     }
 }
 
@@ -151,12 +153,12 @@ fn print_options_sheets_breaks_notes_and_charts() {
     assert!(pdf.starts_with(b"%PDF-"));
     // Selection on the active sheet.
     let mut o = opts();
-    o.selection = Some(RangeDto {
+    o.selection = Some(vec![RangeDto {
         r0: 0,
         c0: 0,
         r1: 9,
         c1: 1,
-    });
+    }]);
     let sel = f.svc.print_layout(f.doc, &o).unwrap();
     assert_eq!(sel.pages.len(), 1);
     assert_eq!(sel.pages[0].rows, [0, 9]);
@@ -540,4 +542,106 @@ fn column_default_styles_print_on_one_page() {
     let job = svc.prepare_print_job(info.doc, &opts(), &[]).unwrap();
     assert_eq!(job.layout.pages.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Print scopes through the service on a three-sheet document whose stored
+/// active sheet is still the first (the UI switched tabs without an edit):
+/// the active sheet, all sheets, the selection, and page ranges. Every scope
+/// prepares a job whose PDF and layout agree with `print_layout`.
+#[test]
+fn print_scopes_on_three_sheets() {
+    let mut f = Fixture::new();
+    f.apply(vec![
+        Op::AddSheet {
+            name: Some("Two".into()),
+            index: None,
+        },
+        Op::AddSheet {
+            name: Some("Three".into()),
+            index: None,
+        },
+    ]);
+    let ids: Vec<_> = f
+        .svc
+        .document(f.doc)
+        .unwrap()
+        .wb
+        .sheets
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ids.len(), 3);
+    for (i, &s) in ids.iter().enumerate() {
+        // Sheet n gets n pages' worth of rows (50 rows ≈ one A4 page).
+        let rows = 50 * (i as u32 + 1);
+        let ops = (0..rows)
+            .map(|r| common::input(s, &format!("A{}", r + 1), &format!("s{i} r{r}")))
+            .collect();
+        f.apply(ops);
+    }
+    assert_eq!(f.svc.document(f.doc).unwrap().wb.active_sheet, ids[0]);
+    let count = |svc: &mut tally_engine::EngineService, o: &PrintOptionsDto| {
+        let l = svc.print_layout(f.doc, o).unwrap();
+        let job = svc.prepare_print_job(f.doc, o, &[]).unwrap();
+        assert_eq!(job.layout.pages.len(), l.pages.len());
+        if !l.pages.is_empty() {
+            assert!(svc.print_job_pdf(job.job).unwrap().starts_with(b"%PDF-"));
+        }
+        l
+    };
+    // Active sheet: the user's (sheet 2), not the stored first sheet.
+    let mut o = opts();
+    o.active_sheet = Some(ids[1]);
+    let two = count(&mut f.svc, &o);
+    assert!(!two.pages.is_empty());
+    assert!(two.pages.iter().all(|p| p.sheet == ids[1]), "{two:?}");
+    // All sheets: every sheet's pages, in tab order.
+    o.sheets = PrintSheets::All;
+    let all = count(&mut f.svc, &o);
+    let one = count(
+        &mut f.svc,
+        &PrintOptionsDto {
+            active_sheet: Some(ids[0]),
+            ..opts()
+        },
+    );
+    let three = count(
+        &mut f.svc,
+        &PrintOptionsDto {
+            active_sheet: Some(ids[2]),
+            ..opts()
+        },
+    );
+    assert_eq!(
+        all.pages.len(),
+        one.pages.len() + two.pages.len() + three.pages.len()
+    );
+    assert_eq!(all.pages[0].sheet, ids[0]);
+    assert_eq!(all.pages.last().unwrap().sheet, ids[2]);
+    // Selection on the user's sheet.
+    o.sheets = PrintSheets::Active;
+    o.selection = Some(vec![RangeDto {
+        r0: 10,
+        c0: 0,
+        r1: 14,
+        c1: 0,
+    }]);
+    let sel = count(&mut f.svc, &o);
+    assert_eq!(sel.pages.len(), 1);
+    assert_eq!((sel.pages[0].sheet, sel.pages[0].rows), (ids[1], [10, 14]));
+    // Page ranges over all sheets: "1, 3-4" and an out-of-range one.
+    o.selection = None;
+    o.sheets = PrintSheets::All;
+    o.page_ranges = Some(vec![[1, 1], [3, 4]]);
+    let some = count(&mut f.svc, &o);
+    let picked: Vec<u32> = some.pages.iter().map(|p| p.number).collect();
+    let want: Vec<u32> = [0usize, 2, 3]
+        .iter()
+        .filter_map(|&i| all.pages.get(i).map(|p| p.number))
+        .collect();
+    assert_eq!(picked, want);
+    o.page_ranges = Some(vec![[999, 1000]]);
+    let none = count(&mut f.svc, &o);
+    assert!(none.pages.is_empty());
+    assert_eq!(none.warnings.len(), 1);
 }

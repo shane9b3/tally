@@ -4,6 +4,14 @@
  * `print_job_page_png`), Export PDF… (`wb_export_pdf`) and Print (⌘P,
  * `wb_print`). Until W5-3 lands every engine call answers `unsupported`,
  * which is shown as a toast.
+ *
+ * All three cover the same print range (AOO's File ▸ Print ▸ Range): the
+ * selected sheets (the active one; the default), all sheets or the selected
+ * cells, plus an optional page list. The options always name the sheet the
+ * user is on (`activeSheet`): the engine's own active sheet only follows
+ * sheet switches that went through an edit. The range is remembered for the
+ * session and starts at the default for another document. From the preview,
+ * Print and Export PDF use the preview's job, so they print what it shows.
  */
 import { CANCELLED, isApiError, type ChartSvgDto, type PrintOptionsDto } from "@tally/bridge";
 import type { AppController } from "../controller";
@@ -11,9 +19,15 @@ import type { ChartFeatures } from "../charts/chartFeatures";
 import { useDocStore } from "../stores/docStore";
 import { t } from "../i18n";
 import { useUiStore } from "../stores/uiStore";
-import { dpiFor, stepPage, stepPreviewZoom, THUMB_DPI, thumbWindow } from "./printReducer";
+import { DEFAULT_PRINT_SCOPE, dpiFor, parsePageRanges, printOptionsFor, stepPage, stepPreviewZoom, THUMB_DPI, thumbWindow, type PrintScope } from "./printReducer";
+import { selectionRanges, useSelectionStore } from "../stores/selectionStore";
 import { usePrintStore } from "./printStore";
 import { clientV4 } from "../objects/shell";
+
+/** What a prepared job was built from: the document (a window can show another one later) and the options. */
+function jobKey(doc: number, options: PrintOptionsDto): string {
+  return JSON.stringify([doc, options]);
+}
 
 export const PRINT_SOON = "Printing and PDF export are coming with the print pipeline (W5-3).";
 
@@ -39,18 +53,68 @@ export class PrintFeatures {
     this.ctl.notifyError(e);
   }
 
+  // -- print range --------------------------------------------------------------
+
+  /** The range chosen for the current document (the default for another one). */
+  range(): { scope: PrintScope; pageSpec: string } {
+    const st = usePrintStore.getState();
+    const doc = this.ctl.info?.doc ?? null;
+    if (st.scopeDoc !== doc) return { scope: DEFAULT_PRINT_SCOPE, pageSpec: "" };
+    return { scope: st.scope, pageSpec: st.pageSpec };
+  }
+
+  /** Remembers a range for this session (an invalid page list is not stored). */
+  setRange(scope: PrintScope, pageSpec: string): boolean {
+    if (!parsePageRanges(pageSpec).ok) return false;
+    usePrintStore.getState().setRange(this.ctl.info?.doc ?? null, scope, pageSpec.trim());
+    return true;
+  }
+
+  /** The engine options of a range on the user's sheet and current selection. */
+  optionsFor(scope: PrintScope, pageSpec: string): PrintOptionsDto {
+    const parsed = parsePageRanges(pageSpec);
+    const sel = selectionRanges(useSelectionStore.getState().selection);
+    return printOptionsFor(scope, parsed.ok ? parsed.ranges : null, this.ctl.sheet, sel);
+  }
+
   // -- preview ------------------------------------------------------------------
 
-  /** File ▸ Print Preview. */
-  async openPreview(options: PrintOptionsDto = usePrintStore.getState().options): Promise<void> {
+  /** File ▸ Print Preview: the remembered range, opened at the active sheet's first page. */
+  async openPreview(options?: PrintOptionsDto): Promise<void> {
+    if (!options) {
+      // The bar shows the range of this document.
+      const r = this.range();
+      this.setRange(r.scope, r.pageSpec);
+      options = this.optionsFor(r.scope, r.pageSpec);
+    }
     const st = usePrintStore.getState();
     st.setOpen(true);
     st.setOptions(options);
     await this.prepare(options);
+    this.showActiveSheet();
+  }
+
+  /** The preview bar's range: remembered, then the preview is rebuilt for it. */
+  async changeRange(scope: PrintScope, pageSpec: string): Promise<boolean> {
+    if (!this.setRange(scope, pageSpec)) return false;
+    const options = this.optionsFor(scope, pageSpec);
+    usePrintStore.getState().setOptions(options);
+    usePrintStore.getState().setPage(0);
+    await this.prepare(options);
+    this.showActiveSheet();
+    return true;
+  }
+
+  /** Goes to the first page of the user's sheet (AOO opens the preview there). */
+  private showActiveSheet(): void {
+    const layout = usePrintStore.getState().layout;
+    const at = layout?.pages.findIndex((p) => p.sheet === this.ctl.sheet) ?? -1;
+    this.goToPage(at >= 0 ? at : 0);
   }
 
   closePreview(): void {
     usePrintStore.getState().setOpen(false);
+    usePrintStore.getState().setRangeDialog(null);
     this.ctl.focusGrid();
   }
 
@@ -63,7 +127,7 @@ export class PrintFeatures {
       st.setStatus("loading");
       const svgs = await this.chartSvgs(options);
       const job = await clientV4(this.ctl).preparePrintJob(doc, options, svgs);
-      usePrintStore.getState().setJob(job.job, job.layout, version);
+      usePrintStore.getState().setJob(job.job, job.layout, version, jobKey(doc, options));
       usePrintStore.getState().setStatus("ready");
       if (job.layout.warnings.length > 0) this.toast("info", job.layout.warnings[0] ?? "");
       void this.renderCurrent();
@@ -85,7 +149,7 @@ export class PrintFeatures {
   private async chartSvgs(options: PrintOptionsDto): Promise<ChartSvgDto[]> {
     const info = this.ctl.info;
     if (!info) return [];
-    const sheets = options.sheets.type === "active" ? [this.ctl.sheet] : options.sheets.type === "all" ? info.sheets.map((s) => s.id) : options.sheets.ids;
+    const sheets = options.sheets.type === "active" ? [options.activeSheet ?? this.ctl.sheet] : options.sheets.type === "all" ? info.sheets.filter((s) => !s.hidden).map((s) => s.id) : options.sheets.ids;
     const out: ChartSvgDto[] = [];
     let failed = false;
     for (const sheet of sheets) {
@@ -101,12 +165,14 @@ export class PrintFeatures {
     return out;
   }
 
-  /** The job for the current document (re-prepared when the document changed). */
-  private async ensureJob(): Promise<number | null> {
+  /** The job for `options` (re-prepared when the document or the options changed). */
+  private async ensureJob(options: PrintOptionsDto): Promise<number | null> {
     const st = usePrintStore.getState();
     const version = useDocStore.getState().info?.version ?? 0;
-    if (st.job !== null && st.jobVersion === version) return st.job;
-    return this.prepare(st.options);
+    const doc = this.ctl.info?.doc ?? null;
+    if (st.job !== null && doc !== null && st.jobVersion === version && st.jobKey === jobKey(doc, options)) return st.job;
+    st.setOptions(options);
+    return this.prepare(options);
   }
 
   /** Renders the current page at the current zoom (cached) and the thumbnails around it. */
@@ -169,8 +235,38 @@ export class PrintFeatures {
 
   // -- export and print ---------------------------------------------------------
 
-  /** File ▸ Export ▸ PDF… / Share ▸ Export as PDF…: save dialog, then the PDF bytes. */
+  /**
+   * File ▸ Export ▸ PDF… / Share ▸ Export as PDF…: the range step first
+   * (AOO's PDF Options ▸ Range); from the preview, its range directly.
+   */
   async exportPdf(): Promise<void> {
+    const st = usePrintStore.getState();
+    if (st.open) return this.exportPdfWith(st.options);
+    st.setRangeDialog("pdf");
+  }
+
+  /** ⌘P / File ▸ Print…: the range step first (AOO's Print ▸ Range); from the preview, its range directly. */
+  async print(): Promise<void> {
+    const st = usePrintStore.getState();
+    if (st.open) return this.printWith(st.options);
+    st.setRangeDialog("print");
+  }
+
+  /** The range step's OK: remembers the range, then prints or exports it. */
+  async confirmRange(kind: "print" | "pdf", scope: PrintScope, pageSpec: string): Promise<void> {
+    usePrintStore.getState().setRangeDialog(null);
+    if (!this.setRange(scope, pageSpec)) return;
+    const options = this.optionsFor(scope, pageSpec);
+    await (kind === "print" ? this.printWith(options) : this.exportPdfWith(options));
+  }
+
+  cancelRange(): void {
+    usePrintStore.getState().setRangeDialog(null);
+    this.ctl.focusGrid();
+  }
+
+  /** Save dialog, then the PDF bytes of the job for `options`. */
+  async exportPdfWith(options: PrintOptionsDto): Promise<void> {
     try {
       const doc = this.ctl.requireDoc();
       const shell = this.ctl.shell;
@@ -178,7 +274,7 @@ export class PrintFeatures {
         this.toast("info", "Exporting a PDF needs the desktop app.");
         return;
       }
-      const job = await this.ensureJob();
+      const job = await this.ensureJob(options);
       if (job === null) {
         const err = usePrintStore.getState().error;
         if (err) this.toast(err === PRINT_SOON ? "info" : "error", err);
@@ -191,8 +287,8 @@ export class PrintFeatures {
     }
   }
 
-  /** ⌘P / File ▸ Print…: the OS print dialog over the job's PDF. */
-  async print(): Promise<void> {
+  /** The OS print dialog over the PDF of the job for `options`. */
+  async printWith(options: PrintOptionsDto): Promise<void> {
     try {
       const doc = this.ctl.requireDoc();
       const shell = this.ctl.shell;
@@ -200,7 +296,7 @@ export class PrintFeatures {
         this.toast("info", "Printing needs the desktop app.");
         return;
       }
-      const job = await this.ensureJob();
+      const job = await this.ensureJob(options);
       if (job === null) {
         const err = usePrintStore.getState().error;
         if (err) this.toast(err === PRINT_SOON ? "info" : "error", err);

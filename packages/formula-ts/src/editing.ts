@@ -38,9 +38,14 @@ const OPERAND_EXPECTED: ReadonlySet<TokenKind> = new Set<TokenKind>([
   "Pipe",
 ]);
 
-/** True for text the editor treats as a formula (`=...`). */
+/**
+ * True for text the editor treats as a formula: `=…`, and, as in AOO's
+ * formula mode (`ScInputHandler::UpdateFormulaMode`), text starting with
+ * `+` or `-` (typed `+B1+B2` is stored as `=+B1+B2`), so references are
+ * coloured and can be picked while typing it.
+ */
 export function isFormulaText(src: string): boolean {
-  return src.startsWith("=");
+  return src.startsWith("=") || src.startsWith("+") || src.startsWith("-");
 }
 
 function lastSignificantBefore(tokens: readonly Token[], index: number): Token | undefined {
@@ -59,9 +64,18 @@ function lastSignificantBefore(tokens: readonly Token[], index: number): Token |
  *   allowed): an empty span at the caret (insert).
  * - Directly after a reference that itself follows such a token: that
  *   reference's span (replace), so repeated picks replace the reference.
+ *
+ * Text starting with `+` / `-` follows AOO's `ScTabViewShell::IsRefInputMode`:
+ * a lone sign, or text whose last token is an operator, `(` or a separator
+ * (`MayReferenceFollow`), inserts; a typed reference is never replaced
+ * (only the previous pick is, which the caller tracks), so `-12:30` or
+ * `-A1` followed by an arrow key commits. Deliberately unlike AOO, text made
+ * only of signs (`--`, `-----`, a separator line) is not point mode.
  */
 export function pointInsertion(src: string, caret: number, dialect: Dialect = "calc-a1"): Span | null {
   if (!isFormulaText(src) || caret < 1 || caret > src.length) return null;
+  const signed = !src.startsWith("=");
+  if (signed && src.length > 1 && /^[+-]+$/.test(src)) return null;
   const tokens = tokenize(src, dialect);
   // The token that ends exactly at, or contains, the caret.
   let i = 0;
@@ -77,6 +91,7 @@ export function pointInsertion(src: string, caret: number, dialect: Dialect = "c
   const endsHere = at && at.end === caret ? at : undefined;
   const idx = endsHere ? i + 1 : i;
   if (endsHere && (endsHere.kind === "CellRef" || endsHere.kind === "RangeRef")) {
+    if (signed) return null;
     const before = lastSignificantBefore(tokens, i);
     return before && OPERAND_EXPECTED.has(before.kind) ? { start: endsHere.start, end: endsHere.end } : null;
   }

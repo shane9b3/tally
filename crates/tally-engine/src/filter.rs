@@ -22,7 +22,8 @@ use tally_model::{
 use tally_types::{CellAddr, CellRange, SheetId, Value};
 
 use crate::service::view::display_text;
-use crate::storage::{AutoFilter, ColumnCriteria, Spans};
+use crate::storage::{AutoFilter, ColumnCriteria, ColumnStore, Spans};
+use crate::tools::{passes_threshold, top_threshold, TopKind};
 use crate::workbook::Workbook;
 
 /// Most distinct values listed per column by [`filter_info`].
@@ -48,6 +49,10 @@ pub fn op_to_model(op: FilterOp) -> FilterOpData {
         FilterOp::EndsWith => FilterOpData::EndsWith,
         FilterOp::Empty => FilterOpData::Empty,
         FilterOp::NotEmpty => FilterOpData::NotEmpty,
+        FilterOp::TopValues => FilterOpData::TopValues,
+        FilterOp::BottomValues => FilterOpData::BottomValues,
+        FilterOp::TopPercent => FilterOpData::TopPercent,
+        FilterOp::BottomPercent => FilterOpData::BottomPercent,
     }
 }
 
@@ -65,6 +70,10 @@ pub fn op_to_api(op: FilterOpData) -> FilterOp {
         FilterOpData::EndsWith => FilterOp::EndsWith,
         FilterOpData::Empty => FilterOp::Empty,
         FilterOpData::NotEmpty => FilterOp::NotEmpty,
+        FilterOpData::TopValues => FilterOp::TopValues,
+        FilterOpData::BottomValues => FilterOp::BottomValues,
+        FilterOpData::TopPercent => FilterOp::TopPercent,
+        FilterOpData::BottomPercent => FilterOp::BottomPercent,
     }
 }
 
@@ -90,24 +99,47 @@ pub fn criteria_to_api(c: &ColumnCriteria) -> ColumnFilter {
     }
 }
 
-/// Model → engine AutoFilter.
-pub fn from_model(d: &AutoFilterData) -> AutoFilter {
+/// Model → engine AutoFilter (takes the model's value lists without
+/// copying them).
+pub fn from_model(d: AutoFilterData) -> AutoFilter {
+    let range = d.range;
     let mut columns = BTreeMap::new();
-    for c in &d.columns {
-        if c.col < d.range.c0 || c.col > d.range.c1 {
+    for c in d.columns {
+        if c.col < range.c0 || c.col > range.c1 {
             continue;
         }
         columns.insert(
             c.col,
             ColumnCriteria {
-                values: c.values.clone(),
-                condition: c.condition.as_ref().map(|x| (x.op, x.value.clone())),
+                values: c.values,
+                condition: c.condition.map(|x| (x.op, x.value)),
             },
         );
     }
-    AutoFilter {
-        range: d.range,
-        columns,
+    AutoFilter { range, columns }
+}
+
+/// An area that reaches the sheet's last row (or column), a whole-column,
+/// whole-row or whole-sheet ref, cut down in that direction to the sheet's
+/// cells (keeping its header row and first column), as AOO's
+/// `GetPrintArea`-style trimming. Any other area is kept exactly as
+/// written, so `A1:D1000` with data to row 500 stays `A1:D1000` and rows
+/// typed later inside it are filtered.
+pub fn clamp_to_cells(r: CellRangeLocal, cells: &[tally_model::CellData]) -> CellRangeLocal {
+    let whole_rows = r.r1 >= tally_types::MAX_ROWS - 1;
+    let whole_cols = r.c1 >= tally_types::MAX_COLS - 1;
+    if !whole_rows && !whole_cols {
+        return r;
+    }
+    let (mut r1, mut c1) = (r.r0, r.c0);
+    for c in cells {
+        r1 = r1.max(c.row);
+        c1 = c1.max(c.col);
+    }
+    CellRangeLocal {
+        r1: if whole_rows { r.r1.min(r1) } else { r.r1 },
+        c1: if whole_cols { r.c1.min(c1) } else { r.c1 },
+        ..r
     }
 }
 
@@ -143,10 +175,32 @@ pub fn passes(c: &ColumnCriteria, v: &Value, text: &str) -> bool {
 pub struct Matcher<'a> {
     values: Option<HashSet<String>>,
     condition: Option<(FilterOpData, &'a str)>,
+    /// `(ge, threshold)` of a top/bottom-N condition ([`Matcher::for_column`]).
+    threshold: Option<(bool, f64)>,
+}
+
+/// The top/bottom-N kind of an operator (`None` for the others).
+fn top_kind(op: FilterOpData) -> Option<TopKind> {
+    Some(match op {
+        FilterOpData::TopValues => TopKind::Largest,
+        FilterOpData::BottomValues => TopKind::Smallest,
+        FilterOpData::TopPercent => TopKind::LargestPct,
+        FilterOpData::BottomPercent => TopKind::SmallestPct,
+        _ => return None,
+    })
+}
+
+fn number_of(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => Some(*n),
+        Value::Bool(b) => Some(f64::from(u8::from(*b))),
+        _ => None,
+    }
 }
 
 impl<'a> Matcher<'a> {
-    /// Prepares `c`.
+    /// Prepares `c` (a top/bottom-N condition passes every cell; use
+    /// [`Matcher::for_column`]).
     pub fn new(c: &'a ColumnCriteria) -> Self {
         Self {
             values: c
@@ -154,7 +208,39 @@ impl<'a> Matcher<'a> {
                 .as_ref()
                 .map(|v| v.iter().map(|x| x.to_lowercase()).collect()),
             condition: c.condition.as_ref().map(|(op, o)| (*op, o.as_str())),
+            threshold: None,
         }
+    }
+
+    /// Prepares `c` for column `col` of the data rows `r0..=r1` of `sheet`:
+    /// a top/bottom-N condition gets its threshold, once, from the numbers
+    /// among the column's cells in those rows (AOO `ScTable::TopTenQuery`:
+    /// the whole query area, not just the rows other columns leave
+    /// visible; ties pass).
+    pub fn for_column(
+        wb: &Workbook,
+        sheet: SheetId,
+        r0: u32,
+        r1: u32,
+        col: u32,
+        c: &'a ColumnCriteria,
+    ) -> Self {
+        let mut m = Self::new(c);
+        if let Some((op, operand)) = m.condition {
+            if let Some(kind) = top_kind(op) {
+                let vals: Vec<f64> = match wb.sheet(sheet).and_then(|s| s.columns.get(col as usize))
+                {
+                    Some(column) if r0 <= r1 => column
+                        .cells
+                        .iter_range(r0, r1)
+                        .filter_map(|(r, _)| number_of(&wb.value(CellAddr::new(sheet, r, col))))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                m.threshold = Some(top_threshold(vals, kind, operand));
+            }
+        }
+        m
     }
 
     /// `true` if a cell (its value and display text) passes.
@@ -165,7 +251,13 @@ impl<'a> Matcher<'a> {
             }
         }
         if let Some((op, operand)) = self.condition {
-            if !condition(op, operand, v, text) {
+            if top_kind(op).is_some() {
+                if let Some((ge, t)) = self.threshold {
+                    if !passes_threshold(number_of(v), ge, t) {
+                        return false;
+                    }
+                }
+            } else if !condition(op, operand, v, text) {
                 return false;
             }
         }
@@ -249,24 +341,66 @@ impl Workbook {
             None => Spans::default(),
             Some(af) if af.columns.is_empty() => Spans::default(),
             Some(af) => {
-                let matchers: Vec<(u32, Matcher<'_>)> = af
-                    .columns
-                    .iter()
-                    .map(|(col, c)| (*col, Matcher::new(c)))
-                    .collect();
-                let mut hidden = Vec::new();
-                for r in af.range.r0.saturating_add(1)..=af.range.r1 {
-                    let keep = matchers.iter().all(|(col, m)| {
+                // Only the filtered columns' own cells are read; an empty cell
+                // is decided once per column (review: a file's 16,384
+                // filtered columns over a million rows took minutes per
+                // refresh). A row is hidden when a cell fails its column, or
+                // when it is empty in a column whose criteria refuse empty.
+                let (body0, body1) = (af.range.r0.saturating_add(1), af.range.r1);
+                let mut fails_empty = 0u32;
+                // Row → (filled cells in empty-refusing columns, a cell failed).
+                let mut rows: std::collections::HashMap<u32, (u32, bool)> =
+                    std::collections::HashMap::new();
+                for (col, c) in &af.columns {
+                    let m = Matcher::for_column(self, sheet, body0, body1, *col, c);
+                    let refuses_empty = !m.passes(&Value::Empty, "");
+                    fails_empty += u32::from(refuses_empty);
+                    let Some(column) = s.columns.get(*col as usize) else {
+                        continue;
+                    };
+                    if body0 > body1 {
+                        continue;
+                    }
+                    for (r, _) in column.cells.iter_range(body0, body1) {
                         let addr = CellAddr::new(sheet, r, *col);
                         let v = self.value(addr);
                         let text = display_text(self, addr);
-                        m.passes(&v, &text)
-                    });
-                    if !keep {
-                        hidden.push(r);
+                        let e = rows.entry(r).or_insert((0, false));
+                        if refuses_empty {
+                            e.0 += 1;
+                        }
+                        if !m.passes(&v, &text) {
+                            e.1 = true;
+                        }
                     }
                 }
-                Spans::from_sorted_rows(hidden)
+                if fails_empty == 0 {
+                    let mut hidden: Vec<u32> =
+                        rows.iter().filter(|(_, x)| x.1).map(|(r, _)| *r).collect();
+                    hidden.sort_unstable();
+                    Spans::from_sorted_rows(hidden)
+                } else {
+                    // Every row is hidden except those filled in all the
+                    // empty-refusing columns and passing everywhere.
+                    let mut kept: Vec<u32> = rows
+                        .iter()
+                        .filter(|(_, x)| !x.1 && x.0 == fails_empty)
+                        .map(|(r, _)| *r)
+                        .collect();
+                    kept.sort_unstable();
+                    let mut spans = Vec::new();
+                    let mut next = body0;
+                    for r in kept {
+                        if r > next {
+                            spans.push((next, r - 1));
+                        }
+                        next = r + 1;
+                    }
+                    if next <= body1 {
+                        spans.push((next, body1));
+                    }
+                    Spans::from_spans(spans)
+                }
             }
         };
         // The standard/advanced filter (wave 5) hides rows the same way.
@@ -341,7 +475,20 @@ pub fn filter_info(wb: &Workbook, sheet: SheetId) -> Option<AutoFilterInfo> {
     let mut columns = Vec::new();
     for col in r.c0..=r.c1 {
         let mut seen: BTreeMap<String, (Option<f64>, String, u32)> = BTreeMap::new();
-        for row in r.r0.saturating_add(1)..=r.r1 {
+        // Only the column's cells are read; the empty rows count at once
+        // (a whole-sheet area must not walk a million rows per column).
+        let (b0, b1) = (r.r0.saturating_add(1), r.r1);
+        let filled: Vec<u32> = match s.columns.get(col as usize) {
+            Some(c) if b0 <= b1 => c.cells.iter_range(b0, b1).map(|(row, _)| row).collect(),
+            _ => Vec::new(),
+        };
+        let empties = (b1 + 1)
+            .saturating_sub(b0)
+            .saturating_sub(filled.len() as u32);
+        if empties > 0 {
+            seen.insert(String::new(), (None, String::new(), empties));
+        }
+        for row in filled {
             let addr = CellAddr::new(sheet, row, col);
             let v = wb.value(addr);
             let text = if v.is_empty() {

@@ -187,7 +187,8 @@ test("hyperlink dialog sets a link; ⌘-click opens it", async ({ page }) => {
   await dialog.getByTestId("dialog-ok").click();
   const ops = await recorded(page);
   expect(ops.slice(-2)).toMatchObject([
-    { type: "setCellInput", r: 17, c: 1, input: "Order portal" },
+    // Literal text, not typed input (a leading +/- stays text; P18).
+    { type: "setRangeInputs", r: 17, c: 1, rows: [["Order portal"]] },
     { type: "setLink", r: 17, c: 1, url: "https://example.com/orders" },
   ]);
   await expect.poll(() => cellFlags(page, 17, 1)).toBe(32);

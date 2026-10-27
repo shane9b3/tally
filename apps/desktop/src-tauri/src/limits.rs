@@ -52,6 +52,10 @@ pub const MAX_CHART_SERIES: usize = 255;
 pub const MAX_PIVOT_FIELDS: usize = 64;
 /// Most constraints (and variable ranges) in one solver request.
 pub const MAX_SOLVER_CONSTRAINTS: usize = 1_000;
+/// Most selected ranges a print of "Selected cells" may list.
+pub const MAX_PRINT_SELECTION_RANGES: usize = 256;
+/// Most page ranges ("1-3,5,…") a print may list.
+pub const MAX_PRINT_PAGE_RANGES: usize = 256;
 /// Highest page number a print job may address (`page_from`, `page_to`, `page`).
 pub const MAX_PRINT_PAGES: u32 = 10_000;
 /// Largest SVG payload per chart in `prepare_print_job`, in bytes (4 MB).
@@ -78,6 +82,14 @@ pub const MAX_AUTOCOMPLETE_CHARS: usize = 1_024;
 
 fn bad(message: impl Into<String>) -> ApiError {
     ApiError::invalid_argument(message)
+}
+
+/// A paste payload: TSV text at most [`MAX_TSV`] bytes, a clipboard token at most 256 characters.
+pub fn paste_payload(payload: &PastePayload) -> CmdResult<()> {
+    match payload {
+        PastePayload::Tsv { text: t } => text_max("the pasted text", t, MAX_TSV),
+        PastePayload::Internal { token } => chars_max("the clipboard token", token, 256),
+    }
 }
 
 /// `text` is at most [`MAX_TEXT`] bytes.
@@ -206,6 +218,9 @@ pub fn find_query(q: &FindQuery) -> CmdResult<()> {
     text(what, &q.text)?;
     if let Some(from) = &q.from {
         cell("the search start", from)?;
+    }
+    if let Some(sel) = &q.selection {
+        ranges("the search selection", sel)?;
     }
     Ok(())
 }
@@ -344,7 +359,14 @@ pub fn print_page(what: &str, page: u32) -> CmdResult<()> {
 /// Print options: the selection range and the page window.
 pub fn print_options(opts: &PrintOptionsDto) -> CmdResult<()> {
     if let Some(sel) = &opts.selection {
-        range("the print selection", sel)?;
+        if sel.len() > MAX_PRINT_SELECTION_RANGES {
+            return Err(bad(format!(
+                "more than {MAX_PRINT_SELECTION_RANGES} selected ranges to print"
+            )));
+        }
+        for r in sel {
+            range("the print selection", r)?;
+        }
     }
     for (what, p) in [("page_from", opts.page_from), ("page_to", opts.page_to)] {
         if let Some(p) = p {
@@ -354,6 +376,17 @@ pub fn print_options(opts: &PrintOptionsDto) -> CmdResult<()> {
     if let (Some(a), Some(b)) = (opts.page_from, opts.page_to) {
         if a > b {
             return Err(bad("the page range is reversed"));
+        }
+    }
+    if let Some(ranges) = &opts.page_ranges {
+        if ranges.len() > MAX_PRINT_PAGE_RANGES {
+            return Err(bad(format!(
+                "more than {MAX_PRINT_PAGE_RANGES} page ranges"
+            )));
+        }
+        for &[a, b] in ranges {
+            print_page("page_ranges", a)?;
+            print_page("page_ranges", b)?;
         }
     }
     Ok(())
@@ -491,10 +524,7 @@ fn typed_op(op: &Op) -> CmdResult<()> {
             find_query(query)?;
             text("the replacement", replace)
         }
-        Op::Paste { payload, .. } | Op::PasteSpecial { payload, .. } => match payload {
-            PastePayload::Tsv { text: t } => text_max("the pasted text", t, MAX_TSV),
-            PastePayload::Internal { token } => chars_max("the clipboard token", token, 256),
-        },
+        Op::Paste { payload, .. } | Op::PasteSpecial { payload, .. } => paste_payload(payload),
         Op::SetPageBreak { axis, at, .. } => match axis {
             tally_api::BreakAxis::Row => row("the page break", *at),
             tally_api::BreakAxis::Col => col("the page break", *at),
@@ -870,11 +900,31 @@ mod tests {
             suppress_empty_pages: true,
             page_from: from,
             page_to: to,
+            active_sheet: None,
+            page_ranges: None,
         };
         assert!(print_options(&opts(Some(1), Some(MAX_PRINT_PAGES))).is_ok());
         assert!(print_options(&opts(None, Some(MAX_PRINT_PAGES + 1))).is_err());
         assert!(print_options(&opts(Some(5), Some(4))).is_err());
         assert!(print_page("p", MAX_PRINT_PAGES + 1).is_err());
+        let mut o = opts(None, None);
+        o.page_ranges = Some(vec![[1, 3], [5, 5]]);
+        assert!(print_options(&o).is_ok());
+        o.page_ranges = Some(vec![[1, MAX_PRINT_PAGES + 1]]);
+        assert!(print_options(&o).is_err());
+        o.page_ranges = Some(vec![[1, 1]; MAX_PRINT_PAGE_RANGES + 1]);
+        assert!(print_options(&o).is_err());
+        o.page_ranges = None;
+        let a1 = RangeDto {
+            r0: 0,
+            c0: 0,
+            r1: 0,
+            c1: 0,
+        };
+        o.selection = Some(vec![a1, a1]);
+        assert!(print_options(&o).is_ok());
+        o.selection = Some(vec![a1; MAX_PRINT_SELECTION_RANGES + 1]);
+        assert!(print_options(&o).is_err());
         assert!(dpi(600).is_ok());
         assert!(dpi(0).is_err() && dpi(601).is_err());
 
@@ -977,6 +1027,8 @@ mod tests {
             whole_cell: false,
             mode: FindMode::Regex,
             from: None,
+            in_notes: None,
+            selection: None,
         };
         assert!(find_query(&q("a+".into())).is_ok());
         let e = find_query(&q("a".repeat(MAX_TEXT + 1))).unwrap_err();

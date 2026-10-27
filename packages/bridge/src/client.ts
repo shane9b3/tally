@@ -22,6 +22,8 @@ import type { CellEditInfo } from "./generated/CellEditInfo";
 import type { CellPos } from "./generated/CellPos";
 import type { ClipboardOut } from "./generated/ClipboardOut";
 import type { Direction } from "./generated/Direction";
+import type { PasteOptions } from "./generated/PasteOptions";
+import type { PastePayload } from "./generated/PastePayload";
 import type { DocChangedEvent } from "./generated/DocChangedEvent";
 import type { DocId } from "./generated/DocId";
 import type { FileFormat } from "./generated/FileFormat";
@@ -113,6 +115,14 @@ export interface EngineClient {
   copy(doc: DocId, sel: SelectionDto): Promise<ClipboardOut>;
   /** Ctrl+arrow target. */
   navigateEdge(doc: DocId, sheet: SheetId, from: CellPos, dir: Direction): Promise<CellPos>;
+  /**
+   * Tab / Enter on a protected sheet: the next unlocked, visible, non-covered cell from `from`
+   * in reading order (`right`/`left` along rows, `down`/`up` down columns), wrapping, optionally
+   * inside `within`. `null`: the sheet is not protected or has no such cell.
+   */
+  nextUnlocked(doc: DocId, sheet: SheetId, from: CellPos, dir: Direction, within: RangeDto | null): Promise<CellPos | null>;
+  /** Whether a paste of `payload` at `target` would write over a cell that holds data. */
+  pasteOverwrites(doc: DocId, sheet: SheetId, target: RangeDto, payload: PastePayload, options: PasteOptions): Promise<boolean>;
   /** Resolves name box text such as `B12`, `A1:C5` or `Sheet2.A1`. */
   resolveNameBox(doc: DocId, text: string): Promise<SelectionDto>;
   /** Every registered function. */
@@ -152,7 +162,8 @@ export interface EngineClientV2 extends EngineClient {
  * `Op`s applied through `apply`; these are the queries. Tauri commands:
  * `conditional_formats`, `validations`, `validation_at`, `note`, `notes`,
  * `protection_info`, `page_setup`, `document_properties`, `goal_seek`,
- * `list_locales`, `set_locale`, `resolve_name_box_in` (see docs/api.md).
+ * `list_locales`, `set_locale`, `resolve_name_box_in`, `set_active_sheet`
+ * (see docs/api.md).
  */
 export interface EngineClientV3 extends EngineClientV2 {
   /** The sheet's conditional formats in priority order. */
@@ -179,6 +190,11 @@ export interface EngineClientV3 extends EngineClientV2 {
   setLocale(doc: DocId, locale: string): Promise<ApplyResult>;
   /** Name box resolution relative to the sheet the UI shows. */
   resolveNameBoxIn(doc: DocId, sheet: SheetId, text: string): Promise<SelectionDto>;
+  /**
+   * The sheet the user switched to (view state: saved as the active sheet,
+   * used by CSV save and Find across sheets). No undo step, no modified flag.
+   */
+  setActiveSheet(doc: DocId, sheet: SheetId): Promise<void>;
 }
 
 /**

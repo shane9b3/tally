@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { callAt, groupedReferences, identifierAt, pointInsertion } from "../src/index";
+import { callAt, groupedReferences, identifierAt, isFormulaText, pointInsertion } from "../src/index";
 
 describe("pointInsertion", () => {
   it("inserts after =, operators, ( , and ;", () => {
@@ -60,5 +60,45 @@ describe("groupedReferences", () => {
     const refs = groupedReferences("=A1+$A$1+B2:C3+b2:c3+Sheet2.A1");
     expect(refs.map((r) => r.group)).toEqual([0, 0, 1, 1, 2]);
     expect(refs[4]?.sheet).toBe("Sheet2");
+  });
+});
+
+describe("leading + / - (AOO formula mode)", () => {
+  it("treats +… and -… as formula text", () => {
+    expect(isFormulaText("+B1+B2")).toBe(true);
+    expect(isFormulaText("-A1")).toBe(true);
+    expect(isFormulaText("=A1")).toBe(true);
+    expect(isFormulaText("A1+B1")).toBe(false);
+    expect(isFormulaText("'+B1")).toBe(false);
+  });
+
+  it("colours and picks references after a leading sign", () => {
+    const refs = groupedReferences("+B1+B2+b1");
+    expect(refs.map((r) => [r.start, r.end, r.group])).toEqual([
+      [1, 3, 0],
+      [4, 6, 1],
+      [7, 9, 0],
+    ]);
+    expect(pointInsertion("+", 1)).toEqual({ start: 1, end: 1 });
+    expect(pointInsertion("-B1*", 4)).toEqual({ start: 4, end: 4 });
+    expect(pointInsertion("-5", 2)).toBeNull();
+    expect(pointInsertion("-(", 2)).toEqual({ start: 2, end: 2 });
+    expect(pointInsertion("+B1;", 4)).toEqual({ start: 4, end: 4 });
+  });
+
+  it("follows AOO IsRefInputMode for typed references, times and dash lines (L4)", () => {
+    // A typed reference is not replaced (only the previous pick is).
+    expect(pointInsertion("+B1", 3)).toBeNull();
+    expect(pointInsertion("-A1", 3)).toBeNull();
+    // A negative time ends in a number / range, not an operator.
+    expect(pointInsertion("-12:30", 6)).toBeNull();
+    // Separator lines of signs are never point mode (deliberate; AOO would pick).
+    for (const s of ["--", "-----", "+-", "++"]) expect(pointInsertion(s, s.length), s).toBeNull();
+    // A lone sign is (AOO).
+    expect(pointInsertion("-", 1)).toEqual({ start: 1, end: 1 });
+    // "=" formulas keep replacing the reference after an operator.
+    expect(pointInsertion("=B1", 3)).toEqual({ start: 1, end: 3 });
+    expect(identifierAt("+su", 3)).toEqual({ start: 1, end: 3, text: "su" });
+    expect(callAt("-SUM(A1;", 8)).toMatchObject({ name: "SUM", argIndex: 1 });
   });
 });

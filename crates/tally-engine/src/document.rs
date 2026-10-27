@@ -36,6 +36,9 @@ pub struct Document {
     pub recalc_incomplete: bool,
     /// Warnings for the next [`Self::info`] (taken by the service once).
     pub warnings: Vec<String>,
+    /// Options of the document's CSV exports (the last Text Export
+    /// dialog choices; defaults until set).
+    pub csv_options: tally_api::CsvExportOptions,
 }
 
 /// Formats a colour `0xRRGGBBAA` as `#rrggbb`.
@@ -73,6 +76,7 @@ impl Document {
             dirty: false,
             recalc_incomplete: report.incomplete,
             warnings,
+            csv_options: tally_api::CsvExportOptions::default(),
         }
     }
 

@@ -204,11 +204,14 @@ fn parse_unsigned(b: &[u8], dec: u8, grp: Option<u8>) -> Option<NumInfo> {
     })
 }
 
+/// A leading sign and the blanks after it (AOO `ScanStartString`:
+/// `GetSign` then `SkipBlanks`, so `- 5` is −5).
 fn strip_sign(s: &str) -> (Option<bool>, &str) {
+    let blanks = [' ', '\u{a0}'];
     if let Some(r) = s.strip_prefix('-') {
-        (Some(true), r)
+        (Some(true), r.trim_start_matches(blanks))
     } else if let Some(r) = s.strip_prefix('+') {
-        (Some(false), r)
+        (Some(false), r.trim_start_matches(blanks))
     } else {
         (None, s)
     }

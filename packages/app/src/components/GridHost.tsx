@@ -55,6 +55,8 @@ export function GridHost() {
   const decimalSep = decimalSepOf(useV3Store((s) => s.locale));
   const pageBreaks = useV3Store((s) => s.pageBreaks);
   const printRange = useV3Store((s) => s.pageSetup?.printRange ?? null);
+  // Protected sheet: Tab / Enter move between unlocked cells only (AOO); the engine finds the next one.
+  const protectedNav = useV3Store((s) => s.protection?.sheetProtected === true);
   // ARIA mirror (wave 5, §4 item 46): the sheet name and the active cell's formula.
   const activeInput = useEditStore((s) => (s.active && s.active.sheet === sheet ? s.active.input : null));
   const i18nRev = useW56Store((s) => s.i18nRev);
@@ -95,6 +97,8 @@ export function GridHost() {
     pageBreakPreview,
     pageBreaks: pageBreakPreview ? (previewBreaks ?? pageBreaks) : pageBreaksOn ? pageBreaks : null,
     printRange: pageBreakPreview || pageBreaksOn ? printRange : null,
+    protectedNav,
+    onNextUnlocked: ctl.nextUnlocked,
     onObjectSelect: w5.objects.onObjectSelect,
     onObjectPointerDown: w5.objects.onObjectPointerDown,
     onObjectDoubleClick: w5.objects.onObjectDoubleClick,

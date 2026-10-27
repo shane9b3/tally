@@ -32,6 +32,8 @@ const PROP_KEYS = [
   "filterButtons",
   "pageBreaks",
   "printRange",
+  "protectedNav",
+  "onNextUnlocked",
   "onSelectionChange",
   "onStartEdit",
   "onEditChange",

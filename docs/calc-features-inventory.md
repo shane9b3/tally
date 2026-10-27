@@ -63,9 +63,9 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Backspace clears, Delete opens Delete Contents | done | An option turns the dialog off |
 | Switch to edit mode on Enter, Expand formatting, Expand references, Use Tab column, Printer metrics | missing | Not in Options > Input |
 | Show references in colour while editing | done | Editor spans and grid outlines (`formulaEdit.ts:44`); always on, no option; test `formulaEdit.test.ts` "colours each distinct reference" |
-| Highlight selection in headers, overwrite warning when pasting, detective auto-refresh | partial (U22, T12) | Header highlight done (`grid/src/renderer.ts:1369`); paste overwrites without asking (`controller.ts:918`); traces are not redrawn after edits |
+| Highlight selection in headers, overwrite warning when pasting, detective auto-refresh | partial (T12) | Header highlight done (`grid/src/renderer.ts:1369`); overwrite warning done (Options > Input "Show overwrite warning when pasting data", on by default; `controller.ts` `confirmPasteOverData` asks the engine `paste_overwrites`, which uses the engine's own paste area; tests `v03.rs` `paste_overwrites_matches_the_engine_target`, `nextUnlocked.test.ts`, `tests/e2e/input-ux.spec.ts`); traces are not redrawn after edits |
 | Automatic number recognition (dates, percent, currency, fractions, booleans) | done | Locale-aware (en, de, fr, es) |
-| Leading apostrophe forces text, leading `+`/`-` starts a formula | partial (P18) | `'123` is text (`workbook.rs:884`); `+B1+B2` stays text (`set_input_opts` only treats `=` as a formula); test `inventory_1_0.rs` `apostrophe_forces_text_and_signs_stay_numbers` |
+| Leading apostrophe forces text, leading `+`/`-` starts a formula | done | `'123` is text; typed `+B1+B2` is stored `=+B1+B2` unless it is a number, does not compile or uses an unknown name (AOO `EnterData`; `workbook.rs` `set_typed_input`, P18); paste and CSV do not convert; tests `inventory_1_0.rs` `apostrophe_forces_text_and_signs_stay_numbers`, `fill_signed_input.rs`, e2e `fill-signed.spec.ts` |
 | Alt+arrows row height / column width (Shift = optimal) | done | |
 | Ctrl+Alt+Shift+arrows | missing | U5 |
 | Alt+PageUp/PageDown | done | `selection.ts` |
@@ -88,17 +88,17 @@ The numbered sections after this block keep the original AOO text, which is the 
 | F8 / Shift+F8 | done | |
 | Shift+Backspace, Ctrl+Backspace | missing | |
 | Ctrl+arrows, Home/End, Ctrl+Home/End, PageUp/PageDown | done | |
-| Tab / Shift+Tab | partial (U7) | Next/previous cell (`grid/src/interaction.ts:757`); does not skip locked cells on a protected sheet |
+| Tab / Shift+Tab | done | Next/previous cell; on a protected sheet Tab, Shift+Tab and Enter move between unlocked cells only (the grid asks the engine `next_unlocked`, which walks the style runs, skips hidden rows / columns and covered merge cells and wraps; tests `v03.rs` `next_unlocked_skips_locked_hidden_and_covered_cells`, `nextUnlocked.test.ts`, `tests/e2e/input-ux.spec.ts`) |
 | Name Box | done | `⇧⌘T` focuses it |
 
 ### 4. Fill and AutoFill
 
 | Item | Status | Note |
 |---|---|---|
-| Fill handle with AutoFill analysis (linear, dates, text+number, sort lists, formulas) | partial (T16) | Linear, dates (day/month/year steps), en-US day and month names, numbered text, formulas (`fill.rs`; tests `v02.rs` `fill_series`, `fill_dates_and_modes`). Custom sort lists are not used, `1st` fills `2st`, a single number dragged up or left counts up |
+| Fill handle with AutoFill analysis (linear, dates, text+number, sort lists, formulas) | done | Linear, dates (day/month/year steps), day and month names of the document locale and en-US, Options sort lists (AOO `ScUserList` order), numbered text, formulas, ordinals (`1st` → `2nd`), counting down when filled up or left (`fill.rs`; tests `v02.rs` `fill_series`, `fill_dates_and_modes`, `fill_signed_input.rs`) |
 | Ctrl-drag copies; filtered data copies | missing (T16) | The fill handle always sends mode `auto` (`fill.ts:31`); `fill.rs` ignores filtered rows |
 | Fill Series dialog | done | `edit.fillSeries` |
-| Fill Down / Right | done | `⌘D`, `⌘R` |
+| Fill Down / Right | done | `⌘D`, `⌘R`: a copy with relative references adjusted (AOO `FillSimple`), not AutoFill (fill mode `copy`) |
 | Fill Up / Left | partial | Fill Series dialog has Up and Left (`DataDialogs.tsx` Fill Series dialog); no Fill Up / Fill Left commands |
 | Fill Sheet | missing | |
 | Sort lists (Options) | done | |
@@ -180,7 +180,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Item | Status | Note |
 |---|---|---|
 | AutoFilter with value list and empty entry | done | |
-| AutoFilter Top 10 | missing | The AutoFilter popover has values and one condition; `FilterOp` has no largest. The standard filter has largest / smallest |
+| AutoFilter Top 10 | done | "Top 10" in the AutoFilter popover = `FilterOp::TopValues` with 10 (AOO `SC_TOPVAL`); the condition list also has largest / smallest / largest % / smallest % (`filter.rs`, ties pass as in `ScTable::TopTenQuery`); ODS `top values` … `bottom percent`, XLSX `top10` |
 | Standard filter: operators, AND/OR, options | partial | Operators in T2; regex is Rust syntax (P4) |
 | Advanced filter | done | |
 | Reset filter, Hide AutoFilter | done | `data.resetFilter`, `data.clearFilters` |
@@ -271,7 +271,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Regular expressions | deviation (P4, T1) | Rust `regex`, not ICU |
 | Wildcards | done | Extra mode |
 | Similarity search, search for styles | missing | T1 |
-| Search in comments, all sheets, current selection only | partial (T1) | All sheets done (`FindQuery.sheet = None`, `Dialogs.tsx` find dialog); no comments search, no selection-only scope |
+| Search in comments, all sheets, current selection only | done | Search in Formulas / Values / Notes (`FindQuery.in_notes`; Replace All edits note text, undoable), Current selection only (`FindQuery.selection`, checked when several cells are selected, as AOO), All sheets (`FindQuery.sheet = None`); Replace (one) in the dialog (`find.rs`, `Dialogs.tsx`) |
 | Find bar | done | `⌘F` |
 | Spelling, AutoSpellcheck, thesaurus, hyphenation, Hangul/Hanja | missing | U8 |
 | AutoCorrect: two initial capitals, sentences, dashes, ordinals, quotes, replacement table | done | Options > AutoCorrect (six options) |
@@ -307,7 +307,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Layout (mirrored, only left/right), Borders and Background tabs | missing | R2, R3 |
 | Header/footer editor with fields and presets | partial | R5 |
 | Suppress empty pages | done | `suppress_empty_pages` |
-| Print only selected sheets | partial (R11) | Print and PDF cover the active sheet only; the engine takes all / some sheets and a selection (`tally-api/src/print.rs:25`) but the UI never sets them |
+| Print only selected sheets | done | R11: All sheets / Selected sheets (the active sheet; no multi-sheet selection yet) / Selected cells and a page list, in Print…, Export as PDF… and the Print Preview bar; default the active sheet |
 | PDF export | done | `file.exportPdf`; X21 |
 | Print preview | done | `file.printPreview` |
 | Native print | partial | R7 |
@@ -379,7 +379,7 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 | DIF, SYLK, Lotus, Quattro Pro, RTF, StarCalc 1-5, UOF, Pocket Excel, MiniCalc, SpreadsheetML 2003 | missing | missing | X10 |
 | PDF | n/a | done | |
 | CSV import options (separators, text delimiter, from row, character set, quoted as text, detect special numbers, column types, fixed width) | partial | | X17 |
-| CSV export options (character set, delimiters, as shown, quote all) | n/a | missing | X24: no options dialog; active sheet, UTF-8, comma, minimal quoting, as shown (`service/codec.rs:193`, `service/mod.rs:254`) |
+| CSV export options (character set, delimiters, as shown, quote all) | n/a | done | Text Export dialog after the file is picked (`CsvExportDialog.tsx`, `wb_save` → `csv_options` → `wb_save_csv`): field delimiter, text delimiter (or none), quote all text cells, save as shown, UTF-8 / UTF-16 / Windows-1252 / ISO-8859-1; last choices remembered for the session and by the document; "Keep current format" prompt on Save with the active-sheet-only note (`service/codec.rs`, `tally-io-csv`) |
 | VBA import as comments | missing | VBA is never read |
 
 ### 31. Other tools

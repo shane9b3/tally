@@ -6,60 +6,40 @@
 //! extended, so filling up or left continues the series backwards
 //! (1, 2 filled up gives 0, −1). Styles repeat with the source pattern.
 //!
-//! `Auto` detection per lane:
+//! `Auto` detection per lane (AOO `ScTable::FillAnalyse` / `FillAuto`).
+//! "+1" below is −1 when filling up or left (AOO negates the increment
+//! when `!bPositive`), so a single 5 dragged up gives 4, 3, 2:
 //! - numbers: one cell steps by +1; several with a constant difference
-//!   form a linear series; otherwise the pattern repeats, each repetition
-//!   +1 (AOO's `FILL_SIMPLE` with delta 1);
+//!   form a linear series;
 //! - date-formatted numbers: one cell steps one day; several step by
 //!   months (years) when the day of month is constant and the month
-//!   difference is, else by a constant day difference; otherwise the
-//!   pattern repeats;
-//! - day and month names (full or abbreviated, en-US, wrapping) step
-//!   through their list keeping the case style;
-//! - text with a trailing (else leading) integer ("Item 1", "Q3",
-//!   "001x") increments it, keeping leading zeros;
-//! - anything else (plain text, formulas, mixed lanes) is copied; formulas
-//!   are relative, so their references follow the new position.
+//!   difference is, else by a constant day difference;
+//! - entries of an AutoFill list (AOO `ScUserList`: the locale's and
+//!   en-US day and month names, abbreviated first, then the Options sort
+//!   lists) step through their list, wrapping and keeping the case style
+//!   (AOO writes the list's own case: a deliberate difference);
+//! - text with a leading or trailing integer ("Item 1", "Q3", "1st",
+//!   "001x"; AOO `lcl_DecompValueString`) increments it, zero-padding
+//!   when the number has a leading zero; English ordinal suffixes follow
+//!   the number ("1st" → "2nd", "11th", "21st"; AOO
+//!   `ScGlobal::GetOrdinalSuffix`); several with a constant difference
+//!   form a linear series;
+//! - anything else repeats the pattern, each repetition adding +1 to
+//!   numbers and numbered text (AOO's `FILL_SIMPLE`); plain text is
+//!   copied and formulas are relative, so their references follow the
+//!   new position.
 
 use std::sync::Arc;
 
 use tally_api::{ApiError, FillMode};
 use tally_numfmt::date::{days_in_month, serial_from_ymd, ymd_from_serial};
+use tally_numfmt::EN_US;
 use tally_types::{approx_equal, CellAddr, CellRange, DateEpoch, Value};
 
 use crate::ops::{array_block_error, MAX_OP_CELLS};
 use crate::storage::{CellContent, StyleId};
 use crate::undo::{capture_range, Change};
 use crate::workbook::{SnapContent, Workbook};
-
-const DAYS: [&str; 7] = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-];
-const DAYS_ABBR: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTHS: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
-const MONTHS_ABBR: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-const LISTS: [&[&str]; 4] = [&DAYS, &DAYS_ABBR, &MONTHS, &MONTHS_ABBR];
 
 /// Fill direction.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -104,38 +84,151 @@ fn apply_case(s: &str, case: Case) -> String {
     }
 }
 
-/// `(list index, position)` of a day/month name.
-fn list_pos(s: &str) -> Option<(usize, usize)> {
-    let t = s.trim();
-    LISTS.iter().enumerate().find_map(|(li, list)| {
+/// The AutoFill lists, in AOO `ScUserList` order: the document locale's
+/// abbreviated and full day names, abbreviated and full month names, then
+/// the Options sort lists (`custom_sort_lists`). The en-US names follow the
+/// locale's when the locale differs (Tally keeps English names filling in
+/// every locale; AOO only has the UI language's).
+fn fill_lists(wb: &Workbook) -> Vec<Vec<String>> {
+    let mut out: Vec<Vec<String>> = Vec::new();
+    let mut add = |l: Vec<String>| {
+        if !l.is_empty() && !out.contains(&l) {
+            out.push(l);
+        }
+    };
+    let own = |l: &[&str]| l.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
+    for loc in [wb.locale, &EN_US] {
+        add(own(&loc.short_day_names));
+        add(own(&loc.day_names));
+        add(own(&loc.short_month_names));
+        add(own(&loc.month_names));
+    }
+    for l in &wb.custom_sort_lists {
+        add(l.clone());
+    }
+    out
+}
+
+/// `(list index, position)` of `s` in the first list containing it
+/// (case-insensitive, AOO `ScUserList::GetData`).
+fn list_pos(lists: &[Vec<String>], s: &str) -> Option<(usize, usize)> {
+    let t = s.trim().to_lowercase();
+    lists.iter().enumerate().find_map(|(li, list)| {
         list.iter()
-            .position(|x| x.eq_ignore_ascii_case(t))
+            .position(|x| x.to_lowercase() == t)
             .map(|p| (li, p))
     })
 }
 
-/// Text with a number: `(prefix, number, digits, suffix)` (trailing number
-/// preferred, else leading).
-fn numbered(s: &str) -> Option<(String, i64, usize, String)> {
-    let bytes = s.as_bytes();
-    let end = bytes.len();
-    let mut i = end;
-    while i > 0 && bytes[i - 1].is_ascii_digit() {
+/// Text with a number at its start (`head`) or end (AOO
+/// `lcl_DecompValueString`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NumText {
+    head: bool,
+    value: i64,
+    /// Zero-padded width: the digit count when the number has a leading
+    /// zero, else 0.
+    digits: usize,
+    /// The text without the number.
+    rest: String,
+}
+
+/// Decomposes `s` like AOO: a leading number (with an optional `-` sign)
+/// wins when it is followed by a space or the end, or when the text does
+/// not end in a digit; otherwise a trailing number. Unlike AOO, a `-`
+/// before a trailing number is not a sign ("Item-5" fills "Item-6", not
+/// "Item-4"; "2024-05" fills "2024-06").
+fn numbered(s: &str) -> Option<NumText> {
+    const MAX_DIGITS: usize = 15;
+    let b = s.as_bytes();
+    let last = *b.last()?;
+    let neg = usize::from(b[0] == b'-');
+    let mut n = neg;
+    while n < b.len() && b[n].is_ascii_digit() {
+        n += 1;
+    }
+    let next = b.get(n).copied();
+    if n > neg && (next.is_none() || next == Some(b' ') || !last.is_ascii_digit()) {
+        let len = n - neg;
+        if len > MAX_DIGITS {
+            return None;
+        }
+        return Some(NumText {
+            head: true,
+            value: s[..n].parse().ok()?,
+            digits: if b[neg] == b'0' { len } else { 0 },
+            rest: s[n..].to_owned(),
+        });
+    }
+    let mut i = b.len();
+    while i > 0 && b[i - 1].is_ascii_digit() {
         i -= 1;
     }
-    if i < end && end - i <= 15 {
-        let n: i64 = s[i..].parse().ok()?;
-        return Some((s[..i].to_owned(), n, end - i, String::new()));
+    let len = b.len() - i;
+    if len == 0 || len > MAX_DIGITS {
+        return None;
     }
-    let mut j = 0;
-    while j < end && bytes[j].is_ascii_digit() {
-        j += 1;
+    Some(NumText {
+        head: false,
+        value: s[i..].parse().ok()?,
+        digits: if b[i] == b'0' { len } else { 0 },
+        rest: s[..i].to_owned(),
+    })
+}
+
+/// The English ordinal suffix of `n` (`st`, `nd`, `rd`, `th`).
+fn ordinal_suffix(n: i64) -> &'static str {
+    let a = n.unsigned_abs();
+    if (11..=13).contains(&(a % 100)) {
+        return "th";
     }
-    if j > 0 && j <= 15 && j < end {
-        let n: i64 = s[..j].parse().ok()?;
-        return Some((String::new(), n, j, s[j..].to_owned()));
+    match a % 10 {
+        1 => "st",
+        2 => "nd",
+        3 => "rd",
+        _ => "th",
     }
-    None
+}
+
+/// Whether `t`'s suffix is the ordinal suffix of its leading number
+/// ("1st", "22ND"): `Some(upper case)`, else `None`. AOO compares with
+/// the lower-case suffix only; upper case is accepted here too.
+fn ordinal_case(t: &NumText) -> Option<bool> {
+    if !t.head {
+        return None;
+    }
+    let suf = ordinal_suffix(t.value);
+    if t.rest == suf {
+        Some(false)
+    } else if t.rest == suf.to_ascii_uppercase() {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// `t` with its number replaced by `value` (AOO `lcl_ValueString` /
+/// `lcl_getSuffixCell`); an ordinal suffix follows the new number.
+fn renumber(t: &NumText, value: i64) -> String {
+    let body = if t.digits <= 1 {
+        value.to_string()
+    } else {
+        let mut d = format!("{:0w$}", value.unsigned_abs(), w = t.digits);
+        if value < 0 {
+            d.insert(0, '-');
+        }
+        d
+    };
+    if t.head {
+        let rest = match ordinal_case(t) {
+            Some(false) => ordinal_suffix(value).to_owned(),
+            Some(true) => ordinal_suffix(value).to_ascii_uppercase(),
+            None => t.rest.clone(),
+        };
+        format!("{body}{rest}")
+    } else {
+        format!("{}{body}", t.rest)
+    }
 }
 
 fn number(v: &Value) -> Option<f64> {
@@ -172,21 +265,28 @@ enum Plan {
     Growth(f64),
     Months(i64),
     List {
-        list: usize,
+        list: Vec<String>,
         start: usize,
         step: i64,
         case: Case,
     },
+    /// Numbered text: `last` (the source cell nearest the fill) renumbered
+    /// by `step` per cell.
     Numbered {
-        prefix: String,
-        suffix: String,
-        last: i64,
+        last: NumText,
         step: i64,
-        digits: usize,
     },
 }
 
-fn plan_lane(seq: &[Src], mode: FillMode, epoch: DateEpoch) -> Plan {
+/// The plan for one lane; `sign` is −1 when filling up or left (the
+/// default step of a single cell, and the pattern delta, count down).
+fn plan_lane(
+    seq: &[Src],
+    mode: FillMode,
+    epoch: DateEpoch,
+    sign: f64,
+    lists: &[Vec<String>],
+) -> Plan {
     let n = seq.len();
     let all_numbers: Option<Vec<f64>> = seq
         .iter()
@@ -201,7 +301,7 @@ fn plan_lane(seq: &[Src], mode: FillMode, epoch: DateEpoch) -> Plan {
         FillMode::LinearSeries => {
             return match &all_numbers {
                 Some(xs) if n >= 2 => Plan::Linear(xs[n - 1] - xs[n - 2]),
-                Some(_) => Plan::Linear(1.0),
+                Some(_) => Plan::Linear(sign),
                 None => Plan::Copy,
             }
         }
@@ -214,25 +314,22 @@ fn plan_lane(seq: &[Src], mode: FillMode, epoch: DateEpoch) -> Plan {
         }
         FillMode::Date => {
             return match &all_numbers {
-                Some(xs) => date_plan(xs, epoch).unwrap_or(Plan::Linear(1.0)),
+                Some(xs) => date_plan(xs, epoch).unwrap_or(Plan::Linear(sign)),
                 None => Plan::Copy,
             }
         }
         FillMode::Auto => {}
     }
     if let Some(xs) = &all_numbers {
-        if all_dates {
-            if n == 1 {
-                return Plan::Linear(1.0);
-            }
-            return date_plan(xs, epoch).unwrap_or(Plan::Copy);
-        }
         if n == 1 {
-            return Plan::Linear(1.0);
+            return Plan::Linear(sign);
+        }
+        if all_dates {
+            return date_plan(xs, epoch).unwrap_or(Plan::CopyDelta(sign));
         }
         return match constant_step(xs) {
             Some(d) => Plan::Linear(d),
-            None => Plan::CopyDelta(1.0),
+            None => Plan::CopyDelta(sign),
         };
     }
     let texts: Option<Vec<&str>> = seq
@@ -243,16 +340,16 @@ fn plan_lane(seq: &[Src], mode: FillMode, epoch: DateEpoch) -> Plan {
         })
         .collect();
     let Some(texts) = texts else {
-        return Plan::Copy;
+        return Plan::CopyDelta(sign);
     };
-    // Day / month names.
-    let pos: Option<Vec<(usize, usize)>> = texts.iter().map(|t| list_pos(t)).collect();
+    // Day / month names and sort lists.
+    let pos: Option<Vec<(usize, usize)>> = texts.iter().map(|t| list_pos(lists, t)).collect();
     if let Some(pos) = pos {
         let list = pos[0].0;
         if pos.iter().all(|p| p.0 == list) {
-            let len = LISTS[list].len() as i64;
+            let len = lists[list].len() as i64;
             let step = if n == 1 {
-                1
+                sign as i64
             } else {
                 let d = (pos[1].1 as i64 - pos[0].1 as i64).rem_euclid(len);
                 if pos
@@ -261,44 +358,39 @@ fn plan_lane(seq: &[Src], mode: FillMode, epoch: DateEpoch) -> Plan {
                 {
                     d
                 } else {
-                    return Plan::Copy;
+                    return Plan::CopyDelta(sign);
                 }
             };
             return Plan::List {
-                list,
+                list: lists[list].clone(),
                 start: pos[n - 1].1,
                 step,
                 case: case_of(texts[n - 1]),
             };
         }
     }
-    // Numbered text.
-    let nums: Option<Vec<(String, i64, usize, String)>> =
-        texts.iter().map(|t| numbered(t)).collect();
+    // Numbered text: AOO only needs the same number position (start or
+    // end) and a constant difference; the rest comes from the last cell
+    // and the widest zero-padded number sets the width.
+    let nums: Option<Vec<NumText>> = texts.iter().map(|t| numbered(t)).collect();
     if let Some(nums) = nums {
-        let (p, s) = (&nums[0].0, &nums[0].3);
-        if nums.iter().all(|x| &x.0 == p && &x.3 == s) {
-            let step = if n == 1 {
-                1
-            } else {
-                let d = nums[1].1 - nums[0].1;
-                if nums.windows(2).all(|w| w[1].1 - w[0].1 == d) {
-                    d
-                } else {
-                    1
-                }
-            };
-            let last = &nums[n - 1];
+        if n == 1 {
             return Plan::Numbered {
-                prefix: last.0.clone(),
-                suffix: last.3.clone(),
-                last: last.1,
-                step,
-                digits: last.2,
+                last: nums[0].clone(),
+                step: sign as i64,
             };
         }
+        let head = nums[0].head;
+        let d = nums[1].value - nums[0].value;
+        if nums.iter().all(|x| x.head == head)
+            && nums.windows(2).all(|w| w[1].value - w[0].value == d)
+        {
+            let mut last = nums[n - 1].clone();
+            last.digits = nums.iter().map(|x| x.digits).max().unwrap_or(0);
+            return Plan::Numbered { last, step: d };
+        }
     }
-    Plan::Copy
+    Plan::CopyDelta(sign)
 }
 
 fn date_plan(xs: &[f64], epoch: DateEpoch) -> Option<Plan> {
@@ -337,8 +429,16 @@ fn produce(plan: &Plan, seq: &[Src], k: usize, epoch: DateEpoch) -> Option<SnapC
         Plan::Copy => seq[k % n].content.clone(),
         Plan::CopyDelta(d) => {
             let src = &seq[k % n];
+            let delta = (k / n + 1) as f64 * d;
             match &src.content {
-                Some(SnapContent::Value(Value::Number(x))) => num(x + (k / n + 1) as f64 * d),
+                Some(SnapContent::Value(Value::Number(x))) => num(x + delta),
+                Some(SnapContent::Value(Value::Text(t))) => match numbered(t) {
+                    Some(nt) => Some(SnapContent::Value(Value::text(renumber(
+                        &nt,
+                        nt.value.saturating_add(delta as i64),
+                    )))),
+                    None => src.content.clone(),
+                },
                 other => other.clone(),
             }
         }
@@ -354,26 +454,12 @@ fn produce(plan: &Plan, seq: &[Src], k: usize, epoch: DateEpoch) -> Option<SnapC
             step,
             case,
         } => {
-            let l = LISTS[*list];
-            let i = (*start as i64 + step * (k as i64 + 1)).rem_euclid(l.len() as i64) as usize;
-            Some(SnapContent::Value(Value::text(apply_case(l[i], *case))))
+            let i = (*start as i64 + step * (k as i64 + 1)).rem_euclid(list.len() as i64) as usize;
+            Some(SnapContent::Value(Value::text(apply_case(&list[i], *case))))
         }
-        Plan::Numbered {
-            prefix,
-            suffix,
-            last,
-            step,
-            digits,
-        } => {
-            let v = last + step * (k as i64 + 1);
-            let body = if v < 0 {
-                format!("-{:0w$}", -v, w = *digits)
-            } else {
-                format!("{v:0w$}", w = *digits)
-            };
-            Some(SnapContent::Value(Value::text(format!(
-                "{prefix}{body}{suffix}"
-            ))))
+        Plan::Numbered { last, step } => {
+            let v = last.value.saturating_add(step.saturating_mul(k as i64 + 1));
+            Some(SnapContent::Value(Value::text(renumber(last, v))))
         }
     }
 }
@@ -424,6 +510,7 @@ pub fn fill_range(
         return Err(array_block_error());
     }
     let epoch = wb.settings.date_epoch;
+    let lists = fill_lists(wb);
     let inv = capture_range(wb, area, true, true);
     let vertical = matches!(dir, Dir::Down | Dir::Up);
     let lanes = if vertical {
@@ -465,7 +552,12 @@ pub fn fill_range(
                 }
             })
             .collect();
-        let plan = plan_lane(&seq, mode, epoch);
+        let sign = if matches!(dir, Dir::Up | Dir::Left) {
+            -1.0
+        } else {
+            1.0
+        };
+        let plan = plan_lane(&seq, mode, epoch, sign, &lists);
         let positions: Vec<u32> = match dir {
             Dir::Down => (source.r1 + 1..=target.r1).collect(),
             Dir::Up => (target.r0..source.r0).rev().collect(),
@@ -507,14 +599,59 @@ mod tests {
 
     #[test]
     fn helpers() {
-        assert_eq!(list_pos("mon"), Some((1, 1)));
-        assert_eq!(list_pos("December"), Some((2, 11)));
-        assert_eq!(
-            numbered("Item 9"),
-            Some(("Item ".into(), 9, 1, String::new()))
-        );
-        assert_eq!(numbered("007x"), Some((String::new(), 7, 3, "x".into())));
+        let mut wb = Workbook::new();
+        wb.custom_sort_lists = vec![vec!["North".into(), "South".into()]];
+        let lists = fill_lists(&wb);
+        assert_eq!(list_pos(&lists, "mon"), Some((0, 1)));
+        assert_eq!(list_pos(&lists, "Monday"), Some((1, 1)));
+        // "May" is in the abbreviated list first (AOO order).
+        assert_eq!(list_pos(&lists, "May"), Some((2, 4)));
+        assert_eq!(list_pos(&lists, "December"), Some((3, 11)));
+        assert_eq!(list_pos(&lists, "south"), Some((4, 1)));
+        // A German document fills German names too.
+        wb.locale = &tally_numfmt::DE_DE;
+        let lists = fill_lists(&wb);
+        let (li, p) = list_pos(&lists, tally_numfmt::DE_DE.day_names[1]).unwrap();
+        assert_eq!(lists[li][p], tally_numfmt::DE_DE.day_names[1]);
+        assert!(list_pos(&lists, "Monday").is_some());
+        let nt = |head, value, digits, rest: &str| {
+            Some(NumText {
+                head,
+                value,
+                digits,
+                rest: rest.into(),
+            })
+        };
+        assert_eq!(numbered("Item 9"), nt(false, 9, 0, "Item "));
+        assert_eq!(numbered("007x"), nt(true, 7, 3, "x"));
+        assert_eq!(numbered("1st"), nt(true, 1, 0, "st"));
+        // A leading number followed by a space wins (AOO #i5550).
+        assert_eq!(numbered("1 to 5"), nt(true, 1, 0, " to 5"));
+        // Otherwise the trailing one (IP addresses).
+        assert_eq!(numbered("10.0.0.1"), nt(false, 1, 0, "10.0.0."));
+        assert_eq!(numbered("-3 dB"), nt(true, -3, 0, " dB"));
+        assert_eq!(numbered("Item-5"), nt(false, 5, 0, "Item-"));
         assert_eq!(numbered("abc"), None);
+        assert_eq!(numbered("-"), None);
+        assert_eq!(numbered(""), None);
+        let ords: Vec<String> = [1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111, 112, -1]
+            .iter()
+            .map(|&v| format!("{v}{}", ordinal_suffix(v)))
+            .collect();
+        assert_eq!(
+            ords,
+            [
+                "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd",
+                "101st", "111th", "112th", "-1st"
+            ]
+        );
+        let first = numbered("1ST").unwrap();
+        assert_eq!(renumber(&first, 2), "2ND");
+        // Not an ordinal: the suffix is kept as is (AOO).
+        assert_eq!(renumber(&numbered("1th").unwrap(), 2), "2th");
+        assert_eq!(renumber(&numbered("1st place").unwrap(), 2), "2st place");
+        assert_eq!(renumber(&numbered("Item 09").unwrap(), 10), "Item 10");
+        assert_eq!(renumber(&numbered("Item 09").unwrap(), -1), "Item -01");
         assert_eq!(constant_step(&[1.0, 3.0, 5.0]), Some(2.0));
         assert_eq!(constant_step(&[1.0, 3.0, 4.0]), None);
         let e = DateEpoch::default();

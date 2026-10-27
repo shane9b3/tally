@@ -29,8 +29,8 @@ fn two_digit_year_window_is_1930() {
 }
 
 /// Section 2: a leading apostrophe forces text; a leading `+` or `-`
-/// before a number is its sign. (`+B1+B2` staying text is gap P18, not
-/// locked here.)
+/// before a number is its sign. (`+B1+B2` as a formula, P18, is tested
+/// in `fill_signed_input.rs`.)
 #[test]
 fn apostrophe_forces_text_and_signs_stay_numbers() {
     let mut f = Fixture::new();

@@ -303,3 +303,216 @@ fn reads_excel_tools_fixture() {
     assert_eq!(p.data_fields[0].function, AggFnData::Sum);
     assert_eq!(p.output, Some(r(0, 0, 3, 1)));
 }
+
+/// AutoFilter: value lists, a custom condition and AOO's "Top 10" as
+/// `<top10>`; filtered rows are hidden rows in Excel and read back as the
+/// filter's rows.
+#[test]
+fn autofilter_round_trip_with_top10() {
+    let mut wb = sample();
+    // No outline (its collapsed group hides rows of its own).
+    wb.sheets[0].row_groups.clear();
+    wb.sheets[0].row_heights.retain(|h| !h.hidden);
+    let ops = [
+        (0, Some(vec!["East".to_string(), String::new()]), None),
+        (
+            1,
+            None,
+            Some(FilterConditionData {
+                op: FilterOpData::BeginsWith,
+                value: "A*p".into(),
+            }),
+        ),
+        (
+            2,
+            None,
+            Some(FilterConditionData {
+                op: FilterOpData::TopValues,
+                value: "10".into(),
+            }),
+        ),
+        (
+            3,
+            None,
+            Some(FilterConditionData {
+                op: FilterOpData::BottomPercent,
+                value: "25".into(),
+            }),
+        ),
+    ];
+    wb.sheets[0].auto_filter = Some(AutoFilterData {
+        range: r(0, 0, 4, 3),
+        columns: ops
+            .iter()
+            .map(|(col, values, condition)| FilterColumnData {
+                col: *col,
+                values: values.clone(),
+                condition: condition.clone(),
+            })
+            .collect(),
+        filtered_rows: vec![(3, 4)],
+    });
+    let bytes = to_bytes(&wb);
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(
+        &mut zip.by_name("xl/worksheets/sheet1.xml").unwrap(),
+        &mut xml,
+    )
+    .unwrap();
+    assert!(xml.contains(r#"<autoFilter ref="A1:D5">"#), "{xml}");
+    assert!(
+        xml.contains(
+            r#"<filterColumn colId="2"><top10 top="1" val="10" percent="0"/></filterColumn>"#
+        ),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(r#"<top10 top="0" val="25" percent="1"/>"#),
+        "{xml}"
+    );
+    assert!(xml.contains(r#"<customFilter val="A~*p*"/>"#), "{xml}");
+    assert!(
+        xml.contains(r#"<filters blank="1"><filter val="East"/></filters>"#),
+        "{xml}"
+    );
+    // Schema order: the autoFilter comes before mergeCells / pageMargins.
+    let at = xml.find("<autoFilter").unwrap();
+    assert!(at < xml.find("<pageMargins").unwrap());
+    // Excel's hidden `_xlnm._FilterDatabase` name is written, and not read
+    // back as a user name.
+    let mut wbx = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("xl/workbook.xml").unwrap(), &mut wbx).unwrap();
+    assert!(
+        wbx.contains(r#"<definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">'Data'!$A$1:$D$5</definedName>"#),
+        "{wbx}"
+    );
+    let back = round_trip(&wb);
+    let af = back.sheets[0].auto_filter.as_ref().unwrap();
+    assert_eq!(af, wb.sheets[0].auto_filter.as_ref().unwrap());
+    assert!(!back.sheets[0].row_heights.iter().any(|h| h.hidden));
+    assert!(!back.names.iter().any(|n| n.name.contains("FilterDatabase")));
+}
+
+/// Replaces `xl/worksheets/sheet1.xml` of a package.
+fn with_sheet1(bytes: &[u8], f: impl Fn(String) -> String) -> Vec<u8> {
+    let mut zin = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..zin.len() {
+        let mut file = zin.by_index(i).unwrap();
+        let name = file.name().unwrap().to_string();
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut data).unwrap();
+        if name == "xl/worksheets/sheet1.xml" {
+            data = f(String::from_utf8(data).unwrap()).into_bytes();
+        }
+        // Stored: the crafted parts would trip the compression-ratio guard.
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        out.start_file(name, opts).unwrap();
+        std::io::Write::write_all(&mut out, &data).unwrap();
+    }
+    out.finish().unwrap().into_inner()
+}
+
+/// Control characters in filter values survive (`&#9;` … and `_xHHHH_`);
+/// a column with two custom conditions opens unfiltered with a warning.
+#[test]
+fn autofilter_control_characters_and_two_conditions() {
+    let mut wb = sample();
+    wb.sheets[0].row_groups.clear();
+    wb.sheets[0].row_heights.retain(|h| !h.hidden);
+    let values = vec![
+        "a\tb".to_string(),
+        "x\u{1}y\n".to_string(),
+        "_x0041_".to_string(),
+    ];
+    wb.sheets[0].auto_filter = Some(AutoFilterData {
+        range: r(0, 0, 4, 3),
+        columns: vec![FilterColumnData {
+            col: 0,
+            values: Some(values.clone()),
+            condition: None,
+        }],
+        filtered_rows: Vec::new(),
+    });
+    let bytes = to_bytes(&wb);
+    let back = tally_io_xlsx::read_xlsx(
+        std::io::Cursor::new(&bytes),
+        &tally_io_xlsx::Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        back.sheets[0].auto_filter.as_ref().unwrap().columns[0].values,
+        Some(values)
+    );
+    let two = with_sheet1(&bytes, |x| {
+        x.replace(
+            "</autoFilter>",
+            r#"<filterColumn colId="2"><customFilters and="1"><customFilter operator="greaterThan" val="5"/><customFilter operator="lessThan" val="30"/></customFilters></filterColumn></autoFilter>"#,
+        )
+    });
+    let back =
+        tally_io_xlsx::read_xlsx(std::io::Cursor::new(two), &tally_io_xlsx::Limits::default())
+            .unwrap();
+    let af = back.sheets[0].auto_filter.as_ref().unwrap();
+    assert!(af.columns.iter().all(|c| c.col != 2), "{af:?}");
+    assert!(
+        back.warnings.iter().any(|w| w.contains("two conditions")),
+        "{:?}",
+        back.warnings
+    );
+}
+
+/// A crafted filter with more values than allowed keeps the cap and warns.
+#[test]
+fn autofilter_values_are_capped_with_a_warning() {
+    let wb = sample();
+    let bytes = to_bytes(&wb);
+    let big = "v".repeat(30_000);
+    let flood = with_sheet1(&bytes, |x| {
+        let mut f = String::from(r#"<autoFilter ref="A1:D5">"#);
+        for c in 0..2 {
+            f.push_str(&format!(r#"<filterColumn colId="{c}"><filters>"#));
+            for i in 0..600 {
+                f.push_str(&format!(r#"<filter val="{big}{i}"/>"#));
+            }
+            f.push_str("</filters></filterColumn>");
+        }
+        f.push_str("</autoFilter>");
+        x.replacen("<pageMargins", &format!("{f}<pageMargins"), 1)
+    });
+    let back = tally_io_xlsx::read_xlsx(
+        std::io::Cursor::new(flood),
+        &tally_io_xlsx::Limits::default(),
+    )
+    .unwrap();
+    let af = back.sheets[0].auto_filter.as_ref().unwrap();
+    let total: usize = af
+        .columns
+        .iter()
+        .map(|c| {
+            c.values
+                .as_ref()
+                .map_or(0, |v| v.iter().map(String::len).sum::<usize>())
+        })
+        .sum();
+    assert!(total <= 64 << 20, "{total}");
+    assert!(
+        af.columns[0]
+            .values
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(String::len)
+            .sum::<usize>()
+            <= 16 << 20
+    );
+    assert!(
+        back.warnings
+            .iter()
+            .any(|w| w.contains("AutoFilter lists more values")),
+        "{:?}",
+        back.warnings
+    );
+}

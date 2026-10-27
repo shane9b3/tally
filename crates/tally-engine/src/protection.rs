@@ -6,9 +6,9 @@
 //! not security: the hashes are weak and the file is not encrypted.
 //! Unknown algorithms cannot be verified and accept any password.
 
-use tally_api::{ApiError, ProtectionInfo, ProtectionOptions};
+use tally_api::{ApiError, Direction, ProtectionInfo, ProtectionOptions, RangeDto};
 use tally_model::{hash_algorithms, CellProtectionData, SheetProtectionData};
-use tally_types::{CellRange, SheetId};
+use tally_types::{CellRange, SheetId, MAX_COLS, MAX_ROWS};
 
 use crate::storage::StyleId;
 use crate::workbook::Workbook;
@@ -519,6 +519,153 @@ pub fn info(wb: &Workbook, sheet: SheetId) -> Option<ProtectionInfo> {
         structure_protected: wb.structure_protection.is_some(),
         structure_has_password: wb.structure_protection.as_ref().is_some_and(has_pw),
     })
+}
+
+/// The unlocked cells of a sheet as `[r0, c0, r1, c1]` per-column row runs,
+/// from the style runs (cells outside any run have the default style).
+fn unlocked_runs(wb: &Workbook, s: &crate::storage::Sheet) -> Vec<[i64; 4]> {
+    let mut out: Vec<[i64; 4]> = Vec::new();
+    for c in 0..u32::try_from(s.columns.len()).unwrap_or(u32::MAX) {
+        let Some(col) = s.column(c) else { continue };
+        for (a, b, id) in col.styles.runs_in(0, MAX_ROWS - 1) {
+            if cell_protection(wb, id).locked {
+                continue;
+            }
+            let (a, b, c) = (i64::from(a), i64::from(b), i64::from(c));
+            match out.last_mut() {
+                Some(l) if l[1] == c && l[3] == c && l[2] + 1 == a => l[2] = b,
+                _ => out.push([a, c, b, c]),
+            }
+        }
+    }
+    out
+}
+
+/// The first position strictly after (`r`, `c`) in row-major order inside
+/// one of `rects` (`[r0, c0, r1, c1]`).
+fn first_after(rects: &[[i64; 4]], r: i64, c: i64) -> Option<(i64, i64)> {
+    let mut best: Option<(i64, i64)> = None;
+    for &[a0, b0, a1, b1] in rects {
+        let cand = if r < a0 {
+            Some((a0, b0))
+        } else if r <= a1 {
+            if c < b1 {
+                Some((r, (c + 1).max(b0)))
+            } else if r < a1 {
+                Some((r + 1, b0))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(x) = cand {
+            if best.is_none_or(|b| x < b) {
+                best = Some(x);
+            }
+        }
+    }
+    best
+}
+
+/// Tab / Enter on a protected sheet (AOO `ScTable::ValidNextPos`): the next
+/// unlocked cell from `from` in reading order, skipping hidden rows and
+/// columns and the covered cells of merges, wrapping. Tab (`Right` / `Left`)
+/// walks along rows, Enter (`Down` / `Up`) down columns. `within` limits the
+/// walk to a selection. `None`: the sheet is not protected or has no such cell.
+pub fn next_unlocked(
+    wb: &Workbook,
+    sheet: SheetId,
+    from: (u32, u32),
+    dir: Direction,
+    within: Option<&RangeDto>,
+) -> Option<(u32, u32)> {
+    let s = wb.sheet(sheet)?;
+    s.meta.protection()?;
+    let by_col = matches!(dir, Direction::Up | Direction::Down);
+    let fwd = matches!(dir, Direction::Right | Direction::Down);
+    let sg: i64 = if fwd { 1 } else { -1 };
+    let clip = within.map_or(
+        [0, 0, i64::from(MAX_ROWS - 1), i64::from(MAX_COLS - 1)],
+        |w| {
+            [
+                i64::from(w.r0),
+                i64::from(w.c0),
+                i64::from(w.r1),
+                i64::from(w.c1),
+            ]
+        },
+    );
+    // Transformed space: (major, minor) = row-major position, negated going back.
+    let mut rects: Vec<[i64; 4]> = Vec::new();
+    let runs = if cell_protection(wb, StyleId::DEFAULT).locked {
+        unlocked_runs(wb, s)
+    } else {
+        vec![[0, 0, i64::from(MAX_ROWS - 1), i64::from(MAX_COLS - 1)]]
+    };
+    for [r0, c0, r1, c1] in runs {
+        let (r0, c0, r1, c1) = (
+            r0.max(clip[0]),
+            c0.max(clip[1]),
+            r1.min(clip[2]),
+            c1.min(clip[3]),
+        );
+        if r0 > r1 || c0 > c1 {
+            continue;
+        }
+        let (a0, a1, b0, b1) = if by_col {
+            (c0, c1, r0, r1)
+        } else {
+            (r0, r1, c0, c1)
+        };
+        rects.push(if fwd {
+            [a0, b0, a1, b1]
+        } else {
+            [-a1, -b1, -a0, -b0]
+        });
+    }
+    if rects.is_empty() {
+        return None;
+    }
+    let (fr, fc) = (i64::from(from.0), i64::from(from.1));
+    let (mut major, mut minor) = if by_col {
+        (fc * sg, fr * sg)
+    } else {
+        (fr * sg, fc * sg)
+    };
+    let mut wrapped = false;
+    for _ in 0..4_000_000 {
+        let Some((a, b)) = first_after(&rects, major, minor) else {
+            if wrapped {
+                return None;
+            }
+            wrapped = true;
+            major = -4_000_000;
+            minor = 0;
+            continue;
+        };
+        let (a, b) = (a * sg, b * sg);
+        let (r, c) = if by_col { (b, a) } else { (a, b) };
+        let (ru, cu) = (u32::try_from(r).ok()?, u32::try_from(c).ok()?);
+        let major_hidden = if by_col {
+            s.col_hidden(cu)
+        } else {
+            s.row_hidden(ru)
+        };
+        if major_hidden {
+            // The whole row (column) is out: continue after its last cell.
+            major = a * sg;
+            minor = 4_000_000;
+            continue;
+        }
+        if s.col_hidden(cu) || s.row_hidden(ru) || s.is_merge_covered(ru, cu) {
+            major = a * sg;
+            minor = b * sg;
+            continue;
+        }
+        return Some((ru, cu));
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------

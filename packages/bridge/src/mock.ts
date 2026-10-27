@@ -26,7 +26,11 @@ import type { CellView } from "./generated/CellView";
 import type { ClipboardOut } from "./generated/ClipboardOut";
 import type { DimRunPx } from "./generated/DimRunPx";
 import type { Direction } from "./generated/Direction";
+import type { PasteOptions } from "./generated/PasteOptions";
+import type { PastePayload } from "./generated/PastePayload";
+import { pasteArea } from "./pasteArea";
 import type { DocChangedEvent } from "./generated/DocChangedEvent";
+import type { CsvExportOptions } from "./generated/CsvExportOptions";
 import type { DocId } from "./generated/DocId";
 import type { FileFormat } from "./generated/FileFormat";
 import type { FunctionInfo } from "./generated/FunctionInfo";
@@ -390,6 +394,17 @@ class Evaluator {
   }
 
   private formula(src: string): Scalar {
+    // A leading unary sign (typed `+B1+B2` is stored `=+B1+B2`). Minus is
+    // only applied where -(x) equals the real precedence (no + / - after).
+    if (src.startsWith("+")) return this.formula(src.slice(1).trim());
+    if (src.startsWith("-") && !/^-\s*\d/.test(src)) {
+      const inner = src.slice(1).trim();
+      const op = BINARY_RE.exec(inner)?.[2];
+      if (op !== "+" && op !== "-") {
+        const v = this.toNumber(this.formula(inner));
+        return typeof v === "number" ? -v : v;
+      }
+    }
     const sum = SUM_RE.exec(src);
     if (sum?.[1] !== undefined) {
       const range = parseRange(sum[1]);
@@ -526,15 +541,45 @@ export class MockClient implements EngineClientV4, ShellClient {
     return Promise.reject(apiError("unsupported", "Opening files needs the desktop app."));
   }
 
-  /** "Saves" in memory under the document title with the format's extension. */
-  saveWithDialog(doc: DocId, saveAs: boolean, format: FileFormat | null): Promise<WorkbookInfo> {
+  /**
+   * "Saves" in memory under the document title with the format's extension.
+   * Like the desktop shell, a newly "picked" CSV file without options
+   * rejects with `csv_options` and waits for {@link saveCsv}.
+   */
+  saveWithDialog(doc: DocId, saveAs: boolean, format: FileFormat | null, csv: CsvExportOptions | null = null): Promise<WorkbookInfo> {
     const d = this.docs.get(doc);
     if (!d) return Promise.reject(apiError("not_found", `no document ${doc}`));
     const fmt = format ?? "ods";
-    if (d.path !== null && !saveAs && format === null) return this.save(doc, null, fmt);
+    if (d.path !== null && !saveAs && format === null) {
+      if (/\.(csv|tsv|txt|tab)$/i.test(d.path)) this.savedCsv.push({ doc, title: d.title, csv: structuredClone(this.csvOptions.get(doc) ?? null) });
+      return this.save(doc, null, fmt);
+    }
     const title = d.title;
     const name = /\.[a-z]+$/i.test(title) ? title.replace(/\.[a-z]+$/i, `.${fmt}`) : `${title}.${fmt}`;
+    if (fmt === "csv") {
+      if (csv === null) {
+        this.pendingCsv.set(doc, name);
+        return Promise.reject(apiError("csv_options", name));
+      }
+      this.csvOptions.set(doc, structuredClone(csv));
+      this.savedCsv.push({ doc, title: name, csv: structuredClone(csv) });
+    }
     return this.save(doc, name, fmt);
+  }
+
+  /** CSV saves (e2e hook): the file name and the Text Export options used. */
+  readonly savedCsv: { doc: DocId; title: string; csv: CsvExportOptions | null }[] = [];
+  private readonly pendingCsv = new Map<DocId, string>();
+  private readonly csvOptions = new Map<DocId, CsvExportOptions>();
+
+  saveCsv(doc: DocId, csv: CsvExportOptions | null): Promise<WorkbookInfo | null> {
+    const name = this.pendingCsv.get(doc);
+    this.pendingCsv.delete(doc);
+    if (csv === null) return Promise.resolve(null);
+    if (name === undefined) return Promise.reject(apiError("not_found", "no CSV save is waiting for options"));
+    this.csvOptions.set(doc, structuredClone(csv));
+    this.savedCsv.push({ doc, title: name, csv: structuredClone(csv) });
+    return this.save(doc, name, "csv");
   }
 
   recentFiles(): Promise<string[]> {
@@ -654,6 +699,27 @@ export class MockClient implements EngineClientV4, ShellClient {
 
   navigateEdge(doc: DocId, sheet: SheetId, from: CellPos, dir: Direction): Promise<CellPos> {
     return this.run(() => navigate(this.sheet(this.doc(doc), sheet), from, dir));
+  }
+
+  /** The mock has no cell protection state: nothing to jump to. */
+  nextUnlocked(_doc: DocId, _sheet: SheetId, _from: CellPos, _dir: Direction, _within: RangeDto | null): Promise<CellPos | null> {
+    return Promise.resolve(null);
+  }
+
+  pasteOverwrites(doc: DocId, sheet: SheetId, target: RangeDto, payload: PastePayload, options: PasteOptions): Promise<boolean> {
+    return this.run(() => {
+      const sh = this.sheet(this.doc(doc), sheet);
+      const snap = payload.type === "internal" ? this.clipboard.get(payload.token) : undefined;
+      const clip = snap ? { rows: snap.length, cols: Math.max(1, ...snap.map((r) => r.length)) } : null;
+      const area = pasteArea(target, payload, options, clip);
+      if (!area) return false;
+      for (const [k, cell] of sh.cells) {
+        if (cell.input === "") continue;
+        const [r, c] = k.split(",").map(Number) as [number, number];
+        if (r >= area.r0 && r <= area.r1 && c >= area.c0 && c <= area.c1) return true;
+      }
+      return false;
+    });
   }
 
   resolveNameBox(doc: DocId, text: string): Promise<SelectionDto> {
@@ -842,6 +908,15 @@ export class MockClient implements EngineClientV4, ShellClient {
       });
     }
     return this.resolveNameBox(doc, text);
+  }
+
+  setActiveSheet(doc: DocId, sheet: SheetId): Promise<void> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      if (!d.state.sheets.some((s) => s.id === sheet)) throw apiError("not_found", `no sheet ${sheet}`);
+      // View state: no undo step, the document stays clean.
+      d.state.activeSheet = sheet;
+    });
   }
 
   // -- v0.4–v0.6 stubs (wave 5) ----------------------------------------------

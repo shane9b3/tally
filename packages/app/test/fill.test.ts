@@ -48,6 +48,23 @@ describe("planSeries", () => {
     expect(run([txt("1st")], [1, 2, 10])).toEqual(["2nd", "3rd", "11th"]);
   });
 
+  it("ordinals and numbered text match the engine (T16)", () => {
+    expect(run([txt("1st")], [3, 10, 11, 12, 20, 21, 22, 100, 110])).toEqual(["4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "101st", "111th"]);
+    // Filling up counts down.
+    expect(run([txt("Item 5")], [-1, -2])).toEqual(["Item 4", "Item 3"]);
+    expect(run([txt("3rd")], [-1, -2])).toEqual(["2nd", "1st"]);
+    expect(run([txt("Item 10")], [-1])).toEqual(["Item 9"]);
+    expect(run([txt("1th")], [1])).toEqual(["2th"]);
+  });
+
+  it("uses the Options sort lists after the built-in names, abbreviated first (L6)", () => {
+    const lists = [["North", "East", "South", "West"]];
+    const g = planSeries([txt("South")], lists);
+    expect(g ? [1, 2, -2].map(g) : null).toEqual(["West", "North", "North"]);
+    expect(planSeries([txt("South")])).toBeNull();
+    expect(run([txt("May")], [1])).toEqual(["Jun"]);
+  });
+
   it("copies everything else", () => {
     expect(planSeries([txt("Paid")])).toBeNull();
     expect(planSeries([txt("A1B")])).toBeNull();
@@ -103,6 +120,8 @@ describe("fillRange (engine op)", () => {
     const source = { r0: 0, c0: 0, r1: 1, c1: 0 };
     const target = { r0: 0, c0: 0, r1: 9, c1: 0 };
     expect(fillRange({ sheet: 3 }, source, target)).toEqual([{ type: "fillRange", sheet: 3, source, target, mode: "auto" }]);
+    // ⌘D / ⌘R copy (AOO FillSimple).
+    expect(fillRange({ sheet: 3 }, source, target, "copy")).toEqual([{ type: "fillRange", sheet: 3, source, target, mode: "copy" }]);
     expect(fillRange({ sheet: 3 }, source, source)).toEqual([]);
   });
 });

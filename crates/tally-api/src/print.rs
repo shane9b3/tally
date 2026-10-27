@@ -41,14 +41,43 @@ pub enum PrintSheets {
 pub struct PrintOptionsDto {
     /// Sheets.
     pub sheets: PrintSheets,
-    /// Print only this selection (on the active sheet).
-    pub selection: Option<RangeDto>,
+    /// Print only these selected ranges of the active sheet (AOO's
+    /// "Selected cells"), each as its own print range, in this order. A
+    /// whole-row or whole-column range ends at the sheet's data.
+    pub selection: Option<Vec<RangeDto>>,
     /// Skip pages without content (AOO default `true`).
     pub suppress_empty_pages: bool,
     /// First page to print (1-based), or all.
     pub page_from: Option<u32>,
     /// Last page to print (1-based).
     pub page_to: Option<u32>,
+    /// The sheet the user is on. [`PrintSheets::Active`] and `selection`
+    /// resolve against it; `None` uses the workbook's stored active sheet,
+    /// which only follows sheet switches that went through an edit.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub active_sheet: Option<SheetId>,
+    /// Pages to print as inclusive 1-based `[first, last]` ranges over the
+    /// job ("1-3,5" is `[[1, 3], [5, 5]]`), or all. Pages keep their job
+    /// order and numbering; ranges past the end select nothing.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub page_ranges: Option<Vec<[u32; 2]>>,
+}
+
+impl Default for PrintOptionsDto {
+    /// The active sheet, every page, empty pages suppressed.
+    fn default() -> Self {
+        Self {
+            sheets: PrintSheets::Active,
+            selection: None,
+            suppress_empty_pages: true,
+            page_from: None,
+            page_to: None,
+            active_sheet: None,
+            page_ranges: None,
+        }
+    }
 }
 
 /// A chart rendered to SVG by the UI, for the print job (≤ 4 MB each).
@@ -428,6 +457,21 @@ mod tests {
             serde_json::to_value(PrintSheets::Active).unwrap(),
             json!({ "type": "active" })
         );
+        // The scope fields are optional on the wire (older callers).
+        let o: PrintOptionsDto = serde_json::from_value(json!({
+            "sheets": { "type": "active" }, "selection": null,
+            "suppressEmptyPages": true, "pageFrom": null, "pageTo": null
+        }))
+        .unwrap();
+        assert_eq!(o, PrintOptionsDto::default());
+        let o: PrintOptionsDto = serde_json::from_value(json!({
+            "sheets": { "type": "all" }, "selection": null,
+            "suppressEmptyPages": true, "pageFrom": null, "pageTo": null,
+            "activeSheet": 2, "pageRanges": [[1, 3], [5, 5]]
+        }))
+        .unwrap();
+        assert_eq!(o.active_sheet, Some(2));
+        assert_eq!(o.page_ranges, Some(vec![[1, 3], [5, 5]]));
         let s = CalcSettingsDto {
             iterations: Some(IterationsDto {
                 steps: 100,

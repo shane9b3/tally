@@ -15,6 +15,10 @@ export interface Limits {
   pageCols: number;
   /** Used range of the sheet (Ctrl+A, End, Ctrl+End). */
   used: RangeDto | null;
+  /** Protected sheet: Tab / Enter ask the app (`onNextUnlocked`) for the next unlocked cell. */
+  protectedNav?: boolean;
+  /** Merged areas (a selection that is exactly one merge counts as a single cell). */
+  merges?: readonly RangeDto[];
 }
 
 export interface Mods {

@@ -964,6 +964,64 @@ impl Workbook {
         self.set_input_opts(addr, input, true);
     }
 
+    /// What the user typed into one cell (cell edit, formula bar; AOO
+    /// `ScViewFunc::EnterData`): [`Self::set_input`], except that input
+    /// starting with `+` or `-` that is not a number becomes a formula
+    /// (`+B1+B2` is stored as `=+B1+B2`), as in AOO:
+    /// - extra leading signs are ignored for the number test (`--5` and
+    ///   `+-5` are not formulas; they go through the recognizer, which
+    ///   keeps them as text), and a lone `-` / `+` (or `+-`) stays text;
+    /// - numbers, percentages, exponents and dates (`-5`, `+5`, `-5%`,
+    ///   `+1e3`, `-2020`) stay numbers;
+    /// - a Text-formatted (`@`) cell keeps the input as text;
+    /// - input that does not compile, or uses an unknown name or function
+    ///   (`-abc`, `+foo(1)`), stays text (AOO compiles with extended error
+    ///   detection and stores text on an error).
+    ///
+    /// Paste, CSV import, text to columns and Fill Selection (Alt+Enter)
+    /// use [`Self::set_input`], where only `=` starts a formula (AOO
+    /// `ScColumn::SetString`).
+    pub fn set_typed_input(&mut self, addr: CellAddr, input: &str) {
+        match self.signed_formula(addr, input) {
+            Some(f) => self.set_formula(addr, Arc::new(f), None),
+            None => self.set_input(addr, input),
+        }
+    }
+
+    /// The formula a typed `+…` / `-…` input becomes, if any (see
+    /// [`Self::set_typed_input`]).
+    fn signed_formula(&self, addr: CellAddr, input: &str) -> Option<Formula> {
+        let sign = input.chars().next().filter(|c| matches!(c, '+' | '-'))?;
+        let rest = input[1..].trim_start_matches(['+', '-']);
+        if rest.is_empty() || self.styles.get(self.style_at(addr)).is_text_format() {
+            return None;
+        }
+        let collapsed = format!("{sign}{rest}");
+        let rec = recognize_input_with(
+            &collapsed,
+            self.locale,
+            &RecognizeContext::now(self.settings.date_epoch),
+        );
+        if matches!(rec.value, Value::Number(_)) {
+            return None;
+        }
+        let f = self.parse_formula(&format!("={input}"), addr).ok()?;
+        let mut unknown = false;
+        f.expr.walk(|e| {
+            if matches!(
+                e,
+                Expr::Name(tally_formula::NameRef::Unresolved(_))
+                    | Expr::Call {
+                        func: FuncRef::Unknown(_),
+                        ..
+                    }
+            ) {
+                unknown = true;
+            }
+        });
+        (!unknown).then_some(f)
+    }
+
     /// Like [`Self::set_input`], but `=…` stays text instead of becoming a
     /// formula (imported CSV: AOO's "Evaluate formulas" is off by default).
     pub fn set_constant_input(&mut self, addr: CellAddr, input: &str) {

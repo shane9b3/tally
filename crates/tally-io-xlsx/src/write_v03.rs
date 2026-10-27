@@ -931,6 +931,9 @@ pub(crate) struct Patches {
     /// XML inserted into `xl/workbook.xml` before `</workbook>` (wrapped in
     /// `<pivotCaches>` when it holds pivot caches).
     pub workbook_inserts: Vec<String>,
+    /// `<definedName>` elements added to `xl/workbook.xml` (AutoFilter
+    /// `_xlnm._FilterDatabase` names).
+    pub defined_names: Vec<String>,
     /// `xl/worksheets/sheetN.xml` → XML inserted at the `scenarios`
     /// position (after `sheetProtection`).
     pub sheet_inserts: Vec<(String, String)>,
@@ -951,6 +954,7 @@ impl Patches {
             && self.content_types.is_empty()
             && self.rels.is_empty()
             && self.workbook_inserts.is_empty()
+            && self.defined_names.is_empty()
             && self.sheet_inserts.is_empty()
             && self.style_names.is_empty()
             && self.sheet_view_attrs.is_empty()
@@ -1103,7 +1107,10 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             .map(|(_, a)| a.as_str())
             .collect();
         let is_wb = name == "xl/workbook.xml"
-            && (p.date1904 || p.workbook_protection.is_some() || !p.workbook_inserts.is_empty());
+            && (p.date1904
+                || p.workbook_protection.is_some()
+                || !p.workbook_inserts.is_empty()
+                || !p.defined_names.is_empty());
         let sheet_ins: Vec<&str> = p
             .sheet_inserts
             .iter()
@@ -1172,6 +1179,28 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
                 if let Some(wp) = &p.workbook_protection {
                     // CT_Workbook order: … workbookPr, workbookProtection, bookViews …
                     patched = patched.replacen("<bookViews", &format!("{wp}<bookViews"), 1);
+                }
+                if !p.defined_names.is_empty() {
+                    // CT_Workbook order: … sheets, …, definedNames, calcPr …
+                    let names = p.defined_names.concat();
+                    patched = if patched.contains("</definedNames>") {
+                        patched.replacen("</definedNames>", &format!("{names}</definedNames>"), 1)
+                    } else {
+                        let block = format!("<definedNames>{names}</definedNames>");
+                        let at = [
+                            "<calcPr",
+                            "<oleSize",
+                            "<customWorkbookViews",
+                            "<pivotCaches",
+                            "</workbook>",
+                        ]
+                        .iter()
+                        .find_map(|m| patched.find(m))
+                        .unwrap_or(patched.len());
+                        let mut x = patched;
+                        x.insert_str(at, &block);
+                        x
+                    };
                 }
                 if !p.workbook_inserts.is_empty() {
                     let block =

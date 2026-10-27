@@ -368,6 +368,10 @@ fn autofilter_round_trip() {
         FilterOpData::EndsWith,
         FilterOpData::Empty,
         FilterOpData::NotEmpty,
+        FilterOpData::TopValues,
+        FilterOpData::BottomValues,
+        FilterOpData::TopPercent,
+        FilterOpData::BottomPercent,
     ] {
         let mut w = wb.clone();
         let af = w.sheets[0].auto_filter.as_mut().unwrap();
@@ -385,6 +389,37 @@ fn autofilter_round_trip() {
             "{op:?}"
         );
     }
+}
+
+/// AutoFilter "Top 10" is AOO's `table:operator="top values"` with value 10.
+#[test]
+fn autofilter_top_values_operators_are_written_as_aoo() {
+    let sheet = SheetData {
+        name: "S".into(),
+        auto_filter: Some(AutoFilterData {
+            range: rect(0, 0, 4, 0),
+            columns: vec![FilterColumnData {
+                col: 0,
+                values: None,
+                condition: Some(FilterConditionData {
+                    op: FilterOpData::TopValues,
+                    value: "10".into(),
+                }),
+            }],
+            filtered_rows: Vec::new(),
+        }),
+        ..SheetData::default()
+    };
+    let wb = one_sheet(sheet);
+    let xml = content_xml(&write(&wb));
+    assert!(
+        xml.contains(r#"table:value="10" table:operator="top values" table:data-type="number""#),
+        "{xml}"
+    );
+    assert_eq!(
+        round_trip(&wb).sheets[0].auto_filter,
+        wb.sheets[0].auto_filter
+    );
 }
 
 #[test]
