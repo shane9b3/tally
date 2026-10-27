@@ -38,7 +38,7 @@ real-file corpus).
 - Split is restored on sheet show, not after undo/redo.
 - No e2e yet for View toggles and split restore (unit tests only).
 - Windows branch of `open_url`, Windows title bar, Intel macOS / Windows / Linux builds need CI.
-- Grid announcements and older dialog labels (V3Dialogs, DataDialogs) still have English literals.
+- l10n: the de/fr/es text of the ~1,000 keys added in the literals pass wants a native-speaker review; `FILTER_SOON`/`CHART_SOON` stubs in `commands.ts` are still English.
 - XLS import: calamine 0.37 is shielded by a pre-scan, but a hostile file within budget can still use ~1 GB, and an allocation failure there aborts; re-check the pre-scan whenever calamine is upgraded.
 - Pivot refresh keeps every previous table on the undo stack (no byte budget on undo).
 - Pivot refresh overwrite prompt is covered by a mock-level test only (no e2e of the dialog flow).
@@ -51,6 +51,15 @@ real-file corpus).
 - Lookup index: overlapping ranges over one column (`$A$1:$A$n`, `$A$2:$A$n`, `A:A`) get separate indexes within the 256 MB budget.
 - Perf (docs/perf-baseline.md hot spots 3–5): ~280 bytes per cell (1.4–1.6 GB for a 50 MB XLSX); CSV import ~6 MB/s; grid fling drops frames in headless Chromium — re-measure in the Tauri webview.
 - Not built yet from the plan: multithreaded recalc, auto-update (tauri-plugin-updater), opt-in crash reporting.
+- Inventory gaps found 2026-10-27 (docs/calc-features-inventory.md 1.0 status; deviation IDs in docs/parity-deviations.md). Sizes: S < 1 day, M a few days, L a week or more.
+  - Input and editing: leading `+`/`-` starts a formula (P18, S); paste-over-data warning with an Input option (U22, S); Tab / Shift+Tab skip locked cells on a protected sheet (U7, S); Paste Special Link and Shift cells, and Text / Numbers / Date / Formulas / Comments choices (M); two-digit year window option (P17, S).
+  - Sheets and view: multi-sheet selection and editing, Shift+Ctrl+PgUp/PgDn (wave 5 item 31, L); read-only mode (M); zoom 20-400 % (U18, S); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, M).
+  - Fill: AutoFill uses Options sort lists, ordinals (`1st` → `2nd`), single number dragged up/left counts down (bug vs AOO and the TS mock), Ctrl-drag copies, filtered ranges copy (T16, M); Edit > Fill > Up / Left commands (S); Fill Sheet (needs multi-sheet selection).
+  - Formatting: Numbers tab category list, option controls and language selector (G14, M); Hide all / Hide when printing in the UI and applied on screen and in print (G15, M); `[NatNum]` / `[DBNum]` / calendar modifiers rendered (G7, L); AutoFormat add / rename / delete (M); Load Styles from another document (M).
+  - Data: validity "sort entries ascending" incl. ODS `sorted` round trip (G16, S); sort extend-selection prompt (S); AutoFilter Top 10 (S); DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M); Data > Select Range and Refresh Range (S).
+  - Charts: date axis and axis crossing position (T18, M); chart data table editor for internal data (T18, M); cylinder / cone / pyramid shapes (T10, L).
+  - Tools: Find in comments and current-selection scope (T1, S); detective Fill Mode, Refresh Traces, AutoRefresh (T12, M); hyperlink as button and New Document target (M, button needs form controls T11); Function List sidebar (S); Limit decimals for General incl. ODS `table:decimal-places` (S).
+  - Print and files: print / PDF scope All sheets / Selected sheets / Selection in the UI (R11, S, the engine already supports it); CSV export options dialog (X24, S, the writer already supports delimiters and quote-all).
 
 ## Remaining for 1.0 (docs/wave5-plan.md §5)
 1. Functions: keep 408/408; DDE and macro calls marked unsupported (done).

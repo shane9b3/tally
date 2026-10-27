@@ -9,11 +9,13 @@ Scope: Apache OpenOffice Calc 4.x, taken from `github.com/apache/openoffice` (br
 
 ---
 
-## 1.0 status (checked 2026-10-23)
+## 1.0 status (checked 2026-10-23; unverified rows resolved 2026-10-27)
 
 **Status key.** *done* = implemented (tested where noted); *partial* = implemented with reduced scope; *deviation* = done differently on purpose, see `docs/parity-deviations.md` (IDs such as F1, P4); *missing* = not implemented; *unverified* = could not be confirmed from the code or tests.
 
 **How it was checked.** Commands against `packages/app/src/commands.ts` and the menu (`apps/desktop/src-tauri/src/menu.rs`); keys against `packages/app/src/keymap.ts` (`docs/shortcuts.md` is generated from it and `keymap.test.ts` passes); the model and API against `crates/tally-model/src/lib.rs`, `crates/tally-api/src/dto.rs` and `tools.rs`; functions with `cargo run -p xtask -- function-coverage --check` (408/408) and `tally-cli eval`. The AOO oracle run (`xtask aoo-oracle`) and the 200-file fidelity corpus have not been done, so behaviour that only follows the AOO source is not oracle-confirmed.
+
+On 2026-10-27 the 46 rows that were *unverified* (or had an unverified part) were resolved by reading the code path end to end, `tally-cli eval`, and existing tests; behaviour without a test is locked in `crates/tally-engine/tests/inventory_1_0.rs`. Result: 7 done, 5 deviation, 18 partial, 16 missing; the gaps are listed in `docs/TODO.md` ("Inventory gaps found 2026-10-27").
 
 The numbered sections after this block keep the original AOO text, which is the specification. Each table here refers to a section by number.
 
@@ -23,11 +25,11 @@ The numbered sections after this block keep the original AOO text, which is the 
 |---|---|---|
 | Rows per sheet 1,048,576 | done | Whole-row/column references end at row 1,048,576 |
 | Columns per sheet | deviation (P1) | 16,384 (A..XFD), not 1,024 |
-| Sheets per document 256 | unverified | |
-| 512 tokens per formula, 1,024-character symbols, nesting 42 | unverified | Err:512 is used by the work budgets |
+| Sheets per document 256 | deviation (P15) | 10,000 (`workbook.rs:23` `MAX_SHEETS`); test `security.rs` `sheet_count_is_capped` |
+| 512 tokens per formula, 1,024-character symbols, nesting 42 | deviation (P16) | No token count; 8,192 characters, nesting 256, tree depth 1,024, 255 arguments (`tally-formula/src/parser.rs:35-42`); tests `tally-formula/tests/errors.rs` `err_512_nesting`, `inventory_1_0.rs` `formula_limits_are_larger_than_aoo` |
 | CHOOSE 30 values | done | `CHOOSE` arity 2..31 |
-| Undo steps 100, configurable 1..1000 | unverified | Undo works for every op; no setting found in Options (U17) |
-| Two-digit year window 1930 | unverified | |
+| Undo steps 100, configurable 1..1000 | partial (U17) | 100 steps, fixed (`undo.rs:15`); no setting; test `undo.rs` `undo_depth_is_100` |
+| Two-digit year window 1930 | partial (P17) | Window starts at 1930 (`tally-numfmt/src/locale.rs:119`) for input and DATEVALUE; not configurable; test `inventory_1_0.rs` `two_digit_year_window_is_1930` |
 | Null date 1899-12-30 (also 1900, 1904) | done | `DateEpoch`, Options > Calculate > Date |
 | Zoom 100 % default | done | |
 
@@ -41,8 +43,8 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Insert sheet from file / as link | missing | X23 |
 | Hide and show sheets | done | `sheet.hide`, `sheet.show` |
 | Sheet tab colour | done | `sheet.tabColor` |
-| Multi-sheet selection editing | unverified | Planned in wave 5 item 31 |
-| Ctrl+PageUp/PageDown sheet navigation | done | Shift to extend the sheet selection is unverified |
+| Multi-sheet selection editing | missing | No sheet-selection state in `packages/app` or the API; planned in wave 5 item 31 |
+| Ctrl+PageUp/PageDown sheet navigation | done | `keymap.ts:114-115`; Shift+Ctrl+PgUp/PgDn is not bound (no multi-sheet selection) |
 | Navigator (F5) | partial | Sheets, names, database ranges, charts, pivots, notes, scenarios; no images, OLE or drawing objects |
 | Sheet events | missing | No scripting (T15) |
 | Scenario sheets | done | See 17 |
@@ -60,15 +62,15 @@ The numbered sections after this block keep the original AOO text, which is the 
 | F2, Esc | done | |
 | Backspace clears, Delete opens Delete Contents | done | An option turns the dialog off |
 | Switch to edit mode on Enter, Expand formatting, Expand references, Use Tab column, Printer metrics | missing | Not in Options > Input |
-| Show references in colour while editing | unverified | Point mode exists (`formulaEdit.ts`) |
-| Highlight selection in headers, overwrite warning when pasting, detective auto-refresh | unverified | |
+| Show references in colour while editing | done | Editor spans and grid outlines (`formulaEdit.ts:44`); always on, no option; test `formulaEdit.test.ts` "colours each distinct reference" |
+| Highlight selection in headers, overwrite warning when pasting, detective auto-refresh | partial (U22, T12) | Header highlight done (`grid/src/renderer.ts:1369`); paste overwrites without asking (`controller.ts:918`); traces are not redrawn after edits |
 | Automatic number recognition (dates, percent, currency, fractions, booleans) | done | Locale-aware (en, de, fr, es) |
-| Leading apostrophe forces text, leading `+`/`-` starts a formula | unverified | |
+| Leading apostrophe forces text, leading `+`/`-` starts a formula | partial (P18) | `'123` is text (`workbook.rs:884`); `+B1+B2` stays text (`set_input_opts` only treats `=` as a formula); test `inventory_1_0.rs` `apostrophe_forces_text_and_signs_stay_numbers` |
 | Alt+arrows row height / column width (Shift = optimal) | done | |
 | Ctrl+Alt+Shift+arrows | missing | U5 |
 | Alt+PageUp/PageDown | done | `selection.ts` |
 | Insert / Delete Cells dialogs | done | `sheet.insertCells`, `sheet.deleteCells`, `⌃⌘+` / `⌃⌘−` |
-| Paste Special (selection types, operations, skip empty, transpose, link, shift) | partial | Paste values, Paste Special dialog, transpose; "link" and "shift cells" unverified |
+| Paste Special (selection types, operations, skip empty, transpose, link, shift) | partial | Everything / Values / Formats, five operations, skip empty, transpose (`Dialogs.tsx` `PasteSpecialDialog`, `PasteOptions` in `dto.rs:1418`); no Link, no Shift cells, no Text / Numbers / Date / Formulas / Comments / Objects choice |
 | Selection list | deviation (U1) | `⌃D` |
 | Merge cells with data prompt | done | |
 | Text to Columns | done | `data.textToColumns`; T7 notes a quote difference |
@@ -86,18 +88,18 @@ The numbered sections after this block keep the original AOO text, which is the 
 | F8 / Shift+F8 | done | |
 | Shift+Backspace, Ctrl+Backspace | missing | |
 | Ctrl+arrows, Home/End, Ctrl+Home/End, PageUp/PageDown | done | |
-| Tab / Shift+Tab | partial | Next/previous cell; skipping protected cells unverified |
+| Tab / Shift+Tab | partial (U7) | Next/previous cell (`grid/src/interaction.ts:757`); does not skip locked cells on a protected sheet |
 | Name Box | done | `⇧⌘T` focuses it |
 
 ### 4. Fill and AutoFill
 
 | Item | Status | Note |
 |---|---|---|
-| Fill handle with AutoFill analysis (linear, dates, text+number, sort lists, formulas) | unverified | `fill.ts` and `crates/tally-engine/src/fill.rs` exist; each rule not checked |
-| Ctrl-drag copies; filtered data copies | unverified | |
+| Fill handle with AutoFill analysis (linear, dates, text+number, sort lists, formulas) | partial (T16) | Linear, dates (day/month/year steps), en-US day and month names, numbered text, formulas (`fill.rs`; tests `v02.rs` `fill_series`, `fill_dates_and_modes`). Custom sort lists are not used, `1st` fills `2st`, a single number dragged up or left counts up |
+| Ctrl-drag copies; filtered data copies | missing (T16) | The fill handle always sends mode `auto` (`fill.ts:31`); `fill.rs` ignores filtered rows |
 | Fill Series dialog | done | `edit.fillSeries` |
 | Fill Down / Right | done | `⌘D`, `⌘R` |
-| Fill Up / Left | unverified | Planned with the series dialog |
+| Fill Up / Left | partial | Fill Series dialog has Up and Left (`DataDialogs.tsx` Fill Series dialog); no Fill Up / Fill Left commands |
 | Fill Sheet | missing | |
 | Sort lists (Options) | done | |
 
@@ -113,11 +115,11 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Alignment: Filled, text direction, hyphenation | missing | G3 |
 | Borders: styles, colours, diagonals | partial | No spacing to contents, no shadow (G4) |
 | Background colour | done | |
-| Cell protection: Protected, Hide formula | done | "Hide all" and "Hide when printing" are in the ODS styles; the UI for them is unverified |
+| Cell protection: Protected, Hide formula | done | `StylesUi.tsx` protection tab. "Hide all" and "Hide when printing" only round-trip through ODS: no UI, not applied (G15) |
 | Merge and unmerge | done | |
 | Ctrl+B/I/U, L/E/R/J, Ctrl+Shift+1..6 | deviation (U6) | Different keys for alignment; no justify key |
 | Default formatting (Ctrl+M) | done | `edit.clearFormats`, `⌘M` |
-| AutoFormat | partial | Presets and options (`format.autoFormat`); adding, renaming and deleting presets unverified |
+| AutoFormat | partial | 17 fixed presets and options (`styles/autoformat.ts:25`); no Add / Rename / Delete |
 | Row height, column width, optimal size, hide/show | done | |
 | Group and outline (F12 / Ctrl+F12), AutoOutline | done | |
 | Value highlighting (Ctrl+F8) | done | |
@@ -130,9 +132,9 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Digits, thousands, scaling, scientific, fractions | done | |
 | Date and time codes, elapsed `[h]`, AM/PM, Q, WW | done | |
 | `[$sym-LCID]` currency / locale | done | |
-| `[NatNum]`, `[DBNum]` | partial | Parsed; rendering unverified |
-| Calendar modifiers (`[~buddhist]` ...), era codes (E, G, R) | unverified | |
-| Format categories and dialog options | partial | Format dialog present; language selector unverified |
+| `[NatNum]`, `[DBNum]` | deviation (G7) | Parsed and ignored: `TEXT(123;"[NatNum1][$-411]0")` gives `123` |
+| Calendar modifiers (`[~buddhist]` ...), era codes (E, G, R) | deviation (G7) | Modifiers ignored (`[~buddhist]YYYY` gives 2023); G / GG / GGG and E / EE give Gregorian eras (`AD`, `Anno Domini`); `R` is a literal |
+| Format categories and dialog options | partial (G14) | Preset chips, a code field and a preview (`StylesUi.tsx` numbers tab); no category list, decimal / leading-zero / negative-red / thousands controls or language selector |
 | ODS fourth (text) section | missing | X15 |
 
 ### 7. Styles
@@ -142,7 +144,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Cell styles Default, Result, Result2, Heading, Heading1, parents | done | Styles panel `⌘F11` |
 | Create from selection, update, paint can | done | |
 | Page styles (Default, Report) | missing | Page setup is per sheet (G8) |
-| Load styles from another document | unverified | |
+| Load styles from another document | missing | No command |
 | STYLE() | partial | Returns 0, applies nothing |
 | Conditional formats apply cell styles | deviation (G9) | |
 
@@ -159,7 +161,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Item | Status | Note |
 |---|---|---|
 | Allow: whole, decimal, date, time, range, list, text length | done | |
-| Operators, min/max, allow empty, selection list | done | Sorted-list option unverified |
+| Operators, min/max, allow empty, selection list | partial (G16) | No "sort entries ascending" option; ODS `display-list="sorted"` is read as unsorted and saved as `unsorted` (`tally-io-ods/src/v03.rs:1107,1156`) |
 | Input help, error alert Stop / Warning / Information | done | |
 | Error action Macro | missing | G10 |
 | Mark Invalid Data | done | `tools.markInvalid` |
@@ -168,9 +170,9 @@ The numbered sections after this block keep the original AOO text, which is the 
 
 | Item | Status | Note |
 |---|---|---|
-| Keys, ascending/descending, case sensitive, labels, include formats, copy to, custom order, left to right | done | Maximum number of keys unverified |
+| Keys, ascending/descending, case sensitive, labels, include formats, copy to, custom order, left to right | done | Dialog has 3 keys as in AOO (`Dialogs.tsx` sort dialog); the engine takes up to 64 (`sort.rs:32`) |
 | Collation language | deviation (F2) | Code-point order |
-| Extend-selection prompt | unverified | |
+| Extend-selection prompt | missing | A multi-cell selection is sorted as selected (`controller.ts:1315` `dataRegion`) |
 | Sort ascending / descending buttons | done | `data.sortAsc`, `data.sortDesc` |
 
 ### 11. Filters
@@ -178,7 +180,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Item | Status | Note |
 |---|---|---|
 | AutoFilter with value list and empty entry | done | |
-| AutoFilter Top 10 | unverified | The standard filter has largest / smallest |
+| AutoFilter Top 10 | missing | The AutoFilter popover has values and one condition; `FilterOp` has no largest. The standard filter has largest / smallest |
 | Standard filter: operators, AND/OR, options | partial | Operators in T2; regex is Rust syntax (P4) |
 | Advanced filter | done | |
 | Reset filter, Hide AutoFilter | done | `data.resetFilter`, `data.clearFilters` |
@@ -195,7 +197,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Layout: outline | missing | T5 |
 | Captions for several data fields | partial | T5 |
 | Result options: ignore empty rows, identify categories, totals, drill to details | done | |
-| Add filter button | unverified | |
+| Add filter button | partial (T17) | Option stored and a `Filter` row written (`pivot.rs:2332`); the row is plain text, not a button |
 | Grouping: numeric, dates, manual | done | |
 | Source: sheet range | done | |
 | Source: registered data source, external service | missing | T4 |
@@ -207,16 +209,16 @@ The numbered sections after this block keep the original AOO text, which is the 
 |---|---|---|
 | Types: column, bar, pie, area, line, scatter, bubble, radar, stock (4 variants) | done | |
 | Stacked and percent stacked, combo (columns and lines), secondary axis | done | |
-| Donut, exploded pie | unverified | |
-| Radar "filled", cylinder / cone / pyramid shapes | unverified | |
+| Donut, exploded pie | done | `charts/toEcharts.ts:479-500`; tests `toEcharts.test.ts` "pie exploded", "donut", "donuts with several series become concentric rings" |
+| Radar "filled", cylinder / cone / pyramid shapes | partial (T10) | Filled radar done (`toEcharts.ts:533`, snapshot "radar filled"); no shapes |
 | 3D charts and scene settings | missing | Flag stored, not rendered (T10) |
 | Titles, legend, axes, grids, data labels | done | |
 | Axis scale: logarithmic, reverse | done | |
-| Axis scale: date axis, crossing positions | unverified | |
+| Axis scale: date axis, crossing positions | missing (T18) | `ChartAxisData` has no axis type or crossing (`tally-model/src/charts.rs:349`) |
 | Trend lines (linear, log, exp, power), equation, R-squared | done | |
 | Mean-value line, error bars | done | Dropped on XLSX save (X5) |
 | Wizard (4 steps) | deviation (T10) | Editor panel |
-| Chart data table (internal data) | unverified | |
+| Chart data table (internal data) | partial (T18) | Internal data from ODS `local-table` / XLSX literals is kept and drawn (`tally-engine/src/charts.rs:1293`; test `tally-io-ods/tests/charts.rs` `roundtrip_literal_values_via_local_table`); no editor |
 | Live update from cell ranges | done | |
 
 ### 15-19. Goal Seek, Solver, Scenarios, Consolidate, Multiple Operations
@@ -234,11 +236,11 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Item | Status | Note |
 |---|---|---|
 | Define names | done | `data.defineName` (`⌘F3`), `data.manageNames` |
-| Name options (print range, filter, repeat) | unverified | |
+| Name options (print range, filter, repeat) | missing | `NameData` has no usage flags (`tally-model/src/lib.rs:1440`); ODS `table:range-usable-as` is dropped |
 | Insert Name list, Create Names from labels | done | `data.createNamesFromLabels` |
 | Label ranges | missing | P3 |
 | Database ranges (define) | done | `data.defineDatabaseRange` |
-| Select Range, Refresh Range | unverified | |
+| Select Range, Refresh Range | partial | The Navigator lists and selects database ranges; no Select Range or Refresh Range command |
 | Registered data sources (F4) | missing | |
 | Sheet-local names | done | Extension |
 
@@ -255,11 +257,11 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Item | Status | Note |
 |---|---|---|
 | Insert Hyperlink, HYPERLINK() | done | `⌥⌘K`; opens on `⌘`-click through Rust (U21) |
-| Hyperlink as a button, New Document target | unverified | |
+| Hyperlink as a button, New Document target | missing | The dialog takes a URL only (`V3Dialogs.tsx` `HyperlinkDialog`) |
 | Comments: insert, show/hide, indicator, author and date | done | `⇧F2`, `⌥⌘C` |
 | Comments printable | partial | T13 |
 | Trace precedents / dependents / error, remove traces, mark invalid | done | |
-| Fill Mode, Refresh Traces, AutoRefresh | unverified | T12 |
+| Fill Mode, Refresh Traces, AutoRefresh | missing (T12) | `commands.ts:323-326` has trace, remove and mark invalid only |
 
 ### 23. Find, spelling, AutoCorrect
 
@@ -269,14 +271,14 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Regular expressions | deviation (P4, T1) | Rust `regex`, not ICU |
 | Wildcards | done | Extra mode |
 | Similarity search, search for styles | missing | T1 |
-| Search in comments, all sheets, current selection only | unverified | |
+| Search in comments, all sheets, current selection only | partial (T1) | All sheets done (`FindQuery.sheet = None`, `Dialogs.tsx` find dialog); no comments search, no selection-only scope |
 | Find bar | done | `⌘F` |
 | Spelling, AutoSpellcheck, thesaurus, hyphenation, Hangul/Hanja | missing | U8 |
 | AutoCorrect: two initial capitals, sentences, dashes, ordinals, quotes, replacement table | done | Options > AutoCorrect (six options) |
 | AutoCorrect exceptions list, automatic bold/underline, URL recognition | missing | Not among the six options |
 | AutoInput | done | |
 | Function name suggestions while typing | done | Tab / Enter accepts |
-| Function tips in the input line | unverified | |
+| Function tips in the input line | done | Signature with the current argument (`components/FormulaAssist.tsx` `signatureAt`); test `formulaEdit.test.ts` "shows the signature with the current argument" |
 
 ### 24. Protection
 
@@ -286,7 +288,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Protect document structure | done | `tools.protectDocument` |
 | Cell protection attributes | done | |
 | File password to open / to modify | missing | X11 |
-| Read-only mode | unverified | |
+| Read-only mode | missing | No open-read-only or Edit File toggle |
 | Record changes, shared workbooks | missing | T14 |
 
 ### 25. Printing and page setup
@@ -305,7 +307,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Layout (mirrored, only left/right), Borders and Background tabs | missing | R2, R3 |
 | Header/footer editor with fields and presets | partial | R5 |
 | Suppress empty pages | done | `suppress_empty_pages` |
-| Print only selected sheets | unverified | |
+| Print only selected sheets | partial (R11) | Print and PDF cover the active sheet only; the engine takes all / some sheets and a selection (`tally-api/src/print.rs:25`) but the UI never sets them |
 | PDF export | done | `file.exportPdf`; X21 |
 | Print preview | done | `file.printPreview` |
 | Native print | partial | R7 |
@@ -324,7 +326,7 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 | Whole-column references in Calc A1 | deviation (F9) | |
 | Operators and precedence (`=-2^2` = 4, `2^3^2` = 64) | done | Checked with `tally-cli` |
 | Union `~` | done | Fixed in review 2 (H5) |
-| Intersection `!` | unverified | |
+| Intersection `!` | done | Test `inventory_1_0.rs` `intersection_operator` |
 | Inline arrays (`;` columns, `\|` rows), nested array error | done | |
 | Array formulas, implicit intersection | done | |
 | Error values and Err:5xx codes | done | `Err:522`, `Err:502`, `#N/A` seen in evaluations |
@@ -335,7 +337,7 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 | Whole-cell criteria matching | done | |
 | Regular expressions in formulas | deviation (P4) | `criteria_mode` setting |
 | Find labels | missing | P3 |
-| Limit decimals for General | unverified | |
+| Limit decimals for General | missing | Not in `CalcSettings`; ODS `table:decimal-places` is not read |
 | AutoCalculate toggle | deviation (U3) | Always on |
 | Volatile functions, hard recalculation | done | `⇧⌘F9` |
 | Status-bar function choice | partial | Sum, count, average shown (U19) |
@@ -345,20 +347,20 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 | Item | Status | Note |
 |---|---|---|
 | Freeze panes, split window | done | Split is not written to XLSX (X4) |
-| Zoom presets, full screen | done | The 20 % - 400 % range is unverified |
+| Zoom presets, full screen | deviation (U18) | Range 50-200 % (`formats.ts` `MIN_ZOOM` / `MAX_ZOOM`); test `stores.test.ts` "toggles the sidebar and clamps zoom"; full screen `view.fullScreen` |
 | Grid lines, headers, zero values, formulas, value highlighting | done | Options > View |
-| Page breaks, guides, large handles, anchor, text-overflow indicator | unverified | |
-| Objects / charts show, hide, placeholder | unverified | |
+| Page breaks, guides, large handles, anchor, text-overflow indicator | partial | Page breaks toggle (`view.pageBreaks`, `commands.ts:264`); the others are missing |
+| Objects / charts show, hide, placeholder | missing (U18) | |
 | Bars and toolbars on/off | done | `view.toolbar`, `view.formattingBar`, `view.formulaBar`, `view.statusBar` |
-| Scroll bars, outline symbols toggles | unverified | |
-| Measurement units | missing | G14 |
+| Scroll bars, outline symbols toggles | missing | |
+| Measurement units | missing | G13 |
 
 ### 29. Undo and redo
 
 | Item | Status | Note |
 |---|---|---|
 | Multi-level undo / redo for edits, format, structure, sort, filter, subtotals, DataPilot, sheets, names, outline, merge | done | |
-| Depth setting 1-1000, history drop-down | unverified | |
+| Depth setting 1-1000, history drop-down | missing (U17) | Fixed 100; the UI keeps only the top undo / redo label (`stores/docStore.ts:6`) |
 | Repeat last command | done | `⇧⌘Y` |
 
 ### 30. Import and export formats
@@ -377,7 +379,7 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 | DIF, SYLK, Lotus, Quattro Pro, RTF, StarCalc 1-5, UOF, Pocket Excel, MiniCalc, SpreadsheetML 2003 | missing | missing | X10 |
 | PDF | n/a | done | |
 | CSV import options (separators, text delimiter, from row, character set, quoted as text, detect special numbers, column types, fixed width) | partial | | X17 |
-| CSV export options (character set, delimiters, as shown, quote all) | unverified | | |
+| CSV export options (character set, delimiters, as shown, quote all) | n/a | missing | X24: no options dialog; active sheet, UTF-8, comma, minimal quoting, as shown (`service/codec.rs:193`, `service/mod.rs:254`) |
 | VBA import as comments | missing | VBA is never read |
 
 ### 31. Other tools
@@ -387,7 +389,7 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 | Function Wizard (`⌘F2`): Last Used, parameters, live result | done | |
 | Navigator | partial | See section 1 |
 | Data source browser, Gallery | missing | |
-| Function List sidebar | unverified | The wizard lists functions |
+| Function List sidebar | missing | The wizard lists functions |
 | Special Character | missing | No command |
 | Insert image, chart | done | `insert.image`, `insert.chart` |
 | OLE objects, floating frames, form controls, drawing shapes | missing | T11 |

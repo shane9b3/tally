@@ -67,6 +67,10 @@ These are not deviations from AOO. They are listed so nobody "fixes" them.
 | P12 | Locale-dependent parsing | Locale of the document | en-US plus de, fr, es function names and separators. Other locales fall back to en-US with a warning | N | `crates/tally-engine/src/convert.rs:80`; `docs/l10n.md` |
 | P13 | Iterative references | Steps 100, min change 0.001 | Same defaults; from a file at most 1,000 steps (32,767 in the UI) | D (DoS limit) | `docs/security.md` |
 | P14 | Computation budgets | Unlimited (hangs) | Per-formula, per-transaction and MULTIPLE.OPERATIONS caps give Err:512 (e.g. 10,000 table ops per recalc, 50M cells per transaction, VDB loop cap) | D (security) | `docs/security.md` section 8 |
+| P15 | Sheets per document | 256 | 10,000 (`MAX_SHEETS`); files with more are cut with a warning | D (Excel/LibreOffice-sized documents, DoS cap) | `crates/tally-engine/src/workbook.rs:23`; test `security.rs` `sheet_count_is_capped` |
+| P16 | Formula size limits | 512 tokens per formula (Err:512), 1,024-character symbols | No token limit: 8,192 characters per formula, 256 nested parentheses/calls, tree depth 1,024, 255 arguments (all Err:512 / Err:504 past the cap). A formula AOO rejects as too long can work in Tally | D (parser caps instead of a token count) | `crates/tally-formula/src/parser.rs:35-42`; test `inventory_1_0.rs` `formula_limits_are_larger_than_aoo` |
+| P17 | Two-digit years | Window 1930-2029 by default, set in Tools > Options > General | Same 1930 window for input and DATEVALUE, but fixed: no option, not read from or written to files | N | `crates/tally-numfmt/src/locale.rs:119`; test `inventory_1_0.rs` `two_digit_year_window_is_1930` |
+| P18 | Formula entry with a leading `+` or `-` | `+A1+B1` and `-A1` become formulas (`=+A1+B1`); `+5` stays a number | Only `=` starts a formula; `+B1+B2` and `-B1` are stored as text. Signed numbers work | N | `crates/tally-engine/src/workbook.rs` `set_input_opts` (checked 2026-10-27) |
 
 ## 3. File formats
 
@@ -95,6 +99,7 @@ These are not deviations from AOO. They are listed so nobody "fixes" them.
 | X21 | PDF | Export | Export, print and preview from one engine (krilla). Pictures and conditional data bars/icons are not printed yet; no outline, tags or links in the PDF | N | file-formats "PDF" |
 | X22 | Fonts in PDF | System fonts | Document fonts are looked up with fontdb; unknown families fall back to embedded Inter with a warning | D | file-formats; security.md 3d |
 | X23 | Edit > Links, Link to External Data, Insert Sheet from File | Present | Not implemented (no live external data). Move/Copy sheet works within one document | N | features inventory sections 1 and 21 |
+| X24 | CSV export | Options dialog: character set, field and text delimiters, save as shown, quote all text | No dialog: active sheet, UTF-8, comma, `"` only where needed, CRLF, as shown. The writer supports other delimiters and quote-all, but the engine always uses the defaults | N | `crates/tally-engine/src/service/codec.rs:193`; `crates/tally-io-csv/src/lib.rs` `CsvWriteOptions` |
 
 ## 4. Formatting and styles
 
@@ -106,19 +111,22 @@ These are not deviations from AOO. They are listed so nobody "fixes" them.
 | G4 | Borders | Adds spacing to contents and a border shadow | Solid, dashed, dotted, double with width and colour, plus diagonals. XLSX diagonals with different up/down styles collapse to one; ODS accounting-double underline reads as Double (no warning) | N | `BordersData`; review 4 L16, L17 |
 | G5 | Background | Solid colour | Solid colour only | parity | |
 | G6 | Rich text in cells | Mixed formatting inside one cell | Not supported: a cell has one style; imported rich runs are flattened | N | file-formats |
-| G7 | Number formats | NatNum / DBNum transliteration, calendar modifiers (`[~buddhist]`, `[~hijri]`), era codes | Format grammar with sections, conditions, colours, elapsed time, fractions, scaling. NatNum / DBNum are parsed; calendar modifiers and era codes are *unverified* | N | `crates/tally-numfmt` |
+| G7 | Number formats | NatNum / DBNum transliteration, calendar modifiers (`[~buddhist]`, `[~hijri]`), era codes | Format grammar with sections, conditions, colours, elapsed time, fractions, scaling. `[NatNum]` / `[DBNum]` are parsed and ignored (Western digits); calendar modifiers are ignored (Gregorian years); G / GG / GGG and E / EE give the Gregorian era (`AD`, `Anno Domini`) and year; `R` is not a code (checked with `tally-cli eval` 2026-10-27) | N | `crates/tally-numfmt` |
 | G8 | Cell styles | Default, Result, Result2, Heading, Heading1, parent chains; page styles (Default, Report) | Cell styles as in AOO. No separate page-style objects: page setup is per sheet. Deleting a style moves its cells to the parent, not to Default (review 4 L10). `Result2` hard-codes `[$$-409]` under de-DE (L15) | N, *unverified* for L10 / L15 | `crates/tally-engine/src/cellstyles.rs` |
 | G9 | Conditional formatting | Up to three conditions, applies named cell styles | Rules apply differential styles (bold, italic, underline, strike, colours), not named cell styles; unlimited rules; adds colour scales, data bars, icon sets, top/bottom N, duplicates, date periods | D | `crates/tally-api/src/features.rs` |
 | G10 | Data validation | Error action Stop / Warning / Information / Macro | Macro action not supported (no scripting) | N | `ValidationErrorStyleData` |
 | G11 | Column and row auto-size | Uses the printer / system font metrics | Header and column autofit measure with Inter metrics; other fonts are measured at runtime where available. Optimal heights can differ by a pixel or two from AOO | P (font rendering differs per OS) | `crates/tally-engine/src/print.rs:479`; `crates/tally-engine/src/autofit.rs` |
 | G12 | Delete Contents > Formats | Clears merges, CF and validation | Keeps merges, CF and validation (review 4 L9) | N, *unverified* | review 4 |
 | G13 | Measurement units | mm, cm, m, inch, pt, pica ... selectable | No units option found in Tools > Options | N, *unverified* | `packages/app/src/options/OptionsDialog.tsx` |
+| G14 | Format Cells > Numbers | Category list, format list, language, decimal places, leading zeros, negative numbers red, thousands separator, format code | Preset chips, a format-code field and a live preview. No category or format list, no option controls and no language selector (`[$-LCID]` typed in the code works) | N | `packages/app/src/styles/StylesUi.tsx` numbers tab |
+| G15 | Cell protection "Hide all", "Hide when printing" | Set in Format Cells > Cell Protection and applied | Read from and written to ODS (`hidden-and-protected`, `print-content`) only: no UI, cells are still shown and printed | N | `crates/tally-model/src/lib.rs:777`; `crates/tally-io-ods/src/styles.rs:397` |
+| G16 | Validity selection list order | "Sort entries ascending" option (`display-list="sorted"`) | No option; ODS `sorted` is read as unsorted and saved as `unsorted` | N | `crates/tally-io-ods/src/v03.rs:1107,1156` |
 
 ## 5. Data tools, charts and objects
 
 | # | Area | AOO 4.1 | Tally | Why | Reference |
 |---|---|---|---|---|---|
-| T1 | Find & Replace | ICU regex, similarity search, search for styles, all sheets | Modes literal / wildcard (`*`, `?`, `~`) / regex (Rust `regex`); no similarity search, no search for styles; `sheet` scope is one sheet or the document (*unverified* for all-sheets) | D / N | `crates/tally-api/src/dto.rs` `FindQuery` |
+| T1 | Find & Replace | ICU regex, similarity search, search for styles, search in comments, current selection only | Modes literal / wildcard (`*`, `?`, `~`) / regex (Rust `regex`); All sheets works (`FindQuery.sheet = None`). No similarity search, no search for styles, no search in comments, no current-selection scope | D / N | `crates/tally-api/src/dto.rs` `FindQuery`; `packages/app/src/components/Dialogs.tsx` find dialog |
 | T2 | Standard filter | Includes "Does not begin with", "Does not end with", regex, no duplications, copy results | Operators = <> < > <= >= largest, smallest, % variants, contains, does not contain, begins with, ends with, empty, not empty. "Does not begin/end with" *unverified* | N | `crates/tally-model/src/tools.rs` |
 | T3 | Sort | Collation algorithm and language options | Natural sort, left-to-right, copy to, custom order, include formats; no collator choice (see F2) | D | `crates/tally-api/src/tools.rs` |
 | T4 | DataPilot sources | Sheet range, registered data source, external service | Sheet range only | N | features inventory 13 |
@@ -129,10 +137,13 @@ These are not deviations from AOO. They are listed so nobody "fixes" them.
 | T9 | Solver | lp_solve linear solver with options | Own two-phase simplex plus branch and bound (linear, integer, binary), `notLinear` status for non-linear models; no engine choice | D (lp_solve is LGPL) | `docs/wave5-plan.md` item 15 |
 | T10 | Charts | Wizard; 3D charts with scene settings; column/cylinder/cone/pyramid shapes; net "filled"; charts are OLE objects | Chart editor panel instead of a wizard; types column, bar, line, area, pie, scatter, bubble, radar, stock (4 variants), stacking, combo line series, secondary axis, trend lines, error bars, mean line. The 3D flag is stored but 3D is not rendered; no shape variants | N | `crates/tally-model/src/charts.rs`; wave5-plan "Never or post-1.0" |
 | T11 | Drawing layer, Gallery, Form controls, OLE, Floating frames | Present | Only charts and pictures are objects; no shapes, text boxes, form controls, Design Mode | N (out of scope) | wave5-plan |
-| T12 | Detective | Trace Error, Fill Mode, Refresh Traces, AutoRefresh | Trace precedents / dependents / error, remove traces, mark invalid data; Fill Mode and AutoRefresh not found (*unverified*) | N | `crates/tally-engine/src/detective.rs` |
+| T12 | Detective | Trace Error, Fill Mode, Refresh Traces, AutoRefresh | Trace precedents / dependents / error, remove traces, mark invalid data. No Fill Mode, no Refresh Traces, and traces are not redrawn after edits (no AutoRefresh) (checked 2026-10-27) | N | `crates/tally-engine/src/detective.rs`; `packages/app/src/commands.ts:323-326` |
 | T13 | Print comments / notes | Notes end pages counted; notes extend the print area | Notes-at-end pages not counted ("1 of 1" while the PDF has 2); notes do not extend the print area (L19, L20) | N, *unverified* | review 4 |
 | T14 | Change tracking, shared workbooks | Edit > Changes, shared documents | Not implemented | N (post-1.0) | wave5-plan |
 | T15 | Macros | StarBasic, Python, BeanShell, JavaScript; Alt+F11; document and sheet events | Not executed and never read (security). The ODS/XLSX reader skips `Basic/`, `Scripts/`, VBA. There is no "macros disabled" banner (wave 5 plan promised one; not found in `packages/app`) | N (security) | security.md section 5 |
+| T16 | AutoFill (fill handle) | Ctrl-drag copies; filtered ranges copy; custom sort lists fill; ordinal suffixes (`1st`, `2nd`); a single number dragged up or left counts down | Always AutoFill analysis (no copy modifier, filtered rows not special); only the built-in en-US day and month names fill, not the Options sort lists; `1st` fills `2st`, `3st`; a single number dragged up or left counts up (5 gives 6, 7). Linear, date, numbered-text and formula fills match | N | `crates/tally-engine/src/fill.rs`; `packages/app/src/fill.ts:31` |
+| T17 | DataPilot "Add filter" | Filter button above the table opens the filter dialog | Option kept; a plain `Filter` text row is written, with no button behind it | N | `crates/tally-engine/src/pivot.rs:2332` |
+| T18 | Chart axes and data | Date axis type, axis crossing position, Chart Data Table editor | No date axis or crossing settings; internal (literal) data from files is drawn but cannot be edited | N | `crates/tally-model/src/charts.rs:349` |
 
 ## 6. Printing
 
@@ -148,6 +159,7 @@ These are not deviations from AOO. They are listed so nobody "fixes" them.
 | R8 | Print-area edge cases | n/a | Formulas-print + hide zeros hides zero-result formulas (L18); a whole-row fill makes the area 16,384 columns wide (2,731 pages when suppression is off, L21) | N, *unverified* | review 4 |
 | R9 | Optimal row heights when printing | AOO font metrics | Rows print at the height their text needs with AOO baseline; fonts differ from AOO's | P | git log; `print.rs:479` |
 | R10 | Pagination limits | none | At most 10,000 pages per job and 20M cell positions | D (security) | security.md |
+| R11 | Print range choice | Print dialog: All sheets, Selected sheets, Selected cells | Print, print preview and PDF export cover the active sheet only. The engine accepts all / some sheets and a selection (`PrintSheets`, `PrintOptionsDto.selection`), but the UI always sends the default | N | `crates/tally-api/src/print.rs:25`; `packages/app/src/print/printStore.ts:38` |
 
 ## 7. UI, shortcuts and platform
 
@@ -159,7 +171,7 @@ These are not deviations from AOO. They are listed so nobody "fixes" them.
 | U4 | Sheet and tab switching | Ctrl+PgUp / PgDn switch sheets | Same (`⌃PgUp` / `⌃PgDn`). `⌘1` stays Format Cells, so document tabs use `⌃⇥` / `⌃⇧⇥`, `⇧⌘]` / `⇧⌘[` (macOS) and `⌥⌘1-9` (Alt+1-9 on Windows and Linux); 9 = last tab | D | shortcuts.md |
 | U5 | Unbound AOO keys | F4 data source browser, F7 spelling, Ctrl+F7 thesaurus, Alt+F11 macros, Shift+F4 toggle reference, Shift+Space / Ctrl+Shift+Space row/column select, Shift+Backspace, Ctrl+Backspace, Ctrl+Alt+Shift+arrows, Ctrl+; date, Ctrl+Shift+R, Ctrl+J justify, Ctrl+Shift+B/P | Not bound. The features behind F4, F7, Alt+F11 are out of scope; the rest are missing (checked in `keymap.ts`, `selection.ts`, `W56Chrome.tsx`) | N | `packages/app/src/keymap.ts` |
 | U6 | Alignment shortcuts | Ctrl+L / E / R / J | `⇧⌘L` / `⇧⌘E` / `⇧⌘R`; no justify key | D | shortcuts.md |
-| U7 | New line in a cell | Ctrl+Enter | `⌥↩` while editing. Outside editing `⌥↩` fills the selection with the active cell (AOO: Alt+Enter commits into the whole selection). Tab / Enter move to the next unprotected cell: *unverified* | D | `packages/app/src/data/W56Chrome.tsx` |
+| U7 | New line in a cell | Ctrl+Enter | `⌥↩` while editing. Outside editing `⌥↩` fills the selection with the active cell (AOO: Alt+Enter commits into the whole selection). Tab / Shift+Tab move to the next / previous cell without skipping locked cells on a protected sheet (AOO jumps to the next unprotected cell) | D / N | `packages/app/src/data/W56Chrome.tsx`; `packages/grid/src/interaction.ts:757` |
 | U8 | Spell check, AutoSpellcheck, thesaurus, hyphenation, Hangul/Hanja, Chinese conversion | Present | Skipped. The editor's `spellcheck` attribute gives macOS red underlines while editing only | N (platform spell checker only) | `docs/wave5-plan.md` item 18 |
 | U9 | Euro Converter wizard | Present | Not implemented (EUROCONVERT function is) | N | wave5-plan |
 | U10 | Documents as tabs | Separate windows (Window menu) | Tally's own tab system: child webviews in a window, a sidebar "Editing" list, Window menu items, Move Tab to New Window / Merge All Windows, "Open documents in: tabs / windows" option. Native macOS tabs are off | D / P (Tauri child webviews) | git 685c7cf; `docs/qa/multi-window-manual.md` |
@@ -169,21 +181,24 @@ These are not deviations from AOO. They are listed so nobody "fixes" them.
 | U14 | Windows and Linux shells | Native | Undecorated windows rely on Tauri's resize handler; with child webviews the top resize edge may not work on Windows. Linux child webviews live in a GTK box. Both unverified; Intel macOS, Windows and Linux builds need CI | P | `docs/TODO.md` |
 | U15 | UI languages and function names | About 40 UI languages | en, de, fr, es (menus, dialogs, panels, function names). Typing `=SUMME(...)` commits canonical English names | N | `docs/l10n.md`; `docs/qa/v0.5-data-tools-manual.md` |
 | U16 | Accessibility | Java Access Bridge / NSAccessibility tables | Canvas grid with an ARIA mirror and live region. VoiceOver table navigation (VO+arrows reading headers) is not available; Narrator / NVDA unchecked | P (canvas) | `docs/qa/a11y.md` |
-| U17 | Undo depth | 100 steps, configurable 1-1,000 | Undo for every op; the depth setting was not found in Options (*unverified*). Pivot refresh keeps every previous table on the undo stack (no byte budget) | N | `docs/TODO.md` |
-| U18 | Zoom and view | 20-400 %, Synchronize sheets, units | Zoom presets (optimal, page width, whole page); Options > View has grid lines, headers, zero values, show formulas, value highlighting. Object display modes (Show / Hide / Placeholder) not found | N, *unverified* | `OptionsDialog.tsx` |
+| U17 | Undo depth | 100 steps, configurable 1-1,000; undo / redo history drop-downs | Undo for every op, 100 steps fixed (`UNDO_DEPTH`), no setting; only the top undo / redo label is shown, no history list. Pivot refresh keeps every previous table on the undo stack (no byte budget) | N | `crates/tally-engine/src/undo.rs:15`; test `undo.rs` `undo_depth_is_100`; `docs/TODO.md` |
+| U18 | Zoom and view | 20-400 %, Synchronize sheets, units, object display modes | Zoom 50-200 % (presets 50-200 %, optimal, page width, whole page); Options > View has grid lines, headers, zero values, show formulas, value highlighting; page breaks toggle. No object display modes (Show / Hide / Placeholder), guides, scroll-bar or outline-symbol toggles | N | `packages/app/src/formats.ts` `MIN_ZOOM` / `MAX_ZOOM`; `OptionsDialog.tsx` |
 | U19 | Status bar | Selection-function menu | Sum / Count / Average; the choice menu and the status-bar items for signatures and selection mode are *unverified* | N | `packages/app/src/sumRange.ts` |
 | U20 | Extras AOO lacks | n/a | Command palette, "At a glance" panel, assist (rule-based, no network), sidebar, light/dark themes, Remove Duplicates, sheet-local names | D (extensions) | `docs/architecture-plan.md` |
 | U21 | Hyperlinks | Click or Ctrl-click follows | `⌘`-click opens http/https/mailto through Rust only; a plain click selects | D (security) | `docs/security.md` |
+| U22 | Paste over data | Asks "You are pasting data into cells that already contain data" (Input option, on by default) | Pastes at once; Undo restores. No option | N | `packages/app/src/controller.ts:918` |
 
 ## Counts
 
 | Area | Entries |
 |---|---:|
 | Functions (section 1) | 14 |
-| Formulas and parsing (section 2) | 14 |
-| File formats (section 3) | 23 |
-| Formatting and styles (section 4) | 13 |
-| Data tools, charts, objects (section 5) | 15 |
-| Printing (section 6) | 10 |
-| UI, shortcuts, platform (section 7) | 24 |
-| **Total** | **113** |
+| Formulas and parsing (section 2) | 17 |
+| File formats (section 3) | 24 |
+| Formatting and styles (section 4) | 16 |
+| Data tools, charts, objects (section 5) | 18 |
+| Printing (section 6) | 11 |
+| UI, shortcuts, platform (section 7) | 22 |
+| **Total** | **122** |
+
+Recounted 2026-10-27 after the inventory check added P15-P18, X24, G14-G16, T16-T18, R11 and U22 (the earlier table counted 14 P and 24 U entries; there were 13 and 21).
