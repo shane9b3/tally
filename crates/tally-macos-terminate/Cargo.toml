@@ -1,0 +1,26 @@
+[package]
+name = "tally-macos-terminate"
+description = "macOS only: routes -[NSApp terminate:] (Dock Quit, log-out, restart, shutdown) through the app's unsaved-changes guard. The workspace's one crate allowed `unsafe` (docs/security.md)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit.workspace = true
+block2.workspace = true
+objc2-core-foundation.workspace = true
+objc2-foundation = { workspace = true, features = ["NSRunLoop", "NSString", "block2"] }
+
+# Not `workspace = true`: the workspace forbids `unsafe` outright, and
+# `forbid` cannot be lifted. Here it is `deny`, lifted for the one AppKit
+# module only (`src/appkit.rs`); every unsafe block must carry a SAFETY note.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+unwrap_used = "warn"
+undocumented_unsafe_blocks = "deny"

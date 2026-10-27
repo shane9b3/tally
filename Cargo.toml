@@ -18,6 +18,7 @@ members = [
     "crates/tally-io-dbf",
     "crates/tally-assist",
     "crates/tally-cli",
+    "crates/tally-macos-terminate",
     "apps/desktop/src-tauri",
     "xtask",
 ]
@@ -49,6 +50,7 @@ tally-io-xls = { path = "crates/tally-io-xls", version = "0.1.0" }
 tally-io-html = { path = "crates/tally-io-html", version = "0.1.0" }
 tally-io-dbf = { path = "crates/tally-io-dbf", version = "0.1.0" }
 tally-assist = { path = "crates/tally-assist", version = "0.1.0" }
+tally-macos-terminate = { path = "crates/tally-macos-terminate", version = "0.1.0" }
 
 # Desktop shell (used by apps/desktop/src-tauri from WP7 on)
 tauri = "=2.12.4"
@@ -59,6 +61,11 @@ tauri-plugin-dialog = "=2.8.3"
 objc2 = { version = "=0.6.5", default-features = false, features = ["std"] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow"] }
+# macOS only, tally-macos-terminate: queue AppKit calls on the main run loop
+# (`-[NSRunLoop performInModes:block:]`). Already linked by tao.
+block2 = { version = "=0.6.2", default-features = false, features = ["std"] }
+# ... and wake the main run loop after queuing (`CFRunLoopWakeUp`). Already linked by tao.
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFRunLoop"] }
 
 # Libraries
 serde = { version = "=1.0.229", features = ["derive", "rc"] }

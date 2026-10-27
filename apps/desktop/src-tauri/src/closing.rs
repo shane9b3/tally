@@ -33,11 +33,28 @@
 //! The app menu's Quit is a custom item ([`QUIT_ID`]) rather than the
 //! predefined one: the predefined item sends `-[NSApp terminate:]`, which
 //! tao does not route through `ExitRequested`, so it could not be stopped.
-//! (The Dock's Quit and log-out still use `terminate:`, which cannot be
-//! vetoed. tao routes it through `applicationWillTerminate` to
+//!
+//! macOS `terminate:` (the Dock's Quit, `quit app "Tally"`, log-out,
+//! restart, shutdown) runs the same Quit sequence: tao's app delegate has
+//! no `applicationShouldTerminate:`, so `tally-macos-terminate` (the one
+//! crate allowed `unsafe`) adds it once the event loop runs
+//! ([`install_terminate_guard`]). With nothing edited it answers "now";
+//! otherwise it starts the sequence and answers "later", and AppKit waits
+//! (windows and webviews keep working) until the sequence ends:
+//! [`exit_app`] replies "terminate" instead of calling `exit`, and Cancel
+//! (or the asked tab going away unanswered, [`settle_terminate`]) replies
+//! "don't" (at log-out macOS then reports that Tally interrupted it). ⌘Q
+//! keeps calling [`request_quit`] directly; both end in [`exit_app`], and a
+//! `terminate:` arriving while either is asking re-asks the open question
+//! instead of stacking a second one. Escape hatch: Quit from the Dock again
+//! (after 5 s, or a second time) quits anyway, and so does a question that
+//! cannot be sent; the exit snapshot keeps the unanswered documents for
+//! recovery (a hung webview must not leave only Force Quit, which skips
+//! it). Either way the app leaves through
 //! `RunEvent::Exit`, where [`exit_snapshot`] writes a last autosave
-//! snapshot of every edited, unanswered document; they are offered on the
-//! next launch.)
+//! snapshot of every edited, unanswered document (offered on the next
+//! launch): the safety net when the guard could not be installed or the
+//! process is ended some other way.
 //!
 //! A closed tab (or every tab of a destroyed window) closes its document in
 //! the engine (and removes its autosave snapshot, as the in-app Close did)
@@ -81,21 +98,37 @@ const EXIT_LOCK_WAIT: Duration = Duration::from_millis(1500);
 
 /// Sends `close-requested` to one document webview (for a sequence, its
 /// window comes to the front and the tab is shown first, so the user sees
-/// which document is asking).
-pub fn ask<R: Runtime>(app: &AppHandle<R>, label: &str, kind: CloseKind) {
+/// which document is asking). Returns `false` when the event could not be
+/// sent (the question will never be answered).
+pub fn ask<R: Runtime>(app: &AppHandle<R>, label: &str, kind: CloseKind) -> bool {
     if kind != CloseKind::Window {
         windows::reveal(app, label);
     }
-    if let Err(e) = app.emit_to(label, CLOSE_REQUESTED, CloseRequestedEvent { kind }) {
-        eprintln!("tally: emitting {CLOSE_REQUESTED} to {label}: {e}");
+    #[cfg(debug_assertions)]
+    if kind == CloseKind::Quit && debug_env("TALLY_DEBUG_TERMINATE_HANG") {
+        eprintln!("tally(debug): not asking {label} (simulated hung webview)");
+        return true;
+    }
+    match app.emit_to(label, CLOSE_REQUESTED, CloseRequestedEvent { kind }) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("tally: emitting {CLOSE_REQUESTED} to {label}: {e}");
+            false
+        }
     }
 }
 
 /// Carries out a step of a sequence.
 pub fn run_step<R: Runtime>(app: &AppHandle<R>, step: Step) {
     match step {
-        Step::Ask(label, kind) => ask(app, &label, kind),
-        Step::Done(Goal::Exit) => app.exit(0),
+        Step::Ask(label, kind) => {
+            if !ask(app, &label, kind) && kind == CloseKind::Quit {
+                // Cannot ask: quit rather than wait forever; the exit
+                // snapshot keeps every unanswered edited document for recovery.
+                exit_app(app);
+            }
+        }
+        Step::Done(Goal::Exit) => exit_app(app),
         Step::Done(Goal::CloseWindow(win)) => {
             if let Some(w) = app.get_window(&win) {
                 if let Err(e) = w.destroy() {
@@ -143,6 +176,115 @@ pub fn clean_up<R: Runtime>(app: &AppHandle<R>, gone: Gone) {
     if let Some(step) = gone.step {
         run_step(app, step);
     }
+    // The asked tab went away unanswered: the quit is over.
+    settle_terminate(app);
+}
+
+/// The Quit sequence finished (everything saved or discarded): a waiting
+/// `terminate:` (Dock Quit, log-out) is told to go on, which leaves through
+/// `applicationWillTerminate:` (`RunEvent::Exit`); otherwise (⌘Q, an exit
+/// request) the app exits itself.
+fn exit_app<R: Runtime>(app: &AppHandle<R>) {
+    if !tally_macos_terminate::reply(true) {
+        // A log-out arriving from here on goes through without asking.
+        tally_macos_terminate::approve();
+        app.exit(0);
+    }
+}
+
+/// A waiting `terminate:` whose Quit sequence ended without finishing
+/// (Cancel, a cancelled Save As, the asked tab gone unanswered) is told
+/// not to terminate. Checked on the main thread, so it cannot interleave
+/// with a new request (`applicationShouldTerminate:` runs there too).
+fn settle_terminate<R: Runtime>(app: &AppHandle<R>) {
+    if !tally_macos_terminate::is_pending() {
+        return;
+    }
+    let handle = app.clone();
+    let result = app.run_on_main_thread(move || {
+        if !handle.state::<Windows>().with(|r| r.quitting()) {
+            tally_macos_terminate::reply(false);
+        }
+    });
+    if let Err(e) = result {
+        eprintln!("tally: answering the quit request: {e}");
+    }
+}
+
+/// `RunEvent::Ready` (macOS: tao's app delegate exists): routes
+/// `-[NSApp terminate:]` through the Quit sequence. The handler runs on the
+/// main thread inside `terminate:`; it only touches the registry (a leaf
+/// lock) and leaves the asking (window and webview calls) to a task.
+fn install_terminate_guard<R: Runtime>(app: &AppHandle<R>) {
+    let handle = app.clone();
+    let installed = tally_macos_terminate::install(move || {
+        let step = handle.state::<Windows>().with(|r| r.begin_quit());
+        if step == Step::Done(Goal::Exit) {
+            return tally_macos_terminate::Answer::Now;
+        }
+        let app = handle.clone();
+        tauri::async_runtime::spawn(async move { run_step(&app, step) });
+        tally_macos_terminate::Answer::Later
+    });
+    if let Err(e) = installed {
+        // Without it, terminate: quits unasked (the exit snapshot still runs).
+        eprintln!("tally: quit guard for the Dock's Quit and log-out not installed: {e}");
+    }
+    #[cfg(debug_assertions)]
+    debug_terminate(app);
+}
+
+/// Debug builds, manual testing: `TALLY_DEBUG_TERMINATE_MS=<ms>` sends
+/// `-[NSApp terminate:]` (what the Dock's Quit sends) that long after
+/// launch; with `TALLY_DEBUG_TERMINATE_EDITED=1` every tab first counts as
+/// edited, so the question goes to the webviews (a clean webview answers
+/// at once, so the quit then goes through the "later" reply);
+/// `TALLY_DEBUG_TERMINATE_HANG=1` also simulates a hung webview (the quit
+/// question is never sent) and quits again after the escape-hatch delay
+/// (or after `TALLY_DEBUG_TERMINATE_AGAIN_MS`).
+/// Each step, and the exit snapshot plan, is logged to stderr.
+#[cfg(debug_assertions)]
+fn debug_env(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|v| v == "1")
+}
+
+#[cfg(debug_assertions)]
+fn debug_terminate<R: Runtime>(app: &AppHandle<R>) {
+    let Some(ms) = std::env::var("TALLY_DEBUG_TERMINATE_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    else {
+        return;
+    };
+    let edited = debug_env("TALLY_DEBUG_TERMINATE_EDITED");
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(ms));
+        if edited {
+            app.state::<Windows>().with(|r| {
+                for win in r.window_labels() {
+                    for tab in r.tabs(&win) {
+                        let _ = r.report(&tab, true, None, None);
+                    }
+                }
+            });
+        }
+        eprintln!("tally(debug): sending terminate: (edited: {edited})");
+        tally_macos_terminate::terminate();
+        if debug_env("TALLY_DEBUG_TERMINATE_HANG") {
+            // The Dock's Quit again once the escape-hatch delay is over.
+            let again = std::env::var("TALLY_DEBUG_TERMINATE_AGAIN_MS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map_or(
+                    tally_macos_terminate::ESCAPE_AFTER + Duration::from_secs(1),
+                    Duration::from_millis,
+                );
+            std::thread::sleep(again);
+            eprintln!("tally(debug): sending terminate: again");
+            tally_macos_terminate::terminate();
+        }
+    });
 }
 
 /// `on_window_event` hook: guards closing a document window, tracks focus
@@ -200,14 +342,23 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &tauri::RunEvent) {
                 ExitAction::Proceed => {}
                 ExitAction::StayAlive => api.prevent_exit(),
                 ExitAction::Quit => {
+                    // Held only while a question is out; if it cannot be
+                    // sent the exit goes on (with the exit snapshot).
                     if let Step::Ask(label, kind) = windows.with(|r| r.begin_quit()) {
-                        api.prevent_exit();
-                        ask(app, &label, kind);
+                        if ask(app, &label, kind) {
+                            api.prevent_exit();
+                        }
                     }
                 }
             }
         }
-        tauri::RunEvent::Exit => exit_snapshot(app),
+        tauri::RunEvent::Ready => install_terminate_guard(app),
+        tauri::RunEvent::Exit => {
+            if cfg!(debug_assertions) {
+                eprintln!("tally(debug): RunEvent::Exit");
+            }
+            exit_snapshot(app)
+        }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {
             has_visible_windows,
@@ -217,8 +368,8 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &tauri::RunEvent) {
     }
 }
 
-/// `RunEvent::Exit` (tao's `applicationWillTerminate`, so also the Dock's
-/// Quit, log-out and shutdown, which cannot be vetoed): writes a last
+/// `RunEvent::Exit` (also tao's `applicationWillTerminate`: the Dock's
+/// Quit and log-out once allowed, or unguarded if the guard is missing): writes a last
 /// autosave snapshot of every edited document the user did not answer for,
 /// and removes the snapshots of the clean and answered ones (as a clean
 /// close does). The engine lock is only tried for a short while in total
@@ -228,6 +379,13 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &tauri::RunEvent) {
 /// which a snapshot cannot contain. Failures are logged, never fatal.
 fn exit_snapshot<R: Runtime>(app: &AppHandle<R>) {
     let plan = app.state::<Windows>().with(|r| r.exit_plan());
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "tally(debug): exit snapshot plan: {} to snapshot (if the engine reports them dirty), {} to discard",
+            plan.snapshot.len(),
+            plan.discard.len()
+        );
+    }
     for doc in plan.discard {
         autosave::remove_snapshot(app, doc);
     }
@@ -252,7 +410,7 @@ fn snapshot_one<R: Runtime>(app: &AppHandle<R>, st: &AppState, doc: DocId, deadl
     }
 }
 
-/// The app menu's Quit ([`QUIT_ID`]).
+/// The app menu's Quit ([`QUIT_ID`], ⌘Q).
 pub fn request_quit<R: Runtime>(app: &AppHandle<R>) {
     let step = app.state::<Windows>().with(|r| r.begin_quit());
     run_step(app, step);
@@ -317,10 +475,13 @@ pub async fn confirm_close(app: AppHandle, webview: Webview, quit: bool) -> CmdR
 /// `cancel_quit()`: Cancel (or a cancelled Save As) in the tab a sequence
 /// is asking: the sequence is over, nothing is closed. Ignored from a tab
 /// the sequence is not asking.
+/// A waiting `terminate:` (Dock Quit, log-out) is told not to terminate.
 #[tauri::command]
-pub fn cancel_quit(webview: Webview, windows: State<'_, Windows>) -> CmdResult<()> {
+pub fn cancel_quit(app: AppHandle, webview: Webview, windows: State<'_, Windows>) -> CmdResult<()> {
     windows::require_doc_window(webview.label())?;
-    windows.with(|r| r.cancel(webview.label()));
+    if windows.with(|r| r.cancel(webview.label())) {
+        settle_terminate(&app);
+    }
     Ok(())
 }
 

@@ -39,11 +39,9 @@ Options ▸ Load / Save ▸ "Open documents in" starts at **Tabs in one window**
 | 20 | Tools ▸ Options ▸ Load / Save ▸ Open documents in: **Separate windows**; open a file and ⌘N. | Each opens in a new window (existing windows unchanged); Window ▸ Merge All Windows still combines them. Switch back to Tabs. |
 | 21 | Print `A.ods` (File ▸ Print, a print window opens) and `B.ods` in the same window; close `A.ods` with its ×. | Only `A.ods`'s print window closes; `B.ods`'s stays. ⌘W in a print window closes only it. |
 | 22 | Close every document (⌘W each). | macOS: the app keeps running. File ▸ New opens a window; close it; a Dock click opens a new Untitled window; minimise it and click the Dock icon: it comes back. |
-| 23 | Edit two documents (not saved), then `osascript -e 'quit app "Tally"'` (the Dock's Quit). Relaunch. | Quits without asking; the first document offers recovery of both; recovered documents open as the setting says. |
+| 23 | Edit two documents in two windows and one more as a tab of the first window, then Dock ▸ Quit (or `osascript -e 'quit app "Tally"'`). Repeat in Separate windows mode. | Each edited document asks in turn (its window comes forward, its tab is shown), as for ⌘Q. Cancel at any step: nothing closes, earlier answers are forgotten. Answer all: the app quits. |
 | 24 | Tools ▸ Options: language Deutsch; View ▸ Theme. | Menu bar and every document (shown or hidden, every window) switch; the Editing section heading reads "In Bearbeitung". |
 | 25 | Windows/Linux build (if available): steps 3, 4 (Ctrl+Tab / Ctrl+Shift+Tab, Alt+1…9), 8, 9, 14, 18, and resizing from every edge (Windows: top edge especially). | As on macOS; closing the last window exits the app; the Windows title bar buttons act on the right window after Move to New Window. |
 
-Known limitations: the Dock's Quit and log-out/shutdown still quit without
-the prompt (`terminate:` cannot be vetoed through tao); every edited
-document gets an exit snapshot instead (row 23). Hidden documents' timers
+Known limitations: hidden documents' timers
 are throttled by WebKit (autosave may run a little late).

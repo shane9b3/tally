@@ -52,7 +52,7 @@ pnpm -r test
   and `Cargo.lock`.
 - Never run a bare `cargo add tauri` (it resolves to the 3.0 alpha); use the
   workspace pin.
-- No `unsafe`. No `unwrap()` in library code that handles data; tests may unwrap.
+- No `unsafe` (the one approved exception is `crates/tally-macos-terminate`; see docs/security.md). No `unwrap()` in library code that handles data; tests may unwrap.
 - Licensing: Apache-2.0. You may port algorithms from Apache OpenOffice
   (Apache-2.0) with a comment naming the original source file. Never copy code
   from LibreOffice (MPL-2.0), IronCalc or formualizer; they are reference oracles only.

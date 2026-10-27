@@ -4201,6 +4201,7 @@ dependencies = [
  "tally-engine",
  "tally-io-pdf",
  "tally-l10n",
+ "tally-macos-terminate",
  "tally-types",
  "tauri",
  "tauri-build",
@@ -4354,6 +4355,17 @@ name = "tally-l10n"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "tally-macos-terminate"
+version = "0.1.0"
+dependencies = [
+ "block2",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation",
 ]
 
 [[package]]

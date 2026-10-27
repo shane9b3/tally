@@ -1054,6 +1054,11 @@ impl Registry {
         }
     }
 
+    /// Whether a Quit sequence is running (asking its edited tabs).
+    pub fn quitting(&self) -> bool {
+        matches!(&self.sequence, Some(s) if s.goal == Goal::Exit)
+    }
+
     /// The tab a running sequence is asking.
     pub fn asking(&self) -> Option<&str> {
         self.sequence.as_ref().map(|s| s.asking.as_str())
@@ -1850,6 +1855,48 @@ mod tests {
         // a's answer no longer counts: closing it asks again.
         assert!(r.must_ask(&a) && r.must_ask(&b));
         assert_eq!(r.begin_quit(), Step::Ask(a, CloseKind::Quit));
+    }
+
+    #[test]
+    fn quitting_tells_whether_a_pending_terminate_still_has_an_answer_coming() {
+        // closing.rs answers a waiting `terminate:` (Dock Quit, log-out)
+        // "cancel" once no Quit sequence is left to finish it.
+        let mut r = Registry::default();
+        let a = window(&mut r, None);
+        let b = tab(&mut r, &a, None);
+        let c = window(&mut r, None);
+        report(&mut r, &a, true, Some(1));
+        report(&mut r, &b, true, Some(2));
+        report(&mut r, &c, true, Some(3));
+        assert!(!r.quitting());
+        // A window close is not a quit…
+        let w = win(&r, &a);
+        assert!(matches!(r.begin_close_window(&w), WindowClose::Hold(_)));
+        assert!(!r.quitting());
+        // …until a quit takes it over.
+        assert!(matches!(r.begin_quit(), Step::Ask(..)));
+        assert!(r.quitting());
+        let asked = r.asking().map(str::to_owned).unwrap_or_default();
+        assert!(r.cancel(&asked));
+        assert!(!r.quitting());
+        // Answered to the end: done, no longer quitting.
+        let mut step = r.begin_quit();
+        while let Step::Ask(label, _) = step {
+            assert!(r.quitting());
+            step = r
+                .answered(&label)
+                .unwrap_or(Step::Done(Goal::CloseTabs(vec![])));
+        }
+        assert_eq!(step, Step::Done(Goal::Exit));
+        assert!(!r.quitting());
+        // The asked tab destroyed without an answer aborts the quit.
+        report(&mut r, &a, true, Some(1));
+        let Step::Ask(asked, _) = r.begin_quit() else {
+            panic!("expected a question");
+        };
+        let gone = r.window_destroyed(&win(&r, &asked));
+        assert_eq!(gone.step, None);
+        assert!(!r.quitting());
     }
 
     #[test]

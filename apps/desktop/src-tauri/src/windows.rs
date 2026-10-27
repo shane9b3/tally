@@ -518,7 +518,8 @@ pub fn request_tab_close<R: Runtime>(app: &AppHandle<R>, label: &str) {
     match app.state::<Windows>().with(|r| r.close_tab(label)) {
         Some(TabClose::Ask) => {
             reveal(app, label);
-            closing::ask(app, label, CloseKind::Window);
+            // A failed ask is logged there; this tab just stays open.
+            let _ = closing::ask(app, label, CloseKind::Window);
         }
         Some(TabClose::Window(win)) => {
             if let Some(w) = app.get_window(&win) {
