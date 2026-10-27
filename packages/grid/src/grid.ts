@@ -145,7 +145,11 @@ export class Grid {
     });
     this.editor.mount(root);
     this.aria = new AriaMirror(doc, root, this.editor.el, { rows: this.rowsCount, cols: this.colsCount });
-    if (props.aria) this.aria.setProps(props.aria);
+    this.aria.onStrings = (S) => {
+      this.editor.el.setAttribute("aria-label", S.cellEditor);
+      this.objects.setLabel(S.objects);
+    };
+    this.aria.setProps(props.aria ?? {});
     if (props.objects) this.objects.setObjects(props.objects);
     container.appendChild(root);
     // The object layer sits next to the root (see ObjectLayer.mount).

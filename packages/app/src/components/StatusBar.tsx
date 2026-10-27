@@ -8,11 +8,13 @@ import { toSelectionDto, useSelectionStore } from "../stores/selectionStore";
 import { useUiStore } from "../stores/uiStore";
 import { Popover } from "./Popover";
 import { t } from "../i18n";
+import { useW56Store } from "../data/store";
 import styles from "./StatusBar.module.css";
 
 export const STATS_DEBOUNCE_MS = 50;
 
 export function StatusBar() {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const selection = useSelectionStore((s) => s.selection);
   const doc = useDocStore((s) => s.info?.doc);
@@ -47,12 +49,12 @@ export function StatusBar() {
     <div className={styles.status} data-testid="status-bar">
       {sumText !== null ? (
         <span className={styles.stat} data-testid="stat-sum">
-          Sum <b>{sumText}</b>
+          {t("status.sum", "Sum")} <b>{sumText}</b>
         </span>
       ) : null}
       {stats && stats.count > 0 ? (
         <span className={styles.stat} data-testid="stat-count">
-          Count <b>{stats.count}</b>
+          {t("status.count", "Count")} <b>{stats.count}</b>
         </span>
       ) : null}
       <button
@@ -70,7 +72,7 @@ export function StatusBar() {
       </button>
       {menu ? (
         <Popover
-          label="Zoom"
+          label={t("status.zoom", "Zoom")}
           x={menu.x}
           y={menu.y}
           above

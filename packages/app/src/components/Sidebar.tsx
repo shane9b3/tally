@@ -96,18 +96,18 @@ export function Sidebar({ inset }: { inset: boolean }) {
   const others = recent.filter((p) => p !== info?.path).slice(0, 6);
 
   return (
-    <aside className={styles.sidebar} aria-label="Sidebar">
+    <aside className={styles.sidebar} aria-label={t("shell.sidebar", "Sidebar")}>
       <div className={cx(styles.top, inset && styles.insetTop)} data-tauri-drag-region />
       <button type="button" className={styles.newButton} onClick={() => void ctl.newWorkbook()}>
         <PlusIcon />
-        {t("cmd.file.new", "New sheet")}
+        {t("shell.newSheet", "New sheet")}
       </button>
 
       <OpenDocuments dotFor={dotFor} formatTag={formatTag} />
 
       {others.length > 0 ? (
         <section className={styles.section} data-testid="open-recent">
-          <h3 className={styles.heading}>{t("menu.file.recent", "Open recent")}</h3>
+          <h3 className={styles.heading}>{t("shell.openRecent", "Open recent")}</h3>
           <ul className={styles.list}>
             {others.map((p) => {
               const t = seen[p];
@@ -150,7 +150,7 @@ export function Sidebar({ inset }: { inset: boolean }) {
 
       {templates.length > 0 ? (
         <section className={styles.section}>
-          <h3 className={styles.heading}>{t("templates.title", "Start from a template")}</h3>
+          <h3 className={styles.heading}>{t("shell.startFromTemplate", "Start from a template")}</h3>
           <ul className={styles.list}>
             {templates.map((t) => (
               <li key={t.id}>
@@ -166,9 +166,22 @@ export function Sidebar({ inset }: { inset: boolean }) {
 
       <div className={styles.grow} />
       <div className={styles.tip}>
-        <div className={styles.tipTitle}>Tip</div>
-        Type <kbd className={styles.kbd}>=</kbd> in any cell and describe what you want, or press{" "}
-        <kbd className={styles.kbd}>⌘K</kbd> to ask in plain English.
+        <div className={styles.tipTitle}>{t("shell.tipTitle", "Tip")}</div>
+        {t("shell.tipBody", "Type {eq} in any cell and describe what you want, or press {key} to ask in plain English.")
+          .split(/(\{eq\}|\{key\})/)
+          .map((part, i) =>
+            part === "{eq}" ? (
+              <kbd key={i} className={styles.kbd}>
+                =
+              </kbd>
+            ) : part === "{key}" ? (
+              <kbd key={i} className={styles.kbd}>
+                ⌘K
+              </kbd>
+            ) : (
+              part
+            ),
+          )}
       </div>
     </aside>
   );

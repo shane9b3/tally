@@ -2,6 +2,8 @@
 import type { SheetInfo } from "@tally/bridge";
 import { useRef, useState } from "react";
 import { cx, useController } from "../context";
+import { t } from "../i18n";
+import { useW56Store } from "../data/store";
 import { useDocStore } from "../stores/docStore";
 import { PlusIcon } from "./icons";
 import { Popover } from "./Popover";
@@ -25,7 +27,7 @@ function RenameInput({ initial, onDone }: { initial: string; onDone: (name: stri
   return (
     <input
       className={styles.rename}
-      aria-label="Sheet name"
+      aria-label={t("sheet.renamePrompt", "Sheet name")}
       data-testid="sheet-rename"
       autoFocus
       value={value}
@@ -47,6 +49,7 @@ function RenameInput({ initial, onDone }: { initial: string; onDone: (name: stri
 }
 
 export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const sheets = useDocStore((s) => s.info?.sheets ?? NO_SHEETS);
   const active = useDocStore((s) => s.activeSheet);
@@ -64,14 +67,14 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
 
   return (
     <div className={styles.tabs}>
-      <button type="button" className={styles.add} aria-label="Add sheet" title="Add sheet" onClick={() => void ctl.addSheet()}>
+      <button type="button" className={styles.add} aria-label={t("sheetTabs.add", "Add sheet")} title={t("sheetTabs.add", "Add sheet")} onClick={() => void ctl.addSheet()}>
         <PlusIcon />
       </button>
       {/* The tablist holds only the tabs (ARIA); ←/→/Home/End move between sheets. */}
       <div
         className={styles.tabList}
         role="tablist"
-        aria-label="Sheets"
+        aria-label={t("navigator.sheets", "Sheets")}
         onKeyDown={(e) => {
           const shown = sheets.filter((x) => !x.hidden);
           const i = shown.findIndex((x) => x.id === active);
@@ -142,17 +145,17 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
       </div>
       {menu ? (
         <Popover
-          label="Sheet"
+          label={t("dialog.sheet", "Sheet")}
           x={menu.x}
           y={menu.y}
           above
           onClose={() => setMenu(null)}
           items={[
-            { id: "rename", label: "Rename…", onSelect: () => setRenaming(menu.sheet) },
-            { id: "insert", label: "Insert sheet", onSelect: () => void ctl.addSheet() },
+            { id: "rename", label: t("sheetTabs.rename", "Rename…"), onSelect: () => setRenaming(menu.sheet) },
+            { id: "insert", label: t("cmd.sheet.insert", "Insert sheet"), onSelect: () => void ctl.addSheet() },
             {
               id: "delete",
-              label: "Delete",
+              label: t("dialog.delete", "Delete"),
               danger: true,
               disabled: sheets.length <= 1,
               onSelect: () => void ctl.deleteSheet(menu.sheet),

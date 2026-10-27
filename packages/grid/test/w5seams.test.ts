@@ -168,6 +168,18 @@ describe("ARIA mirror", () => {
     expect(describeSelection(sel, "x", null)).toBe("A1: x, selected A1 to C3 (3 rows, 3 columns)");
   });
 
+  it("takes translated strings from the app, English by default", () => {
+    const de = { empty: "leer", formula: ", Formel {formula}", selected: ", {from} bis {to} ({rows} Zeilen, {cols} Spalten)", plusRanges: ", plus {count} weitere" };
+    expect(describeCell("B2", "", null, de)).toBe("B2: leer");
+    expect(describeCell("C1", "6", "=A1", de)).toBe("C1: 6, Formel =A1");
+    const sel = extendTo(cellSelection({ r: 0, c: 0 }), { r: 2, c: 2 });
+    expect(describeSelection(sel, "x", null, de)).toBe("A1: x, A1 bis C3 (3 Zeilen, 3 Spalten)");
+    const { grid, ta } = make({ aria: { sheetName: "Budget", strings: { sheet: "Tabelle {name}", cellEditor: "Zelleneditor", objects: "Objekte" } } });
+    expect(grid.ariaMirror.grid.getAttribute("aria-label")).toBe("Tabelle Budget");
+    expect(ta.getAttribute("aria-label")).toBe("Zelleneditor");
+    expect(container.querySelector(".tally-grid-objects")?.getAttribute("aria-label")).toBe("Objekte");
+  });
+
   it("mirrors the grid: role, counts, active descendant, live announcements", () => {
     const { grid, ta } = make({ aria: { sheetName: "Budget" } });
     const root = container.querySelector(".tally-grid") as HTMLElement;
@@ -394,3 +406,16 @@ describe("selected objects are visible and hide the cell cursor", () => {
   });
 });
 
+
+describe("ARIA mirror language switch", () => {
+  it("rewrites the active-cell and live text when the strings change", () => {
+    const { grid, ta } = make({ aria: { sheetName: "Budget" } });
+    ta.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    const before = grid.ariaMirror.cell.textContent ?? "";
+    expect(before.startsWith("A2: ")).toBe(true);
+    grid.update({ aria: { sheetName: "Budget", strings: { empty: "leer", formula: "" } } });
+    const after = grid.ariaMirror.cell.textContent ?? "";
+    expect(after).toBe(before.replace("empty", "leer"));
+    expect(grid.ariaMirror.announcement).toBe(after);
+  });
+});

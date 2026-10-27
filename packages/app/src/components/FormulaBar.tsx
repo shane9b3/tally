@@ -11,6 +11,8 @@ import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, 
 import { useController } from "../context";
 import { formulaHighlights } from "../formulaEdit";
 import { pretty } from "../pretty";
+import { t } from "../i18n";
+import { useW56Store } from "../data/store";
 import { useDocStore } from "../stores/docStore";
 import { useEditStore } from "../stores/editStore";
 import { useUiStore } from "../stores/uiStore";
@@ -24,6 +26,7 @@ import { Popover } from "./Popover";
 import styles from "./FormulaBar.module.css";
 
 function NameBox() {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const range = useSelectionStore((s) => s.selection.range);
   const names = useDataStore((s) => s.names);
@@ -42,7 +45,7 @@ function NameBox() {
     <div className={styles.nameWrap}>
     <input
       className={styles.nameBox}
-      aria-label="Name box"
+      aria-label={t("toolbar.nameBox", "Name box")}
       data-testid="name-box"
       spellCheck={false}
       autoComplete="off"
@@ -80,8 +83,8 @@ function NameBox() {
       <button
         type="button"
         className={styles.nameMenu}
-        aria-label="Defined names"
-        title={names.length > 0 ? "Go to a named range" : "No names yet (Data ▸ Define Name…)"}
+        aria-label={t("formulaUi.definedNames", "Defined names")}
+        title={names.length > 0 ? t("formulaUi.goToName", "Go to a named range") : t("formulaUi.noNames", "No names yet (Data ▸ Define Name…)")}
         data-testid="name-box-menu"
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
@@ -93,7 +96,7 @@ function NameBox() {
       </button>
       {menu ? (
         <Popover
-          label="Defined names"
+          label={t("formulaUi.definedNames", "Defined names")}
           testId="name-box-list"
           x={menu.x}
           y={menu.y}
@@ -102,11 +105,11 @@ function NameBox() {
             ...names.map((n) => ({
               id: `${n.scope ?? "wb"}:${n.name}`,
               label: n.name,
-              hint: n.sheetName ? `${n.sheetName} only` : n.refersTo.replace(/\$/g, ""),
+              hint: n.sheetName ? t("formulaUi.sheetOnly", "{sheet} only", { sheet: n.sheetName }) : n.refersTo.replace(/\$/g, ""),
               onSelect: () => void ctl.goTo(n.name),
             })),
-            { id: "define", label: "Define name…", separator: names.length > 0, onSelect: () => ctl.openDefineName() },
-            { id: "manage", label: "Manage names…", onSelect: () => useUiStore.getState().openDialog({ kind: "manageNames" }) },
+            { id: "define", label: t("cmd.data.defineName", "Define name…"), separator: names.length > 0, onSelect: () => ctl.openDefineName() },
+            { id: "manage", label: t("cmd.data.manageNames", "Manage names…"), onSelect: () => useUiStore.getState().openDialog({ kind: "manageNames" }) },
           ]}
         />
       ) : null}
@@ -115,6 +118,7 @@ function NameBox() {
 }
 
 export function FormulaBar() {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const edit = useEditStore((s) => s.edit);
   const active = useEditStore((s) => s.active);
@@ -130,7 +134,7 @@ export function FormulaBar() {
   const raw = current?.input ?? "";
   const value = edit ? edit.text : focused ? raw : pretty(raw);
   const arrayRange = current?.arrayRange ?? null;
-  const hint = edit ? (arrayRange ? `Array formula ${a1(arrayRange)} · ⌃⇧↩ to enter` : null) : arrayRange ? `Array formula ${a1(arrayRange)}${current?.hint ? ` · ${current.hint}` : ""}` : current?.hint;
+  const hint = edit ? (arrayRange ? t("formulaUi.arrayEnter", "Array formula {range} · ⌃⇧↩ to enter", { range: a1(arrayRange) }) : null) : arrayRange ? `${t("formulaUi.arrayFormula", "Array formula {range}", { range: a1(arrayRange) })}${current?.hint ? ` · ${current.hint}` : ""}` : current?.hint;
   const spans = useMemo(() => (edit ? formulaHighlights(edit.text, sheetName, theme).spans : []), [edit, sheetName, theme]);
   const coloured = spans.length > 0;
 
@@ -177,7 +181,7 @@ export function FormulaBar() {
         ref={input}
         className={styles.formula}
         style={coloured ? { color: "transparent", background: "transparent" } : undefined}
-        aria-label="Formula"
+        aria-label={t("toolbar.formula", "Formula")}
         data-testid="formula-input"
         spellCheck={false}
         autoComplete="off"

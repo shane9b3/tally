@@ -266,7 +266,7 @@ export function BarMenu({ bar, x, y, onClose }: { bar: ToolbarId; x: number; y: 
         }}
       >
         <span className={styles.check} />
-        <span className={styles.label}>{t("cmd.view.customizeToolbars", "Customize Toolbars…")}</span>
+        <span className={styles.label}>{t("chrome.item.customizeToolbars", "Customize Toolbars…")}</span>
       </button>
       <div className={styles.separator} role="separator" />
       {BARS.map((b) => (
@@ -396,7 +396,7 @@ export function TitleStrip({ inset, trafficLights }: { inset: boolean; trafficLi
   return (
     <header className={cx(styles.strip, trafficLights && styles.stripTall, inset && styles.stripInset)} data-tauri-drag-region data-testid="title-strip" onContextMenu={onContextMenu}>
       {!sidebarOpen ? (
-        <button type="button" className={styles.stripBtn} aria-label="Show sidebar" title="Show sidebar  ⌘\" onClick={() => useUiStore.getState().setSidebar(true)}>
+        <button type="button" className={styles.stripBtn} aria-label={t("shell.showSidebar", "Show sidebar")} title={`${t("shell.showSidebar", "Show sidebar")}  ⌘\\`} onClick={() => useUiStore.getState().setSidebar(true)}>
           <SidebarIcon />
         </button>
       ) : null}

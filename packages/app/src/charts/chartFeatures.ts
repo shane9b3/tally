@@ -16,6 +16,7 @@ import { objectId, selectedChart, useChartStore } from "./chartStore";
 import type { ChartMounts } from "./chartMounts";
 import { DEFAULT_AXIS } from "./toEcharts";
 import { clientV4 } from "../objects/shell";
+import { t } from "../i18n";
 
 /** AOO's default chart size. */
 export const DEFAULT_CHART_MM = { width: 160, height: 90 } as const;
@@ -110,7 +111,7 @@ export class ChartFeatures {
 
   /** One "Edit chart" transaction (the editor panel). */
   async updateChart(chart: ChartDto): Promise<ApplyResult | null> {
-    const res = await this.ctl.apply("Edit chart", [{ type: "updateChart", sheet: this.ctl.sheet, id: chart.id, chart }]);
+    const res = await this.ctl.apply(t("cmd.chart.edit", "Edit chart"), [{ type: "updateChart", sheet: this.ctl.sheet, id: chart.id, chart }]);
     if (res) useChartStore.getState().select(objectId("chart", chart.id));
     return res;
   }

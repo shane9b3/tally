@@ -14,6 +14,7 @@ import { useW56Store } from "../data/store";
 import { filterButtonsFor } from "../dataOps";
 import { useDataStore } from "../stores/dataStore";
 import { useController } from "../context";
+import { t } from "../i18n";
 import { formulaHighlights, isPointMode } from "../formulaEdit";
 import { useDocStore } from "../stores/docStore";
 import { useEditStore } from "../stores/editStore";
@@ -56,7 +57,26 @@ export function GridHost() {
   const printRange = useV3Store((s) => s.pageSetup?.printRange ?? null);
   // ARIA mirror (wave 5, §4 item 46): the sheet name and the active cell's formula.
   const activeInput = useEditStore((s) => (s.active && s.active.sheet === sheet ? s.active.input : null));
-  const aria = useMemo(() => ({ sheetName, activeFormula: activeInput && activeInput.startsWith("=") ? activeInput : null }), [sheetName, activeInput]);
+  const i18nRev = useW56Store((s) => s.i18nRev);
+  const aria = useMemo(
+    () => ({
+      sheetName,
+      activeFormula: activeInput && activeInput.startsWith("=") ? activeInput : null,
+      // The grid never imports the app's i18n; hand it the translated strings (re-built when the language changes).
+      strings: {
+        spreadsheet: t("grid.spreadsheet", "Spreadsheet"),
+        sheet: t("grid.sheet", "Sheet {name}"),
+        empty: t("grid.empty", "empty"),
+        formula: t("grid.formula", ", formula {formula}"),
+        selected: t("grid.selected", ", selected {from} to {to} ({rows} rows, {cols} columns)"),
+        plusRange: t("grid.plusRange", ", plus {count} more range"),
+        plusRanges: t("grid.plusRanges", ", plus {count} more ranges"),
+        cellEditor: t("grid.cellEditor", "Cell editor"),
+        objects: t("grid.objects", "Objects"),
+      },
+    }),
+    [sheetName, activeInput, i18nRev],
+  );
   // W5-5: objects (charts, pictures), detective arrows, Page Break Preview and the split window.
   const charts = useChartStore((s) => s.charts);
   const images = useChartStore((s) => s.images);

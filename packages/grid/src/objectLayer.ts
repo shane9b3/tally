@@ -122,6 +122,11 @@ export class ObjectLayer {
   private axes: AnchorAxes | null = null;
   private events: ObjectLayerEvents;
 
+  /** Relabels the group (translated `aria-label`). */
+  setLabel(label: string): void {
+    this.el.setAttribute("aria-label", label);
+  }
+
   constructor(doc: Document, events: ObjectLayerEvents = {}) {
     this.events = events;
     const el = doc.createElement("div");

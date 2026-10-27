@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import type { StylePatch } from "@tally/bridge";
 
 /** Number format codes used by the toolbar (OOo format-code syntax). */
@@ -14,15 +15,15 @@ export interface NumberFormatPreset {
 }
 
 export const NUMBER_FORMATS: readonly NumberFormatPreset[] = [
-  { id: "general", label: "General", code: "General", sample: "1234.5" },
-  { id: "number", label: "Number", code: "0.00", sample: "1234.50" },
-  { id: "thousands", label: "Number with separators", code: "#,##0.00", sample: "1,234.50" },
-  { id: "percent", label: "Percent", code: PERCENT_FORMAT, sample: "12.50%" },
-  { id: "currency", label: "Currency", code: CURRENCY_FORMAT, sample: "$1,234.50" },
-  { id: "date", label: "Date", code: "MM/DD/YYYY", sample: "10/19/2026" },
-  { id: "time", label: "Time", code: "HH:MM:SS", sample: "14:30:00" },
-  { id: "scientific", label: "Scientific", code: "0.00E+00", sample: "1.23E+03" },
-  { id: "text", label: "Text", code: "@", sample: "1234.5" },
+  { id: "general", get label() { return t("fmt.general", "General"); }, code: "General", sample: "1234.5" },
+  { id: "number", get label() { return t("fmt.number", "Number"); }, code: "0.00", sample: "1234.50" },
+  { id: "thousands", get label() { return t("lbl.fmt.thousands", "Number with separators"); }, code: "#,##0.00", sample: "1,234.50" },
+  { id: "percent", get label() { return t("fmt.percent", "Percent"); }, code: PERCENT_FORMAT, sample: "12.50%" },
+  { id: "currency", get label() { return t("fmt.currency", "Currency"); }, code: CURRENCY_FORMAT, sample: "$1,234.50" },
+  { id: "date", get label() { return t("fmt.date", "Date"); }, code: "MM/DD/YYYY", sample: "10/19/2026" },
+  { id: "time", get label() { return t("fmt.time", "Time"); }, code: "HH:MM:SS", sample: "14:30:00" },
+  { id: "scientific", get label() { return t("fmt.scientific", "Scientific"); }, code: "0.00E+00", sample: "1.23E+03" },
+  { id: "text", get label() { return t("fmt.text", "Text"); }, code: "@", sample: "1234.5" },
 ];
 
 /** The preset whose code matches `code` (case-insensitive), if any. */

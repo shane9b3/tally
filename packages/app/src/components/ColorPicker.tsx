@@ -1,6 +1,7 @@
 /** A small swatch palette (24 colours + custom hex) in a floating card. */
 import { useState } from "react";
 import { hexToRgba, rgbaToHex, SWATCHES, TRANSPARENT } from "../palette";
+import { t } from "../i18n";
 import { useDismiss, useFloating } from "./Popover";
 import styles from "./ColorPicker.module.css";
 
@@ -31,7 +32,7 @@ export function ColorPicker({ x, y, label, value, allowNone, onPick, onClose }: 
       <div className={styles.title}>{label}</div>
       {allowNone ? (
         <button type="button" className={styles.none} onClick={() => pick(TRANSPARENT)}>
-          <span className={styles.noneSwatch} /> No fill
+          <span className={styles.noneSwatch} /> {t("color.noFill", "No fill")}
         </button>
       ) : null}
       <div className={styles.grid}>
@@ -59,14 +60,14 @@ export function ColorPicker({ x, y, label, value, allowNone, onPick, onClose }: 
         <span className={styles.preview} style={{ background: parsed !== null ? hex : "transparent" }} />
         <input
           className={styles.hex}
-          aria-label="Custom colour (hex)"
+          aria-label={t("color.customHex", "Custom colour (hex)")}
           value={hex}
           spellCheck={false}
           maxLength={7}
           onChange={(e) => setHex(e.target.value.startsWith("#") ? e.target.value : `#${e.target.value}`)}
         />
         <button type="submit" className={styles.apply} disabled={parsed === null}>
-          Apply
+          {t("dialog.apply", "Apply")}
         </button>
       </form>
     </div>

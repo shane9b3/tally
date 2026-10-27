@@ -9,6 +9,8 @@ import { useEffect, useRef, useState } from "react";
 import { useController } from "../context";
 import { analyzeGlance, cappedRange, currentRegion, type GlanceResult } from "../glance";
 import { rangeAddress } from "../sumRange";
+import { t } from "../i18n";
+import { useW56Store } from "../data/store";
 import { useDocStore } from "../stores/docStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useUiStore } from "../stores/uiStore";
@@ -24,6 +26,7 @@ interface State {
 
 export function GlancePanel() {
   const ctl = useController();
+  useW56Store((s) => s.i18nRev);
   const doc = useDocStore((s) => s.info?.doc);
   const sheet = useDocStore((s) => s.activeSheet);
   const rev = useDocStore((s) => s.rev);
@@ -70,16 +73,16 @@ export function GlancePanel() {
 
   const { result, sampled } = state;
   return (
-    <aside className={styles.panel} aria-label="At a glance" data-testid="glance-panel">
+    <aside className={styles.panel} aria-label={t("glance.title", "At a glance")} data-testid="glance-panel">
       <header className={styles.head}>
         <div>
-          <div className={styles.title}>At a glance</div>
+          <div className={styles.title}>{t("glance.title", "At a glance")}</div>
           <div className={styles.sub}>
-            {result ? `${rangeAddress(result.region)}${result.hasHeader ? " · header row" : ""}` : state.loading ? "Reading…" : "No data yet"}
-            {sampled ? <span className={styles.badge}>Sampled</span> : null}
+            {result ? `${rangeAddress(result.region)}${result.hasHeader ? ` · ${t("glance.headerRow", "header row")}` : ""}` : state.loading ? t("glance.reading", "Reading…") : t("glance.noDataYet", "No data yet")}
+            {sampled ? <span className={styles.badge}>{t("glance.sampled", "Sampled")}</span> : null}
           </div>
         </div>
-        <button type="button" className={styles.close} aria-label="Close At a glance" onClick={() => useUiStore.getState().setGlance(false)}>
+        <button type="button" className={styles.close} aria-label={t("glance.close", "Close At a glance")} onClick={() => useUiStore.getState().setGlance(false)}>
           ×
         </button>
       </header>
@@ -87,12 +90,12 @@ export function GlancePanel() {
         <div className={styles.body}>
           <div className={styles.tiles}>
             <div className={styles.tile} data-testid="glance-rows">
-              <div className={styles.tileLabel}>Rows</div>
+              <div className={styles.tileLabel}>{t("menu.format.rows", "Rows")}</div>
               <div className={styles.tileValue}>{result.rows.toLocaleString()}</div>
             </div>
             {result.sums.map((s) => (
-              <div key={s.c} className={styles.tile} data-testid={`glance-sum-${s.header}`} title={`Sum of ${s.header}`}>
-                <div className={styles.tileLabel}>Sum of {s.header}</div>
+              <div key={s.c} className={styles.tile} data-testid={`glance-sum-${s.header}`} title={t("glance.sumOf", "Sum of {header}", { header: s.header })}>
+                <div className={styles.tileLabel}>{t("glance.sumOf", "Sum of {header}", { header: s.header })}</div>
                 <div className={styles.tileValue}>{s.text}</div>
               </div>
             ))}
@@ -119,15 +122,15 @@ export function GlancePanel() {
           {result.chart ? (
             <section className={styles.section} data-testid="glance-chart">
               <h4 className={styles.h}>
-                {result.chart.valueHeader} by {result.chart.categoryHeader}
+                {t("glance.valueBy", "{value} by {category}", { value: result.chart.valueHeader, category: result.chart.categoryHeader })}
               </h4>
               <BarChart bars={result.chart.bars} />
             </section>
           ) : null}
-          {result.sums.length === 0 && !result.category ? <p className={styles.empty}>No numeric or category columns here.</p> : null}
+          {result.sums.length === 0 && !result.category ? <p className={styles.empty}>{t("glance.noColumns", "No numeric or category columns here.")}</p> : null}
         </div>
       ) : (
-        <p className={styles.empty}>{state.loading ? "" : "Type some data, or open a template, to see a summary here."}</p>
+        <p className={styles.empty}>{state.loading ? "" : t("glance.empty", "Type some data, or open a template, to see a summary here.")}</p>
       )}
     </aside>
   );
@@ -144,7 +147,7 @@ function BarChart({ bars }: { bars: { label: string; value: number; text: string
   const plotW = W - labelW - valueW;
   const H = bars.length * (barH + gap) - gap;
   return (
-    <svg className={styles.chart} viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label="Bar chart">
+    <svg className={styles.chart} viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label={t("glance.barChart", "Bar chart")}>
       {bars.map((b, i) => {
         const y = i * (barH + gap);
         const w = Math.max(2, (Math.abs(b.value) / max) * plotW);

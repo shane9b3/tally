@@ -16,6 +16,7 @@ import { useUiStore } from "../stores/uiStore";
 import { anchorChanged, dragRect, nudgeAnchor, roundAnchor, type Rect } from "./objectDrag";
 import type { W5Shell } from "./shell";
 import { clientV4 } from "./shell";
+import { t } from "../i18n";
 
 /** Charts whose data is fetched at once after a refresh. */
 export const DATA_FETCH_CAP = 50;
@@ -316,7 +317,7 @@ export class ObjectFeatures {
     if (!p) return;
     const op: Op = p.kind === "chart" ? { type: "deleteChart", sheet: this.ctl.sheet, id: p.id } : { type: "deleteImage", sheet: this.ctl.sheet, id: p.id };
     useChartStore.getState().select(null);
-    await this.ctl.apply(p.kind === "chart" ? "Delete chart" : "Delete picture", [op]);
+    await this.ctl.apply(p.kind === "chart" ? t("cmd.chart.delete", "Delete chart") : t("msg.undo.deletePicture", "Delete picture"), [op]);
     this.ctl.focusGrid();
   }
 
@@ -342,7 +343,7 @@ export class ObjectFeatures {
         widthMm = MAX_IMAGE_WIDTH_MM;
       }
       const image: ImageDto = { id: 0, name: picked.name, anchor: this.anchorAtActive(widthMm, heightMm), mime: picked.mime, data: picked.data };
-      const res = await this.ctl.apply("Insert picture", [{ type: "addImage", sheet: this.ctl.sheet, image }]);
+      const res = await this.ctl.apply(t("msg.undo.insertPicture", "Insert picture"), [{ type: "addImage", sheet: this.ctl.sheet, image }]);
       const id = res?.created?.[0]?.id;
       if (res && res.errors.length === 0 && id !== undefined) {
         useChartStore.getState().setImageData(id, `data:${picked.mime};base64,${picked.data}`);
@@ -383,10 +384,10 @@ export async function pickImageInBrowser(): Promise<import("./shell").PickedImag
     input.click();
   });
   if (!file) return null;
-  if (file.size > 16 * 1024 * 1024) throw { code: "invalid_argument", message: "The picture is larger than 16 MB." };
+  if (file.size > 16 * 1024 * 1024) throw { code: "invalid_argument", message: t("msg.error.pictureTooLarge", "The picture is larger than 16 MB.") };
   const bytes = new Uint8Array(await file.arrayBuffer());
   const mime = sniffImageMime(bytes);
-  if (!mime) throw { code: "invalid_argument", message: "Only PNG and JPEG pictures can be inserted." };
+  if (!mime) throw { code: "invalid_argument", message: t("msg.error.pictureType", "Only PNG and JPEG pictures can be inserted.") };
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   const data = btoa(binary);

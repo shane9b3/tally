@@ -3,6 +3,7 @@
  * into the `Op` (or DTO) the engine takes, plus small parsers and label
  * tables. No React, no engine access; tests cover them directly.
  */
+import { t } from "../i18n";
 import type {
   AggFn,
   CellPos,
@@ -38,16 +39,16 @@ export const STD_FILTER_OPS: readonly { op: StdFilterOp; label: string; numeric?
   { op: "le", label: "<=" },
   { op: "ge", label: ">=" },
   { op: "ne", label: "<>" },
-  { op: "largest", label: "Largest", numeric: true },
-  { op: "smallest", label: "Smallest", numeric: true },
-  { op: "largestPct", label: "Largest %", numeric: true },
-  { op: "smallestPct", label: "Smallest %", numeric: true },
-  { op: "contains", label: "Contains" },
-  { op: "notContains", label: "Does not contain" },
-  { op: "beginsWith", label: "Begins with" },
-  { op: "notBeginsWith", label: "Does not begin with" },
-  { op: "endsWith", label: "Ends with" },
-  { op: "notEndsWith", label: "Does not end with" },
+  { op: "largest", get label() { return t("lbl.stdFilter.largest", "Largest"); }, numeric: true },
+  { op: "smallest", get label() { return t("lbl.stdFilter.smallest", "Smallest"); }, numeric: true },
+  { op: "largestPct", get label() { return t("lbl.stdFilter.largestPct", "Largest %"); }, numeric: true },
+  { op: "smallestPct", get label() { return t("lbl.stdFilter.smallestPct", "Smallest %"); }, numeric: true },
+  { op: "contains", get label() { return t("lbl.stdFilter.contains", "Contains"); } },
+  { op: "notContains", get label() { return t("lbl.stdFilter.notContains", "Does not contain"); } },
+  { op: "beginsWith", get label() { return t("lbl.stdFilter.beginsWith", "Begins with"); } },
+  { op: "notBeginsWith", get label() { return t("lbl.stdFilter.notBeginsWith", "Does not begin with"); } },
+  { op: "endsWith", get label() { return t("lbl.stdFilter.endsWith", "Ends with"); } },
+  { op: "notEndsWith", get label() { return t("lbl.stdFilter.notEndsWith", "Does not end with"); } },
 ];
 
 /** One row of the Standard Filter dialog; `col === null` leaves the row unused. */
@@ -81,15 +82,15 @@ export function filterConditions(rows: readonly FilterRow[]): StdCondition[] {
 
 /** Why the filter cannot run (`null` = fine). */
 export function filterError(conds: readonly StdCondition[], options: StdFilterOptions): string | null {
-  if (conds.length === 0) return "Choose a field for the first condition.";
+  if (conds.length === 0) return t("lbl.err.firstField", "Choose a field for the first condition.");
   for (const c of conds) {
     const meta = STD_FILTER_OPS.find((o) => o.op === c.op);
-    if (meta?.numeric && !(Number(c.value) > 0)) return `“${meta.label}” needs a positive number.`;
+    if (meta?.numeric && !(Number(c.value) > 0)) return t("lbl.err.positive", "“{name}” needs a positive number.", { name: meta.label });
     if (options.regex) {
       try {
         new RegExp(c.value);
       } catch {
-        return `“${c.value}” is not a valid regular expression.`;
+        return t("lbl.err.regex", "“{value}” is not a valid regular expression.", { value: c.value });
       }
     }
   }
@@ -110,17 +111,17 @@ export function advancedFilterOp(sheet: number, range: RangeDto, criteria: Sheet
 
 /** The 11 subtotal functions (AOO's list) with their SUBTOTAL function numbers. */
 export const SUBTOTAL_FNS: readonly { fn: AggFn; label: string; n: number }[] = [
-  { fn: "sum", label: "Sum", n: 9 },
-  { fn: "count", label: "Count", n: 3 },
-  { fn: "average", label: "Average", n: 1 },
-  { fn: "max", label: "Max", n: 4 },
-  { fn: "min", label: "Min", n: 5 },
-  { fn: "product", label: "Product", n: 6 },
-  { fn: "countNums", label: "Count (numbers only)", n: 2 },
-  { fn: "stDev", label: "StDev (sample)", n: 7 },
-  { fn: "stDevP", label: "StDevP (population)", n: 8 },
-  { fn: "var", label: "Var (sample)", n: 10 },
-  { fn: "varP", label: "VarP (population)", n: 11 },
+  { fn: "sum", get label() { return t("pivot.sum", "Sum"); }, n: 9 },
+  { fn: "count", get label() { return t("pivot.count", "Count"); }, n: 3 },
+  { fn: "average", get label() { return t("pivot.average", "Average"); }, n: 1 },
+  { fn: "max", get label() { return t("pivot.max", "Max"); }, n: 4 },
+  { fn: "min", get label() { return t("pivot.min", "Min"); }, n: 5 },
+  { fn: "product", get label() { return t("pivot.product", "Product"); }, n: 6 },
+  { fn: "countNums", get label() { return t("lbl.subtotal.countNums", "Count (numbers only)"); }, n: 2 },
+  { fn: "stDev", get label() { return t("lbl.subtotal.stDev", "StDev (sample)"); }, n: 7 },
+  { fn: "stDevP", get label() { return t("lbl.subtotal.stDevP", "StDevP (population)"); }, n: 8 },
+  { fn: "var", get label() { return t("lbl.subtotal.var", "Var (sample)"); }, n: 10 },
+  { fn: "varP", get label() { return t("lbl.subtotal.varP", "VarP (population)"); }, n: 11 },
 ];
 
 /** One of the three group tabs; `groupBy === null` means unused. */
@@ -181,11 +182,11 @@ export function parseSheetCell(text: string, sheetByName: (name: string) => numb
 
 export function consolidateOp(st: ConsolidateState, sheetByName: (name: string) => number | null, currentSheet: number): Op | string {
   const sources = st.sources.map((s) => parseSheetRange(s, sheetByName, currentSheet));
-  if (sources.length === 0) return "Add at least one source range.";
+  if (sources.length === 0) return t("lbl.err.addSource", "Add at least one source range.");
   const bad = st.sources.find((_, i) => sources[i] === null);
-  if (bad !== undefined) return `“${bad}” is not a range.`;
+  if (bad !== undefined) return t("lbl.err.notRange", "“{value}” is not a range.", { value: bad });
   const dest = parseSheetCell(st.dest, sheetByName, currentSheet);
-  if (!dest) return "Choose a destination cell.";
+  if (!dest) return t("lbl.err.destCell", "Choose a destination cell.");
   return { type: "consolidate", function: st.function, sources: sources as SheetRange[], dest, byRowLabels: st.byRowLabels, byColLabels: st.byColLabels, link: st.link };
 }
 
@@ -290,8 +291,8 @@ export interface SortOptionsState {
 
 export function sortWithOptionsOp(sheet: number, range: RangeDto, st: SortOptionsState, lists: readonly string[][], parseCopyTo: (s: string) => SheetCell | null): Op | string {
   const copyTo = st.copyTo.trim() === "" ? null : parseCopyTo(st.copyTo);
-  if (st.copyTo.trim() !== "" && !copyTo) return `“${st.copyTo}” is not a cell.`;
-  if (st.keys.length === 0) return "Choose a sort key.";
+  if (st.copyTo.trim() !== "" && !copyTo) return t("lbl.err.notCell", "“{value}” is not a cell.", { value: st.copyTo });
+  if (st.keys.length === 0) return t("lbl.err.sortKey", "Choose a sort key.");
   const list = st.customList === null ? null : (lists[st.customList] ?? null);
   const options: SortOptions = { leftToRight: st.leftToRight, copyTo, customOrder: list ? [...list] : null, includeFormats: st.includeFormats, natural: st.natural };
   return { type: "sortRange", sheet, range: { ...range }, keys: st.keys.map((k) => ({ ...k })), hasHeader: st.hasHeader, caseSensitive: st.caseSensitive, options };
@@ -334,12 +335,12 @@ function cellRef(p: CellPos, absolute = true): string {
  */
 export function multipleOperationsOps(sheet: number, range: RangeDto, st: MultiOpsState, parseCell: (s: string) => CellPos | null): Op[] | string {
   const formula = parseA1Range(st.formulas.trim().replace(/\$/g, ""));
-  if (!formula) return "Choose the formula cell(s).";
+  if (!formula) return t("lbl.err.formulaCells", "Choose the formula cell(s).");
   const rowInput = st.rowInput.trim() === "" ? null : parseCell(st.rowInput);
   const colInput = st.colInput.trim() === "" ? null : parseCell(st.colInput);
-  if (st.rowInput.trim() !== "" && !rowInput) return `“${st.rowInput}” is not a cell.`;
-  if (st.colInput.trim() !== "" && !colInput) return `“${st.colInput}” is not a cell.`;
-  if (!rowInput && !colInput) return "Choose a row or column input cell.";
+  if (st.rowInput.trim() !== "" && !rowInput) return t("lbl.err.notCell", "“{value}” is not a cell.", { value: st.rowInput });
+  if (st.colInput.trim() !== "" && !colInput) return t("lbl.err.notCell", "“{value}” is not a cell.", { value: st.colInput });
+  if (!rowInput && !colInput) return t("lbl.err.inputCell", "Choose a row or column input cell.");
   const f = cellRef({ r: formula.r0, c: formula.c0 });
   const rel = (p: CellPos) => cellRef(p, false);
   const ops: Op[] = [];
@@ -379,25 +380,25 @@ export function multipleOperationsOps(sheet: number, range: RangeDto, st: MultiO
 // ---------------------------------------------------------------------------
 
 export const SCENARIO_COLORS: readonly { label: string; rgba: number }[] = [
-  { label: "Light blue", rgba: 0xbfdbfeff },
-  { label: "Light green", rgba: 0xbbf7d0ff },
-  { label: "Light yellow", rgba: 0xfef08aff },
-  { label: "Light red", rgba: 0xfecacaff },
-  { label: "Lavender", rgba: 0xddd6feff },
-  { label: "Grey", rgba: 0xe5e7ebff },
+  { get label() { return t("lbl.scenarioColor.lightBlue", "Light blue"); }, rgba: 0xbfdbfeff },
+  { get label() { return t("lbl.scenarioColor.lightGreen", "Light green"); }, rgba: 0xbbf7d0ff },
+  { get label() { return t("lbl.scenarioColor.lightYellow", "Light yellow"); }, rgba: 0xfef08aff },
+  { get label() { return t("lbl.scenarioColor.lightRed", "Light red"); }, rgba: 0xfecacaff },
+  { get label() { return t("lbl.scenarioColor.lavender", "Lavender"); }, rgba: 0xddd6feff },
+  { get label() { return t("lbl.scenarioColor.grey", "Grey"); }, rgba: 0xe5e7ebff },
 ];
 
 /** The tab colours offered by Sheet ▸ Tab Colour (AOO's standard palette row). */
-export const TAB_COLORS: readonly { label: string; rgba: number }[] = [
-  { label: "Red", rgba: 0xef4444ff },
-  { label: "Orange", rgba: 0xf97316ff },
-  { label: "Yellow", rgba: 0xeab308ff },
-  { label: "Green", rgba: 0x22c55eff },
-  { label: "Teal", rgba: 0x14b8a6ff },
-  { label: "Blue", rgba: 0x3b82f6ff },
-  { label: "Purple", rgba: 0xa855f7ff },
-  { label: "Pink", rgba: 0xec4899ff },
-  { label: "Grey", rgba: 0x6b7280ff },
+export const TAB_COLORS: readonly { id: string; label: string; rgba: number }[] = [
+  { id: "red", get label() { return t("lbl.tabColor.red", "Red"); }, rgba: 0xef4444ff },
+  { id: "orange", get label() { return t("lbl.tabColor.orange", "Orange"); }, rgba: 0xf97316ff },
+  { id: "yellow", get label() { return t("lbl.tabColor.yellow", "Yellow"); }, rgba: 0xeab308ff },
+  { id: "green", get label() { return t("lbl.tabColor.green", "Green"); }, rgba: 0x22c55eff },
+  { id: "teal", get label() { return t("lbl.tabColor.teal", "Teal"); }, rgba: 0x14b8a6ff },
+  { id: "blue", get label() { return t("lbl.tabColor.blue", "Blue"); }, rgba: 0x3b82f6ff },
+  { id: "purple", get label() { return t("lbl.tabColor.purple", "Purple"); }, rgba: 0xa855f7ff },
+  { id: "pink", get label() { return t("lbl.tabColor.pink", "Pink"); }, rgba: 0xec4899ff },
+  { id: "grey", get label() { return t("lbl.tabColor.grey", "Grey"); }, rgba: 0x6b7280ff },
 ];
 
 /** `Name_2`, `Name_3`… — the first copy name not taken. */

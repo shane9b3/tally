@@ -5,6 +5,8 @@
 import type { CellPos } from "@tally/bridge";
 import { useEffect, useRef, useState } from "react";
 import { cx, useController } from "../context";
+import { useW56Store } from "../data/store";
+import { t } from "../i18n";
 import { rgbaToHex } from "../palette";
 import { useV3Store, type CellPopover } from "../stores/v3Store";
 import { useDismiss, useFloating } from "./Popover";
@@ -12,6 +14,7 @@ import styles from "./CellPopovers.module.css";
 
 export function CellPopovers() {
   const p = useV3Store((s) => s.popover);
+  useW56Store((s) => s.i18nRev);
   if (!p) return null;
   switch (p.kind) {
     case "note":
@@ -51,10 +54,10 @@ function NoteView({ p }: { p: Extract<CellPopover, { kind: "note" }> }) {
       <div className={styles.noteText}>{p.note.text}</div>
       <div className={styles.noteActions}>
         <button type="button" className={styles.linkBtn} onClick={() => void ctl.v3.editNote(p.cell)}>
-          Edit
+          {t("dialog.edit", "Edit")}
         </button>
         <button type="button" className={cx(styles.linkBtn, styles.danger)} onClick={() => void ctl.v3.deleteNote(p.cell)}>
-          Delete
+          {t("dialog.delete", "Delete")}
         </button>
       </div>
     </div>
@@ -79,14 +82,14 @@ function NoteEditor({ p }: { p: Extract<CellPopover, { kind: "noteEdit" }> }) {
   }, []);
   const save = () => void ctl.v3.saveNote(p.cell, text, p.author);
   return (
-    <div ref={ref} className={cx(styles.note, styles.editor)} style={style} role="dialog" aria-label="Note" data-testid="note-editor">
-      <div className={styles.meta}>{p.author ? `Note by ${p.author}` : "Note"}</div>
+    <div ref={ref} className={cx(styles.note, styles.editor)} style={style} role="dialog" aria-label={t("popover.note", "Note")} data-testid="note-editor">
+      <div className={styles.meta}>{p.author ? t("popover.noteBy", "Note by {author}", { author: p.author }) : t("popover.note", "Note")}</div>
       <textarea
         ref={ta}
         className={styles.textarea}
         value={text}
         rows={4}
-        placeholder="Add a note…"
+        placeholder={t("popover.addNote", "Add a note…")}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           e.stopPropagation();
@@ -103,15 +106,15 @@ function NoteEditor({ p }: { p: Extract<CellPopover, { kind: "noteEdit" }> }) {
       <div className={styles.editorActions}>
         {p.exists ? (
           <button type="button" className={cx(styles.btn, styles.danger)} onClick={() => void ctl.v3.deleteNote(p.cell)}>
-            Delete
+            {t("dialog.delete", "Delete")}
           </button>
         ) : null}
         <span className={styles.spacer} />
         <button type="button" className={styles.btn} onClick={cancel}>
-          Cancel
+          {t("dialog.cancel", "Cancel")}
         </button>
         <button type="button" className={cx(styles.btn, styles.primary)} onClick={save} data-testid="note-save" title="⌘↩">
-          Save
+          {t("dialog.save", "Save")}
         </button>
       </div>
     </div>
@@ -137,7 +140,7 @@ function ListPopover({ p }: { p: Extract<CellPopover, { kind: "list" }> }) {
       className={styles.list}
       style={style}
       role="listbox"
-      aria-label="Allowed values"
+      aria-label={t("popover.allowedValues", "Allowed values")}
       tabIndex={-1}
       data-testid="validation-list"
       onKeyDown={(e) => {
@@ -150,7 +153,7 @@ function ListPopover({ p }: { p: Extract<CellPopover, { kind: "list" }> }) {
         e.preventDefault();
       }}
     >
-      {p.items.length === 0 ? <div className={styles.empty}>No items</div> : null}
+      {p.items.length === 0 ? <div className={styles.empty}>{t("popover.noItems", "No items")}</div> : null}
       {p.items.map((item, i) => (
         <button
           key={`${i}:${item}`}

@@ -12,6 +12,7 @@ import type { EngineClientV4, FunctionInfo } from "@tally/bridge";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useController } from "../context";
 import { t } from "../i18n";
+import { localizedName, useDocFormulaLang } from "../i18n/formulaNames";
 import { useEditStore } from "../stores/editStore";
 import { useFunctionsStore } from "../stores/functionsStore";
 import { close, Shell } from "./Dialogs";
@@ -117,6 +118,7 @@ export function insertCallAt(text: string, caret: number, name: string): { text:
 export function FunctionWizard() {
   const ctl = useController();
   const functions = useFunctionsStore((s) => s.functions);
+  const formulaLang = useDocFormulaLang();
   const [category, setCategory] = useState<string>(LAST_USED);
   const [query, setQuery] = useState("");
   const existing = useMemo(() => {
@@ -174,7 +176,7 @@ export function FunctionWizard() {
   const label = (c: string): string => (c === LAST_USED ? t("wizard.lastUsed", "Last Used") : c === ALL ? t("wizard.all", "All") : c);
 
   return (
-    <Shell title={t("wizard.title", "Function Wizard")} onSubmit={insert} ok={t("wizard.insertFunction", "Insert")} valid={current !== null} cardClass={wiz.card} testId="function-wizard">
+    <Shell title={t("wizard.title", "Function Wizard")} onSubmit={insert} ok={t("dialog.insert", "Insert")} valid={current !== null} cardClass={wiz.card} testId="function-wizard">
       <div className={wiz.columns}>
         <div className={wiz.left}>
           <label className={styles.field}>
@@ -193,7 +195,7 @@ export function FunctionWizard() {
               ref={searchRef}
               className={styles.input}
               value={query}
-              placeholder="SUMIF, VLOOKUP…"
+              placeholder={formulaLang ? `${localizedName(formulaLang, "SUMIF")}, ${localizedName(formulaLang, "VLOOKUP")}…` : "SUMIF, VLOOKUP…"}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown") {

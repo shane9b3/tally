@@ -49,7 +49,7 @@ export function ArgumentEditor({ fn, initial, onChange }: ArgumentEditorProps) {
     const r = await ctl.w56.pickRange();
     if (r) set(i, a1(r));
   };
-  if (params.length === 0) return <div className={w56.muted}>{t("wizard.arguments", "Arguments")}: none.</div>;
+  if (params.length === 0) return <div className={w56.muted}>{t("formulaUi.argumentsNone", "Arguments: none.")}</div>;
   return (
     <div data-testid="wizard-arguments">
       <div className={w56.section}>{t("wizard.arguments", "Arguments")}</div>

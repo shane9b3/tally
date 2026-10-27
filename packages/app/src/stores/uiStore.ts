@@ -17,6 +17,8 @@ import {
 
 /** A button on a toast (e.g. "Keep" / "Undo" after a validation warning). */
 export interface ToastAction {
+  /** Stable id for tests (`toast-action-<id>`); the label is translated. */
+  id?: string;
   label: string;
   run: () => void;
 }

@@ -58,6 +58,18 @@ import styles from "./W56.module.css";
 
 type D<K extends W56Dialog["kind"]> = Extract<W56Dialog, { kind: K }>;
 
+/** "Objective: {objective} after {n} iterations." with the figure in bold (word order stays translatable). */
+function solverSummary(objective: string, iterations: number) {
+  const parts = t("dd.solverResult", "Objective: {objective} after {n} iterations.", { objective: "\u0000", n: iterations }).split("\u0000");
+  return (
+    <>
+      {parts[0]}
+      <b>{objective}</b>
+      {parts[1]}
+    </>
+  );
+}
+
 const colLetter = (c: number): string => a1({ r0: 0, c0: c, r1: 0, c1: c }).replace(/\d+$/, "");
 
 // ---------------------------------------------------------------------------
@@ -65,6 +77,7 @@ const colLetter = (c: number): string => a1({ r0: 0, c0: c, r1: 0, c1: c }).repl
 // ---------------------------------------------------------------------------
 
 export function StandardFilterDialog({ d }: { d: D<"standardFilter"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [rows, setRows] = useState<FilterRow[]>(() => emptyFilterRows(d.range.c0));
   const [options, setOptions] = useState<StdFilterOptions>({ ...DEFAULT_FILTER_OPTIONS, hasHeader: d.hasHeader });
@@ -75,33 +88,35 @@ export function StandardFilterDialog({ d }: { d: D<"standardFilter"> }) {
   const conds = filterConditions(rows);
   const copyCell = copyTo.trim() === "" ? null : ctl.w56.parseCellRef(copyTo);
   const criteriaRange = parseRangeText(criteria);
-  const error = advanced ? (criteriaRange ? null : "Choose the criteria range.") : filterError(conds, options);
-  const copyError = copyTo.trim() !== "" && !copyCell ? `“${copyTo}” is not a cell.` : null;
+  const error = advanced ? (criteriaRange ? null : t("dd.chooseCriteria", "Choose the criteria range.")) : filterError(conds, options);
+  const copyError = copyTo.trim() !== "" && !copyCell ? t("dd.notACell", "“{ref}” is not a cell.", { ref: copyTo }) : null;
   const setRow = (i: number, p: Partial<FilterRow>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...p } : r)));
   const submit = async () => {
     const opts: StdFilterOptions = { ...options, copyTo: copyCell };
     const op = advanced && criteriaRange ? advancedFilterOp(ctl.sheet, d.range, { sheet: ctl.sheet, range: criteriaRange }, opts) : standardFilterOp(ctl.sheet, d.range, conds, opts);
-    await ctl.w56.applyOps(advanced ? "Advanced filter" : "Standard filter", [op]);
+    await ctl.w56.applyOps(advanced ? t("msg.undo.advancedFilter", "Advanced filter") : t("msg.undo.standardFilter", "Standard filter"), [op]);
     await ctl.refreshFilter();
   };
   return (
     <W56Shell title={advanced ? t("cmd.data.advancedFilter", "Advanced filter").replace(/…$/, "") : t("cmd.data.standardFilter", "Standard filter").replace(/…$/, "")} ok={t("dialog.ok", "OK")} size="xwide" testId="standard-filter" valid={error === null && copyError === null} onSubmit={submit}>
       <p className={dlg.lead}>
-        Filters {a1(d.range)}{options.hasHeader ? " (first row = labels)" : ""}. Rows that do not match are hidden; Data ▸ Filter ▸ Reset Filter shows them again.
+        {options.hasHeader
+          ? t("dd.filtersLeadHeader", "Filters {range} (first row = labels). Rows that do not match are hidden; Data ▸ Filter ▸ Reset Filter shows them again.", { range: a1(d.range) })
+          : t("dd.filtersLead", "Filters {range}. Rows that do not match are hidden; Data ▸ Filter ▸ Reset Filter shows them again.", { range: a1(d.range) })}
       </p>
-      <Segmented label="Filter kind" value={advanced ? "advanced" : "standard"} onChange={(v) => setAdvanced(v === "advanced")} options={[{ id: "standard", label: "Conditions" }, { id: "advanced", label: "Criteria range" }]} />
+      <Segmented label={t("dd.filterKind", "Filter kind")} value={advanced ? "advanced" : "standard"} onChange={(v) => setAdvanced(v === "advanced")} options={[{ id: "standard", label: t("dd.conditions", "Conditions") }, { id: "advanced", label: t("dd.criteriaRange", "Criteria range") }]} />
       {advanced ? (
         <div className={dlg.gap}>
-          <RangeField label="Read filter criteria from" value={criteria} onChange={setCriteria} testId="filter-criteria" />
-          <p className={styles.muted}>The first row of the criteria range holds column labels; each further row is one alternative (OR), the cells of a row combine with AND.</p>
+          <RangeField label={t("dd.readCriteriaFrom", "Read filter criteria from")} value={criteria} onChange={setCriteria} testId="filter-criteria" />
+          <p className={styles.muted}>{t("dd.criteriaHelp", "The first row of the criteria range holds column labels; each further row is one alternative (OR), the cells of a row combine with AND.")}</p>
         </div>
       ) : (
         <div className={dlg.gap}>
           <div className={styles.condRow}>
-            <span className={styles.rowLabel}>Operator</span>
-            <span className={styles.rowLabel}>Field name</span>
-            <span className={styles.rowLabel}>Condition</span>
-            <span className={styles.rowLabel}>Value</span>
+            <span className={styles.rowLabel}>{t("dd.operator", "Operator")}</span>
+            <span className={styles.rowLabel}>{t("dd.fieldName", "Field name")}</span>
+            <span className={styles.rowLabel}>{t("dd.condition", "Condition")}</span>
+            <span className={styles.rowLabel}>{t("dialog.value", "Value")}</span>
           </div>
           {rows.map((r, i) => {
             const disabled = i > 0 && rows[i - 1]?.col === null;
@@ -110,42 +125,42 @@ export function StandardFilterDialog({ d }: { d: D<"standardFilter"> }) {
                 {i === 0 ? (
                   <span />
                 ) : (
-                  <select className={dlg.selectSmall} aria-label={`Operator ${i}`} value={r.connector} disabled={disabled} onChange={(e) => setRow(i, { connector: e.target.value as "and" | "or" })} data-testid={`filter-conn-${i}`}>
-                    <option value="and">AND</option>
-                    <option value="or">OR</option>
+                  <select className={dlg.selectSmall} aria-label={t("dd.operatorN", "Operator {n}", { n: i })} value={r.connector} disabled={disabled} onChange={(e) => setRow(i, { connector: e.target.value as "and" | "or" })} data-testid={`filter-conn-${i}`}>
+                    <option value="and">{t("dd.opAnd", "AND")}</option>
+                    <option value="or">{t("dd.opOr", "OR")}</option>
                   </select>
                 )}
-                <select className={dlg.selectSmall} aria-label={`Field ${i + 1}`} value={r.col === null ? "" : String(r.col)} disabled={disabled} onChange={(e) => setRow(i, { col: e.target.value === "" ? null : Number(e.target.value) })} data-testid={`filter-field-${i}`}>
-                  <option value="">- none -</option>
+                <select className={dlg.selectSmall} aria-label={t("dd.fieldN", "Field {n}", { n: i + 1 })} value={r.col === null ? "" : String(r.col)} disabled={disabled} onChange={(e) => setRow(i, { col: e.target.value === "" ? null : Number(e.target.value) })} data-testid={`filter-field-${i}`}>
+                  <option value="">{t("dd.none", "- none -")}</option>
                   {cols.map((c) => (
                     <option key={c.col} value={String(c.col)}>
                       {c.label}
                     </option>
                   ))}
                 </select>
-                <select className={dlg.selectSmall} aria-label={`Condition ${i + 1}`} value={r.op} disabled={disabled || r.col === null} onChange={(e) => setRow(i, { op: e.target.value as FilterRow["op"] })} data-testid={`filter-op-${i}`}>
+                <select className={dlg.selectSmall} aria-label={t("dd.conditionN", "Condition {n}", { n: i + 1 })} value={r.op} disabled={disabled || r.col === null} onChange={(e) => setRow(i, { op: e.target.value as FilterRow["op"] })} data-testid={`filter-op-${i}`}>
                   {STD_FILTER_OPS.map((o) => (
                     <option key={o.op} value={o.op}>
                       {o.label}
                     </option>
                   ))}
                 </select>
-                <input className={cx(dlg.input, styles.small)} style={{ width: "100%", height: 26 }} aria-label={`Value ${i + 1}`} value={r.value} disabled={disabled || r.col === null} onChange={(e) => setRow(i, { value: e.target.value })} data-testid={`filter-value-${i}`} />
+                <input className={cx(dlg.input, styles.small)} style={{ width: "100%", height: 26 }} aria-label={t("dd.valueN", "Value {n}", { n: i + 1 })} value={r.value} disabled={disabled || r.col === null} onChange={(e) => setRow(i, { value: e.target.value })} data-testid={`filter-value-${i}`} />
               </div>
             );
           })}
         </div>
       )}
-      <div className={styles.section}>Options</div>
+      <div className={styles.section}>{t("dialog.options", "Options")}</div>
       <div className={dlg.optionGrid}>
         <Check label={t("sort.caseSensitive", "Case sensitive")} checked={options.caseSensitive} onChange={(v) => setOptions({ ...options, caseSensitive: v })} />
         <Check label={t("find.regex", "Regular expressions")} checked={options.regex} onChange={(v) => setOptions({ ...options, regex: v })} testId="filter-regex" />
         <Check label={t("sort.hasHeader", "Range contains column labels")} checked={options.hasHeader} onChange={(v) => setOptions({ ...options, hasHeader: v })} />
-        <Check label="No duplications" checked={options.noDuplicates} onChange={(v) => setOptions({ ...options, noDuplicates: v })} testId="filter-nodup" />
-        <Check label="Keep filter criteria" checked={options.keepCriteria} onChange={(v) => setOptions({ ...options, keepCriteria: v })} />
+        <Check label={t("dd.noDuplicates", "No duplications")} checked={options.noDuplicates} onChange={(v) => setOptions({ ...options, noDuplicates: v })} testId="filter-nodup" />
+        <Check label={t("dd.keepCriteria", "Keep filter criteria")} checked={options.keepCriteria} onChange={(v) => setOptions({ ...options, keepCriteria: v })} />
       </div>
       <div className={dlg.gap}>
-        <RangeField label="Copy results to (optional)" value={copyTo} onChange={setCopyTo} testId="filter-copy-to" placeholder="H1 or Sheet2.A1" allowSheet />
+        <RangeField label={t("dd.copyResultsOptional", "Copy results to (optional)")} value={copyTo} onChange={setCopyTo} testId="filter-copy-to" placeholder={t("dd.cellOrSheetRef", "H1 or Sheet2.A1")} allowSheet />
       </div>
       {error ? <p className={dlg.error}>{error}</p> : null}
       {copyError ? <p className={dlg.error}>{copyError}</p> : null}
@@ -158,6 +173,7 @@ export function StandardFilterDialog({ d }: { d: D<"standardFilter"> }) {
 // ---------------------------------------------------------------------------
 
 export function SubtotalsDialog({ d }: { d: D<"subtotals"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [tabs, setTabs] = useState<SubtotalTab[]>(() => {
     const first = emptySubtotalTabs();
@@ -183,20 +199,20 @@ export function SubtotalsDialog({ d }: { d: D<"subtotals"> }) {
       size="wide"
       testId="subtotals-dialog"
       valid={groups.length > 0}
-      onSubmit={() => void ctl.w56.applyOps("Subtotals", [subtotalsOp(ctl.sheet, d.range, groups, options)])}
+      onSubmit={() => void ctl.w56.applyOps(t("subtotals.title", "Subtotals"), [subtotalsOp(ctl.sheet, d.range, groups, options)])}
       extra={
-        <button type="button" className={dlg.secondary} onClick={() => void ctl.w56.applyOps("Remove subtotals", [removeSubtotalsOp(ctl.sheet, d.range)]).then(() => closeW56())} data-testid="subtotals-remove">
+        <button type="button" className={dlg.secondary} onClick={() => void ctl.w56.applyOps(t("msg.undo.removeSubtotals", "Remove subtotals"), [removeSubtotalsOp(ctl.sheet, d.range)]).then(() => closeW56())} data-testid="subtotals-remove">
           {t("subtotals.removeAll", "Remove all")}
         </button>
       }
     >
-      <p className={dlg.lead}>Inserts SUBTOTAL rows for {a1(d.range)} and builds an outline.</p>
-      <Tabs label="Groups" value={tab} onChange={setTab} tabs={[{ id: "g1", label: "1st Group" }, { id: "g2", label: "2nd Group" }, { id: "g3", label: "3rd Group" }, { id: "options", label: t("dialog.options", "Options") }]} />
+      <p className={dlg.lead}>{t("dd.subtotalsLead", "Inserts SUBTOTAL rows for {range} and builds an outline.", { range: a1(d.range) })}</p>
+      <Tabs label={t("dd.groups", "Groups")} value={tab} onChange={setTab} tabs={[{ id: "g1", label: t("dd.group1", "1st Group") }, { id: "g2", label: t("dd.group2", "2nd Group") }, { id: "g3", label: t("dd.group3", "3rd Group") }, { id: "options", label: t("dialog.options", "Options") }]} />
       {cur ? (
         <>
           <Field label={t("subtotals.groupBy", "Group by")}>
             <select className={dlg.select} value={cur.groupBy === null ? "" : String(cur.groupBy)} onChange={(e) => update({ groupBy: e.target.value === "" ? null : Number(e.target.value) })} data-testid={`subtotal-groupby-${gi}`}>
-              <option value="">- none -</option>
+              <option value="">{t("dd.none", "- none -")}</option>
               {cols.map((c) => (
                 <option key={c.col} value={String(c.col)}>
                   {c.label}
@@ -226,9 +242,9 @@ export function SubtotalsDialog({ d }: { d: D<"subtotals"> }) {
         <div>
           <Check label={t("subtotals.pageBreak", "Page break between groups")} checked={options.pageBreaks} onChange={(v) => setOptions({ ...options, pageBreaks: v })} />
           <Check label={t("sort.caseSensitive", "Case sensitive")} checked={options.caseSensitive} onChange={(v) => setOptions({ ...options, caseSensitive: v })} />
-          <Check label="Pre-sort area according to groups" checked={options.presort} onChange={(v) => setOptions({ ...options, presort: v })} />
+          <Check label={t("dd.preSort", "Pre-sort area according to groups")} checked={options.presort} onChange={(v) => setOptions({ ...options, presort: v })} />
           <Check label={t("sort.ascending", "Ascending")} checked={options.ascending} disabled={!options.presort} onChange={(v) => setOptions({ ...options, ascending: v })} />
-          <Check label="Include formats" checked={options.includeFormats} disabled={!options.presort} onChange={(v) => setOptions({ ...options, includeFormats: v })} />
+          <Check label={t("dd.includeFormats", "Include formats")} checked={options.includeFormats} disabled={!options.presort} onChange={(v) => setOptions({ ...options, includeFormats: v })} />
         </div>
       )}
     </W56Shell>
@@ -240,6 +256,7 @@ export function SubtotalsDialog({ d }: { d: D<"subtotals"> }) {
 // ---------------------------------------------------------------------------
 
 export function ConsolidateDialog() {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [st, setSt] = useState<ConsolidateState>({ function: "sum", sources: [], dest: "", byRowLabels: false, byColLabels: false, link: false });
   const [draft, setDraft] = useState(a1(ctl.selection.range));
@@ -252,7 +269,7 @@ export function ConsolidateDialog() {
   };
   return (
     <W56Shell title={t("consolidate.title", "Consolidate")} ok={t("dialog.ok", "OK")} size="wide" testId="consolidate-dialog" valid={error === null} onSubmit={() => {
-        if (typeof op !== "string") void ctl.w56.applyOps("Consolidate", [op]);
+        if (typeof op !== "string") void ctl.w56.applyOps(t("consolidate.title", "Consolidate"), [op]);
       }}>
       <Field label={t("consolidate.function", "Function")}>
         <select className={dlg.select} value={st.function} onChange={(e) => setSt({ ...st, function: e.target.value as AggFn })} data-testid="consolidate-fn">
@@ -265,7 +282,7 @@ export function ConsolidateDialog() {
       </Field>
       <div className={styles.section}>{t("consolidate.sourceRanges", "Consolidation ranges")}</div>
       <div className={styles.list} data-testid="consolidate-sources">
-        {st.sources.length === 0 ? <div className={cx(styles.listItem, styles.muted)}>No ranges yet.</div> : null}
+        {st.sources.length === 0 ? <div className={cx(styles.listItem, styles.muted)}>{t("dd.noRangesYet", "No ranges yet.")}</div> : null}
         {st.sources.map((s, i) => (
           <div key={`${s}-${i}`} className={styles.listItem}>
             <span className={styles.grow}>{s}</span>
@@ -277,17 +294,17 @@ export function ConsolidateDialog() {
       </div>
       <div className={styles.row}>
         <div style={{ flex: 1 }}>
-          <RangeField label="Source data range" value={draft} onChange={setDraft} testId="consolidate-source" allowSheet />
+          <RangeField label={t("dd.sourceDataRange", "Source data range")} value={draft} onChange={setDraft} testId="consolidate-source" allowSheet />
         </div>
         <button type="button" className={dlg.secondary} style={{ marginTop: 18 }} onClick={addSource} data-testid="consolidate-add">
           {t("dialog.add", "Add")}
         </button>
       </div>
-      <RangeField label={t("consolidate.target", "Copy results to")} value={st.dest} onChange={(v) => setSt({ ...st, dest: v })} testId="consolidate-dest" allowSheet placeholder="Sheet2.A1" />
-      <div className={styles.section}>Consolidate by</div>
+      <RangeField label={t("consolidate.target", "Copy results to")} value={st.dest} onChange={(v) => setSt({ ...st, dest: v })} testId="consolidate-dest" allowSheet placeholder={t("dd.sheetCellRef", "Sheet2.A1")} />
+      <div className={styles.section}>{t("dd.consolidateBy", "Consolidate by")}</div>
       <div className={dlg.optionGrid}>
-        <Check label="Row labels" checked={st.byRowLabels} onChange={(v) => setSt({ ...st, byRowLabels: v })} />
-        <Check label="Column labels" checked={st.byColLabels} onChange={(v) => setSt({ ...st, byColLabels: v })} />
+        <Check label={t("dd.rowLabels", "Row labels")} checked={st.byRowLabels} onChange={(v) => setSt({ ...st, byRowLabels: v })} />
+        <Check label={t("dd.columnLabels", "Column labels")} checked={st.byColLabels} onChange={(v) => setSt({ ...st, byColLabels: v })} />
         <Check label={t("consolidate.linkToSource", "Link to source data")} checked={st.link} onChange={(v) => setSt({ ...st, link: v })} />
       </div>
       {error && st.sources.length > 0 ? <p className={dlg.error}>{error}</p> : null}
@@ -300,6 +317,7 @@ export function ConsolidateDialog() {
 // ---------------------------------------------------------------------------
 
 export function TextToColumnsDialog({ d }: { d: D<"textToColumns"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [st, setSt] = useState<SeparatorState>(() => ({ ...DEFAULT_SEPARATORS, ...guessSeparator(d.texts) }));
   const preview = useMemo(() => previewSplit(d.texts, st), [d.texts, st]);
@@ -312,12 +330,12 @@ export function TextToColumnsDialog({ d }: { d: D<"textToColumns"> }) {
     setSt({ ...st, columnTypes: types });
   };
   return (
-    <W56Shell title={t("textToColumns.title", "Text to Columns")} ok={t("dialog.ok", "OK")} size="xwide" testId="text-to-columns" valid={nCols > 0} onSubmit={() => void ctl.w56.applyOps("Text to columns", [{ type: "textToColumns", sheet: ctl.sheet, range: { ...d.range }, options: toCsvOptions(st) }])}>
-      <p className={dlg.lead}>Splits the text of {a1(d.range)} into the columns to the right.</p>
+    <W56Shell title={t("textToColumns.title", "Text to Columns")} ok={t("dialog.ok", "OK")} size="xwide" testId="text-to-columns" valid={nCols > 0} onSubmit={() => void ctl.w56.applyOps(t("msg.undo.textToColumns", "Text to columns"), [{ type: "textToColumns", sheet: ctl.sheet, range: { ...d.range }, options: toCsvOptions(st) }])}>
+      <p className={dlg.lead}>{t("dd.splitsLead", "Splits the text of {range} into the columns to the right.", { range: a1(d.range) })}</p>
       <div className={styles.section}>{t("textToColumns.separator", "Separator options")}</div>
-      <Segmented label="Mode" value={st.fixedWidth ? "fixed" : "separated"} onChange={(v) => setSt({ ...st, fixedWidth: v === "fixed" })} options={[{ id: "separated", label: "Separated by" }, { id: "fixed", label: t("textToColumns.fixedWidth", "Fixed width") }]} />
+      <Segmented label={t("dd.mode", "Mode")} value={st.fixedWidth ? "fixed" : "separated"} onChange={(v) => setSt({ ...st, fixedWidth: v === "fixed" })} options={[{ id: "separated", label: t("dd.separatedBy", "Separated by") }, { id: "fixed", label: t("textToColumns.fixedWidth", "Fixed width") }]} />
       {st.fixedWidth ? (
-        <Field label="Column starts (characters, comma separated)" className={dlg.gap}>
+        <Field label={t("dd.columnStarts", "Column starts (characters, comma separated)")} className={dlg.gap}>
           <input className={dlg.input} value={st.widths.join(", ")} placeholder="5, 12, 20" onChange={(e) => setSt({ ...st, widths: e.target.value.split(/[,\s]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0) })} data-testid="t2c-widths" />
         </Field>
       ) : (
@@ -331,7 +349,7 @@ export function TextToColumnsDialog({ d }: { d: D<"textToColumns"> }) {
             <span>{t("textToColumns.other", "Other")}</span>
             <input className={dlg.input} style={{ width: 44, height: 26 }} maxLength={1} value={st.otherChar} onChange={(e) => setSt({ ...st, otherChar: e.target.value, other: e.target.value !== "" })} data-testid="t2c-other" />
           </label>
-          <Check label="Merge delimiters" checked={st.mergeDelimiters} onChange={(v) => setSt({ ...st, mergeDelimiters: v })} />
+          <Check label={t("dd.mergeDelimiters", "Merge delimiters")} checked={st.mergeDelimiters} onChange={(v) => setSt({ ...st, mergeDelimiters: v })} />
         </div>
       )}
       <div className={styles.row}>
@@ -340,8 +358,8 @@ export function TextToColumnsDialog({ d }: { d: D<"textToColumns"> }) {
           <option value='"'>"</option>
           <option value="'">'</option>
         </select>
-        <Check label="Trim spaces" checked={st.trim} onChange={(v) => setSt({ ...st, trim: v })} />
-        <Check label="Detect numbers and dates" checked={st.detectNumbers} onChange={(v) => setSt({ ...st, detectNumbers: v })} />
+        <Check label={t("dd.trimSpaces", "Trim spaces")} checked={st.trim} onChange={(v) => setSt({ ...st, trim: v })} />
+        <Check label={t("dd.detectNumbers", "Detect numbers and dates")} checked={st.detectNumbers} onChange={(v) => setSt({ ...st, detectNumbers: v })} />
       </div>
       <div className={styles.section}>{t("textToColumns.preview", "Preview")}</div>
       <div className={styles.previewWrap}>
@@ -350,7 +368,7 @@ export function TextToColumnsDialog({ d }: { d: D<"textToColumns"> }) {
             <tr>
               {Array.from({ length: nCols }, (_, c) => (
                 <th key={c}>
-                  <select className={dlg.selectSmall} style={{ height: 22, fontSize: 11 }} aria-label={`Column ${c + 1} type`} value={typeOf(c)} onChange={(e) => setType(c, e.target.value as SeparatorState["columnTypes"][number])}>
+                  <select className={dlg.selectSmall} style={{ height: 22, fontSize: 11 }} aria-label={t("dd.columnNType", "Column {n} type", { n: c + 1 })} value={typeOf(c)} onChange={(e) => setType(c, e.target.value as SeparatorState["columnTypes"][number])}>
                     {COLUMN_TYPES.map((ct) => (
                       <option key={ct.type} value={ct.type}>
                         {ct.label}
@@ -381,13 +399,14 @@ export function TextToColumnsDialog({ d }: { d: D<"textToColumns"> }) {
 // ---------------------------------------------------------------------------
 
 export function RemoveDuplicatesDialog({ d }: { d: D<"removeDuplicates"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const all = d.labels.map((_, i) => d.range.c0 + i);
   const [cols, setCols] = useState<number[]>(all);
   const [hasHeader, setHasHeader] = useState(d.hasHeader);
   return (
-    <W56Shell title={t("duplicates.title", "Remove Duplicates")} ok={t("dialog.remove", "Remove")} size="wide" testId="remove-duplicates" valid={cols.length > 0} danger onSubmit={() => void ctl.w56.applyOps("Remove duplicates", [removeDuplicatesOp(ctl.sheet, d.range, cols.length === all.length ? [] : cols, hasHeader)])}>
-      <p className={dlg.lead}>Keeps the first of each set of identical rows in {a1(d.range)} (compared on the chosen columns).</p>
+    <W56Shell title={t("duplicates.title", "Remove Duplicates")} ok={t("dialog.remove", "Remove")} size="wide" testId="remove-duplicates" valid={cols.length > 0} danger onSubmit={() => void ctl.w56.applyOps(t("msg.undo.removeDuplicates", "Remove duplicates"), [removeDuplicatesOp(ctl.sheet, d.range, cols.length === all.length ? [] : cols, hasHeader)])}>
+      <p className={dlg.lead}>{t("dd.dupLead", "Keeps the first of each set of identical rows in {range} (compared on the chosen columns).", { range: a1(d.range) })}</p>
       <div className={styles.section}>{t("duplicates.columns", "Compare columns")}</div>
       <div className={styles.chips}>
         {d.labels.map((label, i) => {
@@ -406,23 +425,25 @@ export function RemoveDuplicatesDialog({ d }: { d: D<"removeDuplicates"> }) {
 }
 
 export function CreateNamesDialog({ d }: { d: D<"createNamesFromLabels"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [from, setFrom] = useState<NameLabelFlags>({ top: true, left: false, bottom: false, right: false });
   const any = from.top || from.left || from.bottom || from.right;
   return (
-    <W56Shell title={t("cmd.data.createNamesFromLabels", "Create names from labels").replace(/…$/, "")} ok={t("dialog.ok", "OK")} testId="create-names" valid={any} onSubmit={() => void ctl.w56.applyOps("Create names", [createNamesOp(ctl.sheet, d.range, from)]).then(() => ctl.refreshNames())}>
-      <p className={dlg.lead}>Names the rows and columns of {a1(d.range)} after the labels in its</p>
+    <W56Shell title={t("cmd.data.createNamesFromLabels", "Create names from labels").replace(/…$/, "")} ok={t("dialog.ok", "OK")} testId="create-names" valid={any} onSubmit={() => void ctl.w56.applyOps(t("msg.undo.createNames", "Create names"), [createNamesOp(ctl.sheet, d.range, from)]).then(() => ctl.refreshNames())}>
+      <p className={dlg.lead}>{t("dd.namesLead", "Names the rows and columns of {range} after the labels in its", { range: a1(d.range) })}</p>
       <div className={dlg.optionGrid}>
-        <Check label="Top row" checked={from.top} onChange={(v) => setFrom({ ...from, top: v })} testId="names-top" />
-        <Check label="Left column" checked={from.left} onChange={(v) => setFrom({ ...from, left: v })} testId="names-left" />
-        <Check label="Bottom row" checked={from.bottom} onChange={(v) => setFrom({ ...from, bottom: v })} />
-        <Check label="Right column" checked={from.right} onChange={(v) => setFrom({ ...from, right: v })} />
+        <Check label={t("dd.topRow", "Top row")} checked={from.top} onChange={(v) => setFrom({ ...from, top: v })} testId="names-top" />
+        <Check label={t("dd.leftColumn", "Left column")} checked={from.left} onChange={(v) => setFrom({ ...from, left: v })} testId="names-left" />
+        <Check label={t("dd.bottomRow", "Bottom row")} checked={from.bottom} onChange={(v) => setFrom({ ...from, bottom: v })} />
+        <Check label={t("dd.rightColumn", "Right column")} checked={from.right} onChange={(v) => setFrom({ ...from, right: v })} />
       </div>
     </W56Shell>
   );
 }
 
 export function DefineDatabaseRangeDialog({ d }: { d: D<"defineDatabaseRange"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [name, setName] = useState("");
   const [range, setRange] = useState(a1(d.range));
@@ -431,7 +452,7 @@ export function DefineDatabaseRangeDialog({ d }: { d: D<"defineDatabaseRange"> }
   const valid = isValidDbRangeName(name.trim()) && parsed !== null;
   return (
     <W56Shell title={t("cmd.data.defineDatabaseRange", "Define database range").replace(/…$/, "")} ok={t("dialog.add", "Add")} size="wide" testId="define-db-range" valid={valid} onSubmit={() => {
-        if (parsed) void ctl.w56.applyOps("Define database range", [defineDatabaseRangeOp(name.trim(), ctl.sheet, parsed, hasHeader)]);
+        if (parsed) void ctl.w56.applyOps(t("msg.undo.defineDatabaseRange", "Define database range"), [defineDatabaseRangeOp(name.trim(), ctl.sheet, parsed, hasHeader)]);
       }}>
       <Field label={t("dialog.name", "Name")}>
         <input className={dlg.input} value={name} autoFocus onChange={(e) => setName(e.target.value)} data-testid="dbrange-name" />
@@ -440,7 +461,7 @@ export function DefineDatabaseRangeDialog({ d }: { d: D<"defineDatabaseRange"> }
       <Check label={t("sort.hasHeader", "Range contains column labels")} checked={hasHeader} onChange={setHasHeader} />
       {d.existing.length > 0 ? (
         <>
-          <div className={styles.section}>Existing ranges</div>
+          <div className={styles.section}>{t("dd.existingRanges", "Existing ranges")}</div>
           <div className={styles.list}>
             {d.existing.map((r) => (
               <div key={r.name} className={styles.listItem}>
@@ -455,7 +476,7 @@ export function DefineDatabaseRangeDialog({ d }: { d: D<"defineDatabaseRange"> }
           </div>
         </>
       ) : null}
-      {name.trim() !== "" && !isValidDbRangeName(name.trim()) ? <p className={dlg.error}>{t("names.invalid", "Invalid name.")}</p> : null}
+      {name.trim() !== "" && !isValidDbRangeName(name.trim()) ? <p className={dlg.error}>{t("dd.invalidName", "Invalid name.")}</p> : null}
     </W56Shell>
   );
 }
@@ -465,49 +486,50 @@ export function DefineDatabaseRangeDialog({ d }: { d: D<"defineDatabaseRange"> }
 // ---------------------------------------------------------------------------
 
 export function FillSeriesDialog({ d }: { d: D<"fillSeries"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const first = useDocStore.getState().source?.getCell(d.range.r0, d.range.c0)?.text ?? "";
   const [st, setSt] = useState<FillSeriesState>({ ...DEFAULT_FILL_SERIES, direction: d.range.r1 > d.range.r0 ? "down" : "right", start: first });
   const n = st.direction === "down" || st.direction === "up" ? d.range.r1 - d.range.r0 + 1 : d.range.c1 - d.range.c0 + 1;
   const preview = st.kind === "autoFill" ? [] : previewSeries(st, n, first);
   return (
-    <W56Shell title={t("cmd.edit.fillSeries", "Fill series").replace(/…$/, "")} ok={t("dialog.ok", "OK")} size="wide" testId="fill-series" onSubmit={() => void ctl.w56.applyOps("Fill series", [fillSeriesOp(ctl.sheet, d.range, st)])}>
+    <W56Shell title={t("cmd.edit.fillSeries", "Fill series").replace(/…$/, "")} ok={t("dialog.ok", "OK")} size="wide" testId="fill-series" onSubmit={() => void ctl.w56.applyOps(t("msg.undo.fillSeries", "Fill series"), [fillSeriesOp(ctl.sheet, d.range, st)])}>
       <div className={styles.grid2}>
-        <Field label="Direction">
+        <Field label={t("sort.direction", "Direction")}>
           <select className={dlg.select} value={st.direction} onChange={(e) => setSt({ ...st, direction: e.target.value as FillSeriesState["direction"] })} data-testid="series-direction">
-            <option value="down">Down</option>
-            <option value="right">Right</option>
-            <option value="up">Up</option>
-            <option value="left">Left</option>
+            <option value="down">{t("dd.dirDown", "Down")}</option>
+            <option value="right">{t("dd.dirRight", "Right")}</option>
+            <option value="up">{t("dd.dirUp", "Up")}</option>
+            <option value="left">{t("dd.dirLeft", "Left")}</option>
           </select>
         </Field>
-        <Field label="Series type">
+        <Field label={t("dd.seriesType", "Series type")}>
           <select className={dlg.select} value={st.kind} onChange={(e) => setSt({ ...st, kind: e.target.value as FillSeriesState["kind"] })} data-testid="series-kind">
-            <option value="linear">Linear</option>
-            <option value="growth">Growth</option>
-            <option value="date">Date</option>
-            <option value="autoFill">AutoFill</option>
+            <option value="linear">{t("dd.serLinear", "Linear")}</option>
+            <option value="growth">{t("dd.serGrowth", "Growth")}</option>
+            <option value="date">{t("fmt.date", "Date")}</option>
+            <option value="autoFill">{t("dd.serAutoFill", "AutoFill")}</option>
           </select>
         </Field>
         {st.kind === "date" ? (
-          <Field label="Time unit">
+          <Field label={t("dd.timeUnit", "Time unit")}>
             <select className={dlg.select} value={st.unit} onChange={(e) => setSt({ ...st, unit: e.target.value as FillSeriesState["unit"] })}>
-              <option value="day">Day</option>
-              <option value="weekday">Weekday</option>
-              <option value="month">Month</option>
-              <option value="year">Year</option>
+              <option value="day">{t("dd.unitDay", "Day")}</option>
+              <option value="weekday">{t("dd.unitWeekday", "Weekday")}</option>
+              <option value="month">{t("dd.unitMonth", "Month")}</option>
+              <option value="year">{t("dd.unitYear", "Year")}</option>
             </select>
           </Field>
         ) : (
           <span />
         )}
-        <Field label="Start value">
+        <Field label={t("dd.startValue", "Start value")}>
           <input className={dlg.input} value={st.start} onChange={(e) => setSt({ ...st, start: e.target.value })} data-testid="series-start" />
         </Field>
-        <Field label="End value (optional)">
+        <Field label={t("dd.endValueOptional", "End value (optional)")}>
           <input className={dlg.input} value={st.end} onChange={(e) => setSt({ ...st, end: e.target.value })} data-testid="series-end" />
         </Field>
-        <Field label="Increment">
+        <Field label={t("dd.increment", "Increment")}>
           <input className={dlg.input} value={st.increment} disabled={st.kind === "autoFill"} onChange={(e) => setSt({ ...st, increment: e.target.value })} data-testid="series-increment" />
         </Field>
       </div>
@@ -522,17 +544,18 @@ export function FillSeriesDialog({ d }: { d: D<"fillSeries"> }) {
 }
 
 export function SortOptionsDialog({ d }: { d: D<"sortOptions"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [st, setSt] = useState<SortOptionsState>({ keys: [{ col: Math.min(d.range.c1, Math.max(d.range.c0, ctl.selection.active.c)), ascending: true }], hasHeader: d.hasHeader, caseSensitive: false, leftToRight: false, copyTo: "", customList: null, includeFormats: true, natural: false });
   const lists = [...BUILTIN_SORT_LISTS, ...d.lists];
-  const keys = st.leftToRight ? Array.from({ length: d.range.r1 - d.range.r0 + 1 }, (_, i) => ({ col: d.range.r0 + i, label: `Row ${d.range.r0 + i + 1}` })) : d.labels.map((label, i) => ({ col: d.range.c0 + i, label: st.hasHeader ? label : `Column ${colLetter(d.range.c0 + i)}` }));
+  const keys = st.leftToRight ? Array.from({ length: d.range.r1 - d.range.r0 + 1 }, (_, i) => ({ col: d.range.r0 + i, label: t("a11y.rowHeader", "Row {n}", { n: d.range.r0 + i + 1 }) })) : d.labels.map((label, i) => ({ col: d.range.c0 + i, label: st.hasHeader ? label : t("a11y.columnHeader", "Column {n}", { n: colLetter(d.range.c0 + i) }) }));
   const op = sortWithOptionsOp(ctl.sheet, d.range, st, lists, (s) => ctl.w56.parseCellRef(s));
   const key0 = st.keys[0];
   return (
     <W56Shell title={`${t("sort.title", "Sort")} (${t("dialog.options", "Options")})`} ok={t("sort.title", "Sort")} size="wide" testId="sort-options" valid={typeof op !== "string"} onSubmit={() => {
-        if (typeof op !== "string") void ctl.w56.applyOps("Sort", [op]);
+        if (typeof op !== "string") void ctl.w56.applyOps(t("sort.title", "Sort"), [op]);
       }}>
-      <Field label={st.leftToRight ? "Sort by row" : t("sort.key", "Sort key")}>
+      <Field label={st.leftToRight ? t("dd.sortByRow", "Sort by row") : t("sort.key", "Sort key")}>
         <select className={dlg.select} value={String(key0?.col ?? "")} onChange={(e) => setSt({ ...st, keys: [{ col: Number(e.target.value), ascending: key0?.ascending ?? true }] })} data-testid="sortopt-key">
           {keys.map((k) => (
             <option key={k.col} value={String(k.col)}>
@@ -542,20 +565,20 @@ export function SortOptionsDialog({ d }: { d: D<"sortOptions"> }) {
         </select>
       </Field>
       <div className={styles.row}>
-        <Segmented label="Order" value={key0?.ascending ? "asc" : "desc"} onChange={(v) => setSt({ ...st, keys: [{ col: key0?.col ?? d.range.c0, ascending: v === "asc" }] })} options={[{ id: "asc", label: t("sort.ascending", "Ascending") }, { id: "desc", label: t("sort.descending", "Descending") }]} />
+        <Segmented label={t("dd.order", "Order")} value={key0?.ascending ? "asc" : "desc"} onChange={(v) => setSt({ ...st, keys: [{ col: key0?.col ?? d.range.c0, ascending: v === "asc" }] })} options={[{ id: "asc", label: t("sort.ascending", "Ascending") }, { id: "desc", label: t("sort.descending", "Descending") }]} />
       </div>
       <div className={styles.section}>{t("sort.direction", "Direction")}</div>
-      <Segmented label="Direction" value={st.leftToRight ? "ltr" : "ttb"} onChange={(v) => setSt({ ...st, leftToRight: v === "ltr", keys: [{ col: v === "ltr" ? d.range.r0 : d.range.c0, ascending: true }] })} options={[{ id: "ttb", label: t("sort.topToBottom", "Top to bottom (sort rows)") }, { id: "ltr", label: t("sort.leftToRight", "Left to right (sort columns)") }]} />
+      <Segmented label={t("sort.direction", "Direction")} value={st.leftToRight ? "ltr" : "ttb"} onChange={(v) => setSt({ ...st, leftToRight: v === "ltr", keys: [{ col: v === "ltr" ? d.range.r0 : d.range.c0, ascending: true }] })} options={[{ id: "ttb", label: t("sort.topToBottom", "Top to bottom (sort rows)") }, { id: "ltr", label: t("sort.leftToRight", "Left to right (sort columns)") }]} />
       <div className={styles.section}>{t("dialog.options", "Options")}</div>
       <div className={dlg.optionGrid}>
         <Check label={t("sort.hasHeader", "Range contains column labels")} checked={st.hasHeader} onChange={(v) => setSt({ ...st, hasHeader: v })} />
         <Check label={t("sort.caseSensitive", "Case sensitive")} checked={st.caseSensitive} onChange={(v) => setSt({ ...st, caseSensitive: v })} />
-        <Check label="Include formats" checked={st.includeFormats} onChange={(v) => setSt({ ...st, includeFormats: v })} />
+        <Check label={t("dd.includeFormats", "Include formats")} checked={st.includeFormats} onChange={(v) => setSt({ ...st, includeFormats: v })} />
         <Check label={t("sort.naturalSort", "Natural sort")} checked={st.natural} onChange={(v) => setSt({ ...st, natural: v })} />
       </div>
-      <Field label="Custom sort order (first key)" className={dlg.gap}>
+      <Field label={t("dd.customSortOrder", "Custom sort order (first key)")} className={dlg.gap}>
         <select className={dlg.select} value={st.customList === null ? "" : String(st.customList)} onChange={(e) => setSt({ ...st, customList: e.target.value === "" ? null : Number(e.target.value) })} data-testid="sortopt-list">
-          <option value="">- none -</option>
+          <option value="">{t("dd.none", "- none -")}</option>
           {lists.map((l, i) => (
             <option key={i} value={String(i)}>
               {l.slice(0, 4).join(", ")}
@@ -564,7 +587,7 @@ export function SortOptionsDialog({ d }: { d: D<"sortOptions"> }) {
           ))}
         </select>
       </Field>
-      <RangeField label="Copy sort results to (optional)" value={st.copyTo} onChange={(v) => setSt({ ...st, copyTo: v })} testId="sortopt-copy-to" allowSheet placeholder="Sheet2.A1" />
+      <RangeField label={t("dd.copySortOptional", "Copy sort results to (optional)")} value={st.copyTo} onChange={(v) => setSt({ ...st, copyTo: v })} testId="sortopt-copy-to" allowSheet placeholder={t("dd.sheetCellRef", "Sheet2.A1")} />
       {typeof op === "string" ? <p className={dlg.error}>{op}</p> : null}
     </W56Shell>
   );
@@ -575,6 +598,7 @@ export function SortOptionsDialog({ d }: { d: D<"sortOptions"> }) {
 // ---------------------------------------------------------------------------
 
 export function DeleteContentsDialog({ d }: { d: D<"deleteContents"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [what, setWhat] = useState<DeleteContentsFlags>(DEFAULT_DELETE);
   const [all, setAll] = useState(false);
@@ -582,8 +606,8 @@ export function DeleteContentsDialog({ d }: { d: D<"deleteContents"> }) {
   const any = Object.values(flags).some(Boolean);
   return (
     <W56Shell title={t("cmd.edit.deleteContents", "Delete contents").replace(/…$/, "")} ok={t("dialog.ok", "OK")} testId="delete-contents" valid={any} onSubmit={() => void ctl.w56.deleteContents(d.ranges, flags)}>
-      <p className={dlg.lead}>Removes from {d.ranges.map(a1).join(", ")}:</p>
-      <Check label="Delete all" checked={all} onChange={setAll} testId="delete-all" />
+      <p className={dlg.lead}>{t("dd.removesFrom", "Removes from {ranges}:", { ranges: d.ranges.map(a1).join(", ") })}</p>
+      <Check label={t("dd.deleteAll", "Delete all")} checked={all} onChange={setAll} testId="delete-all" />
       <div className={dlg.optionGrid}>
         {DELETE_FLAG_LABELS.map((f) => (
           <Check key={f.key} label={t(`paste.${f.key}`, f.label)} checked={flags[f.key]} disabled={all} onChange={(v) => setWhat({ ...what, [f.key]: v })} testId={`delete-${f.key}`} />
@@ -594,6 +618,7 @@ export function DeleteContentsDialog({ d }: { d: D<"deleteContents"> }) {
 }
 
 export function MultipleOperationsDialog({ d }: { d: D<"multipleOperations"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [st, setSt] = useState<MultiOpsState>({ formulas: "", rowInput: "", colInput: "" });
   const parseCell = (s: string) => {
@@ -603,9 +628,9 @@ export function MultipleOperationsDialog({ d }: { d: D<"multipleOperations"> }) 
   const ops = multipleOperationsOps(ctl.sheet, d.range, st, parseCell);
   return (
     <W56Shell title={t("multiOps.title", "Multiple Operations")} ok={t("dialog.ok", "OK")} size="wide" testId="multiple-operations" valid={typeof ops !== "string"} onSubmit={() => {
-        if (typeof ops !== "string") void ctl.w56.applyOps("Multiple operations", ops);
+        if (typeof ops !== "string") void ctl.w56.applyOps(t("msg.undo.multipleOperations", "Multiple operations"), ops);
       }}>
-      <p className={dlg.lead}>Fills {a1(d.range)} with MULTIPLE.OPERATIONS formulas: the first column (and/or row) holds the values to try.</p>
+      <p className={dlg.lead}>{t("dd.multiLead", "Fills {range} with MULTIPLE.OPERATIONS formulas: the first column (and/or row) holds the values to try.", { range: a1(d.range) })}</p>
       <RangeField label={t("multiOps.formulas", "Formulas")} value={st.formulas} onChange={(v) => setSt({ ...st, formulas: v })} testId="mops-formulas" placeholder="B4" />
       <RangeField label={t("multiOps.rowInputCell", "Row input cell")} value={st.rowInput} onChange={(v) => setSt({ ...st, rowInput: v })} testId="mops-row" placeholder="B1" />
       <RangeField label={t("multiOps.columnInputCell", "Column input cell")} value={st.colInput} onChange={(v) => setSt({ ...st, colInput: v })} testId="mops-col" placeholder="B2" />
@@ -615,6 +640,7 @@ export function MultipleOperationsDialog({ d }: { d: D<"multipleOperations"> }) 
 }
 
 export function InsertCellsDialog({ d }: { d: D<"insertCells"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [mode, setMode] = useState<"down" | "right" | "rows" | "cols">("down");
   return (
@@ -628,13 +654,13 @@ export function InsertCellsDialog({ d }: { d: D<"insertCells"> }) {
         else void ctl.w56.insertCells(d.range, mode);
       }}
     >
-      <p className={dlg.lead}>Insert at {a1(d.range)}:</p>
-      <div role="radiogroup" aria-label="Selection">
+      <p className={dlg.lead}>{t("dd.insertAt", "Insert at {range}:", { range: a1(d.range) })}</p>
+      <div role="radiogroup" aria-label={t("dd.selection", "Selection")}>
         {([
-          ["down", "Shift cells down"],
-          ["right", "Shift cells right"],
-          ["rows", "Entire row"],
-          ["cols", "Entire column"],
+          ["down", t("dd.shiftDown", "Shift cells down")],
+          ["right", t("dd.shiftRight", "Shift cells right")],
+          ["rows", t("dd.entireRow", "Entire row")],
+          ["cols", t("dd.entireColumn", "Entire column")],
         ] as const).map(([id, label]) => (
           <label key={id} className={dlg.checkRow}>
             <input type="radio" name="insert-mode" checked={mode === id} onChange={() => setMode(id)} data-testid={`insert-${id}`} />
@@ -647,6 +673,7 @@ export function InsertCellsDialog({ d }: { d: D<"insertCells"> }) {
 }
 
 export function DeleteCellsDialog({ d }: { d: D<"deleteCells"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [mode, setMode] = useState<"up" | "left" | "rows" | "cols">("up");
   return (
@@ -661,13 +688,13 @@ export function DeleteCellsDialog({ d }: { d: D<"deleteCells"> }) {
         else void ctl.w56.deleteCells(d.range, mode);
       }}
     >
-      <p className={dlg.lead}>Delete {a1(d.range)}:</p>
-      <div role="radiogroup" aria-label="Selection">
+      <p className={dlg.lead}>{t("dd.deleteRangeLead", "Delete {range}:", { range: a1(d.range) })}</p>
+      <div role="radiogroup" aria-label={t("dd.selection", "Selection")}>
         {([
-          ["up", "Shift cells up"],
-          ["left", "Shift cells left"],
-          ["rows", "Delete entire row(s)"],
-          ["cols", "Delete entire column(s)"],
+          ["up", t("dd.shiftUp", "Shift cells up")],
+          ["left", t("dd.shiftLeft", "Shift cells left")],
+          ["rows", t("dd.deleteRows", "Delete entire row(s)")],
+          ["cols", t("dd.deleteCols", "Delete entire column(s)")],
         ] as const).map(([id, label]) => (
           <label key={id} className={dlg.checkRow}>
             <input type="radio" name="delete-mode" checked={mode === id} onChange={() => setMode(id)} data-testid={`deletecells-${id}`} />
@@ -684,9 +711,10 @@ export function DeleteCellsDialog({ d }: { d: D<"deleteCells"> }) {
 // ---------------------------------------------------------------------------
 
 export function ScenariosDialog({ d }: { d: D<"scenarios"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [list, setList] = useState<ScenarioDto[]>(d.list);
-  const [name, setName] = useState(`Scenario ${d.list.length + 1}`);
+  const [name, setName] = useState(t("dd.scenarioN", "Scenario {n}", { n: d.list.length + 1 }));
   const [comment, setComment] = useState("");
   const [color, setColor] = useState<number>(SCENARIO_COLORS[0]?.rgba ?? 0xbfdbfeff);
   const [copyBack, setCopyBack] = useState(true);
@@ -702,7 +730,7 @@ export function ScenariosDialog({ d }: { d: D<"scenarios"> }) {
   };
   return (
     <W56Shell title={t("scenario.title", "Create Scenario")} ok={t("dialog.add", "Add")} size="wide" testId="scenarios-dialog" valid={name.trim() !== ""} keepOpen onSubmit={create}>
-      <p className={dlg.lead}>A scenario stores the values of {ranges.map(a1).join(", ")} under a name; show one from the Navigator or here.</p>
+      <p className={dlg.lead}>{t("dd.scenarioLead", "A scenario stores the values of {ranges} under a name; show one from the Navigator or here.", { ranges: ranges.map(a1).join(", ") })}</p>
       {list.length > 0 ? (
         <div className={styles.list} data-testid="scenario-list">
           {list.map((s) => (
@@ -711,7 +739,7 @@ export function ScenariosDialog({ d }: { d: D<"scenarios"> }) {
                 {s.name}
               </span>
               <button type="button" className={dlg.rowBtn} onClick={() => void ctl.w56.showScenario(s.id).then(() => setList(list.map((x) => ({ ...x, active: x.id === s.id }))))}>
-                Show
+                {t("dd.show", "Show")}
               </button>
               <button type="button" className={cx(dlg.rowBtn, dlg.dangerText)} onClick={() => void ctl.w56.deleteScenario(s.id).then(() => setList(list.filter((x) => x.id !== s.id)))}>
                 {t("dialog.delete", "Delete")}
@@ -726,13 +754,13 @@ export function ScenariosDialog({ d }: { d: D<"scenarios"> }) {
       <Field label={t("scenario.comment", "Comment")}>
         <textarea className={styles.textarea} value={comment} onChange={(e) => setComment(e.target.value)} />
       </Field>
-      <div className={styles.section}>Settings</div>
+      <div className={styles.section}>{t("dd.settings", "Settings")}</div>
       <div className={dlg.optionGrid}>
-        <Check label="Display border" checked={displayBorder} onChange={setDisplayBorder} />
+        <Check label={t("dd.displayBorder", "Display border")} checked={displayBorder} onChange={setDisplayBorder} />
         <Check label={t("scenario.copyBack", "Copy back")} checked={copyBack} onChange={setCopyBack} />
-        <Check label="Prevent changes" checked={preventChanges} onChange={setPrevent} />
+        <Check label={t("dd.preventChanges", "Prevent changes")} checked={preventChanges} onChange={setPrevent} />
       </div>
-      <div className={styles.swatches} role="radiogroup" aria-label="Border colour">
+      <div className={styles.swatches} role="radiogroup" aria-label={t("dd.borderColour", "Border colour")}>
         {SCENARIO_COLORS.map((c) => (
           <button key={c.rgba} type="button" role="radio" aria-checked={color === c.rgba} aria-label={c.label} title={c.label} className={color === c.rgba ? styles.swatchOn : styles.swatch} style={{ background: rgbaToHex(c.rgba).slice(0, 7) }} onClick={() => setColor(c.rgba)} />
         ))}
@@ -746,6 +774,7 @@ export function ScenariosDialog({ d }: { d: D<"scenarios"> }) {
 // ---------------------------------------------------------------------------
 
 export function CopySheetDialog({ d }: { d: D<"copySheet"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const sheets = useDocStore((s) => s.info?.sheets ?? []);
   const [name, setName] = useState(d.name);
@@ -753,18 +782,18 @@ export function CopySheetDialog({ d }: { d: D<"copySheet"> }) {
   const taken = sheets.some((s) => s.name.toLowerCase() === name.trim().toLowerCase());
   return (
     <W56Shell title={t("cmd.sheet.duplicate", "Copy sheet").replace(/…$/, "")} ok={t("dialog.ok", "OK")} testId="copy-sheet" valid={name.trim() !== "" && !taken} onSubmit={() => void ctl.w56.copySheet(d.sheet, name, index === "after" ? null : Number(index))}>
-      <Field label="New name">
+      <Field label={t("dd.newName", "New name")}>
         <input className={dlg.input} value={name} autoFocus onChange={(e) => setName(e.target.value)} data-testid="copy-sheet-name" />
       </Field>
-      <Field label="Insert before" className={dlg.gap}>
+      <Field label={t("dd.insertBefore", "Insert before")} className={dlg.gap}>
         <select className={dlg.select} value={index} onChange={(e) => setIndex(e.target.value)}>
-          <option value="after">After the current sheet</option>
+          <option value="after">{t("dd.afterCurrentSheet", "After the current sheet")}</option>
           {sheets.map((s, i) => (
             <option key={s.id} value={String(i)}>
               {s.name}
             </option>
           ))}
-          <option value={String(sheets.length)}>- move to end position -</option>
+          <option value={String(sheets.length)}>{t("dd.moveToEnd", "- move to end position -")}</option>
         </select>
       </Field>
       {taken ? <p className={dlg.error}>{t("sheet.nameExists", "A sheet with this name already exists.")}</p> : null}
@@ -773,11 +802,12 @@ export function CopySheetDialog({ d }: { d: D<"copySheet"> }) {
 }
 
 export function ShowSheetDialog({ d }: { d: D<"showSheet"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [picked, setPicked] = useState<number[]>(d.hidden[0] ? [d.hidden[0].id] : []);
   return (
     <W56Shell title={t("cmd.sheet.show", "Show sheet").replace(/…$/, "")} ok={t("dialog.ok", "OK")} testId="show-sheet" valid={picked.length > 0} onSubmit={() => void ctl.w56.showSheets(picked)}>
-      <div className={styles.list} role="listbox" aria-multiselectable="true" aria-label="Hidden sheets">
+      <div className={styles.list} role="listbox" aria-multiselectable="true" aria-label={t("dd.hiddenSheets", "Hidden sheets")}>
         {d.hidden.map((s) => {
           const on = picked.includes(s.id);
           return (
@@ -792,16 +822,17 @@ export function ShowSheetDialog({ d }: { d: D<"showSheet"> }) {
 }
 
 export function TabColorDialog({ d }: { d: D<"tabColor"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [color, setColor] = useState<number | null>(d.color);
   return (
     <W56Shell title={t("cmd.sheet.tabColor", "Tab colour").replace(/…$/, "")} ok={t("dialog.ok", "OK")} testId="tab-color" onSubmit={() => void ctl.w56.setTabColor(d.sheet, color)}>
-      <div className={styles.swatches} role="radiogroup" aria-label="Tab colour">
-        <button type="button" role="radio" aria-checked={color === null} aria-label="No colour" title="No colour" className={color === null ? styles.swatchOn : styles.swatch} style={{ background: "transparent", border: color === null ? undefined : "1px dashed var(--tally-border)" }} onClick={() => setColor(null)} data-testid="tab-color-none">
+      <div className={styles.swatches} role="radiogroup" aria-label={t("dd.tabColour", "Tab colour")}>
+        <button type="button" role="radio" aria-checked={color === null} aria-label={t("dd.noColour", "No colour")} title={t("dd.noColour", "No colour")} className={color === null ? styles.swatchOn : styles.swatch} style={{ background: "transparent", border: color === null ? undefined : "1px dashed var(--tally-border)" }} onClick={() => setColor(null)} data-testid="tab-color-none">
           ✕
         </button>
         {TAB_COLORS.map((c) => (
-          <button key={c.rgba} type="button" role="radio" aria-checked={color === c.rgba} aria-label={c.label} title={c.label} className={color === c.rgba ? styles.swatchOn : styles.swatch} style={{ background: rgbaToHex(c.rgba).slice(0, 7) }} onClick={() => setColor(c.rgba)} data-testid={`tab-color-${c.label.toLowerCase()}`} />
+          <button key={c.rgba} type="button" role="radio" aria-checked={color === c.rgba} aria-label={c.label} title={c.label} className={color === c.rgba ? styles.swatchOn : styles.swatch} style={{ background: rgbaToHex(c.rgba).slice(0, 7) }} onClick={() => setColor(c.rgba)} data-testid={`tab-color-${c.id}`} />
         ))}
       </div>
     </W56Shell>
@@ -809,16 +840,17 @@ export function TabColorDialog({ d }: { d: D<"tabColor"> }) {
 }
 
 export function ShowOutlineLevelDialog({ d }: { d: D<"showOutlineLevel"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [axis, setAxis] = useState(d.axis);
   const [level, setLevel] = useState(1);
   return (
     <W56Shell title={t("cmd.data.showOutlineLevel", "Show outline level").replace(/…$/, "")} ok={t("dialog.ok", "OK")} testId="outline-level" onSubmit={() => ctl.w56.onOutlineLevel(axis, level)}>
-      <Segmented label="Axis" value={axis} onChange={setAxis} options={[{ id: "rows", label: "Rows" }, { id: "cols", label: "Columns" }]} />
+      <Segmented label={t("dd.axis", "Axis")} value={axis} onChange={setAxis} options={[{ id: "rows", label: t("menu.format.rows", "Rows") }, { id: "cols", label: t("menu.format.columns", "Columns") }]} />
       <Field label={t("outline.level", "Level {n}", { n: level })} className={dlg.gap}>
         <input className={dlg.input} type="number" min={1} max={d.max + 1} value={level} onChange={(e) => setLevel(Math.max(1, Math.min(d.max + 1, Number(e.target.value) || 1)))} data-testid="outline-level-input" />
       </Field>
-      <p className={dlg.note}>Level {d.max + 1} shows everything; level 1 only the outermost groups.</p>
+      <p className={dlg.note}>{t("dd.levelNote", "Level {n} shows everything; level 1 only the outermost groups.", { n: d.max + 1 })}</p>
     </W56Shell>
   );
 }
@@ -834,6 +866,7 @@ interface ConstraintRow {
 }
 
 export function SolverDialog({ d }: { d: D<"solver"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [objective, setObjective] = useState(d.objective);
   const [goal, setGoal] = useState<"max" | "min" | "value">("max");
@@ -876,7 +909,7 @@ export function SolverDialog({ d }: { d: D<"solver"> }) {
         },
         (e: unknown) => {
           setBusy(false);
-          setError(typeof e === "object" && e && "message" in e ? String((e as { message: unknown }).message) : "The solver failed.");
+          setError(typeof e === "object" && e && "message" in e ? String((e as { message: unknown }).message) : t("dd.solverFailedMsg", "The solver failed."));
         },
       );
   };
@@ -884,7 +917,7 @@ export function SolverDialog({ d }: { d: D<"solver"> }) {
   return (
     <W56Shell
       title={t("solver.title", "Solver")}
-      ok={result && result.status === "optimal" ? t("dialog.apply", "Apply") : busy ? "Solving…" : t("solver.solve", "Solve")}
+      ok={result && result.status === "optimal" ? t("dialog.apply", "Apply") : busy ? t("dd.solving", "Solving…") : t("solver.solve", "Solve")}
       size="xwide"
       testId="solver-dialog"
       keepOpen={!(result && result.status === "optimal")}
@@ -911,33 +944,33 @@ export function SolverDialog({ d }: { d: D<"solver"> }) {
       <div className={styles.section}>{t("solver.constraints", "Limiting conditions")}</div>
       {rows.map((r, i) => (
         <div key={i} className={styles.condRow} style={{ gridTemplateColumns: "1.4fr 0.8fr 1.4fr auto" }}>
-          <input className={cx(dlg.input, dlg.mono)} style={{ height: 28 }} aria-label={`Cell reference ${i + 1}`} value={r.lhs} placeholder="B2:B4" onChange={(e) => setRow(i, { lhs: e.target.value })} data-testid={`solver-lhs-${i}`} />
-          <select className={dlg.selectSmall} aria-label={`Operator ${i + 1}`} value={r.op} onChange={(e) => setRow(i, { op: e.target.value as SolverOp })}>
+          <input className={cx(dlg.input, dlg.mono)} style={{ height: 28 }} aria-label={t("dd.cellReferenceN", "Cell reference {n}", { n: i + 1 })} value={r.lhs} placeholder="B2:B4" onChange={(e) => setRow(i, { lhs: e.target.value })} data-testid={`solver-lhs-${i}`} />
+          <select className={dlg.selectSmall} aria-label={t("dd.operatorN", "Operator {n}", { n: i + 1 })} value={r.op} onChange={(e) => setRow(i, { op: e.target.value as SolverOp })}>
             <option value="le">{"<="}</option>
             <option value="ge">{">="}</option>
             <option value="eq">=</option>
-            <option value="integer">Integer</option>
-            <option value="binary">Binary</option>
+            <option value="integer">{t("dd.integer", "Integer")}</option>
+            <option value="binary">{t("dd.binary", "Binary")}</option>
           </select>
-          <input className={dlg.input} style={{ height: 28 }} aria-label={`Value ${i + 1}`} value={r.rhs} disabled={r.op === "integer" || r.op === "binary"} placeholder="100 or C1" onChange={(e) => setRow(i, { rhs: e.target.value })} data-testid={`solver-rhs-${i}`} />
+          <input className={dlg.input} style={{ height: 28 }} aria-label={t("dd.valueN", "Value {n}", { n: i + 1 })} value={r.rhs} disabled={r.op === "integer" || r.op === "binary"} placeholder={t("dd.valueOrCell", "100 or C1")} onChange={(e) => setRow(i, { rhs: e.target.value })} data-testid={`solver-rhs-${i}`} />
           <button type="button" className={dlg.rowBtn} onClick={() => setRows(rows.length > 1 ? rows.filter((_, j) => j !== i) : [{ lhs: "", op: "le", rhs: "" }])}>
             ×
           </button>
         </div>
       ))}
       <button type="button" className={dlg.rowBtn} onClick={() => setRows([...rows, { lhs: "", op: "le", rhs: "" }])} data-testid="solver-add-constraint">
-        + Add condition
+        {t("dd.addCondition", "+ Add condition")}
       </button>
       <div className={dlg.optionGrid}>
-        <Check label="Assume variables as non-negative" checked={nonNeg} onChange={setNonNeg} />
-        <Check label="Assume variables as integer" checked={integer} onChange={setInteger} />
+        <Check label={t("dd.assumeNonNegative", "Assume variables as non-negative")} checked={nonNeg} onChange={setNonNeg} />
+        <Check label={t("dd.assumeInteger", "Assume variables as integer")} checked={integer} onChange={setInteger} />
       </div>
       {error ? <p className={dlg.error}>{error}</p> : null}
       {result ? (
         <div className={cx(styles.result, result.status !== "optimal" && styles.resultWarn)} data-testid="solver-result">
           <div className={styles.resultTitle}>{result.status === "optimal" ? t("solver.solved", "Solving successfully finished.") : result.status === "notLinear" ? t("solver.notLinear", "The model is not linear. The solver handles linear models only.") : `${t("solver.failed", "No solution was found.")} (${result.status})`}</div>
           <div>
-            Objective: <b>{String(Number(result.objective.toPrecision(10)))}</b> after {result.iterations} iterations.
+            {solverSummary(String(Number(result.objective.toPrecision(10))), result.iterations)}
             {result.values.length > 0 ? ` ${result.values.map((v) => `${colLetter(v.cell.c)}${v.cell.r + 1} = ${Number(v.value.toPrecision(10))}`).join(", ")}` : ""}
           </div>
         </div>
@@ -951,6 +984,7 @@ export function SolverDialog({ d }: { d: D<"solver"> }) {
 // ---------------------------------------------------------------------------
 
 export function MergePromptDialog({ d }: { d: D<"mergePrompt"> }) {
+  useW56Store((s) => s.i18nRev);
   return (
     <W56Shell
       title={t("cmd.format.merge", "Merge cells")}
@@ -966,7 +1000,9 @@ export function MergePromptDialog({ d }: { d: D<"mergePrompt"> }) {
       onClose={() => undefined}
     >
       <p className={dlg.lead}>
-        Should the contents of the hidden cells be moved into the first cell? ({d.hidden} {d.hidden === 1 ? "cell holds" : "cells hold"} content in {a1(d.range)}; “No” keeps only the first cell's content.)
+        {d.hidden === 1
+          ? t("dd.mergeLeadOne", "Should the contents of the hidden cells be moved into the first cell? ({n} cell holds content in {range}; “No” keeps only the first cell's content.)", { n: d.hidden, range: a1(d.range) })
+          : t("dd.mergeLeadMany", "Should the contents of the hidden cells be moved into the first cell? ({n} cells hold content in {range}; “No” keeps only the first cell's content.)", { n: d.hidden, range: a1(d.range) })}
       </p>
       <MergeNoButton onKeep={d.onKeep} />
     </W56Shell>
@@ -991,22 +1027,23 @@ function MergeNoButton({ onKeep }: { onKeep: () => void }) {
 }
 
 export function DocumentStatsDialog({ d }: { d: D<"documentStats"> }) {
-  const rows: [string, string][] = [
-    ["Sheets", String(d.stats.sheets)],
-    ["Cells with content", String(d.stats.cells)],
-    ["Formula cells", String(d.stats.formulas)],
-    ["Pages", d.stats.pages === null ? "—" : String(d.stats.pages)],
-    ["Charts", String(d.stats.charts)],
-    ["Notes", String(d.stats.notes)],
-    ["Defined names", String(d.stats.names)],
+  useW56Store((s) => s.i18nRev);
+  const rows: [string, string, string][] = [
+    ["sheets", t("navigator.sheets", "Sheets"), String(d.stats.sheets)],
+    ["cells-with-content", t("dd.statCells", "Cells with content"), String(d.stats.cells)],
+    ["formula-cells", t("dd.statFormulas", "Formula cells"), String(d.stats.formulas)],
+    ["pages", t("print.pages", "Pages"), d.stats.pages === null ? "—" : String(d.stats.pages)],
+    ["charts", t("navigator.charts", "Charts"), String(d.stats.charts)],
+    ["notes", t("navigator.notes", "Notes"), String(d.stats.notes)],
+    ["defined-names", t("dd.statNames", "Defined names"), String(d.stats.names)],
   ];
   return (
-    <W56Shell title="Document statistics" ok={t("dialog.close", "Close")} testId="document-stats" onSubmit={() => undefined} cancelLabel={t("dialog.close", "Close")} noOk>
+    <W56Shell title={t("cmd.file.documentStats", "Document statistics…").replace(/…$/, "")} ok={t("dialog.close", "Close")} testId="document-stats" onSubmit={() => undefined} cancelLabel={t("dialog.close", "Close")} noOk>
       <div className={dlg.preview}>
-        {rows.map(([k, v]) => (
-          <div key={k} className={dlg.previewRow}>
+        {rows.map(([id, k, v]) => (
+          <div key={id} className={dlg.previewRow}>
             <span className={dlg.previewIn}>{k}</span>
-            <span className={dlg.previewOut} data-testid={`stat-${k.toLowerCase().replace(/\W+/g, "-")}`}>
+            <span className={dlg.previewOut} data-testid={`stat-${id}`}>
               {v}
             </span>
           </div>
@@ -1017,14 +1054,15 @@ export function DocumentStatsDialog({ d }: { d: D<"documentStats"> }) {
 }
 
 export function RecoveryDialog({ d }: { d: D<"recovery"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [files, setFiles] = useState(d.files);
   useEffect(() => {
     if (files.length === 0) closeW56();
   }, [files]);
   return (
-    <W56Shell title="Recover unsaved work" size="wide" testId="recovery-dialog" noOk cancelLabel="Later" onSubmit={() => undefined}>
-      <p className={dlg.lead}>Tally kept autosaved copies of these workbooks when it last closed. Recover opens the copy; Discard deletes it.</p>
+    <W56Shell title={t("dd.recoverTitle", "Recover unsaved work")} size="wide" testId="recovery-dialog" noOk cancelLabel={t("dd.later", "Later")} onSubmit={() => undefined}>
+      <p className={dlg.lead}>{t("dd.recoveryLead", "Tally kept autosaved copies of these workbooks when it last closed. Recover opens the copy; Discard deletes it.")}</p>
       <div className={styles.list}>
         {files.map((f) => (
           <div key={f.path} className={styles.listItem}>
@@ -1034,10 +1072,10 @@ export function RecoveryDialog({ d }: { d: D<"recovery"> }) {
             <button type="button" className={dlg.rowBtn} onClick={() => void ctl.w56.recover(f, files.filter((x) => x !== f)).then((ok) => {
               if (ok) setFiles(files.filter((x) => x !== f));
             })} data-testid="recover">
-              Recover
+              {t("dd.recover", "Recover")}
             </button>
             <button type="button" className={cx(dlg.rowBtn, dlg.dangerText)} onClick={() => void ctl.w56.discardRecovery(f).then(() => setFiles(files.filter((x) => x !== f)))}>
-              Discard
+              {t("dd.discard", "Discard")}
             </button>
           </div>
         ))}
@@ -1047,21 +1085,23 @@ export function RecoveryDialog({ d }: { d: D<"recovery"> }) {
 }
 
 export function SaveAsTemplateDialog({ d }: { d: D<"saveAsTemplate"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const [name, setName] = useState(d.name);
   const valid = /^[^\\/:*?"<>|]{1,80}$/.test(name.trim());
   return (
     <W56Shell title={t("cmd.file.saveAsTemplate", "Save as template").replace(/…$/, "")} ok={t("dialog.save", "Save")} testId="save-as-template" valid={valid} onSubmit={() => void ctl.w56.saveAsTemplate(name.trim())}>
-      <Field label="Template name">
+      <Field label={t("dd.templateName", "Template name")}>
         <input className={dlg.input} value={name} autoFocus onChange={(e) => setName(e.target.value)} data-testid="template-name" />
       </Field>
-      <p className={dlg.note}>Saved as an OpenDocument template (.ots) in your templates folder; New from Template lists it.</p>
+      <p className={dlg.note}>{t("dd.templateNote", "Saved as an OpenDocument template (.ots) in your templates folder; New from Template lists it.")}</p>
     </W56Shell>
   );
 }
 
 /** ⌃D: a small list anchored at the cell (not a modal). */
 export function SelectionListPopover({ d }: { d: D<"selectionList"> }) {
+  useW56Store((s) => s.i18nRev);
   const ctl = useController();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1085,7 +1125,7 @@ export function SelectionListPopover({ d }: { d: D<"selectionList"> }) {
   }, [ctl]);
   const top = Math.min(d.rect.bottom + 2, window.innerHeight - 230);
   return (
-    <div ref={ref} className={styles.selectionList} style={{ left: d.rect.left, top }} role="listbox" aria-label="Selection list" data-testid="selection-list">
+    <div ref={ref} className={styles.selectionList} style={{ left: d.rect.left, top }} role="listbox" aria-label={t("dd.selectionList", "Selection list")} data-testid="selection-list">
       {d.items.map((item) => (
         <button
           key={item}

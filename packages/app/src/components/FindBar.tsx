@@ -7,6 +7,8 @@
 import type { FindMode } from "@tally/bridge";
 import { useEffect, useRef } from "react";
 import { useController } from "../context";
+import { useW56Store } from "../data/store";
+import { t } from "../i18n";
 import { useDataStore } from "../stores/dataStore";
 import { useUiStore } from "../stores/uiStore";
 import { ArrowDownIcon, ArrowUpIcon } from "./icons";
@@ -19,14 +21,15 @@ export function FindBar() {
   return <Bar />;
 }
 
-const MODES: { mode: FindMode; label: string }[] = [
-  { mode: "literal", label: "Text" },
-  { mode: "wildcards", label: "Wildcards" },
-  { mode: "regex", label: "Regex" },
+const MODES: { mode: FindMode; label: () => string }[] = [
+  { mode: "literal", label: () => t("paste.text", "Text") },
+  { mode: "wildcards", label: () => t("find.wildcards", "Wildcards") },
+  { mode: "regex", label: () => t("findbar.regex", "Regex") },
 ];
 
 function Bar() {
   const ctl = useController();
+  useW56Store((s) => s.i18nRev);
   const find = useDataStore((s) => s.find);
   const patch = useDataStore.getState().patchFind;
   const input = useRef<HTMLInputElement>(null);
@@ -42,13 +45,13 @@ function Bar() {
   const opts = find.options;
   const setOpt = (o: Partial<typeof opts>) => patch({ options: { ...opts, ...o }, searched: null, index: -1 });
   const total = find.hits.length;
-  const status = find.searched === null ? "" : total === 0 ? "No matches" : `${find.index + 1} of ${total}${find.truncated ? "+" : ""}`;
+  const status = find.searched === null ? "" : total === 0 ? t("filter.noMatches", "No matches") : t("findbar.matchOf", "{n} of {total}", { n: find.index + 1, total: `${total}${find.truncated ? "+" : ""}` });
 
   return (
     <div
       className={styles.bar}
       role="search"
-      aria-label="Find"
+      aria-label={t("findbar.find", "Find")}
       data-testid="find-bar"
       onKeyDown={(e) => {
         if (e.key === "Escape") {
@@ -62,8 +65,8 @@ function Bar() {
         <input
           ref={input}
           className={`${panel.input} ${styles.field}`}
-          placeholder="Find in sheet"
-          aria-label="Find"
+          placeholder={t("findbar.placeholder", "Find in sheet")}
+          aria-label={t("findbar.find", "Find")}
           spellCheck={false}
           value={find.text}
           data-testid="find-input"
@@ -78,41 +81,41 @@ function Bar() {
         <span className={styles.status} data-testid="find-status">
           {status}
         </span>
-        <button type="button" className={panel.iconBtn} aria-label="Previous match" title="Previous match  ⇧↩" disabled={find.text === ""} onClick={() => void ctl.findStep(-1)} data-testid="find-prev">
+        <button type="button" className={panel.iconBtn} aria-label={t("findbar.prev", "Previous match")} title={`${t("findbar.prev", "Previous match")}  ⇧↩`} disabled={find.text === ""} onClick={() => void ctl.findStep(-1)} data-testid="find-prev">
           <ArrowUpIcon />
         </button>
-        <button type="button" className={panel.iconBtn} aria-label="Next match" title="Next match  ↩" disabled={find.text === ""} onClick={() => void ctl.findStep(1)} data-testid="find-next">
+        <button type="button" className={panel.iconBtn} aria-label={t("findbar.next", "Next match")} title={`${t("findbar.next", "Next match")}  ↩`} disabled={find.text === ""} onClick={() => void ctl.findStep(1)} data-testid="find-next">
           <ArrowDownIcon />
         </button>
         <button
           type="button"
           className={panel.link}
           onClick={() => useUiStore.getState().openDialog({ kind: "findReplace", text: find.text })}
-          title="Find & replace  ⌥⌘F"
+          title={`${t("dlg.findReplace", "Find & replace")}  ⌥⌘F`}
         >
-          Replace…
+          {t("findbar.replaceEllipsis", "Replace…")}
         </button>
-        <button type="button" className={panel.iconBtn} aria-label="Close find" title="Close  Esc" onClick={close}>
+        <button type="button" className={panel.iconBtn} aria-label={t("findbar.close", "Close find")} title={`${t("dialog.close", "Close")}  Esc`} onClick={close}>
           ✕
         </button>
       </div>
       <div className={styles.options}>
-        <button type="button" className={panel.chip} aria-pressed={opts.matchCase} onClick={() => setOpt({ matchCase: !opts.matchCase })} title="Match case">
+        <button type="button" className={panel.chip} aria-pressed={opts.matchCase} onClick={() => setOpt({ matchCase: !opts.matchCase })} title={t("find.matchCase", "Match case")}>
           Aa
         </button>
-        <button type="button" className={panel.chip} aria-pressed={opts.wholeCell} onClick={() => setOpt({ wholeCell: !opts.wholeCell })} title="The whole cell must match" data-testid="find-whole">
-          Whole cell
+        <button type="button" className={panel.chip} aria-pressed={opts.wholeCell} onClick={() => setOpt({ wholeCell: !opts.wholeCell })} title={t("findbar.wholeCellTip", "The whole cell must match")} data-testid="find-whole">
+          {t("findbar.wholeCell", "Whole cell")}
         </button>
-        <button type="button" className={panel.chip} aria-pressed={opts.inFormulas} onClick={() => setOpt({ inFormulas: !opts.inFormulas })} title="Search formulas instead of values">
-          Formulas
+        <button type="button" className={panel.chip} aria-pressed={opts.inFormulas} onClick={() => setOpt({ inFormulas: !opts.inFormulas })} title={t("findbar.formulasTip", "Search formulas instead of values")}>
+          {t("find.formulas", "Formulas")}
         </button>
-        <button type="button" className={panel.chip} aria-pressed={opts.allSheets} onClick={() => setOpt({ allSheets: !opts.allSheets })} title="Search every sheet">
-          All sheets
+        <button type="button" className={panel.chip} aria-pressed={opts.allSheets} onClick={() => setOpt({ allSheets: !opts.allSheets })} title={t("findbar.allSheetsTip", "Search every sheet")}>
+          {t("find.allSheets", "All sheets")}
         </button>
-        <select className={`${panel.select} ${styles.mode}`} aria-label="Match mode" value={opts.mode} onChange={(e) => setOpt({ mode: e.target.value as FindMode })}>
+        <select className={`${panel.select} ${styles.mode}`} aria-label={t("findbar.matchMode", "Match mode")} value={opts.mode} onChange={(e) => setOpt({ mode: e.target.value as FindMode })}>
           {MODES.map((m) => (
             <option key={m.mode} value={m.mode}>
-              {m.label}
+              {m.label()}
             </option>
           ))}
         </select>

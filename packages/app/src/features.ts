@@ -46,6 +46,7 @@ import {
   UI_LOCALES,
   type HighlightPreset,
 } from "./v03";
+import { t } from "./i18n";
 
 /** Optional shell commands of the desktop app (`TauriClient.openUrl`, `userName`). */
 export interface LinkShell {
@@ -216,7 +217,7 @@ export class V3Features {
       }
     }
     const retry = op?.type === "setCellInput" ? op.input : null;
-    useUiStore.getState().openDialog({ kind: "validationAlert", title: title || "Invalid value", message: e.message || "This value is not allowed here.", cell, retry });
+    useUiStore.getState().openDialog({ kind: "validationAlert", title: title || "Invalid value", message: e.message || t("msg.validation.notAllowed", "This value is not allowed here."), cell, retry });
   }
 
   private async validationWarning(w: OpError, op: Op | undefined): Promise<void> {
@@ -238,8 +239,8 @@ export class V3Features {
       return;
     }
     useUiStore.getState().pushToast("warning", message, [
-      { label: "Keep", run: () => this.ctl.focusGrid() },
-      { label: "Undo", run: () => void this.ctl.undo() },
+      { id: "keep", label: t("msg.toast.keep", "Keep"), run: () => this.ctl.focusGrid() },
+      { id: "undo", label: t("cmd.edit.undo", "Undo"), run: () => void this.ctl.undo() },
     ]);
   }
 
@@ -263,11 +264,11 @@ export class V3Features {
   }
 
   updateConditionalFormat(id: number, ranges: RangeDto[], rules: CfRuleDto[]): Promise<ApplyResult | null> {
-    return this.ctl.apply("Edit conditional formatting", [{ type: "updateConditionalFormat", sheet: this.sheet, id, ranges: ranges.map((r) => ({ ...r })), rules }]);
+    return this.ctl.apply(t("msg.undo.editConditionalFormatting", "Edit conditional formatting"), [{ type: "updateConditionalFormat", sheet: this.sheet, id, ranges: ranges.map((r) => ({ ...r })), rules }]);
   }
 
   deleteConditionalFormat(id: number): Promise<ApplyResult | null> {
-    return this.ctl.apply("Delete conditional formatting", [{ type: "deleteConditionalFormat", sheet: this.sheet, id }]);
+    return this.ctl.apply(t("msg.undo.deleteConditionalFormatting", "Delete conditional formatting"), [{ type: "deleteConditionalFormat", sheet: this.sheet, id }]);
   }
 
   /**
@@ -280,7 +281,7 @@ export class V3Features {
       ...order.map((cf): Op => ({ type: "deleteConditionalFormat", sheet, id: cf.id })),
       ...order.map((cf): Op => ({ type: "addConditionalFormat", sheet, ranges: cf.ranges.map((r) => ({ ...r })), rules: cf.rules })),
     ];
-    return this.ctl.apply("Conditional formatting order", ops);
+    return this.ctl.apply(t("msg.undo.conditionalFormattingOrder", "Conditional formatting order"), ops);
   }
 
   /** Toolbar "Highlight cells" preset: applies at once or asks for the value(s). */
@@ -303,7 +304,7 @@ export class V3Features {
     const existing = (await this.conditionalFormats().catch(() => [])).find(
       (cf) => cf.ranges.length === 1 && sameRange(cf.ranges[0]!, body) && isColorByValue(cf.rules),
     );
-    if (existing) await this.ctl.apply("Colour by value", [{ type: "updateConditionalFormat", sheet: this.sheet, id: existing.id, ranges: [{ ...body }], rules }]);
+    if (existing) await this.ctl.apply(t("cmd.format.colorByValue", "Colour by value"), [{ type: "updateConditionalFormat", sheet: this.sheet, id: existing.id, ranges: [{ ...body }], rules }]);
     else await this.addConditionalFormat([body], rules, "Colour by value");
   }
 
@@ -324,11 +325,11 @@ export class V3Features {
   async applyValidation(v: ValidationDto, existing: boolean): Promise<void> {
     const sheet = this.sheet;
     const ops: Op[] = existing ? [{ type: "updateValidation", sheet, id: v.id, validation: v }] : [{ type: "addValidation", sheet, validation: v }];
-    await this.ctl.apply("Data validation", ops);
+    await this.ctl.apply(t("v3.dvTitle", "Data validation"), ops);
   }
 
   async clearValidation(id: number): Promise<void> {
-    await this.ctl.apply("Remove validation", [{ type: "deleteValidation", sheet: this.sheet, id }]);
+    await this.ctl.apply(t("msg.undo.removeValidation", "Remove validation"), [{ type: "deleteValidation", sheet: this.sheet, id }]);
   }
 
   /** A cell's ▾ (validation list) or ↗ (link) was clicked. */
@@ -360,7 +361,7 @@ export class V3Features {
   /** Picks a list item (one undo step, validated by the engine like typing). */
   async pickListItem(cell: CellPos, item: string): Promise<void> {
     useV3Store.getState().setPopover(null);
-    await this.ctl.apply("Choose from list", [{ type: "setCellInput", sheet: this.sheet, r: cell.r, c: cell.c, input: item }]);
+    await this.ctl.apply(t("msg.undo.chooseFromList", "Choose from list"), [{ type: "setCellInput", sheet: this.sheet, r: cell.r, c: cell.c, input: item }]);
     this.ctl.focusGrid();
   }
 
@@ -411,16 +412,16 @@ export class V3Features {
     const sheet = this.sheet;
     if (text.trim() === "") {
       const had = await this.client.note(this.doc, sheet, cell.r, cell.c).catch(() => null);
-      if (had) await this.ctl.apply("Delete note", [{ type: "deleteNote", sheet, r: cell.r, c: cell.c }]);
+      if (had) await this.ctl.apply(t("cmd.insert.deleteNote", "Delete note"), [{ type: "deleteNote", sheet, r: cell.r, c: cell.c }]);
     } else {
-      await this.ctl.apply("Note", [{ type: "setNote", sheet, r: cell.r, c: cell.c, note: { r: cell.r, c: cell.c, text, author, created: null, shown: false } }]);
+      await this.ctl.apply(t("popover.note", "Note"), [{ type: "setNote", sheet, r: cell.r, c: cell.c, note: { r: cell.r, c: cell.c, text, author, created: null, shown: false } }]);
     }
     this.ctl.focusGrid();
   }
 
   async deleteNote(cell: CellPos = this.ctl.selection.active): Promise<void> {
     useV3Store.getState().setPopover(null);
-    await this.ctl.apply("Delete note", [{ type: "deleteNote", sheet: this.sheet, r: cell.r, c: cell.c }]);
+    await this.ctl.apply(t("cmd.insert.deleteNote", "Delete note"), [{ type: "deleteNote", sheet: this.sheet, r: cell.r, c: cell.c }]);
   }
 
   /** The pointer rests on (or left) a cell with a note. */
@@ -477,12 +478,12 @@ export class V3Features {
     const display = text.trim() === "" && (current?.input ?? "") === "" ? url : text;
     if (display !== "" && display !== (current?.input ?? "")) ops.push({ type: "setCellInput", sheet, r: cell.r, c: cell.c, input: display });
     ops.push({ type: "setLink", sheet, r: cell.r, c: cell.c, url });
-    const res = await this.ctl.apply("Hyperlink", ops);
+    const res = await this.ctl.apply(t("hyperlink.title", "Hyperlink"), ops);
     return res !== null && res.errors.length === 0;
   }
 
   async removeLink(): Promise<void> {
-    await this.ctl.apply("Remove hyperlink", [{ type: "clearLink", sheet: this.sheet, ranges: this.ctl.ranges }]);
+    await this.ctl.apply(t("cmd.insert.removeHyperlink", "Remove hyperlink"), [{ type: "clearLink", sheet: this.sheet, ranges: this.ctl.ranges }]);
   }
 
   /** ⌘-click / ↗: `#Sheet.A1` jumps; http(s)/mailto open in the OS; anything else is refused. */
@@ -527,12 +528,12 @@ export class V3Features {
   }
 
   async protectSheet(password: string | null, options: ProtectionOptions): Promise<void> {
-    const res = await this.ctl.apply("Protect sheet", [{ type: "protectSheet", sheet: this.sheet, password: password || null, options }]);
+    const res = await this.ctl.apply(t("msg.undo.protectSheet", "Protect sheet"), [{ type: "protectSheet", sheet: this.sheet, password: password || null, options }]);
     if (res && res.errors.length === 0) this.toast("info", `Protected “${this.ctl.sheetName()}”. Locked cells can't be changed.`);
   }
 
   async unprotectSheet(password: string | null): Promise<boolean> {
-    const res = await this.ctl.apply("Unprotect sheet", [{ type: "unprotectSheet", sheet: this.sheet, password }]);
+    const res = await this.ctl.apply(t("msg.undo.unprotectSheet", "Unprotect sheet"), [{ type: "unprotectSheet", sheet: this.sheet, password }]);
     const ok = res !== null && res.errors.length === 0;
     if (ok) this.toast("info", `“${this.ctl.sheetName()}” is no longer protected.`);
     return ok;
@@ -549,7 +550,7 @@ export class V3Features {
 
   async setDocumentProtection(protect: boolean, password: string | null): Promise<boolean> {
     const op: Op = protect ? { type: "protectDocument", password: password || null } : { type: "unprotectDocument", password: password || null };
-    const res = await this.ctl.apply(protect ? "Protect document" : "Unprotect document", [op]);
+    const res = await this.ctl.apply(protect ? t("v3.protectDoc", "Protect document") : t("v3.unprotectDoc", "Unprotect document"), [op]);
     const ok = res !== null && res.errors.length === 0;
     if (ok) this.toast("info", protect ? "Sheets can no longer be added, deleted, renamed or moved." : "The document structure is no longer protected.");
     return ok;
@@ -571,7 +572,7 @@ export class V3Features {
   async applyGoalSeek(variableCell: CellPos, value: number): Promise<void> {
     const input = String(Number(value.toPrecision(15)));
     const cell = { ...variableCell };
-    await this.ctl.apply("Goal seek", [{ type: "setCellInput", sheet: this.sheet, r: cell.r, c: cell.c, input }], {
+    await this.ctl.apply(t("v3.goalTitle", "Goal seek"), [{ type: "setCellInput", sheet: this.sheet, r: cell.r, c: cell.c, input }], {
       range: { r0: cell.r, c0: cell.c, r1: cell.r, c1: cell.c },
       active: cell,
       anchor: cell,
@@ -590,7 +591,7 @@ export class V3Features {
   }
 
   async saveProperties(props: DocPropertiesDto): Promise<void> {
-    await this.ctl.apply("Document properties", [{ type: "setDocumentProperties", props }]);
+    await this.ctl.apply(t("v3.propsTitle", "Document properties"), [{ type: "setDocumentProperties", props }]);
   }
 
   // -- page setup and breaks ------------------------------------------------------------------------------
@@ -605,7 +606,7 @@ export class V3Features {
   }
 
   async savePageSetup(setup: PageSetupDto): Promise<void> {
-    const res = await this.ctl.apply("Page setup", [{ type: "setPageSetup", sheet: this.sheet, setup }]);
+    const res = await this.ctl.apply(t("v3.pageSetup", "Page setup"), [{ type: "setPageSetup", sheet: this.sheet, setup }]);
     if (res && res.errors.length === 0) useV3Store.getState().setPageSetup(setup);
   }
 
@@ -617,7 +618,7 @@ export class V3Features {
       this.toast("info", axis === "row" ? "A page break goes above a row below row 1." : "A page break goes left of a column right of A.");
       return;
     }
-    await this.ctl.apply("Insert page break", [{ type: "setPageBreak", sheet: this.sheet, axis, at, present: true }]);
+    await this.ctl.apply(t("msg.undo.insertPageBreak", "Insert page break"), [{ type: "setPageBreak", sheet: this.sheet, axis, at, present: true }]);
     if (!useV3Store.getState().pageBreaksOn) this.setPageBreaksOn(true);
   }
 
@@ -632,7 +633,7 @@ export class V3Features {
       this.toast("info", "There is no manual page break at the active cell.");
       return;
     }
-    await this.ctl.apply("Remove page break", ops);
+    await this.ctl.apply(t("msg.undo.removePageBreak", "Remove page break"), ops);
   }
 
   setPageBreaksOn(on: boolean): void {
@@ -679,14 +680,14 @@ export class V3Features {
   }
 
   async refreshFilter(): Promise<void> {
-    await this.ctl.apply("Refresh filter", [{ type: "refreshFilter", sheet: this.sheet }]);
+    await this.ctl.apply(t("cmd.data.refreshFilter", "Refresh filter"), [{ type: "refreshFilter", sheet: this.sheet }]);
     await this.ctl.refreshFilter();
   }
 
   /** Format ▸ Fit Row Height: wrapped / multi-line rows of the selection get the height they need. */
   async fitRows(): Promise<void> {
     const ops: Op[] = this.ctl.ranges.map((r) => ({ type: "autoFitRows", sheet: this.sheet, start: r.r0, end: Math.min(r.r1, r.r0 + 100_000) }));
-    await this.ctl.apply("Fit row height", ops);
+    await this.ctl.apply(t("msg.undo.fitRowHeight", "Fit row height"), ops);
   }
 
   /** Describes a selection for dialogs (`F2:F15`). */

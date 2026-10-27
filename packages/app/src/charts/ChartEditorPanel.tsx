@@ -11,18 +11,23 @@ import { cx, useController } from "../context";
 import { t } from "../i18n";
 import { hexToRgba, rgbaToHex } from "../palette";
 import { CHART_KINDS, KindThumb } from "./chartKinds";
+import { useW56Store } from "../data/store";
 import { selectedChart, useChartStore } from "./chartStore";
 import { DEFAULT_AXIS } from "./toEcharts";
 import styles from "./ChartEditorPanel.module.css";
 import { arrowNav } from "../components/dialogA11y";
 
-const LEGENDS: { id: LegendPos; label: string }[] = [
-  { id: "none", label: "None" },
-  { id: "right", label: "Right" },
-  { id: "left", label: "Left" },
-  { id: "top", label: "Top" },
-  { id: "bottom", label: "Bottom" },
+const legends = (): { id: LegendPos; label: string }[] => [
+  { id: "none", label: t("cp.noneLegend", "None") },
+  { id: "right", label: t("cp.right", "Right") },
+  { id: "left", label: t("cp.left", "Left") },
+  { id: "top", label: t("cp.top", "Top") },
+  { id: "bottom", label: t("cp.bottom", "Bottom") },
 ];
+
+/** Chart-kind labels (the table lives in chartKinds.tsx; translated here at render). */
+const KIND_KEYS: Record<ChartKind, string> = { column: "chart.column", bar: "chart.bar", line: "chart.line", area: "chart.area", pie: "chart.pie", scatter: "cp.kindXY", bubble: "chart.bubble", radar: "chart.radar", stock: "chart.stock" };
+const kindLabel = (k: { kind: ChartKind; label: string }): string => t(KIND_KEYS[k.kind] ?? "", k.label);
 
 /** A blank series (values set by the user). */
 export function emptySeries(values = ""): ChartSeriesDto {
@@ -65,6 +70,7 @@ export function errorBarKindFor(type: string): ErrorBarKind | null {
 
 export function ChartEditorPanel() {
   const ctl = useController();
+  useW56Store((s) => s.i18nRev);
   const chart = useChartStore((s) => selectedChart(s));
   const data = useChartStore((s) => (chart ? s.data[chart.id] : undefined));
   const [draft, setDraft] = useState<ChartDto | null>(chart);
@@ -121,117 +127,117 @@ export function ChartEditorPanel() {
       <header className={styles.head}>
         <div>
           <div className={styles.title}>{t("chart.editor", "Chart editor")}</div>
-          <div className={styles.sub}>{draft.title || `Chart ${draft.id}`}</div>
+          <div className={styles.sub}>{draft.title || t("cp.chartN", "Chart {id}", { id: draft.id })}</div>
         </div>
         <button type="button" className={styles.close} aria-label={t("chart.closeEditor", "Close chart editor")} onClick={() => ctl.w5.charts.closeEditor()}>
           ×
         </button>
       </header>
       <div className={styles.body}>
-        <Section title={t("chart.type", "Type")} open testId="chart-section-type">
-          <div className={styles.kinds} role="radiogroup" aria-label="Chart type" data-select-on-focus="false">
+        <Section title={t("cp.sectionType", "Type")} open testId="chart-section-type">
+          <div className={styles.kinds} role="radiogroup" aria-label={t("chart.type", "Chart type")} data-select-on-focus="false">
             {CHART_KINDS.map((k) => (
-              <button key={k.kind} type="button" role="radio" aria-checked={draft.kind === k.kind} className={draft.kind === k.kind ? styles.kindOn : styles.kind} data-kind={k.kind} title={k.label} onClick={() => patch(kindPatch(draft, k.kind))}>
+              <button key={k.kind} type="button" role="radio" aria-checked={draft.kind === k.kind} className={draft.kind === k.kind ? styles.kindOn : styles.kind} data-kind={k.kind} title={kindLabel(k)} onClick={() => patch(kindPatch(draft, k.kind))}>
                 <KindThumb kind={k.kind} />
-                <span>{k.label}</span>
+                <span>{kindLabel(k)}</span>
               </button>
             ))}
           </div>
           {draft.kind === "column" || draft.kind === "bar" || draft.kind === "line" || draft.kind === "area" ? (
-            <Row label="Stacking">
-              <Segmented value={draft.stacking} options={[{ id: "none", label: "None" }, { id: "stacked", label: "Stacked" }, { id: "percent", label: "Percent" }] as { id: Stacking; label: string }[]} onChange={(stacking) => patch({ stacking })} />
+            <Row label={t("cp.stacking", "Stacking")}>
+              <Segmented value={draft.stacking} options={[{ id: "none", label: t("cp.noneStacking", "None") }, { id: "stacked", label: t("chart.stacked", "Stacked") }, { id: "percent", label: t("cp.percent", "Percent") }] as { id: Stacking; label: string }[]} onChange={(stacking) => patch({ stacking })} />
             </Row>
           ) : null}
           {draft.kind === "line" || draft.kind === "scatter" ? (
             <div className={styles.checks}>
-              <Check label="Lines" checked={draft.lines} onChange={(lines) => patch({ lines })} />
-              <Check label="Markers" checked={draft.markers} onChange={(markers) => patch({ markers })} />
-              <Check label="Smooth" checked={draft.smooth} onChange={(smooth) => patch({ smooth })} />
+              <Check label={t("cp.lines", "Lines")} checked={draft.lines} onChange={(lines) => patch({ lines })} />
+              <Check label={t("cp.markers", "Markers")} checked={draft.markers} onChange={(markers) => patch({ markers })} />
+              <Check label={t("cp.smooth", "Smooth")} checked={draft.smooth} onChange={(smooth) => patch({ smooth })} />
             </div>
           ) : null}
           {draft.kind === "pie" ? (
             <div className={styles.checks}>
-              <Check label="Donut" checked={(draft.hole ?? 0) > 0} onChange={(on) => patch({ hole: on ? 0.5 : null })} />
-              <Check label="Exploded" checked={draft.exploded} onChange={(exploded) => patch({ exploded })} />
+              <Check label={t("cp.donut", "Donut")} checked={(draft.hole ?? 0) > 0} onChange={(on) => patch({ hole: on ? 0.5 : null })} />
+              <Check label={t("cp.exploded", "Exploded")} checked={draft.exploded} onChange={(exploded) => patch({ exploded })} />
             </div>
           ) : null}
           {draft.kind === "radar" ? (
             <div className={styles.checks}>
-              <Check label="Filled" checked={draft.filled} onChange={(filled) => patch({ filled })} />
-              <Check label="Markers" checked={draft.markers} onChange={(markers) => patch({ markers })} />
+              <Check label={t("cp.filled", "Filled")} checked={draft.filled} onChange={(filled) => patch({ filled })} />
+              <Check label={t("cp.markers", "Markers")} checked={draft.markers} onChange={(markers) => patch({ markers })} />
             </div>
           ) : null}
           {draft.kind === "stock" ? (
-            <Row label="Variant">
+            <Row label={t("cp.variant", "Variant")}>
               <select className={styles.select} value={draft.stock ?? "hlc"} onChange={(e) => patch({ stock: e.target.value as StockVariant })}>
-                <option value="hlc">Low, high, close</option>
-                <option value="ohlc">Open, low, high, close</option>
-                <option value="volumeHlc">Volume + low, high, close</option>
-                <option value="volumeOhlc">Volume + open, low, high, close</option>
+                <option value="hlc">{t("cp.stockHlc", "Low, high, close")}</option>
+                <option value="ohlc">{t("cp.stockOhlc", "Open, low, high, close")}</option>
+                <option value="volumeHlc">{t("cp.stockVolumeHlc", "Volume + low, high, close")}</option>
+                <option value="volumeOhlc">{t("cp.stockVolumeOhlc", "Volume + open, low, high, close")}</option>
               </select>
             </Row>
           ) : null}
-          <Check label="3D (kept for the file; drawn flat)" checked={draft.threeD} onChange={(threeD) => patch({ threeD })} />
+          <Check label={t("cp.threeD", "3D (kept for the file; drawn flat)")} checked={draft.threeD} onChange={(threeD) => patch({ threeD })} />
         </Section>
 
         <Section title={t("chart.data", "Data")} open testId="chart-section-data">
           <div className={styles.rowWide}>
-            Data range
+            {t("chart.dataRange", "Data range")}
             <RefInput value={draft.source?.range ?? ""} testId="chart-source" onCommit={(range) => patch({ source: range === "" ? null : { range, seriesInRows: draft.source?.seriesInRows ?? false, firstRowLabel: draft.source?.firstRowLabel ?? true, firstColLabel: draft.source?.firstColLabel ?? true }, series: [] })} onPick={() => pick((ref) => patch({ source: { range: ref, seriesInRows: false, firstRowLabel: true, firstColLabel: true }, series: [] }))} />
           </div>
           {draft.source ? (
             <div className={styles.checks}>
-              <Check label="Series in rows" checked={draft.source.seriesInRows} onChange={(seriesInRows) => patch({ source: { ...draft.source!, seriesInRows }, series: [] })} />
-              <Check label="First row as label" checked={draft.source.firstRowLabel} onChange={(firstRowLabel) => patch({ source: { ...draft.source!, firstRowLabel }, series: [] })} />
-              <Check label="First column as label" checked={draft.source.firstColLabel} onChange={(firstColLabel) => patch({ source: { ...draft.source!, firstColLabel }, series: [] })} />
+              <Check label={t("cp.seriesInRows", "Series in rows")} checked={draft.source.seriesInRows} onChange={(seriesInRows) => patch({ source: { ...draft.source!, seriesInRows }, series: [] })} />
+              <Check label={t("chart.firstRowLabel", "First row as label")} checked={draft.source.firstRowLabel} onChange={(firstRowLabel) => patch({ source: { ...draft.source!, firstRowLabel }, series: [] })} />
+              <Check label={t("chart.firstColumnLabel", "First column as label")} checked={draft.source.firstColLabel} onChange={(firstColLabel) => patch({ source: { ...draft.source!, firstColLabel }, series: [] })} />
             </div>
           ) : null}
           <div className={styles.rowWide}>
-            Categories
+            {t("cp.categories", "Categories")}
             <RefInput value={draft.categories ?? ""} testId="chart-categories" onCommit={(v) => patch({ categories: v === "" ? null : v })} onPick={() => pick((ref) => patch({ categories: ref }))} />
           </div>
           {series.map((s, i) => (
             <div key={i} className={styles.series} data-testid={`chart-series-${i}`}>
               <div className={styles.seriesHead}>
-                <input className={styles.input} placeholder={`Series ${i + 1}`} aria-label="Series name" defaultValue={seriesNameText(s)} key={`${draft.id}:${i}:${seriesNameText(s)}`} onBlur={(e) => setSeries(i, { name: parseSeriesName(e.target.value) })} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
-                <input type="color" className={styles.swatch} aria-label="Series colour" value={s.color !== null ? rgbaToHex(s.color) : rgbaToHex(data?.series[i]?.color ?? 0x004586ff)} onChange={(e) => setSeries(i, { color: hexToRgba(e.target.value) })} />
-                <button type="button" className={styles.remove} aria-label="Remove series" onClick={() => patch({ series: series.filter((_, j) => j !== i) })}>
+                <input className={styles.input} placeholder={t("cp.seriesN", "Series {n}", { n: i + 1 })} aria-label={t("cp.seriesName", "Series name")} defaultValue={seriesNameText(s)} key={`${draft.id}:${i}:${seriesNameText(s)}`} onBlur={(e) => setSeries(i, { name: parseSeriesName(e.target.value) })} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+                <input type="color" className={styles.swatch} aria-label={t("cp.seriesColour", "Series colour")} value={s.color !== null ? rgbaToHex(s.color) : rgbaToHex(data?.series[i]?.color ?? 0x004586ff)} onChange={(e) => setSeries(i, { color: hexToRgba(e.target.value) })} />
+                <button type="button" className={styles.remove} aria-label={t("cp.removeSeries", "Remove series")} onClick={() => patch({ series: series.filter((_, j) => j !== i) })}>
                   ×
                 </button>
               </div>
-              <RefInput value={s.values} placeholder="Values ($Sheet1.$B$2:$B$9)" testId={`chart-series-${i}-values`} onCommit={(values) => setSeries(i, { values })} onPick={() => pick((ref) => setSeries(i, { values: ref }))} />
-              {xy ? <RefInput value={s.xValues ?? ""} placeholder="X values" onCommit={(v) => setSeries(i, { xValues: v || null })} onPick={() => pick((ref) => setSeries(i, { xValues: ref }))} /> : null}
-              {draft.kind === "bubble" ? <RefInput value={s.sizes ?? ""} placeholder="Bubble sizes" onCommit={(v) => setSeries(i, { sizes: v || null })} onPick={() => pick((ref) => setSeries(i, { sizes: ref }))} /> : null}
+              <RefInput value={s.values} placeholder={t("cp.valuesPlaceholder", "Values ($Sheet1.$B$2:$B$9)")} testId={`chart-series-${i}-values`} onCommit={(values) => setSeries(i, { values })} onPick={() => pick((ref) => setSeries(i, { values: ref }))} />
+              {xy ? <RefInput value={s.xValues ?? ""} placeholder={t("cp.xValues", "X values")} onCommit={(v) => setSeries(i, { xValues: v || null })} onPick={() => pick((ref) => setSeries(i, { xValues: ref }))} /> : null}
+              {draft.kind === "bubble" ? <RefInput value={s.sizes ?? ""} placeholder={t("cp.bubbleSizes", "Bubble sizes")} onCommit={(v) => setSeries(i, { sizes: v || null })} onPick={() => pick((ref) => setSeries(i, { sizes: ref }))} /> : null}
               {cartesian && !xy ? (
                 <div className={styles.checks}>
-                  <select className={styles.select} aria-label="Series type" value={s.kind ?? ""} onChange={(e) => setSeries(i, { kind: (e.target.value || null) as ChartKind | null })}>
-                    <option value="">Same as chart</option>
-                    <option value="column">Column</option>
-                    <option value="line">Line</option>
-                    <option value="area">Area</option>
+                  <select className={styles.select} aria-label={t("cp.seriesType", "Series type")} value={s.kind ?? ""} onChange={(e) => setSeries(i, { kind: (e.target.value || null) as ChartKind | null })}>
+                    <option value="">{t("cp.sameAsChart", "Same as chart")}</option>
+                    <option value="column">{t("chart.column", "Column")}</option>
+                    <option value="line">{t("chart.line", "Line")}</option>
+                    <option value="area">{t("chart.area", "Area")}</option>
                   </select>
-                  <Check label="Secondary axis" checked={s.secondaryAxis} onChange={(secondaryAxis) => setSeries(i, { secondaryAxis })} />
+                  <Check label={t("cp.secondaryAxis", "Secondary axis")} checked={s.secondaryAxis} onChange={(secondaryAxis) => setSeries(i, { secondaryAxis })} />
                 </div>
               ) : null}
             </div>
           ))}
           <button type="button" className={styles.add} data-testid="chart-add-series" onClick={() => patch({ series: [...series, emptySeries()], source: null })}>
-            + Add series
+            {t("cp.addSeries", "+ Add series")}
           </button>
           {data && data.problems.length > 0 ? <div className={styles.problems}>{data.problems.join(" · ")}</div> : null}
-          {data?.truncated ? <div className={styles.hint}>Some points were left out (the chart limits are 255 series and 32,000 points).</div> : null}
+          {data?.truncated ? <div className={styles.hint}>{t("cp.truncated", "Some points were left out (the chart limits are 255 series and 32,000 points).")}</div> : null}
         </Section>
 
         <Section title={t("chart.titles", "Titles")} open testId="chart-section-titles">
-          <Row label="Title">
+          <Row label={t("chart.chartTitle", "Title")}>
             <input className={styles.input} data-testid="chart-title" value={draft.title ?? ""} onChange={(e) => stage({ title: e.target.value || null })} onBlur={commitDraft} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
           </Row>
-          <Row label="Subtitle">
+          <Row label={t("chart.subtitle", "Subtitle")}>
             <input className={styles.input} value={draft.subtitle ?? ""} onChange={(e) => stage({ subtitle: e.target.value || null })} onBlur={commitDraft} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
           </Row>
-          <Row label="Legend">
+          <Row label={t("chart.legend", "Legend")}>
             <select className={styles.select} data-testid="chart-legend" value={draft.legend} onChange={(e) => patch({ legend: e.target.value as LegendPos })}>
-              {LEGENDS.map((l) => (
+              {legends().map((l) => (
                 <option key={l.id} value={l.id}>
                   {l.label}
                 </option>
@@ -245,7 +251,7 @@ export function ChartEditorPanel() {
             <div className={styles.tabs} role="tablist">
               {(["x", "y", ...(hasY2 ? ["y2" as const] : [])] as ("x" | "y" | "y2")[]).map((tab) => (
                 <button key={tab} type="button" role="tab" aria-selected={axisTab === tab} className={axisTab === tab ? styles.tabOn : styles.tab} onClick={() => setAxisTab(tab)}>
-                  {tab === "x" ? "X axis" : tab === "y" ? "Y axis" : "Secondary Y"}
+                  {tab === "x" ? t("chart.xAxis", "X axis") : tab === "y" ? t("chart.yAxis", "Y axis") : t("cp.secondaryY", "Secondary Y")}
                 </button>
               ))}
             </div>
@@ -258,24 +264,24 @@ export function ChartEditorPanel() {
           {cur ? (
             <>
               <div className={styles.checks}>
-                <Check label="Value" checked={cur.labels.value} onChange={(value) => setSeries(seriesIdx, { labels: { ...cur.labels, value } })} />
-                {draft.kind === "pie" ? <Check label="Percent" checked={cur.labels.percent} onChange={(percent) => setSeries(seriesIdx, { labels: { ...cur.labels, percent } })} /> : null}
-                <Check label="Category" checked={cur.labels.category} onChange={(category) => setSeries(seriesIdx, { labels: { ...cur.labels, category } })} />
-                <Check label="Series name" checked={cur.labels.seriesName} onChange={(seriesName) => setSeries(seriesIdx, { labels: { ...cur.labels, seriesName } })} />
+                <Check label={t("dialog.value", "Value")} checked={cur.labels.value} onChange={(value) => setSeries(seriesIdx, { labels: { ...cur.labels, value } })} />
+                {draft.kind === "pie" ? <Check label={t("cp.percent", "Percent")} checked={cur.labels.percent} onChange={(percent) => setSeries(seriesIdx, { labels: { ...cur.labels, percent } })} /> : null}
+                <Check label={t("cp.category", "Category")} checked={cur.labels.category} onChange={(category) => setSeries(seriesIdx, { labels: { ...cur.labels, category } })} />
+                <Check label={t("cp.seriesName", "Series name")} checked={cur.labels.seriesName} onChange={(seriesName) => setSeries(seriesIdx, { labels: { ...cur.labels, seriesName } })} />
               </div>
-              <Row label="Placement">
+              <Row label={t("cp.placement", "Placement")}>
                 <select className={styles.select} value={cur.labels.position} onChange={(e) => setSeries(seriesIdx, { labels: { ...cur.labels, position: e.target.value as ChartSeriesDto["labels"]["position"] } })}>
-                  <option value="auto">Automatic</option>
-                  <option value="outside">Outside</option>
-                  <option value="inside">Inside</option>
-                  <option value="center">Centre</option>
-                  <option value="above">Above</option>
-                  <option value="below">Below</option>
+                  <option value="auto">{t("cp.automatic", "Automatic")}</option>
+                  <option value="outside">{t("cp.outside", "Outside")}</option>
+                  <option value="inside">{t("cp.inside", "Inside")}</option>
+                  <option value="center">{t("cp.centre", "Centre")}</option>
+                  <option value="above">{t("cp.above", "Above")}</option>
+                  <option value="below">{t("cp.below", "Below")}</option>
                 </select>
               </Row>
             </>
           ) : (
-            <div className={styles.hint}>Add a series first.</div>
+            <div className={styles.hint}>{t("cp.addSeriesFirst", "Add a series first.")}</div>
           )}
         </Section>
 
@@ -284,67 +290,67 @@ export function ChartEditorPanel() {
             {series.length > 1 ? <SeriesPicker series={series} value={seriesIdx} onChange={setSeriesIdx} /> : null}
             {cur ? (
               <>
-                <Row label="Trend line">
+                <Row label={t("chart.trendLine", "Trend line")}>
                   <select className={styles.select} data-testid="chart-trend" value={cur.trend?.kind ?? ""} onChange={(e) => setSeries(seriesIdx, { trend: e.target.value === "" ? null : { kind: e.target.value as TrendKind, showEquation: cur.trend?.showEquation ?? false, showR2: cur.trend?.showR2 ?? false, name: cur.trend?.name ?? null } })}>
-                    <option value="">None</option>
-                    <option value="linear">Linear</option>
-                    <option value="logarithmic">Logarithmic</option>
-                    <option value="exponential">Exponential</option>
-                    <option value="power">Power</option>
+                    <option value="">{t("cp.noneTrend", "None")}</option>
+                    <option value="linear">{t("cp.linear", "Linear")}</option>
+                    <option value="logarithmic">{t("cp.logarithmic", "Logarithmic")}</option>
+                    <option value="exponential">{t("cp.exponential", "Exponential")}</option>
+                    <option value="power">{t("cp.power", "Power")}</option>
                   </select>
                 </Row>
                 {cur.trend ? (
                   <div className={styles.checks}>
-                    <Check label="Show equation" checked={cur.trend.showEquation} onChange={(showEquation) => setSeries(seriesIdx, { trend: { ...cur.trend!, showEquation } })} />
-                    <Check label="Show R²" checked={cur.trend.showR2} onChange={(showR2) => setSeries(seriesIdx, { trend: { ...cur.trend!, showR2 } })} />
+                    <Check label={t("cp.showEquation", "Show equation")} checked={cur.trend.showEquation} onChange={(showEquation) => setSeries(seriesIdx, { trend: { ...cur.trend!, showEquation } })} />
+                    <Check label={t("cp.showR2", "Show R²")} checked={cur.trend.showR2} onChange={(showR2) => setSeries(seriesIdx, { trend: { ...cur.trend!, showR2 } })} />
                   </div>
                 ) : null}
-                <Row label="Error bars">
+                <Row label={t("chart.errorBars", "Error bars")}>
                   <select className={styles.select} value={cur.errorBars?.kind.type ?? ""} onChange={(e) => setSeries(seriesIdx, { errorBars: e.target.value === "" ? null : { kind: errorBarKindFor(e.target.value)!, direction: cur.errorBars?.direction ?? "both" } })}>
-                    <option value="">None</option>
-                    <option value="constant">Constant value</option>
-                    <option value="percent">Percentage</option>
-                    <option value="stdDev">Standard deviation</option>
-                    <option value="stdError">Standard error</option>
-                    <option value="variance">Variance</option>
-                    <option value="errorMargin">Error margin</option>
-                    <option value="range">Cell range</option>
+                    <option value="">{t("cp.noneErrorBars", "None")}</option>
+                    <option value="constant">{t("cp.constantValue", "Constant value")}</option>
+                    <option value="percent">{t("cp.percentage", "Percentage")}</option>
+                    <option value="stdDev">{t("cp.stdDev", "Standard deviation")}</option>
+                    <option value="stdError">{t("cp.stdError", "Standard error")}</option>
+                    <option value="variance">{t("cp.variance", "Variance")}</option>
+                    <option value="errorMargin">{t("cp.errorMargin", "Error margin")}</option>
+                    <option value="range">{t("validation.cellRange", "Cell range")}</option>
                   </select>
                 </Row>
                 {cur.errorBars ? <ErrorBarFields series={cur} onChange={(errorBars) => setSeries(seriesIdx, { errorBars })} onPick={pick} /> : null}
-                <Check label="Mean value line" checked={cur.meanLine} onChange={(meanLine) => setSeries(seriesIdx, { meanLine })} />
+                <Check label={t("chart.meanLine", "Mean value line")} checked={cur.meanLine} onChange={(meanLine) => setSeries(seriesIdx, { meanLine })} />
               </>
             ) : (
-              <div className={styles.hint}>Add a series first.</div>
+              <div className={styles.hint}>{t("cp.addSeriesFirst", "Add a series first.")}</div>
             )}
           </Section>
         ) : null}
 
         <Section title={t("chart.appearance", "Appearance")} testId="chart-section-appearance">
-          <Row label="Background">
+          <Row label={t("cells.background", "Background")}>
             <div className={styles.refRow}>
-              <input type="color" className={styles.swatch} aria-label="Chart background" value={draft.background !== null ? rgbaToHex(draft.background) : "#ffffff"} onChange={(e) => patch({ background: hexToRgba(e.target.value) })} />
+              <input type="color" className={styles.swatch} aria-label={t("cp.chartBackground", "Chart background")} value={draft.background !== null ? rgbaToHex(draft.background) : "#ffffff"} onChange={(e) => patch({ background: hexToRgba(e.target.value) })} />
               <button type="button" className={styles.pick} onClick={() => patch({ background: null })}>
-                None
+                {t("cp.noneBackground", "None")}
               </button>
             </div>
           </Row>
-          <Row label="Plot area">
+          <Row label={t("cp.plotArea", "Plot area")}>
             <div className={styles.refRow}>
-              <input type="color" className={styles.swatch} aria-label="Plot background" value={draft.plotBackground !== null ? rgbaToHex(draft.plotBackground) : "#ffffff"} onChange={(e) => patch({ plotBackground: hexToRgba(e.target.value) })} />
+              <input type="color" className={styles.swatch} aria-label={t("cp.plotBackground", "Plot background")} value={draft.plotBackground !== null ? rgbaToHex(draft.plotBackground) : "#ffffff"} onChange={(e) => patch({ plotBackground: hexToRgba(e.target.value) })} />
               <button type="button" className={styles.pick} onClick={() => patch({ plotBackground: null })}>
-                None
+                {t("cp.nonePlot", "None")}
               </button>
             </div>
           </Row>
-          <Check label="Include hidden cells" checked={draft.includeHidden} onChange={(includeHidden) => patch({ includeHidden })} />
+          <Check label={t("cp.includeHidden", "Include hidden cells")} checked={draft.includeHidden} onChange={(includeHidden) => patch({ includeHidden })} />
         </Section>
         <div className={styles.actions}>
           <button type="button" className={styles.button} onClick={() => void ctl.w5.charts.copyAsImage()}>
-            Copy as image
+            {t("cp.copyAsImage", "Copy as image")}
           </button>
           <button type="button" className={styles.danger} data-testid="chart-delete" onClick={() => void ctl.w5.charts.deleteSelected()}>
-            Delete chart
+            {t("cmd.chart.delete", "Delete chart")}
           </button>
         </div>
       </div>
@@ -412,12 +418,12 @@ function RefInput({ value, placeholder, onCommit, onPick, testId }: { value: str
         placeholder={placeholder}
         value={text}
         data-testid={testId}
-        aria-label={placeholder ?? "Range"}
+        aria-label={placeholder ?? t("dialog.range", "Range")}
         onChange={(e) => setText(e.target.value)}
         onBlur={() => text.trim() !== value && onCommit(text.trim())}
         onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
       />
-      <button type="button" className={styles.pick} title="Pick the range on the sheet" aria-label="Pick range" onClick={onPick}>
+      <button type="button" className={styles.pick} title={t("cp.pickTitle", "Pick the range on the sheet")} aria-label={t("cp.pickRange", "Pick range")} onClick={onPick}>
         ⤓
       </button>
     </div>
@@ -426,11 +432,11 @@ function RefInput({ value, placeholder, onCommit, onPick, testId }: { value: str
 
 function SeriesPicker({ series, value, onChange }: { series: ChartSeriesDto[]; value: number; onChange: (i: number) => void }) {
   return (
-    <Row label="Series">
+    <Row label={t("cp.series", "Series")}>
       <select className={styles.select} value={Math.min(value, series.length - 1)} onChange={(e) => onChange(Number(e.target.value))}>
         {series.map((s, i) => (
           <option key={i} value={i}>
-            {seriesNameText(s) || `Series ${i + 1}`}
+            {seriesNameText(s) || t("cp.seriesN", "Series {n}", { n: i + 1 })}
           </option>
         ))}
       </select>
@@ -444,28 +450,28 @@ function AxisEditor({ axis, value, onStage, onCommit, commitDraft }: { axis: Cha
   );
   return (
     <>
-      <Check label="Show axis" checked={axis.visible} onChange={(visible) => onCommit({ visible })} />
-      <Row label="Title">
+      <Check label={t("cp.showAxis", "Show axis")} checked={axis.visible} onChange={(visible) => onCommit({ visible })} />
+      <Row label={t("chart.chartTitle", "Title")}>
         <input className={styles.input} value={axis.title ?? ""} onChange={(e) => onStage({ title: e.target.value || null })} onBlur={commitDraft} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
       </Row>
       {value === "value" ? (
         <>
-          <Row label="Minimum">{num("min")}</Row>
-          <Row label="Maximum">{num("max")}</Row>
-          <Row label="Major interval">{num("major")}</Row>
-          <Row label="Minor divisions">
+          <Row label={t("cp.minimum", "Minimum")}>{num("min")}</Row>
+          <Row label={t("cp.maximum", "Maximum")}>{num("max")}</Row>
+          <Row label={t("cp.majorInterval", "Major interval")}>{num("major")}</Row>
+          <Row label={t("cp.minorDivisions", "Minor divisions")}>
             <input className={styles.input} type="number" min={0} max={100} value={axis.minorCount ?? ""} onChange={(e) => onStage({ minorCount: e.target.value === "" ? null : Math.max(0, Math.trunc(Number(e.target.value))) })} onBlur={commitDraft} />
           </Row>
-          <Row label="Number format">
-            <input className={cx(styles.input, styles.mono)} placeholder="General" value={axis.numberFormat ?? ""} onChange={(e) => onStage({ numberFormat: e.target.value || null })} onBlur={commitDraft} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+          <Row label={t("menu.format.numberFormat", "Number format")}>
+            <input className={cx(styles.input, styles.mono)} placeholder={t("fmt.general", "General")} value={axis.numberFormat ?? ""} onChange={(e) => onStage({ numberFormat: e.target.value || null })} onBlur={commitDraft} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
           </Row>
         </>
       ) : null}
       <div className={styles.checks}>
-        {value === "value" ? <Check label="Logarithmic" checked={axis.log} onChange={(log) => onCommit({ log })} /> : null}
-        <Check label="Reverse" checked={axis.reverse} onChange={(reverse) => onCommit({ reverse })} />
-        <Check label="Major grid" checked={axis.majorGrid} onChange={(majorGrid) => onCommit({ majorGrid })} />
-        <Check label="Minor grid" checked={axis.minorGrid} onChange={(minorGrid) => onCommit({ minorGrid })} />
+        {value === "value" ? <Check label={t("cp.logarithmic", "Logarithmic")} checked={axis.log} onChange={(log) => onCommit({ log })} /> : null}
+        <Check label={t("cp.reverse", "Reverse")} checked={axis.reverse} onChange={(reverse) => onCommit({ reverse })} />
+        <Check label={t("cp.majorGrid", "Major grid")} checked={axis.majorGrid} onChange={(majorGrid) => onCommit({ majorGrid })} />
+        <Check label={t("cp.minorGrid", "Minor grid")} checked={axis.minorGrid} onChange={(minorGrid) => onCommit({ minorGrid })} />
       </div>
     </>
   );
@@ -484,20 +490,20 @@ function ErrorBarFields({ series, onChange, onPick }: { series: ChartSeriesDto; 
     <>
       {k.type === "constant" ? (
         <>
-          {numField("Positive", k.plus, (n) => ({ ...k, plus: n }))}
-          {numField("Negative", k.minus, (n) => ({ ...k, minus: n }))}
+          {numField(t("cp.positive", "Positive"), k.plus, (n) => ({ ...k, plus: n }))}
+          {numField(t("cp.negative", "Negative"), k.minus, (n) => ({ ...k, minus: n }))}
         </>
       ) : null}
-      {k.type === "percent" || k.type === "errorMargin" ? numField("Percent", k.percent, (n) => ({ ...k, percent: n })) : null}
-      {k.type === "stdDev" ? numField("Multiplier", k.k, (n) => ({ ...k, k: n })) : null}
+      {k.type === "percent" || k.type === "errorMargin" ? numField(t("cp.percent", "Percent"), k.percent, (n) => ({ ...k, percent: n })) : null}
+      {k.type === "stdDev" ? numField(t("cp.multiplier", "Multiplier"), k.k, (n) => ({ ...k, k: n })) : null}
       {k.type === "range" ? (
         <>
-          <RefInput value={k.plus} placeholder="Positive (range)" onCommit={(plus) => set({ ...k, plus })} onPick={() => void onPick((ref) => set({ ...k, plus: ref }))} />
-          <RefInput value={k.minus} placeholder="Negative (range)" onCommit={(minus) => set({ ...k, minus })} onPick={() => void onPick((ref) => set({ ...k, minus: ref }))} />
+          <RefInput value={k.plus} placeholder={t("cp.positiveRange", "Positive (range)")} onCommit={(plus) => set({ ...k, plus })} onPick={() => void onPick((ref) => set({ ...k, plus: ref }))} />
+          <RefInput value={k.minus} placeholder={t("cp.negativeRange", "Negative (range)")} onCommit={(minus) => set({ ...k, minus })} onPick={() => void onPick((ref) => set({ ...k, minus: ref }))} />
         </>
       ) : null}
-      <Row label="Direction">
-        <Segmented value={eb.direction} options={[{ id: "both", label: "Both" }, { id: "plus", label: "Plus" }, { id: "minus", label: "Minus" }] as { id: ChartSeriesDto["errorBars"] extends infer E ? (E extends { direction: infer D } ? D : never) : never; label: string }[]} onChange={(direction) => onChange({ ...eb, direction })} />
+      <Row label={t("cp.direction", "Direction")}>
+        <Segmented value={eb.direction} options={[{ id: "both", label: t("cp.both", "Both") }, { id: "plus", label: t("cp.plus", "Plus") }, { id: "minus", label: t("cp.minus", "Minus") }] as { id: ChartSeriesDto["errorBars"] extends infer E ? (E extends { direction: infer D } ? D : never) : never; label: string }[]} onChange={(direction) => onChange({ ...eb, direction })} />
       </Row>
     </>
   );

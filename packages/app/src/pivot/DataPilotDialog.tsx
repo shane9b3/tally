@@ -11,6 +11,7 @@ import { useState, type DragEvent } from "react";
 import { cx, useController } from "../context";
 import { a1 } from "../dataOps";
 import { t } from "../i18n";
+import { useW56Store } from "../data/store";
 import { useDocStore } from "../stores/docStore";
 import dlg from "../components/Dialogs.module.css";
 import { Check, Field, RangeField, W56Shell, parseRangeText } from "../data/W56Shell";
@@ -25,6 +26,11 @@ const AXES: readonly { area: Axis; key: string; label: string }[] = [
   { area: "col", key: "pivot.columnFields", label: "Column fields" },
   { area: "row", key: "pivot.rowFields", label: "Row fields" },
 ];
+
+const axisLabel = (area: PivotArea): string => {
+  const ax = AXES.find((a) => a.area === area);
+  return ax ? t(ax.key, ax.label) : t("pivot.dataFields", "Data fields");
+};
 
 function dragData(e: DragEvent, data: { from: PivotArea | "list"; sourceCol: number; dataIndex?: number }) {
   e.dataTransfer.setData("text/x-tally-pivot", JSON.stringify(data));
@@ -41,6 +47,7 @@ function readDrag(e: DragEvent): { from: PivotArea | "list"; sourceCol: number; 
 
 export function DataPilotDialog({ d }: { d: Extract<W56Dialog, { kind: "dataPilot" }> }) {
   const ctl = useController();
+  useW56Store((s) => s.i18nRev);
   const sheets = useDocStore((s) => s.info?.sheets ?? []);
   const [st, setSt] = useState<PivotLayoutState>(d.layout);
   const [selected, setSelected] = useState<{ area: PivotArea; sourceCol: number; dataIndex?: number } | null>(null);
@@ -51,9 +58,9 @@ export function DataPilotDialog({ d }: { d: Extract<W56Dialog, { kind: "dataPilo
   const available = availableFields(st, d.fields);
   const error = layoutError(st);
   const targetCell = parseRangeText(target);
-  const targetError = st.targetSheet !== null && !targetCell ? "Choose a target cell." : null;
+  const targetError = st.targetSheet !== null && !targetCell ? t("dp.chooseTarget", "Choose a target cell.") : null;
   const src = st.source;
-  const sourceText = src.type === "range" ? `${sheets.find((s) => s.id === src.sheet)?.name ?? "Sheet"}.${a1(src.range)}` : src.name;
+  const sourceText = src.type === "range" ? `${sheets.find((s) => s.id === src.sheet)?.name ?? t("dialog.sheet", "Sheet")}.${a1(src.range)}` : src.name;
 
   const drop = (area: PivotArea | "list") => (e: DragEvent) => {
     e.preventDefault();
@@ -92,7 +99,7 @@ export function DataPilotDialog({ d }: { d: Extract<W56Dialog, { kind: "dataPilo
   return (
     <W56Shell title={`${t("pivot.title", "DataPilot")} — ${t("pivot.layout", "Layout")}`} ok={d.existing ? t("dialog.apply", "Apply") : t("dialog.ok", "OK")} size="xwide" testId="datapilot-dialog" valid={error === null && targetError === null} onSubmit={submit}>
       <p className={dlg.lead}>
-        {t("pivot.source", "Source")}: <b>{sourceText}</b>. Drag fields into the areas, or select one and use Move to.
+        {t("pivot.source", "Source")}: <b>{sourceText}</b>. {t("dp.dragHint", "Drag fields into the areas, or select one and use Move to.")}
       </p>
       <div className={styles.layout}>
         <div className={styles.areas}>
@@ -102,7 +109,7 @@ export function DataPilotDialog({ d }: { d: Extract<W56Dialog, { kind: "dataPilo
               {st[ax.area].map((f) => (
                 <FieldChip key={f.sourceCol} label={f.name} selected={selected?.area === ax.area && selected.sourceCol === f.sourceCol} onDragStart={(e) => dragData(e, { from: ax.area, sourceCol: f.sourceCol })} onClick={() => setSelected({ area: ax.area, sourceCol: f.sourceCol })} onMove={() => setMoveMenu({ area: ax.area, sourceCol: f.sourceCol })} onRemove={() => moveTo({ from: ax.area, sourceCol: f.sourceCol }, "list")} />
               ))}
-              {st[ax.area].length === 0 ? <div className={styles.areaEmpty}>Drop a field here</div> : null}
+              {st[ax.area].length === 0 ? <div className={styles.areaEmpty}>{t("dp.dropField", "Drop a field here")}</div> : null}
             </div>
           ))}
           <div className={cx(styles.area, styles.data)} onDragOver={(e) => e.preventDefault()} onDrop={drop("data")} data-testid="pivot-area-data">
@@ -110,7 +117,7 @@ export function DataPilotDialog({ d }: { d: Extract<W56Dialog, { kind: "dataPilo
             {st.data.map((f, i) => (
               <FieldChip key={`${f.sourceCol}-${i}`} label={dataCaption(f)} selected={selected?.area === "data" && selected.dataIndex === i} onDragStart={(e) => dragData(e, { from: "data", sourceCol: f.sourceCol, dataIndex: i })} onClick={() => setSelected({ area: "data", sourceCol: f.sourceCol, dataIndex: i })} onMove={() => setMoveMenu({ area: "data", sourceCol: f.sourceCol, dataIndex: i })} onRemove={() => moveTo({ from: "data", sourceCol: f.sourceCol, dataIndex: i }, "list")} />
             ))}
-            {st.data.length === 0 ? <div className={styles.areaEmpty}>Drop the values to summarise here</div> : null}
+            {st.data.length === 0 ? <div className={styles.areaEmpty}>{t("dp.dropValues", "Drop the values to summarise here")}</div> : null}
           </div>
         </div>
         <div className={styles.fieldList} onDragOver={(e) => e.preventDefault()} onDrop={drop("list")} data-testid="pivot-field-list">
@@ -118,7 +125,7 @@ export function DataPilotDialog({ d }: { d: Extract<W56Dialog, { kind: "dataPilo
           {available.map((f) => (
             <FieldChip key={f.sourceCol} label={f.name} hint={f.numeric ? "123" : f.date ? "📅" : "abc"} onDragStart={(e) => dragData(e, { from: "list", sourceCol: f.sourceCol })} onClick={() => setSelected(null)} onMove={() => setMoveMenu({ area: "list", sourceCol: f.sourceCol })} onAdd={{ row: () => moveTo({ from: "list", sourceCol: f.sourceCol }, "row"), col: () => moveTo({ from: "list", sourceCol: f.sourceCol }, "col"), data: () => moveTo({ from: "list", sourceCol: f.sourceCol }, "data") }} />
           ))}
-          {available.length === 0 ? <div className={styles.areaEmpty}>Every field is placed.</div> : null}
+          {available.length === 0 ? <div className={styles.areaEmpty}>{t("dp.allPlaced", "Every field is placed.")}</div> : null}
         </div>
       </div>
       {moveMenu ? (
@@ -126,7 +133,7 @@ export function DataPilotDialog({ d }: { d: Extract<W56Dialog, { kind: "dataPilo
           <span className={w56.muted}>{t("pivot.moveTo", "Move to…")}</span>
           {(["page", "col", "row", "data", "list"] as const).map((area) => (
             <button key={area} type="button" role="menuitem" className={w56.chip} disabled={moveMenu.area === area} onClick={() => moveTo({ from: moveMenu.area, sourceCol: moveMenu.sourceCol, ...(moveMenu.dataIndex !== undefined ? { dataIndex: moveMenu.dataIndex } : {}) }, area)} data-testid={`pivot-move-${area}`}>
-              {area === "list" ? "Field list" : AXES.find((a) => a.area === area)?.label ?? "Data fields"}
+              {area === "list" ? t("dp.fieldList", "Field list") : axisLabel(area)}
             </button>
           ))}
           <button type="button" className={dlg.rowBtn} onClick={() => setMoveMenu(null)}>
@@ -151,7 +158,7 @@ export function DataPilotDialog({ d }: { d: Extract<W56Dialog, { kind: "dataPilo
               ))}
             </select>
           </Field>
-          {st.targetSheet !== null ? <RangeField label="Target cell" value={target} onChange={setTarget} testId="pivot-target" placeholder="H1" /> : null}
+          {st.targetSheet !== null ? <RangeField label={t("dp.targetCell", "Target cell")} value={target} onChange={setTarget} testId="pivot-target" placeholder="H1" /> : null}
           <div className={dlg.optionGrid}>
             <Check label={t("pivot.ignoreEmpty", "Ignore empty rows")} checked={st.ignoreEmptyRows} onChange={(v) => setSt({ ...st, ignoreEmptyRows: v })} />
             <Check label={t("pivot.identifyCategories", "Identify categories")} checked={st.identifyCategories} onChange={(v) => setSt({ ...st, identifyCategories: v })} />
@@ -160,10 +167,10 @@ export function DataPilotDialog({ d }: { d: Extract<W56Dialog, { kind: "dataPilo
             <Check label={t("pivot.addFilter", "Add filter")} checked={st.showFilterButton} onChange={(v) => setSt({ ...st, showFilterButton: v })} />
             <Check label={t("pivot.enableDrillDown", "Enable drill to details")} checked={st.drillDown} onChange={(v) => setSt({ ...st, drillDown: v })} />
           </div>
-          <Field label="Data pseudo-field orientation">
+          <Field label={t("dp.dataLayout", "Data pseudo-field orientation")}>
             <select className={dlg.select} value={st.dataLayout} onChange={(e) => setSt({ ...st, dataLayout: e.target.value as "row" | "column" })}>
-              <option value="column">Column</option>
-              <option value="row">Row</option>
+              <option value="column">{t("dialog.column", "Column")}</option>
+              <option value="row">{t("dialog.row", "Row")}</option>
             </select>
           </Field>
         </div>
@@ -184,22 +191,22 @@ function FieldChip({ label, hint, selected, onDragStart, onClick, onMove, onRemo
       {hint ? <span className={styles.chipHint}>{hint}</span> : null}
       {onAdd ? (
         <span className={styles.chipBtns}>
-          <button type="button" title="Add to row fields" aria-label={`${label}: add to rows`} onClick={(e) => (e.stopPropagation(), onAdd.row())} data-testid={`pivot-add-row-${label}`}>
+          <button type="button" title={t("dp.addToRowsTitle", "Add to row fields")} aria-label={t("dp.addToRowsAria", "{name}: add to rows", { name: label })} onClick={(e) => (e.stopPropagation(), onAdd.row())} data-testid={`pivot-add-row-${label}`}>
             R
           </button>
-          <button type="button" title="Add to column fields" aria-label={`${label}: add to columns`} onClick={(e) => (e.stopPropagation(), onAdd.col())} data-testid={`pivot-add-col-${label}`}>
+          <button type="button" title={t("dp.addToColsTitle", "Add to column fields")} aria-label={t("dp.addToColsAria", "{name}: add to columns", { name: label })} onClick={(e) => (e.stopPropagation(), onAdd.col())} data-testid={`pivot-add-col-${label}`}>
             C
           </button>
-          <button type="button" title="Add to data fields" aria-label={`${label}: add to data`} onClick={(e) => (e.stopPropagation(), onAdd.data())} data-testid={`pivot-add-data-${label}`}>
+          <button type="button" title={t("dp.addToDataTitle", "Add to data fields")} aria-label={t("dp.addToDataAria", "{name}: add to data", { name: label })} onClick={(e) => (e.stopPropagation(), onAdd.data())} data-testid={`pivot-add-data-${label}`}>
             Σ
           </button>
         </span>
       ) : null}
-      <button type="button" className={styles.chipMenu} title={t("pivot.moveTo", "Move to…")} aria-label={`${label}: move to`} onClick={(e) => (e.stopPropagation(), onMove())}>
+      <button type="button" className={styles.chipMenu} title={t("pivot.moveTo", "Move to…")} aria-label={t("dp.moveToAria", "{name}: move to", { name: label })} onClick={(e) => (e.stopPropagation(), onMove())}>
         ⋯
       </button>
       {onRemove ? (
-        <button type="button" className={styles.chipMenu} title={t("dialog.remove", "Remove")} aria-label={`${label}: remove`} onClick={(e) => (e.stopPropagation(), onRemove())}>
+        <button type="button" className={styles.chipMenu} title={t("dialog.remove", "Remove")} aria-label={t("dp.removeAria", "{name}: remove", { name: label })} onClick={(e) => (e.stopPropagation(), onRemove())}>
           ×
         </button>
       ) : null}
@@ -225,22 +232,22 @@ function DataFieldOptions({ f, index, st, fields, onChange }: { f: LayoutDataFie
             ))}
           </select>
         </Field>
-        <Field label="Caption (optional)">
+        <Field label={t("dp.caption", "Caption (optional)")}>
           <input className={dlg.input} value={f.caption ?? ""} placeholder={dataCaption({ ...f, caption: null })} onChange={(e) => onChange({ caption: e.target.value === "" ? null : e.target.value })} />
         </Field>
-        <Field label="Displayed value">
+        <Field label={t("dp.displayedValue", "Displayed value")}>
           <select className={dlg.select} value={f.showAs?.kind ?? ""} onChange={(e) => onChange({ showAs: e.target.value === "" ? null : { kind: e.target.value as ShowAsKind, baseField: f.showAs?.baseField ?? axisFields[0]?.sourceCol ?? null, baseItem: f.showAs?.baseItem ?? null } })}>
-            <option value="">Normal</option>
+            <option value="">{t("dp.normal", "Normal")}</option>
             {SHOW_AS.map((s) => (
               <option key={s.kind} value={s.kind}>
-                {s.label}
+                {t(`dp.showAs.${s.kind}`, s.label)}
               </option>
             ))}
           </select>
         </Field>
         {f.showAs && (f.showAs.kind === "difference" || f.showAs.kind === "percentOf" || f.showAs.kind === "percentDifference" || f.showAs.kind === "runningTotal") ? (
           <>
-            <Field label="Base field">
+            <Field label={t("dp.baseField", "Base field")}>
               <select className={dlg.select} value={f.showAs.baseField === null ? "" : String(f.showAs.baseField)} onChange={(e) => onChange({ showAs: { ...f.showAs!, baseField: e.target.value === "" ? null : Number(e.target.value) } })}>
                 {axisFields.map((a) => (
                   <option key={a.sourceCol} value={String(a.sourceCol)}>
@@ -250,10 +257,10 @@ function DataFieldOptions({ f, index, st, fields, onChange }: { f: LayoutDataFie
               </select>
             </Field>
             {f.showAs.kind !== "runningTotal" ? (
-              <Field label="Base item">
+              <Field label={t("dp.baseItem", "Base item")}>
                 <select className={dlg.select} value={f.showAs.baseItem ?? "__prev"} onChange={(e) => onChange({ showAs: { ...f.showAs!, baseItem: e.target.value } })}>
-                  <option value="__prev">- previous item -</option>
-                  <option value="__next">- next item -</option>
+                  <option value="__prev">{t("dp.prevItem", "- previous item -")}</option>
+                  <option value="__next">{t("dp.nextItem", "- next item -")}</option>
                   {items.map((it) => (
                     <option key={it.text} value={it.text}>
                       {it.text}
@@ -277,12 +284,12 @@ function FieldOptions({ f, area, fields, st, onChange }: { f: LayoutField; area:
   return (
     <div className={styles.options} data-testid="pivot-field-options">
       <div className={w56.section}>
-        Field: {f.name} ({AXES.find((a) => a.area === area)?.label})
+        {t("dp.fieldHeader", "Field: {name} ({area})", { name: f.name, area: axisLabel(area) })}
       </div>
       {area === "page" ? (
-        <Field label="Selected item">
+        <Field label={t("dp.selectedItem", "Selected item")}>
           <select className={dlg.select} value={f.pageItem ?? ""} onChange={(e) => onChange({ pageItem: e.target.value === "" ? null : e.target.value })}>
-            <option value="">- all -</option>
+            <option value="">{t("dp.all", "- all -")}</option>
             {items.map((it) => (
               <option key={it.text} value={it.text}>
                 {it.text}
@@ -292,28 +299,28 @@ function FieldOptions({ f, area, fields, st, onChange }: { f: LayoutField; area:
         </Field>
       ) : (
         <div className={w56.grid3}>
-          <Field label="Subtotals">
+          <Field label={t("subtotals.title", "Subtotals")}>
             <select className={dlg.select} value={subtotalType} onChange={(e) => onChange({ subtotals: e.target.value === "auto" ? { type: "auto" } : e.target.value === "none" ? { type: "none" } : { type: "custom", fns: ["sum"] } })} data-testid="pivot-subtotals">
-              <option value="auto">Automatic</option>
-              <option value="none">None</option>
-              <option value="custom">User-defined</option>
+              <option value="auto">{t("cp.automatic", "Automatic")}</option>
+              <option value="none">{t("dp.noneSubtotals", "None")}</option>
+              <option value="custom">{t("dp.userDefined", "User-defined")}</option>
             </select>
           </Field>
-          <Field label="Sort by">
+          <Field label={t("dp.sortBy", "Sort by")}>
             <select className={dlg.select} value={f.sort.type === "name" ? (f.sort.ascending ? "nameAsc" : "nameDesc") : f.sort.type === "data" ? (f.sort.ascending ? "dataAsc" : "dataDesc") : f.sort.type} onChange={(e) => onChange({ sort: e.target.value === "none" ? { type: "none" } : e.target.value === "manual" ? { type: "manual", order: items.map((i) => i.text) } : e.target.value.startsWith("name") ? { type: "name", ascending: e.target.value === "nameAsc" } : { type: "data", dataField: 0, ascending: e.target.value === "dataAsc" } })}>
-              <option value="nameAsc">Name, ascending</option>
-              <option value="nameDesc">Name, descending</option>
-              <option value="dataAsc">Data field, ascending</option>
-              <option value="dataDesc">Data field, descending</option>
-              <option value="manual">Manual</option>
-              <option value="none">None (source order)</option>
+              <option value="nameAsc">{t("dp.nameAsc", "Name, ascending")}</option>
+              <option value="nameDesc">{t("dp.nameDesc", "Name, descending")}</option>
+              <option value="dataAsc">{t("dp.dataAsc", "Data field, ascending")}</option>
+              <option value="dataDesc">{t("dp.dataDesc", "Data field, descending")}</option>
+              <option value="manual">{t("dp.manual", "Manual")}</option>
+              <option value="none">{t("dp.sortNone", "None (source order)")}</option>
             </select>
           </Field>
-          <Field label="Layout">
+          <Field label={t("pivot.layout", "Layout")}>
             <select className={dlg.select} value={f.layout} onChange={(e) => onChange({ layout: e.target.value as PivotLayout })}>
               {PIVOT_LAYOUTS.map((l) => (
                 <option key={l.layout} value={l.layout}>
-                  {l.label}
+                  {t(`dp.layout.${l.layout}`, l.label)}
                 </option>
               ))}
             </select>
@@ -334,14 +341,14 @@ function FieldOptions({ f, area, fields, st, onChange }: { f: LayoutField; area:
       ) : null}
       {area !== "page" ? (
         <div className={dlg.optionGrid}>
-          <Check label="Show items without data" checked={f.showEmpty} onChange={(v) => onChange({ showEmpty: v })} />
-          <Check label="Empty line after each item" checked={f.emptyLineAfter} onChange={(v) => onChange({ emptyLineAfter: v })} />
-          <Check label="Show automatically (top N)" checked={f.autoShow !== null} onChange={(v) => onChange({ autoShow: v ? { top: true, count: 5, dataField: 0 } : null })} />
+          <Check label={t("dp.showEmpty", "Show items without data")} checked={f.showEmpty} onChange={(v) => onChange({ showEmpty: v })} />
+          <Check label={t("dp.emptyLineAfter", "Empty line after each item")} checked={f.emptyLineAfter} onChange={(v) => onChange({ emptyLineAfter: v })} />
+          <Check label={t("dp.autoShow", "Show automatically (top N)")} checked={f.autoShow !== null} onChange={(v) => onChange({ autoShow: v ? { top: true, count: 5, dataField: 0 } : null })} />
           {f.autoShow ? (
             <span className={w56.row}>
               <select className={dlg.selectSmall} value={f.autoShow.top ? "top" : "bottom"} onChange={(e) => onChange({ autoShow: { ...f.autoShow!, top: e.target.value === "top" } })}>
-                <option value="top">Top</option>
-                <option value="bottom">Bottom</option>
+                <option value="top">{t("dp.top", "Top")}</option>
+                <option value="bottom">{t("dp.bottom", "Bottom")}</option>
               </select>
               <input className={dlg.input} style={{ width: 60, height: 26 }} type="number" min={1} value={f.autoShow.count} onChange={(e) => onChange({ autoShow: { ...f.autoShow!, count: Math.max(1, Number(e.target.value) || 1) } })} />
               <select className={dlg.selectSmall} value={String(f.autoShow.dataField)} onChange={(e) => onChange({ autoShow: { ...f.autoShow!, dataField: Number(e.target.value) } })}>
@@ -357,13 +364,13 @@ function FieldOptions({ f, area, fields, st, onChange }: { f: LayoutField; area:
       ) : null}
       {items.length > 0 && items.length <= 200 ? (
         <>
-          <div className={w56.section}>Hide items</div>
+          <div className={w56.section}>{t("dp.hideItems", "Hide items")}</div>
           <div className={w56.chips}>
             {items.map((it) => {
               const hidden = f.hiddenItems.includes(it.text);
               return (
-                <button key={it.text} type="button" className={hidden ? w56.chip : w56.chipOn} aria-pressed={!hidden} title={hidden ? "Hidden" : "Shown"} onClick={() => toggleHidden(it.text)}>
-                  {it.text === "" ? "(empty)" : it.text} <span className={w56.muted}>{it.count}</span>
+                <button key={it.text} type="button" className={hidden ? w56.chip : w56.chipOn} aria-pressed={!hidden} title={hidden ? t("dp.hidden", "Hidden") : t("dp.shown", "Shown")} onClick={() => toggleHidden(it.text)}>
+                  {it.text === "" ? t("dp.empty", "(empty)") : it.text} <span className={w56.muted}>{it.count}</span>
                 </button>
               );
             })}

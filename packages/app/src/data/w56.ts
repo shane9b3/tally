@@ -362,7 +362,7 @@ export class W56Features {
     const ops: Op[] = [];
     if (targetSheet === null) {
       // A new sheet: add it first (one undo step with the pivot).
-      const res = await this.ctl.apply("Insert sheet", [{ type: "addSheet", name: null, index: null }]);
+      const res = await this.ctl.apply(t("cmd.sheet.insert", "Insert sheet"), [{ type: "addSheet", name: null, index: null }]);
       const added = res?.info?.sheets.find((s) => !useDocStore.getState().info?.sheets.some((o) => o.id === s.id)) ?? res?.info?.sheets[res.info.sheets.length - 1];
       if (!res || !added) return false;
       targetSheet = added.id;
@@ -370,7 +370,7 @@ export class W56Features {
     }
     const dto = toPivotDto(layout, targetSheet, existing?.id ?? 0, existing?.name ?? "");
     ops.push(existing ? { type: "updatePivot", id: existing.id, pivot: dto, overwrite } : { type: "createPivot", pivot: dto, overwrite });
-    const res = await this.ctl.apply(existing ? "Update pivot table" : "Create pivot table", ops);
+    const res = await this.ctl.apply(existing ? t("msg.undo.updatePivotTable", "Update pivot table") : t("msg.undo.createPivotTable", "Create pivot table"), ops);
     if (!res) return false;
     const notEmpty = res.errors.find((e) => e.code === "target_not_empty");
     if (notEmpty) {
@@ -395,7 +395,7 @@ export class W56Features {
       this.toast("info", "Put the cursor inside a pivot table to refresh it.");
       return;
     }
-    const res = await this.ctl.apply("Refresh pivot table", [{ type: "refreshPivot", id: p.id, overwrite }]);
+    const res = await this.ctl.apply(t("cmd.data.refreshPivot", "Refresh pivot table"), [{ type: "refreshPivot", id: p.id, overwrite }]);
     if (res?.errors.some((e) => e.code === "target_not_empty")) {
       useUiStore.getState().openDialog({
         kind: "confirm",
@@ -410,7 +410,7 @@ export class W56Features {
 
   async deletePivot(p: PivotDto | null = this.activePivot(), clearOutput = true): Promise<void> {
     if (!p) return;
-    await this.ctl.apply("Delete pivot table", [{ type: "deletePivot", id: p.id, clearOutput }]);
+    await this.ctl.apply(t("pivot.deleteTable", "Delete pivot table"), [{ type: "deletePivot", id: p.id, clearOutput }]);
   }
 
   /**
@@ -424,7 +424,7 @@ export class W56Features {
     if (!info) return false;
     void this.client.pivotAt(info.doc, this.sheet, cell.r, cell.c).then(
       (hit) => {
-        if (hit && (hit.role === "data" || hit.role === "total")) void this.ctl.apply("Drill down", [{ type: "pivotDrillDown", id: hit.pivot, r: cell.r, c: cell.c }]);
+        if (hit && (hit.role === "data" || hit.role === "total")) void this.ctl.apply(t("msg.undo.drillDown", "Drill down"), [{ type: "pivotDrillDown", id: hit.pivot, r: cell.r, c: cell.c }]);
         else this.ctl.startEdit(cell, undefined, "grid");
       },
       () => this.ctl.startEdit(cell, undefined, "grid"),
@@ -460,7 +460,7 @@ export class W56Features {
   }
 
   async resetFilter(): Promise<void> {
-    await this.ctl.apply("Reset filter", [{ type: "resetFilter", sheet: this.sheet }]);
+    await this.ctl.apply(t("cmd.data.resetFilter", "Reset filter"), [{ type: "resetFilter", sheet: this.sheet }]);
     await this.ctl.refreshFilter();
   }
 
@@ -511,16 +511,16 @@ export class W56Features {
   }
 
   async createScenario(s: ScenarioDto): Promise<boolean> {
-    const res = await this.ctl.apply("Create scenario", [{ type: "createScenario", sheet: this.sheet, scenario: s }]);
+    const res = await this.ctl.apply(t("msg.undo.createScenario", "Create scenario"), [{ type: "createScenario", sheet: this.sheet, scenario: s }]);
     return res !== null && res.errors.length === 0;
   }
 
   async showScenario(id: number): Promise<void> {
-    await this.ctl.apply("Show scenario", [{ type: "showScenario", sheet: this.sheet, id }]);
+    await this.ctl.apply(t("msg.undo.showScenario", "Show scenario"), [{ type: "showScenario", sheet: this.sheet, id }]);
   }
 
   async deleteScenario(id: number): Promise<void> {
-    await this.ctl.apply("Delete scenario", [{ type: "deleteScenario", sheet: this.sheet, id }]);
+    await this.ctl.apply(t("msg.undo.deleteScenario", "Delete scenario"), [{ type: "deleteScenario", sheet: this.sheet, id }]);
   }
 
   async openDefineDatabaseRange(): Promise<void> {
@@ -534,7 +534,7 @@ export class W56Features {
   }
 
   async deleteDatabaseRange(name: string): Promise<void> {
-    await this.ctl.apply("Delete database range", [{ type: "deleteDatabaseRange", name }]);
+    await this.ctl.apply(t("msg.undo.deleteDatabaseRange", "Delete database range"), [{ type: "deleteDatabaseRange", name }]);
   }
 
   openCreateNames(): void {
@@ -582,7 +582,7 @@ export class W56Features {
   }
 
   async setCustomLists(lists: string[][]): Promise<void> {
-    const res = await this.ctl.apply("Sort lists", [{ type: "setCustomSortLists", lists: lists.map((l) => [...l]) }]);
+    const res = await this.ctl.apply(t("od.tabSortLists", "Sort lists"), [{ type: "setCustomSortLists", lists: lists.map((l) => [...l]) }]);
     if (res && res.errors.length === 0) this.lists = null;
   }
 
@@ -592,7 +592,7 @@ export class W56Features {
   }
 
   async deleteContents(ranges: readonly RangeDto[], what: DeleteContentsFlags): Promise<void> {
-    await this.ctl.apply("Delete contents", [deleteContentsOp(this.sheet, ranges, what)]);
+    await this.ctl.apply(t("msg.undo.deleteContents", "Delete contents"), [deleteContentsOp(this.sheet, ranges, what)]);
   }
 
   openMultipleOperations(): void {
@@ -613,11 +613,11 @@ export class W56Features {
   }
 
   async insertCells(range: RangeDto, shift: "down" | "right"): Promise<void> {
-    await this.ctl.apply("Insert cells", [{ type: "insertCells", sheet: this.sheet, range: { ...range }, shift }]);
+    await this.ctl.apply(t("msg.undo.insertCells", "Insert cells"), [{ type: "insertCells", sheet: this.sheet, range: { ...range }, shift }]);
   }
 
   async deleteCells(range: RangeDto, shift: "up" | "left"): Promise<void> {
-    await this.ctl.apply("Delete cells", [{ type: "deleteCells", sheet: this.sheet, range: { ...range }, shift }], cellSelection({ r: range.r0, c: range.c0 }));
+    await this.ctl.apply(t("msg.undo.deleteCells", "Delete cells"), [{ type: "deleteCells", sheet: this.sheet, range: { ...range }, shift }], cellSelection({ r: range.r0, c: range.c0 }));
   }
 
   /** Applies any op list from a dialog (one undo step). */
@@ -648,7 +648,7 @@ export class W56Features {
           }
           const input = mergedContent(texts, range);
           const tl = { r: range.r0, c: range.c0 };
-          await this.ctl.apply("Merge cells", [
+          await this.ctl.apply(t("cmd.format.merge", "Merge cells"), [
             { type: "setCellInput", sheet, r: tl.r, c: tl.c, input },
             { type: "mergeCells", sheet, range: { ...range } },
           ], { range: { ...range }, active: tl, anchor: tl });
@@ -672,7 +672,7 @@ export class W56Features {
 
   async applySolverResult(res: SolverResult): Promise<void> {
     const ops: Op[] = res.values.map((v) => ({ type: "setCellInput", sheet: v.cell.sheet, r: v.cell.r, c: v.cell.c, input: String(Number(v.value.toPrecision(15))) }));
-    if (ops.length > 0) await this.ctl.apply("Solver", ops);
+    if (ops.length > 0) await this.ctl.apply(t("solver.title", "Solver"), ops);
   }
 
   // -- sheets ----------------------------------------------------------------------
@@ -685,7 +685,7 @@ export class W56Features {
   }
 
   async copySheet(sheet: number, name: string, index: number | null): Promise<void> {
-    await this.ctl.apply("Copy sheet", [{ type: "copySheet", sheet, name: name.trim() === "" ? null : name.trim(), index }]);
+    await this.ctl.apply(t("msg.undo.copySheet", "Copy sheet"), [{ type: "copySheet", sheet, name: name.trim() === "" ? null : name.trim(), index }]);
   }
 
   async hideSheet(sheet = this.sheet): Promise<void> {
@@ -695,7 +695,7 @@ export class W56Features {
       this.toast("info", "The last visible sheet cannot be hidden.");
       return;
     }
-    await this.ctl.apply("Hide sheet", [{ type: "setSheetHidden", sheet, hidden: true }]);
+    await this.ctl.apply(t("cmd.sheet.hide", "Hide sheet"), [{ type: "setSheetHidden", sheet, hidden: true }]);
     if (sheet === this.sheet) {
       const next = useDocStore.getState().info?.sheets.find((s) => !s.hidden && s.id !== sheet);
       if (next) this.ctl.showSheet(next.id);
@@ -713,7 +713,7 @@ export class W56Features {
 
   async showSheets(ids: number[]): Promise<void> {
     if (ids.length === 0) return;
-    await this.ctl.apply("Show sheet", ids.map((sheet): Op => ({ type: "setSheetHidden", sheet, hidden: false })));
+    await this.ctl.apply(t("msg.undo.showSheet", "Show sheet"), ids.map((sheet): Op => ({ type: "setSheetHidden", sheet, hidden: false })));
     const first = ids[0];
     if (first !== undefined) this.ctl.showSheet(first);
   }
@@ -725,7 +725,7 @@ export class W56Features {
   }
 
   async setTabColor(sheet: number, color: number | null): Promise<void> {
-    await this.ctl.apply("Tab colour", [{ type: "setTabColor", sheet, color }]);
+    await this.ctl.apply(t("dd.tabColour", "Tab colour"), [{ type: "setTabColor", sheet, color }]);
   }
 
   /** Extra items of the sheet-tab context menu. */
@@ -753,7 +753,7 @@ export class W56Features {
     if (p) {
       out.push(
         { id: "pivotRefresh", label: t("pivot.refresh", "Refresh"), separator: true, onSelect: () => void this.refreshPivot(p) },
-        { id: "pivotEdit", label: t("pivot.layout", "Layout…"), onSelect: () => void this.openDataPilot(p) },
+        { id: "pivotEdit", label: `${t("pivot.layout", "Layout")}…`, onSelect: () => void this.openDataPilot(p) },
         { id: "pivotDelete", label: t("pivot.deleteTable", "Delete pivot table"), danger: true, onSelect: () => void this.deletePivot(p) },
       );
     }
@@ -779,7 +779,7 @@ export class W56Features {
   }
 
   async applyCellStyle(name: string, ranges: RangeDto[] = this.ctl.ranges): Promise<void> {
-    await this.ctl.apply(`Style: ${name}`, [{ type: "applyCellStyle", sheet: this.sheet, ranges: ranges.map((r) => ({ ...r })), name }]);
+    await this.ctl.apply(t("msg.undo.style", "Style: {name}", { name }), [{ type: "applyCellStyle", sheet: this.sheet, ranges: ranges.map((r) => ({ ...r })), name }]);
   }
 
   /** "New style from selection": the active cell's resolved style under a new name. */
@@ -800,13 +800,13 @@ export class W56Features {
   }
 
   async defineCellStyle(s: CellStyleDto): Promise<boolean> {
-    const res = await this.ctl.apply("Cell style", [{ type: "defineCellStyle", style: s }]);
+    const res = await this.ctl.apply(t("msg.undo.cellStyle", "Cell style"), [{ type: "defineCellStyle", style: s }]);
     await this.refreshCellStyles();
     return res !== null && res.errors.length === 0;
   }
 
   async deleteCellStyle(name: string): Promise<void> {
-    await this.ctl.apply("Delete cell style", [{ type: "deleteCellStyle", name }]);
+    await this.ctl.apply(t("msg.undo.deleteCellStyle", "Delete cell style"), [{ type: "deleteCellStyle", name }]);
     await this.refreshCellStyles();
   }
 
@@ -824,7 +824,7 @@ export class W56Features {
   }
 
   async applyAutoFormat(range: RangeDto, preset: string, options: Parameters<typeof this.autoFormatOp>[2]): Promise<void> {
-    await this.ctl.apply(`AutoFormat ${preset}`, [this.autoFormatOp(range, preset, options)]);
+    await this.ctl.apply(t("msg.undo.autoFormat", "AutoFormat {name}", { name: preset }), [this.autoFormatOp(range, preset, options)]);
   }
 
   private autoFormatOp(range: RangeDto, preset: string, options: Extract<Op, { type: "applyAutoFormat" }>["options"]): Op {
@@ -851,7 +851,7 @@ export class W56Features {
     const changes = Object.entries(patch).some(([, v]) => v !== null && v !== undefined);
     if (changes) ops.push({ type: "applyStyle", sheet: this.sheet, ranges: ranges.map((r) => ({ ...r })), patch });
     if (protection && (protection.locked !== null || protection.hiddenFormula !== null)) ops.push({ type: "setCellProtection", sheet: this.sheet, ranges: ranges.map((r) => ({ ...r })), locked: protection.locked, hiddenFormula: protection.hiddenFormula });
-    if (ops.length > 0) await this.ctl.apply("Format cells", ops);
+    if (ops.length > 0) await this.ctl.apply(t("lbl.protect.opt.formatCells", "Format cells"), ops);
   }
 
   // -- view options and zoom ---------------------------------------------------------
@@ -900,7 +900,7 @@ export class W56Features {
 
   async setViewOptions(v: ViewOptionsDto): Promise<void> {
     const { split: _split, ...options } = v;
-    const res = await this.ctl.apply("View options", [{ type: "setViewOptions", sheet: this.sheet, options: { ...DEFAULT_VIEW, ...options } }]);
+    const res = await this.ctl.apply(t("msg.undo.viewOptions", "View options"), [{ type: "setViewOptions", sheet: this.sheet, options: { ...DEFAULT_VIEW, ...options } }]);
     // The engine's answer is authoritative (afterResult re-reads it too; this covers results without a version bump).
     if (res && res.errors.length === 0) await this.refreshView(false);
   }
@@ -990,7 +990,7 @@ export class W56Features {
   }
 
   async setCalcSettings(settings: CalcSettingsDto): Promise<boolean> {
-    const res = await this.ctl.apply("Calculation settings", [{ type: "setCalcSettings", settings }]);
+    const res = await this.ctl.apply(t("msg.undo.calculationSettings", "Calculation settings"), [{ type: "setCalcSettings", settings }]);
     return res !== null && res.errors.length === 0;
   }
 
@@ -1093,7 +1093,7 @@ export class W56Features {
       this.store.setGhost(null);
       return;
     }
-    await this.ctl.apply("Choose from list", [{ type: "setCellInput", sheet: this.sheet, r: cell.r, c: cell.c, input: item }]);
+    await this.ctl.apply(t("msg.undo.chooseFromList", "Choose from list"), [{ type: "setCellInput", sheet: this.sheet, r: cell.r, c: cell.c, input: item }]);
     this.ctl.focusGrid();
   }
 
@@ -1269,7 +1269,7 @@ export class W56Features {
     const a = sel.active;
     const input = (await this.client.cellEditInfo(this.doc, this.sheet, a.r, a.c).catch(() => null))?.input ?? "";
     const rows = Array.from({ length: Math.min(r.r1 - r.r0 + 1, 10_000) }, () => Array.from({ length: Math.min(r.c1 - r.c0 + 1, 1_000) }, () => input));
-    await this.ctl.apply("Fill selection", [{ type: "setRangeInputs", sheet: this.sheet, r: r.r0, c: r.c0, rows }]);
+    await this.ctl.apply(t("msg.undo.fillSelection", "Fill selection"), [{ type: "setRangeInputs", sheet: this.sheet, r: r.r0, c: r.c0, rows }]);
   }
 
   /** ⌥ + arrows: the active row/column grows or shrinks; ⇧ fits it. */

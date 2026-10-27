@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { useController } from "../context";
 import { assistFor, signatureAt, splitSignature } from "../formulaEdit";
+import { t } from "../i18n";
 import { useEditStore } from "../stores/editStore";
 import { useFunctionsStore } from "../stores/functionsStore";
 import styles from "./FormulaAssist.module.css";
@@ -50,7 +51,7 @@ export function FormulaAssist() {
     const active = Math.min(index, list.items.length - 1);
     const current = list.items[active];
     return (
-      <div className={styles.popup} style={pos} role="listbox" aria-label="Functions" data-testid="fn-autocomplete">
+      <div className={styles.popup} style={pos} role="listbox" aria-label={t("wizard.functions", "Functions")} data-testid="fn-autocomplete">
         {list.items.map((f, i) => (
           <div
             key={f.name}
@@ -75,7 +76,7 @@ export function FormulaAssist() {
             <code className={styles.signature}>{current.signature}</code>
             <div className={styles.description}>{current.description}</div>
             <div className={styles.keys}>
-              <kbd>Tab</kbd> insert · <kbd>Esc</kbd> close
+              <kbd>Tab</kbd> {t("formulaUi.assistInsert", "insert")} · <kbd>Esc</kbd> {t("formulaUi.assistClose", "close")}
             </div>
           </div>
         ) : null}

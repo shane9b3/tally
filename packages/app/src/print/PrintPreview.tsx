@@ -9,7 +9,7 @@ import { useController } from "../context";
 import { t } from "../i18n";
 import { useReturnFocus, useTitleId } from "../components/dialogA11y";
 import { trapTab } from "../components/trapTab";
-import { dpiFor, fitWidthZoom, fitZoom, pageLabel, paperPx } from "./printReducer";
+import { dpiFor, fitWidthZoom, fitZoom, paperPx } from "./printReducer";
 import { usePrintStore } from "./printStore";
 import styles from "./PrintPreview.module.css";
 
@@ -77,31 +77,31 @@ function Preview({ inset }: { inset: boolean }) {
       }}
     >
       <div className={inset ? `${styles.bar} ${styles.inset}` : styles.bar} data-tauri-drag-region>
-        <span id={titleId} className={styles.barTitle}>{t("print.preview", "Print preview")}</span>
-        <button type="button" className={styles.icon} aria-label="Previous page" disabled={page <= 0} onClick={() => print.stepPage(-1)}>
+        <span id={titleId} className={styles.barTitle}>{t("printPreview.title", "Print preview")}</span>
+        <button type="button" className={styles.icon} aria-label={t("printPreview.prev", "Previous page")} disabled={page <= 0} onClick={() => print.stepPage(-1)}>
           ‹
         </button>
         <span className={styles.pageLabel} data-testid="print-page-label">
-          {status === "loading" && !layout ? "Preparing…" : pageLabel(page, count)}
+          {status === "loading" && !layout ? t("printPreview.preparing", "Preparing…") : count === 0 ? t("printPreview.noPages", "No pages") : t("print.pageOf", "Page {n} of {total}", { n: page + 1, total: count })}
         </span>
-        <button type="button" className={styles.icon} aria-label="Next page" disabled={page >= count - 1} onClick={() => print.stepPage(1)}>
+        <button type="button" className={styles.icon} aria-label={t("printPreview.next", "Next page")} disabled={page >= count - 1} onClick={() => print.stepPage(1)}>
           ›
         </button>
         <span className={styles.spacer} />
-        <button type="button" className={styles.icon} aria-label="Zoom out" onClick={() => print.zoomBy(-1)}>
+        <button type="button" className={styles.icon} aria-label={t("cmd.view.zoomOut", "Zoom out")} onClick={() => print.zoomBy(-1)}>
           −
         </button>
         <span className={styles.zoom} data-testid="print-zoom">
           {Math.round(zoom * 100)}%
         </span>
-        <button type="button" className={styles.icon} aria-label="Zoom in" onClick={() => print.zoomBy(1)}>
+        <button type="button" className={styles.icon} aria-label={t("cmd.view.zoomIn", "Zoom in")} onClick={() => print.zoomBy(1)}>
           +
         </button>
         <button type="button" className={styles.btn} disabled={!cur} onClick={() => cur && print.setZoom(fitWidthZoom(cur.paperMm, viewport()))}>
-          Fit width
+          {t("printPreview.fitWidth", "Fit width")}
         </button>
         <button type="button" className={styles.btn} disabled={!cur} onClick={() => cur && print.setZoom(fitZoom(cur.paperMm, viewport()))}>
-          Whole page
+          {t("printPreview.wholePage", "Whole page")}
         </button>
         <span className={styles.spacer} />
         <button type="button" className={styles.btn} onClick={() => void ctl.v3.openPageSetup()}>
@@ -113,15 +113,15 @@ function Preview({ inset }: { inset: boolean }) {
         <button type="button" className={styles.primary} data-testid="print-print" onClick={() => void print.print()}>
           {t("cmd.file.print", "Print…")}
         </button>
-        <button type="button" className={styles.btn} aria-label="Close print preview" data-testid="print-close" onClick={() => print.closePreview()}>
-          Close
+        <button type="button" className={styles.btn} aria-label={t("printPreview.close", "Close print preview")} data-testid="print-close" onClick={() => print.closePreview()}>
+          {t("dialog.close", "Close")}
         </button>
       </div>
       <div className={styles.main}>
-        <nav className={styles.thumbs} aria-label="Pages" data-testid="print-thumbs">
+        <nav className={styles.thumbs} aria-label={t("print.pages", "Pages")} data-testid="print-thumbs">
           {layout?.pages.map((p) => (
             <button key={p.index} type="button" className={p.index === page ? styles.thumbOn : styles.thumb} aria-current={p.index === page ? "page" : undefined} onClick={() => print.goToPage(p.index)}>
-              {thumbs[p.index] ? <img src={thumbs[p.index]} alt={`Page ${p.number}`} /> : <span className={styles.thumbBlank} />}
+              {thumbs[p.index] ? <img src={thumbs[p.index]} alt={t("printPreview.pageN", "Page {n}", { n: p.number })} /> : <span className={styles.thumbBlank} />}
               <span>{p.number}</span>
             </button>
           ))}
@@ -129,7 +129,7 @@ function Preview({ inset }: { inset: boolean }) {
         <div ref={stage} className={styles.stage} tabIndex={0} role="region" aria-label={t("print.page", "Page")} data-testid="print-stage">
           {cur && size ? (
             png ? (
-              <img className={styles.paper} src={png} width={size.width} height={size.height} alt={`Page ${cur.number}`} data-testid="print-page" />
+              <img className={styles.paper} src={png} width={size.width} height={size.height} alt={t("printPreview.pageN", "Page {n}", { n: cur.number })} data-testid="print-page" />
             ) : (
               <div className={styles.paper} style={{ width: size.width, height: size.height }} data-testid="print-page-pending">
                 {error ? <div className={styles.empty}>{error}</div> : null}
@@ -137,7 +137,7 @@ function Preview({ inset }: { inset: boolean }) {
             )
           ) : (
             <div className={styles.empty}>
-              {status === "loading" ? "Preparing the pages…" : error ? <div className={styles.warn}>{error}</div> : "Nothing to print on this sheet."}
+              {status === "loading" ? t("printPreview.preparingPages", "Preparing the pages…") : error ? <div className={styles.warn}>{error}</div> : t("printPreview.nothing", "Nothing to print on this sheet.")}
             </div>
           )}
         </div>

@@ -26,7 +26,9 @@ import type {
 import { drawCfIcon } from "@tally/grid";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { cx, useController } from "../context";
+import { useW56Store } from "../data/store";
 import { t } from "../i18n";
+import { sampleAndCall, useDocFormulaLang } from "../i18n/formulaNames";
 import { HF_LINE_MM, hfArea, hfAreaHeightMm, pageBoxes, type HfWhich } from "../print/hfLayout";
 import { rgbaToHex } from "../palette";
 import { useDocStore } from "../stores/docStore";
@@ -101,6 +103,7 @@ export function isV3Dialog(d: DialogState): d is V3DialogState {
 }
 
 export function V3Dialog({ dialog }: { dialog: V3DialogState }) {
+  useW56Store((s) => s.i18nRev);
   switch (dialog.kind) {
     case "cfManager":
       return <CfManagerDialog />;
@@ -164,7 +167,7 @@ function ColorField({ label, value, onChange, allowNone, testId }: { label: stri
         <span>{label}</span>
       </button>
       {value !== null && allowNone ? (
-        <button type="button" className={v3.clearBtn} aria-label={`Clear ${label}`} onClick={() => onChange(null)}>
+        <button type="button" className={v3.clearBtn} aria-label={t("v3.clearColor", "Clear {label}", { label })} onClick={() => onChange(null)}>
           ×
         </button>
       ) : null}
@@ -299,38 +302,38 @@ function CfManagerDialog() {
   const newRule = () => setEditing({ cf: null, index: null, ranges: ctl.v3.selectionText(), rule: { kind: defaultKind("cellValue"), style: { ...CF_STYLE_PRESETS[0]!.style }, stopIfTrue: false } });
   return (
     <Shell
-      title="Conditional formatting"
+      title={t("v3.cfTitle", "Conditional formatting")}
       wide
       noOk
       cardClass={v3.xwide}
       testId="cf-manager"
       onSubmit={() => undefined}
-      cancelLabel="Done"
+      cancelLabel={t("v3.done", "Done")}
       extra={
         <button type="button" className={styles.primary} onClick={newRule} data-testid="cf-new">
-          New rule…
+          {t("v3.newRule", "New rule…")}
         </button>
       }
     >
       <p className={styles.lead}>
-        Rules for “{ctl.sheetName()}”, highest priority first. A cell takes the first matching rule's settings; ▲▼ change the order.
+        {t("v3.cfLead", "Rules for “{sheet}”, highest priority first. A cell takes the first matching rule's settings; ▲▼ change the order.", { sheet: ctl.sheetName() })}
       </p>
       {list === null ? (
-        <p className={styles.note}>Loading…</p>
+        <p className={styles.note}>{t("app.loading", "Loading…")}</p>
       ) : rows.length === 0 ? (
         <div className={v3.empty}>
-          <p>No rules on this sheet yet.</p>
-          <p className={styles.note}>Select cells and choose New rule…, or use Highlight cells in the format bar.</p>
+          <p>{t("v3.noRules", "No rules on this sheet yet.")}</p>
+          <p className={styles.note}>{t("v3.noRulesHint", "Select cells and choose New rule…, or use Highlight cells in the format bar.")}</p>
         </div>
       ) : (
-        <div className={v3.ruleList} role="table" aria-label="Rules" data-testid="cf-rules">
+        <div className={v3.ruleList} role="table" aria-label={t("v3.rules", "Rules")} data-testid="cf-rules">
           {rows.map((row, k) => (
             <div key={`${row.cf.id}:${row.index}`} className={v3.ruleRow} role="row" data-rule={k}>
               <span className={v3.order}>
-                <button type="button" className={v3.iconBtn} aria-label="Move up" disabled={k === 0} onClick={() => move(row, -1)}>
+                <button type="button" className={v3.iconBtn} aria-label={t("v3.moveUp", "Move up")} disabled={k === 0} onClick={() => move(row, -1)}>
                   ▲
                 </button>
-                <button type="button" className={v3.iconBtn} aria-label="Move down" disabled={k === rows.length - 1} onClick={() => move(row, 1)}>
+                <button type="button" className={v3.iconBtn} aria-label={t("v3.moveDown", "Move down")} disabled={k === rows.length - 1} onClick={() => move(row, 1)}>
                   ▼
                 </button>
               </span>
@@ -340,7 +343,7 @@ function CfManagerDialog() {
                 <span className={v3.ruleRanges}>{rangesText(row.cf.ranges)}</span>
               </span>
               <button type="button" className={styles.rowBtn} onClick={() => setEditing({ cf: row.cf, index: row.index, ranges: rangesText(row.cf.ranges), rule: structuredClone(row.rule) })}>
-                Edit
+                {t("dialog.edit", "Edit")}
               </button>
               <button
                 type="button"
@@ -350,7 +353,7 @@ function CfManagerDialog() {
                   after(row.cf.rules.length === 1 ? ctl.v3.deleteConditionalFormat(row.cf.id) : ctl.v3.updateConditionalFormat(row.cf.id, row.cf.ranges, row.cf.rules.filter((_, i) => i !== row.index)))
                 }
               >
-                Delete
+                {t("dialog.delete", "Delete")}
               </button>
             </div>
           ))}
@@ -360,19 +363,28 @@ function CfManagerDialog() {
   );
 }
 
-function thresholdEditor(t: CfThreshold, onChange: (t: CfThreshold) => void, label: string, kinds: readonly CfValueKind[]) {
-  const needsValue = t.kind === "number" || t.kind === "percent" || t.kind === "percentile" || t.kind === "formula";
-  const names: Record<CfValueKind, string> = { min: "Lowest value", max: "Highest value", autoMin: "Automatic", autoMax: "Automatic", number: "Number", percent: "Percent", percentile: "Percentile", formula: "Formula" };
+function thresholdEditor(th: CfThreshold, onChange: (th: CfThreshold) => void, label: string, kinds: readonly CfValueKind[]) {
+  const needsValue = th.kind === "number" || th.kind === "percent" || th.kind === "percentile" || th.kind === "formula";
+  const names: Record<CfValueKind, string> = {
+    min: t("v3.lowestValue", "Lowest value"),
+    max: t("v3.highestValue", "Highest value"),
+    autoMin: t("v3.automatic", "Automatic"),
+    autoMax: t("v3.automatic", "Automatic"),
+    number: t("fmt.number", "Number"),
+    percent: t("fmt.percent", "Percent"),
+    percentile: t("v3.percentile", "Percentile"),
+    formula: t("wizard.formula", "Formula"),
+  };
   return (
     <span className={v3.thresh}>
-      <select className={styles.selectSmall} aria-label={`${label} type`} value={t.kind} onChange={(e) => onChange({ kind: e.target.value as CfValueKind, value: t.value })}>
+      <select className={styles.selectSmall} aria-label={t("v3.thresholdType", "{label} type", { label })} value={th.kind} onChange={(e) => onChange({ kind: e.target.value as CfValueKind, value: th.value })}>
         {kinds.map((k) => (
           <option key={k} value={k}>
             {names[k]}
           </option>
         ))}
       </select>
-      {needsValue ? <input className={cx(styles.input, v3.small)} aria-label={`${label} value`} value={t.value} onChange={(e) => onChange({ ...t, value: e.target.value })} /> : null}
+      {needsValue ? <input className={cx(styles.input, v3.small)} aria-label={t("v3.thresholdValue", "{label} value", { label })} value={th.value} onChange={(e) => onChange({ ...th, value: e.target.value })} /> : null}
     </span>
   );
 }
@@ -381,19 +393,21 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
   const lid = useId();
   const [ranges, setRanges] = useState(editing.ranges);
   const [rule, setRule] = useState<CfRuleDto>(editing.rule);
+  const formulaLang = useDocFormulaLang();
   const parsed = parseRanges(ranges);
-  const err = parsed ? ruleError(rule) : "Enter the cells, e.g. F2:F15.";
+  const err = parsed ? ruleError(rule) : t("v3.enterCellsCf", "Enter the cells, e.g. F2:F15.");
   const k = rule.kind;
   const setKind = (kind: CfRuleKind) => setRule((r) => ({ ...r, kind }));
   const setStyle = (p: Partial<CfStyleDto>) => setRule((r) => ({ ...r, style: { ...r.style, ...p } }));
   const st = rule.style;
   const chip = st.display?.type === "chip" ? st.display : null;
+  const styleLabels = { bold: t("v3.boldLabel", "bold"), italic: t("v3.italicLabel", "italic"), underline: t("v3.underlineLabel", "underline"), strike: t("v3.strikeLabel", "strike") } as const;
   const tKinds: readonly CfValueKind[] = ["min", "max", "number", "percent", "percentile", "formula"];
 
   return (
     <Shell
-      title={editing.cf ? "Edit rule" : "New rule"}
-      ok={editing.cf ? "Save" : "Add rule"}
+      title={editing.cf ? t("v3.editRule", "Edit rule") : t("v3.newRuleTitle", "New rule")}
+      ok={editing.cf ? t("dialog.save", "Save") : t("v3.addRule", "Add rule")}
       wide
       cardClass={v3.xwide}
       testId="cf-editor"
@@ -402,15 +416,15 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
       onSubmit={() => parsed && onSave(parsed, rule)}
       extra={
         <button type="button" className={styles.secondary} onClick={onCancel}>
-          Back
+          {t("dialog.back", "Back")}
         </button>
       }
     >
       <div className={v3.grid2}>
-        <Field label="Apply to">
+        <Field label={t("v3.applyTo", "Apply to")}>
           <input className={cx(styles.input, styles.mono)} value={ranges} spellCheck={false} onChange={(e) => setRanges(e.target.value)} data-testid="cf-ranges" />
         </Field>
-        <Field label="Rule type">
+        <Field label={t("v3.ruleType", "Rule type")}>
           <select className={styles.select} value={k.type} onChange={(e) => setKind(defaultKind(e.target.value as CfRuleType))} data-testid="cf-type">
             {CF_RULE_TYPES.map((t) => (
               <option key={t.type} value={t.type}>
@@ -424,11 +438,11 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
       <div className={v3.section}>
         {k.type === "cellValue" ? (
           <div className={v3.row}>
-            <span className={v3.rowLabel}>Cell value is</span>
+            <span className={v3.rowLabel}>{t("cf.cellValue", "Cell value is")}</span>
             <select
               className={styles.selectSmall}
               value={k.op}
-              aria-label="Comparison"
+              aria-label={t("v3.comparison", "Comparison")}
               data-testid="cf-op"
               onChange={(e) => {
                 const op = e.target.value as CmpOp;
@@ -446,7 +460,7 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
               <input
                 key={i}
                 className={cx(styles.input, v3.small)}
-                aria-label={i === 0 ? "Value" : "Second value"}
+                aria-label={i === 0 ? t("dialog.value", "Value") : t("v3.secondValue", "Second value")}
                 value={operandText(f)}
                 data-testid={`cf-value-${i}`}
                 onChange={(e) => setKind({ ...k, formulas: k.formulas.map((x, j) => (j === i ? (e.target.value === "" ? "" : operandFrom(e.target.value)) : x)) })}
@@ -455,8 +469,8 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
           </div>
         ) : null}
         {k.type === "formula" ? (
-          <Field label="Format cells where this formula is true (relative to the first cell)">
-            <input className={cx(styles.input, styles.mono)} value={k.formula} placeholder='$G2="Overdue"' spellCheck={false} onChange={(e) => setKind({ ...k, formula: e.target.value })} data-testid="cf-formula" />
+          <Field label={t("v3.cfFormulaLabel", "Format cells where this formula is true (relative to the first cell)")}>
+            <input className={cx(styles.input, styles.mono)} value={k.formula} placeholder={t("v3.phCfFormula", '$G2="Overdue"')} spellCheck={false} onChange={(e) => setKind({ ...k, formula: e.target.value })} data-testid="cf-formula" />
           </Field>
         ) : null}
         {k.type === "colorScale" ? (
@@ -467,8 +481,8 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
               ))}
             </div>
             <div className={v3.row}>
-              <span className={v3.rowLabel}>Colours</span>
-              <div className={styles.segmentedInline} role="radiogroup" aria-label="Stops">
+              <span className={v3.rowLabel}>{t("v3.colours", "Colours")}</span>
+              <div className={styles.segmentedInline} role="radiogroup" aria-label={t("v3.stops", "Stops")}>
                 {[2, 3].map((n) => (
                   <button
                     key={n}
@@ -485,9 +499,9 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
             </div>
             {k.stops.map((s, i) => (
               <div key={i} className={v3.row}>
-                <span className={v3.rowLabel}>{i === 0 ? "Lowest" : i === k.stops.length - 1 ? "Highest" : "Middle"}</span>
-                {thresholdEditor(s.threshold, (t) => setKind({ ...k, stops: k.stops.map((x, j) => (j === i ? { ...x, threshold: t } : x)) }), `Stop ${i + 1}`, tKinds)}
-                <ColorField label="Colour" value={s.color} onChange={(c) => c !== null && setKind({ ...k, stops: k.stops.map((x, j) => (j === i ? { ...x, color: c } : x)) })} />
+                <span className={v3.rowLabel}>{i === 0 ? t("v3.lowest", "Lowest") : i === k.stops.length - 1 ? t("v3.highest", "Highest") : t("v3.middle", "Middle")}</span>
+                {thresholdEditor(s.threshold, (th) => setKind({ ...k, stops: k.stops.map((x, j) => (j === i ? { ...x, threshold: th } : x)) }), t("v3.stopN", "Stop {n}", { n: i + 1 }), tKinds)}
+                <ColorField label={t("v3.colour", "Colour")} value={s.color} onChange={(c) => c !== null && setKind({ ...k, stops: k.stops.map((x, j) => (j === i ? { ...x, color: c } : x)) })} />
               </div>
             ))}
           </>
@@ -495,27 +509,27 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
         {k.type === "dataBar" ? (
           <>
             <div className={v3.row}>
-              <span className={v3.rowLabel}>Shortest bar</span>
-              {thresholdEditor(k.min, (t) => setKind({ ...k, min: t }), "Minimum", ["autoMin", "min", "number", "percent", "percentile", "formula"])}
+              <span className={v3.rowLabel}>{t("v3.shortestBar", "Shortest bar")}</span>
+              {thresholdEditor(k.min, (t) => setKind({ ...k, min: t }), t("solver.minimum", "Minimum"), ["autoMin", "min", "number", "percent", "percentile", "formula"])}
             </div>
             <div className={v3.row}>
-              <span className={v3.rowLabel}>Longest bar</span>
-              {thresholdEditor(k.max, (t) => setKind({ ...k, max: t }), "Maximum", ["autoMax", "max", "number", "percent", "percentile", "formula"])}
+              <span className={v3.rowLabel}>{t("v3.longestBar", "Longest bar")}</span>
+              {thresholdEditor(k.max, (t) => setKind({ ...k, max: t }), t("solver.maximum", "Maximum"), ["autoMax", "max", "number", "percent", "percentile", "formula"])}
             </div>
             <div className={v3.row}>
-              <ColorField label="Bar colour" value={k.color} onChange={(c) => c !== null && setKind({ ...k, color: c })} />
-              <ColorField label="Negative" value={k.negativeColor} allowNone onChange={(c) => setKind({ ...k, negativeColor: c })} />
+              <ColorField label={t("v3.barColour", "Bar colour")} value={k.color} onChange={(c) => c !== null && setKind({ ...k, color: c })} />
+              <ColorField label={t("v3.negative", "Negative")} value={k.negativeColor} allowNone onChange={(c) => setKind({ ...k, negativeColor: c })} />
             </div>
             <div className={v3.row}>
-              <Check label="Gradient fill" checked={k.gradient} onChange={(v) => setKind({ ...k, gradient: v })} />
-              <Check label="Show the value" checked={k.showValue} onChange={(v) => setKind({ ...k, showValue: v })} />
+              <Check label={t("v3.gradientFill", "Gradient fill")} checked={k.gradient} onChange={(v) => setKind({ ...k, gradient: v })} />
+              <Check label={t("v3.showValue", "Show the value")} checked={k.showValue} onChange={(v) => setKind({ ...k, showValue: v })} />
             </div>
           </>
         ) : null}
         {k.type === "iconSet" ? (
           <>
             <div className={v3.row}>
-              <span id={`${lid}-icons`} className={v3.rowLabel}>Icons</span>
+              <span id={`${lid}-icons`} className={v3.rowLabel}>{t("v3.icons", "Icons")}</span>
               <select className={styles.selectSmall} aria-labelledby={`${lid}-icons`} value={k.set} onChange={(e) => setKind({ ...k, set: e.target.value as typeof k.set, thresholds: iconThresholds(e.target.value as typeof k.set) })}>
                 {ICON_SETS.map((s) => (
                   <option key={s.set} value={s.set}>
@@ -525,47 +539,47 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
               </select>
               <IconStrip set={k.set} />
             </div>
-            {k.thresholds.slice(1).map((t, i) => (
+            {k.thresholds.slice(1).map((th, i) => (
               <div key={i} className={v3.row}>
-                <span className={v3.rowLabel}>Icon {i + 2} from</span>
-                {thresholdEditor(t, (nt) => setKind({ ...k, thresholds: k.thresholds.map((x, j) => (j === i + 1 ? nt : x)) }), `Threshold ${i + 2}`, ["percent", "number", "percentile", "formula"])}
+                <span className={v3.rowLabel}>{t("v3.iconFrom", "Icon {n} from", { n: i + 2 })}</span>
+                {thresholdEditor(th, (nt) => setKind({ ...k, thresholds: k.thresholds.map((x, j) => (j === i + 1 ? nt : x)) }), t("v3.thresholdN", "Threshold {n}", { n: i + 2 }), ["percent", "number", "percentile", "formula"])}
               </div>
             ))}
             <div className={v3.row}>
-              <Check label="Reverse order" checked={k.reverse} onChange={(v) => setKind({ ...k, reverse: v })} />
-              <Check label="Show the value" checked={k.showValue} onChange={(v) => setKind({ ...k, showValue: v })} />
+              <Check label={t("v3.reverseOrder", "Reverse order")} checked={k.reverse} onChange={(v) => setKind({ ...k, reverse: v })} />
+              <Check label={t("v3.showValue", "Show the value")} checked={k.showValue} onChange={(v) => setKind({ ...k, showValue: v })} />
             </div>
           </>
         ) : null}
         {k.type === "top" ? (
           <div className={v3.row}>
-            <div className={styles.segmentedInline} role="radiogroup" aria-label="Top or bottom">
+            <div className={styles.segmentedInline} role="radiogroup" aria-label={t("v3.topOrBottom", "Top or bottom")}>
               {[false, true].map((b) => (
                 <button key={String(b)} type="button" role="radio" aria-checked={k.bottom === b} className={k.bottom === b ? styles.segOn : styles.seg} onClick={() => setKind({ ...k, bottom: b })}>
-                  {b ? "Bottom" : "Top"}
+                  {b ? t("v3.bottom", "Bottom") : t("v3.top", "Top")}
                 </button>
               ))}
             </div>
-            <input className={cx(styles.input, v3.small)} aria-label="Rank" inputMode="numeric" value={String(k.rank)} onChange={(e) => setKind({ ...k, rank: Math.floor(Number(e.target.value) || 0) })} />
-            <Check label="percent" checked={k.percent} onChange={(v) => setKind({ ...k, percent: v })} />
+            <input className={cx(styles.input, v3.small)} aria-label={t("v3.rank", "Rank")} inputMode="numeric" value={String(k.rank)} onChange={(e) => setKind({ ...k, rank: Math.floor(Number(e.target.value) || 0) })} />
+            <Check label={t("v3.percentLower", "percent")} checked={k.percent} onChange={(v) => setKind({ ...k, percent: v })} />
           </div>
         ) : null}
         {k.type === "average" ? (
           <div className={v3.row}>
-            <div className={styles.segmentedInline} role="radiogroup" aria-label="Above or below">
+            <div className={styles.segmentedInline} role="radiogroup" aria-label={t("v3.aboveOrBelow", "Above or below")}>
               {[true, false].map((b) => (
                 <button key={String(b)} type="button" role="radio" aria-checked={k.above === b} className={k.above === b ? styles.segOn : styles.seg} onClick={() => setKind({ ...k, above: b })}>
-                  {b ? "Above" : "Below"}
+                  {b ? t("v3.above", "Above") : t("v3.below", "Below")}
                 </button>
               ))}
             </div>
-            <span className={v3.rowLabel}>average</span>
-            <Check label="or equal" checked={k.equal} onChange={(v) => setKind({ ...k, equal: v })} />
+            <span className={v3.rowLabel}>{t("v3.average", "average")}</span>
+            <Check label={t("v3.orEqual", "or equal")} checked={k.equal} onChange={(v) => setKind({ ...k, equal: v })} />
           </div>
         ) : null}
         {k.type === "text" ? (
           <div className={v3.row}>
-            <span id={`${lid}-text`} className={v3.rowLabel}>Text</span>
+            <span id={`${lid}-text`} className={v3.rowLabel}>{t("v3.text", "Text")}</span>
             <select className={styles.selectSmall} aria-labelledby={`${lid}-text`} value={k.op} onChange={(e) => setKind({ ...k, op: e.target.value as typeof k.op })}>
               {TEXT_OPS.map((o) => (
                 <option key={o.op} value={o.op}>
@@ -573,12 +587,12 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
                 </option>
               ))}
             </select>
-            <input className={styles.input} aria-label="Text" value={k.text} onChange={(e) => setKind({ ...k, text: e.target.value })} data-testid="cf-text" />
+            <input className={styles.input} aria-label={t("v3.text", "Text")} value={k.text} onChange={(e) => setKind({ ...k, text: e.target.value })} data-testid="cf-text" />
           </div>
         ) : null}
         {k.type === "dateIs" ? (
           <div className={v3.row}>
-            <span id={`${lid}-date`} className={v3.rowLabel}>Date is</span>
+            <span id={`${lid}-date`} className={v3.rowLabel}>{t("v3.dateIs", "Date is")}</span>
             <select className={styles.selectSmall} aria-labelledby={`${lid}-date`} value={k.period} onChange={(e) => setKind({ ...k, period: e.target.value as typeof k.period })}>
               {DATE_PERIODS.map((p) => (
                 <option key={p.period} value={p.period}>
@@ -588,12 +602,12 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
             </select>
           </div>
         ) : null}
-        {["duplicate", "unique", "blank", "notBlank", "error", "notError"].includes(k.type) ? <p className={styles.note}>Formats {ruleSummary(rule).toLowerCase()} in the range.</p> : null}
+        {["duplicate", "unique", "blank", "notBlank", "error", "notError"].includes(k.type) ? <p className={styles.note}>{formatsInRange(k.type)}</p> : null}
       </div>
 
       {usesStyle(k) ? (
         <div className={v3.section}>
-          <div className={v3.sectionTitle}>Format with</div>
+          <div className={v3.sectionTitle}>{t("v3.formatWith", "Format with")}</div>
           <div className={v3.presetRow}>
             {CF_STYLE_PRESETS.map((p) => (
               <button key={p.id} type="button" className={v3.stylePreset} title={p.label} aria-label={p.label} onClick={() => setRule((r) => ({ ...r, style: { ...p.style } }))}>
@@ -610,32 +624,44 @@ function RuleEditor({ editing, onCancel, onSave }: { editing: Editing; onCancel:
                 ["strike", "S"],
               ] as const
             ).map(([key, glyph]) => (
-              <button key={key} type="button" className={st[key] ? v3.toggleOn : v3.toggle} aria-pressed={!!st[key]} aria-label={key} onClick={() => setStyle({ [key]: st[key] ? null : true })}>
+              <button key={key} type="button" className={st[key] ? v3.toggleOn : v3.toggle} aria-pressed={!!st[key]} aria-label={styleLabels[key]} onClick={() => setStyle({ [key]: st[key] ? null : true })}>
                 <span className={v3[`glyph_${key}`]}>{glyph}</span>
               </button>
             ))}
-            <ColorField label="Text" value={chip ? null : st.color} allowNone onChange={(c) => setStyle({ color: c, display: null })} testId="cf-font-color" />
-            <ColorField label="Fill" value={chip ? null : st.fill} allowNone onChange={(c) => setStyle({ fill: c, display: null })} testId="cf-fill-color" />
+            <ColorField label={t("v3.text", "Text")} value={chip ? null : st.color} allowNone onChange={(c) => setStyle({ color: c, display: null })} testId="cf-font-color" />
+            <ColorField label={t("v3.fill", "Fill")} value={chip ? null : st.fill} allowNone onChange={(c) => setStyle({ fill: c, display: null })} testId="cf-fill-color" />
           </div>
           <div className={v3.row}>
-            <Check label="Show as a chip" checked={chip !== null} onChange={(v) => setStyle(v ? { display: { type: "chip", bg: st.fill ?? 0xdbeafeff, fg: st.color ?? 0x1e40afff }, fill: null, color: null } : { display: null })} testId="cf-chip" />
+            <Check label={t("v3.showChip", "Show as a chip")} checked={chip !== null} onChange={(v) => setStyle(v ? { display: { type: "chip", bg: st.fill ?? 0xdbeafeff, fg: st.color ?? 0x1e40afff }, fill: null, color: null } : { display: null })} testId="cf-chip" />
             {chip ? (
               <>
-                <ColorField label="Chip" value={chip.bg} onChange={(c) => c !== null && setStyle({ display: { ...chip, bg: c } })} />
-                <ColorField label="Chip text" value={chip.fg} onChange={(c) => c !== null && setStyle({ display: { ...chip, fg: c } })} />
+                <ColorField label={t("v3.chip", "Chip")} value={chip.bg} onChange={(c) => c !== null && setStyle({ display: { ...chip, bg: c } })} />
+                <ColorField label={t("v3.chipText", "Chip text")} value={chip.fg} onChange={(c) => c !== null && setStyle({ display: { ...chip, fg: c } })} />
               </>
             ) : null}
           </div>
           <div className={v3.previewLine}>
-            <span className={styles.note}>Preview</span>
+            <span className={styles.note}>{t("v3.preview", "Preview")}</span>
             <StylePreview rule={rule} />
           </div>
         </div>
       ) : null}
-      <Check label="Stop if true (skip lower rules for matching cells)" checked={rule.stopIfTrue} onChange={(v) => setRule((r) => ({ ...r, stopIfTrue: v }))} />
+      <Check label={t("v3.stopIfTrue", "Stop if true (skip lower rules for matching cells)")} checked={rule.stopIfTrue} onChange={(v) => setRule((r) => ({ ...r, stopIfTrue: v }))} />
       {err ? <p className={styles.error}>{err}</p> : null}
     </Shell>
   );
+}
+
+/** "Formats duplicate values in the range." for the rule kinds that need no operands. */
+function formatsInRange(type: string): string {
+  switch (type) {
+    case "duplicate": return t("v3.formatsInRange.duplicate", "Formats duplicate values in the range.");
+    case "unique": return t("v3.formatsInRange.unique", "Formats unique values in the range.");
+    case "blank": return t("v3.formatsInRange.blank", "Formats blank cells in the range.");
+    case "notBlank": return t("v3.formatsInRange.notBlank", "Formats non-blank cells in the range.");
+    case "error": return t("v3.formatsInRange.error", "Formats cells with errors in the range.");
+    default: return t("v3.formatsInRange.notError", "Formats cells without errors in the range.");
+  }
 }
 
 function CfPresetDialog({ d }: { d: Extract<DialogState, { kind: "cfPreset" }> }) {
@@ -647,27 +673,26 @@ function CfPresetDialog({ d }: { d: Extract<DialogState, { kind: "cfPreset" }> }
   const ref = useAutoFocus();
   const valid = a.trim() !== "" && (preset.values < 2 || b.trim() !== "");
   const style = CF_STYLE_PRESETS.find((p) => p.id === styleId)?.style ?? CF_STYLE_PRESETS[0]!.style;
-  const title = preset.label.replace(/…$/, "");
   return (
     <Shell
-      title={`Highlight cells: ${title.toLowerCase()}`}
-      ok="Apply"
+      title={preset.dialogTitle}
+      ok={t("dialog.apply", "Apply")}
       wide
       testId="cf-preset-dialog"
       valid={valid}
-      onSubmit={() => void ctl.v3.addConditionalFormat(d.ranges, [presetRule(d.preset, [a, b], style)], "Highlight cells")}
+      onSubmit={() => void ctl.v3.addConditionalFormat(d.ranges, [presetRule(d.preset, [a, b], style)], t("chrome.item.highlight", "Highlight cells"))}
     >
-      <p className={styles.lead}>Format cells in {rangesText(d.ranges)} that are {title.toLowerCase()}:</p>
+      <p className={styles.lead}>{preset.leadTemplate.replace("{ranges}", rangesText(d.ranges))}</p>
       <div className={v3.row}>
-        <input ref={ref} className={styles.input} aria-label="Value" value={a} onChange={(e) => setA(e.target.value)} data-testid="cf-preset-value" placeholder={d.preset === "textContains" ? "text" : "value or cell"} />
+        <input ref={ref} className={styles.input} aria-label={t("dialog.value", "Value")} value={a} onChange={(e) => setA(e.target.value)} data-testid="cf-preset-value" placeholder={d.preset === "textContains" ? t("v3.phText", "text") : t("v3.phValueOrCell", "value or cell")} />
         {preset.values === 2 ? (
           <>
-            <span className={v3.rowLabel}>and</span>
-            <input className={styles.input} aria-label="Second value" value={b} onChange={(e) => setB(e.target.value)} data-testid="cf-preset-value2" />
+            <span className={v3.rowLabel}>{t("v3.and", "and")}</span>
+            <input className={styles.input} aria-label={t("v3.secondValue", "Second value")} value={b} onChange={(e) => setB(e.target.value)} data-testid="cf-preset-value2" />
           </>
         ) : null}
       </div>
-      <Field label="with" className={styles.gap}>
+      <Field label={t("v3.with", "with")} className={styles.gap}>
         <select className={styles.select} value={styleId} onChange={(e) => setStyleId(e.target.value)} data-testid="cf-preset-style">
           {CF_STYLE_PRESETS.map((p) => (
             <option key={p.id} value={p.id}>
@@ -689,6 +714,7 @@ type VTab = "criteria" | "help" | "alert";
 function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" }> }) {
   const ctl = useController();
   const [tab, setTab] = useState<VTab>("criteria");
+  const formulaLang = useDocFormulaLang();
   const [v, setV] = useState<ValidationDto>(d.validation);
   const [itemsText, setItemsText] = useState(() => (d.validation.kind.type === "list" && d.validation.kind.source.type === "values" ? d.validation.kind.source.items.join("\n") : ""));
   const [rangesInput, setRangesInput] = useState(rangesText(d.validation.ranges));
@@ -696,14 +722,14 @@ function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" 
   const set = (p: Partial<ValidationDto>) => setV((x) => ({ ...x, ...p }));
   const parsedRanges = parseRanges(rangesInput);
   const effective: ValidationDto = { ...v, ranges: parsedRanges ?? v.ranges, kind: k.type === "list" && k.source.type === "values" ? { ...k, source: { type: "values", items: listItems(itemsText) } } : k };
-  const err = parsedRanges ? validationError(effective) : "Enter the cells, e.g. G2:G15.";
+  const err = parsedRanges ? validationError(effective) : t("v3.enterCellsVal", "Enter the cells, e.g. G2:G15.");
   const help = v.inputHelp ?? { title: "", text: "" };
   const alert = v.error;
 
   return (
     <Shell
-      title="Data validation"
-      ok={d.existing ? "Save" : "Apply"}
+      title={t("v3.dvTitle", "Data validation")}
+      ok={d.existing ? t("dialog.save", "Save") : t("dialog.apply", "Apply")}
       wide
       cardClass={v3.xwide}
       testId="validation-dialog"
@@ -718,28 +744,28 @@ function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" 
       extra={
         d.existing ? (
           <button type="button" className={cx(styles.secondary, styles.dangerText)} onClick={() => (close(), void ctl.v3.clearValidation(v.id))} data-testid="validation-remove">
-            Remove
+            {t("dialog.remove", "Remove")}
           </button>
         ) : undefined
       }
     >
       <Tabs
-        label="Validation"
+        label={t("v3.validation", "Validation")}
         value={tab}
         onChange={setTab}
         tabs={[
-          { id: "criteria", label: "Criteria" },
-          { id: "help", label: "Input help" },
-          { id: "alert", label: "Error alert" },
+          { id: "criteria", label: t("v3.criteria", "Criteria") },
+          { id: "help", label: t("validation.inputHelp", "Input help") },
+          { id: "alert", label: t("validation.errorAlert", "Error alert") },
         ]}
       />
       {tab === "criteria" ? (
         <div className={v3.section}>
           <div className={v3.grid2}>
-            <Field label="Cells">
+            <Field label={t("v3.cells", "Cells")}>
               <input className={cx(styles.input, styles.mono)} value={rangesInput} spellCheck={false} onChange={(e) => setRangesInput(e.target.value)} data-testid="validation-ranges" />
             </Field>
-            <Field label="Allow">
+            <Field label={t("validation.allow", "Allow")}>
               <select className={styles.select} value={k.type} onChange={(e) => set({ kind: defaultValidationKind(e.target.value as ValidationType) })} data-testid="validation-type">
                 {VALIDATION_TYPES.map((t) => (
                   <option key={t.type} value={t.type}>
@@ -751,11 +777,11 @@ function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" 
           </div>
           {k.type === "list" ? (
             <>
-              <div className={styles.segmented} role="radiogroup" aria-label="Source">
+              <div className={styles.segmented} role="radiogroup" aria-label={t("pivot.source", "Source")}>
                 {(
                   [
-                    ["values", "Items"],
-                    ["range", "From a range"],
+                    ["values", t("v3.items", "Items")],
+                    ["range", t("v3.fromRange", "From a range")],
                   ] as const
                 ).map(([t, label]) => (
                   <button
@@ -772,11 +798,11 @@ function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" 
                 ))}
               </div>
               {k.source.type === "values" ? (
-                <Field label="One item per line (or separated by commas)" className={styles.gap}>
-                  <textarea className={cx(styles.input, v3.textarea)} rows={4} value={itemsText} onChange={(e) => setItemsText(e.target.value)} data-testid="validation-items" placeholder={"Paid\nDue\nOverdue"} />
+                <Field label={t("v3.itemsHint", "One item per line (or separated by commas)")} className={styles.gap}>
+                  <textarea className={cx(styles.input, v3.textarea)} rows={4} value={itemsText} onChange={(e) => setItemsText(e.target.value)} data-testid="validation-items" placeholder={t("v3.phListItems", "Paid\nDue\nOverdue")} />
                 </Field>
               ) : (
-                <Field label="Source range" className={styles.gap}>
+                <Field label={t("v3.sourceRange", "Source range")} className={styles.gap}>
                   <input
                     className={cx(styles.input, styles.mono)}
                     value={k.source.reference}
@@ -787,16 +813,16 @@ function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" 
                   />
                 </Field>
               )}
-              <Check label="Show a dropdown in the cell" checked={v.showDropdown} onChange={(x) => set({ showDropdown: x })} />
+              <Check label={t("v3.showDropdown", "Show a dropdown in the cell")} checked={v.showDropdown} onChange={(x) => set({ showDropdown: x })} />
             </>
           ) : null}
           {"formulas" in k ? (
             <div className={v3.row}>
-              <span className={v3.rowLabel}>{k.type === "textLength" ? "Length" : "Value"}</span>
+              <span className={v3.rowLabel}>{k.type === "textLength" ? t("v3.length", "Length") : t("dialog.value", "Value")}</span>
               <select
                 className={styles.selectSmall}
                 value={k.op}
-                aria-label="Comparison"
+                aria-label={t("v3.comparison", "Comparison")}
                 onChange={(e) => {
                   const op = e.target.value as CmpOp;
                   const n = CMP_OPS.find((o) => o.op === op)?.operands ?? 1;
@@ -810,36 +836,36 @@ function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" 
                 ))}
               </select>
               {k.formulas.map((f, i) => (
-                <input key={i} className={cx(styles.input, v3.small)} aria-label={i === 0 ? "Minimum" : "Maximum"} value={f} onChange={(e) => set({ kind: { ...k, formulas: k.formulas.map((x, j) => (j === i ? e.target.value : x)) } })} />
+                <input key={i} className={cx(styles.input, v3.small)} aria-label={i === 0 ? t("solver.minimum", "Minimum") : t("solver.maximum", "Maximum")} value={f} onChange={(e) => set({ kind: { ...k, formulas: k.formulas.map((x, j) => (j === i ? e.target.value : x)) } })} />
               ))}
             </div>
           ) : null}
           {k.type === "custom" ? (
-            <Field label="Valid when this formula is true (relative to the first cell)" className={styles.gap}>
-              <input className={cx(styles.input, styles.mono)} value={k.formula} placeholder="AND(D2>0,D2<100)" spellCheck={false} onChange={(e) => set({ kind: { ...k, formula: e.target.value } })} />
+            <Field label={t("v3.validFormula", "Valid when this formula is true (relative to the first cell)")} className={styles.gap}>
+              <input className={cx(styles.input, styles.mono)} value={k.formula} placeholder={sampleAndCall(formulaLang)} spellCheck={false} onChange={(e) => set({ kind: { ...k, formula: e.target.value } })} />
             </Field>
           ) : null}
-          {k.type === "any" ? <p className={styles.note}>Any value is allowed; use the Input help tab to show a hint.</p> : null}
-          <Check label="Allow empty cells" checked={v.allowBlank} onChange={(x) => set({ allowBlank: x })} />
+          {k.type === "any" ? <p className={styles.note}>{t("v3.anyValue", "Any value is allowed; use the Input help tab to show a hint.")}</p> : null}
+          <Check label={t("validation.allowEmpty", "Allow empty cells")} checked={v.allowBlank} onChange={(x) => set({ allowBlank: x })} />
         </div>
       ) : null}
       {tab === "help" ? (
         <div className={v3.section}>
-          <p className={styles.note}>Shown next to the cell while it is selected.</p>
-          <Field label="Title">
+          <p className={styles.note}>{t("v3.helpShown", "Shown next to the cell while it is selected.")}</p>
+          <Field label={t("properties.docTitle", "Title")}>
             <input className={styles.input} value={help.title} onChange={(e) => set({ inputHelp: { ...help, title: e.target.value } })} data-testid="validation-help-title" />
           </Field>
-          <Field label="Message" className={styles.gap}>
+          <Field label={t("v3.message", "Message")} className={styles.gap}>
             <textarea className={cx(styles.input, v3.textarea)} rows={3} value={help.text} onChange={(e) => set({ inputHelp: { ...help, text: e.target.value } })} data-testid="validation-help-text" />
           </Field>
         </div>
       ) : null}
       {tab === "alert" ? (
         <div className={v3.section}>
-          <Check label="Show an error alert for invalid values" checked={alert !== null} onChange={(x) => set({ error: x ? { style: "stop", title: "", text: "" } : null })} testId="validation-alert-on" />
+          <Check label={t("v3.showAlert", "Show an error alert for invalid values")} checked={alert !== null} onChange={(x) => set({ error: x ? { style: "stop", title: "", text: "" } : null })} testId="validation-alert-on" />
           {alert ? (
             <>
-              <div className={styles.segmented} role="radiogroup" aria-label="Style">
+              <div className={styles.segmented} role="radiogroup" aria-label={t("v3.style", "Style")}>
                 {ALERT_STYLES.map((s) => (
                   <button key={s.style} type="button" role="radio" aria-checked={alert.style === s.style} className={alert.style === s.style ? styles.segOn : styles.seg} title={s.hint} onClick={() => set({ error: { ...alert, style: s.style as ValidationErrorStyle } })} data-testid={`validation-style-${s.style}`}>
                     {s.label}
@@ -847,15 +873,15 @@ function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" 
                 ))}
               </div>
               <p className={styles.note}>{ALERT_STYLES.find((s) => s.style === alert.style)?.hint}</p>
-              <Field label="Title" className={styles.gap}>
+              <Field label={t("properties.docTitle", "Title")} className={styles.gap}>
                 <input className={styles.input} value={alert.title} onChange={(e) => set({ error: { ...alert, title: e.target.value } })} data-testid="validation-alert-title" />
               </Field>
-              <Field label="Message" className={styles.gap}>
-                <textarea className={cx(styles.input, v3.textarea)} rows={3} value={alert.text} placeholder="The value you entered is not valid." onChange={(e) => set({ error: { ...alert, text: e.target.value } })} data-testid="validation-alert-text" />
+              <Field label={t("v3.message", "Message")} className={styles.gap}>
+                <textarea className={cx(styles.input, v3.textarea)} rows={3} value={alert.text} placeholder={t("v3.defaultInvalid", "The value you entered is not valid.")} onChange={(e) => set({ error: { ...alert, text: e.target.value } })} data-testid="validation-alert-text" />
               </Field>
             </>
           ) : (
-            <p className={styles.note}>Invalid values are accepted silently.</p>
+            <p className={styles.note}>{t("v3.invalidSilent", "Invalid values are accepted silently.")}</p>
           )}
         </div>
       ) : null}
@@ -869,7 +895,7 @@ function ValidationAlertDialog({ d }: { d: Extract<DialogState, { kind: "validat
   return (
     <Shell
       title={d.title}
-      ok={d.retry !== null && d.cell ? "Retry" : "OK"}
+      ok={d.retry !== null && d.cell ? t("v3.retry", "Retry") : t("dialog.ok", "OK")}
       testId="validation-alert"
       onSubmit={() => {
         if (d.retry !== null && d.cell) ctl.v3.retryEdit(d.cell, d.retry);
@@ -898,8 +924,8 @@ function HyperlinkDialog({ d }: { d: Extract<DialogState, { kind: "hyperlink" }>
   const err = linkError(normalized);
   return (
     <Shell
-      title={d.url ? "Edit hyperlink" : "Insert hyperlink"}
-      ok={d.url ? "Save" : "Insert"}
+      title={d.url ? t("v3.editLink", "Edit hyperlink") : t("v3.insertLink", "Insert hyperlink")}
+      ok={d.url ? t("dialog.save", "Save") : t("dialog.insert", "Insert")}
       wide
       testId="hyperlink-dialog"
       valid={url.trim() !== "" && err === null}
@@ -907,19 +933,19 @@ function HyperlinkDialog({ d }: { d: Extract<DialogState, { kind: "hyperlink" }>
       extra={
         d.url ? (
           <button type="button" className={cx(styles.secondary, styles.dangerText)} onClick={() => (close(), void ctl.v3.removeLink())}>
-            Remove link
+            {t("v3.removeLink", "Remove link")}
           </button>
         ) : undefined
       }
     >
-      <Field label="Link to">
-        <input ref={ref} className={styles.input} value={url} spellCheck={false} placeholder="https://example.com, name@example.com or #Sheet2.A1" onChange={(e) => setUrl(e.target.value)} data-testid="hyperlink-url" />
+      <Field label={t("v3.linkTo", "Link to")}>
+        <input ref={ref} className={styles.input} value={url} spellCheck={false} placeholder={t("v3.linkPlaceholder", "https://example.com, name@example.com or #Sheet2.A1")} onChange={(e) => setUrl(e.target.value)} data-testid="hyperlink-url" />
       </Field>
-      {err ? <p className={styles.error}>{err}</p> : normalized !== url.trim() && url.trim() !== "" ? <p className={styles.note}>Saved as {normalized}</p> : null}
-      <Field label="Text to display" className={styles.gap}>
-        <input className={styles.input} value={text} placeholder={d.hasText ? "" : "(the link)"} onChange={(e) => setText(e.target.value)} data-testid="hyperlink-text" />
+      {err ? <p className={styles.error}>{err}</p> : normalized !== url.trim() && url.trim() !== "" ? <p className={styles.note}>{t("v3.savedAs", "Saved as {link}", { link: normalized })}</p> : null}
+      <Field label={t("v3.textToDisplay", "Text to display")} className={styles.gap}>
+        <input className={styles.input} value={text} placeholder={d.hasText ? "" : t("v3.theLink", "(the link)")} onChange={(e) => setText(e.target.value)} data-testid="hyperlink-text" />
       </Field>
-      <p className={styles.note}>⌘-click the cell, or click its ↗, to open the link.</p>
+      <p className={styles.note}>{t("v3.linkHint", "⌘-click the cell, or click its ↗, to open the link.")}</p>
     </Shell>
   );
 }
@@ -936,24 +962,24 @@ function ProtectSheetDialog() {
   const ref = useAutoFocus();
   const mismatch = password !== confirm;
   return (
-    <Shell title={`Protect “${ctl.sheetName()}”`} ok="Protect" wide testId="protect-sheet-dialog" valid={!mismatch} onSubmit={() => void ctl.v3.protectSheet(password, opts)}>
-      <p className={styles.lead}>Locked cells (all cells, unless unlocked) can't be changed while the sheet is protected.</p>
+    <Shell title={t("v3.protectTitle", "Protect “{sheet}”", { sheet: ctl.sheetName() })} ok={t("v3.protect", "Protect")} wide testId="protect-sheet-dialog" valid={!mismatch} onSubmit={() => void ctl.v3.protectSheet(password, opts)}>
+      <p className={styles.lead}>{t("v3.lockedCells", "Locked cells (all cells, unless unlocked) can't be changed while the sheet is protected.")}</p>
       <div className={v3.grid2}>
-        <Field label="Password (optional)">
+        <Field label={t("v3.passwordOptional", "Password (optional)")}>
           <input ref={ref} type="password" className={styles.input} value={password} autoComplete="new-password" onChange={(e) => setPassword(e.target.value)} data-testid="protect-password" />
         </Field>
-        <Field label="Confirm">
+        <Field label={t("v3.confirm", "Confirm")}>
           <input type="password" className={styles.input} value={confirm} autoComplete="new-password" onChange={(e) => setConfirm(e.target.value)} data-testid="protect-confirm" />
         </Field>
       </div>
-      {mismatch && confirm !== "" ? <p className={styles.error}>The passwords don't match.</p> : null}
-      <div className={v3.sectionTitle}>Allow everyone to</div>
+      {mismatch && confirm !== "" ? <p className={styles.error}>{t("v3.pwMismatch", "The passwords don't match.")}</p> : null}
+      <div className={v3.sectionTitle}>{t("v3.allowEveryone", "Allow everyone to")}</div>
       <div className={styles.optionGrid}>
         {PROTECTION_LABELS.map((o) => (
           <Check key={o.key} label={o.label} checked={opts[o.key]} onChange={(x) => setOpts((p) => ({ ...p, [o.key]: x }))} />
         ))}
       </div>
-      <p className={styles.note}>Protection keeps honest people from mistakes; the file is not encrypted.</p>
+      <p className={styles.note}>{t("v3.protectNote", "Protection keeps honest people from mistakes; the file is not encrypted.")}</p>
     </Shell>
   );
 }
@@ -965,8 +991,8 @@ function UnprotectSheetDialog() {
   const ref = useAutoFocus();
   return (
     <Shell
-      title={`Unprotect “${ctl.sheetName()}”`}
-      ok="Unprotect"
+      title={t("v3.unprotectTitle", "Unprotect “{sheet}”", { sheet: ctl.sheetName() })}
+      ok={t("protect.unprotect", "Unprotect")}
       testId="unprotect-sheet-dialog"
       keepOpen
       valid={password !== ""}
@@ -979,10 +1005,10 @@ function UnprotectSheetDialog() {
         })
       }
     >
-      <Field label="Password">
+      <Field label={t("dialog.password", "Password")}>
         <input ref={ref} type="password" className={styles.input} value={password} onChange={(e) => (setPassword(e.target.value), setWrong(false))} data-testid="unprotect-password" />
       </Field>
-      {wrong ? <p className={styles.error}>That password is not right.</p> : null}
+      {wrong ? <p className={styles.error}>{t("v3.wrongPassword", "That password is not right.")}</p> : null}
     </Shell>
   );
 }
@@ -994,8 +1020,8 @@ function ProtectDocumentDialog({ d }: { d: Extract<DialogState, { kind: "protect
   const ref = useAutoFocus();
   return (
     <Shell
-      title={d.protected ? "Unprotect document" : "Protect document"}
-      ok={d.protected ? "Unprotect" : "Protect"}
+      title={d.protected ? t("v3.unprotectDoc", "Unprotect document") : t("v3.protectDoc", "Protect document")}
+      ok={d.protected ? t("protect.unprotect", "Unprotect") : t("v3.protect", "Protect")}
       testId="protect-document-dialog"
       keepOpen
       valid={!(d.protected && d.hasPassword && password === "")}
@@ -1008,13 +1034,13 @@ function ProtectDocumentDialog({ d }: { d: Extract<DialogState, { kind: "protect
         })
       }
     >
-      <p className={styles.lead}>{d.protected ? "Sheets can't be added, deleted, renamed or moved while the structure is protected." : "Protects the structure: sheets can't be added, deleted, renamed or moved."}</p>
+      <p className={styles.lead}>{d.protected ? t("v3.docProtectedLead", "Sheets can't be added, deleted, renamed or moved while the structure is protected.") : t("v3.docProtectLead", "Protects the structure: sheets can't be added, deleted, renamed or moved.")}</p>
       {!d.protected || d.hasPassword ? (
-        <Field label={d.protected ? "Password" : "Password (optional)"}>
+        <Field label={d.protected ? t("dialog.password", "Password") : t("v3.passwordOptional", "Password (optional)")}>
           <input ref={ref} type="password" className={styles.input} value={password} onChange={(e) => (setPassword(e.target.value), setWrong(false))} data-testid="protect-document-password" />
         </Field>
       ) : null}
-      {wrong ? <p className={styles.error}>That password is not right.</p> : null}
+      {wrong ? <p className={styles.error}>{t("v3.wrongPassword", "That password is not right.")}</p> : null}
     </Shell>
   );
 }
@@ -1034,14 +1060,14 @@ function GoalSeekDialog({ d }: { d: Extract<DialogState, { kind: "goalSeek" }> }
   const ref = useAutoFocus();
   const f = parseCell(formulaCell);
   const v = parseCell(variableCell);
-  const t = parseNumber(target);
-  const valid = f !== null && v !== null && t !== null && !(f.r === v.r && f.c === v.c);
+  const tv = parseNumber(target);
+  const valid = f !== null && v !== null && tv !== null && !(f.r === v.r && f.c === v.c);
   const fmt = (n: number) => String(Number(n.toPrecision(12)));
   const run = () => {
-    if (!f || !v || t === null) return;
+    if (!f || !v || tv === null) return;
     setBusy(true);
     setError(null);
-    ctl.v3.goalSeek(f, t, v).then(
+    ctl.v3.goalSeek(f, tv, v).then(
       (res) => {
         setBusy(false);
         setResult({ res, variable: v });
@@ -1049,14 +1075,14 @@ function GoalSeekDialog({ d }: { d: Extract<DialogState, { kind: "goalSeek" }> }
       (e: unknown) => {
         setBusy(false);
         setResult(null);
-        setError(typeof e === "object" && e && "message" in e ? String((e as { message: unknown }).message) : "Goal seek failed.");
+        setError(typeof e === "object" && e && "message" in e ? String((e as { message: unknown }).message) : t("v3.goalFailed", "Goal seek failed."));
       },
     );
   };
   return (
     <Shell
-      title="Goal seek"
-      ok={result ? "Apply" : busy ? "Seeking…" : "Seek"}
+      title={t("v3.goalTitle", "Goal seek")}
+      ok={result ? t("dialog.apply", "Apply") : busy ? t("v3.seeking", "Seeking…") : t("v3.seek", "Seek")}
       wide
       testId="goal-seek-dialog"
       keepOpen={!result}
@@ -1066,27 +1092,27 @@ function GoalSeekDialog({ d }: { d: Extract<DialogState, { kind: "goalSeek" }> }
         else run();
       }}
     >
-      <p className={styles.lead}>Changes one cell until a formula gives the value you want.</p>
+      <p className={styles.lead}>{t("v3.goalLead", "Changes one cell until a formula gives the value you want.")}</p>
       <div className={v3.grid3}>
-        <Field label="Formula cell">
+        <Field label={t("goalSeek.formulaCell", "Formula cell")}>
           <input ref={ref} className={cx(styles.input, styles.mono)} value={formulaCell} onChange={(e) => (setFormulaCell(e.target.value), setResult(null))} data-testid="goal-formula" />
         </Field>
-        <Field label="Target value">
+        <Field label={t("goalSeek.targetValue", "Target value")}>
           <input className={styles.input} inputMode="decimal" value={target} onChange={(e) => (setTarget(e.target.value), setResult(null))} data-testid="goal-target" />
         </Field>
-        <Field label="By changing cell">
+        <Field label={t("v3.byChanging", "By changing cell")}>
           <input className={cx(styles.input, styles.mono)} value={variableCell} placeholder="D2" onChange={(e) => (setVariableCell(e.target.value), setResult(null))} data-testid="goal-variable" />
         </Field>
       </div>
       {error ? <p className={styles.error}>{error}</p> : null}
       {result ? (
         <div className={cx(v3.result, !result.res.found && v3.resultWarn)} data-testid="goal-result">
-          <div className={v3.resultTitle}>{result.res.found ? "Found a solution" : "No exact solution"}</div>
+          <div className={v3.resultTitle}>{result.res.found ? t("v3.found", "Found a solution") : t("v3.notFound", "No exact solution")}</div>
           <div>
-            {variableCell.toUpperCase()} = <b>{fmt(result.res.value)}</b> gives {formulaCell.toUpperCase()} = <b>{fmt(result.res.result)}</b>
+            {variableCell.toUpperCase()} = <b>{fmt(result.res.value)}</b> {t("v3.gives", "gives")} {formulaCell.toUpperCase()} = <b>{fmt(result.res.result)}</b>
           </div>
           <div className={styles.note}>
-            {result.res.iterations} iteration{result.res.iterations === 1 ? "" : "s"}. Apply writes the value into {variableCell.toUpperCase()} (⌘Z undoes it).
+            {result.res.iterations === 1 ? t("v3.goalNoteOne", "{n} iteration. Apply writes the value into {cell} (⌘Z undoes it).", { n: result.res.iterations, cell: variableCell.toUpperCase() }) : t("v3.goalNoteMany", "{n} iterations. Apply writes the value into {cell} (⌘Z undoes it).", { n: result.res.iterations, cell: variableCell.toUpperCase() })}
           </div>
         </div>
       ) : null}
@@ -1108,8 +1134,8 @@ function PropertiesDialog({ d }: { d: Extract<DialogState, { kind: "properties" 
   const date = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "—");
   return (
     <Shell
-      title="Document properties"
-      ok="Save"
+      title={t("v3.propsTitle", "Document properties")}
+      ok={t("dialog.save", "Save")}
       wide
       testId="properties-dialog"
       onSubmit={() =>
@@ -1122,29 +1148,29 @@ function PropertiesDialog({ d }: { d: Extract<DialogState, { kind: "properties" 
         })
       }
     >
-      <Field label="Title">
+      <Field label={t("properties.docTitle", "Title")}>
         <input ref={ref} className={styles.input} value={p.title ?? ""} onChange={(e) => set({ title: text(e.target.value) })} data-testid="props-title" />
       </Field>
       <div className={cx(v3.grid2, styles.gap)}>
-        <Field label="Subject">
+        <Field label={t("properties.subject", "Subject")}>
           <input className={styles.input} value={p.subject ?? ""} onChange={(e) => set({ subject: text(e.target.value) })} />
         </Field>
-        <Field label="Author">
+        <Field label={t("properties.author", "Author")}>
           <input className={styles.input} value={p.author ?? ""} onChange={(e) => set({ author: text(e.target.value) })} data-testid="props-author" />
         </Field>
       </div>
-      <Field label="Keywords (comma-separated)" className={styles.gap}>
+      <Field label={t("v3.keywordsHint", "Keywords (comma-separated)")} className={styles.gap}>
         <input className={styles.input} value={keywords} onChange={(e) => setKeywords(e.target.value)} />
       </Field>
-      <Field label="Description" className={styles.gap}>
+      <Field label={t("v3.description", "Description")} className={styles.gap}>
         <textarea className={cx(styles.input, v3.textarea)} rows={3} value={p.description ?? ""} onChange={(e) => set({ description: text(e.target.value) })} />
       </Field>
       <dl className={v3.meta}>
-        <dt>Created</dt>
+        <dt>{t("properties.created", "Created")}</dt>
         <dd>{date(p.created)}</dd>
-        <dt>Modified</dt>
+        <dt>{t("properties.modified", "Modified")}</dt>
         <dd>{date(p.modified)}</dd>
-        <dt>Application</dt>
+        <dt>{t("v3.application", "Application")}</dt>
         <dd>{p.generator ?? "—"}</dd>
       </dl>
     </Shell>
@@ -1169,13 +1195,13 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
   const pr = printRange.trim() === "" ? null : parseRanges(printRange);
   const rr = parseSpan(repeatRows, "row");
   const rc = parseSpan(repeatCols, "col");
-  const err = pr === null && printRange.trim() !== "" ? "The print range is not a range (e.g. A1:G15)." : (pr?.length ?? 0) > 1 ? "Use one print range." : rr === undefined ? "Rows to repeat look like 1:2." : rc === undefined ? "Columns to repeat look like A:B." : null;
+  const err = pr === null && printRange.trim() !== "" ? t("v3.errPrintRange", "The print range is not a range (e.g. A1:G15).") : (pr?.length ?? 0) > 1 ? t("v3.errOneRange", "Use one print range.") : rr === undefined ? t("v3.errRows", "Rows to repeat look like 1:2.") : rc === undefined ? t("v3.errCols", "Columns to repeat look like A:B.") : null;
   const [w, h] = paperMm(s);
   // The engine cuts oversized areas down to keep a 10 mm body; say so instead.
   const hfFits = pageBoxes(s, [w, h]).fits;
   const scaleOk = s.scale.type === "percent" ? s.scale.percent >= 10 && s.scale.percent <= 400 : s.scale.type === "fitTo" ? s.scale.width >= 0 && s.scale.height >= 0 : s.scale.pages >= 1;
   const sheetName = ctl.sheetName();
-  const fileName = useDocStore((st) => st.info?.title ?? "Untitled");
+  const fileName = useDocStore((st) => st.info?.title ?? t("app.untitled", "Untitled"));
   const m = s.margins;
   const setMargin = (k: keyof PageSetupDto["margins"], v: string) => {
     const n = Number(v);
@@ -1187,8 +1213,8 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
   }, [w, h]);
   return (
     <Shell
-      title="Page setup"
-      ok="Save"
+      title={t("v3.pageSetup", "Page setup")}
+      ok={t("dialog.save", "Save")}
       wide
       cardClass={cx(v3.xwide, v3.xxwide)}
       testId="page-setup-dialog"
@@ -1203,14 +1229,14 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
       }
     >
       <Tabs
-        label="Page setup"
+        label={t("v3.pageSetup", "Page setup")}
         value={tab}
         onChange={setTab}
         tabs={[
-          { id: "page", label: "Page" },
-          { id: "margins", label: "Margins" },
-          { id: "hf", label: "Header & footer" },
-          { id: "sheet", label: "Sheet" },
+          { id: "page", label: t("print.page", "Page") },
+          { id: "margins", label: t("print.margins", "Margins") },
+          { id: "hf", label: t("v3.headerFooter", "Header & footer") },
+          { id: "sheet", label: t("dialog.sheet", "Sheet") },
         ]}
       />
       <div className={v3.pageLayout}>
@@ -1218,42 +1244,42 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
           {tab === "page" ? (
             <>
               <div className={v3.row}>
-                <span className={v3.rowLabel}>Orientation</span>
-                <div className={styles.segmentedInline} role="radiogroup" aria-label="Orientation">
+                <span className={v3.rowLabel}>{t("print.orientation", "Orientation")}</span>
+                <div className={styles.segmentedInline} role="radiogroup" aria-label={t("print.orientation", "Orientation")}>
                   {(["portrait", "landscape"] as const).map((o) => (
                     <button key={o} type="button" role="radio" aria-checked={s.orientation === o} className={s.orientation === o ? styles.segOn : styles.seg} onClick={() => set({ orientation: o })} data-testid={`page-${o}`}>
-                      {o === "portrait" ? "Portrait" : "Landscape"}
+                      {o === "portrait" ? t("print.portrait", "Portrait") : t("print.landscape", "Landscape")}
                     </button>
                   ))}
                 </div>
               </div>
               <div className={v3.row}>
-                <span id={`${lid}-paper`} className={v3.rowLabel}>Paper</span>
+                <span id={`${lid}-paper`} className={v3.rowLabel}>{t("v3.paper", "Paper")}</span>
                 <select className={styles.selectSmall} aria-labelledby={`${lid}-paper`} value={s.paper.type} onChange={(e) => set({ paper: e.target.value === "custom" ? { type: "custom", widthMm: w, heightMm: h } : ({ type: e.target.value } as PageSetupDto["paper"]) })} data-testid="page-paper">
                   {PAPERS.map((p) => (
                     <option key={p.type} value={p.type}>
                       {p.label} ({p.mm[0]} × {p.mm[1]} mm)
                     </option>
                   ))}
-                  <option value="custom">Custom…</option>
+                  <option value="custom">{t("v3.custom", "Custom…")}</option>
                 </select>
               </div>
               {s.paper.type === "custom" ? (
                 <div className={v3.row}>
-                  <span className={v3.rowLabel}>Size (mm)</span>
-                  <input className={cx(styles.input, v3.small)} aria-label="Width" value={s.paper.widthMm} onChange={(e) => s.paper.type === "custom" && set({ paper: { ...s.paper, widthMm: Number(e.target.value) || 0 } })} />
+                  <span className={v3.rowLabel}>{t("v3.sizeMm", "Size (mm)")}</span>
+                  <input className={cx(styles.input, v3.small)} aria-label={t("v3.width", "Width")} value={s.paper.widthMm} onChange={(e) => s.paper.type === "custom" && set({ paper: { ...s.paper, widthMm: Number(e.target.value) || 0 } })} />
                   <span>×</span>
-                  <input className={cx(styles.input, v3.small)} aria-label="Height" value={s.paper.heightMm} onChange={(e) => s.paper.type === "custom" && set({ paper: { ...s.paper, heightMm: Number(e.target.value) || 0 } })} />
+                  <input className={cx(styles.input, v3.small)} aria-label={t("print.hfHeight", "Height")} value={s.paper.heightMm} onChange={(e) => s.paper.type === "custom" && set({ paper: { ...s.paper, heightMm: Number(e.target.value) || 0 } })} />
                 </div>
               ) : null}
               <div className={v3.row}>
-                <span className={v3.rowLabel}>Scale</span>
-                <div className={styles.segmentedInline} role="radiogroup" aria-label="Scale">
+                <span className={v3.rowLabel}>{t("print.scale", "Scale")}</span>
+                <div className={styles.segmentedInline} role="radiogroup" aria-label={t("print.scale", "Scale")}>
                   <button type="button" role="radio" aria-checked={s.scale.type === "percent"} className={s.scale.type === "percent" ? styles.segOn : styles.seg} onClick={() => set({ scale: { type: "percent", percent: 100 } })}>
-                    Percent
+                    {t("fmt.percent", "Percent")}
                   </button>
                   <button type="button" role="radio" aria-checked={s.scale.type === "fitTo"} className={s.scale.type === "fitTo" ? styles.segOn : styles.seg} onClick={() => set({ scale: { type: "fitTo", width: 1, height: 0 } })} data-testid="page-fit">
-                    Fit to pages
+                    {t("v3.fitToPages", "Fit to pages")}
                   </button>
                 </div>
               </div>
@@ -1261,37 +1287,37 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
                 <span className={v3.rowLabel} />
                 {s.scale.type === "percent" ? (
                   <>
-                    <input className={cx(styles.input, v3.small)} aria-label="Percent" inputMode="numeric" value={s.scale.percent} onChange={(e) => set({ scale: { type: "percent", percent: Math.round(Number(e.target.value) || 0) } })} data-testid="page-percent" />
+                    <input className={cx(styles.input, v3.small)} aria-label={t("fmt.percent", "Percent")} inputMode="numeric" value={s.scale.percent} onChange={(e) => set({ scale: { type: "percent", percent: Math.round(Number(e.target.value) || 0) } })} data-testid="page-percent" />
                     <span>%</span>
                   </>
                 ) : (
                   <>
-                    <input className={cx(styles.input, v3.small)} aria-label="Pages wide" inputMode="numeric" value={s.scale.type === "fitTo" ? s.scale.width : 0} onChange={(e) => s.scale.type === "fitTo" && set({ scale: { ...s.scale, width: Math.max(0, Math.round(Number(e.target.value) || 0)) } })} />
-                    <span>wide ×</span>
-                    <input className={cx(styles.input, v3.small)} aria-label="Pages tall" inputMode="numeric" value={s.scale.type === "fitTo" ? s.scale.height : 0} onChange={(e) => s.scale.type === "fitTo" && set({ scale: { ...s.scale, height: Math.max(0, Math.round(Number(e.target.value) || 0)) } })} />
-                    <span>tall (0 = any)</span>
+                    <input className={cx(styles.input, v3.small)} aria-label={t("v3.pagesWide", "Pages wide")} inputMode="numeric" value={s.scale.type === "fitTo" ? s.scale.width : 0} onChange={(e) => s.scale.type === "fitTo" && set({ scale: { ...s.scale, width: Math.max(0, Math.round(Number(e.target.value) || 0)) } })} />
+                    <span>{t("v3.wideTimes", "wide ×")}</span>
+                    <input className={cx(styles.input, v3.small)} aria-label={t("v3.pagesTall", "Pages tall")} inputMode="numeric" value={s.scale.type === "fitTo" ? s.scale.height : 0} onChange={(e) => s.scale.type === "fitTo" && set({ scale: { ...s.scale, height: Math.max(0, Math.round(Number(e.target.value) || 0)) } })} />
+                    <span>{t("v3.tallAny", "tall (0 = any)")}</span>
                   </>
                 )}
               </div>
-              {!scaleOk ? <p className={styles.error}>Scale is 10 % to 400 %.</p> : null}
+              {!scaleOk ? <p className={styles.error}>{t("v3.scaleRange", "Scale is 10 % to 400 %.")}</p> : null}
             </>
           ) : null}
           {tab === "margins" ? (
             <div className={v3.grid2}>
               {(
                 [
-                  ["topMm", "Top"],
-                  ["bottomMm", "Bottom"],
-                  ["leftMm", "Left"],
-                  ["rightMm", "Right"],
+                  ["topMm", t("print.marginTop", "Top")],
+                  ["bottomMm", t("print.marginBottom", "Bottom")],
+                  ["leftMm", t("print.marginLeft", "Left")],
+                  ["rightMm", t("print.marginRight", "Right")],
                 ] as const
               ).map(([key, label]) => (
-                <Field key={key} label={`${label} (mm)`}>
+                <Field key={key} label={t("v3.mmLabel", "{label} (mm)", { label })}>
                   <input className={styles.input} inputMode="decimal" defaultValue={String(m[key])} onChange={(e) => setMargin(key, e.target.value)} data-testid={`margin-${key}`} />
                 </Field>
               ))}
-              <Check label="Centre horizontally" checked={s.centerH} onChange={(x) => set({ centerH: x })} />
-              <Check label="Centre vertically" checked={s.centerV} onChange={(x) => set({ centerV: x })} />
+              <Check label={t("print.centerHorizontally", "Centre horizontally")} checked={s.centerH} onChange={(x) => set({ centerH: x })} />
+              <Check label={t("print.centerVertically", "Centre vertically")} checked={s.centerV} onChange={(x) => set({ centerV: x })} />
             </div>
           ) : null}
           {tab === "hf" ? (
@@ -1302,28 +1328,28 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
           ) : null}
           {tab === "sheet" ? (
             <>
-              <Field label="Print range (empty: the used area)">
+              <Field label={t("v3.printRangeHint", "Print range (empty: the used area)")}>
                 <input className={cx(styles.input, styles.mono)} value={printRange} placeholder="A1:G15" spellCheck={false} onChange={(e) => setPrintRange(e.target.value)} data-testid="page-print-range" />
               </Field>
               <div className={cx(v3.grid2, styles.gap)}>
-                <Field label="Rows to repeat">
+                <Field label={t("print.repeatRows", "Rows to repeat")}>
                   <input className={cx(styles.input, styles.mono)} value={repeatRows} placeholder="1:1" onChange={(e) => setRepeatRows(e.target.value)} data-testid="page-repeat-rows" />
                 </Field>
-                <Field label="Columns to repeat">
+                <Field label={t("print.repeatColumns", "Columns to repeat")}>
                   <input className={cx(styles.input, styles.mono)} value={repeatCols} placeholder="A:A" onChange={(e) => setRepeatCols(e.target.value)} />
                 </Field>
               </div>
               <div className={styles.optionGrid}>
-                <Check label="Gridlines" checked={s.printGridlines} onChange={(x) => set({ printGridlines: x })} testId="page-gridlines" />
-                <Check label="Row and column headers" checked={s.printHeaders} onChange={(x) => set({ printHeaders: x })} />
+                <Check label={t("v3.gridlines", "Gridlines")} checked={s.printGridlines} onChange={(x) => set({ printGridlines: x })} testId="page-gridlines" />
+                <Check label={t("v3.rowColHeaders", "Row and column headers")} checked={s.printHeaders} onChange={(x) => set({ printHeaders: x })} />
               </div>
               <div className={v3.row}>
-                <span className={v3.rowLabel}>Page order</span>
-                <div className={styles.segmentedInline} role="radiogroup" aria-label="Page order">
+                <span className={v3.rowLabel}>{t("v3.pageOrder", "Page order")}</span>
+                <div className={styles.segmentedInline} role="radiogroup" aria-label={t("v3.pageOrder", "Page order")}>
                   {(
                     [
-                      ["topToBottom", "Down, then over"],
-                      ["leftToRight", "Over, then down"],
+                      ["topToBottom", t("v3.downThenOver", "Down, then over")],
+                      ["leftToRight", t("v3.overThenDown", "Over, then down")],
                     ] as const
                   ).map(([o, label]) => (
                     <button key={o} type="button" role="radio" aria-checked={s.pageOrder === o} className={s.pageOrder === o ? styles.segOn : styles.seg} onClick={() => set({ pageOrder: o })}>
@@ -1333,7 +1359,7 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
                 </div>
               </div>
               <p className={styles.note}>
-                Manual breaks: {s.rowBreaks.length} row, {s.colBreaks.length} column (Insert ▸ Page Break).
+                {t("v3.manualBreaks", "Manual breaks: {rows} row, {cols} column (Insert ▸ Page Break).", { rows: s.rowBreaks.length, cols: s.colBreaks.length })}
               </p>
             </>
           ) : null}
@@ -1370,7 +1396,7 @@ function PagePreview({ setup, size, ctx }: { setup: PageSetupDto; size: { w: num
     );
   };
   return (
-    <div className={v3.pagePreviewWrap} aria-label="Page preview">
+    <div className={v3.pagePreviewWrap} aria-label={t("v3.pagePreview", "Page preview")}>
       <div className={v3.paper} style={{ width: size.w, height: size.h }}>
         {area("header")}
         <div
@@ -1390,7 +1416,7 @@ function PagePreview({ setup, size, ctx }: { setup: PageSetupDto; size: { w: num
         {area("footer")}
       </div>
       <div className={styles.note}>
-        {setup.orientation === "landscape" ? "Landscape" : "Portrait"}, {setup.scale.type === "percent" ? `${setup.scale.percent} %` : setup.scale.type === "fitTo" ? `fit ${setup.scale.width || "any"} × ${setup.scale.height || "any"}` : `fit ${setup.scale.pages} pages`}
+        {t("v3.previewNote", "{orientation}, {scale}", { orientation: setup.orientation === "landscape" ? t("print.landscape", "Landscape") : t("print.portrait", "Portrait"), scale: setup.scale.type === "percent" ? `${setup.scale.percent} %` : setup.scale.type === "fitTo" ? t("v3.fitWH", "fit {w} × {h}", { w: setup.scale.width || t("v3.any", "any"), h: setup.scale.height || t("v3.any", "any") }) : t("v3.fitPages", "fit {n} pages", { n: setup.scale.pages }) })}
       </div>
     </div>
   );
@@ -1448,16 +1474,16 @@ function HeaderFooterSection({ which, setup, onChange, ctx }: { which: HfWhich; 
       <fieldset className={v3.hfFields} disabled={!on} data-testid={`${which}-fields`}>
         <HeaderFooterEditor value={text} onChange={(hf) => onChange(isHeader ? { header: hf } : { footer: hf })} ctx={ctx} testId={which} />
         <div className={v3.grid4}>
-          <Field label={`${t("print.hfLeftMargin", "Left margin")} (mm)`}>
+          <Field label={t("v3.mmLabel", "{label} (mm)", { label: t("print.hfLeftMargin", "Left margin") })}>
             <MmInput value={area.leftMm} onChange={(v) => update({ leftMm: v })} testId={`${which}-left-margin`} />
           </Field>
-          <Field label={`${t("print.hfRightMargin", "Right margin")} (mm)`}>
+          <Field label={t("v3.mmLabel", "{label} (mm)", { label: t("print.hfRightMargin", "Right margin") })}>
             <MmInput value={area.rightMm} onChange={(v) => update({ rightMm: v })} testId={`${which}-right-margin`} />
           </Field>
-          <Field label={`${t("print.hfSpacing", "Spacing")} (mm)`}>
+          <Field label={t("v3.mmLabel", "{label} (mm)", { label: t("print.hfSpacing", "Spacing") })}>
             <MmInput value={area.spacingMm} onChange={(v) => update({ spacingMm: v }, heightMm + v)} testId={`${which}-spacing`} />
           </Field>
-          <Field label={`${t("print.hfHeight", "Height")} (mm)`}>
+          <Field label={t("v3.mmLabel", "{label} (mm)", { label: t("print.hfHeight", "Height") })}>
             <MmInput value={heightMm} onChange={(v) => update({}, v + area.spacingMm)} testId={`${which}-height`} />
           </Field>
         </div>
@@ -1494,7 +1520,7 @@ function HeaderFooterEditor({ value, onChange, ctx, testId }: { value: HeaderFoo
     <>
       <div className={v3.grid3}>
         {(["left", "center", "right"] as const).map((k) => (
-          <Field key={k} label={k === "left" ? "Left" : k === "center" ? "Centre" : "Right"}>
+          <Field key={k} label={k === "left" ? t("print.marginLeft", "Left") : k === "center" ? t("v3.centre", "Centre") : t("print.marginRight", "Right")}>
             {/* A textarea: a region may hold several lines (an <input> would drop the line breaks). */}
             <textarea ref={refs[k]} className={cx(styles.input, styles.mono, v3.hfText)} rows={2} value={hf[k]} onFocus={() => setFocus(k)} onChange={(e) => update(k, e.target.value)} data-testid={`${testId}-${k}`} />
           </Field>
@@ -1502,12 +1528,12 @@ function HeaderFooterEditor({ value, onChange, ctx, testId }: { value: HeaderFoo
       </div>
       <div className={v3.presetRow}>
         {HF_PLACEHOLDERS.map((p) => (
-          <button key={p.token} type="button" className={styles.preset} onMouseDown={(e) => e.preventDefault()} onClick={() => insert(p.token)} title={p.token} data-testid={`${testId}-insert-${p.label.toLowerCase()}`}>
+          <button key={p.token} type="button" className={styles.preset} onMouseDown={(e) => e.preventDefault()} onClick={() => insert(p.token)} title={p.token} data-testid={`${testId}-insert-${p.token.slice(2, -1).toLowerCase()}`}>
             + {p.label}
           </button>
         ))}
       </div>
-      {value ? <p className={styles.note}>Preview: {[hf.left, hf.center, hf.right].map((x) => previewHeaderFooter(x, ctx) || "—").join("  ·  ")}</p> : null}
+      {value ? <p className={styles.note}>{t("v3.previewColon", "Preview: {text}", { text: [hf.left, hf.center, hf.right].map((x) => previewHeaderFooter(x, ctx) || "—").join("  ·  ") })}</p> : null}
     </>
   );
 }

@@ -27,14 +27,14 @@ export type BorderPreset = "all" | "outer" | "inner" | "top" | "bottom" | "left"
 export type LineWeight = "thin" | "medium" | "thick";
 
 export const BORDER_PRESETS: readonly { id: BorderPreset; label: string }[] = [
-  { id: "all", label: "All borders" },
-  { id: "outer", label: "Outer borders" },
-  { id: "inner", label: "Inner borders" },
-  { id: "top", label: "Top border" },
-  { id: "bottom", label: "Bottom border" },
-  { id: "left", label: "Left border" },
-  { id: "right", label: "Right border" },
-  { id: "none", label: "No borders" },
+  { id: "all", get label() { return t("cells.allBorders", "All borders"); } },
+  { id: "outer", get label() { return t("lbl.border.outer", "Outer borders"); } },
+  { id: "inner", get label() { return t("lbl.border.inner", "Inner borders"); } },
+  { id: "top", get label() { return t("lbl.border.top", "Top border"); } },
+  { id: "bottom", get label() { return t("lbl.border.bottom", "Bottom border"); } },
+  { id: "left", get label() { return t("lbl.border.left", "Left border"); } },
+  { id: "right", get label() { return t("lbl.border.right", "Right border"); } },
+  { id: "none", get label() { return t("cells.noBorder", "No borders"); } },
 ];
 
 /** Line width in px for each weight (Calc: 0.75 pt, 1.75 pt, 2.5 pt). */
@@ -147,17 +147,17 @@ export function filterButtonsFor(info: AutoFilterInfo | null): FilterButtons | n
 
 /** Condition operators of the filter popover (label, op, takes a value). */
 export const FILTER_OPS: readonly { op: FilterOp; label: string; value: boolean }[] = [
-  { op: "eq", label: "equals", value: true },
-  { op: "ne", label: "does not equal", value: true },
-  { op: "gt", label: "greater than", value: true },
-  { op: "ge", label: "at least", value: true },
-  { op: "lt", label: "less than", value: true },
-  { op: "le", label: "at most", value: true },
-  { op: "contains", label: "contains", value: true },
-  { op: "beginsWith", label: "begins with", value: true },
-  { op: "endsWith", label: "ends with", value: true },
-  { op: "empty", label: "is empty", value: false },
-  { op: "notEmpty", label: "is not empty", value: false },
+  { op: "eq", get label() { return t("filter.op.eq", "equals"); }, value: true },
+  { op: "ne", get label() { return t("filter.op.ne", "does not equal"); }, value: true },
+  { op: "gt", get label() { return t("filter.op.gt", "greater than"); }, value: true },
+  { op: "ge", get label() { return t("filter.op.ge", "at least"); }, value: true },
+  { op: "lt", get label() { return t("filter.op.lt", "less than"); }, value: true },
+  { op: "le", get label() { return t("filter.op.le", "at most"); }, value: true },
+  { op: "contains", get label() { return t("filter.op.contains", "contains"); }, value: true },
+  { op: "beginsWith", get label() { return t("filter.op.beginsWith", "begins with"); }, value: true },
+  { op: "endsWith", get label() { return t("filter.op.endsWith", "ends with"); }, value: true },
+  { op: "empty", get label() { return t("filter.op.empty", "is empty"); }, value: false },
+  { op: "notEmpty", get label() { return t("filter.op.notEmpty", "is not empty"); }, value: false },
 ];
 
 /**
@@ -285,9 +285,9 @@ export function limitDetail(message: string): string | null {
 export function friendlyError(code: string, message: string): string {
   switch (code) {
     case "array_block":
-      return "You can't change part of an array formula. Select the whole block, edit it, and press ⌃⇧↩.";
+      return t("lbl.err.arrayBlock", "You can't change part of an array formula. Select the whole block, edit it, and press ⌃⇧↩.");
     case "merged":
-      return "That would split a merged cell. Unmerge it first (Format ▸ Unmerge Cells).";
+      return t("lbl.err.merged", "That would split a merged cell. Unmerge it first (Format ▸ Unmerge Cells).");
     case "bad_file": {
       const what = limitDetail(message);
       if (what === null) return message;

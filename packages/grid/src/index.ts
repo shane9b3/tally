@@ -35,7 +35,7 @@ export { drawCfIcon, drawDataBar, iconCount, ICON_COLORS } from "./cfIcons";
 export { cellsOptionsActive, EngineClientSource, type EngineClientSourceOptions } from "./engineSource";
 // Wave 5 seams (W5-0b)
 export { ObjectLayer, anchorToPx, pxToAnchor, anchorRange, PX_PER_MM, OBJECT_HANDLES, type GridObject, type ObjectAnchor, type ObjectHandle, type AnchorAxes, type ObjectLayerEvents } from "./objectLayer";
-export { AriaMirror, describeCell, describeSelection, OFFSCREEN_STYLE, type AriaProps } from "./aria";
+export { AriaMirror, describeCell, describeSelection, DEFAULT_GRID_STRINGS, gridStrings, OFFSCREEN_STYLE, type AriaProps, type GridStrings } from "./aria";
 export { SplitView, clampRatio, type SplitAxis, type SplitOptions } from "./split";
 export { OUTLINE_LEVEL_PX, outlineLevels, outlineHit, type OutlineHit } from "./outline";
 export { SyntheticSource, type SyntheticOptions } from "./synthetic";

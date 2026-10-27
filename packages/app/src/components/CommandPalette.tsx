@@ -82,7 +82,7 @@ function PaletteCard() {
     >
       <Command
         className={styles.card}
-        label="Command palette"
+        label={t("cmd.palette.toggle", "Command palette")}
         loop
         onKeyDown={(e) => {
           if (e.key === "Escape") {
@@ -96,7 +96,7 @@ function PaletteCard() {
           <Command.Input
             className={styles.input}
             autoFocus
-            placeholder="Ask or do anything…"
+            placeholder={t("shell.paletteAsk", "Ask or do anything…")}
             value={query}
             onValueChange={setQuery}
             data-testid="palette-input"
@@ -104,9 +104,9 @@ function PaletteCard() {
           <kbd className={styles.esc}>esc</kbd>
         </div>
         <Command.List className={styles.list}>
-          <Command.Empty className={styles.empty}>No matches. Try “sum of Total” or “bold”.</Command.Empty>
+          <Command.Empty className={styles.empty}>{t("shell.paletteEmpty", "No matches. Try “sum of Total” or “bold”.")}</Command.Empty>
           {answers.length > 0 ? (
-            <Command.Group heading="Answer" forceMount>
+            <Command.Group heading={t("shell.paletteAnswer", "Answer")} forceMount>
               {answers.map((s, i) => (
                 <Command.Item
                   key={`a${i}`}
@@ -121,14 +121,14 @@ function PaletteCard() {
                   <div className={styles.answerTop}>
                     <span className={styles.value}>{s.preview ?? s.title}</span>
                     <code className={styles.formula}>{pretty(s.formula ?? "")}</code>
-                    <span className={styles.insert}>Insert ↵</span>
+                    <span className={styles.insert}>{t("dialog.insert", "Insert")} ↵</span>
                   </div>
                   <div className={styles.explanation}>{s.explanation || s.title}</div>
                 </Command.Item>
               ))}
             </Command.Group>
           ) : null}
-          <Command.Group heading="Actions">
+          <Command.Group heading={t("shell.paletteActions", "Actions")}>
             {actionHints.map((s, i) => {
               const cmd = s.action ? ctl.registry.get(s.action) : undefined;
               return (
@@ -171,7 +171,7 @@ function PaletteCard() {
             })}
           </Command.Group>
           {query.trim() !== "" && functions.length > 0 ? (
-            <Command.Group heading="Functions">
+            <Command.Group heading={t("wizard.functions", "Functions")}>
               {functions.map((f) => (
                 <Command.Item
                   key={f.name}

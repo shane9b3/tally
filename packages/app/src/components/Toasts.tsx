@@ -1,6 +1,7 @@
 /** Error and info toasts (bottom centre, auto-dismiss). */
 import { useEffect } from "react";
 import { cx } from "../context";
+import { t } from "../i18n";
 import { useUiStore, type Toast } from "../stores/uiStore";
 import styles from "./Toasts.module.css";
 
@@ -29,7 +30,7 @@ function ToastView({ toast }: { toast: Toast }) {
           key={a.label}
           type="button"
           className={styles.action}
-          data-testid={`toast-action-${a.label.toLowerCase()}`}
+          data-testid={`toast-action-${a.id ?? a.label}`}
           onClick={() => {
             useUiStore.getState().dismissToast(toast.id);
             a.run();
@@ -38,7 +39,7 @@ function ToastView({ toast }: { toast: Toast }) {
           {a.label}
         </button>
       ))}
-      <button type="button" className={styles.close} aria-label="Dismiss" onClick={() => useUiStore.getState().dismissToast(toast.id)}>
+      <button type="button" className={styles.close} aria-label={t("shell.dismiss", "Dismiss")} onClick={() => useUiStore.getState().dismissToast(toast.id)}>
         ×
       </button>
     </div>

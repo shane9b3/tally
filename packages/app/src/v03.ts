@@ -6,6 +6,7 @@
  * locales. The controller (features.ts) and the dialogs use them; tests
  * cover them directly.
  */
+import { t } from "./i18n";
 import type {
   CellPos,
   CfColorStop,
@@ -86,13 +87,13 @@ export function normalizeLink(input: string): string {
 
 /** Problems with a link the Hyperlink dialog shows (`null` when it can be saved). */
 export function linkError(url: string): string | null {
-  const t = url.trim();
-  if (t === "") return null;
-  if (isForbiddenLink(t)) return "Script and data links are not allowed.";
-  if (new TextEncoder().encode(t).length > MAX_URL) return "That link is too long.";
-  if (isInternalLink(t)) return t.length > 1 ? null : "Type a cell or name after #, e.g. #Sheet2.A1.";
-  if (/^file:/i.test(t)) return null;
-  if (!isOpenableUrl(t)) return "Use a web address (https://…), an e-mail address or #Sheet.A1.";
+  const u = url.trim();
+  if (u === "") return null;
+  if (isForbiddenLink(u)) return t("lbl.link.forbidden", "Script and data links are not allowed.");
+  if (new TextEncoder().encode(u).length > MAX_URL) return t("lbl.link.tooLong", "That link is too long.");
+  if (isInternalLink(u)) return u.length > 1 ? null : t("lbl.link.internal", "Type a cell or name after #, e.g. #Sheet2.A1.");
+  if (/^file:/i.test(u)) return null;
+  if (!isOpenableUrl(u)) return t("lbl.link.invalid", "Use a web address (https://…), an e-mail address or #Sheet.A1.");
   return null;
 }
 
@@ -112,14 +113,14 @@ export function chipCfStyle(bg: number, fg: number): CfStyleDto {
 
 /** The common highlight styles (Excel's "Light red fill with dark red text" …). */
 export const CF_STYLE_PRESETS: readonly { id: string; label: string; style: CfStyleDto }[] = [
-  { id: "red", label: "Light red fill, dark red text", style: { ...emptyCfStyle(), fill: 0xfee2e2ff, color: 0x991b1bff } },
-  { id: "amber", label: "Yellow fill, dark yellow text", style: { ...emptyCfStyle(), fill: 0xfef3c7ff, color: 0x92400eff } },
-  { id: "green", label: "Green fill, dark green text", style: { ...emptyCfStyle(), fill: 0xdcfce7ff, color: 0x166534ff } },
-  { id: "blue", label: "Blue fill, dark blue text", style: { ...emptyCfStyle(), fill: 0xdbeafeff, color: 0x1e40afff } },
-  { id: "redText", label: "Red text", style: { ...emptyCfStyle(), color: 0xdc2626ff } },
-  { id: "bold", label: "Bold", style: { ...emptyCfStyle(), bold: true } },
-  { id: "chipGreen", label: "Green chip", style: chipCfStyle(0xdcfce7ff, 0x166534ff) },
-  { id: "chipRed", label: "Red chip", style: chipCfStyle(0xfee2e2ff, 0x991b1bff) },
+  { id: "red", get label() { return t("lbl.cf.style.red", "Light red fill, dark red text"); }, style: { ...emptyCfStyle(), fill: 0xfee2e2ff, color: 0x991b1bff } },
+  { id: "amber", get label() { return t("lbl.cf.style.amber", "Yellow fill, dark yellow text"); }, style: { ...emptyCfStyle(), fill: 0xfef3c7ff, color: 0x92400eff } },
+  { id: "green", get label() { return t("lbl.cf.style.green", "Green fill, dark green text"); }, style: { ...emptyCfStyle(), fill: 0xdcfce7ff, color: 0x166534ff } },
+  { id: "blue", get label() { return t("lbl.cf.style.blue", "Blue fill, dark blue text"); }, style: { ...emptyCfStyle(), fill: 0xdbeafeff, color: 0x1e40afff } },
+  { id: "redText", get label() { return t("lbl.cf.style.redText", "Red text"); }, style: { ...emptyCfStyle(), color: 0xdc2626ff } },
+  { id: "bold", get label() { return t("lbl.cf.style.bold", "Bold"); }, style: { ...emptyCfStyle(), bold: true } },
+  { id: "chipGreen", get label() { return t("lbl.cf.style.chipGreen", "Green chip"); }, style: chipCfStyle(0xdcfce7ff, 0x166534ff) },
+  { id: "chipRed", get label() { return t("lbl.cf.style.chipRed", "Red chip"); }, style: chipCfStyle(0xfee2e2ff, 0x991b1bff) },
 ];
 
 /** Default style of new rules. */
@@ -132,11 +133,11 @@ export function threshold(kind: CfValueKind, value = ""): CfThreshold {
 
 /** Colour scale presets (low → high). */
 export const COLOR_SCALES: readonly { id: string; label: string; colors: number[] }[] = [
-  { id: "rwg", label: "Red – white – green", colors: [0xf8696bff, 0xffffffff, 0x63be7bff] },
-  { id: "gwr", label: "Green – white – red", colors: [0x63be7bff, 0xffffffff, 0xf8696bff] },
-  { id: "wg", label: "White – green", colors: [0xffffffff, 0x63be7bff] },
-  { id: "wb", label: "White – blue", colors: [0xffffffff, 0x5a8ac6ff] },
-  { id: "ryg", label: "Red – yellow – green", colors: [0xf8696bff, 0xffeb84ff, 0x63be7bff] },
+  { id: "rwg", get label() { return t("lbl.cf.scale.rwg", "Red – white – green"); }, colors: [0xf8696bff, 0xffffffff, 0x63be7bff] },
+  { id: "gwr", get label() { return t("lbl.cf.scale.gwr", "Green – white – red"); }, colors: [0x63be7bff, 0xffffffff, 0xf8696bff] },
+  { id: "wg", get label() { return t("lbl.cf.scale.wg", "White – green"); }, colors: [0xffffffff, 0x63be7bff] },
+  { id: "wb", get label() { return t("lbl.cf.scale.wb", "White – blue"); }, colors: [0xffffffff, 0x5a8ac6ff] },
+  { id: "ryg", get label() { return t("lbl.cf.scale.ryg", "Red – yellow – green"); }, colors: [0xf8696bff, 0xffeb84ff, 0x63be7bff] },
 ];
 
 /** Colour scale stops for 2 or 3 colours (min, [50th percentile], max). */
@@ -156,26 +157,26 @@ export function colorScaleStops(colors: readonly number[]): CfColorStop[] {
 
 /** Icon sets offered in the editor. */
 export const ICON_SETS: readonly { set: IconSetKind; label: string }[] = [
-  { set: "threeArrows", label: "3 arrows" },
-  { set: "threeArrowsGray", label: "3 grey arrows" },
-  { set: "threeTrafficLights", label: "3 traffic lights" },
-  { set: "threeTrafficLightsRimmed", label: "3 traffic lights (rimmed)" },
-  { set: "threeFlags", label: "3 flags" },
-  { set: "threeSigns", label: "3 signs" },
-  { set: "threeSymbols", label: "3 symbols (circled)" },
-  { set: "threeSymbolsUncircled", label: "3 symbols" },
-  { set: "threeStars", label: "3 stars" },
-  { set: "threeTriangles", label: "3 triangles" },
-  { set: "fourArrows", label: "4 arrows" },
-  { set: "fourArrowsGray", label: "4 grey arrows" },
-  { set: "fourRedToBlack", label: "4 red to black" },
-  { set: "fourRating", label: "4 ratings" },
-  { set: "fourTrafficLights", label: "4 traffic lights" },
-  { set: "fiveArrows", label: "5 arrows" },
-  { set: "fiveArrowsGray", label: "5 grey arrows" },
-  { set: "fiveRating", label: "5 ratings" },
-  { set: "fiveQuarters", label: "5 quarters" },
-  { set: "fiveBoxes", label: "5 boxes" },
+  { set: "threeArrows", get label() { return t("lbl.cf.icons.threeArrows", "3 arrows"); } },
+  { set: "threeArrowsGray", get label() { return t("lbl.cf.icons.threeArrowsGray", "3 grey arrows"); } },
+  { set: "threeTrafficLights", get label() { return t("lbl.cf.icons.threeTrafficLights", "3 traffic lights"); } },
+  { set: "threeTrafficLightsRimmed", get label() { return t("lbl.cf.icons.threeTrafficLightsRimmed", "3 traffic lights (rimmed)"); } },
+  { set: "threeFlags", get label() { return t("lbl.cf.icons.threeFlags", "3 flags"); } },
+  { set: "threeSigns", get label() { return t("lbl.cf.icons.threeSigns", "3 signs"); } },
+  { set: "threeSymbols", get label() { return t("lbl.cf.icons.threeSymbols", "3 symbols (circled)"); } },
+  { set: "threeSymbolsUncircled", get label() { return t("lbl.cf.icons.threeSymbolsUncircled", "3 symbols"); } },
+  { set: "threeStars", get label() { return t("lbl.cf.icons.threeStars", "3 stars"); } },
+  { set: "threeTriangles", get label() { return t("lbl.cf.icons.threeTriangles", "3 triangles"); } },
+  { set: "fourArrows", get label() { return t("lbl.cf.icons.fourArrows", "4 arrows"); } },
+  { set: "fourArrowsGray", get label() { return t("lbl.cf.icons.fourArrowsGray", "4 grey arrows"); } },
+  { set: "fourRedToBlack", get label() { return t("lbl.cf.icons.fourRedToBlack", "4 red to black"); } },
+  { set: "fourRating", get label() { return t("lbl.cf.icons.fourRating", "4 ratings"); } },
+  { set: "fourTrafficLights", get label() { return t("lbl.cf.icons.fourTrafficLights", "4 traffic lights"); } },
+  { set: "fiveArrows", get label() { return t("lbl.cf.icons.fiveArrows", "5 arrows"); } },
+  { set: "fiveArrowsGray", get label() { return t("lbl.cf.icons.fiveArrowsGray", "5 grey arrows"); } },
+  { set: "fiveRating", get label() { return t("lbl.cf.icons.fiveRating", "5 ratings"); } },
+  { set: "fiveQuarters", get label() { return t("lbl.cf.icons.fiveQuarters", "5 quarters"); } },
+  { set: "fiveBoxes", get label() { return t("lbl.cf.icons.fiveBoxes", "5 boxes"); } },
 ];
 
 /** Icons in a set. */
@@ -193,55 +194,55 @@ export function iconThresholds(set: IconSetKind): CfThreshold[] {
 export type CfRuleType = CfRuleKind["type"];
 
 export const CF_RULE_TYPES: readonly { type: CfRuleType; label: string }[] = [
-  { type: "cellValue", label: "Cell value" },
-  { type: "formula", label: "Formula is" },
-  { type: "colorScale", label: "Colour scale" },
-  { type: "dataBar", label: "Data bar" },
-  { type: "iconSet", label: "Icon set" },
-  { type: "top", label: "Top / bottom" },
-  { type: "average", label: "Above / below average" },
-  { type: "duplicate", label: "Duplicate values" },
-  { type: "unique", label: "Unique values" },
-  { type: "text", label: "Text" },
-  { type: "blank", label: "Blank cells" },
-  { type: "notBlank", label: "Non-blank cells" },
-  { type: "error", label: "Errors" },
-  { type: "notError", label: "No errors" },
-  { type: "dateIs", label: "Date is" },
+  { type: "cellValue", get label() { return t("lbl.cf.rule.cellValue", "Cell value"); } },
+  { type: "formula", get label() { return t("cf.formulaIs", "Formula is"); } },
+  { type: "colorScale", get label() { return t("cf.colorScale", "Colour scale"); } },
+  { type: "dataBar", get label() { return t("cf.dataBar", "Data bar"); } },
+  { type: "iconSet", get label() { return t("cf.iconSet", "Icon set"); } },
+  { type: "top", get label() { return t("lbl.cf.rule.top", "Top / bottom"); } },
+  { type: "average", get label() { return t("lbl.cf.rule.average", "Above / below average"); } },
+  { type: "duplicate", get label() { return t("lbl.cf.rule.duplicate", "Duplicate values"); } },
+  { type: "unique", get label() { return t("lbl.cf.rule.unique", "Unique values"); } },
+  { type: "text", get label() { return t("lbl.cf.rule.text", "Text"); } },
+  { type: "blank", get label() { return t("lbl.cf.rule.blank", "Blank cells"); } },
+  { type: "notBlank", get label() { return t("lbl.cf.rule.notBlank", "Non-blank cells"); } },
+  { type: "error", get label() { return t("lbl.cf.rule.error", "Errors"); } },
+  { type: "notError", get label() { return t("lbl.cf.rule.notError", "No errors"); } },
+  { type: "dateIs", get label() { return t("lbl.cf.rule.dateIs", "Date is"); } },
 ];
 
 export const CMP_OPS: readonly { op: CmpOp; label: string; symbol: string; operands: 1 | 2 }[] = [
-  { op: "gt", label: "greater than", symbol: ">", operands: 1 },
-  { op: "ge", label: "greater than or equal to", symbol: "≥", operands: 1 },
-  { op: "lt", label: "less than", symbol: "<", operands: 1 },
-  { op: "le", label: "less than or equal to", symbol: "≤", operands: 1 },
-  { op: "eq", label: "equal to", symbol: "=", operands: 1 },
-  { op: "ne", label: "not equal to", symbol: "≠", operands: 1 },
-  { op: "between", label: "between", symbol: "between", operands: 2 },
-  { op: "notBetween", label: "not between", symbol: "not between", operands: 2 },
+  { op: "gt", get label() { return t("cf.greaterThan", "greater than"); }, symbol: ">", operands: 1 },
+  { op: "ge", get label() { return t("lbl.cf.cmp.ge", "greater than or equal to"); }, symbol: "≥", operands: 1 },
+  { op: "lt", get label() { return t("cf.lessThan", "less than"); }, symbol: "<", operands: 1 },
+  { op: "le", get label() { return t("lbl.cf.cmp.le", "less than or equal to"); }, symbol: "≤", operands: 1 },
+  { op: "eq", get label() { return t("cf.equalTo", "equal to"); }, symbol: "=", operands: 1 },
+  { op: "ne", get label() { return t("cf.notEqualTo", "not equal to"); }, symbol: "≠", operands: 1 },
+  { op: "between", get label() { return t("cf.between", "between"); }, symbol: "between", operands: 2 },
+  { op: "notBetween", get label() { return t("cf.notBetween", "not between"); }, symbol: "not between", operands: 2 },
 ];
 
 export const TEXT_OPS: readonly { op: CfTextOp; label: string }[] = [
-  { op: "contains", label: "contains" },
-  { op: "notContains", label: "does not contain" },
-  { op: "beginsWith", label: "begins with" },
-  { op: "endsWith", label: "ends with" },
+  { op: "contains", get label() { return t("lbl.cf.textOp.contains", "contains"); } },
+  { op: "notContains", get label() { return t("lbl.cf.textOp.notContains", "does not contain"); } },
+  { op: "beginsWith", get label() { return t("lbl.cf.textOp.beginsWith", "begins with"); } },
+  { op: "endsWith", get label() { return t("lbl.cf.textOp.endsWith", "ends with"); } },
 ];
 
 export const DATE_PERIODS: readonly { period: CfDatePeriod; label: string }[] = [
-  { period: "yesterday", label: "yesterday" },
-  { period: "today", label: "today" },
-  { period: "tomorrow", label: "tomorrow" },
-  { period: "last7Days", label: "in the last 7 days" },
-  { period: "lastWeek", label: "last week" },
-  { period: "thisWeek", label: "this week" },
-  { period: "nextWeek", label: "next week" },
-  { period: "lastMonth", label: "last month" },
-  { period: "thisMonth", label: "this month" },
-  { period: "nextMonth", label: "next month" },
-  { period: "lastYear", label: "last year" },
-  { period: "thisYear", label: "this year" },
-  { period: "nextYear", label: "next year" },
+  { period: "yesterday", get label() { return t("lbl.cf.period.yesterday", "yesterday"); } },
+  { period: "today", get label() { return t("lbl.cf.period.today", "today"); } },
+  { period: "tomorrow", get label() { return t("lbl.cf.period.tomorrow", "tomorrow"); } },
+  { period: "last7Days", get label() { return t("lbl.cf.period.last7Days", "in the last 7 days"); } },
+  { period: "lastWeek", get label() { return t("lbl.cf.period.lastWeek", "last week"); } },
+  { period: "thisWeek", get label() { return t("lbl.cf.period.thisWeek", "this week"); } },
+  { period: "nextWeek", get label() { return t("lbl.cf.period.nextWeek", "next week"); } },
+  { period: "lastMonth", get label() { return t("lbl.cf.period.lastMonth", "last month"); } },
+  { period: "thisMonth", get label() { return t("lbl.cf.period.thisMonth", "this month"); } },
+  { period: "nextMonth", get label() { return t("lbl.cf.period.nextMonth", "next month"); } },
+  { period: "lastYear", get label() { return t("lbl.cf.period.lastYear", "last year"); } },
+  { period: "thisYear", get label() { return t("lbl.cf.period.thisYear", "this year"); } },
+  { period: "nextYear", get label() { return t("lbl.cf.period.nextYear", "next year"); } },
 ];
 
 /** A rule kind with sensible defaults for the editor. */
@@ -308,37 +309,41 @@ export function ruleSummary(rule: CfRuleDto): string {
     case "cellValue": {
       const op = CMP_OPS.find((o) => o.op === k.op);
       const vals = k.formulas.map(operandText);
-      if (op?.operands === 2) return `Cell value ${op.label} ${vals[0] ?? ""} and ${vals[1] ?? ""}`;
-      return `Cell value ${op?.symbol ?? k.op} ${vals[0] ?? ""}`;
+      if (op?.operands === 2) return t("lbl.rule.cellValueBetween", "Cell value {op} {a} and {b}", { op: op.label, a: vals[0] ?? "", b: vals[1] ?? "" });
+      return t("lbl.rule.cellValueCmp", "Cell value {op} {a}", { op: op?.symbol ?? k.op, a: vals[0] ?? "" });
     }
     case "formula":
-      return `Formula: =${k.formula.replace(/^=/, "")}`;
+      return t("lbl.rule.formula", "Formula: ={formula}", { formula: k.formula.replace(/^=/, "") });
     case "colorScale":
-      return `Colour scale (${k.stops.length} colours)`;
+      return t("lbl.rule.colorScale", "Colour scale ({n} colours)", { n: k.stops.length });
     case "dataBar":
-      return "Data bar";
+      return t("cf.dataBar", "Data bar");
     case "iconSet":
-      return `Icon set: ${ICON_SETS.find((s) => s.set === k.set)?.label ?? k.set}`;
+      return t("lbl.rule.iconSet", "Icon set: {name}", { name: ICON_SETS.find((s) => s.set === k.set)?.label ?? k.set });
     case "top":
-      return `${k.bottom ? "Bottom" : "Top"} ${k.rank}${k.percent ? "%" : ""}`;
-    case "average":
-      return `${k.above ? "Above" : "Below"} average${k.equal ? " (or equal)" : ""}`;
+      return t(k.bottom ? "lbl.rule.bottom" : "lbl.rule.top", k.bottom ? "Bottom {n}{pct}" : "Top {n}{pct}", { n: k.rank, pct: k.percent ? "%" : "" });
+    case "average": {
+      const eq = k.equal ? "Eq" : "";
+      return k.above
+        ? t(`lbl.rule.above${eq}`, k.equal ? "Above average (or equal)" : "Above average")
+        : t(`lbl.rule.below${eq}`, k.equal ? "Below average (or equal)" : "Below average");
+    }
     case "duplicate":
-      return "Duplicate values";
+      return t("lbl.rule.duplicate", "Duplicate values");
     case "unique":
-      return "Unique values";
+      return t("lbl.rule.unique", "Unique values");
     case "text":
-      return `Text ${TEXT_OPS.find((o) => o.op === k.op)?.label ?? k.op} “${k.text}”`;
+      return t("lbl.rule.text", "Text {op} “{text}”", { op: TEXT_OPS.find((o) => o.op === k.op)?.label ?? k.op, text: k.text });
     case "blank":
-      return "Blank cells";
+      return t("lbl.rule.blank", "Blank cells");
     case "notBlank":
-      return "Non-blank cells";
+      return t("lbl.rule.notBlank", "Non-blank cells");
     case "error":
-      return "Cells with errors";
+      return t("lbl.rule.error", "Cells with errors");
     case "notError":
-      return "Cells without errors";
+      return t("lbl.rule.notError", "Cells without errors");
     case "dateIs":
-      return `Date is ${DATE_PERIODS.find((p) => p.period === k.period)?.label ?? k.period}`;
+      return t("lbl.rule.dateIs", "Date is {period}", { period: DATE_PERIODS.find((p) => p.period === k.period)?.label ?? k.period });
   }
 }
 
@@ -368,15 +373,15 @@ export function ruleError(rule: CfRuleDto): string | null {
   const k = rule.kind;
   switch (k.type) {
     case "cellValue":
-      return k.formulas.some((f) => f.trim() === "") ? "Enter a value." : null;
+      return k.formulas.some((f) => f.trim() === "") ? t("lbl.err.enterValue", "Enter a value.") : null;
     case "formula":
-      return k.formula.trim().replace(/^=/, "") === "" ? "Enter a formula, e.g. $G2=\"Overdue\"." : null;
+      return k.formula.trim().replace(/^=/, "") === "" ? t("lbl.err.enterFormulaEg", "Enter a formula, e.g. $G2=\"Overdue\".") : null;
     case "top":
-      return !Number.isInteger(k.rank) || k.rank < 1 || k.rank > 1000 ? "Rank is 1 to 1000." : null;
+      return !Number.isInteger(k.rank) || k.rank < 1 || k.rank > 1000 ? t("lbl.err.rank", "Rank is 1 to 1000.") : null;
     case "text":
-      return k.text === "" ? "Enter the text." : null;
+      return k.text === "" ? t("lbl.err.enterText", "Enter the text.") : null;
     case "colorScale":
-      return k.stops.length < 2 || k.stops.length > 3 ? "Use 2 or 3 colours." : null;
+      return k.stops.length < 2 || k.stops.length > 3 ? t("lbl.err.colours", "Use 2 or 3 colours.") : null;
     default:
       return null;
   }
@@ -385,17 +390,17 @@ export function ruleError(rule: CfRuleDto): string | null {
 /** "Highlight cells" presets of the toolbar menu. */
 export type HighlightPreset = "gt" | "lt" | "between" | "eq" | "textContains" | "duplicates" | "top10" | "colorScale" | "dataBar" | "iconSet";
 
-export const HIGHLIGHT_PRESETS: readonly { id: HighlightPreset; label: string; values: 0 | 1 | 2; separator?: boolean }[] = [
-  { id: "gt", label: "Greater than…", values: 1 },
-  { id: "lt", label: "Less than…", values: 1 },
-  { id: "between", label: "Between…", values: 2 },
-  { id: "eq", label: "Equal to…", values: 1 },
-  { id: "textContains", label: "Text that contains…", values: 1 },
-  { id: "duplicates", label: "Duplicate values", values: 0 },
-  { id: "top10", label: "Top 10 items", values: 0, separator: true },
-  { id: "colorScale", label: "Colour scale", values: 0, separator: true },
-  { id: "dataBar", label: "Data bars", values: 0 },
-  { id: "iconSet", label: "Icon set (arrows)", values: 0 },
+export const HIGHLIGHT_PRESETS: readonly { id: HighlightPreset; label: string; /** Dialog title, e.g. "Highlight cells: greater than". */ dialogTitle: string; /** Lead sentence with a `{ranges}` placeholder. */ leadTemplate: string; values: 0 | 1 | 2; separator?: boolean }[] = [
+  { id: "gt", get label() { return t("lbl.cf.highlight.gt", "Greater than…"); }, values: 1, get dialogTitle() { return t("lbl.cf.presetTitle.gt", "Highlight cells: greater than"); }, get leadTemplate() { return t("lbl.cf.presetLead.gt", "Format cells in {ranges} that are greater than:"); } },
+  { id: "lt", get label() { return t("lbl.cf.highlight.lt", "Less than…"); }, values: 1, get dialogTitle() { return t("lbl.cf.presetTitle.lt", "Highlight cells: less than"); }, get leadTemplate() { return t("lbl.cf.presetLead.lt", "Format cells in {ranges} that are less than:"); } },
+  { id: "between", get label() { return t("lbl.cf.highlight.between", "Between…"); }, values: 2, get dialogTitle() { return t("lbl.cf.presetTitle.between", "Highlight cells: between"); }, get leadTemplate() { return t("lbl.cf.presetLead.between", "Format cells in {ranges} that are between:"); } },
+  { id: "eq", get label() { return t("lbl.cf.highlight.eq", "Equal to…"); }, values: 1, get dialogTitle() { return t("lbl.cf.presetTitle.eq", "Highlight cells: equal to"); }, get leadTemplate() { return t("lbl.cf.presetLead.eq", "Format cells in {ranges} that are equal to:"); } },
+  { id: "textContains", get label() { return t("lbl.cf.highlight.textContains", "Text that contains…"); }, values: 1, get dialogTitle() { return t("lbl.cf.presetTitle.textContains", "Highlight cells: text that contains"); }, get leadTemplate() { return t("lbl.cf.presetLead.textContains", "Format cells in {ranges} that are text that contains:"); } },
+  { id: "duplicates", get label() { return t("lbl.cf.highlight.duplicates", "Duplicate values"); }, values: 0, get dialogTitle() { return t("lbl.cf.presetTitle.duplicates", "Highlight cells: duplicate values"); }, get leadTemplate() { return t("lbl.cf.presetLead.duplicates", "Format cells in {ranges} that are duplicate values:"); } },
+  { id: "top10", get label() { return t("lbl.cf.highlight.top10", "Top 10 items"); }, values: 0, separator: true, get dialogTitle() { return t("lbl.cf.presetTitle.top10", "Highlight cells: top 10 items"); }, get leadTemplate() { return t("lbl.cf.presetLead.top10", "Format cells in {ranges} that are top 10 items:"); } },
+  { id: "colorScale", get label() { return t("cf.colorScale", "Colour scale"); }, values: 0, separator: true, get dialogTitle() { return t("lbl.cf.presetTitle.colorScale", "Highlight cells: colour scale"); }, get leadTemplate() { return t("lbl.cf.presetLead.colorScale", "Format cells in {ranges} that are colour scale:"); } },
+  { id: "dataBar", get label() { return t("lbl.cf.highlight.dataBar", "Data bars"); }, values: 0, get dialogTitle() { return t("lbl.cf.presetTitle.dataBar", "Highlight cells: data bars"); }, get leadTemplate() { return t("lbl.cf.presetLead.dataBar", "Format cells in {ranges} that are data bars:"); } },
+  { id: "iconSet", get label() { return t("lbl.cf.highlight.iconSet", "Icon set (arrows)"); }, values: 0, get dialogTitle() { return t("lbl.cf.presetTitle.iconSet", "Highlight cells: icon set (arrows)"); }, get leadTemplate() { return t("lbl.cf.presetLead.iconSet", "Format cells in {ranges} that are icon set (arrows):"); } },
 ];
 
 /** The rule for a preset with the values the user typed. */
@@ -462,14 +467,14 @@ export function moveItem<T>(list: readonly T[], i: number, delta: -1 | 1): T[] {
 export type ValidationType = ValidationKind["type"];
 
 export const VALIDATION_TYPES: readonly { type: ValidationType; label: string }[] = [
-  { type: "any", label: "Any value" },
-  { type: "list", label: "List" },
-  { type: "whole", label: "Whole number" },
-  { type: "decimal", label: "Decimal" },
-  { type: "date", label: "Date" },
-  { type: "time", label: "Time" },
-  { type: "textLength", label: "Text length" },
-  { type: "custom", label: "Custom formula" },
+  { type: "any", get label() { return t("lbl.validation.type.any", "Any value"); } },
+  { type: "list", get label() { return t("validation.list", "List"); } },
+  { type: "whole", get label() { return t("lbl.validation.type.whole", "Whole number"); } },
+  { type: "decimal", get label() { return t("validation.decimal", "Decimal"); } },
+  { type: "date", get label() { return t("validation.date", "Date"); } },
+  { type: "time", get label() { return t("validation.time", "Time"); } },
+  { type: "textLength", get label() { return t("validation.textLength", "Text length"); } },
+  { type: "custom", get label() { return t("lbl.validation.type.custom", "Custom formula"); } },
 ];
 
 /** A validation kind with defaults for the dialog. */
@@ -509,22 +514,22 @@ export function listItems(text: string): string[] {
 export function validationError(v: ValidationDto): string | null {
   const k = v.kind;
   if (k.type === "list") {
-    if (k.source.type === "values" && k.source.items.length === 0) return "Enter the list items.";
-    if (k.source.type === "range" && k.source.reference.trim() === "") return "Enter the source range, e.g. $Lists.$A$1:$A$5.";
+    if (k.source.type === "values" && k.source.items.length === 0) return t("lbl.err.listItems", "Enter the list items.");
+    if (k.source.type === "range" && k.source.reference.trim() === "") return t("lbl.err.sourceRange", "Enter the source range, e.g. $Lists.$A$1:$A$5.");
   }
-  if (k.type === "custom" && k.formula.trim().replace(/^=/, "") === "") return "Enter a formula.";
+  if (k.type === "custom" && k.formula.trim().replace(/^=/, "") === "") return t("lbl.err.enterFormula", "Enter a formula.");
   if ("formulas" in k) {
     const n = CMP_OPS.find((o) => o.op === k.op)?.operands ?? 1;
-    if (k.formulas.slice(0, n).some((f) => f.trim() === "")) return "Enter the limits.";
+    if (k.formulas.slice(0, n).some((f) => f.trim() === "")) return t("lbl.err.limits", "Enter the limits.");
   }
-  if (v.error && v.error.title.length > 256) return "The title is too long.";
+  if (v.error && v.error.title.length > 256) return t("lbl.err.titleTooLong", "The title is too long.");
   return null;
 }
 
 export const ALERT_STYLES: readonly { style: ValidationErrorStyle; label: string; hint: string }[] = [
-  { style: "stop", label: "Stop", hint: "Invalid values are rejected." },
-  { style: "warning", label: "Warning", hint: "Invalid values can be kept or undone." },
-  { style: "info", label: "Information", hint: "Invalid values are accepted with a message." },
+  { style: "stop", get label() { return t("validation.stop", "Stop"); }, get hint() { return t("lbl.validation.alert.stop.hint", "Invalid values are rejected."); } },
+  { style: "warning", get label() { return t("validation.warning", "Warning"); }, get hint() { return t("lbl.validation.alert.warning.hint", "Invalid values can be kept or undone."); } },
+  { style: "info", get label() { return t("validation.information", "Information"); }, get hint() { return t("lbl.validation.alert.info.hint", "Invalid values are accepted with a message."); } },
 ];
 
 // ---------------------------------------------------------------------------
@@ -644,12 +649,12 @@ export function autoPageBreaks(
 
 /** Header/footer placeholders and their buttons. */
 export const HF_PLACEHOLDERS: readonly { token: string; label: string }[] = [
-  { token: "&[PAGE]", label: "Page" },
-  { token: "&[PAGES]", label: "Pages" },
-  { token: "&[SHEET]", label: "Sheet" },
-  { token: "&[FILE]", label: "File" },
-  { token: "&[DATE]", label: "Date" },
-  { token: "&[TIME]", label: "Time" },
+  { token: "&[PAGE]", get label() { return t("print.page", "Page"); } },
+  { token: "&[PAGES]", get label() { return t("print.pages", "Pages"); } },
+  { token: "&[SHEET]", get label() { return t("lbl.hf.sheet", "Sheet"); } },
+  { token: "&[FILE]", get label() { return t("menu.file", "File"); } },
+  { token: "&[DATE]", get label() { return t("lbl.hf.date", "Date"); } },
+  { token: "&[TIME]", get label() { return t("lbl.hf.time", "Time"); } },
 ];
 
 /** Inserts `token` at the caret (replacing the selection). */
@@ -714,15 +719,15 @@ export const DEFAULT_PROTECTION: ProtectionOptions = {
 };
 
 export const PROTECTION_LABELS: readonly { key: keyof ProtectionOptions; label: string }[] = [
-  { key: "selectLocked", label: "Select locked cells" },
-  { key: "selectUnlocked", label: "Select unlocked cells" },
-  { key: "formatCells", label: "Format cells" },
-  { key: "insertRows", label: "Insert rows" },
-  { key: "insertCols", label: "Insert columns" },
-  { key: "deleteRows", label: "Delete rows" },
-  { key: "deleteCols", label: "Delete columns" },
-  { key: "sort", label: "Sort" },
-  { key: "autoFilter", label: "Use AutoFilter" },
+  { key: "selectLocked", get label() { return t("lbl.protect.opt.selectLocked", "Select locked cells"); } },
+  { key: "selectUnlocked", get label() { return t("lbl.protect.opt.selectUnlocked", "Select unlocked cells"); } },
+  { key: "formatCells", get label() { return t("lbl.protect.opt.formatCells", "Format cells"); } },
+  { key: "insertRows", get label() { return t("lbl.protect.opt.insertRows", "Insert rows"); } },
+  { key: "insertCols", get label() { return t("lbl.protect.opt.insertCols", "Insert columns"); } },
+  { key: "deleteRows", get label() { return t("cmd.sheet.deleteRows", "Delete rows"); } },
+  { key: "deleteCols", get label() { return t("cmd.sheet.deleteCols", "Delete columns"); } },
+  { key: "sort", get label() { return t("lbl.protect.opt.sort", "Sort"); } },
+  { key: "autoFilter", get label() { return t("lbl.protect.opt.autoFilter", "Use AutoFilter"); } },
 ];
 
 /** A single cell from `B2` / `$B$2`, or `null`. */

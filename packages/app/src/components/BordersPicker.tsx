@@ -6,16 +6,40 @@
 import { useState } from "react";
 import { BORDER_PRESETS, borderLine, DEFAULT_BORDER_COLOR, type BorderPreset, type LineWeight } from "../dataOps";
 import { hexToRgba, rgbaToHex } from "../palette";
+import { t } from "../i18n";
 import { useDismiss, useFloating } from "./Popover";
 import styles from "./BordersPicker.module.css";
 import panel from "./Panel.module.css";
 
 const COLORS = ["#1f2937", "#000000", "#6b7280", "#d1d5db", "#2563eb", "#16a34a", "#d97706", "#dc2626"];
-const WEIGHTS: { id: LineWeight; label: string; px: number }[] = [
-  { id: "thin", label: "Thin", px: 1 },
-  { id: "medium", label: "Medium", px: 2 },
-  { id: "thick", label: "Thick", px: 3 },
+const WEIGHTS: { id: LineWeight; label: () => string; px: number }[] = [
+  { id: "thin", label: () => t("borders.thin", "Thin"), px: 1 },
+  { id: "medium", label: () => t("borders.medium", "Medium"), px: 2 },
+  { id: "thick", label: () => t("borders.thick", "Thick"), px: 3 },
 ];
+
+function presetLabel(id: BorderPreset, fallback: string): string {
+  switch (id) {
+    case "all":
+      return t("borders.all", "All borders");
+    case "outer":
+      return t("borders.outer", "Outer borders");
+    case "inner":
+      return t("borders.inner", "Inner borders");
+    case "top":
+      return t("borders.top", "Top border");
+    case "bottom":
+      return t("borders.bottom", "Bottom border");
+    case "left":
+      return t("borders.left", "Left border");
+    case "right":
+      return t("borders.right", "Right border");
+    case "none":
+      return t("cells.noBorder", "No borders");
+    default:
+      return fallback;
+  }
+}
 
 /** A 18 px preview of a preset: faint grid, the affected edges dark. */
 function PresetGlyph({ preset, weight, color }: { preset: BorderPreset; weight: number; color: string }) {
@@ -64,16 +88,16 @@ export function BordersPicker({ x, y, onClose, onPick }: BordersPickerProps) {
   const [color, setColor] = useState(rgbaToHex(DEFAULT_BORDER_COLOR));
   const px = WEIGHTS.find((w) => w.id === weight)?.px ?? 1;
   return (
-    <div ref={ref} className={panel.card} style={{ ...style, width: 236 }} role="dialog" aria-label="Borders" data-testid="borders-picker">
-      <div className={panel.title}>Borders</div>
+    <div ref={ref} className={panel.card} style={{ ...style, width: 236 }} role="dialog" aria-label={t("toolbar.borders", "Borders")} data-testid="borders-picker">
+      <div className={panel.title}>{t("toolbar.borders", "Borders")}</div>
       <div className={styles.presets}>
         {BORDER_PRESETS.map((b) => (
           <button
             key={b.id}
             type="button"
             className={styles.preset}
-            title={b.label}
-            aria-label={b.label}
+            title={presetLabel(b.id, b.label)}
+            aria-label={presetLabel(b.id, b.label)}
             data-preset={b.id}
             onClick={() => {
               onClose();
@@ -84,15 +108,15 @@ export function BordersPicker({ x, y, onClose, onPick }: BordersPickerProps) {
           </button>
         ))}
       </div>
-      <div className={styles.label}>Line</div>
-      <div className={styles.weights} role="radiogroup" aria-label="Line weight">
+      <div className={styles.label}>{t("borders.line", "Line")}</div>
+      <div className={styles.weights} role="radiogroup" aria-label={t("borders.lineWeight", "Line weight")}>
         {WEIGHTS.map((w) => (
-          <button key={w.id} type="button" role="radio" aria-checked={weight === w.id} className={weight === w.id ? styles.weightOn : styles.weight} onClick={() => setWeight(w.id)} title={w.label} data-weight={w.id}>
+          <button key={w.id} type="button" role="radio" aria-checked={weight === w.id} className={weight === w.id ? styles.weightOn : styles.weight} onClick={() => setWeight(w.id)} title={w.label()} data-weight={w.id}>
             <span className={styles.sample} style={{ height: w.px, background: color }} />
           </button>
         ))}
       </div>
-      <div className={styles.label}>Colour</div>
+      <div className={styles.label}>{t("borders.colour", "Colour")}</div>
       <div className={styles.colors}>
         {COLORS.map((c) => (
           <button key={c} type="button" className={styles.swatch} style={{ background: c }} aria-label={c} aria-pressed={color === c} onClick={() => setColor(c)} data-color={c} />

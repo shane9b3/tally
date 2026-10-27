@@ -42,6 +42,12 @@ function sampleStyle(s: StyleDto): React.CSSProperties {
   };
 }
 
+const PRESET_KEYS: Readonly<Record<string, string>> = {"Default": "stylesUi.preset.default", "3D": "stylesUi.preset.threeD", "Black 1": "stylesUi.preset.black1", "Black 2": "stylesUi.preset.black2", "Blue": "stylesUi.preset.blue", "Brown": "stylesUi.preset.brown", "Currency": "stylesUi.preset.currency", "Currency 3D": "stylesUi.preset.currency3d", "Currency Gray": "stylesUi.preset.currencyGray", "Currency Lavender": "stylesUi.preset.currencyLavender", "Currency Turquoise": "stylesUi.preset.currencyTurquoise", "Gray": "stylesUi.preset.gray", "Green": "stylesUi.preset.green", "Lavender": "stylesUi.preset.lavender", "Red": "stylesUi.preset.red", "Turquoise": "stylesUi.preset.turquoise", "Yellow": "stylesUi.preset.yellow"};
+const AUTOFORMAT_OPTION_KEYS: Readonly<Record<string, string>> = { numberFormat: "toolbar.numberFormat", font: "toolbar.font", alignment: "cells.alignment", borders: "cells.borders", pattern: "stylesUi.optPattern", autofit: "stylesUi.optAutofit" };
+
+/** Option and preset labels live in the model files in English; they are translated when drawn. */
+const presetLabel = (name: string): string => t(PRESET_KEYS[name] ?? "", name);
+
 export function StylesPanel() {
   const ctl = useController();
   const styles = useW56Store((s) => s.cellStyles);
@@ -58,7 +64,7 @@ export function StylesPanel() {
         </button>
       </div>
       <div className={w56.panelToolbar}>
-        <button type="button" className={paint ? w56.iconBtnOn : w56.iconBtn} title="Fill format mode: click cells to apply the selected style" aria-pressed={paint !== null} onClick={() => ctl.w56.togglePaintCan(selected)} data-testid="styles-paint">
+        <button type="button" className={paint ? w56.iconBtnOn : w56.iconBtn} title={t("stylesUi.paintTip", "Fill format mode: click cells to apply the selected style")} aria-pressed={paint !== null} onClick={() => ctl.w56.togglePaintCan(selected)} data-testid="styles-paint">
           🪣
         </button>
         <button type="button" className={w56.iconBtn} onClick={() => void ctl.w56.newStyleFromSelection()} data-testid="styles-new">
@@ -97,9 +103,9 @@ export function StylesPanel() {
             {s.parent && s.parent !== "Default" ? <span className={w56.muted}>↳ {s.parent}</span> : null}
           </button>
         ))}
-        {styles.length === 0 ? <div className={cx(w56.muted, w56.navItem)}>No styles yet (the engine lists them once W5-2 lands).</div> : null}
+        {styles.length === 0 ? <div className={cx(w56.muted, w56.navItem)}>{t("stylesUi.none", "No styles yet (the engine lists them once W5-2 lands).")}</div> : null}
       </div>
-      {paint ? <div className={w56.modeBadge}>Fill format: {paint} (Esc stops)</div> : null}
+      {paint ? <div className={w56.modeBadge}>{t("stylesUi.fillMode", "Fill format: {name} (Esc stops)", { name: paint })}</div> : null}
     </aside>
   );
 }
@@ -149,9 +155,9 @@ export function StyleEditorDialog({ d }: { d: D<"styleEditor"> }) {
         <Field label={t("dialog.name", "Name")}>
           <input className={dlg.input} value={name} disabled={!d.isNew && d.style.builtin} autoFocus onChange={(e) => setName(e.target.value)} data-testid="style-name" />
         </Field>
-        <Field label="Inherit from">
+        <Field label={t("stylesUi.inheritFrom", "Inherit from")}>
           <select className={dlg.select} value={parent} disabled={name.trim() === "Default"} onChange={(e) => setParent(e.target.value)}>
-            <option value="">- none -</option>
+            <option value="">{t("stylesUi.inheritNone", "- none -")}</option>
             {styles.filter((s) => s.name !== d.style.name).map((s) => (
               <option key={s.name} value={s.name}>
                 {s.name}
@@ -160,7 +166,7 @@ export function StyleEditorDialog({ d }: { d: D<"styleEditor"> }) {
           </select>
         </Field>
       </div>
-      {taken ? <p className={dlg.error}>A style with this name exists.</p> : null}
+      {taken ? <p className={dlg.error}>{t("stylesUi.nameTaken", "A style with this name exists.")}</p> : null}
       <FormatCellsTabs st={st} setSt={setSt} showProtection={false} />
     </W56Shell>
   );
@@ -177,13 +183,13 @@ export function AutoFormatDialog({ d }: { d: D<"autoFormat"> }) {
   const p = AUTOFORMAT_PRESETS.find((x) => x.name === preset) ?? AUTOFORMAT_PRESETS[0]!;
   return (
     <W56Shell title={t("cmd.format.autoFormat", "AutoFormat").replace(/…$/, "")} ok={t("dialog.ok", "OK")} size="xwide" testId="autoformat-dialog" onSubmit={() => void ctl.w56.applyAutoFormat(d.range, preset, options)}>
-      <p className={dlg.lead}>Applies a table format to {a1(d.range)}: the first row and column are headers, the last ones totals.</p>
+      <p className={dlg.lead}>{t("stylesUi.autoFormatLead", "Applies a table format to {range}: the first row and column are headers, the last ones totals.", { range: a1(d.range) })}</p>
       <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 12 }}>
-        <div className={w56.list} role="listbox" aria-label="Format" style={{ maxHeight: 300 }}>
+        <div className={w56.list} role="listbox" aria-label={t("menu.format", "Format")} style={{ maxHeight: 300 }}>
           {AUTOFORMAT_PRESETS.map((x) => (
             <button key={x.name} type="button" role="option" aria-selected={x.name === preset} className={x.name === preset ? w56.listItemOn : w56.listItem} onClick={() => setPreset(x.name)} onDoubleClick={() => (closeW56(), void ctl.w56.applyAutoFormat(d.range, x.name, options))} data-testid={`autoformat-${x.name.replace(/\s+/g, "-").toLowerCase()}`}>
               <span className={w56.styleSample} style={{ background: x.header[0], borderColor: x.border }} />
-              {x.name}
+              {presetLabel(x.name)}
             </button>
           ))}
         </div>
@@ -204,10 +210,10 @@ export function AutoFormatDialog({ d }: { d: D<"autoFormat"> }) {
               ))}
             </tbody>
           </table>
-          <div className={w56.section}>Formatting</div>
+          <div className={w56.section}>{t("stylesUi.formatting", "Formatting")}</div>
           <div className={dlg.optionGrid}>
             {AUTOFORMAT_OPTION_LABELS.map((o) => (
-              <Check key={o.key} label={o.label} checked={options[o.key]} onChange={(v) => setOptions({ ...options, [o.key]: v })} testId={`autoformat-opt-${o.key}`} />
+              <Check key={o.key} label={t(AUTOFORMAT_OPTION_KEYS[o.key] ?? "", o.label)} checked={options[o.key]} onChange={(v) => setOptions({ ...options, [o.key]: v })} testId={`autoformat-opt-${o.key}`} />
             ))}
           </div>
         </div>
@@ -267,7 +273,7 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
   };
   return (
     <>
-      <Tabs label="Format" tabs={tabs} value={tab} onChange={setTab} />
+      <Tabs label={t("menu.format", "Format")} tabs={tabs} value={tab} onChange={setTab} />
       {tab === "numbers" ? (
         <div>
           <div className={w56.chips}>
@@ -284,7 +290,7 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
             {samples.map((s, i) => (
               <div key={i} className={dlg.previewRow}>
                 <span className={dlg.previewIn}>{[1234.5, -1234.5, 0][i]}</span>
-                <span className={dlg.previewOut}>{s ?? "(engine formats)"}</span>
+                <span className={dlg.previewOut}>{s ?? t("stylesUi.engineFormats", "(engine formats)")}</span>
               </div>
             ))}
           </div>
@@ -298,11 +304,11 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
           </Field>
           <span />
           <Check label={t("cmd.format.underline", "Underline")} checked={st.underline} onChange={(v) => setSt({ ...st, underline: v })} testId="cells-underline" />
-          <Field label="Underline style">
+          <Field label={t("stylesUi.underlineStyle", "Underline style")}>
             <select className={dlg.select} value={st.underlineStyle} disabled={!st.underline} onChange={(e) => setSt({ ...st, underlineStyle: e.target.value as FormatCellsState["underlineStyle"] })} data-testid="cells-underline-style">
               {UNDERLINE_STYLES.map((u) => (
                 <option key={u.style} value={u.style}>
-                  {u.label}
+                  {t(`stylesUi.underline.${u.style}`, u.label)}
                 </option>
               ))}
             </select>
@@ -316,7 +322,7 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
             <select className={dlg.select} value={st.hAlign} onChange={(e) => setSt({ ...st, hAlign: e.target.value as FormatCellsState["hAlign"] })} data-testid="cells-halign">
               {H_ALIGNS.map((h) => (
                 <option key={h.align} value={h.align}>
-                  {h.label}
+                  {h.align === "general" ? t("styles.default", h.label) : t(`stylesUi.halign.${h.align}`, h.label)}
                 </option>
               ))}
             </select>
@@ -325,7 +331,7 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
             <select className={dlg.select} value={st.vAlign} onChange={(e) => setSt({ ...st, vAlign: e.target.value as FormatCellsState["vAlign"] })}>
               {V_ALIGNS.map((v) => (
                 <option key={v.align} value={v.align}>
-                  {v.label}
+                  {t(`stylesUi.valign.${v.align}`, v.label)}
                 </option>
               ))}
             </select>
@@ -338,7 +344,7 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
           </Field>
           <Check label={t("cmd.format.wrap", "Wrap text")} checked={st.wrap} onChange={(v) => setSt({ ...st, wrap: v })} />
           <Check label={t("cells.shrinkToFit", "Shrink to fit cell size")} checked={st.shrinkToFit} onChange={(v) => setSt({ ...st, shrinkToFit: v })} testId="cells-shrink" />
-          <Check label="Vertically stacked" checked={st.stacked} onChange={(v) => setSt({ ...st, stacked: v })} />
+          <Check label={t("stylesUi.stacked", "Vertically stacked")} checked={st.stacked} onChange={(v) => setSt({ ...st, stacked: v })} />
         </div>
       ) : null}
       {tab === "borders" ? (
@@ -360,8 +366,8 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
               const on = v !== undefined && v !== null;
               const off = v === null;
               return (
-                <button key={e.edge} type="button" className={on ? w56.chipOn : w56.chip} aria-pressed={on} title={off ? "Removed" : on ? "Set" : "Unchanged"} style={off ? { textDecoration: "line-through" } : undefined} onClick={() => setSt(toggleEdge(st, e.edge))} data-testid={`cells-border-${e.edge}`}>
-                  {e.label}
+                <button key={e.edge} type="button" className={on ? w56.chipOn : w56.chip} aria-pressed={on} title={off ? t("stylesUi.edgeRemoved", "Removed") : on ? t("stylesUi.edgeSet", "Set") : t("stylesUi.edgeUnchanged", "Unchanged")} style={off ? { textDecoration: "line-through" } : undefined} onClick={() => setSt(toggleEdge(st, e.edge))} data-testid={`cells-border-${e.edge}`}>
+                  {t(`stylesUi.edge.${e.edge}`, e.label)}
                 </button>
               );
             })}
@@ -371,19 +377,19 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
               <select className={dlg.select} value={st.borderStyle} onChange={(e) => setSt({ ...st, borderStyle: e.target.value as FormatCellsState["borderStyle"] })}>
                 {BORDER_STYLES.map((b) => (
                   <option key={b.style} value={b.style}>
-                    {b.label}
+                    {t(`stylesUi.lineStyle.${b.style}`, b.label)}
                   </option>
                 ))}
               </select>
             </Field>
-            <Field label="Width (px)">
+            <Field label={t("stylesUi.widthPx", "Width (px)")}>
               <input className={dlg.input} type="number" min={1} max={8} value={st.borderWidth} onChange={(e) => setSt({ ...st, borderWidth: Math.max(1, Math.min(8, Number(e.target.value) || 1)) })} />
             </Field>
             <Field label={t("cells.lineColor", "Line colour")}>
               <ColorField value={st.borderColor} onChange={(c) => setSt({ ...st, borderColor: c ?? st.borderColor })} />
             </Field>
           </div>
-          <p className={dlg.note}>Edges toggle between set (with the current line), removed and unchanged. The diagonals apply per cell.</p>
+          <p className={dlg.note}>{t("stylesUi.edgeNote", "Edges toggle between set (with the current line), removed and unchanged. The diagonals apply per cell.")}</p>
         </div>
       ) : null}
       {tab === "background" ? (
@@ -393,7 +399,7 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
       ) : null}
       {tab === "protection" && protection && setProtection ? (
         <div>
-          <p className={dlg.lead}>Takes effect once the sheet is protected (Tools ▸ Protect Sheet…).</p>
+          <p className={dlg.lead}>{t("stylesUi.protectionNote", "Takes effect once the sheet is protected (Tools ▸ Protect Sheet…).")}</p>
           <Check label={t("cells.protected", "Protected")} checked={protection.locked ?? st.locked} onChange={(v) => setProtection({ ...protection, locked: v })} testId="cells-locked" />
           <Check label={t("cells.hideFormula", "Hide formula")} checked={protection.hiddenFormula ?? st.hiddenFormula} onChange={(v) => setProtection({ ...protection, hiddenFormula: v })} />
         </div>

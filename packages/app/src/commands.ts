@@ -14,11 +14,23 @@ import { useDocStore } from "./stores/docStore";
 import { useEditStore } from "./stores/editStore";
 import { useUiStore } from "./stores/uiStore";
 import { useDataStore } from "./stores/dataStore";
-import { BORDER_PRESETS, borderLine } from "./dataOps";
+import { BORDER_PRESETS, borderLine, type BorderPreset } from "./dataOps";
 import { useV3Store } from "./stores/v3Store";
 import { HIGHLIGHT_PRESETS, UI_LOCALES } from "./v03";
 import { t } from "./i18n";
 import { useW56Store } from "./data/store";
+
+/** English palette titles of the border presets (the translated titles are `msg.palette.borders.<id>`). */
+const BORDER_TITLES: Record<BorderPreset, string> = {
+  all: "Borders: all borders",
+  outer: "Borders: outer borders",
+  inner: "Borders: inner borders",
+  top: "Borders: top border",
+  bottom: "Borders: bottom border",
+  left: "Borders: left border",
+  right: "Borders: right border",
+  none: "Borders: no borders",
+};
 
 export const COMING_SOON = "Coming soon";
 /** Reason shown for the wave-5 commands registered as seams (W5-0b). */
@@ -57,9 +69,9 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
   };
   const undo = useDocStore.getState;
   const editing = (): boolean => useEditStore.getState().edit !== null;
-  const notEditing = { enabled: () => !editing(), reason: "Finish editing the cell first" };
-  const soon = { enabled: () => false, reason: COMING_SOON };
-  const w5 = { enabled: () => false, reason: WAVE5_SOON };
+  const notEditing = { enabled: () => !editing(), reason: t("msg.reason.finishEditing", "Finish editing the cell first") };
+  const soon = { enabled: () => false, reason: t("msg.reason.comingSoon", COMING_SOON) };
+  const w5 = { enabled: () => false, reason: t("msg.reason.wave5", WAVE5_SOON) };
   const dialog = useUiStore.getState;
   const hasFilter = (): boolean => useDataStore.getState().filter !== null;
   // W5-6E: every title goes through `t("cmd.<id>")` (the English literal stays the fallback).
@@ -100,7 +112,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     ...BORDER_PRESETS.map(
       (b): Command => ({
         id: `format.borders.${b.id}`,
-        title: `Borders: ${b.label.toLowerCase()}`,
+        title: t(`msg.palette.borders.${b.id}`, BORDER_TITLES[b.id]),
         kind: "Format",
         keywords: ["border", "lines", "outline", "box", "grid"],
         run: async () => void (await ctl.applyBorders(b.id, borderLine("thin"))),
@@ -119,7 +131,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     ...NUMBER_FORMATS.filter((f) => f.id !== "currency" && f.id !== "percent").map(
       (f): Command => ({
         id: `format.number.${f.id}`,
-        title: `Number format: ${f.label}`,
+        title: t("msg.palette.numberFormat", "Number format: {name}", { name: f.label }),
         kind: "Format",
         keywords: ["number format", f.code],
         ...sc(`format.number.${f.id}`),
@@ -152,7 +164,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "data.sortDesc", title: "Sort descending (Z → A)", kind: "Sort", keywords: ["order", "largest", "reverse"], run: () => ctl.sortByActive(false) },
     { id: "data.sort", title: "Sort…", kind: "Sort", keywords: ["order", "keys", "columns"], run: () => ctl.openSortDialog() },
     { id: "data.filter", title: "AutoFilter on / off", kind: "Filter", keywords: ["where", "only", "dropdown"], run: () => ctl.toggleAutoFilter() },
-    { id: "data.clearFilters", title: "Clear filters", kind: "Filter", keywords: ["show all"], enabled: hasFilter, reason: "No AutoFilter on this sheet", run: () => ctl.clearFilters() },
+    { id: "data.clearFilters", title: "Clear filters", kind: "Filter", keywords: ["show all"], enabled: hasFilter, reason: t("msg.reason.noAutoFilter", "No AutoFilter on this sheet"), run: () => ctl.clearFilters() },
     { id: "data.defineName", title: "Define name…", kind: "Data", keywords: ["named range", "name"], ...sc("data.defineName"), run: ctl.openDefineName },
     { id: "data.manageNames", title: "Manage names…", kind: "Data", keywords: ["named ranges", "names"], run: () => useUiStore.getState().openDialog({ kind: "manageNames" }) },
     { id: "data.recalc", title: "Recalculate all", kind: "Data", keywords: ["hard recalc", "refresh", "F9"], ...sc("data.recalc"), run: ctl.recalcAll },
@@ -216,7 +228,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
       run: () => {
         useUiStore.getState().cycleTheme();
         const p = useUiStore.getState().themePref;
-        useUiStore.getState().pushToast("info", `Theme: ${p === "system" ? "match system" : p}`);
+        useUiStore.getState().pushToast("info", p === "system" ? t("msg.toast.themeSystem", "Theme: match system") : p === "light" ? t("msg.toast.themeLight", "Theme: light") : t("msg.toast.themeDark", "Theme: dark"));
       },
     },
     {
@@ -238,7 +250,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     ...HIGHLIGHT_PRESETS.map(
       (p): Command => ({
         id: `format.highlight.${p.id}`,
-        title: `Highlight cells: ${p.label.replace(/…$/, "").toLowerCase()}${p.values > 0 ? "…" : ""}`,
+        title: `${p.dialogTitle}${p.values > 0 ? "…" : ""}`,
         kind: "Format",
         keywords: ["conditional formatting", "highlight", "rule"],
         run: () => ctl.v3.highlight(p.id),
@@ -253,7 +265,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "insert.colPageBreak", title: "Insert page break left of column", kind: "Insert", keywords: ["print", "page"], run: () => ctl.v3.insertPageBreak("col") },
     { id: "insert.removePageBreak", title: "Remove page breaks at the cursor", kind: "Insert", keywords: ["print", "page"], run: () => ctl.v3.removePageBreaks() },
     { id: "format.fitRows", title: "Fit row height to contents", kind: "Format", keywords: ["auto fit", "resize rows", "wrap"], run: () => ctl.v3.fitRows() },
-    { id: "data.refreshFilter", title: "Refresh filter", kind: "Filter", keywords: ["reapply", "autofilter", "update"], enabled: hasFilter, reason: "No AutoFilter on this sheet", run: () => ctl.v3.refreshFilter() },
+    { id: "data.refreshFilter", title: "Refresh filter", kind: "Filter", keywords: ["reapply", "autofilter", "update"], enabled: hasFilter, reason: t("msg.reason.noAutoFilter", "No AutoFilter on this sheet"), run: () => ctl.v3.refreshFilter() },
     // v0.3: tools, file, view
     { id: "tools.protectSheet", title: "Protect / unprotect sheet…", kind: "Tools", keywords: ["lock", "password", "protection"], run: () => ctl.v3.protectSheetCommand() },
     { id: "tools.protectDocument", title: "Protect / unprotect document…", kind: "Tools", keywords: ["structure", "lock", "password"], run: () => ctl.v3.protectDocumentCommand() },
@@ -285,7 +297,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "chart.delete", title: t("cmd.chart.delete", "Delete chart"), kind: "Chart", keywords: ["graph", "remove"], run: () => ctl.w5.charts.deleteSelected() },
     { id: "chart.copyImage", title: t("cmd.chart.copyImage", "Copy chart as image"), kind: "Chart", keywords: ["png", "clipboard"], run: () => ctl.w5.charts.copyAsImage() },
     { id: "data.dataPilot", title: t("cmd.data.dataPilot", "DataPilot…"), kind: "Data", keywords: ["pivot table", "summarise", "crosstab"], run: () => void ctl.w56.openDataPilot() },
-    { id: "data.refreshPivot", title: t("cmd.data.refreshPivot", "Refresh pivot table"), kind: "Data", keywords: ["pivot", "datapilot"], enabled: () => useW56Store.getState().activePivot !== null, reason: "Put the cursor inside a pivot table", run: () => void ctl.w56.refreshPivot() },
+    { id: "data.refreshPivot", title: t("cmd.data.refreshPivot", "Refresh pivot table"), kind: "Data", keywords: ["pivot", "datapilot"], enabled: () => useW56Store.getState().activePivot !== null, reason: t("msg.reason.cursorInPivot", "Put the cursor inside a pivot table"), run: () => void ctl.w56.refreshPivot() },
     { id: "data.standardFilter", title: t("cmd.data.standardFilter", "Standard filter…"), kind: "Filter", keywords: ["conditions", "and", "or", "regex"], run: () => void ctl.w56.openStandardFilter(false) },
     { id: "data.advancedFilter", title: t("cmd.data.advancedFilter", "Advanced filter…"), kind: "Filter", keywords: ["criteria range"], run: () => void ctl.w56.openStandardFilter(true) },
     { id: "data.resetFilter", title: t("cmd.data.resetFilter", "Reset filter"), kind: "Filter", keywords: ["show all rows"], run: () => void ctl.w56.resetFilter() },
@@ -356,7 +368,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
 
 /** The document-tab commands (enabled only with the desktop tab shell). */
 function windowCommands(ctl: AppController, sc: (id: string) => { shortcut?: string }): Command[] {
-  const tabs = { enabled: () => ctl.tabs.available, reason: "Tabs are available in the desktop app" };
+  const tabs = { enabled: () => ctl.tabs.available, reason: t("msg.reason.tabsDesktopOnly", "Tabs are available in the desktop app") };
   const select = Array.from({ length: 9 }, (_, i): Command => ({
     id: `window.selectTab${i + 1}`,
     title: i === 8 ? "Show last tab" : `Show tab ${i + 1}`,

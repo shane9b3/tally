@@ -66,6 +66,7 @@ type Menu = { kind: "format" | "color" | "fill" | "borders" | "highlight"; x: nu
 
 export function FormatBar() {
   const ctl = useController();
+  useW56Store((s) => s.i18nRev);
   const style = useActiveStyle();
   const [menu, setMenu] = useState<Menu>(null);
   const open = (kind: NonNullable<Menu>["kind"]) => (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -74,7 +75,7 @@ export function FormatBar() {
   };
   const h: HAlign = style?.hAlign ?? "general";
   const preset = presetFor(style?.numberFormat);
-  const formatLabel = preset ? preset.label : style ? "Custom" : "General";
+  const formatLabel = preset ? preset.label : style ? t("fmtbar.custom", "Custom") : t("fmt.general", "General");
   const textColor = style?.color != null ? rgbaToHex(style.color) : "var(--tally-text)";
   const fillColor = style?.fill != null && (style.fill & 255) > 0 ? rgbaToHex(style.fill) : "transparent";
   const done = () => ctl.focusGrid();
@@ -91,44 +92,44 @@ export function FormatBar() {
     <button
       type="button"
       className={cx(styles.tool, styles.wide, compact && styles.compact)}
-      aria-label="Highlight cells"
+      aria-label={t("chrome.item.highlight", "Highlight cells")}
       aria-haspopup="menu"
-      title="Highlight cells: conditional formatting presets"
+      title={t("fmtbar.highlightTip", "Highlight cells: conditional formatting presets")}
       data-testid="highlight-cells"
       onMouseDown={(e) => e.preventDefault()}
       onClick={open("highlight")}
     >
       <HighlightIcon />
-      {compact ? null : <span>Highlight</span>}
+      {compact ? null : <span>{t("fmtbar.highlight", "Highlight")}</span>}
       <ChevronIcon />
     </button>
   );
   const colorByValueButton = (compact: boolean) => (
-    <Tool command="format.colorByValue" label="Colour by value: chip colours for each distinct value in the column" wide compact={compact}>
+    <Tool command="format.colorByValue" label={t("fmtbar.colorByValueTip", "Colour by value: chip colours for each distinct value in the column")} wide compact={compact}>
       <ChipsIcon />
-      {compact ? null : <span>Colour by value</span>}
+      {compact ? null : <span>{t("cmd.format.colorByValue", "Colour by value")}</span>}
     </Tool>
   );
   const items: Record<string, ReactNode> = {
     fontName: <FontNameBox onDone={done} info={fontInfo} />,
     fontSize: <FontSizeBox onDone={done} info={fontInfo} />,
     bold: (
-      <Tool command="format.bold" label="Bold" active={style?.bold ?? false}>
+      <Tool command="format.bold" label={t("cmd.format.bold", "Bold")} active={style?.bold ?? false}>
         <span className={styles.bold}>B</span>
       </Tool>
     ),
     italic: (
-      <Tool command="format.italic" label="Italic" active={style?.italic ?? false}>
+      <Tool command="format.italic" label={t("cmd.format.italic", "Italic")} active={style?.italic ?? false}>
         <span className={styles.italic}>I</span>
       </Tool>
     ),
     underline: (
-      <Tool command="format.underline" label="Underline" active={style?.underline ?? false}>
+      <Tool command="format.underline" label={t("cmd.format.underline", "Underline")} active={style?.underline ?? false}>
         <span className={styles.underline}>U</span>
       </Tool>
     ),
     strike: (
-      <Tool command="format.strike" label="Strikethrough" active={style?.strike ?? false}>
+      <Tool command="format.strike" label={t("cmd.format.strike", "Strikethrough")} active={style?.strike ?? false}>
         <span className={styles.strike}>S</span>
       </Tool>
     ),
@@ -136,9 +137,9 @@ export function FormatBar() {
       <button
         type="button"
         className={cx(styles.tool, styles.colorTool)}
-        aria-label="Font colour"
+        aria-label={t("toolbar.fontColor", "Font colour")}
         aria-haspopup="dialog"
-        title="Font colour"
+        title={t("toolbar.fontColor", "Font colour")}
         data-testid="font-color"
         onMouseDown={(e) => e.preventDefault()}
         onClick={open("color")}
@@ -151,9 +152,9 @@ export function FormatBar() {
       <button
         type="button"
         className={cx(styles.tool, styles.colorTool)}
-        aria-label="Fill colour"
+        aria-label={t("toolbar.fillColor", "Fill colour")}
         aria-haspopup="dialog"
-        title="Fill colour"
+        title={t("toolbar.fillColor", "Fill colour")}
         data-testid="fill-color"
         onMouseDown={(e) => e.preventDefault()}
         onClick={open("fill")}
@@ -163,27 +164,27 @@ export function FormatBar() {
       </button>
     ),
     alignLeft: (
-      <Tool command="format.alignLeft" label="Align left" active={h === "left"}>
+      <Tool command="format.alignLeft" label={t("cmd.format.alignLeft", "Align left")} active={h === "left"}>
         <AlignLeftIcon />
       </Tool>
     ),
     alignCenter: (
-      <Tool command="format.alignCenter" label="Align centre" active={h === "center"}>
+      <Tool command="format.alignCenter" label={t("cmd.format.alignCenter", "Align centre")} active={h === "center"}>
         <AlignCenterIcon />
       </Tool>
     ),
     alignRight: (
-      <Tool command="format.alignRight" label="Align right" active={h === "right"}>
+      <Tool command="format.alignRight" label={t("cmd.format.alignRight", "Align right")} active={h === "right"}>
         <AlignRightIcon />
       </Tool>
     ),
     wrap: (
-      <Tool command="format.wrap" label="Wrap text" active={style?.wrap ?? false}>
+      <Tool command="format.wrap" label={t("cmd.format.wrap", "Wrap text")} active={style?.wrap ?? false}>
         <WrapIcon />
       </Tool>
     ),
     merge: (
-      <Tool command="format.toggleMerge" label={merged ? "Unmerge cells" : "Merge cells"} active={merged}>
+      <Tool command="format.toggleMerge" label={merged ? t("cmd.format.unmerge", "Unmerge cells") : t("cmd.format.merge", "Merge cells")} active={merged}>
         <MergeIcon />
       </Tool>
     ),
@@ -191,9 +192,9 @@ export function FormatBar() {
       <button
         type="button"
         className={styles.tool}
-        aria-label="Borders"
+        aria-label={t("toolbar.borders", "Borders")}
         aria-haspopup="dialog"
-        title="Borders"
+        title={t("toolbar.borders", "Borders")}
         data-testid="borders"
         onMouseDown={(e) => e.preventDefault()}
         onClick={open("borders")}
@@ -207,7 +208,7 @@ export function FormatBar() {
         className={cx(styles.dropdown, styles.format)}
         aria-label={`${t("toolbar.numberFormat", "Number format")}: ${formatLabel}`}
         aria-haspopup="menu"
-        title="Number format"
+        title={t("toolbar.numberFormat", "Number format")}
         data-testid="number-format"
         onMouseDown={(e) => e.preventDefault()}
         onClick={open("format")}
@@ -217,12 +218,12 @@ export function FormatBar() {
       </button>
     ),
     currency: (
-      <Tool command="format.currency" label="Format as currency" active={preset?.id === "currency"}>
+      <Tool command="format.currency" label={t("fmtbar.currency", "Format as currency")} active={preset?.id === "currency"}>
         <span className={styles.glyph}>$</span>
       </Tool>
     ),
     percent: (
-      <Tool command="format.percent" label="Format as percent" active={preset?.id === "percent"}>
+      <Tool command="format.percent" label={t("fmtbar.percent", "Format as percent")} active={preset?.id === "percent"}>
         <span className={styles.glyph}>%</span>
       </Tool>
     ),
@@ -245,11 +246,11 @@ export function FormatBar() {
   };
 
   return (
-    <div className={styles.bar} role="toolbar" aria-label="Format" data-testid="format-bar" onContextMenu={barMenu.onContextMenu} onKeyDown={(e) => void arrowNav(e)}>
+    <div className={styles.bar} role="toolbar" aria-label={t("menu.format", "Format")} data-testid="format-bar" onContextMenu={barMenu.onContextMenu} onKeyDown={(e) => void arrowNav(e)}>
       <OverflowRow slots={slots} renderSlot={renderSlot} compactable={(s) => s.kind === "el" && (s.el === "highlight" || s.el === "colorByValue")} testId="format-row" className={styles.row} />
       {menu?.kind === "format" ? (
         <Popover
-          label="Number format"
+          label={t("toolbar.numberFormat", "Number format")}
           testId="number-format-menu"
           x={menu.x}
           y={menu.y}
@@ -267,7 +268,7 @@ export function FormatBar() {
             })),
             {
               id: "custom",
-              label: "Custom…",
+              label: t("fmtbar.customEllipsis", "Custom…"),
               separator: true,
               checked: !preset && style !== undefined,
               onSelect: () => useUiStore.getState().openDialog({ kind: "numberFormat", code: style?.numberFormat ?? "General" }),
@@ -277,7 +278,7 @@ export function FormatBar() {
       ) : null}
       {menu?.kind === "highlight" ? (
         <Popover
-          label="Highlight cells"
+          label={t("chrome.item.highlight", "Highlight cells")}
           testId="highlight-menu"
           x={menu.x}
           y={menu.y}
@@ -294,7 +295,7 @@ export function FormatBar() {
             })),
             {
               id: "manage",
-              label: "Manage rules…",
+              label: t("fmtbar.manageRules", "Manage rules…"),
               separator: true,
               onSelect: () => useUiStore.getState().openDialog({ kind: "cfManager" }),
             },
@@ -316,7 +317,7 @@ export function FormatBar() {
         <ColorPicker
           x={menu.x}
           y={menu.y}
-          label={menu.kind === "color" ? "Font colour" : "Fill colour"}
+          label={menu.kind === "color" ? t("toolbar.fontColor", "Font colour") : t("toolbar.fillColor", "Fill colour")}
           value={menu.kind === "color" ? (style?.color ?? null) : (style?.fill ?? null)}
           allowNone={menu.kind === "fill"}
           onClose={() => setMenu(null)}

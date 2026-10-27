@@ -71,9 +71,9 @@ export function Toolbar({ inset }: { inset: boolean }) {
   const hidden = useW56Store((s) => s.prefs.chrome.hidden.toolbar);
   const barMenu = useBarMenu("toolbar");
 
-  const title = info?.title ?? "Untitled";
+  const title = info?.title ?? t("app.untitled", "Untitled");
   const folder = info?.path ? info.path.split(/[\\/]/).slice(-2, -1)[0] : undefined;
-  const subtitle = `${folder ?? "Draft"} · ${info?.dirty ? "Edited" : "Saved"}`;
+  const subtitle = `${folder ?? t("shell.draft", "Draft")} · ${info?.dirty ? t("sidebar.edited", "Edited") : t("status.saved", "Saved")}`;
 
   const items: Record<string, ReactNode> = {
     save: <Pill command="file.save" label={t("cmd.file.save", "Save")} icon={<SaveIcon />} />,
@@ -83,11 +83,11 @@ export function Toolbar({ inset }: { inset: boolean }) {
       <button
         type="button"
         className={styles.pill}
-        aria-label="Sort"
+        aria-label={t("sort.title", "Sort")}
         aria-haspopup="menu"
         aria-expanded={sortMenu !== null}
         data-command="data.sort"
-        title="Sort the table by the active column"
+        title={t("shell.sortTip", "Sort the table by the active column")}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
@@ -98,22 +98,22 @@ export function Toolbar({ inset }: { inset: boolean }) {
         <span>{t("sort.title", "Sort")}</span>
       </button>
     ),
-    filter: <Pill command="data.filter" label={t("menu.data.filter", "Filter")} icon={<FilterIcon />} active={filtering} tooltip={filtering ? "Remove the AutoFilter" : "AutoFilter: a ▾ in each header"} />,
+    filter: <Pill command="data.filter" label={t("menu.data.filter", "Filter")} icon={<FilterIcon />} active={filtering} tooltip={filtering ? t("shell.autoFilterOff", "Remove the AutoFilter") : t("shell.autoFilterOn", "AutoFilter: a ▾ in each header")} />,
     addUp: (
-      <Pill command="insert.addUp" label="Add up" tooltip="Add up the numbers above (Σ)">
+      <Pill command="insert.addUp" label={t("chrome.item.addUp", "Add up")} tooltip={t("shell.addUpTip", "Add up the numbers above (Σ)")}>
         <span className={styles.glyph} aria-hidden="true">
           Σ
         </span>
-        <span>{t("toolbar.sum", "Add up")}</span>
+        <span>{t("chrome.item.addUp", "Add up")}</span>
       </Pill>
     ),
-    chart: <Pill command="insert.chart" label={t("chart.title", "Chart")} icon={<ChartIcon />} tooltip="Insert a chart of the data around the selection" />,
+    chart: <Pill command="insert.chart" label={t("chart.title", "Chart")} icon={<ChartIcon />} tooltip={t("shell.chartTip", "Insert a chart of the data around the selection")} />,
     theme: (
       <button
         type="button"
         className={cx(styles.pill, styles.iconOnly, styles.ghost)}
-        aria-label="Theme"
-        title={`Theme: ${themePref === "system" ? "match system" : themePref} (click to change)`}
+        aria-label={t("cmd.view.theme", "Theme")}
+        title={themePref === "system" ? t("shell.themeTipSystem", "Theme: match system (click to change)") : themePref === "light" ? t("shell.themeTipLight", "Theme: light (click to change)") : t("shell.themeTipDark", "Theme: dark (click to change)")}
         data-testid="theme-toggle"
         data-theme-pref={themePref}
         onMouseDown={(e) => e.preventDefault()}
@@ -122,7 +122,7 @@ export function Toolbar({ inset }: { inset: boolean }) {
         <MoonIcon />
       </button>
     ),
-    glance: <Pill command="view.glance" label="At a glance" icon={<GlanceIcon />} iconOnly active={glanceOpen} tooltip="At a glance" />,
+    glance: <Pill command="view.glance" label={t("glance.title", "At a glance")} icon={<GlanceIcon />} iconOnly active={glanceOpen} tooltip={t("glance.title", "At a glance")} />,
     share: (
       <button
         type="button"
@@ -146,8 +146,8 @@ export function Toolbar({ inset }: { inset: boolean }) {
         <button
           type="button"
           className={cx(styles.pill, styles.iconOnly, styles.ghost)}
-          aria-label="Show sidebar"
-          title="Show sidebar  ⌘\"
+          aria-label={t("shell.showSidebar", "Show sidebar")}
+          title={`${t("shell.showSidebar", "Show sidebar")}  ⌘\\`}
           onClick={() => useUiStore.getState().setSidebar(true)}
         >
           <SidebarIcon />
@@ -161,7 +161,7 @@ export function Toolbar({ inset }: { inset: boolean }) {
           {subtitle}
         </div>
       </div>
-      <nav className={styles.pills} aria-label="Toolbar" data-tauri-drag-region>
+      <nav className={styles.pills} aria-label={t("chrome.bar.toolbar", "Toolbar")} data-tauri-drag-region>
         <OverflowRow
           slots={slots}
           testId="toolbar-row"
@@ -176,31 +176,31 @@ export function Toolbar({ inset }: { inset: boolean }) {
       ))}
       {sortMenu ? (
         <Popover
-          label="Sort"
+          label={t("sort.title", "Sort")}
           testId="sort-menu"
           x={sortMenu.x}
           y={sortMenu.y}
           onClose={() => setSortMenu(null)}
           items={[
-            { id: "asc", label: "Sort A → Z", hint: "by active column", onSelect: () => ctl.registry.run("data.sortAsc") },
-            { id: "desc", label: "Sort Z → A", onSelect: () => ctl.registry.run("data.sortDesc") },
-            { id: "custom", label: "Sort…", separator: true, onSelect: () => ctl.registry.run("data.sort") },
+            { id: "asc", label: t("shell.ctxSortAsc", "Sort A → Z"), hint: t("shell.sortByActive", "by active column"), onSelect: () => ctl.registry.run("data.sortAsc") },
+            { id: "desc", label: t("shell.ctxSortDesc", "Sort Z → A"), onSelect: () => ctl.registry.run("data.sortDesc") },
+            { id: "custom", label: t("cmd.data.sort", "Sort…"), separator: true, onSelect: () => ctl.registry.run("data.sort") },
           ]}
         />
       ) : null}
       {share ? (
         <Popover
-          label="Share"
+          label={t("menu.file.share", "Share")}
           x={share.x}
           y={share.y}
           alignRight
           onClose={() => setShare(null)}
           items={[
-            { id: "xlsx", label: "Export XLSX…", hint: ".xlsx", onSelect: () => ctl.registry.run("file.exportXlsx") },
-            { id: "ods", label: "Export ODS…", hint: ".ods", onSelect: () => ctl.registry.run("file.exportOds") },
-            { id: "csv", label: "Export as CSV…", hint: ".csv", onSelect: () => ctl.registry.run("file.exportCsv") },
-            { id: "pdf", label: "Export as PDF…", hint: ".pdf", onSelect: () => ctl.registry.run("file.exportPdf") },
-            { id: "saveAs", label: "Save a copy…", hint: "⇧⌘S", onSelect: () => ctl.registry.run("file.saveAs") },
+            { id: "xlsx", label: t("shell.exportXlsx", "Export XLSX…"), hint: ".xlsx", onSelect: () => ctl.registry.run("file.exportXlsx") },
+            { id: "ods", label: t("cmd.file.exportOds", "Export ODS…"), hint: ".ods", onSelect: () => ctl.registry.run("file.exportOds") },
+            { id: "csv", label: t("cmd.file.exportCsv", "Export as CSV…"), hint: ".csv", onSelect: () => ctl.registry.run("file.exportCsv") },
+            { id: "pdf", label: t("cmd.file.exportPdf", "Export as PDF…"), hint: ".pdf", onSelect: () => ctl.registry.run("file.exportPdf") },
+            { id: "saveAs", label: t("shell.saveCopy", "Save a copy…"), hint: "⇧⌘S", onSelect: () => ctl.registry.run("file.saveAs") },
           ]}
         />
       ) : null}

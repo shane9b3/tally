@@ -33,6 +33,7 @@ import { Toolbar } from "./components/Toolbar";
 import { useChartStore } from "./charts/chartStore";
 import { W56Chrome, W56Panels } from "./data/W56Chrome";
 import { useW56Store } from "./data/store";
+import { t } from "./i18n";
 import { TitleStrip } from "./chrome/ChromeUi";
 import { usePeekStore } from "./chrome/chromeActions";
 import { ControllerContext } from "./context";
@@ -181,11 +182,11 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
         <Toasts />
         {about ? (
           <div className={styles.aboutOverlay} onMouseDown={() => setAbout(false)}>
-            <div className={styles.about} role="dialog" aria-modal="true" aria-label="About Tally" tabIndex={-1} ref={(el) => el?.focus()} onKeyDown={(e) => (e.key === "Escape" || e.key === "Enter" ? (e.preventDefault(), setAbout(false), ctl.focusGrid()) : e.key === "Tab" && e.preventDefault())} data-testid="about">
+            <div className={styles.about} role="dialog" aria-modal="true" aria-label={t("app.about", "About Tally")} tabIndex={-1} ref={(el) => el?.focus()} onKeyDown={(e) => (e.key === "Escape" || e.key === "Enter" ? (e.preventDefault(), setAbout(false), ctl.focusGrid()) : e.key === "Tab" && e.preventDefault())} data-testid="about">
               <div className={styles.logo}>T</div>
-              <div className={styles.aboutTitle}>Tally</div>
-              <div className={styles.aboutText}>Version 0.3.0 (preview)</div>
-              <div className={styles.aboutText}>A modern, OpenOffice-compatible spreadsheet.</div>
+              <div className={styles.aboutTitle}>{t("app.name", "Tally")}</div>
+              <div className={styles.aboutText}>{t("app.aboutVersion", "Version {version} (preview)", { version: "0.3.0" })}</div>
+              <div className={styles.aboutText}>{t("app.aboutTagline", "A modern, OpenOffice-compatible spreadsheet.")}</div>
             </div>
           </div>
         ) : null}

@@ -4,6 +4,7 @@
  * with the `tally-io-csv` tokenizer; this mirrors its rules closely enough
  * for the live preview grid).
  */
+import { t } from "../i18n";
 import type { CsvColumnType, CsvImportOptionsDto } from "@tally/bridge";
 
 export interface SeparatorState {
@@ -26,12 +27,12 @@ export interface SeparatorState {
 export const DEFAULT_SEPARATORS: SeparatorState = { tab: true, comma: false, semicolon: true, space: false, other: false, otherChar: "", mergeDelimiters: false, quote: '"', trim: true, detectNumbers: true, fixedWidth: false, widths: [], columnTypes: [] };
 
 export const COLUMN_TYPES: readonly { type: CsvColumnType; label: string }[] = [
-  { type: "standard", label: "Standard" },
-  { type: "text", label: "Text" },
-  { type: "dateDmy", label: "Date (DMY)" },
-  { type: "dateMdy", label: "Date (MDY)" },
-  { type: "dateYmd", label: "Date (YMD)" },
-  { type: "hide", label: "Hide" },
+  { type: "standard", get label() { return t("lbl.colType.standard", "Standard"); } },
+  { type: "text", get label() { return t("lbl.colType.text", "Text"); } },
+  { type: "dateDmy", get label() { return t("lbl.colType.dateDmy", "Date (DMY)"); } },
+  { type: "dateMdy", get label() { return t("lbl.colType.dateMdy", "Date (MDY)"); } },
+  { type: "dateYmd", get label() { return t("lbl.colType.dateYmd", "Date (YMD)"); } },
+  { type: "hide", get label() { return t("lbl.colType.hide", "Hide"); } },
 ];
 
 /** The separator characters as the engine wants them (`";\t"`). */

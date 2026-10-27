@@ -89,7 +89,7 @@ export function W56Shell({ title, children, onSubmit, ok, valid = true, size = "
         <h2 id={titleId} className={dlg.title}>
           {title}
         </h2>
-        {picking ? <p className={styles.pickHint}>{t("wizard.select", "Select")}: drag over the cells, then press Enter (Esc cancels).</p> : null}
+        {picking ? <p className={styles.pickHint}>{t("w56shell.pickHint", "Select: drag over the cells, then press Enter (Esc cancels).")}</p> : null}
         {children}
         <div className={dlg.actions}>
           {extra ? <div className={dlg.extra}>{extra}</div> : null}
@@ -164,7 +164,7 @@ export function RangeField({ label, value, onChange, testId, placeholder, allowS
       <span>{label}</span>
       <div className={styles.rangeRow}>
         <input className={cx(dlg.input, dlg.mono, !valid && styles.invalid)} value={value} placeholder={placeholder ?? (allowSheet ? "Sheet1.A1:B5" : "A1:B5")} spellCheck={false} onChange={(e) => onChange(e.target.value)} data-testid={testId} />
-        <button type="button" className={styles.pickBtn} title="Pick in the sheet" aria-label="Pick in the sheet" onClick={() => void pick()} data-testid={testId ? `${testId}-pick` : undefined}>
+        <button type="button" className={styles.pickBtn} title={t("w56shell.pickInSheet", "Pick in the sheet")} aria-label={t("w56shell.pickInSheet", "Pick in the sheet")} onClick={() => void pick()} data-testid={testId ? `${testId}-pick` : undefined}>
           ⌖
         </button>
       </div>
@@ -182,8 +182,8 @@ export function ColorField({ value, onChange, allowNone, testId }: { value: numb
   const hex = value === null ? "#000000" : rgbaToHex(value);
   return (
     <div className={styles.rangeRow}>
-      <input type="color" className={styles.pickBtn} style={{ width: 44, padding: 2 }} value={hex} aria-label="Colour" onChange={(e) => onChange(hexToRgba(e.target.value))} data-testid={testId} />
-      <input className={cx(dlg.input, dlg.mono)} value={value === null ? "" : hex} placeholder={allowNone ? "none" : "#rrggbb"} spellCheck={false} onChange={(e) => {
+      <input type="color" className={styles.pickBtn} style={{ width: 44, padding: 2 }} value={hex} aria-label={t("w56shell.colour", "Colour")} onChange={(e) => onChange(hexToRgba(e.target.value))} data-testid={testId} />
+      <input className={cx(dlg.input, dlg.mono)} value={value === null ? "" : hex} placeholder={allowNone ? t("w56shell.none", "none") : "#rrggbb"} spellCheck={false} onChange={(e) => {
         const v = e.target.value.trim();
         if (v === "" && allowNone) onChange(null);
         else {
@@ -192,7 +192,7 @@ export function ColorField({ value, onChange, allowNone, testId }: { value: numb
         }
       }} />
       {allowNone ? (
-        <button type="button" className={styles.pickBtn} title="No colour" aria-label="No colour" onClick={() => onChange(null)}>
+        <button type="button" className={styles.pickBtn} title={t("w56shell.noColour", "No colour")} aria-label={t("w56shell.noColour", "No colour")} onClick={() => onChange(null)}>
           ✕
         </button>
       ) : null}

@@ -23,6 +23,54 @@ import type { CellView } from "@tally/bridge";
 import { cellAddress } from "./colLetters";
 import type { Selection } from "./types";
 
+/**
+ * The grid's screen-reader strings. The grid never imports the app's i18n;
+ * the app passes translated strings through `AriaProps.strings` (any subset;
+ * the rest stay English). `{name}` placeholders are filled by the grid.
+ */
+export interface GridStrings {
+  /** `aria-label` of the grid when no sheet name is known. */
+  spreadsheet: string;
+  /** `aria-label` of the grid: `{name}` is the sheet's name. */
+  sheet: string;
+  /** Value announced for a blank cell. */
+  empty: string;
+  /** Appended for a formula cell: `{formula}`. */
+  formula: string;
+  /** Appended for a multi-cell selection: `{from}`, `{to}`, `{rows}`, `{cols}`. */
+  selected: string;
+  /** Appended for extra ranges: `{count}` (1). */
+  plusRange: string;
+  /** Appended for extra ranges: `{count}` (2 or more). */
+  plusRanges: string;
+  /** `aria-label` of the cell editor textarea. */
+  cellEditor: string;
+  /** `aria-label` of the drawing-object layer. */
+  objects: string;
+}
+
+export const DEFAULT_GRID_STRINGS: GridStrings = {
+  spreadsheet: "Spreadsheet",
+  sheet: "Sheet {name}",
+  empty: "empty",
+  formula: ", formula {formula}",
+  selected: ", selected {from} to {to} ({rows} rows, {cols} columns)",
+  plusRange: ", plus {count} more range",
+  plusRanges: ", plus {count} more ranges",
+  cellEditor: "Cell editor",
+  objects: "Objects",
+};
+
+/** Fills `{name}` placeholders. */
+function fill(template: string, params: Readonly<Record<string, string | number>>): string {
+  return template.replace(/\{(\w+)\}/g, (m, k: string) => (k in params ? String(params[k]) : m));
+}
+
+/** Merges a partial table over the English defaults. */
+export function gridStrings(partial?: Partial<GridStrings> | null): GridStrings {
+  return partial ? { ...DEFAULT_GRID_STRINGS, ...partial } : DEFAULT_GRID_STRINGS;
+}
+
 /** What the app feeds the mirror (`GridProps.aria`). */
 export interface AriaProps {
   /** The sheet's name (`aria-label`: "Sheet Budget"); `null` keeps "Spreadsheet". */
@@ -34,6 +82,8 @@ export interface AriaProps {
   activeFormula?: string | null;
   /** Turns announcements off (e.g. while a dialog owns the focus). */
   silent?: boolean;
+  /** Translated strings (any subset); English when absent. */
+  strings?: Partial<GridStrings>;
 }
 
 /** Visually hidden but readable by assistive technology. */
@@ -51,23 +101,35 @@ export const OFFSCREEN_STYLE: Partial<CSSStyleDeclaration> = {
 };
 
 /** The text announced for a cell: "B2: 42" / "B2: empty" / "C1: 6, formula =A1*B1". */
-export function describeCell(address: string, text: string | undefined, formula: string | null | undefined): string {
-  const value = text === undefined || text === "" ? "empty" : text;
-  const f = formula && formula.startsWith("=") ? `, formula ${formula}` : "";
+export function describeCell(
+  address: string,
+  text: string | undefined,
+  formula: string | null | undefined,
+  strings: Partial<GridStrings> = DEFAULT_GRID_STRINGS,
+): string {
+  const S = gridStrings(strings);
+  const value = text === undefined || text === "" ? S.empty : text;
+  const f = formula && formula.startsWith("=") ? fill(S.formula, { formula }) : "";
   return `${address}: ${value}${f}`;
 }
 
 /** The announcement for a selection: the active cell, then the range when it spans more than one cell. */
-export function describeSelection(sel: Selection, text: string | undefined, formula: string | null | undefined): string {
+export function describeSelection(
+  sel: Selection,
+  text: string | undefined,
+  formula: string | null | undefined,
+  strings: Partial<GridStrings> = DEFAULT_GRID_STRINGS,
+): string {
+  const S = gridStrings(strings);
   const { range: r, active } = sel;
-  let s = describeCell(cellAddress(active.r, active.c), text, formula);
+  let s = describeCell(cellAddress(active.r, active.c), text, formula, S);
   const rows = r.r1 - r.r0 + 1;
   const cols = r.c1 - r.c0 + 1;
   if (rows > 1 || cols > 1) {
-    s += `, selected ${cellAddress(r.r0, r.c0)} to ${cellAddress(r.r1, r.c1)} (${rows} rows, ${cols} columns)`;
+    s += fill(S.selected, { from: cellAddress(r.r0, r.c0), to: cellAddress(r.r1, r.c1), rows, cols });
   }
   const extra = sel.others?.length ?? 0;
-  if (extra > 0) s += `, plus ${extra} more ${extra === 1 ? "range" : "ranges"}`;
+  if (extra > 0) s += fill(extra === 1 ? S.plusRange : S.plusRanges, { count: extra });
   return s;
 }
 
@@ -84,6 +146,9 @@ export class AriaMirror {
   readonly live: HTMLDivElement;
   private lastAnnounced = "";
   private props: AriaProps = {};
+  private last: { sel: Selection; view: CellView | undefined } | null = null;
+  /** Called with the merged strings whenever props change (the grid relabels the editor and object layer). */
+  onStrings?: (strings: GridStrings) => void;
 
   constructor(
     doc: Document,
@@ -97,7 +162,7 @@ export class AriaMirror {
     grid.setAttribute("aria-rowcount", String(limits.rows));
     grid.setAttribute("aria-colcount", String(limits.cols));
     grid.setAttribute("aria-multiselectable", "true");
-    grid.setAttribute("aria-label", "Spreadsheet");
+    grid.setAttribute("aria-label", DEFAULT_GRID_STRINGS.spreadsheet);
     grid.dataset.testid = "aria-grid";
     Object.assign(grid.style, OFFSCREEN_STYLE);
 
@@ -128,8 +193,21 @@ export class AriaMirror {
   }
 
   setProps(props: AriaProps): void {
+    const stringsChanged = props.strings !== this.props.strings;
     this.props = props;
-    this.grid.setAttribute("aria-label", props.sheetName ? `Sheet ${props.sheetName}` : "Spreadsheet");
+    const S = gridStrings(props.strings);
+    this.grid.setAttribute("aria-label", props.sheetName ? fill(S.sheet, { name: props.sheetName }) : S.spreadsheet);
+    this.onStrings?.(S);
+    // A language switch: rewrite the active-cell node and the live text in the new language at once
+    // (the live region is updated without re-announcing when the words did not change meaning).
+    if (stringsChanged && this.last) {
+      const { sel, view } = this.last;
+      const formula = props.activeFormula ?? null;
+      this.cell.textContent = describeCell(cellAddress(sel.active.r, sel.active.c), view?.text, formula, props.strings);
+      const text = describeSelection(sel, view?.text, formula, props.strings);
+      if (this.live.textContent !== "") this.live.textContent = text;
+      this.lastAnnounced = text;
+    }
   }
 
   /**
@@ -139,14 +217,15 @@ export class AriaMirror {
    */
   update(sel: Selection, view: CellView | undefined, force = false): void {
     const { active } = sel;
+    this.last = { sel, view };
     const formula = this.props.activeFormula ?? null;
     const address = cellAddress(active.r, active.c);
     this.row.setAttribute("aria-rowindex", String(active.r + 1));
     this.cell.setAttribute("aria-colindex", String(active.c + 1));
     this.cell.setAttribute("aria-rowindex", String(active.r + 1));
     this.cell.dataset.address = address;
-    this.cell.textContent = describeCell(address, view?.text, formula);
-    const text = describeSelection(sel, view?.text, formula);
+    this.cell.textContent = describeCell(address, view?.text, formula, this.props.strings);
+    const text = describeSelection(sel, view?.text, formula, this.props.strings);
     if (!force && text === this.lastAnnounced) return;
     this.lastAnnounced = text;
     if (this.props.silent) return;

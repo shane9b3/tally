@@ -97,7 +97,7 @@ export function NavigatorPanel() {
                             void ctl.w56.showScenario(it.id as number);
                           }}
                         >
-                          Show
+                          {t("w56shell.show", "Show")}
                         </span>
                       ) : g.key === "pivots" && it.id !== null ? (
                         <span

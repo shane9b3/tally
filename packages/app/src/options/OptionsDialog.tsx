@@ -20,15 +20,16 @@ import { UI_LANGUAGES, type AppPrefs } from "./prefs";
 const TABS: readonly { id: OptionsTab; key: string; label: string }[] = [
   { id: "calculate", key: "options.calculate", label: "Calculate" },
   { id: "view", key: "options.view", label: "View" },
-  { id: "input", key: "options.general", label: "Input" },
+  { id: "input", key: "od.tabInput", label: "Input" },
   { id: "formula", key: "options.formulaSyntax", label: "Formula syntax" },
-  { id: "sortLists", key: "sort.title", label: "Sort lists" },
-  { id: "loadSave", key: "dialog.save", label: "Load / Save" },
+  { id: "sortLists", key: "od.tabSortLists", label: "Sort lists" },
+  { id: "loadSave", key: "od.tabLoadSave", label: "Load / Save" },
   { id: "language", key: "options.language", label: "Language" },
 ];
 
 export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }> }) {
   const ctl = useController();
+  useW56Store((s) => s.i18nRev);
   const prefs0 = useW56Store((s) => s.prefs);
   const [tab, setTab] = useState<OptionsTab>(d.tab);
   const [calc, setCalc] = useState<CalcSettingsDto>(d.calc);
@@ -65,24 +66,24 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
             </Field>
             <Field label={t("options.dateEpoch", "Date")}>
               <select className={dlg.select} value={calc.dateEpoch} onChange={(e) => setCalc({ ...calc, dateEpoch: e.target.value as CalcSettingsDto["dateEpoch"] })} data-testid="opt-date-epoch">
-                <option value="d1899">12/30/1899 (default)</option>
+                <option value="d1899">{t("od.epochDefault", "12/30/1899 (default)")}</option>
                 <option value="d1900">01/01/1900 (StarCalc 1.0)</option>
                 <option value="d1904">01/01/1904</option>
               </select>
             </Field>
-            <Field label="Search criteria">
+            <Field label={t("od.searchCriteria", "Search criteria")}>
               <select className={dlg.select} value={calc.criteriaMode} onChange={(e) => setCalc({ ...calc, criteriaMode: e.target.value as CalcSettingsDto["criteriaMode"] })} data-testid="opt-criteria">
                 <option value="wildcards">{t("options.wildcards", "Enable wildcards in formulas")}</option>
                 <option value="regex">{t("options.regex", "Enable regular expressions in formulas")}</option>
-                <option value="literal">No wildcards or regular expressions</option>
+                <option value="literal">{t("od.noWildcards", "No wildcards or regular expressions")}</option>
               </select>
             </Field>
-            <Field label="Conversion from text to number">
+            <Field label={t("od.textToNumber", "Conversion from text to number")}>
               <select className={dlg.select} value={calc.textToNumber} onChange={(e) => setCalc({ ...calc, textToNumber: e.target.value as CalcSettingsDto["textToNumber"] })} data-testid="opt-text-to-number">
-                <option value="generateError">Generate #VALUE! error</option>
-                <option value="treatAsZero">Treat as zero</option>
-                <option value="convertUnambiguous">Convert only if unambiguous</option>
-                <option value="convertLocale">Convert also locale dependent</option>
+                <option value="generateError">{t("od.generateError", "Generate #VALUE! error")}</option>
+                <option value="treatAsZero">{t("od.treatAsZero", "Treat as zero")}</option>
+                <option value="convertUnambiguous">{t("od.convertUnambiguous", "Convert only if unambiguous")}</option>
+                <option value="convertLocale">{t("od.convertLocale", "Convert also locale dependent")}</option>
               </select>
             </Field>
           </div>
@@ -100,24 +101,24 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
           <Check label={t("cmd.view.zeroValues", "Zero values")} checked={view.showZeroValues} onChange={(v) => setView({ ...view, showZeroValues: v })} />
           <Check label={t("cmd.view.showFormulas", "Show formulas")} checked={view.showFormulas} onChange={(v) => setView({ ...view, showFormulas: v })} testId="opt-show-formulas" />
           <Check label={t("cmd.view.valueHighlighting", "Value highlighting")} checked={view.valueHighlighting} onChange={(v) => setView({ ...view, valueHighlighting: v })} />
-          <p className={dlg.note} style={{ gridColumn: "1 / -1" }}>Per sheet, saved with the document. (Rendering of these toggles follows in the grid.)</p>
+          <p className={dlg.note} style={{ gridColumn: "1 / -1" }}>{t("od.viewNote", "Per sheet, saved with the document. (Rendering of these toggles follows in the grid.)")}</p>
         </div>
       ) : null}
       {tab === "input" ? (
         <div>
           <Check label={t("options.autoInput", "AutoInput")} checked={prefs.autoInput} onChange={(v) => setPrefs({ ...prefs, autoInput: v })} testId="opt-autoinput" />
-          <Field label="Press Enter to move selection" className={dlg.gap}>
+          <Field label={t("od.enterMoves", "Press Enter to move selection")} className={dlg.gap}>
             <select className={dlg.select} value={prefs.enterMoves} onChange={(e) => setPrefs({ ...prefs, enterMoves: e.target.value as AppPrefs["enterMoves"] })} data-testid="opt-enter-moves">
-              <option value="down">Down</option>
-              <option value="right">Right</option>
-              <option value="up">Up</option>
-              <option value="left">Left</option>
+              <option value="down">{t("od.down", "Down")}</option>
+              <option value="right">{t("od.right", "Right")}</option>
+              <option value="up">{t("od.up", "Up")}</option>
+              <option value="left">{t("od.left", "Left")}</option>
             </select>
           </Field>
-          <Check label="Delete key opens the Delete Contents dialog (⌫ always clears at once)" checked={prefs.deleteKeyDialog} onChange={(v) => setPrefs({ ...prefs, deleteKeyDialog: v })} testId="opt-delete-dialog" />
+          <Check label={t("od.deleteKeyDialog", "Delete key opens the Delete Contents dialog (⌫ always clears at once)")} checked={prefs.deleteKeyDialog} onChange={(v) => setPrefs({ ...prefs, deleteKeyDialog: v })} testId="opt-delete-dialog" />
           <div className={w56.section}>{t("options.autoCorrect", "AutoCorrect")}</div>
           {AUTOCORRECT_OPTIONS.map((o) => (
-            <Check key={o.key} label={`${o.label} (${o.example})`} checked={prefs.autoCorrect[o.key]} onChange={(v) => setPrefs({ ...prefs, autoCorrect: { ...prefs.autoCorrect, [o.key]: v } })} testId={`opt-ac-${o.key}`} />
+            <Check key={o.key} label={`${t(`od.ac.${o.key}`, o.label)} (${o.example})`} checked={prefs.autoCorrect[o.key]} onChange={(v) => setPrefs({ ...prefs, autoCorrect: { ...prefs.autoCorrect, [o.key]: v } })} testId={`opt-ac-${o.key}`} />
           ))}
         </div>
       ) : null}
@@ -129,48 +130,48 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
               <option value=",">, (Excel A1)</option>
             </select>
           </Field>
-          <Check label="Show references in Excel A1 form (Sheet1!A1)" checked={prefs.excelA1Display} onChange={(v) => setPrefs({ ...prefs, excelA1Display: v })} />
-          <p className={dlg.note}>Display preference for the Function Wizard and the formula bar; the engine stores formulas in the OpenOffice dialect.</p>
+          <Check label={t("od.excelA1", "Show references in Excel A1 form (Sheet1!A1)")} checked={prefs.excelA1Display} onChange={(v) => setPrefs({ ...prefs, excelA1Display: v })} />
+          <p className={dlg.note}>{t("od.formulaNote", "Display preference for the Function Wizard and the formula bar; the engine stores formulas in the OpenOffice dialect.")}</p>
         </div>
       ) : null}
       {tab === "sortLists" ? (
         <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 12 }}>
           <div>
-            <div className={w56.list} role="listbox" aria-label="Lists" style={{ maxHeight: 200 }}>
+            <div className={w56.list} role="listbox" aria-label={t("od.lists", "Lists")} style={{ maxHeight: 200 }}>
               {BUILTIN_SORT_LISTS.map((l, i) => (
-                <div key={`b${i}`} className={w56.listItem} title="Built in">
+                <div key={`b${i}`} className={w56.listItem} title={t("od.builtIn", "Built in")}>
                   <span className={w56.grow}>{l.slice(0, 3).join(", ")}, …</span>
                 </div>
               ))}
               {lists.map((l, i) => (
                 <button key={i} type="button" role="option" aria-selected={listIndex === i} className={listIndex === i ? w56.listItemOn : w56.listItem} onClick={() => (commitDraft(listIndex, draft), setListIndex(i), setDraft(l.join("\n")))} data-testid={`sortlist-${i}`}>
-                  <span className={w56.grow}>{l.length > 0 ? l.slice(0, 3).join(", ") + (l.length > 3 ? ", …" : "") : "(empty)"}</span>
+                  <span className={w56.grow}>{l.length > 0 ? l.slice(0, 3).join(", ") + (l.length > 3 ? ", …" : "") : t("dp.empty", "(empty)")}</span>
                 </button>
               ))}
             </div>
             <div className={w56.row}>
               <button type="button" className={dlg.secondary} onClick={() => (commitDraft(listIndex, draft), setLists([...lists, []]), setListIndex(lists.length), setDraft(""))} data-testid="sortlist-new">
-                New
+                {t("od.new", "New")}
               </button>
               <button type="button" className={dlg.secondary} disabled={listIndex === null} onClick={() => (setLists(lists.filter((_, i) => i !== listIndex)), setListIndex(null), setDraft(""))} data-testid="sortlist-delete">
                 {t("dialog.delete", "Delete")}
               </button>
             </div>
           </div>
-          <Field label="Entries (one per line)">
+          <Field label={t("od.entries", "Entries (one per line)")}>
             <textarea className={w56.textarea} style={{ minHeight: 180 }} disabled={listIndex === null} value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={() => commitDraft(listIndex, draft)} data-testid="sortlist-entries" />
           </Field>
         </div>
       ) : null}
       {tab === "loadSave" ? (
         <div className={w56.grid2}>
-          <Field label="Default file format">
+          <Field label={t("od.defaultFormat", "Default file format")}>
             <select className={dlg.select} value={prefs.defaultFormat} onChange={(e) => setPrefs({ ...prefs, defaultFormat: e.target.value as AppPrefs["defaultFormat"] })} data-testid="opt-default-format">
-              <option value="ods">OpenDocument Spreadsheet (.ods)</option>
-              <option value="xlsx">Excel Workbook (.xlsx)</option>
+              <option value="ods">{t("od.formatOds", "OpenDocument Spreadsheet (.ods)")}</option>
+              <option value="xlsx">{t("od.formatXlsx", "Excel Workbook (.xlsx)")}</option>
             </select>
           </Field>
-          <Field label="Save AutoRecovery information every (minutes, 0 = off)">
+          <Field label={t("od.autosave", "Save AutoRecovery information every (minutes, 0 = off)")}>
             <input className={dlg.input} type="number" min={0} max={120} value={prefs.autosaveMinutes} onChange={(e) => setPrefs({ ...prefs, autosaveMinutes: Math.max(0, Math.min(120, Number(e.target.value) || 0)) })} data-testid="opt-autosave" />
           </Field>
           <Field label={t("options.openDocumentsIn", "Open documents in")}>
@@ -186,7 +187,7 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
       ) : null}
       {tab === "language" ? (
         <div className={w56.grid2}>
-          <Field label="User interface">
+          <Field label={t("od.userInterface", "User interface")}>
             <select className={dlg.select} value={prefs.uiLanguage} onChange={(e) => setPrefs({ ...prefs, uiLanguage: e.target.value as AppPrefs["uiLanguage"] })} data-testid="opt-ui-language">
               {UI_LANGUAGES.map((l) => (
                 <option key={l.id} value={l.id}>
@@ -195,7 +196,7 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
               ))}
             </select>
           </Field>
-          <Field label="Locale for new documents">
+          <Field label={t("od.localeNew", "Locale for new documents")}>
             <select className={dlg.select} value={prefs.defaultLocale} onChange={(e) => setPrefs({ ...prefs, defaultLocale: e.target.value })} data-testid="opt-default-locale">
               {["en-US", "en-GB", "de-DE", "fr-FR", "es-ES", "ja-JP"].map((tag) => (
                 <option key={tag} value={tag}>
@@ -204,7 +205,7 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
               ))}
             </select>
           </Field>
-          <p className={dlg.note} style={{ gridColumn: "1 / -1" }}>Changing the interface language re-labels menus, dialogs and panels at once. Function names follow the document locale (View ▸ Locale) and are translated for display only; files always store the English names.</p>
+          <p className={dlg.note} style={{ gridColumn: "1 / -1" }}>{t("od.languageNote", "Changing the interface language re-labels menus, dialogs and panels at once. Function names follow the document locale (View ▸ Locale) and are translated for display only; files always store the English names.")}</p>
         </div>
       ) : null}
     </W56Shell>

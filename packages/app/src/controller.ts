@@ -76,6 +76,7 @@ import { guardDecision, isSequence, proceedAfter, useSavePromptStore, type Close
 import { TabsFeature, useTabsStore, type TabShell } from "./tabs";
 import { canReuseWindow, type WindowShell } from "./windows";
 import { W56Features } from "./data/w56";
+import { t } from "./i18n";
 
 export interface ControllerOptions {
   /** Inside Tauri: the native menu owns its accelerators. */
@@ -296,7 +297,7 @@ export class AppController {
 
   requireDoc(): number {
     const info = this.info;
-    if (!info) throw { code: "not_found", message: "No workbook is open." } satisfies ApiError;
+    if (!info) throw { code: "not_found", message: t("msg.error.noWorkbook", "No workbook is open.") } satisfies ApiError;
     return info.doc;
   }
 
@@ -422,12 +423,12 @@ export class AppController {
     return this.apply(label, [{ type: "applyStyle", sheet: this.sheet, ranges, patch }]);
   }
 
-  setFontSize = (pt: number): Promise<ApplyResult | null> => this.applyPatch("Font size", fontSizePatch(pt));
+  setFontSize = (pt: number): Promise<ApplyResult | null> => this.applyPatch(t("toolbar.fontSize", "Font size"), fontSizePatch(pt));
   /** The font box: one undoable ApplyStyle; the document font clears the cells' own family. */
-  setFontFamily = (name: string, documentFont: string): Promise<ApplyResult | null> => this.applyPatch("Font", fontFamilyPatch(name, documentFont));
-  setTextColor = (rgba: number): Promise<ApplyResult | null> => this.applyPatch("Font colour", { ...EMPTY_PATCH, color: rgba });
-  setFillColor = (rgba: number): Promise<ApplyResult | null> => this.applyPatch("Fill colour", { ...EMPTY_PATCH, fill: rgba });
-  setAlign = (h: HAlign): Promise<ApplyResult | null> => this.applyPatch("Align", { ...EMPTY_PATCH, hAlign: h });
+  setFontFamily = (name: string, documentFont: string): Promise<ApplyResult | null> => this.applyPatch(t("toolbar.font", "Font"), fontFamilyPatch(name, documentFont));
+  setTextColor = (rgba: number): Promise<ApplyResult | null> => this.applyPatch(t("toolbar.fontColor", "Font colour"), { ...EMPTY_PATCH, color: rgba });
+  setFillColor = (rgba: number): Promise<ApplyResult | null> => this.applyPatch(t("toolbar.fillColor", "Fill colour"), { ...EMPTY_PATCH, fill: rgba });
+  setAlign = (h: HAlign): Promise<ApplyResult | null> => this.applyPatch(t("msg.undo.align", "Align"), { ...EMPTY_PATCH, hAlign: h });
 
   setNumberFormat(code: string, label: string): Promise<ApplyResult | null> {
     return this.setNumberFormatOn(this.ranges, code, label);
@@ -476,7 +477,7 @@ export class AppController {
         groups.set(key, list);
       }
       if (groups.size === 0) {
-        useUiStore.getState().pushToast("info", "Select a column of text values to colour.");
+        useUiStore.getState().pushToast("info", t("msg.toast.colorByValueNeedsText", "Select a column of text values to colour."));
         return;
       }
       const values = [...groups.keys()];
@@ -509,7 +510,7 @@ export class AppController {
         this.focusGrid();
         return;
       }
-      await this.apply("Add up", [{ type: "setCellInput", sheet, r: active.r, c: active.c, input: sumFormula(range) }]);
+      await this.apply(t("chrome.item.addUp", "Add up"), [{ type: "setCellInput", sheet, r: active.r, c: active.c, input: sumFormula(range) }]);
     } catch (e) {
       this.notifyError(e);
     }
@@ -517,7 +518,7 @@ export class AppController {
 
   insertFormula(formula: string): Promise<ApplyResult | null> {
     const a = this.selection.active;
-    return this.apply("Insert formula", [{ type: "setCellInput", sheet: this.sheet, r: a.r, c: a.c, input: formula }]);
+    return this.apply(t("msg.undo.insertFormula", "Insert formula"), [{ type: "setCellInput", sheet: this.sheet, r: a.r, c: a.c, input: formula }]);
   }
 
   // -- cells --------------------------------------------------------------------
@@ -586,8 +587,8 @@ export class AppController {
       const pending = unchanged
         ? null
         : arrayOp
-          ? this.apply("Array formula", [arrayOp])
-          : this.apply("Typing", this.typingOps(sheet, edit.cell, edit.text));
+          ? this.apply(t("msg.undo.arrayFormula", "Array formula"), [arrayOp])
+          : this.apply(t("msg.undo.typing", "Typing"), this.typingOps(sheet, edit.cell, edit.text));
       if (pending) this.lastCommit = pending;
       if (origin === "bar") {
         if (move !== "none") {
@@ -638,13 +639,13 @@ export class AppController {
     // The grid reports the current range; clear every range of a multi-selection.
     const ranges = this.ranges;
     const all = ranges.some((r) => r.r0 === range.r0 && r.c0 === range.c0 && r.r1 === range.r1 && r.c1 === range.c1) ? ranges : [{ ...range }];
-    void this.apply("Delete", [{ type: "clear", sheet: this.sheet, ranges: all, what: "contents" }]);
+    void this.apply(t("dialog.delete", "Delete"), [{ type: "clear", sheet: this.sheet, ranges: all, what: "contents" }]);
   };
 
   clearSelection = (): void => this.deleteContents(this.selection.range);
 
   clearFormats = (): Promise<ApplyResult | null> =>
-    this.apply("Clear formats", [{ type: "clear", sheet: this.sheet, ranges: this.ranges, what: "formats" }]);
+    this.apply(t("cmd.edit.clearFormats", "Clear formats"), [{ type: "clear", sheet: this.sheet, ranges: this.ranges, what: "formats" }]);
 
   // -- structure ------------------------------------------------------------------
 
@@ -654,7 +655,7 @@ export class AppController {
     const n = count ?? r.r1 - r.r0 + 1;
     const at = where === "before" ? r.r0 : r.r1 + 1;
     const after = { range: { ...r, r0: at, r1: at + n - 1 }, active: { r: at, c: this.selection.active.c }, anchor: { r: at, c: r.c0 } };
-    return this.apply(n === 1 ? "Insert row" : "Insert rows", [{ type: "insertRows", sheet: this.sheet, at, count: n }], after);
+    return this.apply(n === 1 ? t("msg.undo.insertRow", "Insert row") : t("dlg.insertRows", "Insert rows"), [{ type: "insertRows", sheet: this.sheet, at, count: n }], after);
   };
 
   insertCols = (where: "before" | "after", count?: number): Promise<ApplyResult | null> => {
@@ -662,17 +663,17 @@ export class AppController {
     const n = count ?? r.c1 - r.c0 + 1;
     const at = where === "before" ? r.c0 : r.c1 + 1;
     const after = { range: { ...r, c0: at, c1: at + n - 1 }, active: { r: this.selection.active.r, c: at }, anchor: { r: r.r0, c: at } };
-    return this.apply(n === 1 ? "Insert column" : "Insert columns", [{ type: "insertCols", sheet: this.sheet, at, count: n }], after);
+    return this.apply(n === 1 ? t("msg.undo.insertColumn", "Insert column") : t("dlg.insertColumns", "Insert columns"), [{ type: "insertCols", sheet: this.sheet, at, count: n }], after);
   };
 
   deleteRows = (): Promise<ApplyResult | null> => {
     const r = this.selection.range;
-    return this.apply("Delete rows", [{ type: "deleteRows", sheet: this.sheet, at: r.r0, count: r.r1 - r.r0 + 1 }], cellSelection({ r: r.r0, c: this.selection.active.c }));
+    return this.apply(t("cmd.sheet.deleteRows", "Delete rows"), [{ type: "deleteRows", sheet: this.sheet, at: r.r0, count: r.r1 - r.r0 + 1 }], cellSelection({ r: r.r0, c: this.selection.active.c }));
   };
 
   deleteCols = (): Promise<ApplyResult | null> => {
     const r = this.selection.range;
-    return this.apply("Delete columns", [{ type: "deleteCols", sheet: this.sheet, at: r.c0, count: r.c1 - r.c0 + 1 }], cellSelection({ r: this.selection.active.r, c: r.c0 }));
+    return this.apply(t("cmd.sheet.deleteCols", "Delete columns"), [{ type: "deleteCols", sheet: this.sheet, at: r.c0, count: r.c1 - r.c0 + 1 }], cellSelection({ r: this.selection.active.r, c: r.c0 }));
   };
 
   /** Fits columns `start..=end` to their widest text (visible cells + the first rows of each column). */
@@ -693,7 +694,7 @@ export class AppController {
         if (w === null) continue;
         ops.push({ type: "setColWidth", sheet: this.sheet, start: c, end: c, px: Math.max(AUTOFIT_MIN, Math.min(AUTOFIT_MAX, w)) });
       }
-      if (ops.length > 0) await this.apply("Fit column width", ops);
+      if (ops.length > 0) await this.apply(t("msg.undo.fitColumnWidth", "Fit column width"), ops);
     } catch (e) {
       this.notifyError(e);
     }
@@ -708,7 +709,7 @@ export class AppController {
       const ops = fillRange({ sheet: this.sheet }, source, target);
       if (ops.length === 0) return;
       const sel: Selection = { range: { ...target }, active: { ...this.selection.active }, anchor: { r: target.r0, c: target.c0 } };
-      await this.apply("Fill", ops, sel);
+      await this.apply(t("menu.edit.fill", "Fill"), ops, sel);
     } catch (e) {
       this.notifyError(e);
     }
@@ -829,7 +830,7 @@ export class AppController {
       axis === "col"
         ? { type: "setColWidth", sheet: this.sheet, start, end, px }
         : { type: "setRowHeight", sheet: this.sheet, start, end, px };
-    void this.apply(axis === "col" ? "Column width" : "Row height", [op]);
+    void this.apply(axis === "col" ? t("dlg.columnWidth", "Column width") : t("dlg.rowHeight", "Row height"), [op]);
   };
 
   /** Current size (px at 100%) of row/column `i` from the sheet layout. */
@@ -865,7 +866,7 @@ export class AppController {
       const name = text.trim();
       if (isApiError(e) && e.code === "not_found" && isValidName(name) && !useDataStore.getState().names.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
         const ok = await this.defineName(name, null, absoluteRef(this.sheetName(), this.selection.range), null);
-        if (ok) useUiStore.getState().pushToast("info", `Named ${a1Text(this.selection.range)} “${name}”`);
+        if (ok) useUiStore.getState().pushToast("info", t("msg.toast.named", "Named {range} “{name}”", { range: a1Text(this.selection.range), name }));
         this.focusGrid();
         return ok;
       }
@@ -881,7 +882,7 @@ export class AppController {
     try {
       const doc = this.requireDoc();
       if ((this.selection.others ?? []).length > 0) {
-        useUiStore.getState().pushToast("info", "Copying several ranges at once is not supported; copied the last one.");
+        useUiStore.getState().pushToast("info", t("msg.toast.copyMultiRange", "Copying several ranges at once is not supported; copied the last one."));
       }
       const sel = this.selection;
       const out = await this.client.copy(doc, { sheet: this.sheet, ranges: [{ ...sel.range }], active: { ...sel.active } });
@@ -927,19 +928,19 @@ export class AppController {
         const h = clip.range.r1 - clip.range.r0;
         const w = clip.range.c1 - clip.range.c0;
         const after = { range: { r0: to.r, c0: to.c, r1: to.r + h, c1: to.c + w }, active: { ...to }, anchor: { ...to } };
-        return this.apply("Move", [{ type: "moveRange", sheet: this.sheet, from: { ...clip.range }, to }], after);
+        return this.apply(t("shell.group.move", "Move"), [{ type: "moveRange", sheet: this.sheet, from: { ...clip.range }, to }], after);
       }
       // Across sheets: paste, then clear the source.
-      return this.apply("Move", [
+      return this.apply(t("shell.group.move", "Move"), [
         { type: "paste", sheet: this.sheet, target, payload: { type: "internal", token } },
         { type: "clear", sheet: clip.sheet, ranges: [{ ...clip.range }], what: "all" },
       ]);
     }
     if (valuesOnly && token) {
-      return this.apply("Paste values", [{ type: "pasteSpecial", sheet: this.sheet, target, payload: { type: "internal", token }, options: pasteOptions({ what: "values", transpose: false, skipEmpty: false, operation: "none" }) }], undefined, true);
+      return this.apply(t("msg.undo.pasteValues", "Paste values"), [{ type: "pasteSpecial", sheet: this.sheet, target, payload: { type: "internal", token }, options: pasteOptions({ what: "values", transpose: false, skipEmpty: false, operation: "none" }) }], undefined, true);
     }
     const payload = token && !valuesOnly ? { type: "internal" as const, token } : { type: "tsv" as const, text };
-    return this.apply(valuesOnly ? "Paste values" : "Paste", [{ type: "paste", sheet: this.sheet, target, payload }], undefined, true);
+    return this.apply(valuesOnly ? t("msg.undo.pasteValues", "Paste values") : t("cmd.edit.paste", "Paste"), [{ type: "paste", sheet: this.sheet, target, payload }], undefined, true);
   }
 
   /** Reads the clipboard (system if allowed, else the last copy in this window). */
@@ -985,7 +986,7 @@ export class AppController {
   pasteFromClipboard = async (valuesOnly: boolean): Promise<void> => {
     const { text, token } = await this.readClipboard();
     if (text === null) {
-      useUiStore.getState().pushToast("info", "Use ⌘V to paste (the clipboard is not readable here).");
+      useUiStore.getState().pushToast("info", t("msg.toast.pasteWithKey", "Use ⌘V to paste (the clipboard is not readable here)."));
       return;
     }
     await this.pasteData(text, token, valuesOnly);
@@ -996,12 +997,12 @@ export class AppController {
   pasteSpecial = async (choice: PasteSpecialChoice): Promise<void> => {
     const { text, token } = await this.readClipboard();
     if (text === null && !token) {
-      useUiStore.getState().pushToast("info", "Copy something first.");
+      useUiStore.getState().pushToast("info", t("msg.toast.copyFirst", "Copy something first."));
       return;
     }
     const payload = token ? { type: "internal" as const, token } : { type: "tsv" as const, text: text ?? "" };
     const target = { ...this.selection.range };
-    await this.apply("Paste special", [{ type: "pasteSpecial", sheet: this.sheet, target, payload, options: pasteOptions(choice) }], undefined, true);
+    await this.apply(t("dlg.pasteSpecial", "Paste special"), [{ type: "pasteSpecial", sheet: this.sheet, target, payload, options: pasteOptions(choice) }], undefined, true);
     this.focusGrid();
   };
 
@@ -1032,15 +1033,15 @@ export class AppController {
     if (next) this.showSheet(next.id);
   }
 
-  addSheet = (): Promise<ApplyResult | null> => this.apply("Add sheet", [{ type: "addSheet", name: null, index: null }]);
+  addSheet = (): Promise<ApplyResult | null> => this.apply(t("sheetTabs.add", "Add sheet"), [{ type: "addSheet", name: null, index: null }]);
 
   renameSheet = (sheet: number, name: string): Promise<ApplyResult | null> =>
-    this.apply("Rename sheet", [{ type: "renameSheet", sheet, name }]);
+    this.apply(t("cmd.sheet.rename", "Rename sheet"), [{ type: "renameSheet", sheet, name }]);
 
-  deleteSheet = (sheet: number): Promise<ApplyResult | null> => this.apply("Delete sheet", [{ type: "deleteSheet", sheet }]);
+  deleteSheet = (sheet: number): Promise<ApplyResult | null> => this.apply(t("cmd.sheet.delete", "Delete sheet"), [{ type: "deleteSheet", sheet }]);
 
   moveSheet = (sheet: number, to: number): Promise<ApplyResult | null> =>
-    this.apply("Move sheet", [{ type: "moveSheet", sheet, to }]);
+    this.apply(t("msg.undo.moveSheet", "Move sheet"), [{ type: "moveSheet", sheet, to }]);
 
   // -- files ----------------------------------------------------------------------
 
@@ -1280,7 +1281,7 @@ export class AppController {
       if (!info) return;
       const res = await this.shell.saveWithDialog(info.doc, saveAs, format);
       useDocStore.getState().setInfo(res);
-      if (format !== null) useUiStore.getState().pushToast("info", `Exported ${res.title}`);
+      if (format !== null) useUiStore.getState().pushToast("info", t("msg.toast.exported", "Exported {title}", { title: res.title }));
     } catch (e) {
       this.notifyError(e);
     }
@@ -1367,7 +1368,7 @@ export class AppController {
     try {
       const region = await this.dataRegion();
       if (!region || region.r0 === region.r1) {
-        useUiStore.getState().pushToast("info", "Select a table (or a cell in one) to sort.");
+        useUiStore.getState().pushToast("info", t("msg.toast.selectTableToSort", "Select a table (or a cell in one) to sort."));
         return;
       }
       const hasHeader = await this.hasHeader(region);
@@ -1383,7 +1384,7 @@ export class AppController {
     try {
       const region = await this.dataRegion();
       if (!region) {
-        useUiStore.getState().pushToast("info", "Select a table (or a cell in one) to sort.");
+        useUiStore.getState().pushToast("info", t("msg.toast.selectTableToSort", "Select a table (or a cell in one) to sort."));
         return;
       }
       const hasHeader = await this.hasHeader(region);
@@ -1428,14 +1429,14 @@ export class AppController {
     try {
       const sheet = this.sheet;
       if (useDataStore.getState().filter?.range) {
-        await this.apply("Remove filter", [{ type: "setAutoFilter", sheet, range: null }]);
+        await this.apply(t("msg.undo.removeFilter", "Remove filter"), [{ type: "setAutoFilter", sheet, range: null }]);
       } else {
         const region = await this.dataRegion();
         if (!region || region.r0 === region.r1) {
-          useUiStore.getState().pushToast("info", "Select a table with a header row to filter.");
+          useUiStore.getState().pushToast("info", t("msg.toast.selectTableToFilter", "Select a table with a header row to filter."));
           return;
         }
-        await this.apply("Filter", [{ type: "setAutoFilter", sheet, range: region }]);
+        await this.apply(t("menu.data.filter", "Filter"), [{ type: "setAutoFilter", sheet, range: region }]);
       }
       await this.refreshFilter();
     } catch (e) {
@@ -1444,7 +1445,7 @@ export class AppController {
   };
 
   setColumnFilter = async (col: number, filter: ColumnFilter | null): Promise<void> => {
-    await this.apply(filter ? "Filter" : "Clear filter", [columnFilterOp(this.sheet, col, filter)]);
+    await this.apply(filter ? t("menu.data.filter", "Filter") : t("filter.clear", "Clear filter"), [columnFilterOp(this.sheet, col, filter)]);
     await this.refreshFilter();
   };
 
@@ -1453,7 +1454,7 @@ export class AppController {
     const f = useDataStore.getState().filter;
     const ops = (f?.columns ?? []).filter((c) => c.active).map((c) => columnFilterOp(this.sheet, c.col, null));
     if (ops.length === 0) return;
-    await this.apply("Clear filters", ops);
+    await this.apply(t("cmd.data.clearFilters", "Clear filters"), ops);
     await this.refreshFilter();
   };
 
@@ -1483,7 +1484,7 @@ export class AppController {
       }
       const af = useDataStore.getState().filter?.range;
       if (!af || col < af.c0 || col > af.c1) {
-        useUiStore.getState().pushToast("info", "That column is outside the table.");
+        useUiStore.getState().pushToast("info", t("msg.toast.columnOutsideTable", "That column is outside the table."));
         return;
       }
       await this.setColumnFilter(col, { values: null, condition: { op, value } });
@@ -1507,7 +1508,7 @@ export class AppController {
       const sheet = this.sheet;
       const range = { ...this.selection.range };
       if (range.r0 === range.r1 && range.c0 === range.c1) {
-        useUiStore.getState().pushToast("info", "Select two or more cells to merge.");
+        useUiStore.getState().pushToast("info", t("msg.toast.selectCellsToMerge", "Select two or more cells to merge."));
         return;
       }
       const [block] = await this.client.cells(doc, sheet, [range]);
@@ -1515,7 +1516,7 @@ export class AppController {
       const others = filled.filter((v) => v.r !== range.r0 || v.c !== range.c0);
       const tl = { r: range.r0, c: range.c0 };
       const go = (): void => {
-        void this.apply("Merge cells", [{ type: "mergeCells", sheet, range }], { range, active: tl, anchor: tl });
+        void this.apply(t("cmd.format.merge", "Merge cells"), [{ type: "mergeCells", sheet, range }], { range, active: tl, anchor: tl });
       };
       if (others.length === 0) {
         go();
@@ -1528,7 +1529,7 @@ export class AppController {
     }
   };
 
-  unmergeCells = (): Promise<ApplyResult | null> => this.apply("Unmerge cells", [{ type: "unmergeCells", sheet: this.sheet, range: { ...this.selection.range } }]);
+  unmergeCells = (): Promise<ApplyResult | null> => this.apply(t("cmd.format.unmerge", "Unmerge cells"), [{ type: "unmergeCells", sheet: this.sheet, range: { ...this.selection.range } }]);
 
   toggleMerge = async (): Promise<void> => {
     if (this.selectionIsMerged()) await this.unmergeCells();
@@ -1539,14 +1540,22 @@ export class AppController {
   freeze = async (what: "both" | "rows" | "cols"): Promise<void> => {
     const { rows, cols } = freezeAt(this.selection.active, what);
     if (rows === 0 && cols === 0) {
-      const where = what === "rows" ? "below the rows" : what === "cols" ? "right of the columns" : "below and right of what";
-      useUiStore.getState().pushToast("info", `Select a cell ${where} you want to keep in view.`);
+      useUiStore
+        .getState()
+        .pushToast(
+          "info",
+          what === "rows"
+            ? t("msg.toast.freezeRows", "Select a cell below the rows you want to keep in view.")
+            : what === "cols"
+              ? t("msg.toast.freezeCols", "Select a cell right of the columns you want to keep in view.")
+              : t("msg.toast.freezeBoth", "Select a cell below and right of what you want to keep in view."),
+        );
       return;
     }
-    await this.apply("Freeze panes", [{ type: "setFrozen", sheet: this.sheet, rows, cols }]);
+    await this.apply(t("cmd.view.freeze", "Freeze panes"), [{ type: "setFrozen", sheet: this.sheet, rows, cols }]);
   };
 
-  unfreeze = (): Promise<ApplyResult | null> => this.apply("Unfreeze panes", [{ type: "setFrozen", sheet: this.sheet, rows: 0, cols: 0 }]);
+  unfreeze = (): Promise<ApplyResult | null> => this.apply(t("cmd.view.unfreeze", "Unfreeze panes"), [{ type: "setFrozen", sheet: this.sheet, rows: 0, cols: 0 }]);
 
   isFrozen(): boolean {
     const f = useDocStore.getState().source?.getLayout(this.sheet).frozen;
@@ -1574,7 +1583,7 @@ export class AppController {
 
   /** Borders on every selected range. */
   applyBorders = (preset: BorderPreset, line: Parameters<typeof bordersPatch>[1]): Promise<ApplyResult | null> =>
-    this.applyPatch(preset === "none" ? "Remove borders" : "Borders", { ...EMPTY_PATCH, borders: bordersPatch(preset, line) });
+    this.applyPatch(preset === "none" ? t("msg.undo.removeBorders", "Remove borders") : t("toolbar.borders", "Borders"), { ...EMPTY_PATCH, borders: bordersPatch(preset, line) });
 
   // -- v0.2: names --------------------------------------------------------------------
 
@@ -1596,13 +1605,13 @@ export class AppController {
       ops.push({ type: "deleteName", name: replacing.name, scope: replacing.scope });
     }
     ops.push({ type: "defineName", name, scope, refersTo: refersTo.trim().replace(/^=/, "") });
-    const res = await this.apply(replacing ? "Edit name" : "Define name", ops);
+    const res = await this.apply(replacing ? t("dlg.editName", "Edit name") : t("dlg.defineName", "Define name"), ops);
     await this.refreshNames();
     return res !== null && res.errors.length === 0;
   };
 
   deleteName = async (n: NameInfo): Promise<void> => {
-    await this.apply("Delete name", [{ type: "deleteName", name: n.name, scope: n.scope }]);
+    await this.apply(t("msg.undo.deleteName", "Delete name"), [{ type: "deleteName", name: n.name, scope: n.scope }]);
     await this.refreshNames();
   };
 
@@ -1649,14 +1658,25 @@ export class AppController {
       const { options } = useDataStore.getState().find;
       const query = findQuery(text, options, this.sheet, null);
       const before = await this.client.find(doc, { ...query, inFormulas: true });
-      const res = await this.apply("Replace all", [{ type: "replaceAll", sheet: options.allSheets ? null : this.sheet, query, replace }]);
+      const res = await this.apply(t("dlg.replaceAll", "Replace all"), [{ type: "replaceAll", sheet: options.allSheets ? null : this.sheet, query, replace }]);
       if (!res) return 0;
       const n = res.replaced ?? Math.max(0, before.hits.length - res.errors.length);
       const skipped = res.errors.length;
       useDataStore.getState().patchFind({ searched: null, hits: [], index: -1 });
       useUiStore
         .getState()
-        .pushToast("info", n === 0 && skipped === 0 ? `No cells match “${text}”.` : `Replaced ${n === 1 ? "1 cell" : `${n} cells`}${skipped > 0 ? ` (${skipped} skipped)` : ""}.`);
+        .pushToast(
+          "info",
+          n === 0 && skipped === 0
+            ? t("msg.toast.noMatch", "No cells match “{text}”.", { text })
+            : n === 1
+              ? skipped > 0
+                ? t("msg.toast.replacedOneSkipped", "Replaced 1 cell ({skipped} skipped).", { skipped })
+                : t("msg.toast.replacedOne", "Replaced 1 cell.")
+              : skipped > 0
+                ? t("msg.toast.replacedManySkipped", "Replaced {n} cells ({skipped} skipped).", { n, skipped })
+                : t("msg.toast.replacedMany", "Replaced {n} cells.", { n }),
+        );
       return n;
     } catch (e) {
       this.notifyError(e);
@@ -1679,13 +1699,13 @@ export class AppController {
     const range = block ?? (inSel ? { ...sel } : { r0: edit.cell.r, c0: edit.cell.c, r1: edit.cell.r, c1: edit.cell.c });
     const op = arrayFormulaOp(this.sheet, range, this.w56.commitText(edit.text));
     if (!op) {
-      useUiStore.getState().pushToast("info", "An array formula starts with = (type it, then press ⌃⇧↩).");
+      useUiStore.getState().pushToast("info", t("msg.toast.arrayFormulaHint", "An array formula starts with = (type it, then press ⌃⇧↩)."));
       return;
     }
     st.end();
     if (origin === "bar") this.focusGrid();
     const tl = { r: range.r0, c: range.c0 };
-    await this.apply("Array formula", [op], { range, active: tl, anchor: tl });
+    await this.apply(t("msg.undo.arrayFormula", "Array formula"), [op], { range, active: tl, anchor: tl });
   };
 
   /** ⌘D / ⌘R. */
@@ -1699,7 +1719,7 @@ export class AppController {
   recalcAll = async (): Promise<void> => {
     try {
       this.handleResult(await this.client.recalcAll(this.requireDoc()));
-      useUiStore.getState().pushToast("info", "Recalculated every formula.");
+      useUiStore.getState().pushToast("info", t("msg.toast.recalculated", "Recalculated every formula."));
     } catch (e) {
       this.notifyError(e);
     }

@@ -8,6 +8,7 @@
  */
 import type { FunctionInfo } from "@tally/bridge";
 import tables from "./functionNames.json";
+import { useV3Store } from "../stores/v3Store";
 
 export type FormulaLang = "de" | "fr" | "es";
 
@@ -17,6 +18,16 @@ const TABLES = tables as Readonly<Record<FormulaLang, Readonly<Record<string, st
 export function formulaLangOf(tag: string): FormulaLang | null {
   const lang = tag.split(/[-_]/)[0]?.toLowerCase();
   return lang === "de" || lang === "fr" || lang === "es" ? lang : null;
+}
+
+/** The formula language of the document locale (re-renders on a locale change). */
+export function useDocFormulaLang(): FormulaLang | null {
+  return formulaLangOf(useV3Store((s) => s.locale));
+}
+
+/** "AND(D2>0,D2<100)" with the locale's function name (and `;` separators when localized). */
+export function sampleAndCall(lang: FormulaLang | null): string {
+  return lang ? `${localizedName(lang, "AND")}(D2>0;D2<100)` : "AND(D2>0,D2<100)";
 }
 
 const reverse = new Map<FormulaLang, Map<string, string>>();

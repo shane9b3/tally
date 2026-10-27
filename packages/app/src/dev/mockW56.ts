@@ -104,6 +104,12 @@ export type W56Outcome =
   | { kind: "handled"; ops: Op[]; touched: Map<number, RangeDto[]>; layout: Set<number>; pivotsChanged: boolean }
   | { kind: "error"; code: string; message: string };
 
+/** The captions the engine writes into subtotal rows (fixed English, whatever the UI language). */
+const ENGINE_SUBTOTAL_CAPTION: Record<string, string> = {
+  sum: "Sum", count: "Count", average: "Average", max: "Max", min: "Min", product: "Product",
+  countNums: "Count (Numbers only)", stDev: "StDev (Sample)", stDevP: "StDevP (Population)", var: "Var (Sample)", varP: "VarP (Population)",
+};
+
 const inside = (rg: RangeDto, r: number, c: number): boolean => r >= rg.r0 && r <= rg.r1 && c >= rg.c0 && c <= rg.c1;
 
 function numberOf(text: string): number | null {
@@ -677,7 +683,7 @@ export async function applyW56Op(x: W56Ext, op: Op, ctx: W56Ctx): Promise<W56Out
           j++;
         }
         const total: string[] = Array.from({ length: op.range.c1 - op.range.c0 + 1 }, () => "");
-        total[g0.groupBy - op.range.c0] = `${value} ${fnMeta.label}`;
+        total[g0.groupBy - op.range.c0] = `${value} ${ENGINE_SUBTOTAL_CAPTION[fnMeta.fn] ?? "Sum"}`;
         for (const c of g0.columns) total[c - op.range.c0] = `=SUBTOTAL(${fnMeta.n};${colLetter(c)}${start + 1}:${colLetter(c)}${outRow})`;
         out.push(total);
         groupRows.push({ start, end: outRow - 1 });

@@ -6,6 +6,8 @@
 import type { NameInfo, PasteOperation, SortKey } from "@tally/bridge";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useController } from "../context";
+import { useW56Store } from "../data/store";
+import { t } from "../i18n";
 import { a1, DEFAULT_PASTE_SPECIAL, isValidName, type PasteSpecialChoice } from "../dataOps";
 import { useDataStore } from "../stores/dataStore";
 import { NUMBER_FORMATS } from "../formats";
@@ -21,6 +23,7 @@ import { arrowNav, useReturnFocus, useTitleId } from "./dialogA11y";
 
 export function Dialogs() {
   const dialog = useUiStore((s) => s.dialog);
+  useW56Store((s) => s.i18nRev);
   if (!dialog) return null;
   return <DialogFor dialog={dialog} />;
 }
@@ -77,7 +80,7 @@ export interface ShellProps {
   noOk?: boolean;
 }
 
-export function Shell({ title, children, onSubmit, ok = "Apply", valid = true, wide, danger, testId, extra, keepOpen, cancelLabel = "Cancel", cardClass, noOk }: ShellProps) {
+export function Shell({ title, children, onSubmit, ok, valid = true, wide, danger, testId, extra, keepOpen, cancelLabel, cardClass, noOk }: ShellProps) {
   const ctl = useController();
   const formRef = useRef<HTMLFormElement>(null);
   const titleId = useTitleId();
@@ -126,11 +129,11 @@ export function Shell({ title, children, onSubmit, ok = "Apply", valid = true, w
         <div className={styles.actions}>
           {extra ? <div className={styles.extra}>{extra}</div> : null}
           <button type="button" className={styles.secondary} onClick={cancel} data-testid="dialog-cancel">
-            {cancelLabel}
+            {cancelLabel ?? t("dialog.cancel", "Cancel")}
           </button>
           {noOk ? null : (
             <button type="submit" className={danger ? `${styles.primary} ${styles.dangerBtn}` : styles.primary} disabled={!valid} data-testid="dialog-ok">
-              {ok}
+              {ok ?? t("dialog.apply", "Apply")}
             </button>
           )}
         </div>
@@ -154,16 +157,21 @@ function ResizeDialog({ d }: { d: Extract<DialogState, { kind: "resize" }> }) {
   const n = Number(px);
   const valid = Number.isFinite(n) && n >= 2 && n <= 2000;
   const ref = useAutoFocus();
-  const what = d.axis === "row" ? "Row height" : "Column width";
+  const what = d.axis === "row" ? t("dlg.rowHeight", "Row height") : t("dlg.columnWidth", "Column width");
   return (
     <Shell title={what} valid={valid} onSubmit={() => ctl.resize(d.axis, d.start, d.end, Math.round(n))}>
       <label className={styles.field}>
-        <span>{what} in pixels</span>
+        <span>{t("dlg.inPixels", "{what} in pixels", { what })}</span>
         <input ref={ref} className={styles.input} inputMode="numeric" value={px} onChange={(e) => setPx(e.target.value)} />
       </label>
       <p className={styles.note}>
-        {d.end > d.start ? `Applies to ${d.end - d.start + 1} ${d.axis === "row" ? "rows" : "columns"}.` : "Default: "}
-        {d.end > d.start ? "" : d.axis === "row" ? "24 px" : "100 px"}
+        {d.end > d.start
+          ? d.axis === "row"
+            ? t("dlg.appliesRows", "Applies to {n} rows.", { n: d.end - d.start + 1 })
+            : t("dlg.appliesCols", "Applies to {n} columns.", { n: d.end - d.start + 1 })
+          : d.axis === "row"
+            ? t("dlg.defaultRow", "Default: 24 px")
+            : t("dlg.defaultCol", "Default: 100 px")}
       </p>
     </Shell>
   );
@@ -179,13 +187,13 @@ function InsertDialog({ d }: { d: Extract<DialogState, { kind: "insert" }> }) {
   const rows = d.axis === "row";
   return (
     <Shell
-      title={rows ? "Insert rows" : "Insert columns"}
-      ok="Insert"
+      title={rows ? t("dlg.insertRows", "Insert rows") : t("dlg.insertColumns", "Insert columns")}
+      ok={t("dialog.insert", "Insert")}
       valid={valid}
       onSubmit={() => void (rows ? ctl.insertRows(where, n) : ctl.insertCols(where, n))}
     >
       <label className={styles.field}>
-        <span>How many</span>
+        <span>{t("dlg.howMany", "How many")}</span>
         <input ref={ref} className={styles.input} inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value)} />
       </label>
       <div className={styles.segmented} role="radiogroup">
@@ -198,7 +206,7 @@ function InsertDialog({ d }: { d: Extract<DialogState, { kind: "insert" }> }) {
             className={where === w ? styles.segOn : styles.seg}
             onClick={() => setWhere(w)}
           >
-            {rows ? (w === "before" ? "Above" : "Below") : w === "before" ? "Left" : "Right"}
+            {rows ? (w === "before" ? t("dlg.above", "Above") : t("dlg.below", "Below")) : w === "before" ? t("dlg.left", "Left") : t("dlg.right", "Right")}
           </button>
         ))}
       </div>
@@ -218,9 +226,9 @@ function NumberFormatDialog({ d }: { d: Extract<DialogState, { kind: "numberForm
   const samples = [value, -value, 0];
   const preview = samples.map((v) => formatNumberLite(v, code));
   return (
-    <Shell title="Custom number format" wide onSubmit={() => void ctl.setNumberFormat(code.trim() || "General", "Number format")}>
+    <Shell title={t("dlg.customNumberFormat", "Custom number format")} wide onSubmit={() => void ctl.setNumberFormat(code.trim() || "General", t("toolbar.numberFormat", "Number format"))}>
       <label className={styles.field}>
-        <span>Format code</span>
+        <span>{t("fmt.formatCode", "Format code")}</span>
         <input
           ref={ref}
           className={`${styles.input} ${styles.mono}`}
@@ -232,7 +240,7 @@ function NumberFormatDialog({ d }: { d: Extract<DialogState, { kind: "numberForm
       </label>
       <div className={styles.preview} data-testid="numfmt-preview">
         {preview[0] === null ? (
-          <span className={styles.note}>No preview for this code; the engine will format it when applied.</span>
+          <span className={styles.note}>{t("dlg.noPreview", "No preview for this code; the engine will format it when applied.")}</span>
         ) : (
           samples.map((v, i) => (
             <div key={i} className={styles.previewRow}>
@@ -262,32 +270,32 @@ function SortDialog({ d }: { d: Extract<DialogState, { kind: "sort" }> }) {
   const [caseSensitive, setCase] = useState(false);
   const cols: number[] = [];
   for (let c = d.range.c0; c <= d.range.c1; c++) cols.push(c);
-  const label = (c: number) => (hasHeader ? (d.labels[c - d.range.c0] ?? "") : `Column ${a1({ r0: 0, c0: c, r1: 0, c1: c }).replace(/\d+$/, "")}`);
+  const label = (c: number) => (hasHeader ? (d.labels[c - d.range.c0] ?? "") : t("dlg.columnLetter", "Column {col}", { col: a1({ r0: 0, c0: c, r1: 0, c1: c }).replace(/\d+$/, "") }));
   const setKey = (i: number, k: SortKey | null) => setKeys((ks) => ks.map((x, j) => (j === i ? k : x)));
   const chosen = keys.filter((k): k is SortKey => k !== null);
-  const range = hasHeader ? `${a1(d.range)} (header row kept)` : a1(d.range);
+  const range = hasHeader ? t("dlg.headerKept", "{range} (header row kept)", { range: a1(d.range) }) : a1(d.range);
   return (
-    <Shell title="Sort" ok="Sort" wide testId="sort-dialog" valid={chosen.length > 0} onSubmit={() => void ctl.sortWith({ range: d.range, keys: chosen, hasHeader, caseSensitive })}>
-      <p className={styles.lead}>Sorts {range}. Whole rows move together.</p>
+    <Shell title={t("sort.title", "Sort")} ok={t("sort.title", "Sort")} wide testId="sort-dialog" valid={chosen.length > 0} onSubmit={() => void ctl.sortWith({ range: d.range, keys: chosen, hasHeader, caseSensitive })}>
+      <p className={styles.lead}>{t("dlg.sortLead", "Sorts {range}. Whole rows move together.", { range })}</p>
       {keys.map((k, i) => (
         <div key={i} className={styles.sortRow}>
-          <span className={styles.sortLabel}>{i === 0 ? "Sort by" : "Then by"}</span>
+          <span className={styles.sortLabel}>{i === 0 ? t("dlg.sortBy", "Sort by") : t("sort.thenBy", "Then by")}</span>
           <select
             className={styles.select}
-            aria-label={i === 0 ? "Sort by" : `Then by ${i}`}
+            aria-label={i === 0 ? t("dlg.sortBy", "Sort by") : t("dlg.thenByN", "Then by {n}", { n: i })}
             value={k ? String(k.col) : ""}
             disabled={i > 0 && keys[i - 1] === null}
             onChange={(e) => setKey(i, e.target.value === "" ? null : { col: Number(e.target.value), ascending: k?.ascending ?? true })}
             data-testid={`sort-key-${i}`}
           >
-            {i > 0 ? <option value="">(none)</option> : null}
+            {i > 0 ? <option value="">{t("dlg.noneParen", "(none)")}</option> : null}
             {cols.map((c) => (
               <option key={c} value={c}>
                 {label(c)}
               </option>
             ))}
           </select>
-          <div className={styles.segmentedInline} role="radiogroup" aria-label="Order">
+          <div className={styles.segmentedInline} role="radiogroup" aria-label={t("dlg.order", "Order")}>
             {[true, false].map((asc) => (
               <button
                 key={String(asc)}
@@ -306,11 +314,11 @@ function SortDialog({ d }: { d: Extract<DialogState, { kind: "sort" }> }) {
       ))}
       <label className={styles.checkRow}>
         <input type="checkbox" checked={hasHeader} onChange={(e) => setHasHeader(e.target.checked)} data-testid="sort-header" />
-        <span>Range contains column labels</span>
+        <span>{t("sort.hasHeader", "Range contains column labels")}</span>
       </label>
       <label className={styles.checkRow}>
         <input type="checkbox" checked={caseSensitive} onChange={(e) => setCase(e.target.checked)} />
-        <span>Case sensitive</span>
+        <span>{t("sort.caseSensitive", "Case sensitive")}</span>
       </label>
     </Shell>
   );
@@ -328,11 +336,11 @@ function FindReplaceDialog({ d }: { d: Extract<DialogState, { kind: "findReplace
   const setOpt = (o: Partial<typeof options>) => patch({ options: { ...options, ...o }, searched: null });
   return (
     <Shell
-      title="Find & replace"
-      ok="Replace all"
+      title={t("dlg.findReplace", "Find & replace")}
+      ok={t("dlg.replaceAll", "Replace all")}
       wide
       keepOpen
-      cancelLabel="Close"
+      cancelLabel={t("dialog.close", "Close")}
       testId="find-replace-dialog"
       valid={text !== ""}
       onSubmit={() => void ctl.replaceAll(text, replace)}
@@ -346,53 +354,53 @@ function FindReplaceDialog({ d }: { d: Extract<DialogState, { kind: "findReplace
             void ctl.findStep(1);
           }}
         >
-          Find next
+          {t("cmd.edit.findNext", "Find next")}
         </button>
       }
     >
       <label className={styles.field}>
-        <span>Find</span>
+        <span>{t("dlg.find", "Find")}</span>
         <input ref={ref} className={styles.input} value={text} spellCheck={false} onChange={(e) => setText(e.target.value)} data-testid="replace-find" />
       </label>
       <label className={`${styles.field} ${styles.gap}`}>
-        <span>Replace with</span>
+        <span>{t("find.replaceWith", "Replace with")}</span>
         <input className={styles.input} value={replace} spellCheck={false} onChange={(e) => setReplace(e.target.value)} data-testid="replace-with" />
       </label>
       <div className={styles.optionGrid}>
         <label className={styles.checkRow}>
           <input type="checkbox" checked={options.matchCase} onChange={(e) => setOpt({ matchCase: e.target.checked })} />
-          <span>Match case</span>
+          <span>{t("find.matchCase", "Match case")}</span>
         </label>
         <label className={styles.checkRow}>
           <input type="checkbox" checked={options.wholeCell} onChange={(e) => setOpt({ wholeCell: e.target.checked })} />
-          <span>Whole cell</span>
+          <span>{t("findbar.wholeCell", "Whole cell")}</span>
         </label>
         <label className={styles.checkRow}>
           <input type="checkbox" checked={options.allSheets} onChange={(e) => setOpt({ allSheets: e.target.checked })} />
-          <span>All sheets</span>
+          <span>{t("find.allSheets", "All sheets")}</span>
         </label>
         <label className={styles.checkRow}>
-          <span>Match</span>
+          <span>{t("dlg.match", "Match")}</span>
           <select className={styles.selectSmall} value={options.mode} onChange={(e) => setOpt({ mode: e.target.value as typeof options.mode })}>
-            <option value="literal">text</option>
-            <option value="wildcards">wildcards (* ?)</option>
-            <option value="regex">regular expression</option>
+            <option value="literal">{t("dlg.modeText", "text")}</option>
+            <option value="wildcards">{t("dlg.modeWildcards", "wildcards (* ?)")}</option>
+            <option value="regex">{t("dlg.modeRegex", "regular expression")}</option>
           </select>
         </label>
       </div>
-      {options.mode === "regex" ? <p className={styles.note}>In the replacement, $1 is the first group and &amp; the whole match.</p> : null}
+      {options.mode === "regex" ? <p className={styles.note}>{t("dlg.regexNote", "In the replacement, $1 is the first group and & the whole match.")}</p> : null}
     </Shell>
   );
 }
 
 // -- Paste Special ---------------------------------------------------------------------
 
-const OPERATIONS: { op: PasteOperation; label: string }[] = [
-  { op: "none", label: "None" },
-  { op: "add", label: "Add" },
-  { op: "subtract", label: "Subtract" },
-  { op: "multiply", label: "Multiply" },
-  { op: "divide", label: "Divide" },
+const operations = (): { op: PasteOperation; label: string }[] => [
+  { op: "none", label: t("paste.none", "None") },
+  { op: "add", label: t("paste.addOp", "Add") },
+  { op: "subtract", label: t("paste.subtract", "Subtract") },
+  { op: "multiply", label: t("paste.multiply", "Multiply") },
+  { op: "divide", label: t("paste.divide", "Divide") },
 ];
 
 function PasteSpecialDialog() {
@@ -400,13 +408,13 @@ function PasteSpecialDialog() {
   const [c, setC] = useState<PasteSpecialChoice>(DEFAULT_PASTE_SPECIAL);
   const set = (p: Partial<PasteSpecialChoice>) => setC((x) => ({ ...x, ...p }));
   return (
-    <Shell title="Paste special" ok="Paste" testId="paste-special-dialog" onSubmit={() => void ctl.pasteSpecial(c)}>
-      <div className={styles.segmented} role="radiogroup" aria-label="Paste">
+    <Shell title={t("dlg.pasteSpecial", "Paste special")} ok={t("cmd.edit.paste", "Paste")} testId="paste-special-dialog" onSubmit={() => void ctl.pasteSpecial(c)}>
+      <div className={styles.segmented} role="radiogroup" aria-label={t("cmd.edit.paste", "Paste")}>
         {(
           [
-            ["all", "Everything"],
-            ["values", "Values"],
-            ["formats", "Formats"],
+            ["all", t("dlg.pasteEverything", "Everything")],
+            ["values", t("find.values", "Values")],
+            ["formats", t("paste.formats", "Formats")],
           ] as const
         ).map(([w, label]) => (
           <button key={w} type="button" role="radio" aria-checked={c.what === w} className={c.what === w ? styles.segOn : styles.seg} onClick={() => set({ what: w })} data-testid={`paste-${w}`}>
@@ -416,16 +424,16 @@ function PasteSpecialDialog() {
       </div>
       <label className={styles.checkRow}>
         <input type="checkbox" checked={c.transpose} onChange={(e) => set({ transpose: e.target.checked })} data-testid="paste-transpose" />
-        <span>Transpose (rows become columns)</span>
+        <span>{t("dlg.transposeLong", "Transpose (rows become columns)")}</span>
       </label>
       <label className={styles.checkRow}>
         <input type="checkbox" checked={c.skipEmpty} onChange={(e) => set({ skipEmpty: e.target.checked })} />
-        <span>Skip empty cells</span>
+        <span>{t("paste.skipEmpty", "Skip empty cells")}</span>
       </label>
       <label className={`${styles.field} ${styles.gap}`}>
-        <span>Operation with the cells pasted onto</span>
+        <span>{t("dlg.pasteOperation", "Operation with the cells pasted onto")}</span>
         <select className={styles.select} value={c.operation} disabled={c.what === "formats"} onChange={(e) => set({ operation: e.target.value as PasteOperation })} data-testid="paste-operation">
-          {OPERATIONS.map((o) => (
+          {operations().map((o) => (
             <option key={o.op} value={o.op}>
               {o.label}
             </option>
@@ -440,9 +448,9 @@ function PasteSpecialDialog() {
 
 function nameError(name: string, scope: number | null, names: readonly NameInfo[], replacing: NameInfo | null): string | null {
   if (name === "") return null;
-  if (!isValidName(name)) return "Names start with a letter or _, use letters, digits, _ and ., and can't look like a cell (A1).";
+  if (!isValidName(name)) return t("dlg.nameInvalid", "Names start with a letter or _, use letters, digits, _ and ., and can't look like a cell (A1).");
   const clash = names.find((n) => n.name.toLowerCase() === name.toLowerCase() && n.scope === scope);
-  if (clash && clash !== replacing && !(replacing && replacing.name === clash.name && replacing.scope === clash.scope)) return `“${clash.name}” already exists here; saving replaces it.`;
+  if (clash && clash !== replacing && !(replacing && replacing.name === clash.name && replacing.scope === clash.scope)) return t("dlg.nameExists", "“{name}” already exists here; saving replaces it.", { name: clash.name });
   return null;
 }
 
@@ -458,8 +466,8 @@ function DefineNameDialog({ d }: { d: Extract<DialogState, { kind: "defineName" 
   const hard = name.trim() !== "" && !isValidName(name.trim());
   return (
     <Shell
-      title={d.replacing ? "Edit name" : "Define name"}
-      ok={d.replacing ? "Save" : "Define"}
+      title={d.replacing ? t("dlg.editName", "Edit name") : t("dlg.defineName", "Define name")}
+      ok={d.replacing ? t("dialog.save", "Save") : t("dlg.define", "Define")}
       wide
       testId="define-name-dialog"
       valid={name.trim() !== "" && !hard && refersTo.trim() !== ""}
@@ -470,26 +478,26 @@ function DefineNameDialog({ d }: { d: Extract<DialogState, { kind: "defineName" 
       }}
     >
       <label className={styles.field}>
-        <span>Name</span>
-        <input ref={ref} className={styles.input} value={name} spellCheck={false} placeholder="e.g. TaxRate" onChange={(e) => setName(e.target.value)} data-testid="name-name" />
+        <span>{t("dialog.name", "Name")}</span>
+        <input ref={ref} className={styles.input} value={name} spellCheck={false} placeholder={t("dlg.nameExample", "e.g. TaxRate")} onChange={(e) => setName(e.target.value)} data-testid="name-name" />
       </label>
       {err ? <p className={hard ? styles.error : styles.note}>{err}</p> : null}
       <label className={`${styles.field} ${styles.gap}`}>
-        <span>Scope</span>
+        <span>{t("names.scope", "Scope")}</span>
         <select className={styles.select} value={scope === null ? "" : String(scope)} onChange={(e) => setScope(e.target.value === "" ? null : Number(e.target.value))} data-testid="name-scope">
-          <option value="">Workbook</option>
+          <option value="">{t("dlg.workbook", "Workbook")}</option>
           {sheets.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.name} only
+              {t("dlg.sheetOnly", "{name} only", { name: s.name })}
             </option>
           ))}
         </select>
       </label>
       <label className={`${styles.field} ${styles.gap}`}>
-        <span>Refers to</span>
+        <span>{t("dlg.refersTo", "Refers to")}</span>
         <input className={`${styles.input} ${styles.mono}`} value={refersTo} spellCheck={false} onChange={(e) => setRefersTo(e.target.value)} data-testid="name-refers" />
       </label>
-      <p className={styles.note}>A range like $Sheet1.$A$1:$B$5, or a constant like 0.07. Use the name in formulas: =SUM({name.trim() || "Name"}).</p>
+      <p className={styles.note}>{t("dlg.refersNote", "A range like $Sheet1.$A$1:$B$5, or a constant like 0.07. Use the name in formulas: =SUM({name}).", { name: name.trim() || t("dialog.name", "Name") })}</p>
     </Shell>
   );
 }
@@ -503,21 +511,21 @@ function ManageNamesDialog() {
   const edit = (n: NameInfo) => useUiStore.getState().openDialog({ kind: "defineName", name: n.name, refersTo: n.refersTo, scope: n.scope, replacing: n });
   return (
     <Shell
-      title="Names"
-      ok="Done"
+      title={t("dlg.names", "Names")}
+      ok={t("dlg.done", "Done")}
       wide
       testId="manage-names-dialog"
       onSubmit={() => undefined}
       extra={
         <button type="button" className={styles.secondary} onClick={ctl.openDefineName}>
-          New…
+          {t("dlg.new", "New…")}
         </button>
       }
     >
       {names.length === 0 ? (
-        <p className={styles.note}>No names yet. Select a range and choose Data ▸ Define Name…, or type a name in the name box.</p>
+        <p className={styles.note}>{t("dlg.noNames", "No names yet. Select a range and choose Data ▸ Define Name…, or type a name in the name box.")}</p>
       ) : (
-        <div className={styles.table} role="table" aria-label="Defined names">
+        <div className={styles.table} role="table" aria-label={t("dlg.definedNames", "Defined names")}>
           {names.map((n) => (
             <div key={`${n.scope ?? "wb"}:${n.name}`} className={styles.tableRow} role="row" data-name={n.name}>
               <span className={styles.nameCell} role="cell">
@@ -527,16 +535,16 @@ function ManageNamesDialog() {
                 {n.refersTo}
               </span>
               <span className={styles.scopeCell} role="cell">
-                {n.sheetName ?? "Workbook"}
+                {n.sheetName ?? t("dlg.workbook", "Workbook")}
               </span>
-              <button type="button" className={styles.rowBtn} onClick={() => void ctl.goTo(n.name).then(() => close())} title="Select the range">
-                Go
+              <button type="button" className={styles.rowBtn} onClick={() => void ctl.goTo(n.name).then(() => close())} title={t("dlg.selectRange", "Select the range")}>
+                {t("dlg.go", "Go")}
               </button>
               <button type="button" className={styles.rowBtn} onClick={() => edit(n)}>
-                Edit
+                {t("dialog.edit", "Edit")}
               </button>
               <button type="button" className={`${styles.rowBtn} ${styles.dangerText}`} onClick={() => void ctl.deleteName(n)} data-testid={`delete-name-${n.name}`}>
-                Delete
+                {t("dialog.delete", "Delete")}
               </button>
             </div>
           ))}

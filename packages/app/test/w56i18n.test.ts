@@ -59,6 +59,20 @@ describe("UI language tables", () => {
     for (const key of Object.values(KIND_KEYS)) expect(key in en, key).toBe(true);
   });
 
+  it("every t(key, fallback) fallback equals en.json[key] (English never differs with the table loaded)", () => {
+    const en = JSON.parse(read("crates/tally-l10n/ui/en.json")) as Record<string, string>;
+    const bad: string[] = [];
+    for (const file of sources(fileURLToPath(new URL("../src", import.meta.url)))) {
+      for (const m of readFileSync(file, "utf8").matchAll(/\bt\(\s*"([A-Za-z0-9_.]+)"\s*,\s*("(?:[^"\\\n]|\\.)*")/g)) {
+        const key = m[1] ?? "";
+        const fallback = JSON.parse(m[2] ?? '""') as string;
+        // Dialog titles reuse a command key with its trailing "…" stripped (`.replace(/…$/, "")`).
+        if (key in en && en[key] !== fallback && en[key] !== `${fallback}…`) bad.push(`${file.split("/src/")[1]}: ${key}: code ${JSON.stringify(fallback)} vs en.json ${JSON.stringify(en[key])}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
   it("switching to German re-labels menus and bumps the revision", async () => {
     const rev = useW56Store.getState().i18nRev;
     await setUiLanguage("de");

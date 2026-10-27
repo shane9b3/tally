@@ -16,6 +16,7 @@ import type { W5Shell } from "./shell";
 import { clampRatio, type SplitAxis } from "@tally/grid";
 import { useW5Store } from "./w5Store";
 import { clientV4 } from "./shell";
+import { t } from "../i18n";
 
 /** Delay before a divider drag is persisted with `setSplit`. */
 export const SPLIT_PERSIST_MS = 300;
@@ -174,7 +175,7 @@ export class ViewFeatures {
     const ops: Op[] = [];
     if (manual) ops.push({ type: "setPageBreak", sheet, axis, at: from, present: false });
     ops.push({ type: "setPageBreak", sheet, axis, at: to, present: true });
-    void this.ctl.apply("Move page break", ops).then(() => this.refreshPageBreaks());
+    void this.ctl.apply(t("msg.undo.movePageBreak", "Move page break"), ops).then(() => this.refreshPageBreaks());
   };
 
   // -- zoom presets -----------------------------------------------------------------
