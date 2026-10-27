@@ -47,7 +47,6 @@ real-file corpus).
 - A11y not covered by axe: Fill Series, Multiple Operations, Create Names, Show Outline Level (don't open from a bare command in the mock); contrast of hover/pressed states, menus and popovers.
 - Fonts: render_pdf font warnings are dropped in `CachedJob::pdf_bytes`; only regular/bold/italic/bold-italic faces (no other weights); "Fonts in this document" lists loaded styles only; header/footer AutoFit measures with Inter metrics.
 - A whole-column style split by one styled cell is written cell by cell after re-import (docs/file-formats.md).
-- Owner to confirm against OpenOffice: the "Lakefront" sheet prints on 2 pages (only "<Stair Skins" in column O spills, ~0.5 mm too wide) — does OO print 1?; MROUND negatives such as Foyer −$415.00 on The Pine.
 - Excel export: an intersection imported from XLSX is written as `(Name) (A1:B2)` on the first save (valid; stable afterwards). ExcelA1 never reads `SUM (A1)` with a space as a call (Excel rejects it too).
 - Lookup index: overlapping ranges over one column (`$A$1:$A$n`, `$A$2:$A$n`, `A:A`) get separate indexes within the 256 MB budget.
 - Perf (docs/perf-baseline.md hot spots 3–5): ~280 bytes per cell (1.4–1.6 GB for a 50 MB XLSX); CSV import ~6 MB/s; grid fling drops frames in headless Chromium — re-measure in the Tauri webview.
