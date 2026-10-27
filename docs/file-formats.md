@@ -176,7 +176,10 @@ conditional formats.
 `tally_formula::Dialect::ExcelA1`: `Sheet1!A1`, `'My Sheet'!$A$1`, 3D
 `Jan:Dec!B2` / `'Q 1:Q 4'!A1:B2`, `,` arguments, arrays `{1,2;3,4}` (`,`
 columns, `;` rows), intersection by whitespace between references
-(`A1:B2 B1:C3`), union by `,` directly inside parentheses (`(A1,B1)`),
+(`A1:B2 B1:C3`; a name before ` (` is an intersection too, `MyRange (A1:B2)`,
+never a call — Excel rejects `SUM (A1)`; the printer brackets a word or
+constant beside the space, so the first export of such a formula is
+`(MyRange) (A1:B2)`), union by `,` directly inside parentheses (`(A1,B1)`),
 `Sheet1!#REF!`, unquoted dotted sheet names on input (`Sales.EU!A1`, printed
 quoted), `TRUE`/`FALSE` literals, the seven Excel error literals. The
 printer never writes `$` before a sheet name, quotes names that look like

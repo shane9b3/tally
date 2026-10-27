@@ -90,7 +90,7 @@ recorded baseline should also be investigated.
 | Grid scroll on the real webview, 1M cells | p95 frame < 20 ms, p99 < 34 ms, no frame > 100 ms during a 10-row/frame fling |
 | Grid scroll in headless Chromium (this spec) | p95 < 67 ms, p99 < 100 ms, to catch regressions only |
 
-## Hot spots (not fixed; reported only)
+## Hot spots (1 and 2 fixed; 3–5 open)
 
 1. **Exact-match VLOOKUP was linear and uncached** (fixed 2026-10-23):
    70 us per lookup into 10k rows, 100k lookups 7 s. Now a per-recalc
