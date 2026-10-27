@@ -26,7 +26,6 @@ real-file corpus).
 - No e2e yet for View toggles and split restore (unit tests only).
 - Tauri shell uses one global lock (a slow call blocks all documents); per-document locks planned.
 - Windows branch of `open_url`, Windows title bar, Intel macOS / Windows / Linux builds need CI.
-- Colour contrast: secondary grey text 4.4:1 / ~3:1, accent-on-tint list rows 3.4:1 (docs/qa/a11y.md) — design-token call.
 - Grid announcements and older dialog labels (V3Dialogs, DataDialogs) still have English literals.
 - XLS import: calamine 0.37 is shielded by a pre-scan, but a hostile file within budget can still use ~1 GB, and an allocation failure there aborts; re-check the pre-scan whenever calamine is upgraded.
 - Pivot refresh keeps every previous table on the undo stack (no byte budget on undo).

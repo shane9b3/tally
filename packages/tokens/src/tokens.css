@@ -18,7 +18,7 @@
   --tally-gray-100: #f3f4f6;
   --tally-gray-200: #e5e7eb;
   --tally-gray-300: #d1d5db;
-  --tally-gray-500: #6b7280;
+  --tally-gray-500: #5f6673; /* muted text: >= 4.5:1 on gray-100 (WCAG AA) */
   --tally-gray-700: #374151;
   --tally-gray-900: #111827;
 
@@ -56,6 +56,7 @@
   --tally-hover: rgba(0, 0, 0, 0.045);
   --tally-scrim: rgba(17, 24, 39, 0.12);
   --tally-danger: #dc2626;
+  --tally-danger-fill: #dc2626;
   --tally-text-disabled: #9ca3af;
 
   /* Status chips */
@@ -121,8 +122,8 @@
   --tally-gray-900: #eceef2;
 
   /* Accent: buttons keep white text; text on tints uses the lighter accent-text. */
-  --tally-accent: #3b82f6;
-  --tally-accent-hover: #2f6fe0;
+  --tally-accent: #2563eb; /* white button text >= 4.5:1 */
+  --tally-accent-hover: #1d4ed8;
   --tally-accent-subtle: rgba(96, 165, 250, 0.16);
   --tally-accent-text: #93bbff;
   --tally-accent-border: rgba(96, 165, 250, 0.35);
@@ -137,6 +138,7 @@
   --tally-hover: rgba(255, 255, 255, 0.06);
   --tally-scrim: rgba(0, 0, 0, 0.45);
   --tally-danger: #f87171;
+  --tally-danger-fill: #dc2626; /* white button text >= 4.5:1 */
   --tally-text-disabled: #5f6672;
 
   /* Grid */
@@ -208,8 +210,8 @@
     --tally-gray-900: #eceef2;
 
     /* Accent: buttons keep white text; text on tints uses the lighter accent-text. */
-    --tally-accent: #3b82f6;
-    --tally-accent-hover: #2f6fe0;
+    --tally-accent: #2563eb; /* white button text >= 4.5:1 */
+    --tally-accent-hover: #1d4ed8;
     --tally-accent-subtle: rgba(96, 165, 250, 0.16);
     --tally-accent-text: #93bbff;
     --tally-accent-border: rgba(96, 165, 250, 0.35);
@@ -224,6 +226,7 @@
     --tally-hover: rgba(255, 255, 255, 0.06);
     --tally-scrim: rgba(0, 0, 0, 0.45);
     --tally-danger: #f87171;
+    --tally-danger-fill: #dc2626; /* white button text >= 4.5:1 */
     --tally-text-disabled: #5f6672;
 
     /* Grid */

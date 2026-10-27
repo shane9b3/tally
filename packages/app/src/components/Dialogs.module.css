@@ -193,7 +193,7 @@
 }
 
 .dangerBtn {
-  background: var(--tally-danger);
+  background: var(--tally-danger-fill);
 }
 
 .lead {

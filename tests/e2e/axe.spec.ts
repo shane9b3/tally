@@ -15,15 +15,13 @@ async function ready(page: Page, url = "/?template=invoices") {
 
 const run = (page: Page, id: string) => page.evaluate((id) => window.__tally!.controller.registry.run(id), id);
 
-/**
- * Rules reported but not failed: colour contrast is a design-token decision
- * (the grey secondary text and the accent-on-tint list selection measure
- * 3–4.4:1); it is tracked in docs/qa/a11y.md, not gated here.
- */
-const REPORT_ONLY = ["color-contrast"];
+/** Rules reported as annotations but not failed (none: colour contrast is gated too). */
+const REPORT_ONLY: string[] = [];
 
 /** Serious and critical violations, formatted one per line (empty when clean). */
 async function violations(page: Page, include?: string): Promise<string[]> {
+  // Dialogs fade in; measuring contrast mid-animation reports blended colours.
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running"));
   let builder = new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"]);
   if (include) builder = builder.include(include);
   const result = await builder.analyze();
@@ -97,4 +95,21 @@ test("axe: print preview and the chart editor", async ({ page }) => {
   const editor = page.getByTestId("chart-editor");
   await expect(editor).toBeVisible();
   expect(await violations(page, "[data-testid=chart-editor]")).toEqual([]);
+});
+
+/** Dark theme: the same checks (contrast differs most here) for the main window and a few dialogs. */
+test.describe("dark theme", () => {
+  test.use({ colorScheme: "dark" });
+  test("axe: main window (dark)", async ({ page }) => {
+    await ready(page);
+    expect(await violations(page)).toEqual([]);
+  });
+  for (const d of DIALOG_COMMANDS.filter((d) => ["Format Cells", "Function Wizard", "Remove Duplicates", "Options", "Sort"].includes(d.name))) {
+    test(`axe: ${d.name} dialog (dark)`, async ({ page }) => {
+      await ready(page);
+      await run(page, d.command);
+      await expect(page.locator("[role=dialog][aria-modal=true], [role=alertdialog]").first()).toBeVisible();
+      expect(await violations(page, "[role=dialog][aria-modal=true]")).toEqual([]);
+    });
+  }
 });
