@@ -16,3 +16,6 @@ apps/desktop/src-tauri/gen/
 .env
 .env.*
 .targets/
+
+# Claude Code worktrees of other sessions
+.claude/worktrees/
