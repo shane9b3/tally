@@ -1904,14 +1904,22 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
 /// The contiguous block of non-empty cells around `(row, col)` (Ctrl+*
 /// semantics), or the cell itself.
 pub fn current_region(wb: &Workbook, sheet: SheetId, row: u32, col: u32) -> CellRange {
+    data_region(wb, sheet, (row, col, row, col))
+}
+
+/// `start` (`r0, c0, r1, c1`) grown while any cell on the border just
+/// outside it is non-empty (AOO's `ScDocument::GetDataArea` for a selection,
+/// the block [`current_region`] finds for one cell), or `start` itself.
+pub fn data_region(wb: &Workbook, sheet: SheetId, start: (u32, u32, u32, u32)) -> CellRange {
+    let (row, col, row1, col1) = start;
     let Some(s) = wb.sheet(sheet) else {
-        return CellRange::new(sheet, row, col, row, col);
+        return CellRange::new(sheet, row, col, row1, col1);
     };
     let Some(used) = s.used_range() else {
-        return CellRange::new(sheet, row, col, row, col);
+        return CellRange::new(sheet, row, col, row1, col1);
     };
     let filled = |r: u32, c: u32| s.is_non_empty(r, c);
-    let (mut r0, mut c0, mut r1, mut c1) = (row, col, row, col);
+    let (mut r0, mut c0, mut r1, mut c1) = (row, col, row1, col1);
     let mut steps = 0;
     loop {
         steps += 1;

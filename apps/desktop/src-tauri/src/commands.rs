@@ -607,6 +607,20 @@ pub async fn next_unlocked(
 }
 
 #[tauri::command]
+pub async fn data_region(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    range: RangeDto,
+) -> CmdResult<RangeDto> {
+    limits::range("data_region", &range)?;
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.data_region(doc, sheet, range))
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn paste_overwrites(
     app: AppHandle,
     doc: DocId,

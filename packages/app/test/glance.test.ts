@@ -1,7 +1,7 @@
 import type { CellView } from "@tally/bridge";
 import { describe, expect, it } from "vitest";
 import { CURRENCY_FORMAT } from "../src/formats";
-import { analyzeGlance, cappedRange, currentRegion, detectHeaderRow } from "../src/glance";
+import { analyzeGlance, cappedRange, currentRegion, detectHeaderRow, expandRegion } from "../src/glance";
 
 function sheet(rows: (string | number | null)[][], at = { r: 0, c: 0 }) {
   const cells = new Map<string, CellView>();
@@ -40,6 +40,14 @@ describe("currentRegion", () => {
     const get = sheet(INVOICES, { r: 2, c: 1 });
     expect(currentRegion(get, { r: 4, c: 2 }, { r0: 0, c0: 0, r1: 50, c1: 20 })).toEqual({ r0: 2, c0: 1, r1: 8, c1: 4 });
     expect(currentRegion(get, { r: 20, c: 10 }, { r0: 0, c0: 0, r1: 50, c1: 20 })).toBeNull();
+  });
+  it("expandRegion grows a selection over its neighbours and keeps one that already covers the block", () => {
+    const get = sheet(INVOICES, { r: 2, c: 1 });
+    const bounds = { r0: 0, c0: 0, r1: 50, c1: 20 };
+    expect(expandRegion(get, { r0: 3, c0: 2, r1: 5, c1: 2 }, bounds)).toEqual({ r0: 2, c0: 1, r1: 8, c1: 4 });
+    expect(expandRegion(get, { r0: 2, c0: 1, r1: 8, c1: 4 }, bounds)).toEqual({ r0: 2, c0: 1, r1: 8, c1: 4 });
+    expect(expandRegion(get, { r0: 1, c0: 0, r1: 9, c1: 5 }, bounds)).toEqual({ r0: 1, c0: 0, r1: 9, c1: 5 });
+    expect(expandRegion(get, { r0: 20, c0: 10, r1: 21, c1: 10 }, bounds)).toEqual({ r0: 20, c0: 10, r1: 21, c1: 10 });
   });
 });
 

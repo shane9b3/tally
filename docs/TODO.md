@@ -25,6 +25,7 @@ real-file corpus).
   - Code-split bundle: main chunk 1.65 MB → 511 kB; lazy parts behind error boundaries.
   - Docs: `docs/parity-deviations.md` (110 entries), 1.0 status in the inventories, `docs/perf-baseline.md` (`cargo xtask perf`).
   - 3D references evaluate (2026-10-29): `Sheet1.A5:Sheet3.A5` / `Sheet1:Sheet3!A5` span the sheets in tab order (AOO `svDoubleRef` with `Tab1 != Tab2`); sequence functions iterate every sheet, lookups / `*IF` / matrices give AOO's Err:504 / Err:502, scalar use intersects on the formula's sheet; deleting an end sheet shrinks the span; INDIRECT returns 3D references. Remaining gaps: `docs/parity-deviations.md` P19. References can be picked on other sheets while typing (2026-10-30, U26).
+  - Sort Range question (AOO `lcl_GetSortParam`): sorting a marked selection with data next to it asks Extend selection / Current selection / Cancel; the sort region comes from the engine (`data_region`), so a table over 20,000 cells is no longer clipped when sorting from one cell.
 - Gates at de70ada: 1,734 Rust tests, 907 TS unit tests, 135 e2e; clippy (also tally-engine without `io`, xtask `perf`) and fmt clean; release bundle builds (Tally.app 27.8 MiB).
 
 - Read-only mode and AOO lock files (2026-11-02): `.~lock.<name>#` read and written in AOO 4.1's format (`apps/desktop/src-tauri/src/doclock.rs`), "Document in Use" prompts, File ▸ Open Read-Only…, unwritable / Finder-locked files and ODS `LoadReadonly` open read-only, Edit ▸ Edit Mode (⇧⌘M), info bar, " (read-only)" title, engine-level `read_only` refusal. Owner's native checks: docs/qa/read-only-manual.md.
@@ -58,10 +59,10 @@ real-file corpus).
 - Not built yet from the plan: multithreaded recalc, auto-update (tauri-plugin-updater), opt-in crash reporting.
 - Inventory gaps found 2026-10-27 (docs/calc-features-inventory.md 1.0 status; deviation IDs in docs/parity-deviations.md). Sizes: S < 1 day, M a few days, L a week or more.
   - Input and editing: two-digit year window option (P17, S).
-  - Sheets and view: multi-sheet selection and editing, Shift+Ctrl+PgUp/PgDn (wave 5 item 31, L; engine done 2026-10-28: `Transaction.group`, `Op::FillSheets`; UI, mock and dialog in progress); read-only mode (done 2026-11-02, see below); zoom 20-400 % (U18, S); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, M).
-  - Fill: Ctrl-drag copies, filtered ranges copy (T16, M); Edit > Fill > Up / Left commands (S); Fill Sheet (engine `Op::FillSheets` done; dialog in progress).
+  - Sheets and view: read-only mode (done 2026-11-02, see below); zoom 20-400 % (U18, S); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, M).
+  - Fill: Ctrl-drag copies, filtered ranges copy (T16, M); Edit > Fill > Up / Left commands (S);
   - Formatting: Hide all / Hide when printing (G15, done 2026-11-06); `[NatNum]` / `[DBNum]` / calendar modifiers rendered (G7, L); Load Styles from another document (M).
-  - Data: validity "sort entries ascending" incl. ODS `sorted` round trip (G16, S); sort extend-selection prompt (S); DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M); Data > Select Range and Refresh Range (S).
+  - Data: validity "sort entries ascending" incl. ODS `sorted` round trip (G16, S); DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M); Data > Select Range and Refresh Range (S).
   - Charts: chart data table editor for internal data (T18, M); cylinder / cone / pyramid shapes (T10, L).
   - Tools: detective Fill Mode, Refresh Traces, AutoRefresh (T12, done 2026-11-06, see below); hyperlink as button and New Document target (M, button needs form controls T11); Function List sidebar (S); Limit decimals for General incl. ODS `table:decimal-places` (S).
 

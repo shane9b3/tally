@@ -30,6 +30,7 @@
     "allow-clipboard-copy",
     "allow-navigate-edge",
     "allow-next-unlocked",
+    "allow-data-region",
     "allow-paste-overwrites",
     "allow-resolve-name-box",
     "allow-list-functions",

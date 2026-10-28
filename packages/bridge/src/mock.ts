@@ -891,6 +891,10 @@ export class MockClient implements EngineClientV4, ShellClient {
     return Promise.resolve(null);
   }
 
+  dataRegion(doc: DocId, sheet: SheetId, range: RangeDto): Promise<RangeDto> {
+    return this.run(() => dataRegion(this.sheet(this.doc(doc), sheet), range));
+  }
+
   pasteOverwrites(doc: DocId, sheet: SheetId, target: RangeDto, payload: PastePayload, options: PasteOptions): Promise<boolean> {
     return this.run(() => {
       const sh = this.sheet(this.doc(doc), sheet);
@@ -2062,6 +2066,44 @@ function usedRange(sh: MockSheet): RangeDto | null {
       : { r0: r, c0: c, r1: r, c1: c };
   }
   return used;
+}
+
+/**
+ * `start` grown while any cell on the border just outside it holds data,
+ * within the used range (the engine's `data_region`).
+ */
+export function dataRegion(sh: MockSheet, start: RangeDto): RangeDto {
+  const used = usedRange(sh);
+  let r = { ...start };
+  if (!used) return r;
+  const filled = (row: number, col: number): boolean => (sh.cells.get(key(row, col))?.input ?? "") !== "";
+  const any = (r0: number, c0: number, r1: number, c1: number): boolean => {
+    for (let i = Math.max(r0, used.r0); i <= Math.min(r1, used.r1); i++) {
+      for (let j = Math.max(c0, used.c0); j <= Math.min(c1, used.c1); j++) if (filled(i, j)) return true;
+    }
+    return false;
+  };
+  for (let guard = 0; guard < 100_000; guard++) {
+    let grew = false;
+    if (r.r0 > used.r0 && any(r.r0 - 1, r.c0 - 1, r.r0 - 1, r.c1 + 1)) {
+      r = { ...r, r0: r.r0 - 1 };
+      grew = true;
+    }
+    if (r.r1 < used.r1 && any(r.r1 + 1, r.c0 - 1, r.r1 + 1, r.c1 + 1)) {
+      r = { ...r, r1: r.r1 + 1 };
+      grew = true;
+    }
+    if (r.c0 > used.c0 && any(r.r0 - 1, r.c0 - 1, r.r1 + 1, r.c0 - 1)) {
+      r = { ...r, c0: r.c0 - 1 };
+      grew = true;
+    }
+    if (r.c1 < used.c1 && any(r.r0 - 1, r.c1 + 1, r.r1 + 1, r.c1 + 1)) {
+      r = { ...r, c1: r.c1 + 1 };
+      grew = true;
+    }
+    if (!grew) break;
+  }
+  return r;
 }
 
 /** Coalesces per-index sizes into sorted runs. */

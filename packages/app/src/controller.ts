@@ -68,7 +68,6 @@ import {
   type PasteSpecialChoice,
   type SortSpec,
 } from "./dataOps";
-import { cappedRange, currentRegion } from "./glance";
 import { useDataStore } from "./stores/dataStore";
 import { useW56Store } from "./data/store";
 import { applyCompletion, applyPoint, assistFor, assistKey } from "./formulaEdit";
@@ -1964,29 +1963,79 @@ export class AppController {
   /**
    * The range a sort or filter acts on: the AutoFilter area when the active
    * cell is in it, a multi-cell selection (clipped to the used area), else
-   * the current region around the active cell (Ctrl+*).
+   * the current region around the active cell (Ctrl+*, the engine's
+   * `data_region`, so a large table is never clipped).
    */
   async dataRegion(): Promise<RangeDto | null> {
+    return (await this.dataRegionOf())?.range ?? null;
+  }
+
+  /** `dataRegion`, telling whether the range is the selection as the user marked it. */
+  private async dataRegionOf(): Promise<{ range: RangeDto; selected: boolean } | null> {
     const doc = this.requireDoc();
     const sheet = this.sheet;
     const sel = this.selection;
     const af = useDataStore.getState().filter?.range;
     const a = sel.active;
-    if (af && a.r >= af.r0 && a.r <= af.r1 && a.c >= af.c0 && a.c <= af.c1) return { ...af };
-    const layout = await this.client.sheetLayout(doc, sheet);
-    const used = layout.used;
-    if (!used) return null;
+    if (af && a.r >= af.r0 && a.r <= af.r1 && a.c >= af.c0 && a.c <= af.c1) return { range: { ...af }, selected: false };
     const r = sel.range;
     const merge = this.merges().find((m) => m.r0 === r.r0 && m.c0 === r.c0 && m.r1 === r.r1 && m.c1 === r.c1);
     if (!(r.r0 === r.r1 && r.c0 === r.c1) && !merge) {
+      const used = (await this.client.sheetLayout(doc, sheet)).used;
+      if (!used) return null;
       const out = { r0: Math.max(r.r0, used.r0), c0: Math.max(r.c0, used.c0), r1: Math.min(r.r1, used.r1), c1: Math.min(r.c1, used.c1) };
-      return out.r0 <= out.r1 && out.c0 <= out.c1 ? out : null;
+      return out.r0 <= out.r1 && out.c0 <= out.c1 ? { range: out, selected: true } : null;
     }
-    const { range } = cappedRange(used);
-    const [block] = await this.client.cells(doc, sheet, [range]);
-    const map = new Map<string, CellView>();
-    for (const v of block?.cells ?? []) map.set(`${v.r},${v.c}`, v);
-    return currentRegion((rr, cc) => map.get(`${rr},${cc}`), a, range);
+    const one = { r0: a.r, c0: a.c, r1: a.r, c1: a.c };
+    const range = await this.client.dataRegion(doc, sheet, one);
+    if (range.r0 === range.r1 && range.c0 === range.c1) {
+      // The cell and its neighbours are empty: nothing to act on unless the cell itself has content.
+      const [block] = await this.client.cells(doc, sheet, [one]);
+      const v = block?.cells.find((x) => x.r === a.r && x.c === a.c);
+      if (!v || v.kind === "empty" || v.text === "") return null;
+    }
+    return { range, selected: false };
+  }
+
+  /**
+   * The range a sort acts on: `dataRegion`, with AOO's "Sort Range" question
+   * (`lcl_GetSortParam`) when a marked selection has data next to it: extend
+   * the sort to the whole block, sort the selection as it is, or cancel. One
+   * cell and the AutoFilter area never ask. `null`: nothing to sort (a toast
+   * was shown) or cancelled.
+   */
+  async sortRegion(): Promise<RangeDto | null> {
+    const found = await this.dataRegionOf();
+    if (!found) {
+      useUiStore.getState().pushToast("info", t("msg.toast.selectTableToSort", "Select a table (or a cell in one) to sort."));
+      return null;
+    }
+    const { range, selected } = found;
+    if (!selected) return range;
+    const grown = await this.client.dataRegion(this.requireDoc(), this.sheet, range);
+    if (grown.r0 === range.r0 && grown.c0 === range.c0 && grown.r1 === range.r1 && grown.c1 === range.c1) return range;
+    const choice = await this.askSortRange(grown, range);
+    return choice === "extend" ? grown : choice === "current" ? range : null;
+  }
+
+  private askSortRange(extend: RangeDto, current: RangeDto): Promise<"extend" | "current" | null> {
+    return new Promise((resolve) => {
+      useUiStore.getState().openDialog({
+        kind: "confirm",
+        title: t("dialog.sortRange.title", "Sort Range"),
+        message: t(
+          "dialog.sortRange.message",
+          "The cells next to the current selection also contain data. Do you want to extend the sort range to {extend}, or sort the currently selected range, {current}?",
+          { extend: a1Text(extend), current: a1Text(current) },
+        ),
+        ok: t("dialog.sortRange.extend", "Extend selection"),
+        alt: t("dialog.sortRange.current", "Current selection"),
+        focusOk: true,
+        onConfirm: () => resolve("extend"),
+        onAlt: () => resolve("current"),
+        onCancel: () => resolve(null),
+      });
+    });
   }
 
   /** Header texts of `range`'s first row (for the Sort dialog), "Column X" when blank. */
@@ -2019,8 +2068,9 @@ export class AppController {
   /** Toolbar Sort / Data ▸ Sort Ascending|Descending: the data region by the active column. */
   sortByActive = async (ascending: boolean): Promise<void> => {
     try {
-      const region = await this.dataRegion();
-      if (!region || region.r0 === region.r1) {
+      const region = await this.sortRegion();
+      if (!region) return;
+      if (region.r0 === region.r1) {
         useUiStore.getState().pushToast("info", t("msg.toast.selectTableToSort", "Select a table (or a cell in one) to sort."));
         return;
       }
@@ -2035,11 +2085,8 @@ export class AppController {
   /** Opens Sort… with the region, `detect_header` and the active column as the first key. */
   openSortDialog = async (): Promise<void> => {
     try {
-      const region = await this.dataRegion();
-      if (!region) {
-        useUiStore.getState().pushToast("info", t("msg.toast.selectTableToSort", "Select a table (or a cell in one) to sort."));
-        return;
-      }
+      const region = await this.sortRegion();
+      if (!region) return;
       const hasHeader = await this.hasHeader(region);
       const labels = await this.headerLabels(region, true);
       const col = Math.min(region.c1, Math.max(region.c0, this.selection.active.c));

@@ -57,6 +57,47 @@ async function texts(page: Page, r0: number, c0: number, r1: number, c1: number)
   );
 }
 
+test("sorting a marked part of a table asks AOO's Sort Range question: Extend selection / Current selection / Cancel", async ({ page }) => {
+  await ready(page);
+  const sortAsc = async () => {
+    await page.locator('[data-command="data.sort"]').click();
+    await page.getByTestId("sort-menu").locator('[data-item="asc"]').click();
+  };
+  const sorts = async () => (await recorded(page)).filter((o) => o.type === "sortRange");
+  // B3:B6 (Item) inside the A1:G15 table.
+  await clickCell(page, 2, 1);
+  await clickCell(page, 5, 1, "Shift");
+  await sortAsc();
+  const dialog = page.getByTestId("confirm-dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading")).toHaveText("Sort Range");
+  await expect(dialog).toContainText("extend the sort range to A1:G15, or sort the currently selected range, B3:B6?");
+  // Escape: nothing is sorted.
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  expect(await sorts()).toEqual([]);
+  // Current selection: only B3:B6.
+  await sortAsc();
+  await dialog.getByTestId("dialog-alt").click();
+  await expect(dialog).toHaveCount(0);
+  expect((await sorts()).at(-1)).toMatchObject({ range: { r0: 2, c0: 1, r1: 5, c1: 1 }, keys: [{ col: 1, ascending: true }] });
+  // Extend selection (the focused default): the whole table, header detected.
+  await clickCell(page, 2, 1);
+  await clickCell(page, 5, 1, "Shift");
+  await sortAsc();
+  await expect(dialog.getByTestId("dialog-ok")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  expect((await sorts()).at(-1)).toMatchObject({ range: { r0: 0, c0: 0, r1: 14, c1: 6 }, keys: [{ col: 1, ascending: true }], hasHeader: true });
+  // Sort… from one cell of the table never asks.
+  await clickCell(page, 2, 5);
+  await page.locator('[data-command="data.sort"]').click();
+  await page.getByTestId("sort-menu").locator('[data-item="custom"]').click();
+  await expect(page.getByTestId("sort-dialog")).toBeVisible();
+  await expect(dialog).toHaveCount(0);
+  await page.keyboard.press("Escape");
+});
+
 test("Sort… opens with the header detected and sorts by the chosen key", async ({ page }) => {
   await ready(page);
   await clickCell(page, 2, 5); // F3 (Total)

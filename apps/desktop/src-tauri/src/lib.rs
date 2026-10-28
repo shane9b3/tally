@@ -115,6 +115,7 @@ pub fn run() {
             commands::clipboard_copy,
             commands::navigate_edge,
             commands::next_unlocked,
+            commands::data_region,
             commands::paste_overwrites,
             commands::resolve_name_box,
             commands::list_functions,

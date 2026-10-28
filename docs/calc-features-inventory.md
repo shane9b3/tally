@@ -172,7 +172,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 |---|---|---|
 | Keys, ascending/descending, case sensitive, labels, include formats, copy to, custom order, left to right | done | Dialog has 3 keys as in AOO (`Dialogs.tsx` sort dialog); the engine takes up to 64 (`sort.rs:32`) |
 | Collation language | deviation (F2) | Code-point order |
-| Extend-selection prompt | missing | A multi-cell selection is sorted as selected (`controller.ts:1315` `dataRegion`) |
+| Extend-selection prompt | done | AOO's "Sort Range" question (`lcl_GetSortParam`) when a marked selection has data next to it: Extend selection / Current selection / Cancel, before Sort Ascending/Descending, Sort… and Sort with options… (`controller.ts` `sortRegion`; the engine's `data_region` grows the selection). One cell and the AutoFilter area never ask. |
 | Sort ascending / descending buttons | done | `data.sortAsc`, `data.sortDesc` |
 
 ### 11. Filters

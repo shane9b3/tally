@@ -1272,3 +1272,41 @@ fn paste_overwrites_matches_the_engine_target() {
         .paste_overwrites(f.doc, s, range("A1:A3"), internal, o)
         .unwrap());
 }
+
+#[test]
+fn data_region_grows_a_selection_over_its_neighbours() {
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    // A table B2:D5 with a header row, an island at G8, nothing else.
+    for (r, row) in [
+        ["Name", "Qty", "Total"],
+        ["a", "2", "10"],
+        ["b", "1", "5"],
+        ["c", "3", "20"],
+    ]
+    .iter()
+    .enumerate()
+    {
+        for (c, text) in row.iter().enumerate() {
+            let a = CellAddr::new(s, 1 + r as u32, 1 + c as u32).to_a1();
+            f.set(&a, text);
+        }
+    }
+    f.set("G8", "x");
+    let region = |f: &Fixture, a1: &str| {
+        let r = f.svc.data_region(f.doc, s, range(a1)).unwrap();
+        tally_types::CellRange::new(s, r.r0, r.c0, r.r1, r.c1).to_a1()
+    };
+    // One cell: the block around it (Ctrl+*); a column of it: the same block.
+    assert_eq!(region(&f, "C3"), "B2:D5");
+    assert_eq!(region(&f, "C3:C4"), "B2:D5");
+    assert_eq!(region(&f, "B2:D5"), "B2:D5");
+    // A selection that already covers the block does not shrink.
+    assert_eq!(region(&f, "A1:E6"), "A1:E6");
+    // An empty cell with no filled neighbour stays as it is; the island is its own block.
+    assert_eq!(region(&f, "J12"), "J12");
+    assert_eq!(region(&f, "G8"), "G8");
+    // Diagonal neighbours join (Ctrl+* semantics): F7 touches G8.
+    assert_eq!(region(&f, "F7"), "F7:G8");
+    assert!(f.svc.data_region(f.doc, 99, range("A1")).is_err());
+}

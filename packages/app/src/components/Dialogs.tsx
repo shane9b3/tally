@@ -86,6 +86,8 @@ export interface ShellProps {
   /** Keep the dialog open after submitting. */
   keepOpen?: boolean;
   cancelLabel?: string;
+  /** A third, secondary action (AOO's "Current selection" next to "Extend selection"): closes the dialog, then runs. */
+  alt?: { label: string; onClick: () => void };
   /** Focus the primary button on open (Enter confirms), as AOO's Yes / No boxes do. */
   focusOk?: boolean;
   /** Runs when the dialog is cancelled (Cancel, Escape, a click outside). */
@@ -96,7 +98,7 @@ export interface ShellProps {
   noOk?: boolean;
 }
 
-export function Shell({ title, children, onSubmit, ok, valid = true, wide, danger, testId, extra, keepOpen, cancelLabel, onCancel, focusOk, cardClass, noOk }: ShellProps) {
+export function Shell({ title, children, onSubmit, ok, valid = true, wide, danger, testId, extra, keepOpen, cancelLabel, alt, onCancel, focusOk, cardClass, noOk }: ShellProps) {
   const ctl = useController();
   const formRef = useRef<HTMLFormElement>(null);
   const titleId = useTitleId();
@@ -146,6 +148,20 @@ export function Shell({ title, children, onSubmit, ok, valid = true, wide, dange
         {children}
         <div className={styles.actions}>
           {extra ? <div className={styles.extra}>{extra}</div> : null}
+          {alt ? (
+            <button
+              type="button"
+              className={styles.secondary}
+              onClick={() => {
+                close();
+                alt.onClick();
+                ctl.focusGrid();
+              }}
+              data-testid="dialog-alt"
+            >
+              {alt.label}
+            </button>
+          ) : null}
           <button type="button" className={styles.secondary} onClick={cancel} data-testid="dialog-cancel">
             {cancelLabel ?? t("dialog.cancel", "Cancel")}
           </button>
@@ -735,7 +751,17 @@ function ManageNamesDialog() {
 
 function ConfirmDialog({ d }: { d: Extract<DialogState, { kind: "confirm" }> }) {
   return (
-    <Shell title={d.title} ok={d.ok} danger={d.danger} testId="confirm-dialog" onSubmit={d.onConfirm} {...(d.cancel ? { cancelLabel: d.cancel } : {})} {...(d.focusOk ? { focusOk: true } : {})} {...(d.onCancel ? { onCancel: d.onCancel } : {})}>
+    <Shell
+      title={d.title}
+      ok={d.ok}
+      danger={d.danger}
+      testId="confirm-dialog"
+      onSubmit={d.onConfirm}
+      {...(d.cancel ? { cancelLabel: d.cancel } : {})}
+      {...(d.alt && d.onAlt ? { alt: { label: d.alt, onClick: d.onAlt } } : {})}
+      {...(d.focusOk ? { focusOk: true } : {})}
+      {...(d.onCancel ? { onCancel: d.onCancel } : {})}
+    >
       <p className={styles.lead}>{d.message}</p>
     </Shell>
   );

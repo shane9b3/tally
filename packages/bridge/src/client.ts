@@ -123,6 +123,11 @@ export interface EngineClient {
    * inside `within`. `null`: the sheet is not protected or has no such cell.
    */
   nextUnlocked(doc: DocId, sheet: SheetId, from: CellPos, dir: Direction, within: RangeDto | null): Promise<CellPos | null>;
+  /**
+   * `range` grown while any cell on the border just outside it holds data (AOO's `GetDataArea`):
+   * the block around one cell (Ctrl+*), the area a sort of a selection would extend to.
+   */
+  dataRegion(doc: DocId, sheet: SheetId, range: RangeDto): Promise<RangeDto>;
   /** Whether a paste of `payload` at `target` would write over a cell that holds data. */
   pasteOverwrites(doc: DocId, sheet: SheetId, target: RangeDto, payload: PastePayload, options: PasteOptions): Promise<boolean>;
   /** Resolves name box text such as `B12`, `A1:C5` or `Sheet2.A1`. */

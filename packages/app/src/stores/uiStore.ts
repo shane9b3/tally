@@ -50,7 +50,7 @@ export type DialogState =
   | { kind: "pasteSpecial" }
   | { kind: "defineName"; name: string; refersTo: string; scope: number | null; replacing: NameInfo | null }
   | { kind: "manageNames" }
-  | { kind: "confirm"; title: string; message: string; ok: string; cancel?: string; focusOk?: boolean; danger?: boolean; onConfirm: () => void; onCancel?: () => void }
+  | { kind: "confirm"; title: string; message: string; ok: string; cancel?: string; alt?: string; onAlt?: () => void; focusOk?: boolean; danger?: boolean; onConfirm: () => void; onCancel?: () => void }
   // v0.3
   | { kind: "cfManager" }
   | { kind: "cfPreset"; preset: HighlightPreset; ranges: RangeDto[] }

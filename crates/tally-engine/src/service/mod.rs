@@ -725,6 +725,23 @@ impl DocumentService for EngineService {
         )
     }
 
+    fn data_region(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        range: RangeDto,
+    ) -> Result<RangeDto> {
+        let wb = &self.document(doc)?.wb;
+        sheet_of(wb, sheet)?;
+        let r = crate::charts::data_region(wb, sheet, (range.r0, range.c0, range.r1, range.c1));
+        Ok(RangeDto {
+            r0: r.r0,
+            c0: r.c0,
+            r1: r.r1,
+            c1: r.c1,
+        })
+    }
+
     fn paste_overwrites(
         &self,
         doc: DocId,

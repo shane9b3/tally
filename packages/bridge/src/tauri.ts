@@ -137,6 +137,7 @@ export const COMMANDS = {
   copy: "clipboard_copy",
   navigateEdge: "navigate_edge",
   nextUnlocked: "next_unlocked",
+  dataRegion: "data_region",
   pasteOverwrites: "paste_overwrites",
   resolveNameBox: "resolve_name_box",
   listFunctions: "list_functions",
@@ -467,6 +468,10 @@ export class TauriClient implements EngineClientV4, ShellClient {
 
   nextUnlocked(doc: DocId, sheet: SheetId, from: CellPos, dir: Direction, within: RangeDto | null): Promise<CellPos | null> {
     return this.call(COMMANDS.nextUnlocked, { doc, sheet, from, dir, within });
+  }
+
+  dataRegion(doc: DocId, sheet: SheetId, range: RangeDto): Promise<RangeDto> {
+    return this.call(COMMANDS.dataRegion, { doc, sheet, range });
   }
 
   pasteOverwrites(doc: DocId, sheet: SheetId, target: RangeDto, payload: PastePayload, options: PasteOptions): Promise<boolean> {

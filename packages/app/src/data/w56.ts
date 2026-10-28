@@ -437,10 +437,11 @@ export class W56Features {
 
   // -- filters, subtotals, data tools ---------------------------------------------
 
-  private async regionWithLabels(): Promise<{ range: RangeDto; labels: string[]; hasHeader: boolean } | null> {
-    const range = await this.ctl.dataRegion();
+  private async regionWithLabels(forSort = false): Promise<{ range: RangeDto; labels: string[]; hasHeader: boolean } | null> {
+    // A sort asks AOO's "Sort Range" question (and toasts itself) when the selection has data next to it.
+    const range = forSort ? await this.ctl.sortRegion() : await this.ctl.dataRegion();
     if (!range) {
-      this.toast("info", "Select a table (or a cell in one).");
+      if (!forSort) this.toast("info", "Select a table (or a cell in one).");
       return null;
     }
     const hasHeader = range.r1 > range.r0 ? await this.client.detectHeader(this.doc, this.sheet, range).catch(() => false) : false;
@@ -560,7 +561,7 @@ export class W56Features {
 
   async openSortOptions(): Promise<void> {
     try {
-      const r = await this.regionWithLabels();
+      const r = await this.regionWithLabels(true);
       if (!r) return;
       this.store.openDialog({ kind: "sortOptions", ...r, lists: await this.customLists() });
     } catch (e) {

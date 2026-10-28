@@ -29,12 +29,11 @@ function filled(v: CellView | undefined): v is CellView {
 }
 
 /**
- * The block of non-empty cells around `active` (grown while any cell on the
- * border just outside it is non-empty), within `bounds`. `null` if the
- * active cell and its neighbours are empty.
+ * `start` grown while any cell on the border just outside it is non-empty
+ * (what AOO's `GetDataArea` does for a selection), within `bounds`.
  */
-export function currentRegion(get: Lookup, active: CellPos, bounds: RangeDto): RangeDto | null {
-  let r: RangeDto = { r0: active.r, c0: active.c, r1: active.r, c1: active.c };
+export function expandRegion(get: Lookup, start: RangeDto, bounds: RangeDto): RangeDto {
+  let r: RangeDto = { ...start };
   const any = (r0: number, c0: number, r1: number, c1: number): boolean => {
     for (let i = Math.max(r0, bounds.r0); i <= Math.min(r1, bounds.r1); i++) {
       for (let j = Math.max(c0, bounds.c0); j <= Math.min(c1, bounds.c1); j++) if (filled(get(i, j))) return true;
@@ -61,6 +60,16 @@ export function currentRegion(get: Lookup, active: CellPos, bounds: RangeDto): R
     }
     if (!grew) break;
   }
+  return r;
+}
+
+/**
+ * The block of non-empty cells around `active` (grown while any cell on the
+ * border just outside it is non-empty), within `bounds`. `null` if the
+ * active cell and its neighbours are empty.
+ */
+export function currentRegion(get: Lookup, active: CellPos, bounds: RangeDto): RangeDto | null {
+  const r = expandRegion(get, { r0: active.r, c0: active.c, r1: active.r, c1: active.c }, bounds);
   if (r.r0 === r.r1 && r.c0 === r.c1 && !filled(get(r.r0, r.c0))) return null;
   return r;
 }

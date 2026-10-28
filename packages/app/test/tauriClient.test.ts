@@ -52,6 +52,7 @@ describe("TauriClient", () => {
     await client.copy(1, sel);
     await client.navigateEdge(1, 2, { r: 0, c: 0 }, "down");
     await client.nextUnlocked(1, 2, { r: 0, c: 0 }, "right", null);
+    await client.dataRegion(1, 2, { r0: 3, c0: 1, r1: 5, c1: 1 });
     await client.pasteOverwrites(1, 2, { r0: 0, c0: 0, r1: 0, c1: 0 }, { type: "tsv", text: "x" }, { valuesOnly: false, formatsOnly: false, transpose: false, skipEmpty: false, operation: "none" });
     await client.resolveNameBox(1, "B12");
     await client.listFunctions();
@@ -102,6 +103,7 @@ describe("TauriClient", () => {
       { cmd: "clipboard_copy", args: { doc: 1, sel } },
       { cmd: "navigate_edge", args: { doc: 1, sheet: 2, from: { r: 0, c: 0 }, dir: "down" } },
       { cmd: "next_unlocked", args: { doc: 1, sheet: 2, from: { r: 0, c: 0 }, dir: "right", within: null } },
+      { cmd: "data_region", args: { doc: 1, sheet: 2, range: { r0: 3, c0: 1, r1: 5, c1: 1 } } },
       { cmd: "paste_overwrites", args: { doc: 1, sheet: 2, target: { r0: 0, c0: 0, r1: 0, c1: 0 }, payload: { type: "tsv", text: "x" }, options: { valuesOnly: false, formatsOnly: false, transpose: false, skipEmpty: false, operation: "none" } } },
       { cmd: "resolve_name_box", args: { doc: 1, text: "B12" } },
       { cmd: "list_functions", args: undefined },

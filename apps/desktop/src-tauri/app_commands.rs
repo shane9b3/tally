@@ -23,6 +23,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "clipboard_copy",
     "navigate_edge",
     "next_unlocked",
+    "data_region",
     "paste_overwrites",
     "resolve_name_box",
     "list_functions",

@@ -166,6 +166,11 @@ pub trait DocumentService {
         within: Option<RangeDto>,
     ) -> Result<Option<CellPos>>;
 
+    /// `range` grown while any cell on the border just outside it holds data
+    /// (AOO's `GetDataArea`): the block around one cell (Ctrl+*), the sort
+    /// area a selection would extend to.
+    fn data_region(&self, doc: DocId, sheet: SheetId, range: RangeDto) -> Result<RangeDto>;
+
     /// Whether a paste of `payload` at `target` with `options` would write
     /// over at least one cell that holds data (the paste-over-data warning).
     fn paste_overwrites(
