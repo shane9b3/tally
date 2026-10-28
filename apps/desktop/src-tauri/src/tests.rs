@@ -58,6 +58,7 @@ fn set(st: &AppState, info: &WorkbookInfo, r: u32, c: u32, input: &str) -> CmdRe
         label: Some("Typing".into()),
         selection_before: None,
         selection_after: None,
+        group: None,
     };
     let res = with_doc(st, info.doc, |s| s.apply(info.doc, tx))?;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
@@ -399,6 +400,7 @@ fn internal_copy_pastes_into_another_document() -> CmdResult<()> {
         label: None,
         selection_before: None,
         selection_after: None,
+        group: None,
     };
     let res = with_doc(&st, b.doc, |s| s.apply(b.doc, tx))?;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
@@ -475,6 +477,7 @@ fn apply_ok(st: &AppState, doc: DocId, ops: Vec<Op>) -> CmdResult<tally_api::App
         label: Some("test".into()),
         selection_before: None,
         selection_after: None,
+        group: None,
     };
     let res = with_doc(st, doc, |s| s.apply(doc, tx))?;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
@@ -698,6 +701,7 @@ fn tx_of(ops: Vec<Op>) -> Transaction {
         label: Some("test".into()),
         selection_before: None,
         selection_after: None,
+        group: None,
     }
 }
 

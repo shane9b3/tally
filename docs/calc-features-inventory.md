@@ -43,7 +43,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Insert sheet from file / as link | missing | X23 |
 | Hide and show sheets | done | `sheet.hide`, `sheet.show` |
 | Sheet tab colour | done | `sheet.tabColor` |
-| Multi-sheet selection editing | missing | No sheet-selection state in `packages/app` or the API; planned in wave 5 item 31 |
+| Multi-sheet selection editing | partial | Engine done 2026-10-28: `Transaction.group` repeats the group ops (`GROUP_OPS` in `crates/tally-engine/src/group.rs`) on every selected sheet at the same addresses, all-or-nothing, one undo step (tests `group.rs`); deviations U23-U25. Tab selection UI in progress |
 | Ctrl+PageUp/PageDown sheet navigation | done | `keymap.ts:114-115`; Shift+Ctrl+PgUp/PgDn is not bound (no multi-sheet selection) |
 | Navigator (F5) | partial | Sheets, names, database ranges, charts, pivots, notes, scenarios; no images, OLE or drawing objects |
 | Sheet events | missing | No scripting (T15) |
@@ -100,7 +100,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Fill Series dialog | done | `edit.fillSeries` |
 | Fill Down / Right | done | `⌘D`, `⌘R`: a copy with relative references adjusted (AOO `FillSimple`), not AutoFill (fill mode `copy`) |
 | Fill Up / Left | partial | Fill Series dialog has Up and Left (`DataDialogs.tsx` Fill Series dialog); no Fill Up / Fill Left commands |
-| Fill Sheet | missing | |
+| Fill Sheet | partial | Engine done 2026-10-28: `Op::FillSheets` with `FillSheetOptions` (text, numbers, date/time, formulas, notes, formats, operation, skip empty; AOO `ScDocument::FillTab`), own undo step (tests `group.rs`). Dialog in progress |
 | Sort lists (Options) | done | |
 
 ### 5. Cell formatting

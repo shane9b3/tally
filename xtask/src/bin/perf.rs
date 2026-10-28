@@ -398,6 +398,7 @@ fn scenarios(o: &Opts, dir: &Path, scale: u32) -> Res<()> {
                 label: None,
                 selection_before: None,
                 selection_after: None,
+                group: None,
             };
             let st = Instant::now();
             svc.apply(doc, tx).map_err(|e| e.to_string())?;
@@ -549,6 +550,7 @@ fn tx(ops: Vec<tally_api::Op>) -> tally_api::Transaction {
         label: None,
         selection_before: None,
         selection_after: None,
+        group: None,
     }
 }
 

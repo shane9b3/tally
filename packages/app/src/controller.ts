@@ -71,6 +71,8 @@ import { useW56Store } from "./data/store";
 import { applyCompletion, applyPoint, assistFor, assistKey } from "./formulaEdit";
 import { chipColorsFor } from "./palette";
 import { useDocStore } from "./stores/docStore";
+import { GROUP_OPS } from "@tally/bridge";
+import { extendStep, moveBlockSteps, nextActiveAfterDelete, selectedIds, stepVisible, txGroup } from "./sheetGroup";
 import { isPendingEdit, useEditStore } from "./stores/editStore";
 import { useFunctionsStore } from "./stores/functionsStore";
 import { fromSelectionDto, selectionRanges, toSelectionDto, useSelectionStore } from "./stores/selectionStore";
@@ -119,6 +121,9 @@ function errorOf(e: unknown): ApiError {
   if (isApiError(e)) return e;
   return { code: "internal", message: e instanceof Error ? e.message : String(e) };
 }
+
+/** Ops that never go with a sheet group (protection is per sheet / per document). */
+const NO_GROUP_OPS: ReadonlySet<string> = new Set(["protectSheet", "unprotectSheet", "protectDocument", "unprotectDocument"]);
 
 export class AppController {
   readonly registry = new CommandRegistry();
@@ -180,7 +185,11 @@ export class AppController {
         }
       }),
       this.client.onMenuAction((e) => {
-        if (!this.registry.run(e.id)) console.warn(`menu-action: unknown or disabled command ${e.id}`);
+        if (this.registry.run(e.id)) return;
+        // The native menu has no enabled state: say why a disabled command did nothing.
+        const reason = this.registry.has(e.id) ? this.registry.get(e.id)?.reason : undefined;
+        if (reason) useUiStore.getState().pushToast("info", reason);
+        else console.warn(`menu-action: unknown or disabled command ${e.id}`);
       }),
       this.client.onDocChanged((e) => {
         if (e.doc === useDocStore.getState().info?.doc) {
@@ -342,8 +351,16 @@ export class AppController {
     if (res.sheetsChanged) void this.refreshNames();
   }
 
-  /** Applies ops as one undoable transaction. */
-  async apply(label: string, ops: Op[], after?: Selection, keepClip = false): Promise<ApplyResult | null> {
+  /**
+   * Applies ops as one undoable transaction. With several sheets selected
+   * a group edit carries the group (the active sheet first, the others in
+   * tab order): the engine repeats the active sheet's cell, format and
+   * structure ops on every selected sheet, all or nothing. See
+   * {@link groupFor} for which transactions are group edits; `opts.group:
+   * false` sends one without the group (an edit meant for the active sheet
+   * only, or explicit per-sheet ops).
+   */
+  async apply(label: string, ops: Op[], after?: Selection, keepClip = false, opts: { group?: boolean } = {}): Promise<ApplyResult | null> {
     try {
       const doc = this.requireDoc();
       // Any other edit ends a pending copy/cut (as in Calc and Excel).
@@ -355,6 +372,8 @@ export class AppController {
         selectionBefore: toSelectionDto(sel, this.sheet),
         selectionAfter: toSelectionDto(after ?? sel, this.sheet),
       };
+      const group = opts.group === false ? null : this.groupFor(ops);
+      if (group) tx.group = group;
       const res = await this.client.apply(doc, tx);
       this.handleResult(res, ops, after !== undefined);
       return res;
@@ -362,6 +381,20 @@ export class AppController {
       this.notifyError(e);
       return null;
     }
+  }
+
+  /**
+   * The transaction group for `ops`, or `null`: only with several sheets
+   * selected, only when an op is a group op (`GROUP_OPS`, the engine's
+   * whitelist) on the active sheet, and never with sheet or document
+   * protection ops in the transaction.
+   */
+  groupFor(ops: readonly Op[]): number[] | null {
+    const group = txGroup(useDocStore.getState().groupSheets, this.sheet);
+    if (!group) return null;
+    if (ops.some((op) => NO_GROUP_OPS.has(op.type))) return null;
+    const active = this.sheet;
+    return ops.some((op) => GROUP_OPS.includes(op.type) && (op as { sheet?: unknown }).sheet === active) ? group : null;
   }
 
   /** Re-reads the active cell's input and hint for the formula bar. */
@@ -693,16 +726,19 @@ export class AppController {
       const vp = grid.getViewport();
       const top = Math.max(0, Math.min(vp.r0, LAST_ROW - AUTOFIT_ROWS + 1));
       const ops: Op[] = [];
-      for (let c = start; c <= end; c++) {
-        // The first rows of the column plus the rows from the viewport down (up to AUTOFIT_ROWS each).
-        const ranges = [{ r0: 0, c0: c, r1: Math.min(LAST_ROW, AUTOFIT_ROWS - 1), c1: c }];
-        if (top >= AUTOFIT_ROWS) ranges.push({ r0: top, c0: c, r1: Math.min(LAST_ROW, top + AUTOFIT_ROWS - 1), c1: c });
-        const blocks = await this.client.cells(doc, this.sheet, ranges);
-        const w = grid.measureColumnWidth(c, blocks.flatMap((b) => b.cells));
-        if (w === null) continue;
-        ops.push({ type: "setColWidth", sheet: this.sheet, start: c, end: c, px: Math.max(AUTOFIT_MIN, Math.min(AUTOFIT_MAX, w)) });
+      // Each selected sheet is measured on its own contents (explicit per-sheet ops, no group).
+      for (const sheet of this.selectedSheets) {
+        for (let c = start; c <= end; c++) {
+          // The first rows of the column plus the rows from the viewport down (up to AUTOFIT_ROWS each).
+          const ranges = [{ r0: 0, c0: c, r1: Math.min(LAST_ROW, AUTOFIT_ROWS - 1), c1: c }];
+          if (top >= AUTOFIT_ROWS) ranges.push({ r0: top, c0: c, r1: Math.min(LAST_ROW, top + AUTOFIT_ROWS - 1), c1: c });
+          const blocks = await this.client.cells(doc, sheet, ranges);
+          const w = grid.measureColumnWidth(c, blocks.flatMap((b) => b.cells));
+          if (w === null) continue;
+          ops.push({ type: "setColWidth", sheet, start: c, end: c, px: Math.max(AUTOFIT_MIN, Math.min(AUTOFIT_MAX, w)) });
+        }
       }
-      if (ops.length > 0) await this.apply(t("msg.undo.fitColumnWidth", "Fit column width"), ops);
+      if (ops.length > 0) await this.apply(t("msg.undo.fitColumnWidth", "Fit column width"), ops, undefined, false, { group: false });
     } catch (e) {
       this.notifyError(e);
     }
@@ -987,11 +1023,19 @@ export class AppController {
         const after = { range: { r0: to.r, c0: to.c, r1: to.r + h, c1: to.c + w }, active: { ...to }, anchor: { ...to } };
         return this.apply(t("shell.group.move", "Move"), [{ type: "moveRange", sheet: this.sheet, from: { ...clip.range }, to }], after);
       }
-      // Across sheets: paste, then clear the source.
-      return this.apply(t("shell.group.move", "Move"), [
-        { type: "paste", sheet: this.sheet, target, payload: { type: "internal", token } },
-        { type: "clear", sheet: clip.sheet, ranges: [{ ...clip.range }], what: "all" },
-      ]);
+      // Across sheets: paste, then clear the source. A move is never a group
+      // edit (AOO moves on the active sheet only): with the source sheet in
+      // the group the clear would wipe what the paste put there.
+      return this.apply(
+        t("shell.group.move", "Move"),
+        [
+          { type: "paste", sheet: this.sheet, target, payload: { type: "internal", token } },
+          { type: "clear", sheet: clip.sheet, ranges: [{ ...clip.range }], what: "all" },
+        ],
+        undefined,
+        false,
+        { group: false },
+      );
     }
     if (valuesOnly && token) {
       return this.apply(t("msg.undo.pasteValues", "Paste values"), [{ type: "pasteSpecial", sheet: this.sheet, target, payload: { type: "internal", token }, options: pasteOptions({ what: "values", transpose: false, skipEmpty: false, operation: "none" }) }], undefined, true);
@@ -1074,11 +1118,20 @@ export class AppController {
    * Switches the visible sheet and tells the engine (`set_active_sheet`,
    * view state: no undo step, no modified flag), so a save, CSV export and
    * Find across sheets use the sheet the user is on.
+   *
+   * A switch to a sheet outside the multi-sheet selection collapses it to
+   * that sheet; one inside it (or with `keepGroup`) keeps it.
    */
-  showSheet(sheet: number, focus = true): void {
+  showSheet(sheet: number, focus = true, keepGroup = false): void {
     const doc = useDocStore.getState();
     if (useEditStore.getState().edit) useEditStore.getState().end();
-    if (doc.activeSheet !== sheet) doc.setActiveSheet(sheet);
+    if (!keepGroup && !doc.groupSheets.includes(sheet)) doc.selectOnly(sheet);
+    if (doc.activeSheet !== sheet) {
+      const group = useDocStore.getState().groupSheets;
+      doc.setActiveSheet(sheet);
+      // setActiveSheet drops a group that doesn't hold the sheet; `keepGroup` keeps it.
+      if (keepGroup && group.length > 1) useDocStore.getState().setGroup([...group, sheet]);
+    }
     this.syncActiveSheet(sheet);
     doc.source?.setSheet(sheet);
     useSelectionStore.getState().reset();
@@ -1119,13 +1172,83 @@ export class AppController {
     return this.activeSync;
   }
 
+  /** ⌃PgDn / ⌃PgUp: the next visible sheet, alone (a multi-sheet selection collapses to it). */
   stepSheet(delta: 1 | -1): void {
     const info = this.info;
     if (!info) return;
-    const i = info.sheets.findIndex((s) => s.id === this.sheet);
-    const next = info.sheets[(i + delta + info.sheets.length) % info.sheets.length];
-    if (next) this.showSheet(next.id);
+    const next = stepVisible(info.sheets, this.sheet, delta, true);
+    useDocStore.getState().selectOnly(next ?? this.sheet);
+    if (next !== null) this.showSheet(next);
   }
+
+  /** ⇧⌃PgDn / ⇧⌃PgUp: the next visible sheet joins the selection and becomes active. */
+  selectStep(delta: 1 | -1, focus = true): void {
+    const info = this.info;
+    if (!info) return;
+    const step = extendStep(info.sheets, useDocStore.getState().groupSheets, this.sheet, delta);
+    if (!step) return;
+    this.showSheet(step.active, focus, true);
+    useDocStore.getState().setGroup(step.group);
+  }
+
+  /** The selected sheets in tab order (the active one alone without a group). */
+  get selectedSheets(): number[] {
+    return selectedIds(useDocStore.getState().groupSheets, this.sheet);
+  }
+
+  /** Whether several sheets are selected. */
+  get grouped(): boolean {
+    return useDocStore.getState().groupSheets.length > 1;
+  }
+
+  /**
+   * A click on a sheet tab (AOO ScTabControl): plain selects only that
+   * sheet (inside the group it becomes active and the group stays), ⌘/Ctrl
+   * toggles it in or out of the group (not the active one), Shift selects
+   * the sheets from the active one to it.
+   */
+  clickTab(sheet: number, mods: { toggle?: boolean; range?: boolean } = {}): void {
+    const doc = useDocStore.getState();
+    if (mods.range) doc.extendTo(sheet);
+    else if (mods.toggle) doc.toggleSheet(sheet);
+    else this.showSheet(sheet, true, doc.groupSheets.includes(sheet));
+  }
+
+  /** Sheet ▸ Select All Sheets. */
+  selectAllSheets = (): void => useDocStore.getState().selectAllSheets();
+
+  /** Deselect All Sheets: back to the active sheet. */
+  deselectAllSheets = (): void => useDocStore.getState().deselectSheets();
+
+  /** Deletes the selected sheets (one undo step), then shows the next one left. */
+  deleteSelectedSheets = async (): Promise<ApplyResult | null> => {
+    const info = this.info;
+    const ids = this.selectedSheets;
+    // At least one visible sheet stays.
+    if (!info || ids.length >= info.sheets.filter((s) => !s.hidden).length) return null;
+    if (ids.length === 1) return this.deleteSheet(ids[0]!);
+    const next = nextActiveAfterDelete(info.sheets, ids, this.sheet);
+    const label = t("sheetTabs.deleteN", "Delete {n} sheets", { n: ids.length });
+    const res = await this.apply(label, ids.map((sheet): Op => ({ type: "deleteSheet", sheet })));
+    if (res && next !== null && useDocStore.getState().info?.sheets.some((s) => s.id === next)) this.showSheet(next);
+    return res;
+  };
+
+  /**
+   * Drag-and-drop of a tab: the sheet (with a group, every selected sheet,
+   * as one block in tab order) moves before the visible tab `dropAt`.
+   */
+  dropSheets = async (sheet: number, dropAt: number): Promise<void> => {
+    const info = this.info;
+    if (!info) return;
+    const visible = info.sheets.filter((s) => !s.hidden);
+    const at = dropAt >= visible.length ? info.sheets.length : info.sheets.findIndex((s) => s.id === visible[dropAt]?.id);
+    const ids = this.grouped && useDocStore.getState().groupSheets.includes(sheet) ? this.selectedSheets : [sheet];
+    const steps = moveBlockSteps(info.sheets.map((s) => s.id), ids, at < 0 ? info.sheets.length : at);
+    if (steps.length === 0) return;
+    const label = ids.length > 1 ? t("msg.undo.moveSheets", "Move sheets") : t("msg.undo.moveSheet", "Move sheet");
+    await this.apply(label, steps.map((m): Op => ({ type: "moveSheet", sheet: m.sheet, to: m.to })));
+  };
 
   addSheet = (): Promise<ApplyResult | null> => this.apply(t("sheetTabs.add", "Add sheet"), [{ type: "addSheet", name: null, index: null }]);
 
@@ -1602,6 +1725,11 @@ export class AppController {
   /** The ▾ of a filter header was clicked. */
   onFilterButton = (col: number, rect: { left: number; bottom: number }): void => {
     useUiStore.getState().openContextMenu(null);
+    // The AutoFilter belongs to one sheet: off with several selected (AOO).
+    if (this.grouped) {
+      useUiStore.getState().pushToast("info", t("msg.reason.sheetsGrouped", "Not available with several sheets selected"));
+      return;
+    }
     useUiStore.getState().openFilterPopover({ col, x: rect.left, y: rect.bottom + 4 });
   };
 
@@ -1652,14 +1780,18 @@ export class AppController {
         useUiStore.getState().pushToast("info", t("msg.toast.selectCellsToMerge", "Select two or more cells to merge."));
         return;
       }
-      const [block] = await this.client.cells(doc, sheet, [range]);
-      const filled = (block?.cells ?? []).filter((v) => v.kind !== "empty" && v.text !== "");
-      const others = filled.filter((v) => v.r !== range.r0 || v.c !== range.c0);
+      // Every selected sheet is checked for hidden content (AOO ScDocFunc::MergeCells).
+      const filled = new Map<number, CellView[]>();
+      for (const s of this.selectedSheets) {
+        const [block] = await this.client.cells(doc, s, [range]);
+        filled.set(s, (block?.cells ?? []).filter((v) => v.kind !== "empty" && v.text !== ""));
+      }
+      const others = [...filled.values()].some((cells) => cells.some((v) => v.r !== range.r0 || v.c !== range.c0));
       const tl = { r: range.r0, c: range.c0 };
       const go = (): void => {
         void this.apply(t("cmd.format.merge", "Merge cells"), [{ type: "mergeCells", sheet, range }], { range, active: tl, anchor: tl });
       };
-      if (others.length === 0) {
+      if (!others) {
         go();
         return;
       }
@@ -1765,13 +1897,16 @@ export class AppController {
       const st = useDataStore.getState();
       const { text, options } = st.find;
       if (text === "") return;
-      const key = JSON.stringify([text, options, this.sheet, options.allSheets ? null : this.sheet]);
+      // With several sheets selected (and no cell scope) Find searches them (AOO).
+      const group = !options.allSheets && !options.scope && this.grouped ? this.selectedSheets : null;
+      const key = JSON.stringify([text, options, this.sheet, options.allSheets ? null : this.sheet, group]);
       let { hits, index } = st.find;
       if (st.find.searched !== key) {
         // All sheets: the hits rotate from the engine's active sheet.
         await this.activeSheetSynced();
-        const res = await this.client.find(doc, findQuery(text, options, this.sheet, { ...this.selection.active }));
-        hits = res.hits;
+        const query = findQuery(text, options, this.sheet, { ...this.selection.active });
+        const res = await this.client.find(doc, group ? { ...query, sheet: null } : query);
+        hits = group ? res.hits.filter((h) => group.includes(h.sheet)) : res.hits;
         // Hits come rotated to start after the active cell.
         const a = this.selection.active;
         const last = hits.length - 1;
@@ -1784,7 +1919,7 @@ export class AppController {
       }
       const hit = hits[index];
       if (!hit) return;
-      if (hit.sheet !== this.sheet) this.showSheet(hit.sheet, false);
+      if (hit.sheet !== this.sheet) this.showSheet(hit.sheet, false, group !== null);
       const cell = { r: hit.r, c: hit.c };
       const sel = { range: { r0: cell.r, c0: cell.c, r1: cell.r, c1: cell.c }, active: cell, anchor: cell };
       useSelectionStore.getState().setSelection(sel);
@@ -1808,7 +1943,8 @@ export class AppController {
       const inScope = !scope || (scope.sheet === this.sheet && scope.ranges.some((r) => a.r >= r.r0 && a.r <= r.r1 && a.c >= r.c0 && a.c <= r.c1));
       const hit = inScope ? await this.client.find(doc, query) : { hits: [] };
       if (hit.hits.length > 0) {
-        await this.apply(t("dlg.replace", "Replace"), [{ type: "replaceAll", sheet: this.sheet, query, replace }]);
+        // The active cell only: never a group edit.
+        await this.apply(t("dlg.replace", "Replace"), [{ type: "replaceAll", sheet: this.sheet, query, replace }], undefined, false, { group: false });
       }
       useDataStore.getState().patchFind({ text, searched: null, hits: [], index: -1 });
       await this.findStep(1);
@@ -1891,14 +2027,26 @@ export class AppController {
     }
   };
 
-  /** Moves the active sheet one tab left/right. */
+  /** Moves the active sheet (with a group, the selected sheets as a block) one tab left/right. */
   moveSheetBy = async (delta: -1 | 1): Promise<void> => {
     const info = this.info;
     if (!info) return;
-    const i = info.sheets.findIndex((s) => s.id === this.sheet);
-    const to = i + delta;
-    if (i < 0 || to < 0 || to >= info.sheets.length) return;
-    await this.moveSheet(this.sheet, to);
+    const ids = this.selectedSheets;
+    const order = info.sheets.map((s) => s.id);
+    const idx = ids.map((id) => order.indexOf(id)).filter((i) => i >= 0);
+    if (idx.length === 0) return;
+    // The block jumps over the nearest unselected tab: right of the first selected one, or left of the last one.
+    let at = -1;
+    if (delta > 0) {
+      for (let i = Math.min(...idx) + 1; i < order.length && at < 0; i++) if (!ids.includes(order[i]!)) at = i + 1;
+    } else {
+      for (let i = Math.max(...idx) - 1; i >= 0 && at < 0; i--) if (!ids.includes(order[i]!)) at = i;
+    }
+    if (at < 0) return;
+    const steps = moveBlockSteps(order, ids, at);
+    if (steps.length === 0) return;
+    const label = ids.length > 1 ? t("msg.undo.moveSheets", "Move sheets") : t("msg.undo.moveSheet", "Move sheet");
+    await this.apply(label, steps.map((m): Op => ({ type: "moveSheet", sheet: m.sheet, to: m.to })));
   };
 }
 

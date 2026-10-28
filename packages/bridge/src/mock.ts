@@ -88,6 +88,8 @@ import type { TraceDto } from "./generated/TraceDto";
 import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
 import type { CellsOptions } from "./generated/CellsOptions";
 import type { EngineClientV4, SheetId, Unsubscribe } from "./client";
+import type { FillSheetOptions } from "./generated/FillSheetOptions";
+import { expandGroup, groupOf, groupSheets } from "./group";
 import { mockTemplate } from "./mockTemplates";
 import { BUILTIN_TEMPLATES, FALLBACK_FONTS, type FontFamilyInfo, type ShellClient, type TemplateInfo } from "./shell";
 
@@ -134,6 +136,21 @@ interface UndoEntry {
   label: string | null;
   selectionBefore: SelectionDto | null;
   selectionAfter: SelectionDto | null;
+}
+
+/** Opaque state saved by `MockClient.checkpoint` (for subclasses). */
+export interface MockCheckpoint {
+  readonly __mockCheckpoint: never;
+}
+
+interface Checkpoint {
+  state: DocState;
+  v3: MockV3;
+  version: number;
+  dirty: boolean;
+  undoTop: UndoEntry | null;
+  undo: UndoEntry[];
+  redo: UndoEntry[];
 }
 
 /** v0.3 state of a mock document (not part of undo). */
@@ -1190,20 +1207,35 @@ export class MockClient implements EngineClientV4, ShellClient {
     return this.run(() => {
       const d = this.doc(doc);
       const before = cloneState(d.state);
+      // A sheet group (multi-sheet selection) is all-or-nothing, like the engine.
+      const grouped = groupOf(tx) !== null;
+      let group: number[] | null;
+      try {
+        group = groupSheets(tx, (id) => (d.state.sheets.some((sh) => sh.id === id) ? { hidden: false } : null));
+      } catch (e) {
+        const err = e as Partial<ApiError>;
+        return this.result(d, new Touched(), [{ opIndex: 0, code: err.code ?? "internal", message: err.message ?? String(e) }], null);
+      }
+      const v3Before = grouped ? structuredClone(d.v3) : null;
       const touched = new Touched();
       const errors: OpError[] = [];
-      tx.ops.forEach((op, i) => {
+      for (const { op, index } of expandGroup(tx, group)) {
         try {
           this.applyOp(d, op, touched);
         } catch (e) {
           const err = e as Partial<ApiError>;
           errors.push({
-            opIndex: i,
+            opIndex: index,
             code: err.code ?? "internal",
             message: err.message ?? String(e),
           });
         }
-      });
+      }
+      if (grouped && errors.length > 0) {
+        d.state = before;
+        if (v3Before) d.v3 = v3Before;
+        return this.result(d, new Touched(), errors, null);
+      }
       if (touched.any()) {
         d.undo.push({
           state: before,
@@ -1238,6 +1270,55 @@ export class MockClient implements EngineClientV4, ShellClient {
       d.undo.push({ ...entry, state: d.state });
       return this.restore(d, entry.state, entry.selectionAfter);
     });
+  }
+
+  // -- subclass hooks (all-or-nothing group applies) ------------------------
+
+  /** The document's state and undo stacks, to roll back or squash a multi-step apply. */
+  protected checkpoint(doc: DocId): MockCheckpoint {
+    const d = this.doc(doc);
+    const cp: Checkpoint = {
+      state: cloneState(d.state),
+      v3: structuredClone(d.v3),
+      version: d.version,
+      dirty: d.dirty,
+      undoTop: d.undo[d.undo.length - 1] ?? null,
+      undo: [...d.undo],
+      redo: [...d.redo],
+    };
+    return cp as unknown as MockCheckpoint;
+  }
+
+  /** Restores the document exactly as it was at `cp`. */
+  protected rollback(doc: DocId, cp: MockCheckpoint): void {
+    const d = this.doc(doc);
+    const c = cp as unknown as Checkpoint;
+    d.state = cloneState(c.state);
+    d.v3 = structuredClone(c.v3);
+    d.version = c.version;
+    d.dirty = c.dirty;
+    d.undo = [...c.undo];
+    d.redo = [...c.redo];
+  }
+
+  /**
+   * Folds the undo steps pushed since `cp` into one (labelled from `tx`);
+   * returns how many steps were folded (0: nothing changed).
+   */
+  protected squashUndo(doc: DocId, cp: MockCheckpoint, tx: Transaction): number {
+    const d = this.doc(doc);
+    const c = cp as unknown as Checkpoint;
+    const from = c.undoTop === null ? 0 : d.undo.lastIndexOf(c.undoTop) + 1;
+    const steps = d.undo.splice(from);
+    if (steps.length > 0) {
+      d.undo.push({ state: c.state, label: tx.label, selectionBefore: tx.selectionBefore, selectionAfter: tx.selectionAfter });
+    }
+    return steps.length;
+  }
+
+  /** The undo summary of an apply result. */
+  protected undoInfo(doc: DocId): ApplyResult["undo"] {
+    return this.result(this.doc(doc), new Touched(), [], null).undo;
   }
 
   // -- events ---------------------------------------------------------------
@@ -1553,6 +1634,43 @@ export class MockClient implements EngineClientV4, ShellClient {
         d.v3.props = { ...d.v3.props, ...op.props, created: d.v3.props.created, modified: d.v3.props.modified, generator: d.v3.props.generator };
         t.sheetsChanged = true;
         return;
+      case "fillSheets": {
+        const src = this.sheet(d, op.sheet);
+        const targets = [...new Set(op.to)].map((id) => this.sheet(d, id)).filter((sh) => sh !== src);
+        // Source values are read before any target changes (the engine's clip snapshot).
+        const ev = new Evaluator(src);
+        const values = new Map<string, Scalar>();
+        const srcValues = (r: number, c: number): Scalar => {
+          const k = key(r, c);
+          if (!values.has(k)) values.set(k, ev.value(r, c));
+          return values.get(k) as Scalar;
+        };
+        for (const range of op.ranges) for (let r = range.r0; r <= range.r1; r++) for (let c = range.c0; c <= range.c1; c++) if (src.cells.has(key(r, c))) srcValues(r, c);
+        for (const range of op.ranges) {
+          checkRange(range);
+          if (cellCount(range) * Math.max(1, targets.length) > MAX_CELLS_PER_OP) throw apiError("unsupported", "range too large for MockClient");
+          for (const sh of targets) {
+            fillSheetRange(st.styles, src, sh, range, op.options, srcValues);
+            const notes = d.v3.notes;
+            if (op.options.notes) {
+              // Like the engine: the target's notes go only when replacing; then the source's are copied.
+              const replace = !op.options.skipEmpty && op.options.operation === "none";
+              const from = notes.get(src.id);
+              const to = notes.get(sh.id) ?? new Map<string, NoteDto>();
+              for (let r = range.r0; r <= range.r1; r++) {
+                for (let c = range.c0; c <= range.c1; c++) {
+                  const n = from?.get(key(r, c));
+                  if (n) to.set(key(r, c), { ...n });
+                  else if (replace) to.delete(key(r, c));
+                }
+              }
+              notes.set(sh.id, to);
+            }
+            t.cell(sh.id, range);
+          }
+        }
+        return;
+      }
       case "refreshFilter":
       case "setCellProtection":
       case "autoFitRows":
@@ -1628,6 +1746,93 @@ class Touched {
     }
     return out.filter((s) => s.ranges.length > 0);
   }
+}
+
+/** Content class of a cell input for Fill Sheet (`null`: empty). */
+type FillKind = "text" | "numbers" | "dateTime" | "formulas";
+
+function fillKind(input: string, style: StyleDto | undefined): FillKind | null {
+  if (input === "") return null;
+  if (input.startsWith("=")) return "formulas";
+  const v = recognize(input);
+  if (typeof v === "number" || typeof v === "boolean") {
+    const code = (style?.numberFormat ?? "General").replace(/"[^"]*"|\[[^\]]*\]|\\./g, "");
+    return /[yYdD]|[hH]+:|:[sS]/.test(code) ? "dateTime" : "numbers";
+  }
+  return "text";
+}
+
+/**
+ * Edit ▸ Fill ▸ Sheets on one range of one target sheet, mirroring the
+ * engine's `fill_sheets` (AOO ScDocument::FillTab): when replacing (no
+ * operation, Skip empty off) the target's contents of the chosen kinds are
+ * removed first; each chosen source cell is then written as is, or with an
+ * operation combined by {@link pasteArithmetic}. Formats: without Skip empty
+ * the target takes the source's style everywhere; with it only where the
+ * source cell exists.
+ */
+function fillSheetRange(styles: StyleDto[], src: MockSheet, dst: MockSheet, range: RangeDto, o: FillSheetOptions, srcValue: (r: number, c: number) => Scalar): void {
+  const want = (k: FillKind | null): boolean => k !== null && o[k];
+  const replace = o.operation === "none" && !o.skipEmpty;
+  for (let r = range.r0; r <= range.r1; r++) {
+    for (let c = range.c0; c <= range.c1; c++) {
+      const k = key(r, c);
+      const s = src.cells.get(k);
+      const t = dst.cells.get(k) ?? { input: "", style: 0 };
+      const next = { ...t };
+      if (replace && want(fillKind(t.input, styles[t.style]))) next.input = "";
+      if (s && want(fillKind(s.input, styles[s.style]))) {
+        next.input = o.operation === "none" ? s.input : pasteArithmetic(srcValue(r, c), next.input, o.operation);
+      }
+      if (o.formats && (s || !o.skipEmpty)) next.style = s?.style ?? 0;
+      if (next.input === "" && next.style === 0) dst.cells.delete(k);
+      else dst.cells.set(k, next);
+    }
+  }
+}
+
+/** A number as the engine writes it into formula text (general format). */
+function generalNumber(n: number): string {
+  return String(n);
+}
+
+/**
+ * The engine's `paste_arithmetic`: the source VALUE combined into the
+ * target input. An empty source leaves the target; a non-number source
+ * (text, error) is written as a constant; a formula target is wrapped
+ * (`=(body)+5`); a number, boolean or empty target is combined (empty = 0);
+ * a text or error target is kept.
+ */
+export function pasteArithmetic(source: Scalar, target: string, operation: FillSheetOptions["operation"]): string {
+  if (source === null || source === "") return target;
+  if (typeof source === "string") return source;
+  if (typeof source === "object") return source.error;
+  const s = Number(source);
+  const sym = { none: "", add: "+", subtract: "-", multiply: "*", divide: "/" }[operation];
+  if (target.startsWith("=") && target.length > 1) return `=(${target.slice(1)})${sym}${generalNumber(s)}`;
+  const tv = recognize(target);
+  const tn = tv === null ? 0 : typeof tv === "number" ? tv : typeof tv === "boolean" ? Number(tv) : null;
+  if (tn === null) return target;
+  let out: number;
+  switch (operation) {
+    case "none":
+      out = s;
+      break;
+    case "add":
+      out = tn + s;
+      break;
+    case "subtract":
+      out = tn - s;
+      break;
+    case "multiply":
+      out = tn * s;
+      break;
+    case "divide":
+      if (s === 0) return "#DIV/0!";
+      out = tn / s;
+      break;
+  }
+  return Number.isFinite(out) ? generalNumber(out) : "#NUM!";
 }
 
 function checkPos(r: number, c: number): void {

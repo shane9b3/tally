@@ -6,6 +6,7 @@
  */
 export const loadDialogs = () => import("./components/Dialogs");
 export const loadW56Dialogs = () => import("./data/W56Dialogs");
+export const loadFillSheetDialog = () => import("./data/FillSheetDialog");
 export const loadCommandPalette = () => import("./components/CommandPalette");
 export const loadShortcutsModal = () => import("./components/ShortcutsModal");
 export const loadPrintPreview = () => import("./print/PrintPreview");
@@ -15,7 +16,7 @@ export const loadStylesUi = () => import("./styles/StylesUi");
 export const loadNavigator = () => import("./navigator/NavigatorPanel");
 
 /** Most likely first; each is fetched one idle slot after the previous. */
-const PRELOAD = [loadDialogs, loadW56Dialogs, loadCommandPalette, loadStylesUi, loadPrintPreview, loadShortcutsModal, loadChartEditor, loadNavigator];
+const PRELOAD = [loadDialogs, loadW56Dialogs, loadCommandPalette, loadStylesUi, loadPrintPreview, loadShortcutsModal, loadChartEditor, loadNavigator, loadFillSheetDialog];
 
 type IdleWindow = Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number };
 

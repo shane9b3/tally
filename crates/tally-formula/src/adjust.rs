@@ -205,13 +205,21 @@ fn sheet_id(s: &SheetRef, current: SheetId) -> Option<SheetId> {
     }
 }
 
-struct Ctx {
+/// Decides whether a structural change on several sheets at once covers
+/// every sheet of a 3D reference `first..last` (by tab order).
+pub type Covers<'a> = &'a dyn Fn(SheetId, SheetId) -> bool;
+
+struct Ctx<'a> {
     old: CellAddr,
     new: CellAddr,
     lc: LineChange,
+    /// `None`: a one-sheet change (3D references stay). `Some`: the pass
+    /// for a change made on several sheets at once, which moves only the
+    /// 3D references it covers.
+    three_d: Option<Covers<'a>>,
 }
 
-impl Ctx {
+impl Ctx<'_> {
     fn origin_on(&self, axis: Axis, o: CellAddr) -> u32 {
         match axis {
             Axis::Row => o.row,
@@ -271,7 +279,7 @@ impl Ctx {
         match r {
             RefExpr::Invalid => Some(RefExpr::Invalid),
             RefExpr::Cell(c) => {
-                let on = sheet_id(&c.sheet, cur) == Some(self.lc.sheet);
+                let on = self.three_d.is_none() && sheet_id(&c.sheet, cur) == Some(self.lc.sheet);
                 Some(RefExpr::Cell(self.cell(c, on)?))
             }
             RefExpr::Area(a, b) => {
@@ -280,7 +288,13 @@ impl Ctx {
                     SheetRef::Current => sa,
                     _ => sheet_id(&b.sheet, cur),
                 };
-                let on = sa == Some(self.lc.sheet) || sb == Some(self.lc.sheet);
+                // AOO `ScRefUpdate::Update`: a reference over several
+                // sheets moves only when the change covers all of them.
+                let on = match (sa, sb, self.three_d) {
+                    (Some(x), Some(y), covers) if x != y => covers.is_some_and(|f| f(x, y)),
+                    (_, _, Some(_)) => false,
+                    _ => sa == Some(self.lc.sheet) || sb == Some(self.lc.sheet),
+                };
                 let (ar, br) = (self.pos(a.row, Axis::Row)?, self.pos(b.row, Axis::Row)?);
                 let (ac, bc) = (self.pos(a.col, Axis::Col)?, self.pos(b.col, Axis::Col)?);
                 let (ar, br) = self.interval(ar, br, on, Axis::Row)?;
@@ -299,7 +313,7 @@ impl Ctx {
                 ))
             }
             RefExpr::Cols { sheet, start, end } => {
-                let on = sheet_id(sheet, cur) == Some(self.lc.sheet);
+                let on = self.three_d.is_none() && sheet_id(sheet, cur) == Some(self.lc.sheet);
                 let (s, e) = (self.pos(*start, Axis::Col)?, self.pos(*end, Axis::Col)?);
                 let (s, e) = self.interval(s, e, on, Axis::Col)?;
                 Some(RefExpr::Cols {
@@ -309,7 +323,7 @@ impl Ctx {
                 })
             }
             RefExpr::Rows { sheet, start, end } => {
-                let on = sheet_id(sheet, cur) == Some(self.lc.sheet);
+                let on = self.three_d.is_none() && sheet_id(sheet, cur) == Some(self.lc.sheet);
                 let (s, e) = (self.pos(*start, Axis::Row)?, self.pos(*end, Axis::Row)?);
                 let (s, e) = self.interval(s, e, on, Axis::Row)?;
                 Some(RefExpr::Rows {
@@ -384,6 +398,7 @@ pub fn adjust_for_structure_change(
                 old: origin,
                 new: shift_origin(origin, change),
                 lc,
+                three_d: None,
             };
             f.expr.walk_refs_mut(|r| {
                 if !ctx.resolvable(r) {
@@ -397,6 +412,42 @@ pub fn adjust_for_structure_change(
             });
         }
     }
+    changed
+}
+
+/// The second half of a row/column change made on several sheets at once
+/// (a multi-sheet selection): after each sheet's own
+/// [`adjust_for_structure_change`], which leaves references over several
+/// sheets alone, this moves the 3D references whose sheets `covers` (all
+/// inside the changed set), once. `origin` is the formula's current cell
+/// (already moved); the `sheet` of `change` is ignored. Returns `true` if
+/// the AST changed.
+pub fn adjust_3d_for_structure_change(
+    f: &mut Formula,
+    origin: CellAddr,
+    change: &StructureChange,
+    covers: Covers<'_>,
+) -> bool {
+    let Some(lc) = LineChange::of(change) else {
+        return false;
+    };
+    let ctx = Ctx {
+        old: origin,
+        new: origin,
+        lc,
+        three_d: Some(covers),
+    };
+    let mut changed = false;
+    f.expr.walk_refs_mut(|r| {
+        if !ctx.resolvable(r) {
+            return;
+        }
+        let new = ctx.adjust(r).unwrap_or(RefExpr::Invalid);
+        if new != *r {
+            *r = new;
+            changed = true;
+        }
+    });
     changed
 }
 

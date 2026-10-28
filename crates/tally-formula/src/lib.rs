@@ -38,8 +38,8 @@ use std::sync::Arc;
 use tally_types::SheetId;
 
 pub use adjust::{
-    adjust_for_structure_change, move_refs, reanchor, relocate, shifted_origin, BlockMove,
-    StructureChange,
+    adjust_3d_for_structure_change, adjust_for_structure_change, move_refs, reanchor, relocate,
+    shifted_origin, BlockMove, Covers, StructureChange,
 };
 pub use ast::{
     ArrayLit, BinOp, CellRefExpr, Expr, Formula, FormulaFlags, FuncId, FuncRef, NameId, NameRef,

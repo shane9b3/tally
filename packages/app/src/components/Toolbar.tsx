@@ -33,6 +33,7 @@ function Pill({ command, label, icon, children, active, iconOnly, tooltip }: Pil
   // Re-render on undo state / sheet / edit changes so `enabled` is fresh.
   useDocStore((s) => s.undo);
   useDocStore((s) => s.info?.sheets.length);
+  useDocStore((s) => s.groupSheets.length);
   useEditStore((s) => s.edit !== null);
   const cmd = ctl.registry.get(command);
   const enabled = ctl.registry.isEnabled(command);
@@ -182,9 +183,9 @@ export function Toolbar({ inset }: { inset: boolean }) {
           y={sortMenu.y}
           onClose={() => setSortMenu(null)}
           items={[
-            { id: "asc", label: t("shell.ctxSortAsc", "Sort A → Z"), hint: t("shell.sortByActive", "by active column"), onSelect: () => ctl.registry.run("data.sortAsc") },
-            { id: "desc", label: t("shell.ctxSortDesc", "Sort Z → A"), onSelect: () => ctl.registry.run("data.sortDesc") },
-            { id: "custom", label: t("cmd.data.sort", "Sort…"), separator: true, onSelect: () => ctl.registry.run("data.sort") },
+            { id: "asc", label: t("shell.ctxSortAsc", "Sort A → Z"), hint: t("shell.sortByActive", "by active column"), disabled: !ctl.registry.isEnabled("data.sortAsc"), onSelect: () => ctl.registry.run("data.sortAsc") },
+            { id: "desc", label: t("shell.ctxSortDesc", "Sort Z → A"), disabled: !ctl.registry.isEnabled("data.sortDesc"), onSelect: () => ctl.registry.run("data.sortDesc") },
+            { id: "custom", label: t("cmd.data.sort", "Sort…"), separator: true, disabled: !ctl.registry.isEnabled("data.sort"), onSelect: () => ctl.registry.run("data.sort") },
           ]}
         />
       ) : null}

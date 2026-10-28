@@ -159,10 +159,17 @@ const EDIT_PASTE: &[Entry] = &[
     Item("edit.delete", "Delete", None),
 ];
 
-const EDIT_TAIL: &[Entry] = &[
+/// Edit ▸ Fill (AOO: Down, Right, Sheet…, Series…). Fill Sheets… is
+/// enabled in the registry only with several sheets selected.
+const FILL: &[Entry] = &[
     Item("edit.fillDown", "Fill Down", Some("CmdOrCtrl+D")),
     Item("edit.fillRight", "Fill Right", Some("CmdOrCtrl+R")),
+    Item("edit.fillSheet", "Fill Sheets…", None),
     Item("edit.fillSeries", "Fill Series…", None),
+];
+
+const EDIT_TAIL: &[Entry] = &[
+    Sub("Fill", FILL),
     Sep,
     Item("edit.find", "Find…", Some("CmdOrCtrl+F")),
     Item(
@@ -350,6 +357,9 @@ const SHEET: &[Entry] = &[
     Item("sheet.hide", "Hide Sheet", None),
     Item("sheet.show", "Show Sheet…", None),
     Item("sheet.tabColor", "Tab Colour…", None),
+    Sep,
+    Item("sheet.selectAll", "Select All Sheets", None),
+    Item("sheet.deselectAll", "Deselect All Sheets", None),
     Sep,
     Item("sheet.moveLeft", "Move Sheet Left", None),
     Item("sheet.moveRight", "Move Sheet Right", None),
@@ -947,6 +957,9 @@ mod tests {
             "data.defineDatabaseRange",
             "data.createNamesFromLabels",
             "edit.fillSeries",
+            "edit.fillSheet",
+            "sheet.selectAll",
+            "sheet.deselectAll",
             "format.cells",
             "format.autoFormat",
             "view.stylesPanel",

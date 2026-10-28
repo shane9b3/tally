@@ -4217,6 +4217,7 @@ dependencies = [
  "proptest",
  "regex",
  "serde",
+ "serde_json",
  "slotmap",
  "smallvec",
  "tally-api",

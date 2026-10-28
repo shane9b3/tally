@@ -137,6 +137,7 @@ fn long_style_runs_survive_ods() {
             label: None,
             selection_before: None,
             selection_after: None,
+            group: None,
         },
     )
     .unwrap();

@@ -113,6 +113,8 @@ export const BINDINGS: readonly Binding[] = [
   { key: "Escape", mod: false, shift: false, command: "edit.cancelClip", label: "Esc" },
   { key: "PageDown", mod: true, shift: false, command: "sheet.next", label: "⌃PgDn" },
   { key: "PageUp", mod: true, shift: false, command: "sheet.prev", label: "⌃PgUp" },
+  { key: "PageDown", mod: true, shift: true, command: "sheet.selectNext", label: "⇧⌃PgDn" },
+  { key: "PageUp", mod: true, shift: true, command: "sheet.selectPrev", label: "⇧⌃PgUp" },
   { key: "F2", mod: false, shift: true, command: "insert.note", menu: true, label: "⇧F2" },
   { key: "k", code: "KeyK", mod: true, shift: false, alt: true, command: "insert.hyperlink", menu: true, label: "⌥⌘K" },
   // Wave 5 (W5-0b seams; the commands are disabled until W5-5/W5-6 except the Function Wizard).

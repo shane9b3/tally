@@ -1,4 +1,4 @@
-/** Sum / Count of the selection (debounced 50 ms) and the zoom menu. */
+/** Selected sheets, Sum / Count of the selection (debounced 50 ms) and the zoom menu. */
 import type { SelectionStats } from "@tally/bridge";
 import { useEffect, useRef, useState } from "react";
 import { useController } from "../context";
@@ -20,6 +20,7 @@ export function StatusBar() {
   const doc = useDocStore((s) => s.info?.doc);
   const sheet = useDocStore((s) => s.activeSheet);
   const rev = useDocStore((s) => s.rev);
+  const groupSize = useDocStore((s) => s.groupSheets.length);
   const zoom = useUiStore((s) => s.zoom);
   const [stats, setStats] = useState<SelectionStats | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -47,6 +48,11 @@ export function StatusBar() {
   const sumText = stats?.formattedSum ?? (sum !== null ? String(sum) : null);
   return (
     <div className={styles.status} data-testid="status-bar">
+      {groupSize > 1 ? (
+        <span className={styles.group} data-testid="stat-sheets" role="status">
+          {t("status.sheetsSelected", "{n} sheets selected", { n: groupSize })}
+        </span>
+      ) : null}
       {sumText !== null ? (
         <span className={styles.stat} data-testid="stat-sum">
           {t("status.sum", "Sum")} <b>{sumText}</b>

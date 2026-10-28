@@ -332,23 +332,38 @@ fn find_query(text: &str) -> tally_api::FindQuery {
 }
 
 /// One transaction may touch at most 50M cells (summed estimates): 64 ×
-/// SetArrayFormula of 1M cells took 11 s and 1.7 GB. Replace All counts its
-/// 1M-cell maximum, so the 51st of 51 cheap Replace Alls is refused.
+/// SetArrayFormula of 1M cells took 11 s and 1.7 GB. A paste counts its
+/// target (up to 1M cells) or its block, whichever is larger, so the 48th
+/// of 48 cheap one-cell pastes into a whole column is refused. Replace All
+/// counts the cells it can visit (at most 1M; group review L3).
 #[test]
 fn transaction_cell_budget() {
     let mut f = Fixture::new();
     f.set("A1", "x");
-    let ops: Vec<Op> = (0..51)
+    let ops: Vec<Op> = (0..48)
+        .map(|_| Op::Paste {
+            sheet: f.sheet,
+            target: tally_api::RangeDto {
+                r0: 0,
+                c0: 2,
+                r1: 1_048_575,
+                c1: 2,
+            },
+            payload: tally_api::PastePayload::Tsv { text: "1".into() },
+        })
+        .collect();
+    let r = f.apply(ops);
+    assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+    assert_eq!(r.errors[0].op_index, 47);
+    assert_eq!(r.errors[0].code, tally_api::ApiError::UNSUPPORTED);
+    let replaces: Vec<Op> = (0..100)
         .map(|_| Op::ReplaceAll {
             sheet: None,
             query: find_query("nothing-matches"),
             replace: "y".into(),
         })
         .collect();
-    let r = f.apply(ops);
-    assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
-    assert_eq!(r.errors[0].op_index, 50);
-    assert_eq!(r.errors[0].code, tally_api::ApiError::UNSUPPORTED);
+    assert!(f.apply(replaces).errors.is_empty());
     // Ordinary transactions are unaffected.
     let r = f.apply(vec![
         input(f.sheet, "B1", "1"),

@@ -61,6 +61,7 @@ import { DEFAULT_VIEW, useW56Store, type OptionsTab, type RecoveryFile, type W56
 import type { PopoverItem } from "../components/Popover";
 import type { Command } from "../registry";
 import { t } from "../i18n";
+import { nextActiveAfterDelete } from "../sheetGroup";
 
 /** Optional desktop-shell commands used here (`TauriClient`; the browser mock has stand-ins). */
 export interface W56Shell {
@@ -628,37 +629,44 @@ export class W56Features {
   /**
    * §51: merging cells whose hidden (non-top-left) cells hold content asks
    * "Move the contents of the hidden cells into the first cell?". Called by
-   * `AppController.mergeCells` with the filled cells; returns true when it
-   * showed the prompt (the caller then does nothing).
+   * `AppController.mergeCells` with the filled cells of every selected
+   * sheet (AOO checks each); returns true when it showed the prompt (the
+   * caller then does nothing).
    */
-  mergePrompt(range: RangeDto, filled: readonly CellView[], go: () => void): boolean {
-    const hidden = hiddenContentCount(range, filled.map((v) => ({ r: v.r, c: v.c })));
+  mergePrompt(range: RangeDto, filled: ReadonlyMap<number, readonly CellView[]>, go: () => void): boolean {
+    let hidden = 0;
+    for (const cells of filled.values()) hidden += hiddenContentCount(range, cells.map((v) => ({ r: v.r, c: v.c })));
     if (hidden === 0) return false;
-    const sheet = this.sheet;
     this.store.openDialog({
       kind: "mergePrompt",
       range,
       hidden,
-      onMove: () => {
-        void (async () => {
-          const texts: { pos: CellPos; input: string }[] = [];
-          for (const v of filled) {
-            const info = await this.client.cellEditInfo(this.doc, sheet, v.r, v.c).catch(() => null);
-            texts.push({ pos: { r: v.r, c: v.c }, input: info?.input ?? v.text });
-          }
-          const input = mergedContent(texts, range);
-          const tl = { r: range.r0, c: range.c0 };
-          await this.ctl.apply(t("cmd.format.merge", "Merge cells"), [
-            // Moved content, not typed input (AOO ScDocFunc::MergeCells): a 1×1 block, so
-            // "-1-2" stays text instead of becoming a formula (P18).
-            { type: "setRangeInputs", sheet, r: tl.r, c: tl.c, rows: [[input]] },
-            { type: "mergeCells", sheet, range: { ...range } },
-          ], { range: { ...range }, active: tl, anchor: tl });
-        })();
-      },
+      onMove: () => void this.mergeMoving(range, filled),
       onKeep: go,
     });
     return true;
+  }
+
+  /**
+   * Merges `range` on each sheet of `filled`, moving each sheet's own
+   * contents into its first cell: explicit per-sheet ops in one undo step,
+   * sent without the group so nothing is repeated across sheets.
+   */
+  async mergeMoving(range: RangeDto, filled: ReadonlyMap<number, readonly CellView[]>): Promise<ApplyResult | null> {
+    const tl = { r: range.r0, c: range.c0 };
+    const ops: Op[] = [];
+    for (const [sheet, cells] of filled) {
+      const texts: { pos: CellPos; input: string }[] = [];
+      for (const v of cells) {
+        const info = await this.client.cellEditInfo(this.doc, sheet, v.r, v.c).catch(() => null);
+        texts.push({ pos: { r: v.r, c: v.c }, input: info?.input ?? v.text });
+      }
+      // Moved content, not typed input (AOO ScDocFunc::MergeCells): a 1×1 block, so
+      // "-1-2" stays text instead of becoming a formula (P18).
+      if (texts.length > 0) ops.push({ type: "setRangeInputs", sheet, r: tl.r, c: tl.c, rows: [[mergedContent(texts, range)]] });
+      ops.push({ type: "mergeCells", sheet, range: { ...range } });
+    }
+    return this.ctl.apply(t("cmd.format.merge", "Merge cells"), ops, { range: { ...range }, active: tl, anchor: tl }, false, { group: false });
   }
 
   // -- solver ----------------------------------------------------------------------
@@ -674,34 +682,64 @@ export class W56Features {
 
   async applySolverResult(res: SolverResult): Promise<void> {
     const ops: Op[] = res.values.map((v) => ({ type: "setCellInput", sheet: v.cell.sheet, r: v.cell.r, c: v.cell.c, input: String(Number(v.value.toPrecision(15))) }));
-    if (ops.length > 0) await this.ctl.apply(t("solver.title", "Solver"), ops);
+    // The solver's variable cells only, never a group edit (Solver is off with several sheets selected).
+    if (ops.length > 0) await this.ctl.apply(t("solver.title", "Solver"), ops, undefined, false, { group: false });
   }
 
   // -- sheets ----------------------------------------------------------------------
+
+  /** The sheets a tab command on `sheet` acts on: the selected sheets when it is one of them, else `sheet`. */
+  private targetSheets(sheet: number): number[] {
+    const ids = this.ctl.selectedSheets;
+    return ids.includes(sheet) ? ids : [sheet];
+  }
 
   openCopySheet(sheet = this.sheet): void {
     const info = this.ctl.info;
     if (!info) return;
     const name = copySheetName(this.ctl.sheetName(sheet), info.sheets.map((s) => s.name));
-    this.store.openDialog({ kind: "copySheet", sheet, name });
+    const ids = this.targetSheets(sheet);
+    this.store.openDialog(ids.length > 1 ? { kind: "copySheet", sheet, name, sheets: ids } : { kind: "copySheet", sheet, name });
   }
 
   async copySheet(sheet: number, name: string, index: number | null): Promise<void> {
     await this.ctl.apply(t("msg.undo.copySheet", "Copy sheet"), [{ type: "copySheet", sheet, name: name.trim() === "" ? null : name.trim(), index }]);
   }
 
+  /**
+   * Copies several sheets as one block (one undo step), named by the
+   * engine, before the sheet at `index` (`null`: after the last of them).
+   */
+  async copySheets(ids: readonly number[], index: number | null): Promise<void> {
+    const info = this.ctl.info;
+    if (!info || ids.length === 0) return;
+    const last = Math.max(...ids.map((id) => info.sheets.findIndex((s) => s.id === id)));
+    const at = index ?? last + 1;
+    const ops = ids.map((sheet, k): Op => ({ type: "copySheet", sheet, name: null, index: at + k }));
+    const before = new Set(info.sheets.map((s) => s.id));
+    const res = await this.ctl.apply(t("sheetTabs.copyN", "Copy {n} sheets", { n: ids.length }), ops);
+    // The copies become the selection, the copy of the active sheet active (AOO).
+    const after = useDocStore.getState().info?.sheets ?? [];
+    const copies = after.filter((s) => !before.has(s.id)).map((s) => s.id);
+    if (!res || copies.length !== ids.length) return;
+    const active = copies[ids.indexOf(this.sheet)] ?? copies[0]!;
+    this.ctl.showSheet(active, false);
+    useDocStore.getState().setGroup(copies);
+  }
+
+  /** Hides `sheet` (the selected sheets when it is one of them); at least one sheet stays visible. */
   async hideSheet(sheet = this.sheet): Promise<void> {
     const info = this.ctl.info;
     if (!info) return;
-    if (info.sheets.filter((s) => !s.hidden).length <= 1) {
+    const ids = this.targetSheets(sheet);
+    if (info.sheets.filter((s) => !s.hidden && !ids.includes(s.id)).length < 1) {
       this.toast("info", "The last visible sheet cannot be hidden.");
       return;
     }
-    await this.ctl.apply(t("cmd.sheet.hide", "Hide sheet"), [{ type: "setSheetHidden", sheet, hidden: true }]);
-    if (sheet === this.sheet) {
-      const next = useDocStore.getState().info?.sheets.find((s) => !s.hidden && s.id !== sheet);
-      if (next) this.ctl.showSheet(next.id);
-    }
+    const next = nextActiveAfterDelete(info.sheets, ids, this.sheet);
+    const label = ids.length > 1 ? t("sheetTabs.hideN", "Hide {n} sheets", { n: ids.length }) : t("cmd.sheet.hide", "Hide sheet");
+    const res = await this.ctl.apply(label, ids.map((id): Op => ({ type: "setSheetHidden", sheet: id, hidden: true })));
+    if (res && next !== null && next !== this.sheet) this.ctl.showSheet(next);
   }
 
   openShowSheet(): void {
@@ -720,26 +758,37 @@ export class W56Features {
     if (first !== undefined) this.ctl.showSheet(first);
   }
 
+  /** Tab colour… (applies to every selected sheet when `sheet` is one of them; see {@link setTabColor}). */
   openTabColor(sheet = this.sheet): void {
     const current = this.ctl.info?.sheets.find((s) => s.id === sheet)?.tabColor ?? null;
     const rgba = current ? Number.parseInt(current.replace("#", "").padEnd(8, "f"), 16) : null;
     this.store.openDialog({ kind: "tabColor", sheet, color: rgba === null || Number.isNaN(rgba) ? null : rgba });
   }
 
+  /** Sets the tab colour of `sheet` (of every selected sheet when it is one of them). */
   async setTabColor(sheet: number, color: number | null): Promise<void> {
-    await this.ctl.apply(t("dd.tabColour", "Tab colour"), [{ type: "setTabColor", sheet, color }]);
+    const ops = this.targetSheets(sheet).map((id): Op => ({ type: "setTabColor", sheet: id, color }));
+    await this.ctl.apply(t("dd.tabColour", "Tab colour"), ops);
   }
 
-  /** Extra items of the sheet-tab context menu. */
+  /**
+   * Extra items of the sheet-tab context menu. With several sheets
+   * selected Copy, Tab colour and Hide act on all of them (AOO); Select /
+   * Deselect All Sheets change the selection.
+   */
   sheetTabItems(sheet: number): PopoverItem[] {
     const info = this.ctl.info;
+    const ids = this.targetSheets(sheet);
+    const n = ids.length;
     const visible = (info?.sheets ?? []).filter((s) => !s.hidden).length;
     const hidden = (info?.sheets ?? []).some((s) => s.hidden);
     return [
-      { id: "copy", label: t("cmd.sheet.duplicate", "Copy sheet…"), separator: true, onSelect: () => this.openCopySheet(sheet) },
+      { id: "copy", label: n > 1 ? t("sheetTabs.copyNMenu", "Copy {n} sheets…", { n }) : t("cmd.sheet.duplicate", "Copy sheet…"), separator: true, onSelect: () => this.openCopySheet(sheet) },
       { id: "tabColor", label: t("cmd.sheet.tabColor", "Tab colour…"), onSelect: () => this.openTabColor(sheet) },
-      { id: "hide", label: t("cmd.sheet.hide", "Hide sheet"), disabled: visible <= 1, onSelect: () => void this.hideSheet(sheet) },
+      { id: "hide", label: n > 1 ? t("sheetTabs.hideN", "Hide {n} sheets", { n }) : t("cmd.sheet.hide", "Hide sheet"), disabled: visible - n < 1, onSelect: () => void this.hideSheet(sheet) },
       { id: "show", label: t("cmd.sheet.show", "Show sheet…"), disabled: !hidden, onSelect: () => this.openShowSheet() },
+      { id: "selectAll", label: t("cmd.sheet.selectAll", "Select all sheets"), separator: true, disabled: visible <= 1 || n === visible, onSelect: () => this.ctl.selectAllSheets() },
+      { id: "deselectAll", label: t("cmd.sheet.deselectAll", "Deselect all sheets"), disabled: n <= 1, onSelect: () => this.ctl.deselectAllSheets() },
     ];
   }
 

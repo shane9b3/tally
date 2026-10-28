@@ -72,7 +72,7 @@
   display: none;
 }
 
-.tab:hover:not(.active) {
+.tab:hover:not(.active):not(.grouped) {
   color: var(--tally-text);
 }
 
@@ -82,6 +82,18 @@
   box-shadow:
     0 0 0 1px var(--tally-border-subtle),
     var(--tally-shadow-pill);
+}
+
+/* Selected with the active tab (multi-sheet selection) but not active itself. */
+.grouped {
+  background: var(--tally-accent-subtle);
+  color: var(--tally-text);
+  box-shadow: inset 0 0 0 1px var(--tally-border-subtle);
+}
+
+.tab.grouped::before,
+.grouped + .tab::before {
+  display: none;
 }
 
 .dragging {

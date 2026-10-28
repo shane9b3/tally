@@ -239,6 +239,7 @@ fn undo_restores_selection_and_labels() {
         label: Some("Typing".into()),
         selection_before: Some(sel(s, "A1")),
         selection_after: Some(sel(s, "A2")),
+        group: None,
     };
     let r = f.svc.apply(f.doc, tx).unwrap();
     assert_eq!(r.undo.undo_label.as_deref(), Some("Typing"));

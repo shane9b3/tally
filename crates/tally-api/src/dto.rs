@@ -1350,6 +1350,43 @@ pub enum Op {
         /// The settings.
         settings: CalcSettingsDto,
     },
+    /// Edit ▸ Fill ▸ Sheets (AOO `ScDocument::FillTab`): copies `ranges`
+    /// of `sheet` to the same addresses on each sheet of `to`, filtered
+    /// and combined per `options` (like Paste Special).
+    FillSheets {
+        /// Source sheet (the active one).
+        sheet: SheetId,
+        /// Source ranges (the selection).
+        ranges: Vec<RangeDto>,
+        /// Target sheets (the other selected sheets).
+        to: Vec<SheetId>,
+        /// What to copy and how.
+        options: FillSheetOptions,
+    },
+}
+
+/// Options of [`Op::FillSheets`] (the Fill Sheet dialog, AOO's Paste
+/// Special without transpose/link/shift).
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FillSheetOptions {
+    /// Text constants.
+    pub text: bool,
+    /// Numbers (not dates).
+    pub numbers: bool,
+    /// Dates and times.
+    pub date_time: bool,
+    /// Formulas.
+    pub formulas: bool,
+    /// Notes.
+    pub notes: bool,
+    /// Formats (cell attributes, number format, cell style).
+    pub formats: bool,
+    /// Combine numbers with the target's numbers.
+    pub operation: PasteOperation,
+    /// Empty source cells leave the target unchanged.
+    pub skip_empty: bool,
 }
 
 /// One sort key.
@@ -1629,6 +1666,15 @@ pub struct Transaction {
     pub selection_before: Option<SelectionDto>,
     /// Selection to restore on redo.
     pub selection_after: Option<SelectionDto>,
+    /// Multi-sheet selection (AOO "selected sheets"), active sheet first.
+    /// With more than one sheet, each group-whitelisted op whose `sheet`
+    /// is `group[0]` also runs on every other sheet of the group at the
+    /// same addresses (see `tally_engine::group::GROUP_OPS`). The whole
+    /// transaction is all-or-nothing and has one undo record. Absent or
+    /// `null` for a single sheet.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub group: Option<Vec<SheetId>>,
 }
 
 /// Outcome of `apply`, `undo` or `redo`.
@@ -2241,6 +2287,7 @@ mod tests {
                 }],
                 active: CellPos { r: 0, c: 0 },
             }),
+            group: None,
         };
         let v = serde_json::to_value(&tx).unwrap();
         assert!(v.get("selectionBefore").is_some());
@@ -2251,6 +2298,20 @@ mod tests {
         );
         let back: Transaction = serde_json::from_value(v).unwrap();
         assert_eq!(back, tx);
+    }
+
+    #[test]
+    fn transaction_group_is_optional() {
+        let tx: Transaction = serde_json::from_value(
+            json!({ "ops": [], "label": null, "selectionBefore": null, "selectionAfter": null }),
+        )
+        .unwrap();
+        assert_eq!(tx.group, None);
+        let tx: Transaction = serde_json::from_value(
+            json!({ "ops": [], "label": null, "selectionBefore": null, "selectionAfter": null, "group": [1, 2] }),
+        )
+        .unwrap();
+        assert_eq!(tx.group, Some(vec![1, 2]));
     }
 
     #[test]

@@ -20,6 +20,8 @@ import { V3Dialog, isV3Dialog } from "./V3Dialogs";
 import { FunctionWizard } from "./FunctionWizard";
 import { FOCUSABLE, trapTab } from "./trapTab";
 import { arrowNav, useReturnFocus, useTitleId } from "./dialogA11y";
+import { loadFillSheetDialog } from "../lazyChunks";
+import { LazySlot, lazyPart } from "../lazyPart";
 
 export function Dialogs() {
   const dialog = useUiStore((s) => s.dialog);
@@ -51,8 +53,17 @@ function DialogFor({ dialog }: { dialog: DialogState }) {
       return <ConfirmDialog d={dialog} />;
     case "functionWizard":
       return <FunctionWizard />;
+    case "fillSheet":
+      return (
+        <LazySlot onFail={close}>
+          <FillSheetDialog />
+        </LazySlot>
+      );
   }
 }
+
+// Edit ▸ Fill ▸ Sheets… loads on first use, in its own slot (see `lazyChunks.ts`).
+const FillSheetDialog = lazyPart(() => loadFillSheetDialog().then((m) => m.FillSheetDialog));
 
 export { trapTab };
 

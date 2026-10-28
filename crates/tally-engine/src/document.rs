@@ -208,6 +208,12 @@ impl Document {
     }
 
     /// Applies a transaction as one undo step.
+    ///
+    /// With a `group` of two or more sheets the group ops run on every
+    /// sheet of the group ([`crate::group`]) and the transaction is
+    /// all-or-nothing: when an op fails (an error, not a warning or
+    /// notice), every change is reverted and only the errors are
+    /// returned (op indexes are those of `tx.ops`).
     pub fn apply(&mut self, tx: Transaction, clip: Option<&ClipSnapshot>) -> ApplyResult {
         let mut fx = Effects::default();
         let mut errors = Vec::new();
@@ -215,8 +221,29 @@ impl Document {
         let mut spent: u64 = 0;
         let mut meta_ops: u64 = 0;
         let mut note_bytes: u64 = 0;
-        for (i, op) in tx.ops.iter().enumerate() {
-            let cost = crate::ops::op_cost(&self.wb, op);
+        let group = match crate::group::group_sheets(&self.wb, &tx) {
+            Ok(g) => g,
+            Err(e) => {
+                let report = recalc(&mut self.wb);
+                let err = OpError {
+                    op_index: 0,
+                    code: e.code,
+                    message: e.message,
+                };
+                return self.result(report, fx, vec![err], None);
+            }
+        };
+        let atomic = group.is_some();
+        let active_before = self.wb.active_sheet;
+        let mut failed = false;
+        // Indexes into `errors` of the failures (not warnings).
+        let mut hard: Vec<usize> = Vec::new();
+        for step in crate::group::expand(&tx, group.as_deref()) {
+            let (i, op) = (step.index as usize, step.op.as_ref());
+            if atomic && failed {
+                break;
+            }
+            let cost = crate::ops::op_cost(&self.wb, op, clip);
             if spent.saturating_add(cost) > crate::ops::MAX_TX_CELLS {
                 let e = tally_api::ApiError::unsupported(format!(
                     "the change is too large for one step (more than {} cells); \
@@ -228,6 +255,8 @@ impl Document {
                     code: e.code,
                     message: e.message,
                 });
+                failed = true;
+                hard.push(errors.len() - 1);
                 continue;
             }
             if let Some(bytes) = crate::ops_v03::meta_op_cost(op) {
@@ -248,6 +277,8 @@ impl Document {
                         code: e.code,
                         message: e.message,
                     });
+                    failed = true;
+                    hard.push(errors.len() - 1);
                     continue;
                 }
             }
@@ -262,12 +293,21 @@ impl Document {
                         }
                     }
                     changes.extend(c);
+                    // A row/column change made on every group sheet moves
+                    // the 3D references over those sheets once.
+                    if let Some(sheets) = step.ends_group {
+                        changes.extend(crate::group::structure_3d(&mut self.wb, op, sheets));
+                    }
                 }
-                Err(e) => errors.push(OpError {
-                    op_index: i as u32,
-                    code: e.code,
-                    message: e.message,
-                }),
+                Err(e) => {
+                    failed = true;
+                    errors.push(OpError {
+                        op_index: i as u32,
+                        code: e.code,
+                        message: e.message,
+                    });
+                    hard.push(errors.len() - 1);
+                }
             }
             for w in fx.warnings.drain(..) {
                 errors.push(OpError {
@@ -283,6 +323,28 @@ impl Document {
                     message: w.message,
                 });
             }
+        }
+        if atomic && failed {
+            // All-or-nothing: undo what the transaction did so far.
+            for ch in std::mem::take(&mut changes).into_iter().rev() {
+                let _ = apply_change(&mut self.wb, ch, &mut fx);
+            }
+            self.wb.active_sheet = active_before;
+            fx.created = None;
+            fx.notice_errors.clear();
+            fx.replaced = None;
+            fx.fitted_rows = None;
+            let failures: Vec<OpError> = errors
+                .into_iter()
+                .enumerate()
+                .filter(|(k, _)| hard.contains(k))
+                .map(|(_, e)| e)
+                .collect();
+            // Nothing stands, so a reverted protection change neither clears
+            // the undo history nor dirties the document.
+            fx.clear_undo = false;
+            let report = self.recalc_and_filter(&mut fx);
+            return self.result(report, fx, failures, None);
         }
         let report = self.recalc_and_filter(&mut fx);
         if fx.clear_undo {

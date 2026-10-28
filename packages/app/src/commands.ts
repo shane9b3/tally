@@ -10,7 +10,7 @@ import { CURRENCY_FORMAT, NUMBER_FORMATS, PERCENT_FORMAT } from "./formats";
 import { shortcutFor } from "./keymap";
 import type { Command, CommandArgs } from "./registry";
 import type { RangeDto } from "@tally/bridge";
-import { useDocStore } from "./stores/docStore";
+import { isGrouped, useDocStore } from "./stores/docStore";
 import { useEditStore } from "./stores/editStore";
 import { useUiStore } from "./stores/uiStore";
 import { useDataStore } from "./stores/dataStore";
@@ -51,6 +51,79 @@ export function currencyTarget(args: CommandArgs | undefined, selection: RangeDt
   return col === null ? null : { r0: selection.r0, c0: col, r1: selection.r1, c1: col };
 }
 
+/**
+ * Commands that are off while several sheets are selected (AOO greys them
+ * out under a multi-sheet selection: ScTabViewShell::GetStateTable and the
+ * slots that test `GetSelectCount() > 1`). The toolbar, the menus, the
+ * palette and the keymap all go through the registry, so this list is the
+ * one guard; the cell context menu reads it too.
+ */
+export const GROUP_DISABLED_COMMANDS: readonly string[] = [
+  // Sort
+  "data.sortAsc",
+  "data.sortDesc",
+  "data.sort",
+  "data.sortOptions",
+  // Filters
+  "data.filter",
+  "filter.byColumn",
+  "data.standardFilter",
+  "data.advancedFilter",
+  "data.resetFilter",
+  "data.refreshFilter",
+  "data.clearFilters",
+  // Data tools
+  "data.subtotals",
+  "data.dataPilot",
+  "data.consolidate",
+  "data.textToColumns",
+  "data.removeDuplicates",
+  "data.multipleOperations",
+  "format.autoFormat",
+  "tools.scenarios",
+  "tools.solver",
+  "tools.goalSeek",
+  // Rules and links edited by id on the active sheet (new CF / validity rules stay group edits)
+  "format.colorByValue",
+  "insert.hyperlink",
+  "insert.removeHyperlink",
+  // Objects
+  "insert.chart",
+  "chart.byColumn",
+  "insert.image",
+  // Names and database ranges
+  "data.defineName",
+  "data.defineDatabaseRange",
+  "data.createNamesFromLabels",
+  // Sheets
+  "sheet.insert",
+  "sheet.rename",
+];
+
+/**
+ * Wraps the {@link GROUP_DISABLED_COMMANDS} so they are disabled while
+ * `grouped()`, with a reason saying why (their own reason otherwise).
+ */
+export function guardGroup(cmds: Command[], grouped: () => boolean = isGrouped): Command[] {
+  const off = new Set(GROUP_DISABLED_COMMANDS);
+  const why = t("msg.reason.sheetsGrouped", "Not available with several sheets selected");
+  return cmds.map((c) => {
+    if (!off.has(c.id)) return c;
+    const own = c.enabled;
+    const ownReason = Object.getOwnPropertyDescriptor(c, "reason");
+    const guarded = copyCommand(c, { enabled: () => !grouped() && (own?.() ?? true) });
+    Object.defineProperty(guarded, "reason", { enumerable: true, configurable: true, get: () => (grouped() ? why : ownReason?.get ? ownReason.get.call(c) : ownReason?.value) });
+    return guarded;
+  });
+}
+
+/** A copy of a command with `patch` applied, keeping getters (a computed `reason`) live. */
+function copyCommand(c: Command, patch: Partial<Command>): Command {
+  const out = Object.defineProperties({}, Object.getOwnPropertyDescriptors(c)) as Command;
+  for (const [k, v] of Object.entries(patch)) Object.defineProperty(out, k, { value: v, enumerable: true, configurable: true, writable: true });
+  return out;
+}
+
 /** Hooks the UI provides for commands that need a component (rename prompt, about). */
 export interface CommandUi {
   renameActiveSheet(): void;
@@ -74,8 +147,9 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
   const w5 = { enabled: () => false, reason: t("msg.reason.wave5", WAVE5_SOON) };
   const dialog = useUiStore.getState;
   const hasFilter = (): boolean => useDataStore.getState().filter !== null;
+  const grouped = isGrouped;
   // W5-6E: every title goes through `t("cmd.<id>")` (the English literal stays the fallback).
-  return localizeTitles([
+  return guardGroup(localizeTitles([
     // Edit
     { id: "edit.undo", title: "Undo", kind: "Edit", keywords: ["revert", "back"], ...sc("edit.undo"), enabled: () => editing() || undo().undo.canUndo, run: ctl.undoAny },
     { id: "edit.redo", title: "Redo", kind: "Edit", keywords: ["again"], ...sc("edit.redo"), enabled: () => editing() || undo().undo.canRedo, run: ctl.redoAny },
@@ -99,6 +173,19 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "edit.findPrev", title: "Find previous", kind: "Edit", hidden: true, ...sc("edit.findPrev"), run: () => ctl.findStep(-1) },
     { id: "edit.fillDown", title: "Fill down", kind: "Edit", keywords: ["copy down", "series"], ...sc("edit.fillDown"), ...notEditing, run: () => ctl.fillDir("down") },
     { id: "edit.fillRight", title: "Fill right", kind: "Edit", keywords: ["copy right", "series"], ...sc("edit.fillRight"), ...notEditing, run: () => ctl.fillDir("right") },
+    {
+      id: "edit.fillSheet",
+      title: "Fill sheets…",
+      kind: "Edit",
+      keywords: ["copy to sheets", "selected sheets", "group"],
+      // Only with several sheets selected (AOO Edit ▸ Fill ▸ Sheet); the dialog is data/FillSheetDialog.tsx.
+      enabled: () => grouped() && !editing() && ctl.ranges.length === 1,
+      // AOO refuses a multiple selection ("This function cannot be used with multiple selections").
+      get reason() {
+        return grouped() ? t("msg.reason.multiSelection", "This function cannot be used with multiple selections") : t("msg.reason.selectSheets", "Select two or more sheets first");
+      },
+      run: () => dialog().openDialog({ kind: "fillSheet" }),
+    },
     { id: "edit.cancelClip", title: "Cancel copy", kind: "Edit", hidden: true, ...sc("edit.cancelClip"), run: ctl.cancelClip },
     // Format
     { id: "format.bold", title: "Bold", kind: "Format", keywords: ["strong", "weight"], ...sc("format.bold"), run: () => ctl.toggleStyle("bold") },
@@ -193,13 +280,26 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
       title: "Delete sheet",
       kind: "Sheet",
       keywords: ["remove tab"],
-      enabled: () => (undo().info?.sheets.length ?? 0) > 1,
-      run: async () => void (await ctl.deleteSheet(ctl.sheet)),
+      // With several sheets selected, deletes them all unless that would leave none.
+      enabled: () => (undo().info?.sheets.filter((s) => !s.hidden).length ?? 0) > Math.max(1, undo().groupSheets.length),
+      run: async () => void (await ctl.deleteSelectedSheets()),
     },
     { id: "sheet.moveLeft", title: "Move sheet left", kind: "Sheet", keywords: ["reorder", "tab"], run: () => ctl.moveSheetBy(-1) },
     { id: "sheet.moveRight", title: "Move sheet right", kind: "Sheet", keywords: ["reorder", "tab"], run: () => ctl.moveSheetBy(1) },
     { id: "sheet.next", title: "Next sheet", kind: "Sheet", ...sc("sheet.next"), run: () => ctl.stepSheet(1) },
     { id: "sheet.prev", title: "Previous sheet", kind: "Sheet", ...sc("sheet.prev"), run: () => ctl.stepSheet(-1) },
+    { id: "sheet.selectNext", title: "Add next sheet to selection", kind: "Sheet", keywords: ["select sheets", "group", "multiple"], ...sc("sheet.selectNext"), run: () => ctl.selectStep(1) },
+    { id: "sheet.selectPrev", title: "Add previous sheet to selection", kind: "Sheet", keywords: ["select sheets", "group", "multiple"], ...sc("sheet.selectPrev"), run: () => ctl.selectStep(-1) },
+    {
+      id: "sheet.selectAll",
+      title: "Select all sheets",
+      kind: "Sheet",
+      keywords: ["group", "multiple", "every sheet"],
+      enabled: () => (undo().info?.sheets.filter((s) => !s.hidden).length ?? 0) > 1,
+      reason: t("msg.reason.oneSheet", "There is only one visible sheet"),
+      run: ctl.selectAllSheets,
+    },
+    { id: "sheet.deselectAll", title: "Deselect all sheets", kind: "Sheet", keywords: ["ungroup sheets", "single sheet"], enabled: grouped, reason: t("msg.reason.oneSheetSelected", "Only one sheet is selected"), run: ctl.deselectAllSheets },
     // File
     { id: "file.new", title: "New workbook", kind: "File", keywords: ["create", "blank"], ...sc("file.new"), run: ctl.newWorkbook },
     { id: "file.open", title: "Open…", kind: "File", keywords: ["load", "file"], ...sc("file.open"), run: ctl.openDialog },
@@ -363,7 +463,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     // Help
     { id: "help.shortcuts", title: "Keyboard shortcuts", kind: "Help", keywords: ["keys", "hotkeys", "cheat sheet"], ...sc("help.shortcuts"), run: () => useUiStore.getState().setShortcuts(!useUiStore.getState().shortcutsOpen) },
     { id: "help.about", title: "About Tally", kind: "Help", run: () => ui.showAbout() },
-  ]);
+  ]));
 }
 
 /** The document-tab commands (enabled only with the desktop tab shell). */
@@ -391,6 +491,6 @@ function windowCommands(ctl: AppController, sc: (id: string) => { shortcut?: str
 export function localizeTitles(cmds: Command[]): Command[] {
   return cmds.map((c) => {
     const title = t(`cmd.${c.id}`, c.title);
-    return title === c.title ? c : { ...c, title };
+    return title === c.title ? c : copyCommand(c, { title });
   });
 }

@@ -263,11 +263,20 @@ export class V3Features {
     return this.ctl.apply(label, [{ type: "addConditionalFormat", sheet: this.sheet, ranges: ranges.map((r) => ({ ...r })), rules }]);
   }
 
+  /** Existing rules are per sheet: editing them by id is off with several sheets selected. */
+  private refuseGrouped(): boolean {
+    if (!this.ctl.grouped) return false;
+    useUiStore.getState().pushToast("info", t("msg.reason.sheetsGrouped", "Not available with several sheets selected"));
+    return true;
+  }
+
   updateConditionalFormat(id: number, ranges: RangeDto[], rules: CfRuleDto[]): Promise<ApplyResult | null> {
+    if (this.refuseGrouped()) return Promise.resolve(null);
     return this.ctl.apply(t("msg.undo.editConditionalFormatting", "Edit conditional formatting"), [{ type: "updateConditionalFormat", sheet: this.sheet, id, ranges: ranges.map((r) => ({ ...r })), rules }]);
   }
 
   deleteConditionalFormat(id: number): Promise<ApplyResult | null> {
+    if (this.refuseGrouped()) return Promise.resolve(null);
     return this.ctl.apply(t("msg.undo.deleteConditionalFormatting", "Delete conditional formatting"), [{ type: "deleteConditionalFormat", sheet: this.sheet, id }]);
   }
 
@@ -276,6 +285,7 @@ export class V3Features {
    * step): every format is deleted and re-added in `order`.
    */
   reorderConditionalFormats(order: readonly ConditionalFormatDto[]): Promise<ApplyResult | null> {
+    if (this.refuseGrouped()) return Promise.resolve(null);
     const sheet = this.sheet;
     const ops: Op[] = [
       ...order.map((cf): Op => ({ type: "deleteConditionalFormat", sheet, id: cf.id })),
@@ -323,12 +333,14 @@ export class V3Features {
   }
 
   async applyValidation(v: ValidationDto, existing: boolean): Promise<void> {
+    if (existing && this.refuseGrouped()) return;
     const sheet = this.sheet;
     const ops: Op[] = existing ? [{ type: "updateValidation", sheet, id: v.id, validation: v }] : [{ type: "addValidation", sheet, validation: v }];
     await this.ctl.apply(t("v3.dvTitle", "Data validation"), ops);
   }
 
   async clearValidation(id: number): Promise<void> {
+    if (this.refuseGrouped()) return;
     await this.ctl.apply(t("msg.undo.removeValidation", "Remove validation"), [{ type: "deleteValidation", sheet: this.sheet, id }]);
   }
 
@@ -480,7 +492,8 @@ export class V3Features {
     // leading +/- ("+1-555-1234") stays text instead of becoming a formula (P18).
     if (display !== "" && display !== (current?.input ?? "")) ops.push({ type: "setRangeInputs", sheet, r: cell.r, c: cell.c, rows: [[display]] });
     ops.push({ type: "setLink", sheet, r: cell.r, c: cell.c, url });
-    const res = await this.ctl.apply(t("hyperlink.title", "Hyperlink"), ops);
+    // A link is set on the active sheet only (Insert Hyperlink is off with several sheets selected).
+    const res = await this.ctl.apply(t("hyperlink.title", "Hyperlink"), ops, undefined, false, { group: false });
     return res !== null && res.errors.length === 0;
   }
 
@@ -574,11 +587,14 @@ export class V3Features {
   async applyGoalSeek(variableCell: CellPos, value: number): Promise<void> {
     const input = String(Number(value.toPrecision(15)));
     const cell = { ...variableCell };
-    await this.ctl.apply(t("v3.goalTitle", "Goal seek"), [{ type: "setCellInput", sheet: this.sheet, r: cell.r, c: cell.c, input }], {
-      range: { r0: cell.r, c0: cell.c, r1: cell.r, c1: cell.c },
-      active: cell,
-      anchor: cell,
-    });
+    // One cell of one sheet, never a group edit (Goal Seek is off with several sheets selected).
+    await this.ctl.apply(
+      t("v3.goalTitle", "Goal seek"),
+      [{ type: "setCellInput", sheet: this.sheet, r: cell.r, c: cell.c, input }],
+      { range: { r0: cell.r, c0: cell.c, r1: cell.r, c1: cell.c }, active: cell, anchor: cell },
+      false,
+      { group: false },
+    );
   }
 
   // -- document properties ---------------------------------------------------------------------------

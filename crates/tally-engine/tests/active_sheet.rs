@@ -15,6 +15,7 @@ fn tx(ops: Vec<Op>) -> Transaction {
         label: Some("test".into()),
         selection_before: None,
         selection_after: None,
+        group: None,
     }
 }
 

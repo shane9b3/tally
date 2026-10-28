@@ -39,7 +39,7 @@ pub const MAX_TX_CELLS: u64 = 50_000_000;
 /// moved; for clears and sorts the used part of the range; for style ops
 /// one per column (styles are stored as column runs); Replace All counts
 /// its per-op maximum ([`crate::find::MAX_REPLACE`]).
-pub fn op_cost(wb: &Workbook, op: &Op) -> u64 {
+pub fn op_cost(wb: &Workbook, op: &Op, clip: Option<&ClipSnapshot>) -> u64 {
     let area = |r: &RangeDto| -> u64 {
         if r.r1 < r.r0 || r.c1 < r.c0 {
             return 0;
@@ -65,14 +65,51 @@ pub fn op_cost(wb: &Workbook, op: &Op) -> u64 {
         Op::SetArrayFormula { range, .. } => area(range),
         Op::MoveRange { from, .. } => area(from).saturating_mul(2),
         Op::SortRange { sheet, range, .. } => used(*sheet, range),
-        Op::Paste { target, .. } | Op::PasteSpecial { target, .. } => {
-            area(target).min(MAX_OP_CELLS)
+        // A small target still receives the whole block (review M3).
+        Op::Paste {
+            target, payload, ..
         }
+        | Op::PasteSpecial {
+            target, payload, ..
+        } => area(target)
+            .min(MAX_OP_CELLS)
+            .max(paste_block_cells(payload, clip)),
         Op::FillRange { target, .. } => area(target),
-        Op::ReplaceAll { .. } => crate::find::MAX_REPLACE as u64,
+        Op::FillSheets {
+            sheet, ranges, to, ..
+        } => crate::group::fill_sheets_cost(wb, *sheet, ranges, to),
+        // At most MAX_REPLACE cells, and never more than the sheet holds,
+        // so a Replace over a large group is not "too large" (review L3).
+        Op::ReplaceAll { sheet, .. } => {
+            let cells = match sheet {
+                Some(s) => wb.sheet(*s).map_or(0, |s| s.cell_count() as u64),
+                None => wb.sheets.iter().map(|s| s.cell_count() as u64).sum(),
+            };
+            cells.min(crate::find::MAX_REPLACE as u64)
+        }
         _ => crate::tools::tool_op_cost(wb, op).unwrap_or(1),
     };
     cost.max(1)
+}
+
+/// The cells of a paste payload's block: the snapshot's cells for the
+/// engine's own clipboard, rows × columns for TSV (counted without parsing:
+/// lines × the most tabs on one line).
+fn paste_block_cells(payload: &tally_api::PastePayload, clip: Option<&ClipSnapshot>) -> u64 {
+    match payload {
+        tally_api::PastePayload::Internal { token } => clip
+            .filter(|c| c.token == *token)
+            .map_or(0, |c| c.cells.len() as u64),
+        tally_api::PastePayload::Tsv { text } => {
+            let mut rows: u64 = 0;
+            let mut cols: u64 = 0;
+            for line in text.split('\n') {
+                rows += 1;
+                cols = cols.max(line.bytes().filter(|b| *b == b'\t').count() as u64 + 1);
+            }
+            rows.saturating_mul(cols)
+        }
+    }
 }
 
 /// Error code: the op would change part of an array formula block.
@@ -336,6 +373,15 @@ pub fn apply_op(
     clip: Option<&ClipSnapshot>,
     fx: &mut Effects,
 ) -> Result<Vec<Change>, ApiError> {
+    if let Op::FillSheets {
+        sheet,
+        ranges,
+        to,
+        options,
+    } = op
+    {
+        return crate::group::fill_sheets(wb, *sheet, ranges, to, options, fx);
+    }
     if let Some(r) = crate::ops_v03::apply(wb, op, fx) {
         return r;
     }
@@ -437,7 +483,7 @@ impl BlockDest {
 }
 
 /// Undoes `changes` (an op that must not stand).
-fn revert(wb: &mut Workbook, changes: Vec<Change>, fx: &mut Effects) {
+pub(crate) fn revert(wb: &mut Workbook, changes: Vec<Change>, fx: &mut Effects) {
     for ch in changes.into_iter().rev() {
         let _ = apply_change(wb, ch, fx);
     }

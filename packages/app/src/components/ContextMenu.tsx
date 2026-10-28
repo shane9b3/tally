@@ -31,6 +31,8 @@ function Menu({ menu }: { menu: ContextMenuState }) {
   const hasFilter = useDataStore.getState().filter !== null;
   const merged = ctl.selectionIsMerged();
   const single = nRows === 1 && nCols === 1;
+  // Off with several sheets selected (commands.ts GROUP_DISABLED_COMMANDS).
+  const off = (command: string) => ctl.registry.has(command) && !ctl.registry.isEnabled(command);
   let items: PopoverItem[];
 
   if (menu.area === "rowHeader") {
@@ -55,8 +57,8 @@ function Menu({ menu }: { menu: ContextMenuState }) {
       { id: "delete", label: t("shell.ctxDelete", "Delete {what}", { what: cols }), danger: true, separator: true, onSelect: run(ctl.deleteCols) },
       { id: "hide", label: t("shell.ctxHide", "Hide {what}", { what: cols }), onSelect: run(() => ctl.setHidden("col", true)) },
       { id: "show", label: t("shell.ctxShowCols", "Show hidden columns"), onSelect: run(() => ctl.setHidden("col", false)) },
-      { id: "sortAsc", label: t("shell.ctxSortAsc", "Sort A → Z"), separator: true, onSelect: run(() => ctl.sortByActive(true)) },
-      { id: "sortDesc", label: t("shell.ctxSortDesc", "Sort Z → A"), onSelect: run(() => ctl.sortByActive(false)) },
+      { id: "sortAsc", label: t("shell.ctxSortAsc", "Sort A → Z"), separator: true, disabled: off("data.sortAsc"), onSelect: run(() => ctl.sortByActive(true)) },
+      { id: "sortDesc", label: t("shell.ctxSortDesc", "Sort Z → A"), disabled: off("data.sortDesc"), onSelect: run(() => ctl.sortByActive(false)) },
       { id: "resize", label: t("cmd.sheet.colWidth", "Column width…"), separator: true, onSelect: () => openResize("col") },
       { id: "fit", label: t("shell.ctxFitWidth", "Fit width to contents"), onSelect: run(() => ctl.autoFit("col", range.c0, range.c1)) },
       { id: "pageBreak", label: t("shell.ctxPageBreakLeft", "Insert page break left"), onSelect: run(() => ctl.v3.insertPageBreak("col")) },
@@ -71,13 +73,13 @@ function Menu({ menu }: { menu: ContextMenuState }) {
       { id: "pasteSpecial", label: t("cmd.edit.pasteSpecial", "Paste special…"), hint: "⌥⌘V", onSelect: () => dialog({ kind: "pasteSpecial" }) },
       { id: "clear", label: t("cmd.edit.delete", "Clear contents"), hint: "⌫", separator: true, onSelect: run(ctl.clearSelection) },
       { id: "clearFormats", label: t("cmd.edit.clearFormats", "Clear formats"), onSelect: run(ctl.clearFormats) },
-      { id: "sortAsc", label: t("shell.ctxSortAsc", "Sort A → Z"), separator: true, onSelect: run(() => ctl.sortByActive(true)) },
-      { id: "sortDesc", label: t("shell.ctxSortDesc", "Sort Z → A"), onSelect: run(() => ctl.sortByActive(false)) },
-      { id: "filter", label: hasFilter ? t("shell.ctxRemoveAutoFilter", "Remove AutoFilter") : t("shell.ctxAutoFilter", "AutoFilter"), onSelect: run(ctl.toggleAutoFilter) },
+      { id: "sortAsc", label: t("shell.ctxSortAsc", "Sort A → Z"), separator: true, disabled: off("data.sortAsc"), onSelect: run(() => ctl.sortByActive(true)) },
+      { id: "sortDesc", label: t("shell.ctxSortDesc", "Sort Z → A"), disabled: off("data.sortDesc"), onSelect: run(() => ctl.sortByActive(false)) },
+      { id: "filter", label: hasFilter ? t("shell.ctxRemoveAutoFilter", "Remove AutoFilter") : t("shell.ctxAutoFilter", "AutoFilter"), disabled: off("data.filter"), onSelect: run(ctl.toggleAutoFilter) },
       merged
         ? { id: "unmerge", label: t("cmd.format.unmerge", "Unmerge cells"), onSelect: run(ctl.unmergeCells) }
         : { id: "merge", label: t("cmd.format.merge", "Merge cells"), disabled: single, title: single ? t("shell.ctxSelectTwo", "Select two or more cells") : undefined, onSelect: run(ctl.mergeCells) },
-      { id: "defineName", label: t("cmd.data.defineName", "Define name…"), onSelect: () => ctl.openDefineName() },
+      { id: "defineName", label: t("cmd.data.defineName", "Define name…"), disabled: off("data.defineName"), onSelect: () => ctl.openDefineName() },
       ...cellExtras(),
       ...ctl.w56.cellMenuItems(menu.cell),
       { id: "insertRows", label: t("shell.ctxInsertAbove", "Insert {what} above", { what: rows }), separator: true, onSelect: run(() => ctl.insertRows("before")) },
@@ -96,10 +98,10 @@ function Menu({ menu }: { menu: ContextMenuState }) {
       { id: "note", label: hasNote ? t("shell.ctxEditNote", "Edit note…") : t("shell.ctxInsertNote", "Insert note…"), hint: "⇧F2", separator: true, onSelect: () => void ctl.v3.editNote(menu.cell) },
     ];
     if (hasNote) out.push({ id: "deleteNote", label: t("cmd.insert.deleteNote", "Delete note"), onSelect: run(() => ctl.v3.deleteNote(menu.cell)) });
-    out.push({ id: "hyperlink", label: hasLink ? t("shell.ctxEditLink", "Edit hyperlink…") : t("cmd.insert.hyperlink", "Hyperlink…"), hint: "⌥⌘K", onSelect: () => void ctl.v3.openHyperlink() });
+    out.push({ id: "hyperlink", label: hasLink ? t("shell.ctxEditLink", "Edit hyperlink…") : t("cmd.insert.hyperlink", "Hyperlink…"), hint: "⌥⌘K", disabled: off("insert.hyperlink"), onSelect: () => void ctl.v3.openHyperlink() });
     if (hasLink) {
       out.push({ id: "openLink", label: t("shell.ctxOpenLink", "Open hyperlink"), onSelect: () => view?.link && void ctl.v3.openLink(view.link) });
-      out.push({ id: "removeLink", label: t("cmd.insert.removeHyperlink", "Remove hyperlink"), onSelect: run(() => ctl.v3.removeLink()) });
+      out.push({ id: "removeLink", label: t("cmd.insert.removeHyperlink", "Remove hyperlink"), disabled: off("insert.removeHyperlink"), onSelect: run(() => ctl.v3.removeLink()) });
     }
     out.push(
       { id: "validation", label: t("cmd.data.validation", "Data validation…"), onSelect: () => void ctl.v3.openValidation() },

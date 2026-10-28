@@ -739,7 +739,12 @@ fn area_has_merges(wb: &Workbook, area: &CellRange) -> bool {
 /// number (or empty) target, and with a formula target as
 /// `=(formula) op source`; text targets are kept; non-numeric sources
 /// replace the target.
-fn paste_arithmetic(wb: &mut Workbook, addr: CellAddr, cell: &ClipCell, op: PasteOperation) {
+pub(crate) fn paste_arithmetic(
+    wb: &mut Workbook,
+    addr: CellAddr,
+    cell: &ClipCell,
+    op: PasteOperation,
+) {
     if cell.value.is_empty() {
         return;
     }

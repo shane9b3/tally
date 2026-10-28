@@ -59,6 +59,7 @@ pub mod find;
 pub mod fonts;
 pub mod formula_cells;
 pub mod goalseek;
+pub mod group;
 pub mod images;
 pub mod lookup_cache;
 pub mod moves;

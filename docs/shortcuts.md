@@ -44,6 +44,8 @@ Generated from `packages/app/src/keymap.ts` (`BINDINGS`, `GRID_KEYS`) and `packa
 | Esc | Cancel copy | `edit.cancelClip` |
 | ⌃PgDn | Next sheet | `sheet.next` |
 | ⌃PgUp | Previous sheet | `sheet.prev` |
+| ⇧⌃PgDn | Add next sheet to selection | `sheet.selectNext` |
+| ⇧⌃PgUp | Add previous sheet to selection | `sheet.selectPrev` |
 | ⇧F2 / ⌥⌘C | Insert / edit note | `insert.note` |
 | ⌥⌘K | Hyperlink… | `insert.hyperlink` |
 | ⌘F2 | Function… | `insert.function` |

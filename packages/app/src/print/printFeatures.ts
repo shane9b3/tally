@@ -6,7 +6,8 @@
  * which is shown as a toast.
  *
  * All three cover the same print range (AOO's File ▸ Print ▸ Range): the
- * selected sheets (the active one; the default), all sheets or the selected
+ * selected sheets (the default: the multi-sheet selection, else the active
+ * one; the preview opens at the active sheet's first page), all sheets or the selected
  * cells, plus an optional page list. The options always name the sheet the
  * user is on (`activeSheet`): the engine's own active sheet only follows
  * sheet switches that went through an edit. The range is remembered for the
@@ -74,7 +75,7 @@ export class PrintFeatures {
   optionsFor(scope: PrintScope, pageSpec: string): PrintOptionsDto {
     const parsed = parsePageRanges(pageSpec);
     const sel = selectionRanges(useSelectionStore.getState().selection);
-    return printOptionsFor(scope, parsed.ok ? parsed.ranges : null, this.ctl.sheet, sel);
+    return printOptionsFor(scope, parsed.ok ? parsed.ranges : null, this.ctl.sheet, sel, useDocStore.getState().groupSheets);
   }
 
   // -- preview ------------------------------------------------------------------

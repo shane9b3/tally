@@ -20,8 +20,12 @@
  * Demo only: the real engine implements all of this natively.
  */
 import {
+  expandGroup,
+  groupOf,
+  groupSheets,
   MockClient,
   type ApplyResult,
+  type FillSheetsOp,
   type AutoFilterInfo,
   type BordersDto,
   type BordersPatch,
@@ -270,6 +274,28 @@ function matcher(q: FindQuery): ((s: string) => boolean) | null {
     return (s) => re.test(s);
   } catch {
     return null;
+  }
+}
+
+/** Copies the notes of a `fillSheets` op's ranges to its target sheets (side model). */
+function fillNotes(x: V3Ext, op: FillSheetsOp): void {
+  const from = x.notes[op.sheet] ?? {};
+  // Like the engine: the target's notes go only when replacing; then the source's are copied.
+  const replace = !op.options.skipEmpty && op.options.operation === "none";
+  for (const sheet of new Set(op.to)) {
+    if (sheet === op.sheet) continue;
+    const to = { ...(x.notes[sheet] ?? {}) };
+    for (const rg of op.ranges) {
+      for (let r = rg.r0; r <= Math.min(rg.r1, rg.r0 + 4000); r++) {
+        for (let c = rg.c0; c <= Math.min(rg.c1, rg.c0 + 255); c++) {
+          const k = cellKey(r, c);
+          const n = from[k];
+          if (n) to[k] = { ...n };
+          else if (replace) delete to[k];
+        }
+      }
+    }
+    x.notes[sheet] = to;
   }
 }
 
@@ -891,6 +917,72 @@ export class WebMockClient extends MockClient {
 
   override async apply(doc: DocId, tx: Transaction): Promise<ApplyResult> {
     this.recorded.push(...tx.ops.map((op) => structuredClone(op)));
+    const group = groupOf(tx);
+    return group ? this.applyGroup(doc, tx, group) : this.applyOnce(doc, tx);
+  }
+
+  /**
+   * A transaction on grouped sheets (multi-sheet selection), like the
+   * engine: whitelisted ops on `group[0]` repeat on every group sheet, the
+   * whole transaction is all-or-nothing (errors keep the original op index)
+   * and one undo step.
+   */
+  private async applyGroup(doc: DocId, tx: Transaction, raw: number[]): Promise<ApplyResult> {
+    // The engine's group_sheets: unknown ids refuse the whole transaction at op 0;
+    // duplicates and hidden sheets (but group[0]) drop out.
+    const known = this.sheetOrder.get(doc) ?? [this.firstSheet(doc)];
+    const hidden = this.docExt(doc).w56.hiddenSheets;
+    let group: number[];
+    try {
+      group = groupSheets({ ...tx, group: raw }, (id) => (known.includes(id) ? { hidden: hidden.includes(id) } : null)) ?? raw;
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      const clean = await this.applyOnce(doc, { ...tx, group: null, ops: [] });
+      return { ...clean, errors: [{ opIndex: 0, code: err.code ?? "internal", message: err.message ?? String(e) }] };
+    }
+    const expanded = expandGroup(tx, group);
+    const cp = {
+      base: this.checkpoint(doc),
+      ext: JSON.stringify(this.docExt(doc)),
+      extUndo: [...(this.extUndo.get(doc) ?? [])],
+      extRedo: [...(this.extRedo.get(doc) ?? [])],
+      version: this.versions.get(doc),
+      order: this.sheetOrder.get(doc),
+      names: this.sheetNames.get(doc),
+    };
+    const inner: Transaction = { ...tx, group: null, ops: expanded.map((e) => e.op) };
+    const res = await this.applyOnce(doc, inner);
+    const remap = (e: OpError): OpError => ({ ...e, opIndex: expanded[e.opIndex]?.index ?? e.opIndex });
+    const errors = res.errors.map(remap);
+    if (errors.length > 0) {
+      this.rollback(doc, cp.base);
+      this.ext.set(doc, JSON.parse(cp.ext) as DocExt);
+      this.extUndo.set(doc, cp.extUndo);
+      this.extRedo.set(doc, cp.extRedo);
+      if (cp.version === undefined) this.versions.delete(doc);
+      else this.versions.set(doc, cp.version);
+      if (cp.order) this.sheetOrder.set(doc, cp.order);
+      if (cp.names) this.sheetNames.set(doc, cp.names);
+      const clean = await this.applyOnce(doc, { ...tx, group: null, ops: [] });
+      return { ...clean, errors };
+    }
+    // One undo step: the mock's steps fold into one, the side model's into its state before.
+    if (this.squashUndo(doc, cp.base, tx) > 0) {
+      this.extUndo.set(doc, [...cp.extUndo, cp.ext]);
+      this.extRedo.set(doc, []);
+    }
+    // Structural steps report only their last change: refresh every group sheet.
+    const changed: SheetRanges[] = [...res.changed];
+    for (const sheet of group) {
+      const used = (await super.sheetLayout(doc, sheet).catch(() => null))?.used;
+      if (used) changed.push({ sheet, ranges: [used] });
+    }
+    const out: ApplyResult = { ...res, errors, changed, layoutChanged: [...new Set([...res.layoutChanged, ...group])], undo: this.undoInfo(doc) };
+    if (res.warnings) out.warnings = res.warnings.map(remap);
+    return out;
+  }
+
+  private async applyOnce(doc: DocId, tx: Transaction): Promise<ApplyResult> {
     // v0.3 first: protection and validation checks, and side-model ops.
     const before = JSON.stringify(this.docExt(doc));
     const pre = await this.preV3(doc, tx.ops);
@@ -935,6 +1027,17 @@ export class WebMockClient extends MockClient {
     const objects = new Set<number>();
     const chartsChanged = new Map<number, number[]>();
     for (const [i, op] of ops.entries()) {
+      // Edit ▸ Fill ▸ Sheets: refused when a target sheet's cells are protected; notes live here.
+      if (op.type === "fillSheets") {
+        const refusal = op.to.map((sheet) => protectionRefusal(x, { type: "clear", sheet, ranges: op.ranges, what: "all" })).find((m) => m !== null);
+        if (refusal) {
+          errors.push({ opIndex: i, code: "protected", message: refusal });
+          continue;
+        }
+        if (op.options.notes) fillNotes(x, op);
+        kept.push({ op, index: i });
+        continue;
+      }
       // W5-6 data tools, pivots, styles and settings (emulated in mockW56.ts).
       const w56 = await applyW56Op(this.docExt(doc).w56, op, this.w56Ctx(doc));
       if (w56.kind === "error") {

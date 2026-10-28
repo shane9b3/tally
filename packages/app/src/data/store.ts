@@ -41,7 +41,8 @@ export type W56Dialog =
   | { kind: "multipleOperations"; range: RangeDto }
   | { kind: "insertCells"; range: RangeDto }
   | { kind: "deleteCells"; range: RangeDto }
-  | { kind: "copySheet"; sheet: number; name: string }
+  /** `sheets`: several selected sheets, copied as a block with engine names. */
+  | { kind: "copySheet"; sheet: number; name: string; sheets?: number[] }
   | { kind: "showSheet"; hidden: { id: number; name: string }[] }
   | { kind: "tabColor"; sheet: number; color: number | null }
   | { kind: "showOutlineLevel"; axis: "rows" | "cols"; max: number }

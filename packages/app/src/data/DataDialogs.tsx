@@ -779,15 +779,28 @@ export function CopySheetDialog({ d }: { d: D<"copySheet"> }) {
   const sheets = useDocStore((s) => s.info?.sheets ?? []);
   const [name, setName] = useState(d.name);
   const [index, setIndex] = useState<string>("after");
-  const taken = sheets.some((s) => s.name.toLowerCase() === name.trim().toLowerCase());
+  // Several selected sheets are copied as a block with the engine's names (no name field).
+  const group = d.sheets && d.sheets.length > 1 ? d.sheets : null;
+  const taken = !group && sheets.some((s) => s.name.toLowerCase() === name.trim().toLowerCase());
+  const at = index === "after" ? null : Number(index);
   return (
-    <W56Shell title={t("cmd.sheet.duplicate", "Copy sheet").replace(/…$/, "")} ok={t("dialog.ok", "OK")} testId="copy-sheet" valid={name.trim() !== "" && !taken} onSubmit={() => void ctl.w56.copySheet(d.sheet, name, index === "after" ? null : Number(index))}>
-      <Field label={t("dd.newName", "New name")}>
-        <input className={dlg.input} value={name} autoFocus onChange={(e) => setName(e.target.value)} data-testid="copy-sheet-name" />
-      </Field>
+    <W56Shell
+      title={t("cmd.sheet.duplicate", "Copy sheet").replace(/…$/, "")}
+      ok={t("dialog.ok", "OK")}
+      testId="copy-sheet"
+      valid={group ? true : name.trim() !== "" && !taken}
+      onSubmit={() => void (group ? ctl.w56.copySheets(group, at) : ctl.w56.copySheet(d.sheet, name, at))}
+    >
+      {group ? (
+        <p data-testid="copy-sheet-count">{t("sheetTabs.copyN", "Copy {n} sheets", { n: group.length })}</p>
+      ) : (
+        <Field label={t("dd.newName", "New name")}>
+          <input className={dlg.input} value={name} autoFocus onChange={(e) => setName(e.target.value)} data-testid="copy-sheet-name" />
+        </Field>
+      )}
       <Field label={t("dd.insertBefore", "Insert before")} className={dlg.gap}>
-        <select className={dlg.select} value={index} onChange={(e) => setIndex(e.target.value)}>
-          <option value="after">{t("dd.afterCurrentSheet", "After the current sheet")}</option>
+        <select className={dlg.select} value={index} autoFocus={group !== null} onChange={(e) => setIndex(e.target.value)}>
+          <option value="after">{group ? t("dd.afterSelectedSheets", "After the selected sheets") : t("dd.afterCurrentSheet", "After the current sheet")}</option>
           {sheets.map((s, i) => (
             <option key={s.id} value={String(i)}>
               {s.name}

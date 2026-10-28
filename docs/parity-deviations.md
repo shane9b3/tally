@@ -187,6 +187,9 @@ These are not deviations from AOO. They are listed so nobody "fixes" them.
 | U20 | Extras AOO lacks | n/a | Command palette, "At a glance" panel, assist (rule-based, no network), sidebar, light/dark themes, Remove Duplicates, sheet-local names | D (extensions) | `docs/architecture-plan.md` |
 | U21 | Hyperlinks | Click or Ctrl-click follows | `⌘`-click opens http/https/mailto through Rust only; a plain click selects | D (security) | `docs/security.md` |
 | U22 | Paste over data | Asks "You are pasting data into cells that already contain data" (Input option, on by default) | Done 2026-10-27: Yes / No confirmation (Escape = No, Yes is the default button and has the focus) for paste, Paste Special with contents and a same-sheet cut-paste; Options > Input "Show overwrite warning when pasting data", on by default. Not asked for formats-only or arithmetic Paste Special, nor for drag-drop (Tally has no cell drag-move) | fixed | `packages/app/src/controller.ts` `confirmPasteOverData` |
+| U23 | Formulas typed into a multi-sheet selection | Tab-relative sheet references (`$` omitted on the sheet) shift with each selected sheet | Tally has no tab-relative sheet references: unqualified references (`=A1`) point at each sheet, `Sheet9.B2` stays the same on every sheet. The whole group edit is all-or-nothing (AOO refuses it all on a protected sheet too). As in AOO, a reference over several sheets (`Sheet1.A5:Sheet3.A5`) moves on a row/column insert or delete only when the change covers all its sheets, once; Tally applies that pass to cell formulas and names, not to conditional-format, validation or chart ranges, nor to partial cell shifts (Insert/Delete Cells within a band) | D | `crates/tally-engine/src/group.rs`; `crates/tally-engine/tests/group.rs` |
+| U24 | Multi-sheet selection kept | Selected sheets are saved in the view settings (ODS `settings.xml`) and survive undo | The group is a UI state only: not saved (XLSX writes `tabSelected` on the active sheet only), and undo / redo do not restore it | D | `docs/file-formats.md`; `Transaction.group` |
+| U25 | Hidden sheets in a multi-sheet selection | Edits apply to every marked sheet | Hidden sheets are left out of the group (the engine drops them from `Transaction.group`; only the first sheet may be hidden) | D | `crates/tally-engine/src/group.rs` `group_sheets` |
 
 ## Counts
 
@@ -198,7 +201,7 @@ These are not deviations from AOO. They are listed so nobody "fixes" them.
 | Formatting and styles (section 4) | 16 |
 | Data tools, charts, objects (section 5) | 18 |
 | Printing (section 6) | 11 |
-| UI, shortcuts, platform (section 7) | 22 |
-| **Total** | **122** |
+| UI, shortcuts, platform (section 7) | 25 |
+| **Total** | **125** |
 
-Recounted 2026-10-27 after the inventory check added P15-P18, X24, G14-G16, T16-T18, R11 and U22 (the earlier table counted 14 P and 24 U entries; there were 13 and 21).
+Recounted 2026-10-27 after the inventory check added P15-P18, X24, G14-G16, T16-T18, R11 and U22, then U23-U25 on 2026-10-28 (the earlier table counted 14 P and 24 U entries; there were 13 and 21).

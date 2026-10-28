@@ -16,6 +16,7 @@ import type { DeleteContentsFlags } from "./DeleteContentsFlags";
 import type { Direction } from "./Direction";
 import type { DocPropertiesDto } from "./DocPropertiesDto";
 import type { FillMode } from "./FillMode";
+import type { FillSheetOptions } from "./FillSheetOptions";
 import type { FindQuery } from "./FindQuery";
 import type { ImageDto } from "./ImageDto";
 import type { NameLabelFlags } from "./NameLabelFlags";
@@ -1178,4 +1179,20 @@ lists: Array<Array<string>>, } | { "type": "setCalcSettings",
 /**
  * The settings.
  */
-settings: CalcSettingsDto, };
+settings: CalcSettingsDto, } | { "type": "fillSheets", 
+/**
+ * Source sheet (the active one).
+ */
+sheet: number, 
+/**
+ * Source ranges (the selection).
+ */
+ranges: Array<RangeDto>, 
+/**
+ * Target sheets (the other selected sheets).
+ */
+to: Array<number>, 
+/**
+ * What to copy and how.
+ */
+options: FillSheetOptions, };

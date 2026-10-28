@@ -162,6 +162,9 @@ conditional formats.
 
 - Sheets in order, hidden sheets (`state="hidden"`; the active sheet is
   never hidden), active sheet, tab colours, frozen panes.
+- Only the active sheet gets `sheetView tabSelected="1"`; a multi-sheet
+  selection (`Transaction.group`) is not saved in any format (parity
+  deviation U24).
 - Sheet names are made valid for Excel (31 characters, none of `[]:*?/\`,
   no leading/trailing `'`, not `History`, unique case-insensitively);
   formulas and names that refer to a renamed sheet use the new name. Each

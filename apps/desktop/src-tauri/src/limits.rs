@@ -38,8 +38,12 @@ pub const MAX_TSV: usize = 64 * 1024 * 1024;
 pub const MAX_RANGES: usize = 10_000;
 /// Most style ids in one `get_styles` call.
 pub const MAX_STYLE_IDS: usize = 65_536;
-/// Most ops in one transaction.
+/// Most ops in one transaction (after a multi-sheet selection repeats its
+/// group ops on every sheet).
 pub const MAX_OPS: usize = 100_000;
+/// Most sheets in a multi-sheet selection (`Transaction.group`) and in
+/// the targets of `fillSheets`.
+pub const MAX_GROUP_SHEETS: usize = 256;
 /// Most sort keys.
 pub const MAX_SORT_KEYS: usize = 64;
 /// Longest file path or template id.
@@ -441,7 +445,32 @@ pub fn transaction(tx: &Transaction) -> CmdResult<()> {
     {
         selection("the selection", s)?;
     }
-    let structural = tx
+    let group = tx.group.as_deref().unwrap_or_default();
+    if group.len() > MAX_GROUP_SHEETS {
+        return Err(bad(format!(
+            "too many sheets selected ({}; the limit is {MAX_GROUP_SHEETS})",
+            group.len()
+        )));
+    }
+    // How often the engine runs each op: group ops on the active sheet run
+    // on every selected sheet.
+    let times = |o: &Op| -> usize {
+        match group.first() {
+            Some(first)
+                if group.len() > 1 && tally_engine::group::group_sheet(o) == Some(*first) =>
+            {
+                group.len()
+            }
+            _ => 1,
+        }
+    };
+    let expanded: usize = tx.ops.iter().map(times).sum();
+    if expanded > MAX_OPS {
+        return Err(bad(format!(
+            "too many ops in one transaction once repeated on the selected sheets ({expanded}; the limit is {MAX_OPS})"
+        )));
+    }
+    let structural: usize = tx
         .ops
         .iter()
         .filter(|o| {
@@ -454,7 +483,8 @@ pub fn transaction(tx: &Transaction) -> CmdResult<()> {
                     | Op::CreateScenario { .. }
             )
         })
-        .count();
+        .map(times)
+        .sum();
     if structural > MAX_STRUCTURAL_OPS {
         return Err(bad(format!(
             "too many structural ops in one transaction ({structural}; the limit is {MAX_STRUCTURAL_OPS})"
@@ -525,6 +555,10 @@ fn typed_op(op: &Op) -> CmdResult<()> {
             text("the replacement", replace)
         }
         Op::Paste { payload, .. } | Op::PasteSpecial { payload, .. } => paste_payload(payload),
+        Op::FillSheets { to, .. } if to.len() > MAX_GROUP_SHEETS => Err(bad(format!(
+            "too many target sheets ({}; the limit is {MAX_GROUP_SHEETS})",
+            to.len()
+        ))),
         Op::SetPageBreak { axis, at, .. } => match axis {
             tally_api::BreakAxis::Row => row("the page break", *at),
             tally_api::BreakAxis::Col => col("the page break", *at),
@@ -651,6 +685,7 @@ mod tests {
             label: None,
             selection_before: None,
             selection_after: None,
+            group: None,
         }
     }
 
@@ -991,6 +1026,59 @@ mod tests {
         };
         assert!(transaction(&tx(names(MAX_STRUCTURAL_OPS))).is_ok());
         assert!(transaction(&tx(names(MAX_STRUCTURAL_OPS + 1))).is_err());
+    }
+
+    #[test]
+    fn groups_count_every_repeated_op() {
+        let grouped = |ops: Vec<Op>, group: Vec<u32>| Transaction {
+            group: Some(group),
+            ..tx(ops)
+        };
+        let inputs = |n: usize| (0..n).map(|_| input("x".into())).collect::<Vec<_>>();
+        // 100,000 ops on a 40-sheet group would run 4,000,000 times.
+        let g40: Vec<u32> = (1..=40).collect();
+        assert!(transaction(&grouped(inputs(MAX_OPS / 40), g40.clone())).is_ok());
+        assert!(transaction(&grouped(inputs(MAX_OPS / 40 + 1), g40.clone())).is_err());
+        // Ops on another sheet than the first of the group run once.
+        let other = (0..MAX_OPS)
+            .map(|_| Op::SetCellInput {
+                sheet: 2,
+                r: 0,
+                c: 0,
+                input: "x".into(),
+            })
+            .collect();
+        assert!(transaction(&grouped(other, g40)).is_ok());
+        // The group itself, and Fill Sheets targets.
+        let big: Vec<u32> = (1..=MAX_GROUP_SHEETS as u32 + 1).collect();
+        assert!(transaction(&grouped(inputs(1), big.clone())).is_err());
+        assert!(transaction(&grouped(inputs(1), big[..MAX_GROUP_SHEETS].to_vec())).is_ok());
+        let fill = |to: Vec<u32>| Op::FillSheets {
+            sheet: 1,
+            ranges: vec![],
+            to,
+            options: tally_api::FillSheetOptions::default(),
+        };
+        assert!(transaction(&tx(vec![fill(big.clone())])).is_err());
+        assert!(transaction(&tx(vec![fill(big[..MAX_GROUP_SHEETS].to_vec())])).is_ok());
+        // Structural ops count once per sheet.
+        let cells = |n: usize| {
+            (0..n)
+                .map(|_| Op::InsertCells {
+                    sheet: 1,
+                    range: tally_api::RangeDto {
+                        r0: 0,
+                        c0: 0,
+                        r1: 0,
+                        c1: 0,
+                    },
+                    shift: tally_api::ShiftDir::Down,
+                })
+                .collect::<Vec<_>>()
+        };
+        let g4 = vec![1, 2, 3, 4];
+        assert!(transaction(&grouped(cells(MAX_STRUCTURAL_OPS / 4), g4.clone())).is_ok());
+        assert!(transaction(&grouped(cells(MAX_STRUCTURAL_OPS / 4 + 1), g4)).is_err());
     }
 
     #[test]

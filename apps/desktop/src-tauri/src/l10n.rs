@@ -62,6 +62,7 @@ pub fn submenu_label(locale: Locale, title: &str) -> String {
         "Open Recent" => "menu.file.recent",
         "Number Format" => "menu.format.numberFormat",
         "Filter" => "menu.data.filter",
+        "Fill" => "menu.edit.fill",
         "Group and Outline" => "menu.data.group",
         "DataPilot" => "menu.data.dataPilot",
         "Styles" => "menu.format.styles",
@@ -134,6 +135,7 @@ mod tests {
         assert_eq!(item_label(Locale::De, "no.such", "Keep me"), "Keep me");
         assert_eq!(submenu_label(Locale::De, "File"), "Datei");
         assert_eq!(submenu_label(Locale::De, "Edit"), "Bearbeiten");
+        assert_eq!(submenu_label(Locale::De, "Fill"), "Ausfüllen");
         assert_eq!(submenu_label(Locale::En, "File"), "File");
         assert_eq!(submenu_label(Locale::Es, "Nope"), "Nope");
         assert_eq!(locale_of("de-AT"), Locale::De);

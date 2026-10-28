@@ -21,4 +21,13 @@ selectionBefore: SelectionDto | null,
 /**
  * Selection to restore on redo.
  */
-selectionAfter: SelectionDto | null, };
+selectionAfter: SelectionDto | null, 
+/**
+ * Multi-sheet selection (AOO "selected sheets"), active sheet first.
+ * With more than one sheet, each group-whitelisted op whose `sheet`
+ * is `group[0]` also runs on every other sheet of the group at the
+ * same addresses (see `tally_engine::group::GROUP_OPS`). The whole
+ * transaction is all-or-nothing and has one undo record. Absent or
+ * `null` for a single sheet.
+ */
+group?: Array<number> | null, };

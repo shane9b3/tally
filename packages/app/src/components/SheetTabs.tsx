@@ -1,4 +1,9 @@
-/** "+" and the sheet tabs: click to switch, double-click to rename, right-click menu, drag to reorder. */
+/**
+ * "+" and the sheet tabs: click to switch, double-click to rename,
+ * right-click menu, drag to reorder. Several sheets can be selected (AOO
+ * ScTabControl): ⌘/Ctrl-click toggles a tab, Shift-click selects a run of
+ * tabs, Shift+←/→ extends the selection from the keyboard.
+ */
 import type { SheetInfo } from "@tally/bridge";
 import { useRef, useState } from "react";
 import { cx, useController } from "../context";
@@ -10,6 +15,7 @@ import { Popover } from "./Popover";
 import styles from "./SheetTabs.module.css";
 
 const NO_SHEETS: readonly SheetInfo[] = [];
+const NO_GROUP: readonly number[] = [];
 
 export interface SheetTabsProps {
   renaming: number | null;
@@ -53,6 +59,9 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
   const ctl = useController();
   const sheets = useDocStore((s) => s.info?.sheets ?? NO_SHEETS);
   const active = useDocStore((s) => s.activeSheet);
+  const group = useDocStore((s) => (s.groupSheets.length > 1 ? s.groupSheets : NO_GROUP));
+  const selected = (id: number) => id === active || group.includes(id);
+  const nSelected = Math.max(1, group.length);
   const [menu, setMenu] = useState<{ sheet: number; x: number; y: number } | null>(null);
   const [dragging, setDragging] = useState<number | null>(null);
   const [dropAt, setDropAt] = useState<number | null>(null);
@@ -67,7 +76,16 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
 
   return (
     <div className={styles.tabs}>
-      <button type="button" className={styles.add} aria-label={t("sheetTabs.add", "Add sheet")} title={t("sheetTabs.add", "Add sheet")} onClick={() => void ctl.addSheet()}>
+      <button
+        type="button"
+        className={styles.add}
+        aria-label={t("sheetTabs.add", "Add sheet")}
+        aria-disabled={nSelected > 1}
+        title={nSelected > 1 ? t("msg.reason.sheetsGrouped", "Not available with several sheets selected") : t("sheetTabs.add", "Add sheet")}
+        onClick={() => {
+          if (nSelected <= 1) void ctl.addSheet();
+        }}
+      >
         <PlusIcon />
       </button>
       {/* The tablist holds only the tabs (ARIA); ←/→/Home/End move between sheets. */}
@@ -75,6 +93,7 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
         className={styles.tabList}
         role="tablist"
         aria-label={t("navigator.sheets", "Sheets")}
+        aria-multiselectable="true"
         onKeyDown={(e) => {
           const shown = sheets.filter((x) => !x.hidden);
           const i = shown.findIndex((x) => x.id === active);
@@ -82,10 +101,18 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
           if (j === null || !(e.target instanceof HTMLElement) || e.target.getAttribute("role") !== "tab") return;
           e.preventDefault();
           const list = e.currentTarget;
+          const refocus = () => requestAnimationFrame(() => list.querySelector<HTMLElement>('[role="tab"][tabindex="0"]')?.focus());
+          // Shift+←/→ adds the next tab to the selection; plain keys move and select only that tab.
+          if (e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+            ctl.selectStep(e.key === "ArrowLeft" ? -1 : 1, false);
+            refocus();
+            return;
+          }
           const to = shown[Math.max(0, Math.min(shown.length - 1, j))];
           if (!to) return;
+          useDocStore.getState().selectOnly(to.id);
           ctl.showSheet(to.id, false);
-          requestAnimationFrame(() => list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus());
+          refocus();
         }}
       >
       {sheets.filter((s) => !s.hidden).map((s, i) =>
@@ -96,20 +123,26 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
             key={s.id}
             type="button"
             role="tab"
-            aria-selected={s.id === active}
+            aria-selected={selected(s.id)}
+            aria-current={s.id === active && group.length > 1 ? "page" : undefined}
             tabIndex={s.id === active ? 0 : -1}
+            data-sheet={s.id}
             className={cx(
               styles.tab,
               s.id === active && styles.active,
+              s.id !== active && group.includes(s.id) && styles.grouped,
               dragging === s.id && styles.dragging,
               dropAt === i && dragging !== null && styles.dropBefore,
             )}
             draggable
-            onClick={() => ctl.showSheet(s.id)}
-            onDoubleClick={() => setRenaming(s.id)}
+            onClick={(e) => ctl.clickTab(s.id, { toggle: e.metaKey || e.ctrlKey, range: e.shiftKey })}
+            onDoubleClick={(e) => {
+              if (!e.metaKey && !e.ctrlKey && !e.shiftKey && group.length <= 1) setRenaming(s.id);
+            }}
             onContextMenu={(e) => {
               e.preventDefault();
-              ctl.showSheet(s.id, false);
+              // Inside the selection the tab becomes active and the selection stays (AOO).
+              ctl.showSheet(s.id, false, group.includes(s.id));
               setMenu({ sheet: s.id, x: e.clientX, y: e.clientY - 4 });
             }}
             onDragStart={(e) => {
@@ -129,11 +162,7 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
             }}
             onDrop={(e) => {
               e.preventDefault();
-              const from = sheets.findIndex((x) => x.id === dragging);
-              if (dragging !== null && dropAt !== null && from >= 0) {
-                const to = dropAt > from ? dropAt - 1 : dropAt;
-                if (to !== from) void ctl.moveSheet(dragging, to);
-              }
+              if (dragging !== null && dropAt !== null) void ctl.dropSheets(dragging, dropAt);
               setDragging(null);
               setDropAt(null);
             }}
@@ -151,15 +180,25 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
           above
           onClose={() => setMenu(null)}
           items={[
-            { id: "rename", label: t("sheetTabs.rename", "Rename…"), onSelect: () => setRenaming(menu.sheet) },
-            { id: "insert", label: t("cmd.sheet.insert", "Insert sheet"), onSelect: () => void ctl.addSheet() },
-            {
-              id: "delete",
-              label: t("dialog.delete", "Delete"),
-              danger: true,
-              disabled: sheets.length <= 1,
-              onSelect: () => void ctl.deleteSheet(menu.sheet),
-            },
+            // With several sheets selected Insert and Rename are off and Delete removes them all (AOO).
+            { id: "rename", label: t("sheetTabs.rename", "Rename…"), disabled: nSelected > 1, onSelect: () => setRenaming(menu.sheet) },
+            { id: "insert", label: t("cmd.sheet.insert", "Insert sheet"), disabled: nSelected > 1, onSelect: () => void ctl.addSheet() },
+            nSelected > 1
+              ? {
+                  id: "delete",
+                  label: t("sheetTabs.deleteN", "Delete {n} sheets", { n: nSelected }),
+                  danger: true,
+                  // At least one visible sheet stays.
+                  disabled: nSelected >= sheets.filter((x) => !x.hidden).length,
+                  onSelect: () => void ctl.deleteSelectedSheets(),
+                }
+              : {
+                  id: "delete",
+                  label: t("dialog.delete", "Delete"),
+                  danger: true,
+                  disabled: sheets.length <= 1,
+                  onSelect: () => void ctl.deleteSheet(menu.sheet),
+                },
             ...ctl.w56.sheetTabItems(menu.sheet),
           ]}
         />

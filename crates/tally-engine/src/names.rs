@@ -184,6 +184,11 @@ impl NameTable {
         self.len() == 0
     }
 
+    /// Every definition.
+    pub fn defs(&self) -> impl Iterator<Item = &NameDef> {
+        self.entries.iter().filter_map(|e| e.def.as_ref())
+    }
+
     /// Mutable access to every definition (structure changes, moves).
     pub fn defs_mut(&mut self) -> impl Iterator<Item = &mut NameDef> {
         Arc::make_mut(&mut self.entries)

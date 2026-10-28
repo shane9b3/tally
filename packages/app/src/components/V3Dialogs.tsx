@@ -257,6 +257,9 @@ type Editing = { cf: ConditionalFormatDto | null; index: number | null; ranges: 
 
 function CfManagerDialog() {
   const ctl = useController();
+  // Existing rules belong to this sheet: with several sheets selected only New rule… works (it is a group edit).
+  const grouped = useDocStore((s) => s.groupSheets.length > 1);
+  const groupedWhy = grouped ? t("msg.reason.sheetsGrouped", "Not available with several sheets selected") : undefined;
   const [list, setList] = useState<ConditionalFormatDto[] | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const reload = () =>
@@ -315,6 +318,7 @@ function CfManagerDialog() {
         </button>
       }
     >
+      {grouped ? <p className={styles.note} data-testid="cf-grouped">{groupedWhy}</p> : null}
       <p className={styles.lead}>
         {t("v3.cfLead", "Rules for “{sheet}”, highest priority first. A cell takes the first matching rule's settings; ▲▼ change the order.", { sheet: ctl.sheetName() })}
       </p>
@@ -330,10 +334,10 @@ function CfManagerDialog() {
           {rows.map((row, k) => (
             <div key={`${row.cf.id}:${row.index}`} className={v3.ruleRow} role="row" data-rule={k}>
               <span className={v3.order}>
-                <button type="button" className={v3.iconBtn} aria-label={t("v3.moveUp", "Move up")} disabled={k === 0} onClick={() => move(row, -1)}>
+                <button type="button" className={v3.iconBtn} aria-label={t("v3.moveUp", "Move up")} title={groupedWhy} disabled={k === 0 || grouped} onClick={() => move(row, -1)}>
                   ▲
                 </button>
-                <button type="button" className={v3.iconBtn} aria-label={t("v3.moveDown", "Move down")} disabled={k === rows.length - 1} onClick={() => move(row, 1)}>
+                <button type="button" className={v3.iconBtn} aria-label={t("v3.moveDown", "Move down")} title={groupedWhy} disabled={k === rows.length - 1 || grouped} onClick={() => move(row, 1)}>
                   ▼
                 </button>
               </span>
@@ -342,13 +346,15 @@ function CfManagerDialog() {
                 <span className={v3.ruleSummary}>{ruleSummary(row.rule)}</span>
                 <span className={v3.ruleRanges}>{rangesText(row.cf.ranges)}</span>
               </span>
-              <button type="button" className={styles.rowBtn} onClick={() => setEditing({ cf: row.cf, index: row.index, ranges: rangesText(row.cf.ranges), rule: structuredClone(row.rule) })}>
+              <button type="button" className={styles.rowBtn} title={groupedWhy} disabled={grouped} data-testid={`cf-edit-${k}`} onClick={() => setEditing({ cf: row.cf, index: row.index, ranges: rangesText(row.cf.ranges), rule: structuredClone(row.rule) })}>
                 {t("dialog.edit", "Edit")}
               </button>
               <button
                 type="button"
                 className={cx(styles.rowBtn, styles.dangerText)}
                 data-testid={`cf-delete-${k}`}
+                title={groupedWhy}
+                disabled={grouped}
                 onClick={() =>
                   after(row.cf.rules.length === 1 ? ctl.v3.deleteConditionalFormat(row.cf.id) : ctl.v3.updateConditionalFormat(row.cf.id, row.cf.ranges, row.cf.rules.filter((_, i) => i !== row.index)))
                 }
@@ -725,6 +731,9 @@ function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" 
   const err = parsedRanges ? validationError(effective) : t("v3.enterCellsVal", "Enter the cells, e.g. G2:G15.");
   const help = v.inputHelp ?? { title: "", text: "" };
   const alert = v.error;
+  // An existing rule belongs to this sheet: no editing or removing it with several sheets selected.
+  const locked = useDocStore((s) => s.groupSheets.length > 1) && d.existing;
+  const lockedWhy = locked ? t("msg.reason.sheetsGrouped", "Not available with several sheets selected") : undefined;
 
   return (
     <Shell
@@ -733,7 +742,7 @@ function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" 
       wide
       cardClass={v3.xwide}
       testId="validation-dialog"
-      valid={err === null}
+      valid={err === null && !locked}
       onSubmit={() => {
         const out: ValidationDto = {
           ...effective,
@@ -743,12 +752,13 @@ function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" 
       }}
       extra={
         d.existing ? (
-          <button type="button" className={cx(styles.secondary, styles.dangerText)} onClick={() => (close(), void ctl.v3.clearValidation(v.id))} data-testid="validation-remove">
+          <button type="button" className={cx(styles.secondary, styles.dangerText)} title={lockedWhy} disabled={locked} onClick={() => (close(), void ctl.v3.clearValidation(v.id))} data-testid="validation-remove">
             {t("dialog.remove", "Remove")}
           </button>
         ) : undefined
       }
     >
+      {locked ? <p className={styles.note} data-testid="validation-grouped">{lockedWhy}</p> : null}
       <Tabs
         label={t("v3.validation", "Validation")}
         value={tab}

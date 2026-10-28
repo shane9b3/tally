@@ -77,8 +77,8 @@ export function pageLabel(page: number, count: number): string {
 
 /**
  * What a print, the preview and Export PDF cover (AOO's File ▸ Print ▸
- * Range): every sheet, the selected sheets, or the selected cells. Tally
- * has no multi-sheet selection yet, so "selected" is the active sheet.
+ * Range): every sheet, the selected sheets (several with a multi-sheet
+ * selection, else the active one), or the selected cells.
  */
 export type PrintScope = "all" | "selected" | "selection";
 
@@ -134,11 +134,14 @@ export function parsePageRanges(spec: string, count?: number): PageRangeResult {
 
 /**
  * The engine options for a scope on the user's sheet and selection (every
- * range of a multi-selection, each printed as its own print range, in order).
+ * range of a multi-selection, each printed as its own print range, in
+ * order). "selected" with several sheets selected (`group`, tab order)
+ * prints those sheets.
  */
-export function printOptionsFor(scope: PrintScope, ranges: PageRanges | null, sheet: number, selection: readonly RangeDto[] | null): PrintOptionsDto {
+export function printOptionsFor(scope: PrintScope, ranges: PageRanges | null, sheet: number, selection: readonly RangeDto[] | null, group: readonly number[] = []): PrintOptionsDto {
+  const sheets: PrintOptionsDto["sheets"] = scope === "all" ? { type: "all" } : scope === "selected" && group.length > 1 ? { type: "some", ids: [...group] } : { type: "active" };
   return {
-    sheets: { type: scope === "all" ? "all" : "active" },
+    sheets,
     selection: scope === "selection" && selection ? selection.map((r) => ({ ...r })) : null,
     suppressEmptyPages: true,
     pageFrom: null,

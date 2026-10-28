@@ -197,6 +197,7 @@ fn applying_the_document_font_keeps_styles_clean() {
             label: None,
             selection_before: None,
             selection_after: None,
+            group: None,
         };
         svc.apply(info.doc, tx).unwrap();
     };

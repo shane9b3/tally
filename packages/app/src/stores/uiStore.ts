@@ -63,7 +63,13 @@ export type DialogState =
   | { kind: "properties"; props: DocPropertiesDto }
   | { kind: "pageSetup"; setup: PageSetupDto }
   /** Wave 5 (W5-0b): the Function Wizard skeleton (⌘F2); the argument editor comes in W5-6. */
-  | { kind: "functionWizard" };
+  | { kind: "functionWizard" }
+  /**
+   * Edit ▸ Fill ▸ Sheet… (`edit.fillSheet`, only with several sheets
+   * selected): data/FillSheetDialog.tsx reads the selection and the group
+   * from the stores itself.
+   */
+  | { kind: "fillSheet" };
 
 /** The AutoFilter popover of one column, anchored at client coordinates. */
 export interface FilterPopoverState {

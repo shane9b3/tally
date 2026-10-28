@@ -53,12 +53,14 @@ real-file corpus).
 - Not built yet from the plan: multithreaded recalc, auto-update (tauri-plugin-updater), opt-in crash reporting.
 - Inventory gaps found 2026-10-27 (docs/calc-features-inventory.md 1.0 status; deviation IDs in docs/parity-deviations.md). Sizes: S < 1 day, M a few days, L a week or more.
   - Input and editing: Paste Special Link and Shift cells, and Text / Numbers / Date / Formulas / Comments choices (M); two-digit year window option (P17, S).
-  - Sheets and view: multi-sheet selection and editing, Shift+Ctrl+PgUp/PgDn (wave 5 item 31, L); read-only mode (M); zoom 20-400 % (U18, S); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, M).
-  - Fill: Ctrl-drag copies, filtered ranges copy (T16, M); Edit > Fill > Up / Left commands (S); Fill Sheet (needs multi-sheet selection).
+  - Sheets and view: multi-sheet selection and editing, Shift+Ctrl+PgUp/PgDn (wave 5 item 31, L; engine done 2026-10-28: `Transaction.group`, `Op::FillSheets`; UI, mock and dialog in progress); read-only mode (M); zoom 20-400 % (U18, S); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, M).
+  - Fill: Ctrl-drag copies, filtered ranges copy (T16, M); Edit > Fill > Up / Left commands (S); Fill Sheet (engine `Op::FillSheets` done; dialog in progress).
   - Formatting: Numbers tab category list, option controls and language selector (G14, M); Hide all / Hide when printing in the UI and applied on screen and in print (G15, M); `[NatNum]` / `[DBNum]` / calendar modifiers rendered (G7, L); AutoFormat add / rename / delete (M); Load Styles from another document (M).
   - Data: validity "sort entries ascending" incl. ODS `sorted` round trip (G16, S); sort extend-selection prompt (S); DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M); Data > Select Range and Refresh Range (S).
   - Charts: date axis and axis crossing position (T18, M); chart data table editor for internal data (T18, M); cylinder / cone / pyramid shapes (T10, L).
   - Tools: detective Fill Mode, Refresh Traces, AutoRefresh (T12, M); hyperlink as button and New Document target (M, button needs form controls T11); Function List sidebar (S); Limit decimals for General incl. ODS `table:decimal-places` (S).
+
+- 3D references (`Sheet1.A5:Sheet3.A5`, `SUM(Sheet1:Sheet3!A1)`) evaluate to #VALUE! (eval.rs); they parse, save and adjust, but don't compute. Common in multi-sheet workbooks — next priority.
 
 ## Remaining for 1.0 (docs/wave5-plan.md §5)
 1. Functions: keep 408/408; DDE and macro calls marked unsupported (done).

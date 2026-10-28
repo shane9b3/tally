@@ -10,6 +10,11 @@
   white-space: nowrap;
 }
 
+.group {
+  color: var(--tally-text);
+  font-weight: 500;
+}
+
 .stat b {
   margin-left: 4px;
   color: var(--tally-text);
