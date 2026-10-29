@@ -21,7 +21,7 @@ expect = 1
 cells = { A1 = 1, "Sheet2.A1" = 2, "Sheet2.B2" = 3 }
 formula = "=SHEETS(Sheet2.A1:B2)"
 expect = 1
-note = "3D references are not supported; a reference spans one sheet."
+note = "A 2D reference spans one sheet."
 
 [[case]]
 formula = "=SHEETS(5)"
@@ -42,4 +42,10 @@ expect = "Err:504"
 [[case]]
 cells = { A1 = 1, "Sheet2.A1" = 2, "Sheet2.B2" = 3 }
 formula = "=SHEETS()+1"
+expect = 3
+
+[[case]]
+name = "3D reference"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=SHEETS(Sheet2.A1:Sheet4.A2)"
 expect = 3

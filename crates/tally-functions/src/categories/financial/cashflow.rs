@@ -24,27 +24,31 @@ fn flows(a: &mut Args<'_>, i: usize, row_major: bool) -> Result<Vec<f64>, ErrorK
     let v = a.any(i);
     let mut out = Vec::new();
     match &v {
-        EvalValue::Range(r) if row_major => {
-            let mut cells: Vec<(u32, u32, f64)> = Vec::new();
-            let mut err: Option<(u32, u32, ErrorKind)> = None;
-            a.ctx().for_each_in_range(r, true, &mut |addr, val| {
-                match val {
-                    Value::Number(n) => cells.push((addr.row, addr.col, *n)),
-                    Value::Bool(b) => cells.push((addr.row, addr.col, f64::from(u8::from(*b)))),
-                    Value::Error(e) => {
-                        if err.is_none_or(|(r0, c0, _)| (addr.row, addr.col) < (r0, c0)) {
-                            err = Some((addr.row, addr.col, *e));
+        // A range, or each sheet of a 3D reference in tab order
+        // (`ScHorizontalValueIterator` walks the tabs too).
+        v if row_major && (matches!(v, EvalValue::Range(_)) || v.is_3d()) => {
+            for r in v.areas().unwrap_or_default() {
+                let mut cells: Vec<(u32, u32, f64)> = Vec::new();
+                let mut err: Option<(u32, u32, ErrorKind)> = None;
+                a.ctx().for_each_in_range(r, true, &mut |addr, val| {
+                    match val {
+                        Value::Number(n) => cells.push((addr.row, addr.col, *n)),
+                        Value::Bool(b) => cells.push((addr.row, addr.col, f64::from(u8::from(*b)))),
+                        Value::Error(e) => {
+                            if err.is_none_or(|(r0, c0, _)| (addr.row, addr.col) < (r0, c0)) {
+                                err = Some((addr.row, addr.col, *e));
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
+                    ControlFlow::Continue(())
+                });
+                if let Some((_, _, e)) = err {
+                    return Err(e);
                 }
-                ControlFlow::Continue(())
-            });
-            if let Some((_, _, e)) = err {
-                return Err(e);
+                cells.sort_by_key(|&(r, c, _)| (r, c));
+                out.extend(cells.into_iter().map(|(_, _, n)| n));
             }
-            cells.sort_by_key(|&(r, c, _)| (r, c));
-            out.extend(cells.into_iter().map(|(_, _, n)| n));
         }
         EvalValue::Array(m) if row_major => {
             for r in 0..m.rows {
@@ -96,6 +100,8 @@ fn range_flows(a: &mut Args<'_>, i: usize) -> Result<Vec<f64>, ErrorKind> {
         EvalValue::Range(_) | EvalValue::Array(_) | EvalValue::Scalar(Value::Array(_)) => {
             flows(a, i, false)
         }
+        // AOO `ScIRR`/`ScMIRR`: `ScValueIterator` over every sheet.
+        v if v.is_3d() => flows(a, i, false),
         EvalValue::Scalar(Value::Error(e)) => Err(e),
         _ => Err(ErrorKind::ParamList),
     }

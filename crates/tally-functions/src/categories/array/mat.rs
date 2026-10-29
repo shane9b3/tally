@@ -66,6 +66,9 @@ pub(super) fn values(ctx: &mut dyn EvalContext, arg: EvalValue) -> Result<Arc<Ma
             });
             Ok(Arc::new(m))
         }
+        // AOO `GetMatrix` → `CreateMatrixFromDoubleRef`: not a 2D matrix.
+        #[allow(unreachable_patterns)]
+        v if v.is_3d() => Err(ErrorKind::ParamList),
         #[allow(unreachable_patterns)]
         _ => Err(ErrorKind::Value),
     }

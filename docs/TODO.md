@@ -24,6 +24,7 @@ real-file corpus).
   - Accessibility: keyboard-only dialogs, ARIA throughout, axe + keyboard e2e specs; WCAG AA contrast in light and dark, gated by axe (cdd91b3, de70ada).
   - Code-split bundle: main chunk 1.65 MB → 511 kB; lazy parts behind error boundaries.
   - Docs: `docs/parity-deviations.md` (110 entries), 1.0 status in the inventories, `docs/perf-baseline.md` (`cargo xtask perf`).
+  - 3D references evaluate (2026-10-29): `Sheet1.A5:Sheet3.A5` / `Sheet1:Sheet3!A5` span the sheets in tab order (AOO `svDoubleRef` with `Tab1 != Tab2`); sequence functions iterate every sheet, lookups / `*IF` / matrices give AOO's Err:504 / Err:502, scalar use intersects on the formula's sheet; deleting an end sheet shrinks the span; INDIRECT returns 3D references. Remaining gaps: `docs/parity-deviations.md` P19, U26.
 - Gates at de70ada: 1,734 Rust tests, 907 TS unit tests, 135 e2e; clippy (also tally-engine without `io`, xtask `perf`) and fmt clean; release bundle builds (Tally.app 27.8 MiB).
 
 ## Known gaps / follow-ups
@@ -59,8 +60,6 @@ real-file corpus).
   - Data: validity "sort entries ascending" incl. ODS `sorted` round trip (G16, S); sort extend-selection prompt (S); DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M); Data > Select Range and Refresh Range (S).
   - Charts: date axis and axis crossing position (T18, M); chart data table editor for internal data (T18, M); cylinder / cone / pyramid shapes (T10, L).
   - Tools: detective Fill Mode, Refresh Traces, AutoRefresh (T12, M); hyperlink as button and New Document target (M, button needs form controls T11); Function List sidebar (S); Limit decimals for General incl. ODS `table:decimal-places` (S).
-
-- 3D references (`Sheet1.A5:Sheet3.A5`, `SUM(Sheet1:Sheet3!A1)`) evaluate to #VALUE! (eval.rs); they parse, save and adjust, but don't compute. Common in multi-sheet workbooks — next priority.
 
 ## Remaining for 1.0 (docs/wave5-plan.md §5)
 1. Functions: keep 408/408; DDE and macro calls marked unsupported (done).

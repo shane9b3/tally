@@ -325,6 +325,10 @@ impl EvalContext for MockEvalContext {
         (id < self.sheets).then_some(id)
     }
 
+    fn sheet_at(&self, index: u32) -> Option<SheetId> {
+        (index < self.sheets).then_some(index)
+    }
+
     fn sheet_count(&self) -> u32 {
         self.sheets
     }

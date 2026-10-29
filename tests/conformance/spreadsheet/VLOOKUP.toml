@@ -98,3 +98,9 @@ expect = "b"
 name = "inline array"
 formula = "=VLOOKUP(2;{1;\"a\"|2;\"b\"};2;0)"
 expect = "b"
+
+[[case]]
+name = "3D reference (errIllegalParameter)"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=VLOOKUP(10;Sheet1.A1:Sheet3.A2;1;0)"
+expect = "Err:504"

@@ -15,7 +15,7 @@ use tally_numfmt::{recognize_input_with, Locale, RecognizeContext, Recognized, E
 use tally_types::{CalcSettings, CellAddr, CellRange, SheetId, Value, MAX_COLS, MAX_ROWS};
 
 use crate::deps::{DepIndex, HashDepIndex};
-use crate::formula_cells::{CellState, FormulaCell, FormulaCellId, FormulaCells};
+use crate::formula_cells::{CellState, FormulaCell, FormulaCellId, FormulaCells, Span3d};
 use crate::storage::{CellContent, ColumnStore, Sheet, StyleId};
 use crate::styles::StyleTable;
 
@@ -242,6 +242,9 @@ pub struct Workbook {
     pub sheets: Vec<Sheet>,
     /// Sheet id → tab index.
     pub sheet_index: HashMap<SheetId, usize>,
+    /// The tab order 3-D spans were last checked against
+    /// ([`Workbook::refresh_all_precedents`]).
+    span_order: Vec<SheetId>,
     next_sheet_id: SheetId,
     /// Styles.
     pub styles: StyleTable,
@@ -316,6 +319,7 @@ impl Workbook {
         Self {
             sheets: Vec::new(),
             sheet_index: HashMap::new(),
+            span_order: Vec::new(),
             next_sheet_id: 1,
             styles: StyleTable::new(),
             settings: CalcSettings::default(),
@@ -375,6 +379,43 @@ impl Workbook {
             .enumerate()
             .map(|(i, s)| (s.id, i))
             .collect();
+        let order: Vec<SheetId> = self.sheets.iter().map(|s| s.id).collect();
+        self.deps.set_tab_order(&order);
+    }
+
+    /// The sheets a 3-D span covers now, in tab order (empty if an end
+    /// sheet is gone).
+    pub fn span_sheets(&self, s: &Span3d) -> &[Sheet] {
+        match (self.tab_of(s.first), self.tab_of(s.last)) {
+            (Some(a), Some(b)) => self.sheets.get(a.min(b)..=a.max(b)).unwrap_or_default(),
+            _ => &[],
+        }
+    }
+
+    /// Whether a 3-D span covers any cell of `r`.
+    pub fn span_hits(&self, s: &Span3d, r: &CellRange) -> bool {
+        match (
+            self.tab_of(s.first),
+            self.tab_of(s.last),
+            self.tab_of(r.sheet),
+        ) {
+            (Some(a), Some(b), Some(t)) => a.min(b) <= t && t <= a.max(b) && s.rect_hits(r),
+            _ => false,
+        }
+    }
+
+    /// Whether formula `f` reads (statically) any cell of `r`.
+    pub fn reads_range(&self, f: &FormulaCell, r: &CellRange) -> bool {
+        f.precedents.iter().any(|p| p.intersects(r))
+            || f.spans().iter().any(|s| self.span_hits(s, r))
+    }
+
+    /// Whether formula `f` reads (statically) anything on one of `sheets`.
+    pub fn reads_sheet(&self, f: &FormulaCell, sheets: &[SheetId]) -> bool {
+        f.precedents.iter().any(|p| sheets.contains(&p.sheet))
+            || f.spans()
+                .iter()
+                .any(|s| self.span_sheets(s).iter().any(|x| sheets.contains(&x.id)))
     }
 
     /// The sheet with id `id`.
@@ -445,7 +486,14 @@ impl Workbook {
         };
         let at = index.unwrap_or(self.sheets.len()).min(self.sheets.len());
         self.sheets.insert(at, Sheet::new(id, &name));
-        self.reindex();
+        if at + 1 == self.sheets.len() {
+            // Appending moves no other sheet: no full reindex (a file with
+            // thousands of sheets is loaded in linear time).
+            self.sheet_index.insert(id, at);
+            self.deps.append_tab(id, at as u32);
+        } else {
+            self.reindex();
+        }
         if self.sheets.len() == 1 {
             self.active_sheet = id;
         }
@@ -494,37 +542,58 @@ impl Workbook {
         Some(from)
     }
 
-    /// Re-resolves the precedents of formulas with 3-D references (after
-    /// tab-order changes, which move what a 3-D span covers).
+    /// After a sheet operation (insert, delete, move, copy, rename):
+    /// recalculates the SHEET / SHEETS formulas, and the formulas whose 3-D spans now cover a different
+    /// sequence of sheets (other sheets, or the same ones in another order,
+    /// which NPV, IRR and the first-error order see). Spans are matched by
+    /// tab position, so the dependency index needs no update; the cost is
+    /// one comparison of sheet ids per spanned sheet, with no allocation
+    /// per formula.
     pub fn refresh_all_precedents(&mut self) {
-        let ids: Vec<FormulaCellId> = self
+        // SHEET / SHEETS follow every sheet operation (cheap: a flag check).
+        let tab_dep: Vec<FormulaCellId> = self
             .formulas
             .iter()
-            .filter(|(_, f)| f.has_3d)
+            .filter(|(_, f)| f.tab_order_dependent)
             .map(|(id, _)| id)
             .collect();
-        for id in ids {
-            let Some(fc) = self.formulas.get(id) else {
+        self.pending.dirty.extend(tab_dep);
+        let order: Vec<SheetId> = self.sheets.iter().map(|s| s.id).collect();
+        if order == self.span_order {
+            return;
+        }
+        let old_pos: HashMap<SheetId, usize> = self
+            .span_order
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (*s, i))
+            .collect();
+        let slice = |pos: &dyn Fn(SheetId) -> Option<usize>, s: &Span3d| {
+            let (a, b) = (pos(s.first)?, pos(s.last)?);
+            Some(a.min(b)..a.max(b) + 1)
+        };
+        let mut dirty = Vec::new();
+        for (id, f) in self.formulas.iter() {
+            if f.three_d.is_none() {
                 continue;
-            };
-            let a = self.analyze(&fc.formula, fc.addr);
-            let p = a.precedents;
-            if p != fc.precedents {
-                let strict = a.strict;
-                let dynamic = fc.dynamic_deps.clone();
-                // (Names are unaffected by tab order.)
-                self.deps.remove(id);
-                let mut all = p.clone();
-                all.extend(dynamic);
-                self.deps.add(id, &all);
-                let vol = fc.volatile;
-                self.deps.set_volatile(id, vol);
-                if let Some(fc) = self.formulas.get_mut(id) {
-                    fc.precedents = p;
-                    fc.strict_precedents = strict;
+            }
+            // Static spans and those built during evaluation (`:` across
+            // sheets, INDIRECT).
+            let changed = f.spans().iter().chain(f.dynamic_spans()).any(|s| {
+                let old = slice(&|x| old_pos.get(&x).copied(), s);
+                let new = slice(&|x| self.tab_of(x), s);
+                match (old, new) {
+                    (Some(o), Some(n)) => self.span_order[o] != order[n],
+                    (None, None) => false,
+                    _ => true,
                 }
+            });
+            if changed {
+                dirty.push(id);
             }
         }
+        self.pending.dirty.extend(dirty);
+        self.span_order = order;
     }
 
     // ----- cells ----------------------------------------------------------
@@ -767,7 +836,14 @@ impl Workbook {
     /// The static precedents of `f` at `addr`, 3-D spans expanded by tab
     /// order (including those of the names it uses).
     pub fn precedents_of(&self, f: &Formula, addr: CellAddr) -> Vec<CellRange> {
-        self.analyze(f, addr).precedents
+        let a = self.analyze(f, addr);
+        let mut out = a.precedents;
+        for s in &a.spans {
+            out.extend(self.span_sheets(s).iter().map(|x| s.on(x.id)));
+        }
+        out.sort_by_key(|r| (r.sheet, r.r0, r.c0, r.r1, r.c1));
+        out.dedup();
+        out
     }
 
     /// Everything the dependency index needs about `f` at `addr`:
@@ -788,9 +864,19 @@ impl Workbook {
             volatile |= is_volatile(d);
         }
         let has_3d = refs.iter().any(|r| matches!(r, ResolvedRef::Span3d { .. }));
+        let (precedents, spans) = split_refs(refs);
+        let (strict, strict_spans) = match self.strict_precedents_with(&f.expr, addr, &defs) {
+            Some(s) => {
+                let (r, sp) = split_refs(s);
+                (Some(r), sp)
+            }
+            None => (None, spans.clone()),
+        };
         Analysis {
-            precedents: self.expand_refs(refs),
-            strict: self.strict_precedents_with(&f.expr, addr, &defs),
+            precedents,
+            strict,
+            spans,
+            strict_spans,
             keys,
             has_3d,
             volatile,
@@ -808,7 +894,7 @@ impl Workbook {
         root: &Expr,
         addr: CellAddr,
         defs: &crate::names::NameDefs,
-    ) -> Option<Vec<CellRange>> {
+    ) -> Option<Vec<ResolvedRef>> {
         let reg = registry();
         let mut strict = Vec::new();
         let mut excluded = false;
@@ -873,32 +959,7 @@ impl Workbook {
                 _ => {}
             }
         }
-        excluded.then(|| self.expand_refs(strict))
-    }
-
-    fn expand_refs(&self, refs: Vec<ResolvedRef>) -> Vec<CellRange> {
-        let mut out = Vec::new();
-        for r in refs {
-            match r {
-                ResolvedRef::Range(cr) => out.push(cr),
-                ResolvedRef::Span3d { first, last, area } => {
-                    let (Some(a), Some(b)) = (self.tab_of(first), self.tab_of(last)) else {
-                        continue;
-                    };
-                    let (lo, hi) = (a.min(b), a.max(b));
-                    for s in self.sheets.get(lo..=hi).into_iter().flatten() {
-                        out.push(CellRange {
-                            sheet: s.id,
-                            ..area
-                        });
-                    }
-                }
-                ResolvedRef::Invalid => {}
-            }
-        }
-        out.sort_by_key(|r| (r.sheet, r.r0, r.c0, r.r1, r.c1));
-        out.dedup();
-        out
+        excluded.then_some(strict)
     }
 
     /// Stores a formula; the cell becomes dirty.
@@ -914,12 +975,15 @@ impl Workbook {
         let Analysis {
             precedents,
             strict: strict_precedents,
+            spans,
+            strict_spans,
             keys: name_keys,
             has_3d,
             volatile,
         } = self.analyze(&formula, addr);
         let has_names = !name_keys.is_empty();
         let vis_dep = is_visibility_dependent(&formula);
+        let tab_dep = is_tab_order_dependent(&formula);
         let id = self.formulas.insert(FormulaCell {
             addr,
             formula,
@@ -928,15 +992,18 @@ impl Workbook {
             volatile,
             invalid_text,
             precedents: precedents.clone(),
-            strict_precedents,
+            strict_precedents: strict_precedents.map(Box::new),
+            three_d: crate::formula_cells::SpanSet::boxed(spans.clone(), strict_spans, Vec::new()),
             dynamic_deps: Vec::new(),
             has_3d,
+            tab_order_dependent: tab_dep,
             has_names,
             visibility_dependent: vis_dep,
             array: None,
             array_result: None,
         });
         self.deps.add(id, &precedents);
+        self.deps.add_spans(id, &spans);
         self.deps.set_volatile(id, volatile);
         self.deps.set_names(id, &name_keys);
         let old = self
@@ -1151,9 +1218,7 @@ impl Workbook {
         let ids: Vec<FormulaCellId> = self
             .formulas
             .iter()
-            .filter(|(_, f)| {
-                f.visibility_dependent && f.precedents.iter().any(|p| sheets.contains(&p.sheet))
-            })
+            .filter(|(_, f)| f.visibility_dependent && self.reads_sheet(f, sheets))
             .map(|(id, _)| id)
             .collect();
         for id in &ids {
@@ -1194,16 +1259,46 @@ impl Workbook {
 /// What [`Workbook::analyze`] finds out about a formula.
 #[derive(Clone, Debug, Default)]
 pub struct Analysis {
-    /// Static precedents (3-D spans expanded, names included).
+    /// Static single-sheet precedents (names included).
     pub precedents: Vec<CellRange>,
     /// The always-read subset, `None` when that is all of them.
     pub strict: Option<Vec<CellRange>>,
+    /// Static 3-D precedents, unexpanded.
+    pub spans: Vec<Span3d>,
+    /// The always-read 3-D precedents.
+    pub strict_spans: Vec<Span3d>,
     /// Dependency keys of the names used (directly or through names).
     pub keys: Vec<String>,
     /// Contains a 3-D reference.
     pub has_3d: bool,
     /// Calls a volatile function (directly or through names).
     pub volatile: bool,
+}
+
+/// Single-sheet precedents (sorted, deduplicated) and 3-D spans
+/// (deduplicated) of resolved references.
+fn split_refs(refs: Vec<ResolvedRef>) -> (Vec<CellRange>, Vec<Span3d>) {
+    let mut out = Vec::new();
+    let mut spans: Vec<Span3d> = Vec::new();
+    for r in refs {
+        match r {
+            ResolvedRef::Range(cr) => out.push(cr),
+            ResolvedRef::Span3d { first, last, area } => {
+                let s = Span3d {
+                    first,
+                    last,
+                    rect: area,
+                };
+                if !spans.contains(&s) {
+                    spans.push(s);
+                }
+            }
+            ResolvedRef::Invalid => {}
+        }
+    }
+    out.sort_by_key(|r| (r.sheet, r.r0, r.c0, r.r1, r.c1));
+    out.dedup();
+    (out, spans)
 }
 
 fn is_plain_ref(e: &Expr) -> bool {
@@ -1217,6 +1312,16 @@ fn is_plain_ref(e: &Expr) -> bool {
 /// `true` if the formula calls a function that skips hidden or filtered
 /// rows (SUBTOTAL, AGGREGATE).
 pub fn is_visibility_dependent(f: &Formula) -> bool {
+    calls_any(f, &["SUBTOTAL", "AGGREGATE"])
+}
+
+/// `true` if the formula calls SHEET or SHEETS (results that follow the
+/// tab order).
+pub fn is_tab_order_dependent(f: &Formula) -> bool {
+    calls_any(f, &["SHEET", "SHEETS"])
+}
+
+fn calls_any(f: &Formula, names: &[&str]) -> bool {
     let reg = registry();
     let mut v = false;
     f.expr.walk(|e| {
@@ -1227,7 +1332,7 @@ pub fn is_visibility_dependent(f: &Formula) -> bool {
         {
             if reg
                 .get(FuncId(id.0))
-                .is_some_and(|d| matches!(d.name, "SUBTOTAL" | "AGGREGATE"))
+                .is_some_and(|d| names.contains(&d.name))
             {
                 v = true;
             }

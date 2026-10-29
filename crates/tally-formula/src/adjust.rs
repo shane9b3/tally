@@ -374,6 +374,61 @@ fn delete_sheet(r: &mut RefExpr, sheet: SheetId) -> bool {
     changed
 }
 
+/// Moves the ends of 3D references off a sheet about to be deleted, as
+/// AOO's `ScCompiler::UpdateDeleteTab`: a span that starts (ends) on the
+/// deleted sheet then starts (ends) on its neighbour toward the other end,
+/// so `Sheet1.A1:Sheet3.A1` keeps `Sheet2:Sheet3` when Sheet1 goes. A
+/// reference whose both ends are on the deleted sheet is left for
+/// [`adjust_for_structure_change`] (it becomes `#REF!`). `order` is the tab
+/// order before the deletion and `current` the sheet a
+/// [`SheetRef::Current`] stands for (the formula's sheet). The `$` of the
+/// moved end is kept. Returns `true` if the AST changed.
+pub fn retarget_3d_for_sheet_delete(
+    f: &mut Formula,
+    current: SheetId,
+    deleted: SheetId,
+    order: &[SheetId],
+) -> bool {
+    let tab = |s: SheetId| order.iter().position(|x| *x == s);
+    let mut changed = false;
+    f.expr.walk_refs_mut(|r| {
+        let RefExpr::Area(a, b) = r else {
+            return;
+        };
+        let Some(sa) = sheet_id(&a.sheet, current) else {
+            return;
+        };
+        // An end without a sheet means "the start's sheet", not the formula's.
+        let sb = match b.sheet {
+            SheetRef::Current => sa,
+            _ => match sheet_id(&b.sheet, current) {
+                Some(x) => x,
+                None => return,
+            },
+        };
+        if sa == sb || (sa != deleted && sb != deleted) {
+            return;
+        }
+        let (Some(ta), Some(tb)) = (tab(sa), tab(sb)) else {
+            return;
+        };
+        // The end on the deleted sheet steps one tab toward the other end.
+        let (end, from, to) = if sa == deleted {
+            (&mut a.sheet, ta, tb)
+        } else {
+            (&mut b.sheet, tb, ta)
+        };
+        let next = if to > from { from + 1 } else { from - 1 };
+        let Some(&id) = order.get(next) else {
+            return;
+        };
+        let abs = matches!(end, SheetRef::Id { abs: true, .. });
+        *end = SheetRef::Id { id, abs };
+        changed = true;
+    });
+    changed
+}
+
 /// Rewrites the references of `f` (a formula at `origin`, its address before
 /// the change) for a structural change. Returns `true` if the AST changed.
 ///

@@ -42,7 +42,7 @@ use tally_types::{
 
 use crate::deps::{coalesce, DepIndex};
 use crate::eval::{array_result, cell_result, eval_with, EvalEnv};
-use crate::formula_cells::{CellState, FormulaCellId};
+use crate::formula_cells::{CellState, FormulaCellId, Span3d};
 use crate::lookup_cache::{LookupCache, Request};
 use crate::storage::CellContent;
 use crate::workbook::Workbook;
@@ -468,16 +468,86 @@ fn dirty_formulas_in(wb: &Workbook, range: &CellRange, out: &mut Vec<FormulaCell
     }
 }
 
-/// The dirty formulas in `ranges`, as indices into `local`.
+/// The dirty formulas of one topological pass by column, for matching 3-D
+/// spans without visiting every spanned sheet: `(row, tab, id)` of each
+/// dirty formula anchor, per column.
+struct DirtyByCol {
+    cols: HashMap<u32, Vec<(u32, u32, FormulaCellId)>>,
+}
+
+impl DirtyByCol {
+    fn new(wb: &Workbook, ids: &[FormulaCellId]) -> Self {
+        let mut cols: HashMap<u32, Vec<(u32, u32, FormulaCellId)>> = HashMap::new();
+        if wb.deps.span_count() == 0 {
+            // No 3-D reference anywhere: nothing will ask.
+            return Self { cols };
+        }
+        for id in ids {
+            if let Some(f) = wb.formulas.get(*id) {
+                if let Some(t) = wb.tab_of(f.addr.sheet) {
+                    cols.entry(f.addr.col)
+                        .or_default()
+                        .push((f.addr.row, t as u32, *id));
+                }
+            }
+        }
+        Self { cols }
+    }
+
+    /// The dirty formulas inside span `s`: only the columns of its
+    /// rectangle that hold a dirty formula are looked at.
+    fn in_span(&self, wb: &Workbook, s: &Span3d, out: &mut Vec<FormulaCellId>) {
+        let (Some(a), Some(b)) = (wb.tab_of(s.first), wb.tab_of(s.last)) else {
+            return;
+        };
+        let (lo, hi) = (a.min(b) as u32, a.max(b) as u32);
+        let r = &s.rect;
+        let mut visit = |list: &Vec<(u32, u32, FormulaCellId)>| {
+            for (row, tab, id) in list {
+                if r.r0 <= *row
+                    && *row <= r.r1
+                    && lo <= *tab
+                    && *tab <= hi
+                    && wb
+                        .formulas
+                        .get(*id)
+                        .is_some_and(|f| f.state == CellState::Dirty)
+                {
+                    out.push(*id);
+                }
+            }
+        };
+        if u64::from(r.c1 - r.c0) < self.cols.len() as u64 {
+            for c in r.c0..=r.c1 {
+                if let Some(list) = self.cols.get(&c) {
+                    visit(list);
+                }
+            }
+        } else {
+            for (c, list) in &self.cols {
+                if r.c0 <= *c && *c <= r.c1 {
+                    visit(list);
+                }
+            }
+        }
+    }
+}
+
+/// The dirty formulas in `ranges` and `spans`, as indices into `local`.
 fn dirty_successors(
     wb: &Workbook,
     ranges: &mut dyn Iterator<Item = &CellRange>,
+    spans: &[Span3d],
+    dirty: &DirtyByCol,
     local: &SecondaryMap<FormulaCellId, usize>,
     scratch: &mut Vec<FormulaCellId>,
 ) -> Vec<usize> {
     scratch.clear();
     for r in ranges {
         dirty_formulas_in(wb, r, scratch);
+    }
+    for s in spans {
+        dirty.in_span(wb, s, scratch);
     }
     let mut s: Vec<usize> = scratch
         .iter()
@@ -501,12 +571,17 @@ fn topo_order(wb: &Workbook, dirty: &[FormulaCellId]) -> Vec<Scc> {
         local.insert(*id, i);
     }
     let mut scratch: Vec<FormulaCellId> = Vec::new();
+    let by_col = DirtyByCol::new(wb, dirty);
     let sccs = tarjan(dirty.len(), |v| {
         let Some(f) = wb.formulas.get(dirty[v]) else {
             return Vec::new();
         };
         let mut it = f.precedents.iter().chain(f.dynamic_deps.iter());
-        dirty_successors(wb, &mut it, &local, &mut scratch)
+        if f.three_d.is_none() {
+            return dirty_successors(wb, &mut it, &[], &by_col, &local, &mut scratch);
+        }
+        let spans = f.all_spans();
+        dirty_successors(wb, &mut it, &spans, &by_col, &local, &mut scratch)
     });
     let mut out = Vec::with_capacity(sccs.len());
     for (members, cyclic) in sccs {
@@ -536,12 +611,20 @@ fn strict_cycle_members(
         local.insert(*id, i);
     }
     let mut out = Vec::new();
+    let by_col = DirtyByCol::new(wb, scc);
     for (members, cyclic) in tarjan(scc.len(), |v| {
         let Some(f) = wb.formulas.get(scc[v]) else {
             return Vec::new();
         };
-        let strict = f.strict_precedents.as_ref().unwrap_or(&f.precedents);
-        dirty_successors(wb, &mut strict.iter(), &local, scratch)
+        let strict = f.strict_precedents.as_deref().unwrap_or(&f.precedents);
+        dirty_successors(
+            wb,
+            &mut strict.iter(),
+            f.strict_spans(),
+            &by_col,
+            &local,
+            scratch,
+        )
     }) {
         if cyclic {
             out.extend(members.into_iter().map(|i| scc[i]));
@@ -659,6 +742,11 @@ pub struct CalcCtx<'w> {
     now: f64,
     depth: u32,
     dyn_deps: Vec<CellRange>,
+    /// The ranges in `dyn_deps` once there are many (deduplication
+    /// without a linear scan; not built for the usual handful).
+    dyn_seen: Option<HashSet<CellRange>>,
+    /// 3-D references built during evaluation (one entry each).
+    dyn_spans: Vec<Span3d>,
     /// RAND source for shared (read-only) contexts.
     local_rng: Option<crate::workbook::Rng>,
     /// Cells being evaluated, outermost first.
@@ -690,6 +778,8 @@ impl<'w> CalcCtx<'w> {
             now,
             depth: 0,
             dyn_deps: Vec::new(),
+            dyn_seen: None,
+            dyn_spans: Vec::new(),
             local_rng: None,
             eval_stack: Vec::new(),
             deferred: Vec::new(),
@@ -719,6 +809,8 @@ impl<'w> CalcCtx<'w> {
             origin,
             depth: 0,
             dyn_deps: Vec::new(),
+            dyn_seen: None,
+            dyn_spans: Vec::new(),
             local_rng: Some(crate::workbook::Rng::from_time()),
             eval_stack: Vec::new(),
             deferred: Vec::new(),
@@ -862,6 +954,8 @@ impl<'w> CalcCtx<'w> {
         };
         let saved_origin = std::mem::replace(&mut self.origin, addr);
         let saved_dyn = std::mem::take(&mut self.dyn_deps);
+        let saved_seen = std::mem::take(&mut self.dyn_seen);
+        let saved_spans = std::mem::take(&mut self.dyn_spans);
         self.depth += 1;
         self.eval_stack.push(Frame {
             id,
@@ -890,6 +984,8 @@ impl<'w> CalcCtx<'w> {
         self.depth -= 1;
         self.origin = saved_origin;
         let dynamic = std::mem::replace(&mut self.dyn_deps, saved_dyn);
+        let dynamic_spans = std::mem::replace(&mut self.dyn_spans, saved_spans);
+        self.dyn_seen = saved_seen;
         let incomplete = frame.is_some_and(|f| f.deferred);
         let mut matrix = matrix;
         if !incomplete && frame.is_some_and(|f| f.circular) {
@@ -925,13 +1021,18 @@ impl<'w> CalcCtx<'w> {
             f.array_result = matrix;
         }
         f.state = CellState::Clean;
-        if dynamic != f.dynamic_deps {
+        if dynamic != f.dynamic_deps || dynamic_spans != f.dynamic_spans() {
             f.dynamic_deps = dynamic;
+            if dynamic_spans != f.dynamic_spans() {
+                f.set_dynamic_spans(dynamic_spans);
+            }
             let mut all = f.precedents.clone();
             all.extend(f.dynamic_deps.iter().copied());
+            let spans = f.all_spans();
             let vol = f.volatile;
             wb.deps.remove(id);
             wb.deps.add(id, &all);
+            wb.deps.add_spans(id, &spans);
             wb.deps.set_volatile(id, vol);
         }
     }
@@ -1054,6 +1155,31 @@ impl Workbook {
         match crate::names::resolve_chain(&self.names, &f.expr, origin.sheet) {
             Expr::Ref(r) => match r.resolve(origin) {
                 ResolvedRef::Range(cr) if self.sheet(cr.sheet).is_some() => Some(cr),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// [`Workbook::parse_reference_at`] for text spanning several sheets:
+    /// the first and last sheets and the rectangle.
+    pub fn parse_reference_3d_at(
+        &self,
+        text: &str,
+        origin: CellAddr,
+    ) -> Option<(SheetId, SheetId, CellRange)> {
+        let t = text.trim();
+        if t.is_empty() || t.starts_with('=') {
+            return None;
+        }
+        let f = self.parse_formula(&format!("={t}"), origin).ok()?;
+        match crate::names::resolve_chain(&self.names, &f.expr, origin.sheet) {
+            Expr::Ref(r) => match r.resolve(origin) {
+                ResolvedRef::Span3d { first, last, area }
+                    if self.sheet(first).is_some() && self.sheet(last).is_some() =>
+                {
+                    Some((first, last, area))
+                }
                 _ => None,
             },
             _ => None,
@@ -1258,9 +1384,31 @@ impl EvalContext for CalcCtx<'_> {
         self.wb.parse_reference_at(text, self.origin)
     }
 
+    fn parse_reference_text_3d(&self, text: &str) -> Option<(SheetId, SheetId, CellRange)> {
+        self.wb.parse_reference_3d_at(text, self.origin)
+    }
+
     fn record_dynamic_dep(&mut self, range: &CellRange) {
-        if !self.dyn_deps.contains(range) {
+        const LINEAR: usize = 16;
+        let fresh = match &mut self.dyn_seen {
+            Some(set) => set.insert(*range),
+            None if self.dyn_deps.len() < LINEAR => !self.dyn_deps.contains(range),
+            None => {
+                let mut set: HashSet<CellRange> = self.dyn_deps.iter().copied().collect();
+                let fresh = set.insert(*range);
+                self.dyn_seen = Some(set);
+                fresh
+            }
+        };
+        if fresh {
             self.dyn_deps.push(*range);
+        }
+    }
+
+    fn record_dynamic_span(&mut self, first: SheetId, last: SheetId, rect: CellRange) {
+        let s = Span3d { first, last, rect };
+        if !self.dyn_spans.contains(&s) {
+            self.dyn_spans.push(s);
         }
     }
 
@@ -1284,6 +1432,10 @@ impl EvalContext for CalcCtx<'_> {
 
     fn sheet_count(&self) -> u32 {
         self.wb.sheets.len() as u32
+    }
+
+    fn sheet_at(&self, index: u32) -> Option<SheetId> {
+        self.wb.sheets.get(index as usize).map(|s| s.id)
     }
 
     fn cell_format_info(&self, addr: CellAddr) -> CellFormatInfo {
@@ -1683,8 +1835,16 @@ impl EvalContext for SubCtx<'_, '_> {
         self.inner.parse_reference_text(text, a1)
     }
 
+    fn parse_reference_text_3d(&self, text: &str) -> Option<(SheetId, SheetId, CellRange)> {
+        self.inner.parse_reference_text_3d(text)
+    }
+
     fn record_dynamic_dep(&mut self, range: &CellRange) {
         self.inner.record_dynamic_dep(range);
+    }
+
+    fn record_dynamic_span(&mut self, first: SheetId, last: SheetId, rect: CellRange) {
+        self.inner.record_dynamic_span(first, last, rect);
     }
 
     fn now_serial(&self) -> f64 {
@@ -1701,6 +1861,10 @@ impl EvalContext for SubCtx<'_, '_> {
 
     fn sheet_count(&self) -> u32 {
         self.inner.sheet_count()
+    }
+
+    fn sheet_at(&self, index: u32) -> Option<SheetId> {
+        self.inner.sheet_at(index)
     }
 
     fn cell_format_info(&self, addr: CellAddr) -> CellFormatInfo {

@@ -115,6 +115,9 @@ pub enum Change {
     CellStyles(Vec<tally_model::CellStyleData>),
     /// Restore the custom sort lists (v0.5).
     CustomSortLists(Vec<Vec<String>>),
+    /// Several changes applied in order (their inverses come back in the
+    /// opposite order).
+    Batch(Vec<Change>),
     /// Restore a sheet's hidden flag and tab colour (v0.5).
     SheetProps {
         /// Sheet.
@@ -470,11 +473,32 @@ pub fn apply_change(wb: &mut Workbook, change: Change, fx: &mut Effects) -> Opti
             wb.pending.ranges.push(whole_sheet(id));
             wb.refresh_all_precedents();
             fx.sheets_changed = true;
-            Some(Change::RemoveSheet { id })
+            // References typed while the sheet was gone resolve now, as a
+            // reload would; redoing the deletion puts them back first.
+            let resolved = crate::ops::resolve_sheet_refs(wb, id);
+            if resolved
+                .iter()
+                .all(|c| matches!(c, Change::Cells(v) if v.is_empty()))
+            {
+                return Some(Change::RemoveSheet { id });
+            }
+            let mut inv = resolved;
+            inv.push(Change::RemoveSheet { id });
+            Some(Change::Batch(inv))
+        }
+        Change::Batch(list) => {
+            let mut inv: Vec<Change> = list
+                .into_iter()
+                .filter_map(|c| apply_change(wb, c, fx))
+                .collect();
+            inv.reverse();
+            Some(Change::Batch(inv))
         }
         Change::RenameSheet { id, name } => {
             let s = wb.sheet_mut(id)?;
             let old = std::mem::replace(&mut s.name, name);
+            // SHEET("name") follows the names.
+            wb.refresh_all_precedents();
             fx.sheets_changed = true;
             Some(Change::RenameSheet { id, name: old })
         }

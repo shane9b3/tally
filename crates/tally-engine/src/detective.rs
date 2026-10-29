@@ -69,7 +69,19 @@ fn precedent_ranges(wb: &Workbook, addr: CellAddr) -> Vec<CellRange> {
         return Vec::new();
     };
     let mut out: Vec<CellRange> = Vec::new();
-    for r in f.precedents.iter().chain(f.dynamic_deps.iter()) {
+    let mut seen: std::collections::HashSet<CellRange> = std::collections::HashSet::new();
+    // 3-D spans are expanded lazily: the loop stops at MAX_TRACES.
+    let all_spans = f.all_spans();
+    let spans = all_spans
+        .iter()
+        .flat_map(|s| wb.span_sheets(s).iter().map(move |x| s.on(x.id)));
+    for r in f
+        .precedents
+        .iter()
+        .copied()
+        .chain(f.dynamic_deps.iter().copied())
+        .chain(spans)
+    {
         if wb.sheet(r.sheet).is_none() {
             continue;
         }
@@ -80,7 +92,7 @@ fn precedent_ranges(wb: &Workbook, addr: CellAddr) -> Vec<CellRange> {
             r.r1.min(MAX_ROWS - 1),
             r.c1.min(MAX_COLS - 1),
         );
-        if !out.contains(&clipped) {
+        if seen.insert(clipped) {
             out.push(clipped);
         }
         if out.len() >= MAX_TRACES {

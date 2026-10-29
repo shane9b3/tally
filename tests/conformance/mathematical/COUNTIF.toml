@@ -75,3 +75,9 @@ expect = "#DIV/0!"
 [[case]]
 formula = "=COUNTIF(A1:A6)"
 expect = "Err:511"
+
+[[case]]
+name = "3D reference (errIllegalParameter)"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=COUNTIF(Sheet1.A1:Sheet3.A2;\">5\")"
+expect = "Err:504"

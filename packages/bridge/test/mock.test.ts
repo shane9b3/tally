@@ -48,6 +48,38 @@ describe("MockClient", () => {
     expect(await text(client, doc, sheet, 0, 2)).toBe("30");
   });
 
+  it("evaluates aggregates over sheet and 3D references in tab order", async () => {
+    const { client, doc, sheet } = await setup();
+    const added = await client.apply(
+      doc,
+      tx({ type: "addSheet", name: null, index: null }, { type: "addSheet", name: "My Sheet", index: null }),
+    );
+    const [, s2, s3] = added.info?.sheets.map((s) => s.id) ?? [];
+    if (s2 === undefined || s3 === undefined) throw new Error("sheets");
+    await client.apply(doc, tx(set(sheet, 0, 0, "10"), set(s2, 0, 0, "20"), set(s2, 1, 0, "x"), set(s3, 0, 0, "30")));
+    await client.apply(
+      doc,
+      tx(
+        set(sheet, 0, 1, "=SUM(Sheet1.A1:'My Sheet'.A2)"),
+        set(sheet, 0, 2, "=COUNT($Sheet1.A1:$Sheet2.A2)"),
+        set(sheet, 0, 3, "=AVERAGE('My Sheet'.A1:Sheet1.A1)"),
+        set(sheet, 0, 4, "=MIN(Sheet2.A1:A2)"),
+        set(sheet, 0, 5, "=MAX(Sheet1.A1:Nope.A1)"),
+      ),
+    );
+    expect(await text(client, doc, sheet, 0, 1)).toBe("60");
+    expect(await text(client, doc, sheet, 0, 2)).toBe("2");
+    expect(await text(client, doc, sheet, 0, 3)).toBe("20");
+    expect(await text(client, doc, sheet, 0, 4)).toBe("20");
+    expect(await text(client, doc, sheet, 0, 5)).toBe("#NAME?");
+    // Moving the last sheet first narrows the span to Sheet1 only... and back.
+    await client.apply(doc, tx({ type: "moveSheet", sheet: s3, to: 0 }));
+    expect(await text(client, doc, sheet, 0, 1)).toBe("40");
+    // A cycle across sheets is caught.
+    await client.apply(doc, tx(set(s2, 2, 0, "=SUM(Sheet1.G1)"), set(sheet, 0, 6, "=SUM(Sheet2.A3)")));
+    expect(await text(client, doc, sheet, 0, 6)).toBe("Err:522");
+  });
+
   it("detects cycles and text in arithmetic", async () => {
     const { client, doc, sheet } = await setup();
     await client.apply(doc, tx(set(sheet, 0, 0, "=B1+1"), set(sheet, 0, 1, "=A1+1"), set(sheet, 1, 0, "x"), set(sheet, 1, 1, "=A2*2")));

@@ -16,6 +16,11 @@
 //! `svRefList`); SUMIF/AVERAGEIF with a sum range reject a union with
 //! `Err:504` (`IterateParametersIf`: `errIllegalParameter` when
 //! `bSumExtraRange`). The `*IFS` functions take single areas (`#VALUE!`).
+//!
+//! 3D references (`Sheet1.A1:Sheet3.A5`): COUNTBLANK counts over every
+//! sheet (`ScCountEmptyCells` iterates the tabs); COUNTIF, SUMIF and
+//! AVERAGEIF give `Err:504` (`errIllegalParameter` when `Tab1 != Tab2`),
+//! the `*IFS` functions `Err:502` (`errIllegalArgument`).
 
 use std::collections::HashMap;
 use std::ops::ControlFlow;
@@ -230,6 +235,15 @@ fn averageif(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     })
 }
 
+/// A range of the `*IFS` functions: a 3D reference is `Err:502` (AOO
+/// `IterateParametersIfs`: `errIllegalArgument` when `Tab1 != Tab2`).
+fn ifs_range(a: &mut Args, i: usize) -> Result<tally_types::CellRange, ErrorKind> {
+    if a.any(i).is_3d() {
+        return Err(ErrorKind::InvalidArgument);
+    }
+    a.range(i)
+}
+
 /// All ranges must have the dimensions of `sum_range`, else `Err:502`
 /// (AOO `IterateParametersIfs`: `SetError(errIllegalArgument)`).
 fn sumifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
@@ -240,10 +254,10 @@ fn sumifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         if n < 3 || n.is_multiple_of(2) {
             return Err(ErrorKind::MissingVariable2);
         }
-        let sum_range = a.range(0)?;
+        let sum_range = ifs_range(&mut a, 0)?;
         let mut pairs = Vec::with_capacity(n / 2);
         for i in (1..n).step_by(2) {
-            let range = a.range(i)?;
+            let range = ifs_range(&mut a, i)?;
             let crit = a.criterion(i + 1)?;
             if range.rows() != sum_range.rows() || range.cols() != sum_range.cols() {
                 return Err(ErrorKind::InvalidArgument);
@@ -276,7 +290,7 @@ fn criteria_pairs(
     }
     let mut pairs = Vec::new();
     for i in (first..n).step_by(2) {
-        let range = a.range(i)?;
+        let range = ifs_range(a, i)?;
         let crit = a.criterion(i + 1)?;
         if range.rows() != rows || range.cols() != cols {
             return Err(ErrorKind::InvalidArgument);
@@ -295,7 +309,7 @@ fn countifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         if a.count() < 2 || !a.count().is_multiple_of(2) {
             return Err(ErrorKind::MissingVariable2);
         }
-        let first = a.range(0)?;
+        let first = ifs_range(&mut a, 0)?;
         let (rows, cols) = (first.rows(), first.cols());
         let matchers = criteria_pairs(&mut a, 0, rows, cols)?;
         // Positions that are non-empty in at least one criteria range are
@@ -324,7 +338,7 @@ fn averageifs(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         if a.count() < 3 || a.count() % 2 != 1 {
             return Err(ErrorKind::MissingVariable2);
         }
-        let target = a.range(0)?;
+        let target = ifs_range(&mut a, 0)?;
         let matchers = criteria_pairs(&mut a, 1, target.rows(), target.cols())?;
         let mut acc = ApproxSum::new();
         accumulate(a.ctx(), &target, &matchers, &mut acc)?;

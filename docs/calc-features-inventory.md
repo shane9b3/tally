@@ -322,7 +322,7 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 |---|---|---|
 | Calc A1, ODF (`of:`), Excel A1 grammars | done | |
 | Excel R1C1 grammar | missing | P2 |
-| Reference forms, 3D ranges, sheet quoting | done | |
+| Reference forms, 3D ranges, sheet quoting | done | 3D ranges evaluate across the sheets in tab order (AOO semantics, `crates/tally-engine/tests/three_d.rs`); gaps in parity-deviations P19 |
 | Whole-column references in Calc A1 | deviation (F9) | |
 | Operators and precedence (`=-2^2` = 4, `2^3^2` = 64) | done | Checked with `tally-cli` |
 | Union `~` | done | Fixed in review 2 (H5) |

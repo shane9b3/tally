@@ -56,3 +56,9 @@ expect = 8
 name = "no arguments"
 formula = "=MAX()"
 expect = "Err:511"
+
+[[case]]
+name = "3D reference"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=MAX(Sheet1.A1:Sheet4.A2)"
+expect = 40

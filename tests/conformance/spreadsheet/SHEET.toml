@@ -50,3 +50,9 @@ cells = { A1 = 1, "Sheet2.A1" = 2, "Sheet2.B2" = 3 }
 origin = "C3"
 formula = "=SHEET(Sheet2.A1)"
 expect = 2
+
+[[case]]
+name = "3D reference: its first sheet"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=SHEET(Sheet3.A1:Sheet2.A1)"
+expect = 2

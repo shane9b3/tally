@@ -8,6 +8,10 @@
 //! entries) and `swap_remove`, so a cell read by n formulas (200k cells
 //! `=A2*$B$1`) costs O(n) to build and O(1) per formula to change, not
 //! O(n²) (security review 2, HIGH-3).
+//!
+//! 3-D precedents stay unexpanded too: one `(Span3d, FormulaCellId)` entry
+//! per reference, matched by tab position (the index keeps the tab order),
+//! so a span over thousands of sheets costs one entry, not one per sheet.
 
 use std::collections::{HashMap, HashSet};
 
@@ -15,7 +19,7 @@ use slotmap::SecondaryMap;
 use smallvec::SmallVec;
 use tally_types::{CellAddr, CellRange, SheetId};
 
-use crate::formula_cells::FormulaCellId;
+use crate::formula_cells::{FormulaCellId, Span3d};
 
 /// Area entries per sheet beyond which a warning is due (plan: ≤20k ok).
 pub const AREA_WARN_LIMIT: usize = 50_000;
@@ -40,6 +44,17 @@ enum Loc {
     Single(CellAddr, usize),
     /// Position in `areas[sheet]`.
     Area(SheetId, usize),
+    /// Position in `spans`.
+    Span(usize),
+}
+
+/// A registered 3-D span with its tab positions (lowest, highest) under
+/// the current tab order (`None` while an end sheet is unknown).
+#[derive(Clone, Debug)]
+struct SpanEntry {
+    span: Span3d,
+    id: FormulaCellId,
+    tabs: Option<(u32, u32)>,
 }
 
 /// The Phase A [`DepIndex`].
@@ -47,6 +62,9 @@ enum Loc {
 pub struct HashDepIndex {
     singles: HashMap<CellAddr, SmallVec<[FormulaCellId; 2]>>,
     areas: HashMap<SheetId, Vec<(CellRange, FormulaCellId)>>,
+    spans: Vec<SpanEntry>,
+    /// Tab position of each sheet (for matching spans).
+    tabs: HashMap<SheetId, u32>,
     back: SecondaryMap<FormulaCellId, SmallVec<[Loc; 4]>>,
     volatile: HashSet<FormulaCellId>,
     /// Name key (lowercase) → formulas using that name (directly or
@@ -67,6 +85,51 @@ impl HashDepIndex {
         self.areas.get(&sheet).map_or(0, Vec::len)
     }
 
+    /// Number of registered 3-D spans.
+    pub fn span_count(&self) -> usize {
+        self.spans.len()
+    }
+
+    /// Sets the tab order spans are matched against.
+    pub fn set_tab_order(&mut self, order: &[SheetId]) {
+        self.tabs = order
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (*s, i as u32))
+            .collect();
+        for e in &mut self.spans {
+            e.tabs = span_tabs(&self.tabs, &e.span);
+        }
+    }
+
+    /// Records a sheet appended at tab position `at` (no other sheet moved).
+    pub fn append_tab(&mut self, sheet: SheetId, at: u32) {
+        self.tabs.insert(sheet, at);
+        for e in &mut self.spans {
+            if e.tabs.is_none() {
+                e.tabs = span_tabs(&self.tabs, &e.span);
+            }
+        }
+    }
+
+    /// Registers formula `id` as reading the 3-D spans `spans` (in
+    /// addition to what [`DepIndex::add`] registered).
+    pub fn add_spans(&mut self, id: FormulaCellId, spans: &[Span3d]) {
+        if spans.is_empty() {
+            return;
+        }
+        let mut locs: SmallVec<[Loc; 4]> = self.back.remove(id).unwrap_or_default();
+        for s in spans {
+            self.spans.push(SpanEntry {
+                span: *s,
+                id,
+                tabs: span_tabs(&self.tabs, s),
+            });
+            locs.push(Loc::Span(self.spans.len() - 1));
+        }
+        self.back.insert(id, locs);
+    }
+
     /// Number of single-cell keys.
     pub fn single_count(&self) -> usize {
         self.singles.len()
@@ -76,6 +139,7 @@ impl HashDepIndex {
     pub fn clear(&mut self) {
         self.singles.clear();
         self.areas.clear();
+        self.spans.clear();
         self.back.clear();
         self.volatile.clear();
         self.names.clear();
@@ -144,6 +208,7 @@ impl HashDepIndex {
             .filter_map(|l| match l {
                 Loc::Single(a, _) => Some(CellRange::single(*a)),
                 Loc::Area(sheet, i) => self.areas.get(sheet).and_then(|v| v.get(*i)).map(|e| e.0),
+                Loc::Span(i) => self.spans.get(*i).map(|e| e.span.rect),
             })
             .collect()
     }
@@ -162,7 +227,7 @@ impl DepIndex for HashDepIndex {
             locs.iter()
                 .filter_map(|l| match l {
                     Loc::Single(a, _) => Some(*a),
-                    Loc::Area(..) => None,
+                    Loc::Area(..) | Loc::Span(_) => None,
                 })
                 .collect()
         };
@@ -197,13 +262,16 @@ impl DepIndex for HashDepIndex {
         let Some(mut locs) = self.back.remove(id) else {
             return;
         };
-        // Areas in descending index order, so an entry moved by swap_remove
-        // never belongs to `id` itself.
+        // Areas and spans in descending index order, so an entry moved by
+        // swap_remove never belongs to `id` itself.
+        let rank = |l: &Loc| match l {
+            Loc::Span(_) => 0,
+            Loc::Area(..) => 1,
+            Loc::Single(..) => 2,
+        };
         locs.sort_by(|a, b| match (a, b) {
-            (Loc::Area(_, i), Loc::Area(_, j)) => j.cmp(i),
-            (Loc::Area(..), Loc::Single(..)) => std::cmp::Ordering::Less,
-            (Loc::Single(..), Loc::Area(..)) => std::cmp::Ordering::Greater,
-            _ => std::cmp::Ordering::Equal,
+            (Loc::Area(_, i), Loc::Area(_, j)) | (Loc::Span(i), Loc::Span(j)) => j.cmp(i),
+            _ => rank(a).cmp(&rank(b)),
         });
         for loc in locs {
             match loc {
@@ -229,6 +297,24 @@ impl DepIndex for HashDepIndex {
                     }
                     if list.is_empty() {
                         self.singles.remove(&a);
+                    }
+                }
+                Loc::Span(idx) => {
+                    if idx >= self.spans.len() || self.spans[idx].id != id {
+                        continue;
+                    }
+                    let last = self.spans.len() - 1;
+                    self.spans.swap_remove(idx);
+                    if idx < last {
+                        let moved = self.spans[idx].id;
+                        if let Some(ml) = self.back.get_mut(moved) {
+                            for l in ml.iter_mut() {
+                                if *l == Loc::Span(last) {
+                                    *l = Loc::Span(idx);
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
                 Loc::Area(sheet, idx) => {
@@ -286,6 +372,27 @@ impl DepIndex for HashDepIndex {
                 }
             }
         }
+        if self.spans.is_empty() {
+            return;
+        }
+        // Each span is reported once however many changed ranges it covers
+        // (thousands of edited sheets under one span must not produce
+        // sheets × spans entries).
+        let changed: Vec<(u32, &CellRange)> = changed
+            .iter()
+            .filter_map(|r| self.tabs.get(&r.sheet).map(|t| (*t, r)))
+            .collect();
+        for e in &self.spans {
+            let Some((lo, hi)) = e.tabs else {
+                continue;
+            };
+            if changed
+                .iter()
+                .any(|(t, r)| lo <= *t && *t <= hi && e.span.rect_hits(r))
+            {
+                out.push(e.id);
+            }
+        }
     }
 
     fn set_volatile(&mut self, id: FormulaCellId, volatile: bool) {
@@ -299,6 +406,11 @@ impl DepIndex for HashDepIndex {
     fn volatile(&self) -> Vec<FormulaCellId> {
         self.volatile.iter().copied().collect()
     }
+}
+
+fn span_tabs(tabs: &HashMap<SheetId, u32>, s: &Span3d) -> Option<(u32, u32)> {
+    let (a, b) = (*tabs.get(&s.first)?, *tabs.get(&s.last)?);
+    Some((a.min(b), a.max(b)))
 }
 
 /// Coalesces cells and ranges into fewer rectangles: cells of one column

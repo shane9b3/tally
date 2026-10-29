@@ -567,6 +567,12 @@ mod tests {
             ("of:={1;2|3;4}", "{1,2;3,4}"),
             ("of:=TRUE()", "TRUE"),
             ("=SUM(A1,B1)", "SUM(A1,B1)"),
+            // A 3D range starting on the formula's own sheet (Sheet1).
+            ("of:=SUM([.A1:$Data.B2])", "SUM(Sheet1:Data!A1:B2)"),
+            (
+                "of:=SUM([$Sheet1.A1:$'My Sheet'.A1])",
+                "SUM('Sheet1:My Sheet'!A1)",
+            ),
         ];
         for (of, want) in cases {
             assert_eq!(of_to_excel(of, at("C3"), &r).as_deref(), Some(want), "{of}");

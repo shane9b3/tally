@@ -59,3 +59,9 @@ expect = 0.5
 name = "fraction"
 formula = "=AVERAGE(1;2)"
 expect = 1.5
+
+[[case]]
+name = "3D reference"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=AVERAGE(Sheet1.A1:Sheet3.A2)"
+expect = 20

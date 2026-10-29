@@ -5,7 +5,10 @@
  * It is deliberately tiny and is NOT a spreadsheet engine:
  * - inputs are recognised as number, TRUE/FALSE, formula or text;
  * - formulas support only `=ref`, `=a OP b` (OP one of + - * /, operands a
- *   cell reference or a number) and `=SUM(range)`; anything else is `#NAME?`;
+ *   cell reference or a number) and `=SUM|COUNT|AVERAGE|MIN|MAX(range)`,
+ *   where the range may name a sheet (`Sheet2.A1:B2`) or span sheets in
+ *   tab order (`Sheet1.A1:Sheet3.A1`, a 3D reference); anything else is
+ *   `#NAME?`;
  * - formulas are evaluated on read, so dependents are always fresh;
  * - styles support the full `StylePatch` (display only; number formats are
  *   stored but not applied);
@@ -370,11 +373,104 @@ const OPERAND = String.raw`(\$?[A-Za-z]{1,3}\$?\d{1,7}|[+-]?(?:\d+\.?\d*|\.\d+))
 const BINARY_RE = new RegExp(String.raw`^${OPERAND}\s*([-+*/])\s*${OPERAND}$`);
 const SINGLE_RE = new RegExp(String.raw`^${OPERAND}$`);
 const SUM_RE = /^SUM\(\s*([$A-Za-z0-9]+(?::[$A-Za-z0-9]+)?)\s*\)$/i;
+/** `FN(ref)` for the aggregates the mock evaluates. */
+const AGG_RE = /^(SUM|COUNT|AVERAGE|MIN|MAX)\(\s*(.+?)\s*\)$/i;
+/** An optional sheet qualifier (`$Sheet1.`, `'My Sheet'.`) and a cell. */
+const QUAL_CELL = String.raw`(?:\$?('(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_]*)\.)?(\$?[A-Za-z]{1,3}\$?\d{1,7})`;
+const AGG_REF_RE = new RegExp(String.raw`^${QUAL_CELL}(?::${QUAL_CELL})?$`);
+
+/**
+ * Parses an aggregate's reference: a range on the formula's sheet, on a
+ * named sheet, or over the sheets from the first to the last in tab order
+ * (either order). `null` when it is no reference or a sheet is unknown.
+ */
+function parseSheetRange(
+  text: string,
+  current: MockSheet,
+  sheets: readonly MockSheet[],
+): { sheets: MockSheet[]; range: RangeDto } | null {
+  const m = AGG_REF_RE.exec(text.trim());
+  if (!m || m[2] === undefined) return null;
+  const find = (q: string | undefined): MockSheet | null | undefined => {
+    if (q === undefined) return undefined;
+    const name = q.startsWith("'") ? q.slice(1, -1).replace(/''/g, "'") : q;
+    return sheets.find((sh) => sh.name.toLowerCase() === name.toLowerCase()) ?? null;
+  };
+  const first = find(m[1]);
+  const last = m[3] === undefined ? first : find(m[3]);
+  if (first === null || last === null) return null;
+  const range = parseRange(m[4] === undefined ? m[2] : `${m[2]}:${m[4]}`);
+  if (!range) return null;
+  const a = sheets.indexOf(first ?? current);
+  const b = sheets.indexOf(last ?? first ?? current);
+  if (a < 0 || b < 0) return { sheets: [first ?? current], range };
+  return { sheets: sheets.slice(Math.min(a, b), Math.max(a, b) + 1), range };
+}
 
 class Evaluator {
   private readonly visiting = new Set<string>();
 
-  constructor(private readonly sheet: MockSheet) {}
+  /**
+   * `sheets`: every sheet in tab order (for sheet and 3D references);
+   * `peers`: the evaluators of the other sheets, shared so a cycle across
+   * sheets is caught.
+   */
+  constructor(
+    private readonly sheet: MockSheet,
+    private readonly sheets: readonly MockSheet[] = [sheet],
+    private readonly peers: Map<SheetId, Evaluator> = new Map(),
+  ) {
+    if (!peers.has(sheet.id)) peers.set(sheet.id, this);
+  }
+
+  /** The evaluator of a sheet. */
+  private on(sh: MockSheet): Evaluator {
+    let ev = this.peers.get(sh.id);
+    if (!ev) {
+      ev = new Evaluator(sh, this.sheets, this.peers);
+    }
+    return ev;
+  }
+
+  /** SUM, COUNT, AVERAGE, MIN or MAX over a (possibly 3D) reference. */
+  private aggregate(fn: string, refText: string): Scalar {
+    const ref = parseSheetRange(refText, this.sheet, this.sheets);
+    if (!ref) return { error: "#NAME?" };
+    const nums: number[] = [];
+    for (const sh of ref.sheets) {
+      const ev = this.on(sh);
+      const hits: [number, number][] = [];
+      for (const [k, cell] of sh.cells) {
+        if (cell.input === "") continue;
+        const [r, c] = parseKey(k);
+        if (inRange(ref.range, r, c)) hits.push([r, c]);
+      }
+      hits.sort((x, y) => x[1] - y[1] || x[0] - y[0]); // column-major, as the engine
+      for (const [r, c] of hits) {
+        const v = ev.value(r, c);
+        if (isError(v)) return v;
+        if (typeof v === "number") nums.push(v); // text and bools in ranges are skipped
+      }
+    }
+    switch (fn) {
+      case "SUM":
+        return nums.reduce((a, b) => a + b, 0);
+      case "COUNT":
+        return nums.length;
+      case "AVERAGE":
+        return nums.length === 0 ? { error: "#DIV/0!" } : nums.reduce((a, b) => a + b, 0) / nums.length;
+      case "MIN":
+      case "MAX": {
+        // A loop, not Math.min(...nums): spreading a huge range overflows the stack.
+        if (nums.length === 0) return 0;
+        let best = nums[0] ?? 0;
+        for (const x of nums) best = fn === "MIN" ? Math.min(best, x) : Math.max(best, x);
+        return best;
+      }
+      default:
+        return { error: "#NAME?" };
+    }
+  }
 
   value(r: number, c: number): Scalar {
     const cell = this.sheet.cells.get(key(r, c));
@@ -422,21 +518,8 @@ class Evaluator {
         return typeof v === "number" ? -v : v;
       }
     }
-    const sum = SUM_RE.exec(src);
-    if (sum?.[1] !== undefined) {
-      const range = parseRange(sum[1]);
-      if (!range) return { error: "#NAME?" };
-      let total = 0;
-      for (const [k, cell] of this.sheet.cells) {
-        if (cell.input === "") continue;
-        const [r, c] = parseKey(k);
-        if (!inRange(range, r, c)) continue;
-        const v = this.value(r, c);
-        if (isError(v)) return v;
-        if (typeof v === "number") total += v; // text and bools in ranges are skipped
-      }
-      return total;
-    }
+    const agg = AGG_RE.exec(src);
+    if (agg?.[1] !== undefined && agg[2] !== undefined) return this.aggregate(agg[1].toUpperCase(), agg[2]);
     const single = SINGLE_RE.exec(src);
     if (single?.[1] !== undefined) return this.operand(single[1]);
     const bin = BINARY_RE.exec(src);
@@ -634,7 +717,7 @@ export class MockClient implements EngineClientV4, ShellClient {
     return this.run(() => {
       const d = this.doc(doc);
       const sh = this.sheet(d, sheet);
-      const ev = new Evaluator(sh);
+      const ev = new Evaluator(sh, d.state.sheets);
       return ranges.map((range) => {
         const cells: CellView[] = [];
         for (const [k, cell] of sh.cells) {
@@ -681,8 +764,9 @@ export class MockClient implements EngineClientV4, ShellClient {
 
   selectionStats(doc: DocId, sel: SelectionDto): Promise<SelectionStats> {
     return this.run(() => {
-      const sh = this.sheet(this.doc(doc), sel.sheet);
-      const ev = new Evaluator(sh);
+      const d = this.doc(doc);
+      const sh = this.sheet(d, sel.sheet);
+      const ev = new Evaluator(sh, d.state.sheets);
       let count = 0;
       let countNumbers = 0;
       let sum = 0;
@@ -1149,10 +1233,11 @@ export class MockClient implements EngineClientV4, ShellClient {
 
   previewFormula(doc: DocId, sheet: SheetId, _r: number, _c: number, text: string): Promise<string | null> {
     return this.run(() => {
-      const sh = this.sheet(this.doc(doc), sheet);
+      const d = this.doc(doc);
+      const sh = this.sheet(d, sheet);
       const src = text.trim().replace(/^=/, "");
       if (src === "") return null;
-      return displayText(new Evaluator(sh).evalText(src));
+      return displayText(new Evaluator(sh, d.state.sheets).evalText(src));
     });
   }
 
@@ -1175,11 +1260,12 @@ export class MockClient implements EngineClientV4, ShellClient {
 
   copy(doc: DocId, sel: SelectionDto): Promise<ClipboardOut> {
     return this.run(() => {
-      const sh = this.sheet(this.doc(doc), sel.sheet);
+      const d = this.doc(doc);
+      const sh = this.sheet(d, sel.sheet);
       const range = sel.ranges[0];
       if (!range || !validRange(range)) throw apiError("invalid_argument", "empty selection");
       if (cellCount(range) > MAX_CELLS_PER_OP) throw apiError("invalid_argument", "selection too large");
-      const ev = new Evaluator(sh);
+      const ev = new Evaluator(sh, d.state.sheets);
       const inputs: string[][] = [];
       const texts: string[][] = [];
       for (let r = range.r0; r <= range.r1; r++) {
@@ -1638,7 +1724,7 @@ export class MockClient implements EngineClientV4, ShellClient {
         const src = this.sheet(d, op.sheet);
         const targets = [...new Set(op.to)].map((id) => this.sheet(d, id)).filter((sh) => sh !== src);
         // Source values are read before any target changes (the engine's clip snapshot).
-        const ev = new Evaluator(src);
+        const ev = new Evaluator(src, d.state.sheets);
         const values = new Map<string, Scalar>();
         const srcValues = (r: number, c: number): Scalar => {
           const k = key(r, c);

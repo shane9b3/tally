@@ -28,8 +28,14 @@
 //!   with the formula cell, except in array context (array-forcing
 //!   parameters such as SUMPRODUCT's), where references become matrices and
 //!   operators apply elementwise. Inline arrays always operate elementwise.
-//! - A 3-D reference (`Sheet1.A1:Sheet3.A1`) evaluates to `#VALUE!` in
-//!   Phase A (`EvalValue` has no multi-sheet variant).
+//! - A 3-D reference (`Sheet1.A1:Sheet3.A1`, AOO `svDoubleRef` with
+//!   `Tab1 != Tab2`) evaluates to [`EvalValue::Span3d`]: the rectangle on
+//!   every sheet from the first to the last in tab order (either order,
+//!   hidden sheets included). Sequence functions iterate every sheet; as an
+//!   operand it is intersected on the formula's own sheet
+//!   ([`tally_functions::coerce::intersect_3d`], `#VALUE!` outside the
+//!   span); a matrix conversion (array context, array parameters) is
+//!   `Err:504`, as AOO's `CreateMatrixFromDoubleRef`.
 
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
@@ -193,6 +199,7 @@ pub fn array_result(v: &EvalValue, ctx: &mut dyn EvalContext) -> Value {
             Ok(m) => Value::Array(m),
             Err(e) => Value::Error(e),
         },
+        v if v.is_3d() => Value::Error(ErrorKind::ParamList),
         other => cell_result(other, ctx),
     }
 }
@@ -247,7 +254,14 @@ pub fn eval_at_depth<'e>(
                 Expr::Bool(b) => vals.push(EvalValue::bool(*b)),
                 Expr::Err(k) => vals.push(EvalValue::error(*k)),
                 Expr::Missing => vals.push(EvalValue::Missing),
-                Expr::Ref(r) => vals.push(resolve_ref(r, ctx.origin())),
+                Expr::Ref(r) => {
+                    let v = resolve_ref(r, ctx);
+                    // A 3-D reference costs one unit per sheet it spans.
+                    if v.is_3d() && !env.charge(v.areas().map_or(0, |a| a.len() as u64)) {
+                        return EvalValue::error(ErrorKind::FormulaOverflow);
+                    }
+                    vals.push(v);
+                }
                 Expr::Name(n) => name_step(n, arr, env, &mut work, &mut vals),
                 Expr::Paren(x) => work.push(Work::Eval(x, arr)),
                 Expr::Unary(op, x) => {
@@ -474,6 +488,17 @@ fn call_cost(
                 };
                 (cells, d)
             }
+            // A union or a 3-D reference: the used part of every area (a
+            // single cell stays a unit of work).
+            v if v.is_reference() && !matches!(v, EvalValue::Range(_)) => {
+                let cells = v
+                    .areas()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|r| ctx.used_bounds(r).map_or(0, |u| u.cell_count()))
+                    .fold(0u64, u64::saturating_add);
+                (cells.max(1), (1, 1))
+            }
             _ => (1, (1, 1)),
         };
         total = total.saturating_add(cells);
@@ -500,11 +525,14 @@ fn call_cost(
     total.saturating_add(extra)
 }
 
-/// Resolves a reference at `origin`.
-fn resolve_ref(r: &RefExpr, origin: CellAddr) -> EvalValue {
-    match r.resolve(origin) {
+/// Resolves a reference at the formula's origin; a 3-D span becomes one
+/// area per sheet in tab order.
+fn resolve_ref(r: &RefExpr, ctx: &dyn EvalContext) -> EvalValue {
+    match r.resolve(ctx.origin()) {
         ResolvedRef::Range(cr) => EvalValue::Range(cr),
-        ResolvedRef::Span3d { .. } => EvalValue::error(ErrorKind::Value),
+        ResolvedRef::Span3d { first, last, area } => {
+            tally_functions::coerce::span_3d_value(ctx, first, last, area)
+        }
         ResolvedRef::Invalid => EvalValue::error(ErrorKind::Ref),
     }
 }
@@ -573,8 +601,14 @@ impl EvalContext for ArrayCtx<'_> {
     fn parse_reference_text(&self, text: &str, a1: bool) -> Option<CellRange> {
         self.inner.parse_reference_text(text, a1)
     }
+    fn parse_reference_text_3d(&self, text: &str) -> Option<(SheetId, SheetId, CellRange)> {
+        self.inner.parse_reference_text_3d(text)
+    }
     fn record_dynamic_dep(&mut self, range: &CellRange) {
         self.inner.record_dynamic_dep(range);
+    }
+    fn record_dynamic_span(&mut self, first: SheetId, last: SheetId, rect: CellRange) {
+        self.inner.record_dynamic_span(first, last, rect);
     }
     fn now_serial(&self) -> f64 {
         self.inner.now_serial()
@@ -587,6 +621,9 @@ impl EvalContext for ArrayCtx<'_> {
     }
     fn sheet_count(&self) -> u32 {
         self.inner.sheet_count()
+    }
+    fn sheet_at(&self, index: u32) -> Option<SheetId> {
+        self.inner.sheet_at(index)
     }
     fn cell_format_info(&self, addr: CellAddr) -> CellFormatInfo {
         self.inner.cell_format_info(addr)
@@ -659,6 +696,9 @@ fn operand(v: EvalValue, array: bool, ctx: &mut dyn EvalContext) -> Operand {
             Ok(m) => Operand::Matrix(m),
             Err(e) => Operand::Scalar(Value::Error(e)),
         },
+        // AOO `ConvertMatrixParameters`: a 3-D reference cannot become a
+        // matrix (`errIllegalParameter`).
+        v if array && v.is_3d() => Operand::Scalar(Value::Error(ErrorKind::ParamList)),
         // A single-cell range, an implicitly intersected one, or a union
         // (which has no single cell to intersect with: `#VALUE!`).
         other => Operand::Scalar(scalar_value(&other, ctx)),
@@ -714,7 +754,16 @@ fn apply_binary(
     ctx: &mut dyn EvalContext,
 ) -> EvalValue {
     match op {
-        BinOp::Range => return range_op(&l, &r),
+        BinOp::Range => {
+            let v = range_op(&l, &r, ctx);
+            // The sheets between the operands are not static precedents.
+            // Recorded as one span, so a sheet inserted or moved into it
+            // later recalculates the formula.
+            if let Some([first, .., last]) = v.areas().filter(|_| v.is_3d()) {
+                ctx.record_dynamic_span(first.sheet, last.sheet, *first);
+            }
+            return v;
+        }
         BinOp::Intersect => return intersect_op(&l, &r),
         BinOp::Union => return union_op(&l, &r),
         _ => {}
@@ -762,9 +811,42 @@ fn elem(o: &Operand, r: u32, c: u32) -> Value {
     }
 }
 
-fn range_op(l: &EvalValue, r: &EvalValue) -> EvalValue {
+fn range_op(l: &EvalValue, r: &EvalValue, ctx: &dyn EvalContext) -> EvalValue {
     if let Some(e) = l.as_error().or_else(|| r.as_error()) {
         return EvalValue::error(e);
+    }
+    if l.is_3d()
+        || r.is_3d()
+        || matches!((l, r), (EvalValue::Range(a), EvalValue::Range(b)) if a.sheet != b.sheet)
+    {
+        // AOO extends the bounding box over sheets too: from the first to
+        // the last sheet of both operands, in tab order.
+        let (Some(a), Some(b)) = (l.entries(), r.entries()) else {
+            return EvalValue::error(ErrorKind::Value);
+        };
+        if a.len() != 1 || b.len() != 1 {
+            return EvalValue::error(ErrorKind::Value);
+        }
+        let all: Vec<CellRange> = a[0].0.iter().chain(b[0].0.iter()).copied().collect();
+        let tabs: Option<Vec<u32>> = all.iter().map(|x| ctx.sheet_index(x.sheet)).collect();
+        let Some(tabs) = tabs else {
+            return EvalValue::error(ErrorKind::Ref);
+        };
+        let (lo, hi) = (
+            tabs.iter().copied().min().unwrap_or(0),
+            tabs.iter().copied().max().unwrap_or(0),
+        );
+        let (Some(first), Some(last)) = (ctx.sheet_at(lo), ctx.sheet_at(hi)) else {
+            return EvalValue::error(ErrorKind::Ref);
+        };
+        let rect = CellRange::new(
+            first,
+            all.iter().map(|x| x.r0).min().unwrap_or(0),
+            all.iter().map(|x| x.c0).min().unwrap_or(0),
+            all.iter().map(|x| x.r1).max().unwrap_or(0),
+            all.iter().map(|x| x.c1).max().unwrap_or(0),
+        );
+        return tally_functions::coerce::span_3d_value(ctx, first, last, rect);
     }
     match (l, r) {
         (EvalValue::Range(a), EvalValue::Range(b)) if a.sheet == b.sheet => {
@@ -786,20 +868,32 @@ fn union_op(l: &EvalValue, r: &EvalValue) -> EvalValue {
     if let Some(e) = l.as_error().or_else(|| r.as_error()) {
         return EvalValue::error(e);
     }
-    match (l.areas(), r.areas()) {
-        (Some(a), Some(b)) => {
-            let mut areas = Vec::with_capacity(a.len() + b.len());
-            areas.extend_from_slice(a);
-            areas.extend_from_slice(b);
-            EvalValue::union(areas)
-        }
-        _ => EvalValue::error(ErrorKind::Value),
-    }
+    // 3-D references stay one entry each (AOO keeps them as tokens of
+    // the reference list).
+    EvalValue::union_of(&[l, r]).unwrap_or(EvalValue::error(ErrorKind::Value))
 }
 
 fn intersect_op(l: &EvalValue, r: &EvalValue) -> EvalValue {
     if let Some(e) = l.as_error().or_else(|| r.as_error()) {
         return EvalValue::error(e);
+    }
+    if l.is_3d() || r.is_3d() {
+        // AOO `ScIntersect` over sheets: the rectangles intersect on the
+        // sheets both sides span (consecutive in tab order).
+        let (Some(a), Some(b)) = (l.areas(), r.areas()) else {
+            return EvalValue::error(ErrorKind::Value);
+        };
+        let hits: Vec<CellRange> = a
+            .iter()
+            .flat_map(|x| b.iter().filter_map(move |y| x.intersect(y)))
+            .collect();
+        let same =
+            |x: &CellRange, y: &CellRange| (x.r0, x.c0, x.r1, x.c1) == (y.r0, y.c0, y.r1, y.c1);
+        return match hits.first() {
+            None => EvalValue::error(ErrorKind::Null),
+            Some(h) if hits.iter().all(|x| same(x, h)) => EvalValue::span_3d(hits),
+            Some(_) => EvalValue::union(hits),
+        };
     }
     match (l, r) {
         (EvalValue::Range(a), EvalValue::Range(b)) => match a.intersect(b) {

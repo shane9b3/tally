@@ -261,7 +261,7 @@ fn target(a: &mut Args<'_>) -> Result<CellAddr, ErrorKind> {
     if a.is_missing(1) {
         Ok(a.ctx().origin())
     } else {
-        Ok(a.range(1)?.start())
+        a.target_cell(1)
     }
 }
 
@@ -354,8 +354,8 @@ fn cell(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
 fn formula(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
-        let r = a.range(0)?;
-        let info = a.ctx().cell_format_info(r.start());
+        let at = a.target_cell(0)?;
+        let info = a.ctx().cell_format_info(at);
         match info.formula {
             Some(f) if info.has_formula || !f.is_empty() => {
                 if f.starts_with('=') {

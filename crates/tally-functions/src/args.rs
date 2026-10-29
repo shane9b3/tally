@@ -211,20 +211,40 @@ impl<'a> Args<'a> {
     }
 
     /// Argument `i` as a single-area reference. A scalar error propagates;
-    /// a union or anything else that is not a reference is `#VALUE!`.
+    /// a 3D reference is `Err:504` (AOO's lookups and `*IF` functions:
+    /// `errIllegalParameter` when `Tab1 != Tab2`); a union or anything else
+    /// that is not a reference is `#VALUE!`.
     pub fn range(&mut self, i: usize) -> Result<CellRange, ErrorKind> {
         match self.any(i) {
             EvalValue::Range(r) => Ok(r),
             EvalValue::Scalar(Value::Error(e)) => Err(e),
+            v if v.is_3d() => Err(ErrorKind::ParamList),
             _ => Err(ErrorKind::Value),
         }
     }
 
+    /// The cell argument `i` designates for CELL, FORMULA and ISFORMULA:
+    /// the top-left cell of a range; a 3D reference intersected on the
+    /// formula's sheet (AOO `PopDoubleRefOrSingleRef`, `#VALUE!` when it
+    /// cannot be); otherwise as [`Args::range`].
+    pub fn target_cell(&mut self, i: usize) -> Result<tally_types::CellAddr, ErrorKind> {
+        let v = self.any(i);
+        if v.is_3d() {
+            let origin = self.ctx.origin();
+            return coerce::intersect_3d(v.areas().unwrap_or_default(), origin);
+        }
+        Ok(self.range(i)?.start())
+    }
+
     /// Argument `i` as the areas of a reference: one for a range, all of
     /// them for a union (see [`EvalValue::areas`]). A scalar error
-    /// propagates; anything else that is not a reference is `#VALUE!`.
+    /// propagates; a 3D reference is `Err:504` (as [`Args::range`]);
+    /// anything else that is not a reference is `#VALUE!`.
     pub fn ranges(&mut self, i: usize) -> Result<Vec<CellRange>, ErrorKind> {
         let v = self.any(i);
+        if v.has_3d() {
+            return Err(ErrorKind::ParamList);
+        }
         match v.areas() {
             Some(areas) => Ok(areas.to_vec()),
             None => match v {

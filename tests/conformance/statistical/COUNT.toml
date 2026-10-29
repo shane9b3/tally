@@ -49,3 +49,9 @@ name = "several references"
 cells = { A1 = 1, C1 = 2, C2 = "y", C3 = 3 }
 formula = "=COUNT(A1;C1:C3)"
 expect = 3
+
+[[case]]
+name = "3D reference"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=COUNT(Sheet1.A1:Sheet3.A2)"
+expect = 3

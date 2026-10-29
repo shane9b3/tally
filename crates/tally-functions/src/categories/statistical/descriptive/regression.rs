@@ -90,12 +90,16 @@ def!(
     "Extrapolates a future value along a linear trend."
 );
 
-/// The data of argument `i` as one matrix: a reference union
-/// (`A1:A2~C1:C2`) is not a matrix and gives Err:502, as AOO's
+/// The data of argument `i` as one matrix: a 3D reference gives Err:504; a
+/// reference union (`A1:A2~C1:C2`) is not a matrix and gives Err:502, as AOO's
 /// `GetMatrix` (sc/source/core/tool/interpr5.cxx:515-519, reached from
 /// `CalculatePearsonCovar`, interpr3.cxx:3955-3960; correctness review 4,
 /// M37).
 fn matrix_data(a: &mut Args, i: usize) -> Result<super::util::Data, ErrorKind> {
+    if a.any(i).is_3d() {
+        // `CreateMatrixFromDoubleRef`: not a 2D matrix (errIllegalParameter).
+        return Err(ErrorKind::ParamList);
+    }
     if a.any(i).areas().is_some_and(|areas| areas.len() > 1) {
         return Err(ErrorKind::InvalidArgument);
     }

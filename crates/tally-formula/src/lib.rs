@@ -39,7 +39,7 @@ use tally_types::SheetId;
 
 pub use adjust::{
     adjust_3d_for_structure_change, adjust_for_structure_change, move_refs, reanchor, relocate,
-    shifted_origin, BlockMove, Covers, StructureChange,
+    retarget_3d_for_sheet_delete, shifted_origin, BlockMove, Covers, StructureChange,
 };
 pub use ast::{
     ArrayLit, BinOp, CellRefExpr, Expr, Formula, FormulaFlags, FuncId, FuncRef, NameId, NameRef,

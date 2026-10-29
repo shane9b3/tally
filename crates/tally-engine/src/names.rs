@@ -622,6 +622,8 @@ impl Workbook {
         let crate::workbook::Analysis {
             precedents: p,
             strict,
+            spans,
+            strict_spans,
             keys,
             has_3d,
             volatile: vol,
@@ -630,15 +632,19 @@ impl Workbook {
             return;
         };
         let dynamic = fc.dynamic_deps.clone();
+        let mut all_spans = spans.clone();
+        all_spans.extend_from_slice(fc.dynamic_spans());
         self.deps.remove(id);
         let mut all = p.clone();
         all.extend(dynamic);
         self.deps.add(id, &all);
+        self.deps.add_spans(id, &all_spans);
         self.deps.set_volatile(id, vol);
         self.deps.set_names(id, &keys);
         if let Some(fc) = self.formulas.get_mut(id) {
             fc.precedents = p;
-            fc.strict_precedents = strict;
+            fc.strict_precedents = strict.map(Box::new);
+            fc.set_static_spans(spans, strict_spans);
             fc.has_names = !keys.is_empty() || has_names(&formula.expr);
             fc.has_3d = has_3d;
             fc.volatile = vol;

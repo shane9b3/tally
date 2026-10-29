@@ -600,6 +600,7 @@ pub fn paste_internal(
                 } else {
                     content.clone()
                 };
+                let content = without_missing_sheets(wb, content);
                 wb.restore_content(addr, Some(content));
             }
         }
@@ -831,6 +832,60 @@ pub fn parse_tsv(text: &str) -> Vec<Vec<String>> {
         rows.push(row);
     }
     rows
+}
+
+/// A copied formula whose sheets were deleted since the copy: those
+/// references become `#REF!` (`SheetRef::Deleted`), as they print, instead
+/// of reading an empty sheet that no longer exists.
+fn without_missing_sheets(wb: &Workbook, content: SnapContent) -> SnapContent {
+    use tally_formula::{RefExpr, SheetRef};
+    let SnapContent::Formula {
+        formula,
+        invalid_text,
+        array,
+    } = content
+    else {
+        return content;
+    };
+    let gone = |s: &SheetRef| matches!(s, SheetRef::Id { id, .. } if wb.sheet(*id).is_none());
+    let mut hit = false;
+    formula.expr.walk_refs(|r| {
+        hit |= match r {
+            RefExpr::Cell(c) => gone(&c.sheet),
+            RefExpr::Area(a, b) => gone(&a.sheet) || gone(&b.sheet),
+            RefExpr::Cols { sheet, .. } | RefExpr::Rows { sheet, .. } => gone(sheet),
+            RefExpr::Invalid => false,
+        };
+    });
+    if !hit {
+        return SnapContent::Formula {
+            formula,
+            invalid_text,
+            array,
+        };
+    }
+    let mut nf = (*formula).clone();
+    nf.expr.walk_refs_mut(|r| {
+        let mark = |s: &mut SheetRef| {
+            if gone(s) {
+                *s = SheetRef::Deleted;
+            }
+        };
+        match r {
+            RefExpr::Cell(c) => mark(&mut c.sheet),
+            RefExpr::Area(a, b) => {
+                mark(&mut a.sheet);
+                mark(&mut b.sheet);
+            }
+            RefExpr::Cols { sheet, .. } | RefExpr::Rows { sheet, .. } => mark(sheet),
+            RefExpr::Invalid => {}
+        }
+    });
+    SnapContent::Formula {
+        formula: Arc::new(nf),
+        invalid_text,
+        array,
+    }
 }
 
 #[cfg(test)]

@@ -64,6 +64,10 @@ fn permutationa(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue 
 fn prob(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
+        // AOO `GetMatrix`: a 3D reference is not a 2D matrix (Err:504).
+        if a.any(0).is_3d() || a.any(1).is_3d() {
+            return Err(ErrorKind::ParamList);
+        }
         let xs = data(&mut a, 0)?;
         let ps = data(&mut a, 1)?;
         let lo = a.num(2)?;

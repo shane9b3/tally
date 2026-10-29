@@ -32,6 +32,12 @@
 //! iterates `svRefList` the same way); as a scalar argument it is
 //! `#VALUE!`, like any multi-cell reference that cannot be intersected.
 //!
+//! # 3D references
+//!
+//! A 3D reference ([`EvalValue::Span3d`]) is a sequence of its per-sheet
+//! areas in tab order (AOO's `ScValueIterator` walks `Tab1..=Tab2`); as a
+//! scalar it intersects on the formula's own sheet ([`intersect_3d`]).
+//!
 //! # Locale
 //!
 //! [`locale_of`] resolves [`EvalContext::locale_tag`] to the
@@ -74,6 +80,61 @@ pub fn intersect(range: &CellRange, origin: CellAddr) -> Result<CellAddr, ErrorK
     Err(ErrorKind::Value)
 }
 
+/// Implicit intersection of a 3D reference (AOO
+/// `ScInterpreter::DoubleRefToPosSingleRef` with `Tab1 != Tab2`). `areas`
+/// are the per-sheet areas of an [`EvalValue::Span3d`] (same rectangle).
+///
+/// A one-row rectangle yields the cell in the origin's column, a
+/// one-column rectangle the cell in the origin's row (a single cell needs
+/// either, unlike a 2D single cell); the sheet is the formula's own sheet,
+/// which must be one of the spanned sheets. Anything else is `#VALUE!`
+/// (`errNoValue`).
+pub fn intersect_3d(areas: &[CellRange], origin: CellAddr) -> Result<CellAddr, ErrorKind> {
+    let Some(r) = areas.first() else {
+        return Err(ErrorKind::Value);
+    };
+    let (row, col) = if (r.c0..=r.c1).contains(&origin.col) {
+        if r.r0 != r.r1 {
+            return Err(ErrorKind::Value);
+        }
+        (r.r0, origin.col)
+    } else if (r.r0..=r.r1).contains(&origin.row) {
+        if r.c0 != r.c1 {
+            return Err(ErrorKind::Value);
+        }
+        (origin.row, r.c0)
+    } else {
+        return Err(ErrorKind::Value);
+    };
+    if !areas.iter().any(|a| a.sheet == origin.sheet) {
+        return Err(ErrorKind::Value);
+    }
+    Ok(CellAddr::new(origin.sheet, row, col))
+}
+
+/// The value of a 3D reference from `first` to `last` over the rectangle
+/// `area` (its sheet is ignored): one area per sheet between the two in
+/// tab order, either order ([`EvalValue::span_3d`]). `#REF!` if either
+/// sheet is unknown to `ctx`.
+pub fn span_3d_value(
+    ctx: &dyn EvalContext,
+    first: tally_types::SheetId,
+    last: tally_types::SheetId,
+    area: CellRange,
+) -> EvalValue {
+    let (Some(a), Some(b)) = (ctx.sheet_index(first), ctx.sheet_index(last)) else {
+        return EvalValue::error(ErrorKind::Ref);
+    };
+    let mut areas = Vec::with_capacity((a.abs_diff(b) + 1) as usize);
+    for i in a.min(b)..=a.max(b) {
+        match ctx.sheet_at(i) {
+            Some(sheet) => areas.push(CellRange { sheet, ..area }),
+            None => return EvalValue::error(ErrorKind::Ref),
+        }
+    }
+    EvalValue::span_3d(areas)
+}
+
 /// The top-left element of a matrix (`#VALUE!` if the matrix is empty).
 pub fn top_left(m: &Matrix) -> Result<Value, ErrorKind> {
     m.get(0, 0).cloned().ok_or(ErrorKind::Value)
@@ -91,6 +152,15 @@ pub fn scalar_value(arg: &EvalValue, ctx: &mut dyn EvalContext) -> Value {
         }
         EvalValue::Scalar(v) => v.clone(),
         EvalValue::Range(r) => match intersect(r, ctx.origin()) {
+            Ok(addr) => match ctx.cell_value(addr) {
+                Value::Array(m) => top_left(&m).unwrap_or_else(Value::Error),
+                v => v,
+            },
+            Err(e) => Value::Error(e),
+        },
+        // A 3D reference intersects on the formula's own sheet.
+        #[allow(unreachable_patterns)]
+        v if v.is_3d() => match intersect_3d(v.areas().unwrap_or_default(), ctx.origin()) {
             Ok(addr) => match ctx.cell_value(addr) {
                 Value::Array(m) => top_left(&m).unwrap_or_else(Value::Error),
                 v => v,

@@ -2657,6 +2657,8 @@ pub fn copy_sheet(
     fx.created(u32::MAX, new);
     let mut out: Vec<Change> = names.into_iter().collect();
     out.push(Change::RemoveSheet { id: new });
+    // Formulas and names written before a sheet of this name existed.
+    out.extend(crate::ops::resolve_sheet_refs(wb, new));
     Ok(out)
 }
 

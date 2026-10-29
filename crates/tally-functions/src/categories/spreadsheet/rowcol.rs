@@ -40,6 +40,18 @@ fn position(ctx: &mut dyn EvalContext, args: &mut dyn ArgList, want_row: bool) -
                     }
                 }
                 EvalValue::Scalar(Value::Error(e)) => return Err(e),
+                // AOO: the first row/column of a 3D reference.
+                v if v.is_3d() => {
+                    let r = v
+                        .areas()
+                        .and_then(|x| x.first().copied())
+                        .ok_or(ErrorKind::Ref)?;
+                    if want_row {
+                        r.r0
+                    } else {
+                        r.c0
+                    }
+                }
                 _ => return Err(ErrorKind::Value),
             }
         };

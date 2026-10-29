@@ -101,3 +101,21 @@ name = "decimal text with convert_locale"
 formula = "=SUM(\"1.5\")"
 expect = 1.5
 settings = { text_to_number = "convert_locale" }
+
+[[case]]
+name = "3D reference over three sheets"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=SUM(Sheet1.A1:Sheet3.A2)"
+expect = 60
+
+[[case]]
+name = "3D reference, reversed"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=SUM($Sheet3.A1:$Sheet1.A1)"
+expect = 60
+
+[[case]]
+name = "3D reference, other sheets"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=SUM(Sheet2.A1:Sheet4.A1)"
+expect = 90

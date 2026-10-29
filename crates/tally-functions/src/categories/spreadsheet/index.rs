@@ -38,11 +38,16 @@ fn index(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         if row < 0 || col < 0 || area < 0 {
             return Err(ErrorKind::Value);
         }
-        if let Some(areas) = first.areas() {
-            if area < 1 || area as usize > areas.len() {
+        if let Some(entries) = first.entries() {
+            if area < 1 || area as usize > entries.len() {
                 return Err(ErrorKind::Ref);
             }
-            first = EvalValue::Range(areas[area as usize - 1]);
+            let (areas, is_3d) = entries[area as usize - 1];
+            if is_3d {
+                // AOO `ScIndex`: `PushIllegalArgument` when `Tab1 != Tab2`.
+                return Err(ErrorKind::InvalidArgument);
+            }
+            first = EvalValue::Range(areas[0]);
         } else if area != 1 {
             return Err(ErrorKind::Ref);
         }

@@ -99,6 +99,16 @@ impl Mat {
     }
 }
 
+/// [`matrix`] for the paired tests (TTEST, FTEST, CHITEST): a 3D
+/// reference is not a 2D matrix (AOO `CreateMatrixFromDoubleRef`,
+/// Err:504). ZTEST iterates a 3D reference instead (`ScValueIterator`).
+fn matrix_2d(a: &mut Args<'_>, i: usize) -> Result<Mat, ErrorKind> {
+    if a.any(i).is_3d() {
+        return Err(ErrorKind::ParamList);
+    }
+    Ok(matrix(a, i))
+}
+
 /// AOO `GetMatrix`: a reference or array as is; a scalar is a 1×1 matrix
 /// (a missing argument reads as 0, text is a string element).
 fn matrix(a: &mut Args<'_>, i: usize) -> Mat {
@@ -138,8 +148,8 @@ fn moments(v: &[f64]) -> (f64, f64, f64) {
 fn chitest(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
-        let m1 = matrix(&mut a, 0);
-        let m2 = matrix(&mut a, 1);
+        let m1 = matrix_2d(&mut a, 0)?;
+        let m2 = matrix_2d(&mut a, 1)?;
         if m1.rows != m2.rows || m1.cols != m2.cols {
             return Err(ErrorKind::InvalidArgument);
         }
@@ -177,8 +187,8 @@ fn chitest(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
 fn ftest(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
-        let m1 = matrix(&mut a, 0);
-        let m2 = matrix(&mut a, 1);
+        let m1 = matrix_2d(&mut a, 0)?;
+        let m2 = matrix_2d(&mut a, 1)?;
         let (c1, s1, q1) = moments(&m1.numbers()?);
         let (c2, s2, q2) = moments(&m2.numbers()?);
         if c1 < 2.0 || c2 < 2.0 {
@@ -233,8 +243,8 @@ fn two_sample(m1: &Mat, m2: &Mat, welch: bool) -> Result<(f64, f64), ErrorKind> 
 fn ttest(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
-        let m1 = matrix(&mut a, 0);
-        let m2 = matrix(&mut a, 1);
+        let m1 = matrix_2d(&mut a, 0)?;
+        let m2 = matrix_2d(&mut a, 1)?;
         let tails = floor_num(&mut a, 2)?;
         let kind = floor_num(&mut a, 3)?;
         if tails != 1.0 && tails != 2.0 {

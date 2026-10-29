@@ -238,15 +238,26 @@ fn three_d_references_track_tab_order() {
     let info = r.info.unwrap();
     let (s2, s3) = (info.sheets[1].id, info.sheets[2].id);
     f.set("B1", "=SUM(Sheet1.A1:S3.A1)");
-    // 3-D spans evaluate to #VALUE! in Phase A, but edits inside the span dirty them.
-    assert_eq!(f.value("B1"), Value::Error(ErrorKind::Value));
+    // Edits inside the span dirty the 3-D reference.
+    assert_eq!(f.value("B1"), Value::Number(0.0));
     let res = f.apply(vec![common::input(s2, "A1", "5")]);
     assert!(
         res.changed.iter().any(|c| c.sheet == f.sheet),
         "B1 recalculated"
     );
+    assert_eq!(f.value("B1"), Value::Number(5.0));
     f.apply(vec![tally_api::Op::MoveSheet { sheet: s3, to: 1 }]);
     let wb = &f.svc.document(f.doc).unwrap().wb;
     let (_, fc) = wb.formula_at(CellAddr::new(f.sheet, 0, 1)).unwrap();
-    assert_eq!(fc.precedents.len(), 2, "S2 is no longer inside Sheet1..S3");
+    assert_eq!(
+        wb.precedents_of(&fc.formula, fc.addr).len(),
+        2,
+        "S2 is no longer inside Sheet1..S3"
+    );
+    assert_eq!(fc.spans().len(), 1, "one unexpanded span");
+    let res = f.apply(vec![common::input(s2, "A1", "6")]);
+    assert!(
+        !res.changed.iter().any(|c| c.sheet == f.sheet),
+        "B1 no longer reads S2"
+    );
 }

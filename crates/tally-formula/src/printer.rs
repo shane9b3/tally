@@ -584,10 +584,10 @@ impl Printer<'_> {
             out.push(':');
             return self.coords(b, out);
         }
-        // `A1:Sheet2!B2` (start on the formula's own sheet) has no Excel
-        // spelling without knowing that sheet's name.
+        // `A1:Sheet2!B2`: the start is on the formula's own sheet, which
+        // Excel has to name (`Sheet1:Sheet2!A1:B2`).
         let first = match &a.sheet {
-            SheetRef::Current => return None,
+            SheetRef::Current => self.resolver.sheet_name(self.origin.sheet)?,
             s => self.sheet_raw_name(s)?,
         };
         let last = self.sheet_raw_name(&b.sheet)?;

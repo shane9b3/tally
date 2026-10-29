@@ -43,6 +43,9 @@ impl Table {
             EvalValue::Array(m) | EvalValue::Scalar(Value::Array(m)) => Ok(Table::Mat(m)),
             EvalValue::Scalar(Value::Error(e)) => Err(e),
             EvalValue::Scalar(s) => Ok(Table::Mat(Arc::new(Matrix::new_filled(1, 1, s)))),
+            // AOO `CalculateLookup`, `ScMatch`, `ScLookup`:
+            // `PushIllegalParameter` when `Tab1 != Tab2`.
+            v if v.is_3d() => Err(ErrorKind::ParamList),
             _ => Err(ErrorKind::Value),
         }
     }

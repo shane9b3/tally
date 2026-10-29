@@ -5,7 +5,8 @@
 mod common;
 use common::*;
 use tally_formula::{
-    adjust_for_structure_change, relocate, shifted_origin, Formula, StructureChange,
+    adjust_for_structure_change, relocate, retarget_3d_for_sheet_delete, shifted_origin, Formula,
+    StructureChange,
 };
 
 #[test]
@@ -206,6 +207,45 @@ fn delete_and_rename_sheet() {
         a1("A1"),
         &StructureChange::RenameSheet { sheet: 1 }
     ));
+}
+
+#[test]
+fn deleting_an_end_sheet_shrinks_3d_refs() {
+    // Tab order: Sheet1 (0), Sheet2 (1), My Sheet (2), Data (4).
+    let order = [0, 1, 2, 4];
+    let del = |src: &str, sheet| {
+        let mut f = p(src);
+        let moved = retarget_3d_for_sheet_delete(&mut f, 0, sheet, &order);
+        adjust_for_structure_change(&mut f, a1("A1"), &StructureChange::DeleteSheet { sheet });
+        (pr(&f, "A1"), moved)
+    };
+    assert_eq!(
+        del("=SUM(Sheet2.A1:Data.B2)", 1),
+        ("=SUM('My Sheet'.A1:Data.B2)".into(), true)
+    );
+    assert_eq!(
+        del("=SUM($Sheet2.A1:$Data.B2)", 4),
+        ("=SUM($Sheet2.A1:$'My Sheet'.B2)".into(), true)
+    );
+    // Reversed: the end steps toward the start.
+    assert_eq!(
+        del("=SUM(Data.A1:Sheet2.B2)", 4),
+        ("=SUM('My Sheet'.A1:Sheet2.B2)".into(), true)
+    );
+    // A middle sheet or one sheet only: no retargeting.
+    assert_eq!(
+        del("=SUM(Sheet2.A1:Data.B2)", 2),
+        ("=SUM(Sheet2.A1:Data.B2)".into(), false)
+    );
+    assert_eq!(
+        del("=SUM(Sheet2.A1:Sheet2.B2)", 1),
+        ("=SUM(#REF!)".into(), false)
+    );
+    // The formula's own sheet as the start (`A1:Sheet2.B2` on Sheet1).
+    assert_eq!(
+        del("=SUM(A1:Data.B2)", 4),
+        ("=SUM(A1:'My Sheet'.B2)".into(), true)
+    );
 }
 
 #[test]

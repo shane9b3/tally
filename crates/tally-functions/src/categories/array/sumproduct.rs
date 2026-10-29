@@ -79,6 +79,9 @@ fn operand(ctx: &mut dyn EvalContext, arg: EvalValue) -> Result<Operand, ErrorKi
                 entries,
             })
         }
+        // AOO `GetMatrix` on a 3D reference: not a 2D matrix (Err:504).
+        #[allow(unreachable_patterns)]
+        v if v.is_3d() => Err(ErrorKind::ParamList),
         // A reference union has no rectangular shape.
         #[allow(unreachable_patterns)]
         _ => Err(ErrorKind::Value),

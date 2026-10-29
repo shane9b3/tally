@@ -188,10 +188,17 @@ fn indirect(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         // AOO ScIndirect: R1C1 (CONV_XL_R1C1) when approxFloor(a1) == 0,
         // so 0, FALSE and 0.5 all select R1C1.
         let a1 = a.is_missing(1) || crate::coerce::approx_floor(a.num(1)?) != 0.0;
-        let range = a
-            .ctx()
-            .parse_reference_text(text.trim(), a1)
-            .ok_or(ErrorKind::InvalidArgument)?;
+        let parsed = a.ctx().parse_reference_text(text.trim(), a1);
+        let Some(range) = parsed else {
+            // AOO `ConvertDoubleRef` also yields a 3D reference.
+            let span = a1
+                .then(|| a.ctx().parse_reference_text_3d(text.trim()))
+                .flatten()
+                .ok_or(ErrorKind::InvalidArgument)?;
+            let v = crate::coerce::span_3d_value(a.ctx(), span.0, span.1, span.2);
+            a.ctx().record_dynamic_span(span.0, span.1, span.2);
+            return Ok(v);
+        };
         a.ctx().record_dynamic_dep(&range);
         Ok(EvalValue::Range(range))
     })
@@ -224,6 +231,10 @@ pub const OFFSET: FunctionDef =
 fn offset(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run_ref(|| {
+        // AOO `ScOffset`: a 3D base is `PushIllegalArgument` (Err:502).
+        if a.any(0).is_3d() {
+            return Err(ErrorKind::InvalidArgument);
+        }
         let base = a.range(0)?;
         let dr = a.int(1)?;
         let dc = a.int(2)?;
@@ -254,7 +265,8 @@ pub const AREAS: FunctionDef = FunctionDef::new("AREAS", Category::Spreadsheet, 
     .returns(ReturnKind::Number)
     .help("Number of areas in a reference.");
 /// `ROWS(array)`: a union is `Err:504` (AOO `ScRows`: `errIllegalParameter`
-/// for every stack type but a reference or a matrix).
+/// for every stack type but a reference or a matrix); a 3D reference counts
+/// its rows once per sheet.
 pub const ROWS: FunctionDef = FunctionDef::new("ROWS", Category::Spreadsheet, REF1, rows)
     .returns(ReturnKind::Number)
     .help("Number of rows of a reference or array.");
@@ -265,6 +277,13 @@ pub const COLUMNS: FunctionDef = FunctionDef::new("COLUMNS", Category::Spreadshe
 
 fn dims(a: &mut Args<'_>) -> Result<(u32, u32), ErrorKind> {
     let v = a.any(0);
+    if v.is_3d() {
+        // AOO `ScRows`/`ScColumns`: rows (columns) times the sheets.
+        let areas = v.areas().unwrap_or_default();
+        let r = areas.first().ok_or(ErrorKind::Ref)?;
+        let n = areas.len() as u32;
+        return Ok((r.rows().saturating_mul(n), r.cols().saturating_mul(n)));
+    }
     if let Some(areas) = v.areas() {
         return match areas {
             [r] => Ok((r.rows(), r.cols())),
@@ -281,7 +300,17 @@ fn dims(a: &mut Args<'_>) -> Result<(u32, u32), ErrorKind> {
 
 fn areas(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
-    run(|| Ok(Value::Number(a.ranges(0)?.len() as f64)))
+    run(|| {
+        // A 3D reference is one area (AOO `ScAreas` counts the tokens).
+        let v = a.any(0);
+        match v.entries() {
+            Some(e) => Ok(Value::Number(e.len() as f64)),
+            None => match v {
+                EvalValue::Scalar(Value::Error(e)) => Err(e),
+                _ => Err(ErrorKind::Value),
+            },
+        }
+    })
 }
 
 fn rows(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
@@ -328,6 +357,13 @@ fn sheet(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
             EvalValue::Range(r) => r.sheet,
             EvalValue::Scalar(Value::Error(e)) => return Err(e),
             EvalValue::Scalar(Value::Text(t)) => sheet_of_text(a.ctx(), &t).ok_or(ErrorKind::NA)?,
+            // AOO `ScTable`: the first sheet of a 3D reference.
+            v if v.is_3d() => {
+                v.areas()
+                    .and_then(|x| x.first())
+                    .ok_or(ErrorKind::Ref)?
+                    .sheet
+            }
             _ => return Err(ErrorKind::Value),
         };
         let idx = a.ctx().sheet_index(id).ok_or(ErrorKind::Ref)?;
@@ -335,12 +371,13 @@ fn sheet(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     })
 }
 
-/// 3D references are not representable, so a reference always spans one sheet.
+/// A reference spans one sheet, a 3D reference its sheets (AOO `ScTables`).
 fn sheets(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| match a.any(0) {
         EvalValue::Missing => Ok(Value::Number(f64::from(a.ctx().sheet_count()))),
         EvalValue::Range(_) => Ok(Value::Number(1.0)),
+        v if v.is_3d() => Ok(Value::Number(v.areas().map_or(0, <[_]>::len) as f64)),
         EvalValue::Scalar(Value::Error(e)) => Err(e),
         _ => Err(ErrorKind::Value),
     })

@@ -1012,9 +1012,7 @@ pub fn shift_cells(
         .filter(|(_, f)| {
             f.invalid_text.is_none()
                 && !(f.addr.sheet == sheet && snap_area.contains(f.addr))
-                && f.precedents
-                    .iter()
-                    .any(|p| p.sheet == sheet && p.intersects(&moved))
+                && wb.reads_range(f, &moved)
         })
         .map(|(id, f)| (id, f.addr))
         .collect();
@@ -1564,9 +1562,7 @@ pub fn respace_rows(
         .filter(|(_, f)| {
             f.invalid_text.is_none()
                 && !(f.addr.sheet == sheet && block.contains(f.addr))
-                && f.precedents
-                    .iter()
-                    .any(|p| p.sheet == sheet && p.intersects(&rows_area))
+                && wb.reads_range(f, &rows_area)
         })
         .map(|(id, f)| (id, f.addr))
         .collect();

@@ -106,9 +106,7 @@ pub fn move_range(
         .filter(|(_, f)| {
             !inside(f.addr)
                 && f.invalid_text.is_none()
-                && f.precedents
-                    .iter()
-                    .any(|p| p.intersects(&from) || p.intersects(&dest))
+                && (wb.reads_range(f, &from) || wb.reads_range(f, &dest))
         })
         .map(|(id, f)| (id, f.addr))
         .collect();

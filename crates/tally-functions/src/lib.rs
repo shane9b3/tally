@@ -32,7 +32,7 @@ mod registry;
 mod stats_util;
 
 pub use args::{check_arity, check_text_len, run, run_ref, sanitize, Args, MAX_TEXT_BYTES};
-pub use context::{ArgList, CellFormatInfo, EvalContext, EvalValue};
+pub use context::{ArgList, CellFormatInfo, EvalContext, EvalValue, RefList};
 pub use criteria::{CmpOp, Criterion};
 pub use eval::call_def;
 pub use lookup_index::LookupIndex;

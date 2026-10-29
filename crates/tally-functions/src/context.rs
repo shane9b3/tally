@@ -11,6 +11,18 @@ use tally_types::{CalcSettings, CellAddr, CellRange, Matrix, SheetId, Value};
 
 use crate::LookupIndex;
 
+/// The areas of a reference union, with each 3D reference in it kept as
+/// one entry (AOO's `svRefList` holds 3D ranges as single tokens): AREAS
+/// counts entries, INDEX picks one, COUNTIF rejects a 3D entry.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct RefList {
+    /// Every area in formula order, a 3D entry's sheets in tab order.
+    pub areas: Vec<CellRange>,
+    /// Each entry in formula order: its number of areas and whether it is
+    /// a 3D reference.
+    pub entries: Vec<(u32, bool)>,
+}
+
 /// An argument as the evaluator hands it to a function.
 ///
 /// References stay unexpanded (`Range`) so functions can iterate them
@@ -37,7 +49,24 @@ pub enum EvalValue {
     /// [`EvalValue::areas`], which is a one-element slice for a plain
     /// reference, so every function compiles both ways.
     #[cfg(feature = "ref-union")]
-    Union(Arc<[CellRange]>),
+    Union(Arc<RefList>),
+    /// A 3D reference (`Sheet1.A1:Sheet3.B2`, AOO's `svDoubleRef` with
+    /// `Tab1 < Tab2`): the same rectangle on every sheet from the first to
+    /// the last in tab order (hidden sheets included), one area per sheet,
+    /// in tab order; always two or more areas. Built with
+    /// [`EvalValue::span_3d`].
+    ///
+    /// [`EvalValue::areas`] lists the per-sheet areas, so everything that
+    /// iterates a reference (SUM, COUNT, the statistics, COUNTBLANK,
+    /// SUBTOTAL…) visits every sheet, as AOO's `ScValueIterator` does.
+    /// What needs one sheet rejects it: [`crate::Args::range`] and
+    /// [`crate::Args::ranges`] give `Err:504` (`errIllegalParameter`, as
+    /// AOO's lookups and the `*IF` family), a matrix conversion gives
+    /// `Err:504` (`CreateMatrixFromDoubleRef`: "not a 2D matrix"), and a
+    /// scalar use intersects on the formula's own sheet
+    /// ([`crate::coerce::intersect_3d`]). Gated like [`EvalValue::Union`].
+    #[cfg(feature = "ref-union")]
+    Span3d(Arc<[CellRange]>),
 }
 
 impl EvalValue {
@@ -78,14 +107,90 @@ impl EvalValue {
             0 => EvalValue::error(tally_types::ErrorKind::Ref),
             1 => EvalValue::Range(areas[0]),
             #[cfg(feature = "ref-union")]
-            _ => EvalValue::Union(Arc::from(areas)),
+            _ => EvalValue::Union(Arc::new(RefList {
+                entries: vec![(1, false); areas.len()],
+                areas,
+            })),
             #[cfg(not(feature = "ref-union"))]
             _ => EvalValue::error(tally_types::ErrorKind::Value),
         }
     }
 
+    /// A 3D reference over `areas` (one per sheet, in tab order): a plain
+    /// [`EvalValue::Range`] for one sheet, [`EvalValue::Span3d`] for
+    /// several (`#VALUE!` without the `ref-union` feature), `#REF!` for none.
+    pub fn span_3d(areas: Vec<CellRange>) -> Self {
+        match areas.len() {
+            0 => EvalValue::error(tally_types::ErrorKind::Ref),
+            1 => EvalValue::Range(areas[0]),
+            #[cfg(feature = "ref-union")]
+            _ => EvalValue::Span3d(Arc::from(areas)),
+            #[cfg(not(feature = "ref-union"))]
+            _ => EvalValue::error(tally_types::ErrorKind::Value),
+        }
+    }
+
+    /// The union of reference operands in order, keeping 3D references
+    /// (and the entries of nested unions) as entries; `None` if one is not
+    /// a reference. A single 2D entry is a plain range.
+    pub fn union_of(parts: &[&EvalValue]) -> Option<Self> {
+        let mut list = RefList::default();
+        for p in parts {
+            for (areas, is_3d) in p.entries()? {
+                list.areas.extend_from_slice(areas);
+                list.entries.push((areas.len() as u32, is_3d));
+            }
+        }
+        Some(match list.entries.as_slice() {
+            [] => EvalValue::error(tally_types::ErrorKind::Ref),
+            [(1, false)] => EvalValue::Range(list.areas[0]),
+            [(_, true)] => EvalValue::span_3d(list.areas),
+            #[cfg(feature = "ref-union")]
+            _ => EvalValue::Union(Arc::new(list)),
+            #[cfg(not(feature = "ref-union"))]
+            _ => EvalValue::error(tally_types::ErrorKind::Value),
+        })
+    }
+
+    /// The entries of a reference: `(areas, is_3d)` per range, 3D
+    /// reference or union entry in formula order; `None` for a non-reference.
+    pub fn entries(&self) -> Option<Vec<(&[CellRange], bool)>> {
+        match self {
+            EvalValue::Range(r) => Some(vec![(std::slice::from_ref(r), false)]),
+            #[cfg(feature = "ref-union")]
+            EvalValue::Span3d(areas) => Some(vec![(&areas[..], true)]),
+            #[cfg(feature = "ref-union")]
+            EvalValue::Union(list) => {
+                let mut out = Vec::with_capacity(list.entries.len());
+                let mut at = 0usize;
+                for (n, is_3d) in &list.entries {
+                    let end = (at + *n as usize).min(list.areas.len());
+                    out.push((&list.areas[at..end], *is_3d));
+                    at = end;
+                }
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+
+    /// `true` for a 3D reference, or a union holding one.
+    pub fn has_3d(&self) -> bool {
+        self.is_3d() || self.entries().is_some_and(|e| e.iter().any(|x| x.1))
+    }
+
+    /// `true` for a 3D reference ([`EvalValue::Span3d`]).
+    pub fn is_3d(&self) -> bool {
+        #[cfg(feature = "ref-union")]
+        if let EvalValue::Span3d(_) = self {
+            return true;
+        }
+        false
+    }
+
     /// The areas of a reference argument: one for [`EvalValue::Range`],
-    /// all of them for a union, `None` for anything that is not a
+    /// all of them for a union, one per sheet for a 3D reference
+    /// ([`EvalValue::Span3d`]), `None` for anything that is not a
     /// reference. Functions with [`crate::ParamKind::Reference`] parameters
     /// that accept unions (AREAS, COUNTIF, SUBTOTAL, INDEX, ISREF) read
     /// their argument through this.
@@ -93,7 +198,9 @@ impl EvalValue {
         match self {
             EvalValue::Range(r) => Some(std::slice::from_ref(r)),
             #[cfg(feature = "ref-union")]
-            EvalValue::Union(areas) => Some(areas),
+            EvalValue::Union(list) => Some(&list.areas),
+            #[cfg(feature = "ref-union")]
+            EvalValue::Span3d(areas) => Some(areas),
             _ => None,
         }
     }
@@ -192,6 +299,28 @@ pub trait EvalContext {
     /// relative to [`EvalContext::origin`].
     fn parse_reference_text(&self, text: &str, a1: bool) -> Option<CellRange>;
 
+    /// Parses A1 reference text that spans several sheets
+    /// (`Sheet1.A1:Sheet3.B2`, for INDIRECT) into its first and last
+    /// sheets and its rectangle; `None` for anything else (the default).
+    fn parse_reference_text_3d(&self, text: &str) -> Option<(SheetId, SheetId, CellRange)> {
+        let _ = text;
+        None
+    }
+
+    /// Records a 3D reference built during evaluation (INDIRECT, the `:`
+    /// operator across sheets) as one dynamic dependency: `rect` on every
+    /// sheet from `first` to `last` in tab order, whatever that order
+    /// becomes. The default records each sheet now spanned.
+    fn record_dynamic_span(&mut self, first: SheetId, last: SheetId, rect: CellRange) {
+        if let (Some(a), Some(b)) = (self.sheet_index(first), self.sheet_index(last)) {
+            for i in a.min(b)..=a.max(b) {
+                if let Some(sheet) = self.sheet_at(i) {
+                    self.record_dynamic_dep(&CellRange { sheet, ..rect });
+                }
+            }
+        }
+    }
+
     /// Records a reference discovered during evaluation (INDIRECT, OFFSET)
     /// as a dynamic dependency of the current formula.
     fn record_dynamic_dep(&mut self, range: &CellRange);
@@ -208,6 +337,14 @@ pub trait EvalContext {
 
     /// Number of sheets.
     fn sheet_count(&self) -> u32;
+
+    /// The sheet at 0-based tab position `index` (what a 3D reference
+    /// spans), `None` past the end. The default knows no sheets, so 3D
+    /// references are `#REF!` in contexts that do not implement it.
+    fn sheet_at(&self, index: u32) -> Option<SheetId> {
+        let _ = index;
+        None
+    }
 
     /// Formatting and formula facts about a cell.
     fn cell_format_info(&self, addr: CellAddr) -> CellFormatInfo;

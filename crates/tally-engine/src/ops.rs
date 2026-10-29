@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use tally_api::{ApiError, ClearWhat, Op, PasteOptions, RangeDto};
-use tally_formula::{adjust_for_structure_change, RefExpr, SheetRef, StructureChange};
+use tally_formula::{
+    adjust_for_structure_change, retarget_3d_for_sheet_delete, RefExpr, SheetRef, StructureChange,
+};
 use tally_model::CellRangeLocal;
 use tally_numfmt::parse_format;
 use tally_types::{CellAddr, CellRange, SheetId, MAX_COLS, MAX_ROWS};
@@ -136,16 +138,15 @@ fn sheet_refs_mut(r: &mut RefExpr, f: &mut impl FnMut(&mut SheetRef)) {
 /// Points references to an unknown sheet named like sheet `id` (added or
 /// renamed just now) at that sheet, as reloading the file would. Returns
 /// the change that restores the old formulas.
-fn resolve_sheet_refs(wb: &mut Workbook, id: SheetId) -> Change {
+pub(crate) fn resolve_sheet_refs(wb: &mut Workbook, id: SheetId) -> Vec<Change> {
     let Some(name) = wb.sheet(id).map(|s| s.name.to_string()) else {
-        return Change::Cells(Vec::new());
+        return Vec::new();
     };
     let name = name.to_lowercase();
     let matches = |s: &SheetRef| matches!(s, SheetRef::Unresolved(n) if n.to_lowercase() == name);
-    let mut targets: Vec<CellAddr> = Vec::new();
-    for (_, f) in &wb.formulas {
+    let hits = |f: &tally_formula::Formula| {
         let mut hit = false;
-        f.formula.expr.walk_refs(|r| {
+        f.expr.walk_refs(|r| {
             hit |= match r {
                 RefExpr::Cell(c) => matches(&c.sheet),
                 RefExpr::Area(a, b) => matches(&a.sheet) || matches(&b.sheet),
@@ -153,16 +154,10 @@ fn resolve_sheet_refs(wb: &mut Workbook, id: SheetId) -> Change {
                 RefExpr::Invalid => false,
             };
         });
-        if hit {
-            targets.push(f.addr);
-        }
-    }
-    let mut old_cells = Vec::with_capacity(targets.len());
-    for addr in targets {
-        let Some((_, f)) = wb.formula_at(addr) else {
-            continue;
-        };
-        let mut nf = (*f.formula).clone();
+        hit
+    };
+    let rewrite = |f: &tally_formula::Formula| {
+        let mut nf = f.clone();
         nf.expr.walk_refs_mut(|r| {
             sheet_refs_mut(r, &mut |s| {
                 if matches(s) {
@@ -170,10 +165,36 @@ fn resolve_sheet_refs(wb: &mut Workbook, id: SheetId) -> Change {
                 }
             });
         });
+        nf
+    };
+    let mut out = Vec::new();
+    // Names typed before their sheet existed (a reload resolves them too).
+    if wb.names.defs().any(|d| hits(&d.formula)) {
+        out.push(names_snapshot(wb));
+        for def in wb.names.defs_mut() {
+            if hits(&def.formula) {
+                def.formula = Arc::new(rewrite(&def.formula));
+            }
+        }
+        wb.refresh_all_name_dependents();
+    }
+    let targets: Vec<CellAddr> = wb
+        .formulas
+        .iter()
+        .filter(|(_, f)| hits(&f.formula))
+        .map(|(_, f)| f.addr)
+        .collect();
+    let mut old_cells = Vec::with_capacity(targets.len());
+    for addr in targets {
+        let Some((_, f)) = wb.formula_at(addr) else {
+            continue;
+        };
+        let nf = rewrite(&f.formula);
         let old = wb.replace_formula_ast(addr, Arc::new(nf));
         old_cells.push((addr, old));
     }
-    Change::Cells(old_cells)
+    out.push(Change::Cells(old_cells));
+    out
 }
 
 /// Characters not allowed in sheet names (as in LibreOffice).
@@ -855,8 +876,9 @@ fn apply_op_inner(
             wb.refresh_all_precedents();
             fx.sheets_changed = true;
             // Undo restores the formulas first, then removes the sheet.
-            let resolved = resolve_sheet_refs(wb, id);
-            Ok(vec![Change::RemoveSheet { id }, resolved])
+            let mut out = vec![Change::RemoveSheet { id }];
+            out.extend(resolve_sheet_refs(wb, id));
+            Ok(out)
         }
         Op::RenameSheet { sheet, name } => {
             check_sheet(wb, *sheet)?;
@@ -875,7 +897,7 @@ fn apply_op_inner(
                 fx,
             );
             let mut out: Vec<Change> = inv.into_iter().collect();
-            out.push(resolve_sheet_refs(wb, *sheet));
+            out.extend(resolve_sheet_refs(wb, *sheet));
             Ok(out)
         }
         Op::DeleteSheet { sheet } => {
@@ -909,17 +931,21 @@ fn apply_op_inner(
             let change = StructureChange::DeleteSheet { sheet: *sheet };
             let mut adjusted: Vec<(FormulaCellId, CellAddr)> = Vec::new();
             for (id, f) in &wb.formulas {
-                if f.addr.sheet != *sheet && f.precedents.iter().any(|p| p.sheet == *sheet) {
+                if f.addr.sheet != *sheet && wb.reads_sheet(f, &[*sheet]) {
                     adjusted.push((id, f.addr));
                 }
             }
+            // 3-D spans with an end on the sheet shrink to its neighbour
+            // (AOO `UpdateDeleteTab`) instead of becoming #REF!.
+            let order: Vec<SheetId> = wb.sheets.iter().map(|s| s.id).collect();
             let mut old_cells = Vec::with_capacity(adjusted.len());
             for (id, addr) in adjusted {
                 let Some(f) = wb.formulas.get(id) else {
                     continue;
                 };
                 let mut nf = (*f.formula).clone();
-                if adjust_for_structure_change(&mut nf, addr, &change) {
+                let moved = retarget_3d_for_sheet_delete(&mut nf, addr.sheet, *sheet, &order);
+                if adjust_for_structure_change(&mut nf, addr, &change) | moved {
                     let old = wb.replace_formula_ast(addr, Arc::new(nf));
                     old_cells.push((addr, old));
                 }
@@ -928,7 +954,8 @@ fn apply_op_inner(
             wb.names.undefine_scope(*sheet);
             for def in wb.names.defs_mut() {
                 let mut f = (*def.formula).clone();
-                if adjust_for_structure_change(&mut f, def.base, &change) {
+                let moved = retarget_3d_for_sheet_delete(&mut f, def.base.sheet, *sheet, &order);
+                if adjust_for_structure_change(&mut f, def.base, &change) | moved {
                     def.formula = Arc::new(f);
                 }
             }

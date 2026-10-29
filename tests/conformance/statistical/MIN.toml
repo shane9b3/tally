@@ -61,3 +61,9 @@ expect = -0.5
 name = "no arguments"
 formula = "=MIN()"
 expect = "Err:511"
+
+[[case]]
+name = "3D reference"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=MIN(Sheet2.A1:Sheet4.A2)"
+expect = 20

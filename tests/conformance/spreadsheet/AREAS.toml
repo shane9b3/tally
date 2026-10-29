@@ -39,3 +39,9 @@ expect = 1
 [[case]]
 formula = "=AREAS(INDIRECT(\"B2:C3\"))"
 expect = 1
+
+[[case]]
+name = "3D reference is one area"
+cells = { A1 = 10, "Sheet2.A1" = 20, "Sheet2.A2" = "t", "Sheet3.A1" = 30, "Sheet4.A1" = 40 }
+formula = "=AREAS(Sheet1.A1:Sheet3.A2)"
+expect = 1

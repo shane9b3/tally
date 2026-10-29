@@ -60,6 +60,10 @@ fn intersect_arg(r: &CellRange, ctx: &mut dyn EvalContext) -> EvalValue {
 }
 
 fn materialize(v: &EvalValue, ctx: &mut dyn EvalContext) -> Result<Arc<Matrix>, ErrorKind> {
+    if v.is_3d() {
+        // AOO `CreateMatrixFromDoubleRef`: "not a 2D matrix".
+        return Err(ErrorKind::ParamList);
+    }
     if v.areas().is_some_and(|a| a.len() != 1) {
         // A union has no rectangular shape.
         return Err(ErrorKind::Value);
@@ -173,6 +177,16 @@ fn intersect_scalars(
         if let Some(EvalValue::Range(r)) = slot {
             let r = *r;
             *slot = Some(intersect_arg(&r, ctx));
+        } else if slot.as_ref().is_some_and(EvalValue::is_3d) {
+            // AOO: a 3D reference to a value parameter is intersected on
+            // the formula's sheet; in array context it would have to
+            // become a matrix first (`ConvertMatrixParameters`), Err:504.
+            let v = slot.take().unwrap_or(EvalValue::Missing);
+            *slot = Some(if ctx.in_array_context() {
+                EvalValue::error(ErrorKind::ParamList)
+            } else {
+                EvalValue::from_value(scalar_value(&v, ctx))
+            });
         } else if slot.as_ref().is_some_and(EvalValue::is_reference) {
             *slot = Some(EvalValue::error(ErrorKind::Value));
         }

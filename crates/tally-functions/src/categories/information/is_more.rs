@@ -73,8 +73,8 @@ fn isref(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
 fn isformula(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
-        let r = a.range(0)?;
-        let info = a.ctx().cell_format_info(r.start());
+        let at = a.target_cell(0)?;
+        let info = a.ctx().cell_format_info(at);
         Ok(Value::Bool(info.has_formula))
     })
 }
