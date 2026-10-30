@@ -380,6 +380,9 @@ fn keyword(s: &[char], i: usize) -> (Token, usize) {
     if starts_with_ci(s, i, "STANDARD") {
         return (Token::General(GeneralKeyword::Standard), 8);
     }
+    if starts_with_ci(s, i, "BOOLEAN") {
+        return (Token::General(GeneralKeyword::Boolean), 7);
+    }
     if starts_with_ci(s, i, "AM/PM") {
         return (
             Token::DateTime(DateTimeToken::AmPm(s[i..i + 5].iter().collect())),
@@ -836,6 +839,7 @@ pub(crate) fn print_token(t: &Token, out: &mut String) {
         Token::DateTime(dt) => print_dt(dt, out),
         Token::General(GeneralKeyword::General) => out.push_str("General"),
         Token::General(GeneralKeyword::Standard) => out.push_str("Standard"),
+        Token::General(GeneralKeyword::Boolean) => out.push_str("BOOLEAN"),
         Token::Color(Color::Named(c)) => {
             out.push('[');
             out.push_str(c.keyword());

@@ -70,7 +70,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Ctrl+Alt+Shift+arrows | missing | U5 |
 | Alt+PageUp/PageDown | done | `selection.ts` |
 | Insert / Delete Cells dialogs | done | `sheet.insertCells`, `sheet.deleteCells`, `⌃⌘+` / `⌃⌘−` |
-| Paste Special (selection types, operations, skip empty, transpose, link, shift) | partial | Everything / Values / Formats, five operations, skip empty, transpose (`Dialogs.tsx` `PasteSpecialDialog`, `PasteOptions` in `dto.rs:1418`); no Link, no Shift cells, no Text / Numbers / Date / Formulas / Comments / Objects choice |
+| Paste Special (selection types, operations, skip empty, transpose, link, shift) | done | Paste all, Text, Numbers, Date and time, Formulas, Notes, Formats (and the Everything / Values / Formats presets), five operations, Skip empty cells, Transpose, Link, Shift cells (`Dialogs.tsx` `PasteSpecialDialog`; `PasteOptions` / `PasteSelection` in `dto.rs`; `clipboard.rs` `paste_internal`); no Objects box (the clipboard carries no drawing objects); see parity U27 |
 | Selection list | deviation (U1) | `⌃D` |
 | Merge cells with data prompt | done | |
 | Text to Columns | done | `data.textToColumns`; T7 notes a quote difference |
@@ -134,7 +134,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | `[$sym-LCID]` currency / locale | done | |
 | `[NatNum]`, `[DBNum]` | deviation (G7) | Parsed and ignored: `TEXT(123;"[NatNum1][$-411]0")` gives `123` |
 | Calendar modifiers (`[~buddhist]` ...), era codes (E, G, R) | deviation (G7) | Modifiers ignored (`[~buddhist]YYYY` gives 2023); G / GG / GGG and E / EE give Gregorian eras (`AD`, `Anno Domini`); `R` is a literal |
-| Format categories and dialog options | partial (G14) | Preset chips, a code field and a preview (`StylesUi.tsx` numbers tab); no category list, decimal / leading-zero / negative-red / thousands controls or language selector |
+| Format categories and dialog options | done (deviation G14) | Format Cells ▸ Numbers as AOO: Category, Format (AOO locale-data lists per language), Language (`[$-LCID]`, ODS `number:language` / `number:country`), currency list, Options regenerating the code as `GenerateFormat` and read back from it (`NumbersTab.tsx`, `numberFormat.ts`); no Add / Delete / Edit comment |
 | ODS fourth (text) section | missing | X15 |
 
 ### 7. Styles

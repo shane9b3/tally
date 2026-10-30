@@ -49,6 +49,7 @@ export type { Op } from "./generated/Op";
 export type { OpError } from "./generated/OpError";
 export type { PasteOperation } from "./generated/PasteOperation";
 export type { PasteOptions } from "./generated/PasteOptions";
+export type { PasteSelection } from "./generated/PasteSelection";
 export { pasteArea, tsvDims } from "./pasteArea";
 export { expandGroup, groupOf, groupSheets, GROUP_OPS, retarget, type FillSheetsOp, type GroupSheetLookup, type IndexedOp } from "./group";
 export type { PastePayload } from "./generated/PastePayload";
@@ -209,6 +210,6 @@ export type { CellsOptions } from "./generated/CellsOptions";
 
 export { isApiError } from "./client";
 export type { EngineClient, EngineClientV2, EngineClientV3, EngineClientV4, SheetId, Unsubscribe } from "./client";
-export { MockClient, DEFAULT_COL_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX } from "./mock";
+export { MockClient, DEFAULT_COL_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX, mixInputs } from "./mock";
 export { BUILTIN_TEMPLATES, CANCELLED, CSV_OPTIONS, FALLBACK_FONTS } from "./shell";
 export type { FontFaceInfo, FontFamilyInfo, ShellClient, TemplateInfo } from "./shell";

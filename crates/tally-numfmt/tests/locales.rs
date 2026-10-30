@@ -141,7 +141,7 @@ fn ja_jp() {
     assert_eq!(fmt(1234.5, "#,##0.00", l), "1,234.50");
     assert_eq!(
         fmt(1234.0, &builtin_format(QuickFormat::Currency, l), l),
-        "¥1,234"
+        "￥1,234"
     );
     assert_eq!(
         fmt(OCT19, &builtin_format(QuickFormat::Date, l), l),
@@ -152,6 +152,7 @@ fn ja_jp() {
     assert_eq!(fmt(0.75, "AM/PM HH:MM", l), "午後 06:00");
     assert_eq!(num("2026/10/19", l), Some(OCT19));
     assert_eq!(num("¥1,234", l), Some(1234.0));
+    assert_eq!(num("￥1,234", l), Some(1234.0));
     assert_eq!(num("午後 6:00", l), Some(0.75));
 }
 

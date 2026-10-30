@@ -49,7 +49,7 @@ export type W56Dialog =
   | { kind: "solver"; objective: string }
   | { kind: "mergePrompt"; range: RangeDto; hidden: number; onMove: () => void; onKeep: () => void }
   | { kind: "autoFormat"; range: RangeDto }
-  | { kind: "formatCells"; style: StyleDto; ranges: RangeDto[]; mixed?: MixedFields; sample?: string }
+  | { kind: "formatCells"; style: StyleDto; ranges: RangeDto[]; mixed?: MixedFields; sample?: string; sampleNum?: number | null }
   | { kind: "customizeToolbars" }
   | { kind: "styleEditor"; style: CellStyleDto; isNew: boolean; fromSelection: StyleDto | null }
   | { kind: "options"; tab: OptionsTab; calc: CalcSettingsDto; view: ViewOptionsDto; lists: string[][] }

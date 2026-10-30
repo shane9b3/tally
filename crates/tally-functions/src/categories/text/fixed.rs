@@ -6,7 +6,7 @@
 //! code from the locale's standard number/currency format: `FIXED(1234.5)`
 //! is `1.234,50` and `DOLLAR(1234.5)` is `1.234,50 €` under de-DE).
 
-use tally_numfmt::{format_value_with, parse_format, Locale};
+use tally_numfmt::{format_value_in_locale, parse_format, Locale};
 use tally_types::{round_to_15_digits, ErrorKind, Value};
 
 use crate::coerce::locale_of;
@@ -78,7 +78,9 @@ fn render(
     let locale = locale_of(a.ctx());
     let ast = parse_format(&code(&body, locale)).map_err(|_| ErrorKind::InvalidArgument)?;
     let epoch = a.ctx().settings().date_epoch;
-    let out = format_value_with(&Value::Number(r), &ast, locale, None, epoch);
+    // The document locale: a `[$-407]` in the code only sets the NatNum
+    // language in AOO (zformat.cxx), Excel ignores it for numbers.
+    let out = format_value_in_locale(&Value::Number(r), &ast, locale, None, epoch);
     Ok(Value::text(out.text))
 }
 
@@ -193,7 +195,7 @@ mod tests {
         c.set_locale("ja-JP");
         assert_eq!(
             call(&mut c, "DOLLAR", vec![n(1234.5)]),
-            Value::text("¥1,234.50")
+            Value::text("￥1,234.50")
         );
     }
 }

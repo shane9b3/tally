@@ -890,8 +890,9 @@ export class W56Features {
       const source = useDocStore.getState().source;
       const a = this.ctl.selection.active;
       const sel = source ? selectionFont(source, this.ctl.ranges, a, source.getLayout(this.sheet).used ?? null) : undefined;
-      const sample = source?.getCell(a.r, a.c)?.text ?? "";
-      this.store.openDialog({ kind: "formatCells", style: base, ranges: this.ctl.ranges, mixed: mixedOf(sel), sample });
+      const cell = source?.getCell(a.r, a.c);
+      const sample = cell?.text ?? "";
+      this.store.openDialog({ kind: "formatCells", style: base, ranges: this.ctl.ranges, mixed: mixedOf(sel), sample, sampleNum: cell?.num ?? null });
     } catch (e) {
       this.ctl.notifyError(e);
     }

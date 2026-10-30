@@ -227,7 +227,17 @@ fn try_number(t: &str, locale: &Locale) -> Option<(f64, Option<String>)> {
     let (mut sign, rest) = strip_sign(s);
     s = rest;
     let mut currency = false;
-    if let Some(r) = s.strip_prefix(locale.currency_symbol) {
+    // The half- and full-width yen signs are the same currency (AOO ja-JP
+    // uses `￥`).
+    let alt = match locale.currency_symbol {
+        "￥" => "¥",
+        "¥" => "￥",
+        other => other,
+    };
+    let prefix = s
+        .strip_prefix(locale.currency_symbol)
+        .or_else(|| s.strip_prefix(alt));
+    if let Some(r) = prefix {
         currency = true;
         s = r.trim_start_matches([' ', '\u{a0}']);
         if sign.is_none() {
@@ -237,6 +247,7 @@ fn try_number(t: &str, locale: &Locale) -> Option<(f64, Option<String>)> {
         }
     } else if let Some(r) = s
         .strip_suffix(locale.currency_symbol)
+        .or_else(|| s.strip_suffix(alt))
         .filter(|_| locale.currency_after)
     {
         // `12,50 €` (symbol after the amount, with or without a space).

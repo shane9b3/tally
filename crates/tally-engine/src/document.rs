@@ -283,7 +283,9 @@ impl Document {
                 }
             }
             spent += cost;
-            match apply_op(&mut self.wb, op, clip, &mut fx) {
+            let applied = crate::clipboard::check_link_source(op, clip, self.id)
+                .and_then(|()| apply_op(&mut self.wb, op, clip, &mut fx));
+            match applied {
                 Ok(c) => {
                     // Ids allocated by this op (recorded with a placeholder
                     // index) belong to op `i`.

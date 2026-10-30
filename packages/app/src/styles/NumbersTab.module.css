@@ -1,0 +1,60 @@
+/* Format Cells ▸ Numbers: Category | Format | Language, then Options and the code. */
+.tab {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lists {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(180px, 1.6fr) minmax(150px, 1.2fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.label {
+  color: var(--tally-text-muted);
+  font-size: 12px;
+}
+
+.currency {
+  margin-top: 6px;
+}
+
+.options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  margin: 4px 0 0;
+  padding: 8px 12px 10px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 8px;
+}
+
+.options legend {
+  padding: 0 4px;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .lists {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The focused list draws its own ring (keyboard checks look at the focused element). */
+.col > div:has([role="listbox"]:focus-visible) {
+  outline: none;
+}
+
+.col [role="listbox"]:focus-visible {
+  box-shadow: 0 0 0 2px var(--tally-accent);
+}

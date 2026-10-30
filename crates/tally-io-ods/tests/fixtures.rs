@@ -192,10 +192,11 @@ fn libreoffice_shapes() {
     // "value-type" alignment source means General.
     assert!(style(&wb, 0, 9, 5).is_none());
 
-    // Number formats.
+    // Number formats. The currency symbol's number:language / number:country
+    // become the `[$$-409]` tag, as AOO's import gives.
     assert_eq!(
         number_format(&wb, 0, 1, 1),
-        Some("$#,##0.00;[RED]-$#,##0.00")
+        Some("[$$-409]#,##0.00;[RED]-[$$-409]#,##0.00")
     );
     assert_eq!(number_format(&wb, 0, 1, 2), Some("MM/DD/YYYY"));
     assert_eq!(number_format(&wb, 0, 3, 4), Some("0.00%"));

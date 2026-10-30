@@ -226,6 +226,8 @@ pub enum GeneralKeyword {
     General,
     /// `Standard` (German / OOo internal).
     Standard,
+    /// `BOOLEAN`: AOO's boolean format, TRUE / FALSE for numbers.
+    Boolean,
 }
 
 /// A date or time keyword. Counts are the number of repeated letters.
@@ -410,18 +412,42 @@ pub enum SectionKind {
 }
 
 impl FormatAst {
-    /// Whether this is exactly the plain `General` format.
+    /// Whether this is the plain `General` format, also with a language
+    /// tag (`[$-407]General`: General in that language, as an ODS number
+    /// style with only `number:language` gives).
     pub fn is_general(&self) -> bool {
         self.sections.len() == 1
             && matches!(self.sections[0].kind, SectionKind::General)
-            && self.sections[0]
-                .tokens
-                .iter()
-                .all(|t| matches!(t, Token::General(_)))
+            && self.sections[0].tokens.iter().any(|t| {
+                matches!(
+                    t,
+                    Token::General(GeneralKeyword::General | GeneralKeyword::Standard)
+                )
+            })
+            && self.sections[0].tokens.iter().all(|t| match t {
+                Token::General(k) => *k != GeneralKeyword::Boolean,
+                Token::Currency { symbol, .. } => symbol.is_empty(),
+                _ => false,
+            })
     }
 
     /// Whether the first section is a date or time format.
     pub fn is_date(&self) -> bool {
         matches!(self.sections[0].kind, SectionKind::Date(_))
     }
+}
+
+/// Whether a code is General, also with a leading language tag
+/// (`[$-407]General`), without parsing it.
+pub fn is_general_code(code: &str) -> bool {
+    let mut rest = code.trim();
+    while let Some(r) = rest.strip_prefix("[$-") {
+        match r.find(']') {
+            Some(end) if r[..end].chars().all(|c| c.is_ascii_hexdigit()) => {
+                rest = r[end + 1..].trim_start();
+            }
+            _ => return false,
+        }
+    }
+    rest.is_empty() || rest.eq_ignore_ascii_case("General") || rest.eq_ignore_ascii_case("Standard")
 }

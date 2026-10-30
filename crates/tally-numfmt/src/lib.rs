@@ -25,14 +25,18 @@ mod precision;
 mod recognize;
 
 pub use builtin::{builtin_format, QuickFormat};
-pub use format::{format_value, format_value_with, general_string, AlignHint, Formatted, OVERFLOW};
+pub use format::{
+    format_language, format_value, format_value_in_locale, format_value_with, general_string,
+    AlignHint, Formatted, OVERFLOW,
+};
 pub use format_ast::{
-    Color, CompareOp, Condition, DateLayout, DateTimeToken, Digit, ElapsedUnit, ExponentLayout,
-    FormatAst, FractionLayout, GeneralKeyword, NamedColor, NumberLayout, Section, SectionKind,
-    Token, COLOR_PALETTE,
+    is_general_code, Color, CompareOp, Condition, DateLayout, DateTimeToken, Digit, ElapsedUnit,
+    ExponentLayout, FormatAst, FractionLayout, GeneralKeyword, NamedColor, NumberLayout, Section,
+    SectionKind, Token, COLOR_PALETTE,
 };
 pub use locale::{
-    locale_by_tag, DateOrder, Locale, DE_DE, EN_GB, EN_US, ES_ES, FR_FR, JA_JP, LOCALES,
+    lcid_for_language, lcid_language, locale_by_lcid, locale_by_tag, DateOrder, Locale, DE_DE,
+    EN_GB, EN_US, ES_ES, FR_FR, JA_JP, LCID_LANGUAGES, LOCALES,
 };
 pub use parse_format::{parse_format, parse_format_with_locale, print_format, FormatError};
 pub use precision::{display_decimals, display_decimals_for, display_decimals_of};

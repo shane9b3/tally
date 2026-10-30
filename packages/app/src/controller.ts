@@ -59,6 +59,7 @@ import {
   friendlyError,
   isValidName,
   DEFAULT_PASTE_SPECIAL,
+  pasteAsksOverwrite,
   pasteOptions,
   sortOp,
   stepHit,
@@ -1272,8 +1273,17 @@ export class AppController {
     if (!useW56Store.getState().prefs.pasteOverwriteWarning) return true;
     const info = this.info;
     if (!info) return true;
+    // Every sheet the paste writes to (AOO checks each selected sheet, viewfun3.cxx:923).
+    const sheets = this.groupFor([{ type: "pasteSpecial", sheet: this.sheet, target, payload, options }]) ?? [this.sheet];
     try {
-      if (!(await this.client.pasteOverwrites(info.doc, this.sheet, target, payload, options))) return true;
+      let any = false;
+      for (const sheet of sheets) {
+        if (await this.client.pasteOverwrites(info.doc, sheet, target, payload, options)) {
+          any = true;
+          break;
+        }
+      }
+      if (!any) return true;
     } catch {
       return true;
     }
@@ -1335,7 +1345,7 @@ export class AppController {
   }
 
   /** Reads the clipboard (system if allowed, else the last copy in this window). */
-  private async readClipboard(): Promise<{ text: string | null; token: string | null }> {
+  async readClipboard(): Promise<{ text: string | null; token: string | null }> {
     let text: string | null = null;
     let token: string | null = null;
     const clip = typeof navigator === "undefined" ? undefined : navigator.clipboard;
@@ -1384,17 +1394,21 @@ export class AppController {
     this.focusGrid();
   };
 
-  /** Paste Special… (values / formats / transpose / skip empty / arithmetic). */
-  pasteSpecial = async (choice: PasteSpecialChoice): Promise<void> => {
-    const { text, token } = await this.readClipboard();
+  /** Paste Special… (content kinds, operations, skip empty, transpose, link, shift cells). */
+  pasteSpecial = async (choice: PasteSpecialChoice, source?: { text: string | null; token: string | null }): Promise<void> => {
+    const { text, token } = source ?? (await this.readClipboard());
     if (text === null && !token) {
       useUiStore.getState().pushToast("info", t("msg.toast.copyFirst", "Copy something first."));
       return;
     }
+    if (choice.link && !token) {
+      useUiStore.getState().pushToast("info", t("paste.linkNeedsCopy", "Link needs cells copied in this document."));
+      return;
+    }
     const payload = token ? { type: "internal" as const, token } : { type: "tsv" as const, text: text ?? "" };
     const target = { ...this.selection.range };
-    // AOO asks when contents are pasted without an arithmetic operation (not for formats only).
-    if (choice.what !== "formats" && choice.operation === "none" && !(await this.confirmPasteOverData(target, payload, pasteOptions(choice)))) {
+    // AOO asks when cell contents are pasted without an operation (not for formats or notes only, nor when cells shift).
+    if (pasteAsksOverwrite(choice) && !(await this.confirmPasteOverData(target, payload, pasteOptions(choice)))) {
       this.focusGrid();
       return;
     }

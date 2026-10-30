@@ -580,3 +580,70 @@ fn empty_workbook_writes_one_sheet() {
     let back = round_trip(&WorkbookData::default());
     assert_eq!(back.sheets.len(), 1);
 }
+
+/// Format Cells ▸ Numbers language and currency choices (G14) survive XLSX:
+/// Excel keeps both as `[$-407]` / `[$€-407]` tags in the code.
+#[test]
+fn language_and_currency_tags_round_trip() {
+    let codes = [
+        "[$$-409]#,##0.00;[RED]-[$$-409]#,##0.00",
+        "#,##0.00 [$€-407];[RED]-#,##0.00 [$€-407]",
+        "[$£-809]#,##0.00;-[$£-809]#,##0.00",
+        "[$￥-411]#,##0;[RED]-[$￥-411]#,##0",
+        "[$SFr.-807] #,##0.00;[RED][$SFr.-807] -#,##0.00",
+        "[$-407]DD.MM.YYYY",
+        "[$-40C]DD/MM/YYYY HH:MM",
+    ];
+    let wb = WorkbookData {
+        sheets: vec![SheetData {
+            name: "S".into(),
+            cells: (0..codes.len() as u32)
+                .map(|r| v(r, 0, Value::Number(1234.5), Some(r)))
+                .collect(),
+            ..SheetData::default()
+        }],
+        styles: codes
+            .iter()
+            .map(|c| StyleData {
+                number_format: Some((*c).into()),
+                ..StyleData::default()
+            })
+            .collect(),
+        ..WorkbookData::default()
+    };
+    let back = round_trip(&wb);
+    for (i, code) in codes.iter().enumerate() {
+        let st = style(&back, 0, &format!("A{}", i + 1)).unwrap();
+        let got = st.number_format.as_deref().unwrap_or("");
+        // Excel spells colours in title case; the code is otherwise kept.
+        assert_eq!(got.replace("[Red]", "[RED]"), *code);
+    }
+}
+
+/// A language tag on a number section is written (Excel keeps it) but
+/// read back without it: in Excel and AOO it does not change separators.
+#[test]
+fn language_tag_on_numbers_is_dropped_on_read() {
+    let codes = ["[$-407]#,##0.00;[RED]-#,##0.00", "[$-C0A]0.00%"];
+    let wb = WorkbookData {
+        sheets: vec![SheetData {
+            name: "S".into(),
+            cells: (0..codes.len() as u32)
+                .map(|r| v(r, 0, Value::Number(1234.5), Some(r)))
+                .collect(),
+            ..SheetData::default()
+        }],
+        styles: codes
+            .iter()
+            .map(|c| StyleData {
+                number_format: Some((*c).into()),
+                ..StyleData::default()
+            })
+            .collect(),
+        ..WorkbookData::default()
+    };
+    let back = round_trip(&wb);
+    let got = |a1: &str| style(&back, 0, a1).and_then(|s| s.number_format);
+    assert_eq!(got("A1").as_deref(), Some("#,##0.00;[RED]-#,##0.00"));
+    assert_eq!(got("A2").as_deref(), Some("0.00%"));
+}

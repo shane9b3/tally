@@ -37,6 +37,7 @@ import type { ComposeOption } from "echarts/core";
 import type { BarSeriesOption, CandlestickSeriesOption, CustomSeriesOption, LineSeriesOption, PieSeriesOption, RadarSeriesOption, ScatterSeriesOption } from "echarts/charts";
 import type { DatasetComponentOption, GridComponentOption, LegendComponentOption, TitleComponentOption, TooltipComponentOption } from "echarts/components";
 import { formatNumberLite } from "../numfmtLite";
+import { liteLocaleOf } from "../styles/numberFormat";
 
 export type EChartsOption = ComposeOption<
   | BarSeriesOption
@@ -185,7 +186,8 @@ function labelFormatter(spec: ChartSeriesDto, data: SeriesDataDto | undefined, c
 /** Axis label formatter from a number format code. */
 function axisFormatter(fmt: string | null): ((v: number) => string) | undefined {
   if (!fmt || fmt.trim() === "" || /^general$/i.test(fmt.trim())) return undefined;
-  return (v: number) => formatNumberLite(v, fmt) ?? String(v);
+  const loc = liteLocaleOf(fmt);
+  return (v: number) => formatNumberLite(v, fmt, loc) ?? String(v);
 }
 
 /** A cartesian value axis. */

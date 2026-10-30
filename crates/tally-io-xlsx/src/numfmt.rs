@@ -4,13 +4,14 @@
 //! Extensions over `tally_numfmt::excel::{from_excel_code, to_excel_code}`
 //! (candidates to move into tally-numfmt):
 //!
-//! - Excel locale-only tags `[$-409]`, `[$-x-sysdate]`, `[$-F800]` (system
-//!   long date) and `[$-F400]` (system time) are mapped to OOo codes or
-//!   dropped before translation;
+//! - Excel locale-only tags `[$-x-sysdate]`, `[$-F800]` (system long date)
+//!   and `[$-F400]` (system time) are mapped to OOo codes or dropped before
+//!   translation; a known language (`[$-407]`) is kept as the format's
+//!   language;
 //! - codes the OOo grammar rejects fall back to `None` (General) instead of
 //!   failing the import.
 
-use tally_numfmt::{excel, parse_format, SectionKind};
+use tally_numfmt::{excel, parse_format, print_format, SectionKind, Token};
 
 /// The Excel code of a built-in `numFmtId` (en-US), as Excel 365 shows it.
 /// Ids 27–36 and 50–58 are East-Asian locale dates; they map to an ISO date.
@@ -83,10 +84,15 @@ fn preprocess_excel(code: &str) -> String {
             continue;
         }
         if !in_quote && rest.starts_with("[$-") {
-            // `[$-409]`, `[$-x-sysdate]`: a locale without a currency symbol.
+            // `[$-407]`, `[$-x-sysdate]`: a locale without a currency symbol.
+            // A known language is the format's language and is kept (Format
+            // Cells ▸ Numbers ▸ Language, AOO's `[$-407]`); others (calendar
+            // flags, `x-` tags) are dropped.
             if let Some(close) = rest.find(']') {
-                rest = &rest[close + 1..];
-                continue;
+                if tally_numfmt::lcid_language(&rest[3..close]).is_none() {
+                    rest = &rest[close + 1..];
+                    continue;
+                }
             }
         }
         out.push(c);
@@ -105,10 +111,36 @@ pub(crate) fn excel_to_ooo(code: &str) -> Option<String> {
     let ooo = excel::from_excel_code(&pre)
         .or_else(|_| excel::from_excel_code(code))
         .ok()?;
+    let ooo = language_on_dates_only(&ooo);
     if ooo.eq_ignore_ascii_case("general") || ooo.is_empty() {
         None
     } else {
         Some(ooo)
+    }
+}
+
+/// Keeps a language tag (`[$-407]`) only in date and time sections. Excel
+/// uses it there for month and day names and calendars; in a number section
+/// it changes nothing (Excel and AOO show `1,234.50` for `[$-407]#,##0.00`
+/// in an English document), while Tally reads it as the format's language.
+fn language_on_dates_only(ooo: &str) -> String {
+    let Ok(mut ast) = parse_format(ooo) else {
+        return ooo.to_string();
+    };
+    let mut changed = false;
+    for s in &mut ast.sections {
+        if matches!(s.kind, SectionKind::Date(_)) {
+            continue;
+        }
+        let before = s.tokens.len();
+        s.tokens
+            .retain(|t| !matches!(t, Token::Currency { symbol, .. } if symbol.is_empty()));
+        changed |= s.tokens.len() != before;
+    }
+    if changed {
+        print_format(&ast)
+    } else {
+        ooo.to_string()
     }
 }
 
@@ -153,7 +185,29 @@ mod tests {
         assert_eq!(excel_to_ooo("yyyy-mm-dd").as_deref(), Some("YYYY-MM-DD"));
         assert_eq!(
             excel_to_ooo("[$-409]mmm d, yyyy").as_deref(),
+            Some("[$-409]MMM D, YYYY")
+        );
+        assert_eq!(
+            excel_to_ooo("[$-407]dd.mm.yyyy").as_deref(),
+            Some("[$-407]DD.MM.YYYY")
+        );
+        // Not in number sections: Excel and AOO show `1,234.50` (review M2).
+        assert_eq!(excel_to_ooo("[$-407]#,##0.00").as_deref(), Some("#,##0.00"));
+        assert_eq!(
+            excel_to_ooo("[$-407]#,##0.00;[Red]-#,##0.00").as_deref(),
+            Some("#,##0.00;[RED]-#,##0.00")
+        );
+        assert_eq!(
+            excel_to_ooo("[$€-407]#,##0.00").as_deref(),
+            Some("[$€-407]#,##0.00")
+        );
+        assert_eq!(
+            excel_to_ooo("[$-1010409]mmm d, yyyy").as_deref(),
             Some("MMM D, YYYY")
+        );
+        assert_eq!(
+            excel_to_ooo("[$-x-sysdate]dddd, mmmm dd, yyyy").as_deref(),
+            Some("DDDD, MMMM DD, YYYY")
         );
         assert_eq!(excel_to_ooo("[h]:mm:ss").as_deref(), Some("[H]:MM:SS"));
         assert_eq!(excel_to_ooo("General"), None);

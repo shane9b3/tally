@@ -138,7 +138,7 @@ mod tests {
         );
         assert_eq!(
             builtin_format(QuickFormat::Currency, &crate::JA_JP),
-            "[$¥-411]#,##0;[RED]-[$¥-411]#,##0"
+            "[$￥-411]#,##0;[RED]-[$￥-411]#,##0"
         );
     }
 }

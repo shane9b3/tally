@@ -13,7 +13,7 @@
 //! `[DBNumN]` ↔ `[NatNumN]` mapping, and OOo `Q`/`QQ`/`WW`/`G` which have no
 //! Excel equivalent (currently emitted as quoted placeholders).
 
-use crate::format_ast::{Color, DateTimeToken, ElapsedUnit, NamedColor, Token};
+use crate::format_ast::{Color, DateTimeToken, ElapsedUnit, GeneralKeyword, NamedColor, Token};
 use crate::parse_format::{parse_format, print_format, print_token, FormatError};
 
 /// Converts an Excel format code to canonical OOo form.
@@ -28,15 +28,33 @@ fn rep(out: &mut String, c: char, n: u8) {
 }
 
 /// Converts an OOo format code to the Excel dialect.
+///
+/// AOO's `BOOLEAN` becomes `"TRUE";"TRUE";"FALSE"`; a language-only tag
+/// next to a currency tag in one section (`[$-809][$$-409]0.00`) is dropped,
+/// Excel takes one locale per section.
 pub fn to_excel_code(code: &str) -> Result<String, FormatError> {
     let ast = parse_format(code)?;
+    let boolean = |s: &crate::format_ast::Section| {
+        s.tokens
+            .iter()
+            .any(|t| matches!(t, Token::General(GeneralKeyword::Boolean)))
+    };
+    if ast.sections.len() == 1 && boolean(&ast.sections[0]) {
+        return Ok("\"TRUE\";\"TRUE\";\"FALSE\"".into());
+    }
     let mut out = String::new();
     for (i, s) in ast.sections.iter().enumerate() {
         if i > 0 {
             out.push(';');
         }
+        let has_currency = s
+            .tokens
+            .iter()
+            .any(|t| matches!(t, Token::Currency { symbol, .. } if !symbol.is_empty()));
         for t in &s.tokens {
             match t {
+                Token::Currency { symbol, .. } if symbol.is_empty() && has_currency => {}
+                Token::General(GeneralKeyword::Boolean) => out.push_str("\"TRUE\""),
                 Token::DateTime(dt) => match dt {
                     DateTimeToken::Day(n) | DateTimeToken::DayName(n) => rep(&mut out, 'd', *n),
                     DateTimeToken::AooDayName(2) => out.push_str("ddd"),
@@ -127,5 +145,17 @@ mod tests {
         assert_eq!(to_excel_code("[HH]:MM").unwrap(), "[hh]:mm");
         assert_eq!(to_excel_code("Standard").unwrap(), "General");
         assert_eq!(to_excel_code("0;[RED]-0").unwrap(), "0;[Red]-0");
+        assert_eq!(
+            to_excel_code("BOOLEAN").unwrap(),
+            "\"TRUE\";\"TRUE\";\"FALSE\""
+        );
+        assert_eq!(
+            to_excel_code("[$-809][$$-409]#,##0.00").unwrap(),
+            "[$$-409]#,##0.00"
+        );
+        assert_eq!(
+            to_excel_code("[$-407]DD.MM.YYYY").unwrap(),
+            "[$-407]dd.mm.yyyy"
+        );
     }
 }

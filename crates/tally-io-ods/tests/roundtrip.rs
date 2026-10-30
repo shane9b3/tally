@@ -451,6 +451,185 @@ fn every_phase_a_format_round_trips_exactly() {
     }
 }
 
+/// Format Cells ▸ Numbers language and currency choices (G14): the
+/// format's language is the data style's `number:language` /
+/// `number:country`, a currency's locale is on `number:currency-symbol`.
+#[test]
+fn language_and_currency_tags_round_trip() {
+    let codes = [
+        "[$$-409]#,##0.00;[RED]-[$$-409]#,##0.00",
+        "[$$-409]#,##0;-[$$-409]#,##0",
+        "#,##0.00 [$€-407];[RED]-#,##0.00 [$€-407]",
+        "#,##0.00 [$€-40C];-#,##0.00 [$€-40C]",
+        "#,##0.00 [$€-C0A];[RED]-#,##0.00 [$€-C0A]",
+        "[$£-809]#,##0.00;[RED]-[$£-809]#,##0.00",
+        "[$￥-411]#,##0;[RED]-[$￥-411]#,##0",
+        "[$-407]#,##0.00 [$€-407];[RED]-#,##0.00 [$€-407]",
+        "[$-407]DD.MM.YYYY;@",
+        "[$SFr.-807] #,##0.00;[RED][$SFr.-807] -#,##0.00",
+        "[$$-1009]#,##0.00;-[$$-1009]#,##0.00",
+        "[$$-C09]#,##0.00;-[$$-C09]#,##0.00",
+        "#,##0.00 [$USD-409]",
+        "[$-407]DD.MM.YYYY",
+        "[$-40C]DD MMMM YYYY",
+        "[$-411]YYYY/MM/DD HH:MM",
+        "[$-407]#,##0.00;[RED]-#,##0.00",
+        "[$-809]0.00%",
+        "[$-C0A]0.00E+00",
+        "$#,##0.00;[RED]-$#,##0.00",
+    ];
+    for code in codes {
+        let wb = WorkbookData {
+            sheets: vec![SheetData {
+                name: "S".into(),
+                cells: vec![v(0, 0, Value::Number(1.5), Some(0))],
+                ..SheetData::default()
+            }],
+            styles: vec![fmt(code)],
+            ..WorkbookData::default()
+        };
+        let bytes = write_to_vec(&wb);
+        let back = read_ods(Cursor::new(bytes.clone()), &Limits::default()).unwrap();
+        assert_eq!(
+            back.styles.first().and_then(|s| s.number_format.as_deref()),
+            Some(code)
+        );
+        if code == "[$-407]DD.MM.YYYY" {
+            let xml = entry(&bytes, "content.xml");
+            assert!(
+                xml.contains(r#"<number:date-style style:name="N0" number:language="de" number:country="DE">"#),
+                "{xml}"
+            );
+        }
+        if code.contains("[$€-407]") {
+            let xml = entry(&bytes, "content.xml");
+            assert!(
+                xml.contains(r#"<number:currency-symbol number:language="de" number:country="DE">€</number:currency-symbol>"#),
+                "{xml}"
+            );
+        }
+    }
+    // A language without an ISO mapping is dropped, the format kept.
+    let wb = WorkbookData {
+        sheets: vec![SheetData {
+            name: "S".into(),
+            cells: vec![v(0, 0, Value::Number(1.5), Some(0))],
+            ..SheetData::default()
+        }],
+        styles: vec![fmt("[$-2C0A]0.00")],
+        ..WorkbookData::default()
+    };
+    let back = read_ods(Cursor::new(write_to_vec(&wb)), &Limits::default()).unwrap();
+    assert_eq!(back.styles[0].number_format.as_deref(), Some("0.00"));
+}
+
+fn one_cell(code: &str) -> WorkbookData {
+    WorkbookData {
+        sheets: vec![SheetData {
+            name: "S".into(),
+            cells: vec![v(0, 0, Value::Number(1.5), Some(0))],
+            ..SheetData::default()
+        }],
+        styles: vec![fmt(code)],
+        ..WorkbookData::default()
+    }
+}
+
+/// The package with `content.xml` rewritten by `f`.
+fn with_content(bytes: &[u8], f: impl Fn(String) -> String) -> Vec<u8> {
+    use std::io::Write;
+    let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..z.len() {
+        let mut e = z.by_index(i).unwrap();
+        let name = e.name().unwrap().to_string();
+        let mut data = Vec::new();
+        e.read_to_end(&mut data).unwrap();
+        if name == "content.xml" {
+            data = f(String::from_utf8(data).unwrap()).into_bytes();
+        }
+        let method = if name == "mimetype" {
+            zip::CompressionMethod::Stored
+        } else {
+            zip::CompressionMethod::Deflated
+        };
+        let opts = zip::write::SimpleFileOptions::default().compression_method(method);
+        out.start_file(name, opts).unwrap();
+        out.write_all(&data).unwrap();
+    }
+    out.finish().unwrap().into_inner()
+}
+
+/// AOO reads a format's language from the main style (the one with the
+/// style:map elements, xmlnumfi.cxx): every section's style carries it.
+#[test]
+fn language_is_on_the_main_style() {
+    for code in [
+        "[$-407]#,##0.00;[RED]-#,##0.00",
+        "[$-407]DD.MM.YYYY;@",
+        "[$-40C]0.00;-0.00;\"zero\"",
+    ] {
+        let bytes = write_to_vec(&one_cell(code));
+        let xml = entry(&bytes, "content.xml");
+        let main = xml
+            .split("<number:")
+            .find(|e| e.contains("style:name=\"N0\""))
+            .unwrap();
+        assert!(main.contains("number:language="), "{code}: {main}");
+        let back = read_ods(Cursor::new(bytes), &Limits::default()).unwrap();
+        assert_eq!(back.styles[0].number_format.as_deref(), Some(code));
+    }
+}
+
+/// A currency style keeps its own language next to its symbol's: a de-DE
+/// style with `€` reads back as `[$-407]…[$€-407]`, so the display stays
+/// German (review M5).
+#[test]
+fn currency_style_keeps_its_language() {
+    let bytes = write_to_vec(&one_cell("#,##0.00 [$€-407]"));
+    let de = with_content(&bytes, |x| {
+        x.replace(
+            "<number:currency-style style:name=\"N0\">",
+            "<number:currency-style style:name=\"N0\" number:language=\"de\" number:country=\"DE\">",
+        )
+    });
+    let back = read_ods(Cursor::new(de), &Limits::default()).unwrap();
+    assert_eq!(
+        back.styles[0].number_format.as_deref(),
+        Some("[$-407]#,##0.00 [$€-407]")
+    );
+    // AOO's automatic symbol (an empty currency-symbol) is the locale's.
+    let auto = with_content(&bytes, |x| {
+        x.replace(
+            "<number:currency-symbol number:language=\"de\" number:country=\"DE\">€</number:currency-symbol>",
+            "<number:currency-symbol number:language=\"de\" number:country=\"DE\"/>",
+        )
+    });
+    let back = read_ods(Cursor::new(auto), &Limits::default()).unwrap();
+    assert_eq!(
+        back.styles[0].number_format.as_deref(),
+        Some("#,##0.00 [$€-407]")
+    );
+    let bare = with_content(&bytes, |x| {
+        x.replace(
+            "<number:currency-symbol number:language=\"de\" number:country=\"DE\">€</number:currency-symbol>",
+            "<number:currency-symbol/>",
+        )
+    });
+    let back = read_ods(Cursor::new(bare), &Limits::default()).unwrap();
+    assert_eq!(
+        back.styles[0].number_format.as_deref(),
+        Some("#,##0.00 [$]")
+    );
+}
+
+fn entry(bytes: &[u8], name: &str) -> String {
+    let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut s = String::new();
+    z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+    s
+}
+
 #[test]
 fn empty_workbook_round_trips() {
     let wb = WorkbookData {

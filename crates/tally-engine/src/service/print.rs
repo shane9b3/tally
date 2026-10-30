@@ -824,9 +824,11 @@ mod pdf {
                         let mut measure = |s: &str| ctx.width(face, s, size);
                         if measure(&text) > avail {
                             let sep = wb.locale.decimal_sep;
-                            let general =
-                                st.number_format.as_deref().is_none_or(|f| f == "General")
-                                    || is_general_number_text(&text, sep);
+                            let general = st
+                                .number_format
+                                .as_deref()
+                                .is_none_or(tally_numfmt::is_general_code)
+                                || is_general_number_text(&text, sep);
                             text = match v.num {
                                 Some(n) if general && !setup.print_formulas => {
                                     fit_general(n, &text, avail, sep, measure)

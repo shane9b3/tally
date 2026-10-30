@@ -1,7 +1,8 @@
 /**
  * The cells a paste writes, as the engine works it out (`clipboard::paste_area`):
  * external TSV text sits at the top-left and is never tiled; an internal
- * block is tiled over a target that is a whole multiple of its size.
+ * block fills a larger target with copies, the last one cut at its edge
+ * (AOO `CopyFromClip`), and is pasted whole beyond a smaller one.
  */
 import type { PasteOptions } from "./generated/PasteOptions";
 import type { PastePayload } from "./generated/PastePayload";
@@ -27,7 +28,5 @@ export function pasteArea(target: RangeDto, payload: PastePayload, options: Pick
   const { rows, cols } = swap({ rows: Math.max(1, clip.rows), cols: Math.max(1, clip.cols) });
   const th = target.r1 - target.r0 + 1;
   const tw = target.c1 - target.c0 + 1;
-  const repsR = th % rows === 0 ? th / rows : 1;
-  const repsC = tw % cols === 0 ? tw / cols : 1;
-  return { r0: target.r0, c0: target.c0, r1: target.r0 + rows * repsR - 1, c1: target.c0 + cols * repsC - 1 };
+  return { r0: target.r0, c0: target.c0, r1: Math.min(target.r0 + Math.max(th, rows) - 1, 1_048_575), c1: Math.min(target.c0 + Math.max(tw, cols) - 1, 16_383) };
 }

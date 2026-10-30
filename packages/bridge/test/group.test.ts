@@ -131,20 +131,21 @@ describe("groupSheets (engine group_sheets)", () => {
   });
 });
 
-describe("Fill Sheet with an operation (engine paste_arithmetic parity)", () => {
+describe("Fill Sheet with an operation (engine mix_cell / AOO MixData parity)", () => {
   const all: FillSheetOptions = { text: true, numbers: true, dateTime: true, formulas: true, notes: true, formats: false, operation: "add", skipEmpty: false };
-  // [source input, target input, operation, expected target input] as documented by clipboard.rs paste_arithmetic.
+  // [source input, target input, operation, expected target input].
   const cases: [string, string, FillSheetOptions["operation"], string][] = [
-    ["5", "abc", "add", "abc"], // text targets are kept
-    ["5", "=2*3", "add", "=(2*3)+5"], // formula targets are wrapped
-    ["5", "", "subtract", "-5"], // empty targets count as 0
+    ["5", "abc", "add", "abc"], // text on either side keeps the target
+    ["5", "=2*3", "add", "=(2*3)+5"], // a formula on either side builds one
+    ["5", "", "subtract", "-5"], // empty counts as 0
     ["2", "4", "divide", "2"],
-    ["0", "4", "divide", "#DIV/0!"],
+    ["0", "4", "divide", "#VALUE!"], // AOO lcl_DoFunction → errNoValue
     ["3", "4", "multiply", "12"],
-    ["=2+3", "1", "add", "6"], // the source's value, not its formula
-    ["x", "1", "add", "x"], // a non-number source is written as a constant
+    ["=2+3", "1", "add", "=1+(2+3)"], // the source's formula combines
+    ["x", "1", "add", "1"],
     ["1", "TRUE", "add", "2"], // booleans count as 1/0
-    ["", "7", "add", "7"], // an empty source leaves the target
+    ["", "7", "add", "7"], // empty source: 7 + 0
+    ["", "7", "multiply", "0"], // … and 7 × 0
   ];
   it.each(cases)("source %j onto %j with %s gives %j", async (src, dst, operation, want) => {
     const { client, doc, ids } = await setup(2);

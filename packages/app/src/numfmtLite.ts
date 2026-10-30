@@ -8,6 +8,16 @@
  * Returns `null` for codes it does not understand.
  */
 
+/** Separators and boolean names of the format's language (default en-US). */
+export interface LiteLocale {
+  decimal: string;
+  group: string;
+  trueName?: string;
+  falseName?: string;
+}
+
+const EN_US: LiteLocale = { decimal: ".", group: ",", trueName: "TRUE", falseName: "FALSE" };
+
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -56,8 +66,40 @@ function generalText(v: number): string {
   return String(Number(v.toPrecision(10)));
 }
 
-function groupThousands(int: string): string {
-  return int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+function groupThousands(int: string, sep = ","): string {
+  return int.replace(/\B(?=(\d{3})+(?!\d))/g, sep);
+}
+
+/** The closest fraction n/d to `x` (0 ≤ x < 1) with d ≤ `maxDen`. */
+function bestRational(x: number, maxDen: number): [number, number] {
+  let best: [number, number] = [0, 1];
+  let err = Math.abs(x);
+  for (let d = 1; d <= maxDen; d++) {
+    const n = Math.round(x * d);
+    const e = Math.abs(x - n / d);
+    if (e < err - 1e-12) {
+      best = [n, d];
+      err = e;
+    }
+  }
+  return best;
+}
+
+/** `# ?/?`, `# ??/16`, `?/?`: a whole part (when `intPh`) and a fraction. */
+function formatFraction(v: number, intPh: string | undefined, denPh: string): string {
+  const ax = Math.abs(v);
+  const fixed = /^\d+$/.test(denPh) ? Number(denPh) : null;
+  const maxDen = 10 ** denPh.length - 1;
+  let whole = intPh !== undefined ? Math.floor(ax) : 0;
+  const frac = ax - whole;
+  let [n, d] = fixed ? [Math.round(frac * fixed), fixed] : bestRational(frac, maxDen);
+  if (intPh === undefined) return `${n + whole * d}/${d}`;
+  if (n === d) {
+    whole += 1;
+    n = 0;
+  }
+  if (n === 0) return String(whole);
+  return whole === 0 && !intPh.includes("0") ? `${n}/${d}` : `${whole} ${n}/${d}`;
 }
 
 function formatDate(serial: number, section: string): string {
@@ -73,7 +115,8 @@ function formatDate(serial: number, section: string): string {
   const pad = (n: number, w = 2): string => String(n).padStart(w, "0");
   let out = "";
   let lastWasHour = false;
-  const src = literals(section);
+  // `[HH]`: elapsed hours (kept as a marker run through literals()).
+  const src = literals(section.replace(/\[(h+)\]/gi, (_, x: string) => "\u0001".repeat(x.length)));
   let i = 0;
   while (i < src.length) {
     const rest = src.slice(i);
@@ -87,6 +130,13 @@ function formatDate(serial: number, section: string): string {
     if (ch === "\\") {
       out += src[i + 1] ?? "";
       i += 2;
+      continue;
+    }
+    if (ch === "\u0001") {
+      const n = /^\u0001+/.exec(rest)![0].length;
+      out += pad(Math.floor(Math.abs(serial) * 24 + 1e-9), n);
+      lastWasHour = true;
+      i += n;
       continue;
     }
     if (/^AM\/PM/i.test(rest)) {
@@ -103,7 +153,15 @@ function formatDate(serial: number, section: string): string {
       else if (k === "h") {
         const hh = ampm ? ((h + 11) % 12) + 1 : h;
         out += n >= 2 ? pad(hh) : String(hh);
-      } else if (k === "s") out += n >= 2 ? pad(s) : String(s);
+      } else if (k === "s") {
+        out += n >= 2 ? pad(s) : String(s);
+        const fr = /^\.(0+)/.exec(src.slice(i + n));
+        if (fr) {
+          const digits = fr[1]!.length;
+          out += "." + String(Math.floor(((ms % 1000) + 1000) % 1000 / 10 ** (3 - Math.min(3, digits)))).padStart(Math.min(3, digits), "0").padEnd(digits, "0");
+          i += fr[0].length;
+        }
+      }
       else if (k === "m") {
         // Minutes right after hours (or before seconds); months otherwise.
         const minutes = lastWasHour || /^m+:?s/i.test(rest.replace(/^m+/i, (x) => x + ""));
@@ -121,10 +179,15 @@ function formatDate(serial: number, section: string): string {
   return out;
 }
 
-function formatNumberSection(v: number, section: string): string | null {
+function formatNumberSection(v: number, section: string, loc: LiteLocale): string | null {
   const src = literals(section);
-  // Locate the numeric pattern (digits, separators, exponent).
-  const m = /[0#?][0#?,]*(\.[0#?]*)?(E[+-]0+)?|\.[0#?]+(E[+-]0+)?/i.exec(src.replace(/"[^"]*"/g, (x) => "\u0000".repeat(x.length)));
+  const unquoted = src.replace(/"[^"]*"/g, (x) => "\u0000".repeat(x.length));
+  const frac = /(?:([0#?]+)\s+)?[0#?]+\/([0-9#?]+)/.exec(unquoted);
+  if (frac) {
+    const unq = (t: string): string => t.replace(/"([^"]*)"/g, "$1").replace(/\\(.)/g, "$1");
+    return unq(src.slice(0, frac.index)) + formatFraction(v, frac[1], frac[2] ?? "?") + unq(src.slice(frac.index + frac[0].length));
+  }
+  const m = /[0#?][0#?,]*(\.[0#?]*)?(E[+-]0+)?|\.[0#?]+(E[+-]0+)?/i.exec(unquoted);
   const unquote = (t: string): string => t.replace(/"([^"]*)"/g, "$1").replace(/\\(.)/g, "$1");
   if (!m) return unquote(src);
   const pat = m[0];
@@ -141,7 +204,7 @@ function formatNumberSection(v: number, section: string): string | null {
   const minInt = (intPat.replace(/,/g, "").match(/0/g) ?? []).length;
   let body: string;
   if (expM) {
-    if (x === 0) body = `${(0).toFixed(maxDec)}E${expM[1] === "+" ? "+" : ""}${"0".repeat(expM[2]!.length)}`;
+    if (x === 0) body = `${(0).toFixed(maxDec).replace(".", loc.decimal)}E${expM[1] === "+" ? "+" : ""}${"0".repeat(expM[2]!.length)}`;
     else {
       const e = Math.floor(Math.log10(Math.abs(x)));
       let mant = x / 10 ** e;
@@ -151,7 +214,7 @@ function formatNumberSection(v: number, section: string): string | null {
         exp += 1;
       }
       const sign = exp < 0 ? "-" : expM[1] === "+" ? "+" : "";
-      body = `${Math.abs(mant).toFixed(maxDec)}E${sign}${String(Math.abs(exp)).padStart(expM[2]!.length, "0")}`;
+      body = `${Math.abs(mant).toFixed(maxDec).replace(".", loc.decimal)}E${sign}${String(Math.abs(exp)).padStart(expM[2]!.length, "0")}`;
     }
   } else {
     x = Math.abs(x);
@@ -160,17 +223,23 @@ function formatNumberSection(v: number, section: string): string | null {
     let [ip = "0", fp] = fixed.split(".");
     if (ip === "0" && minInt === 0) ip = "";
     ip = ip.padStart(minInt, "0");
-    if (grouping) ip = groupThousands(ip);
-    body = fp !== undefined && fp !== "" ? `${ip}.${fp}` : ip;
+    if (grouping) ip = groupThousands(ip, loc.group);
+    body = fp !== undefined && fp !== "" ? `${ip}${loc.decimal}${fp}` : ip;
     if (body === "") body = "0";
+    // `#,##0.--`: the decimal separator stays without decimals.
+    if (maxDec === 0 && pat.includes(".")) body += loc.decimal;
   }
   return before + body + after;
 }
 
-/** Formats `v` with an OOo format code, or `null` if the code is not supported here. */
-export function formatNumberLite(v: number, code: string): string | null {
+/**
+ * Formats `v` with an OOo format code, or `null` if the code is not
+ * supported here. `loc` gives the separators of the format's language.
+ */
+export function formatNumberLite(v: number, code: string, loc: LiteLocale = EN_US): string | null {
   const trimmed = code.trim();
-  if (trimmed === "" || /^general$/i.test(trimmed)) return generalText(v);
+  const general = (x: number): string => generalText(x).replace(".", loc.decimal);
+  if (trimmed === "" || /^general$/i.test(trimmed)) return general(v);
   const sections = splitSections(trimmed);
   let section = sections[0] ?? "";
   let value = v;
@@ -181,10 +250,11 @@ export function formatNumberLite(v: number, code: string): string | null {
     explicitNeg = true;
   } else if (v === 0 && sections.length >= 3) section = sections[2] ?? section;
   if (section.trim() === "@") return generalText(v);
-  if (/^general$/i.test(section.trim())) return (v < 0 && !explicitNeg ? "" : "") + generalText(value);
+  if (/BOOLEAN/i.test(literals(section).replace(/"[^"]*"/g, ""))) return v !== 0 ? (loc.trueName ?? "TRUE") : (loc.falseName ?? "FALSE");
+  if (/^general$/i.test(literals(section).replace(/""/g, "").trim())) return general(value);
   try {
     if (isDateCode(section)) return formatDate(value, section);
-    const out = formatNumberSection(value, section);
+    const out = formatNumberSection(value, section, loc);
     if (out === null) return null;
     return value < 0 && !explicitNeg ? `-${out}` : out;
   } catch {

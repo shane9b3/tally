@@ -514,17 +514,32 @@ fn fill_targets(
             }
             if any_content {
                 changes.push(Change::Range(capture_range(wb, tr, true, false)));
+                let mixing = o.operation != PasteOperation::None;
+                // An operation mixes the target as it was with what is
+                // pasted, as Paste Special does (AOO `FillTab` → `MixData`,
+                // after deleting all contents unless skipping empty cells).
+                let origs = if mixing {
+                    crate::clipboard::originals(wb, tr)
+                } else {
+                    Vec::new()
+                };
+                if mixing && !o.skip_empty {
+                    crate::undo::clear_range_content(wb, tr);
+                }
+                let mut written = std::collections::HashSet::new();
                 for (cell, &on) in clip.cells.iter().zip(sel) {
                     if !on {
                         continue;
                     }
                     let addr = CellAddr::new(t, tr.r0 + cell.dr, tr.c0 + cell.dc);
-                    if o.operation != PasteOperation::None {
-                        crate::clipboard::paste_arithmetic(wb, addr, cell, o.operation);
-                    } else if let Some(content) = &cell.content {
+                    if let Some(content) = &cell.content {
                         // Arrays cut by the range were copied as values.
                         wb.restore_content(addr, Some(content.clone()));
+                        written.insert(addr);
                     }
+                }
+                if mixing {
+                    crate::clipboard::mix_all(wb, origs, written, o.skip_empty, o.operation);
                 }
                 wb.pending.ranges.push(tr);
             }

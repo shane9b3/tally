@@ -3,12 +3,12 @@
  * Custom number format, Sort…, Find & Replace, Paste Special, Define Name,
  * Manage Names and a generic confirmation.
  */
-import type { NameInfo, PasteOperation, SortKey } from "@tally/bridge";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { tsvDims, type NameInfo, type PasteOperation, type PasteSelection, type SortKey } from "@tally/bridge";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useController } from "../context";
 import { useW56Store } from "../data/store";
 import { t } from "../i18n";
-import { a1, DEFAULT_PASTE_SPECIAL, isValidName, searchIn, type PasteSpecialChoice } from "../dataOps";
+import { a1, ALL_KINDS, DEFAULT_PASTE_SPECIAL, isValidName, PASTE_KINDS, pasteChoiceValid, pasteKinds, pasteShiftAllowed, pasteWhat, searchIn, type PasteKind, type PasteShift, type PasteSpecialChoice } from "../dataOps";
 import { useDataStore } from "../stores/dataStore";
 import { NUMBER_FORMATS } from "../formats";
 import { formatNumberLite } from "../numfmtLite";
@@ -16,6 +16,7 @@ import { useDocStore } from "../stores/docStore";
 import { selectionRanges, useSelectionStore } from "../stores/selectionStore";
 import { useUiStore, type DialogState } from "../stores/uiStore";
 import styles from "./Dialogs.module.css";
+import fs from "../data/FillSheetDialog.module.css";
 import { V3Dialog, isV3Dialog } from "./V3Dialogs";
 import { FunctionWizard } from "./FunctionWizard";
 import { FOCUSABLE, trapTab } from "./trapTab";
@@ -451,13 +452,94 @@ const operations = (): { op: PasteOperation; label: string }[] => [
   { op: "divide", label: t("paste.divide", "Divide") },
 ];
 
+const kindLabels = (): Record<PasteKind, string> => ({
+  text: t("paste.text", "Text"),
+  numbers: t("paste.numbers", "Numbers"),
+  dateTime: t("paste.dates", "Date and time"),
+  formulas: t("paste.formulas", "Formulas"),
+  notes: t("paste.notes", "Notes"),
+  formats: t("paste.formats", "Formats"),
+});
+
+const shifts = (): { id: PasteShift; label: string }[] => [
+  { id: "none", label: t("paste.dontShift", "Don't shift") },
+  { id: "down", label: t("paste.down", "Down") },
+  { id: "right", label: t("paste.right", "Right") },
+];
+
+/** The dialog's choices, kept for the session (AOO's static `nPreviousChecks` etc., inscodlg.cxx:40-44). */
+interface PasteDialogState {
+  all: boolean;
+  kinds: PasteSelection;
+  o: Omit<PasteSpecialChoice, "what" | "kinds">;
+}
+
+/** AOO's first-open state: Paste all off; Text, Numbers, Date & time on; no operation; nothing else. */
+const FIRST_PASTE_DIALOG: PasteDialogState = {
+  all: false,
+  kinds: { text: true, numbers: true, dateTime: true, formulas: false, notes: false, formats: false },
+  o: { transpose: false, skipEmpty: false, operation: "none", link: false, shift: "none" },
+};
+let lastPasteDialog: PasteDialogState = FIRST_PASTE_DIALOG;
+
+/**
+ * Paste Special (AOO's ScInsertContentsDlg): Selection (Paste all, or Text,
+ * Numbers, Date and time, Formulas, Notes, Formats), Operations, Options
+ * (Skip empty cells, Transpose, Link) and Shift cells, plus Tally's quick
+ * presets (Everything / Values / Formats). The choices persist for the
+ * session. Objects are not offered: Tally's clipboard carries no drawing
+ * objects. Link needs a copy made in this document; text from outside
+ * Tally only takes Formulas (off: `=…` stays text), Skip empty cells,
+ * Transpose and Shift cells, so the rest is greyed out. Shift directions
+ * that would push the block off the sheet are greyed out.
+ */
 function PasteSpecialDialog() {
   const ctl = useController();
-  const [c, setC] = useState<PasteSpecialChoice>(DEFAULT_PASTE_SPECIAL);
-  const set = (p: Partial<PasteSpecialChoice>) => setC((x) => ({ ...x, ...p }));
+  const clip = useDataStore((s) => s.clip);
+  const active = useSelectionStore((s) => s.selection.active);
+  const [all, setAll] = useState(lastPasteDialog.all);
+  const [kinds, setKinds] = useState<PasteSelection>(lastPasteDialog.kinds);
+  const [o, setO] = useState(lastPasteDialog.o);
+  const [source, setSource] = useState<{ text: string | null; token: string | null } | null>(null);
+  useEffect(() => {
+    let live = true;
+    void ctl.readClipboard().then((src) => {
+      if (live) setSource(src);
+    });
+    return () => {
+      live = false;
+    };
+  }, [ctl]);
+  const selId = useId();
+  const opId = useId();
+  const optId = useId();
+  const shiftId = useId();
+  const external = source !== null && source.token === null && source.text !== null;
+  const own = clip !== null && (source === null || source.token === clip.token);
+  const canLink = own && !external;
+  const block = own && clip ? { rows: clip.range.r1 - clip.range.r0 + 1, cols: clip.range.c1 - clip.range.c0 + 1 } : external && source?.text ? tsvDims(source.text) : null;
+  const shiftOk = pasteShiftAllowed(active, block);
+  const shift = o.shift === "down" && !shiftOk.down ? "none" : o.shift === "right" && !shiftOk.right ? "none" : o.shift;
+  const choice: PasteSpecialChoice = { ...pasteWhat(all, kinds), ...o, link: canLink && o.link === true, shift, operation: external ? "none" : o.operation };
+  const shown = all ? ALL_KINDS : kinds;
+  const preset = (w: "all" | "values" | "formats") => {
+    setAll(w === "all");
+    setKinds(pasteKinds({ ...DEFAULT_PASTE_SPECIAL, what: w }));
+  };
+  const labels = kindLabels();
   return (
-    <Shell title={t("dlg.pasteSpecial", "Paste special")} ok={t("cmd.edit.paste", "Paste")} testId="paste-special-dialog" onSubmit={() => void ctl.pasteSpecial(c)}>
-      <div className={styles.segmented} role="radiogroup" aria-label={t("cmd.edit.paste", "Paste")}>
+    <Shell
+      title={t("dlg.pasteSpecial", "Paste special")}
+      ok={t("cmd.edit.paste", "Paste")}
+      wide
+      testId="paste-special-dialog"
+      valid={pasteChoiceValid(choice)}
+      onSubmit={() => {
+        lastPasteDialog = { all, kinds, o };
+        void ctl.pasteSpecial(choice, source ?? undefined);
+      }}
+    >
+      <div className={styles.segmented} role="radiogroup" aria-label={t("dlg.pastePresets", "Presets")}>
         {(
           [
             ["all", t("dlg.pasteEverything", "Everything")],
@@ -465,29 +547,76 @@ function PasteSpecialDialog() {
             ["formats", t("paste.formats", "Formats")],
           ] as const
         ).map(([w, label]) => (
-          <button key={w} type="button" role="radio" aria-checked={c.what === w} className={c.what === w ? styles.segOn : styles.seg} onClick={() => set({ what: w })} data-testid={`paste-${w}`}>
+          <button key={w} type="button" role="radio" aria-checked={choice.what === w} className={choice.what === w ? styles.segOn : styles.seg} onClick={() => preset(w)} data-testid={`paste-${w}`}>
             {label}
           </button>
         ))}
       </div>
-      <label className={styles.checkRow}>
-        <input type="checkbox" checked={c.transpose} onChange={(e) => set({ transpose: e.target.checked })} data-testid="paste-transpose" />
-        <span>{t("dlg.transposeLong", "Transpose (rows become columns)")}</span>
-      </label>
-      <label className={styles.checkRow}>
-        <input type="checkbox" checked={c.skipEmpty} onChange={(e) => set({ skipEmpty: e.target.checked })} />
-        <span>{t("paste.skipEmpty", "Skip empty cells")}</span>
-      </label>
-      <label className={`${styles.field} ${styles.gap}`}>
-        <span>{t("dlg.pasteOperation", "Operation with the cells pasted onto")}</span>
-        <select className={styles.select} value={c.operation} disabled={c.what === "formats"} onChange={(e) => set({ operation: e.target.value as PasteOperation })} data-testid="paste-operation">
-          {operations().map((o) => (
-            <option key={o.op} value={o.op}>
-              {o.label}
-            </option>
+      <div className={fs.cols}>
+        <fieldset className={fs.group} aria-labelledby={selId}>
+          <legend id={selId} className={fs.legend}>
+            {t("dd.selection", "Selection")}
+          </legend>
+          <label className={styles.checkRow}>
+            <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} data-testid="paste-kind-all" />
+            <span>{t("paste.all", "Paste all")}</span>
+          </label>
+          {PASTE_KINDS.map((k) => (
+            <label key={k} className={styles.checkRow}>
+              <input type="checkbox" checked={shown[k]} disabled={all || (external && k !== "formulas")} onChange={(e) => setKinds({ ...kinds, [k]: e.target.checked })} data-testid={`paste-kind-${k}`} />
+              <span>{labels[k]}</span>
+            </label>
           ))}
-        </select>
-      </label>
+        </fieldset>
+        <fieldset className={fs.group} role="radiogroup" aria-labelledby={opId} disabled={external}>
+          <legend id={opId} className={fs.legend}>
+            {t("fillSheet.operations", "Operations")}
+          </legend>
+          {operations().map((x) => (
+            <label key={x.op} className={`${styles.checkRow} ${fs.radioRow}`}>
+              <input type="radio" name={opId} checked={choice.operation === x.op} onChange={() => setO({ ...o, operation: x.op })} data-testid={`paste-op-${x.op}`} />
+              <span>{x.label}</span>
+            </label>
+          ))}
+        </fieldset>
+      </div>
+      <div className={fs.cols}>
+        <fieldset className={fs.group} aria-labelledby={optId}>
+          <legend id={optId} className={fs.legend}>
+            {t("dialog.options", "Options")}
+          </legend>
+          <label className={styles.checkRow}>
+            <input type="checkbox" checked={o.skipEmpty} onChange={(e) => setO({ ...o, skipEmpty: e.target.checked })} data-testid="paste-skip-empty" />
+            <span>{t("paste.skipEmpty", "Skip empty cells")}</span>
+          </label>
+          <label className={styles.checkRow}>
+            <input type="checkbox" checked={o.transpose} onChange={(e) => setO({ ...o, transpose: e.target.checked })} data-testid="paste-transpose" />
+            <span>{t("paste.transpose", "Transpose")}</span>
+          </label>
+          <label className={styles.checkRow} title={canLink ? undefined : t("paste.linkNeedsCopy", "Link needs cells copied in this document.")}>
+            <input type="checkbox" checked={choice.link === true} disabled={!canLink} onChange={(e) => setO({ ...o, link: e.target.checked })} data-testid="paste-link" />
+            <span>{t("paste.link", "Link")}</span>
+          </label>
+        </fieldset>
+        <fieldset className={fs.group} role="radiogroup" aria-labelledby={shiftId}>
+          <legend id={shiftId} className={fs.legend}>
+            {t("paste.shiftCells", "Shift cells")}
+          </legend>
+          {shifts().map((x) => (
+            <label key={x.id} className={`${styles.checkRow} ${fs.radioRow}`}>
+              <input
+                type="radio"
+                name={shiftId}
+                checked={(shift ?? "none") === x.id}
+                disabled={(x.id === "down" && !shiftOk.down) || (x.id === "right" && !shiftOk.right)}
+                onChange={() => setO({ ...o, shift: x.id })}
+                data-testid={`paste-shift-${x.id}`}
+              />
+              <span>{x.label}</span>
+            </label>
+          ))}
+        </fieldset>
+      </div>
     </Shell>
   );
 }

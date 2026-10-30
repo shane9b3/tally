@@ -1729,20 +1729,11 @@ export class MockClient implements EngineClientV4, ShellClient {
       case "fillSheets": {
         const src = this.sheet(d, op.sheet);
         const targets = [...new Set(op.to)].map((id) => this.sheet(d, id)).filter((sh) => sh !== src);
-        // Source values are read before any target changes (the engine's clip snapshot).
-        const ev = new Evaluator(src, d.state.sheets);
-        const values = new Map<string, Scalar>();
-        const srcValues = (r: number, c: number): Scalar => {
-          const k = key(r, c);
-          if (!values.has(k)) values.set(k, ev.value(r, c));
-          return values.get(k) as Scalar;
-        };
-        for (const range of op.ranges) for (let r = range.r0; r <= range.r1; r++) for (let c = range.c0; c <= range.c1; c++) if (src.cells.has(key(r, c))) srcValues(r, c);
         for (const range of op.ranges) {
           checkRange(range);
           if (cellCount(range) * Math.max(1, targets.length) > MAX_CELLS_PER_OP) throw apiError("unsupported", "range too large for MockClient");
           for (const sh of targets) {
-            fillSheetRange(st.styles, src, sh, range, op.options, srcValues);
+            fillSheetRange(st.styles, src, sh, range, op.options);
             const notes = d.v3.notes;
             if (op.options.notes) {
               // Like the engine: the target's notes go only when replacing; then the source's are copied.
@@ -1858,12 +1849,13 @@ function fillKind(input: string, style: StyleDto | undefined): FillKind | null {
  * Edit ▸ Fill ▸ Sheets on one range of one target sheet, mirroring the
  * engine's `fill_sheets` (AOO ScDocument::FillTab): when replacing (no
  * operation, Skip empty off) the target's contents of the chosen kinds are
- * removed first; each chosen source cell is then written as is, or with an
- * operation combined by {@link pasteArithmetic}. Formats: without Skip empty
- * the target takes the source's style everywhere; with it only where the
- * source cell exists.
+ * removed first and each chosen source cell is written as is; with an
+ * operation the target as it was is mixed with what is pasted by
+ * {@link mixInputs} (AOO `MixData`). Formats: without Skip empty the target
+ * takes the source's style everywhere; with it only where the source cell
+ * exists.
  */
-function fillSheetRange(styles: StyleDto[], src: MockSheet, dst: MockSheet, range: RangeDto, o: FillSheetOptions, srcValue: (r: number, c: number) => Scalar): void {
+function fillSheetRange(styles: StyleDto[], src: MockSheet, dst: MockSheet, range: RangeDto, o: FillSheetOptions): void {
   const want = (k: FillKind | null): boolean => k !== null && o[k];
   const replace = o.operation === "none" && !o.skipEmpty;
   for (let r = range.r0; r <= range.r1; r++) {
@@ -1872,9 +1864,12 @@ function fillSheetRange(styles: StyleDto[], src: MockSheet, dst: MockSheet, rang
       const s = src.cells.get(k);
       const t = dst.cells.get(k) ?? { input: "", style: 0 };
       const next = { ...t };
-      if (replace && want(fillKind(t.input, styles[t.style]))) next.input = "";
-      if (s && want(fillKind(s.input, styles[s.style]))) {
-        next.input = o.operation === "none" ? s.input : pasteArithmetic(srcValue(r, c), next.input, o.operation);
+      const pasted = s && want(fillKind(s.input, styles[s.style])) ? s.input : "";
+      if (o.operation !== "none") {
+        if (!(o.skipEmpty && pasted === "")) next.input = mixInputs(t.input, pasted, o.operation);
+      } else {
+        if (replace && want(fillKind(t.input, styles[t.style]))) next.input = "";
+        if (pasted !== "") next.input = pasted;
       }
       if (o.formats && (s || !o.skipEmpty)) next.style = s?.style ?? 0;
       if (next.input === "" && next.style === 0) dst.cells.delete(k);
@@ -1883,48 +1878,31 @@ function fillSheetRange(styles: StyleDto[], src: MockSheet, dst: MockSheet, rang
   }
 }
 
-/** A number as the engine writes it into formula text (general format). */
-function generalNumber(n: number): string {
-  return String(n);
-}
-
 /**
- * The engine's `paste_arithmetic`: the source VALUE combined into the
- * target input. An empty source leaves the target; a non-number source
- * (text, error) is written as a constant; a formula target is wrapped
- * (`=(body)+5`); a number, boolean or empty target is combined (empty = 0);
- * a text or error target is kept.
+ * AOO's `ScColumn::MixData` on inputs (the engine's `mix_cell`): `orig`
+ * (the target before) and `pasted`. Both numbers or empty (empty = 0,
+ * booleans 1/0): the result, `#VALUE!` on overflow or division by zero.
+ * Text on either side: the original stays. Otherwise (a formula on either
+ * side) `=(orig)op(pasted)`.
  */
-export function pasteArithmetic(source: Scalar, target: string, operation: FillSheetOptions["operation"]): string {
-  if (source === null || source === "") return target;
-  if (typeof source === "string") return source;
-  if (typeof source === "object") return source.error;
-  const s = Number(source);
-  const sym = { none: "", add: "+", subtract: "-", multiply: "*", divide: "/" }[operation];
-  if (target.startsWith("=") && target.length > 1) return `=(${target.slice(1)})${sym}${generalNumber(s)}`;
-  const tv = recognize(target);
-  const tn = tv === null ? 0 : typeof tv === "number" ? tv : typeof tv === "boolean" ? Number(tv) : null;
-  if (tn === null) return target;
-  let out: number;
-  switch (operation) {
-    case "none":
-      out = s;
-      break;
-    case "add":
-      out = tn + s;
-      break;
-    case "subtract":
-      out = tn - s;
-      break;
-    case "multiply":
-      out = tn * s;
-      break;
-    case "divide":
-      if (s === 0) return "#DIV/0!";
-      out = tn / s;
-      break;
+export function mixInputs(orig: string, pasted: string, op: FillSheetOptions["operation"]): string {
+  if (orig === "" && pasted === "") return "";
+  const isF = (x: string) => x.startsWith("=") && x.length > 1;
+  const num = (x: string): number | null => {
+    if (x === "") return 0;
+    const v = recognize(x);
+    return typeof v === "number" ? v : typeof v === "boolean" ? Number(v) : null;
+  };
+  if ((!isF(orig) && num(orig) === null) || (!isF(pasted) && num(pasted) === null)) return orig;
+  const sym = { none: "", add: "+", subtract: "-", multiply: "*", divide: "/" }[op];
+  if (!isF(orig) && !isF(pasted)) {
+    const a = num(orig) ?? 0;
+    const b = num(pasted) ?? 0;
+    const v = op === "add" ? a + b : op === "subtract" ? a - b : op === "multiply" ? a * b : op === "divide" ? (b === 0 ? NaN : a / b) : b;
+    return Number.isFinite(v) ? String(v) : "#VALUE!";
   }
-  return Number.isFinite(out) ? generalNumber(out) : "#NUM!";
+  const side = (x: string) => (isF(x) ? `(${x.slice(1)})` : String(num(x) ?? 0));
+  return `=${side(orig)}${sym}${side(pasted)}`;
 }
 
 function checkPos(r: number, c: number): void {

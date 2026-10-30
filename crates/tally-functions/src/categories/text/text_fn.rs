@@ -1,6 +1,6 @@
 //! TEXT.
 
-use tally_numfmt::{format_value_with, parse_format_with_locale};
+use tally_numfmt::{format_value_in_locale, parse_format_with_locale};
 use tally_types::{ErrorKind, Value};
 
 use crate::coerce::locale_of;
@@ -40,7 +40,9 @@ fn text(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         let ast =
             parse_format_with_locale(&code, locale).map_err(|_| ErrorKind::InvalidArgument)?;
         let epoch = a.ctx().settings().date_epoch;
-        let out = format_value_with(&v, &ast, locale, None, epoch);
+        // The document locale: a `[$-407]` in the code only sets the NatNum
+        // language in AOO (zformat.cxx), Excel ignores it for numbers.
+        let out = format_value_in_locale(&v, &ast, locale, None, epoch);
         Ok(Value::text(out.text))
     })
 }
@@ -75,6 +77,11 @@ mod tests {
         assert_eq!(t(EvalValue::number(1.2345), "0.00"), Value::text("1.23"));
         assert_eq!(t(EvalValue::bool(true), "0"), Value::text("1"));
         assert_eq!(t(EvalValue::Missing, "0.0"), Value::text("0.0"));
+        // A language tag does not change the separators (AOO, Excel).
+        assert_eq!(
+            t(EvalValue::number(1234.5), "[$-407]#,##0.00"),
+            Value::text("1,234.50")
+        );
     }
 
     #[test]

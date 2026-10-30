@@ -28,7 +28,8 @@ export const NUMBER_FORMATS: readonly NumberFormatPreset[] = [
 
 /** The preset whose code matches `code` (case-insensitive), if any. */
 export function presetFor(code: string | undefined): NumberFormatPreset | undefined {
-  const c = (code ?? "General").toLowerCase();
+  // A language tag (`[$-407]General`, `[$-407]0.00`) does not change the preset.
+  const c = (code ?? "General").replace(/\[\$-[0-9A-Fa-f]+\]/g, "").trim().toLowerCase() || "general";
   return NUMBER_FORMATS.find((p) => p.code.toLowerCase() === c);
 }
 

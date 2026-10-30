@@ -225,8 +225,8 @@ fn invoices_sumif_assist_and_round_trips() -> CmdResult<()> {
     assert!(h0[0].bold && h1[0].bold, "header stays bold");
     let p0 = style_of(&st, info.doc, cell(&before, 1, 4))?;
     let p1 = style_of(&st, reopened.doc, cell(&after, 1, 4))?;
-    // The code is normalised on read (`[$$-409]#,##0.00` comes back as
-    // `$#,##0.00`); both render the same text, compared above.
+    // The currency symbol keeps its language (`[$$-409]`) through ODS; the
+    // text is compared above.
     for p in [&p0[0].number_format, &p1[0].number_format] {
         assert!(
             p.contains("#,##0.00") && p.contains('$'),

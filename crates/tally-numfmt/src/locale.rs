@@ -360,7 +360,8 @@ pub const JA_JP: Locale = Locale {
     date_order: DateOrder::YMD,
     date_sep: '/',
     time_sep: ':',
-    currency_symbol: "¥",
+    // AOO ja_JP.xml: the full-width yen sign; `¥` is recognised too.
+    currency_symbol: "￥",
     currency_code: "JPY",
     lcid_hex: "411",
     month_names: [
@@ -421,6 +422,86 @@ pub fn locale_by_tag(tag: &str) -> Option<&'static Locale> {
                 .next()
                 .is_some_and(|x| x.eq_ignore_ascii_case(&t))
         })
+        .copied()
+}
+
+/// Windows locale ids (hex, as in `[$-407]`) with their ISO 639 language
+/// and ISO 3166 country, for ODF `number:language` / `number:country`.
+/// The first entry for a language/country pair is the one written back.
+pub const LCID_LANGUAGES: [(&str, &str, &str); 34] = [
+    ("409", "en", "US"),
+    ("809", "en", "GB"),
+    ("C09", "en", "AU"),
+    ("1009", "en", "CA"),
+    ("1409", "en", "NZ"),
+    ("1809", "en", "IE"),
+    ("407", "de", "DE"),
+    ("807", "de", "CH"),
+    ("C07", "de", "AT"),
+    ("40C", "fr", "FR"),
+    ("80C", "fr", "BE"),
+    ("C0C", "fr", "CA"),
+    ("100C", "fr", "CH"),
+    ("C0A", "es", "ES"),
+    ("40A", "es", "ES"),
+    ("80A", "es", "MX"),
+    ("411", "ja", "JP"),
+    ("410", "it", "IT"),
+    ("413", "nl", "NL"),
+    ("416", "pt", "BR"),
+    ("816", "pt", "PT"),
+    ("419", "ru", "RU"),
+    ("804", "zh", "CN"),
+    ("404", "zh", "TW"),
+    ("412", "ko", "KR"),
+    ("41D", "sv", "SE"),
+    ("406", "da", "DK"),
+    ("414", "nb", "NO"),
+    ("40B", "fi", "FI"),
+    ("415", "pl", "PL"),
+    ("405", "cs", "CZ"),
+    ("40E", "hu", "HU"),
+    ("41F", "tr", "TR"),
+    ("408", "el", "GR"),
+];
+
+/// The value of a hex locale id (`0407`, `407`, `c0a`); ids with Excel's
+/// calendar / numeral flags above the low 16 bits are `None`. No allocation:
+/// this runs for every formatted cell with a language tag.
+fn lcid_value(hex: &str) -> Option<u32> {
+    let v = u32::from_str_radix(hex.trim(), 16).ok()?;
+    (v <= 0xFFFF).then_some(v)
+}
+
+/// The ISO language and country of a hex locale id (`407` → `("de", "DE")`).
+pub fn lcid_language(hex: &str) -> Option<(&'static str, &'static str)> {
+    let v = lcid_value(hex)?;
+    LCID_LANGUAGES
+        .iter()
+        .find(|(id, _, _)| lcid_value(id) == Some(v))
+        .map(|(_, l, c)| (*l, *c))
+}
+
+/// The hex locale id of an ISO language and country (`de`, `DE` → `407`).
+/// Without a country the language's first entry is used.
+pub fn lcid_for_language(language: &str, country: Option<&str>) -> Option<&'static str> {
+    LCID_LANGUAGES
+        .iter()
+        .find(|(_, l, c)| {
+            l.eq_ignore_ascii_case(language) && country.is_none_or(|k| c.eq_ignore_ascii_case(k))
+        })
+        .map(|(id, _, _)| *id)
+}
+
+/// The built-in locale for a hex locale id (`407` → de-DE; `40A`, the
+/// traditional-sort Spanish id, → es-ES). A locale id of a language Tally
+/// has no data for is `None`.
+pub fn locale_by_lcid(hex: &str) -> Option<&'static Locale> {
+    let v = lcid_value(hex)?;
+    let v = if v == 0x40A { 0xC0A } else { v };
+    LOCALES
+        .iter()
+        .find(|l| lcid_value(l.lcid_hex) == Some(v))
         .copied()
 }
 
@@ -523,6 +604,16 @@ mod tests {
             "English too"
         );
         assert!(FR_FR.is_group_char(' '));
+        assert_eq!(locale_by_lcid("407").map(|l| l.tag), Some("de-DE"));
+        assert_eq!(locale_by_lcid("0c0a").map(|l| l.tag), Some("es-ES"));
+        assert_eq!(locale_by_lcid("40a").map(|l| l.tag), Some("es-ES"));
+        assert!(locale_by_lcid("807").is_none(), "de-CH is not built in");
+        assert_eq!(lcid_language("1009"), Some(("en", "CA")));
+        assert_eq!(lcid_for_language("es", Some("ES")), Some("C0A"));
+        assert_eq!(lcid_for_language("de", None), Some("407"));
+        for l in LOCALES {
+            assert_eq!(locale_by_lcid(l.lcid_hex).map(|x| x.tag), Some(l.tag));
+        }
         assert!(!DE_DE.is_group_char(' '));
     }
 

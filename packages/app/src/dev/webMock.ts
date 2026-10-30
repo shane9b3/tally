@@ -56,7 +56,7 @@ import { applyW56Op, autocompleteOf, cellStylesOf, decorateSheets, emptyW56, nav
 import { applyW5Op, BLANK_PNG, chartDataFor, chartsTouched, dependentsOf, emptyW5, pageBreaksFor, precedentsOf, printLayoutFor, renderPagePng, suggestChartFor, type W5Ext } from "./mockW5";
 import { parseAbsoluteRef } from "../dataOps";
 import { nextUnlocked as walkUnlocked } from "./nextUnlocked";
-import { pasteArea } from "@tally/bridge";
+import { mixInputs, pasteArea } from "@tally/bridge";
 import { previewCall, WIZARD_FUNCTIONS, type MockValue } from "./mockWizard";
 import type {
   FunctionInfo,
@@ -99,6 +99,8 @@ import type {
   ValidationInfo,
 } from "@tally/bridge";
 import { defaultPageSetup } from "../v03";
+import { formatNumberLite } from "../numfmtLite";
+import { liteLocaleOf } from "../styles/numberFormat";
 import { INVALID_SCAN_CAP, invalidCells as invalidCellsOf } from "../detective/detective";
 import type { CellPos, CellsOptions, Direction, PasteOptions, PastePayload, ViewOptionsDto } from "@tally/bridge";
 
@@ -178,6 +180,19 @@ function numberOf(text: string): number | null {
   if (t === "" || !/^-?\d*\.?\d+(e-?\d+)?%?$/i.test(t)) return null;
   const n = Number(t.replace(/%$/, ""));
   return Number.isFinite(n) ? (t.endsWith("%") ? n / 100 : n) : null;
+}
+
+type PasteValueKind = "text" | "numbers" | "dateTime";
+interface ClipKind {
+  formula: boolean;
+  /** The value's kind (a formula's result), `null` when empty. */
+  value: PasteValueKind | null;
+}
+
+function colLetters(c: number): string {
+  let s = "";
+  for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
 }
 
 function passesCondition(text: string, cond: FilterCondition): boolean {
@@ -306,6 +321,8 @@ export class WebMockClient extends MockClient {
   private readonly extUndo = new Map<DocId, string[]>();
   private readonly extRedo = new Map<DocId, string[]>();
   private readonly clips = new Map<string, { inputs: string[][]; texts: string[][] }>();
+  /** Where each copy came from and its cells' kinds (Paste Special ▸ Selection / Link). */
+  private readonly clipInfo = new Map<string, { sheet: number; r0: number; c0: number; kinds: ClipKind[][] }>();
 
   // -- side model -----------------------------------------------------------------
 
@@ -423,7 +440,24 @@ export class WebMockClient extends MockClient {
 
   override async cellsWith(doc: DocId, sheet: number, ranges: RangeDto[], opts: CellsOptions): Promise<CellBlock[]> {
     this.recordedCalls.push({ type: "cellsWith", opts: { ...opts } });
-    return super.cellsWith(doc, sheet, ranges, opts);
+    return this.withNumberFormats(doc, await super.cellsWith(doc, sheet, ranges, opts));
+  }
+
+  /** Number cells shown with their format code (the engine's tally-numfmt; here the preview formatter) and `[RED]` negatives. */
+  private async withNumberFormats(doc: DocId, blocks: CellBlock[]): Promise<CellBlock[]> {
+    const ids = [...new Set(blocks.flatMap((b) => b.cells.filter((v) => v.kind === "number" && v.style !== 0).map((v) => v.style)))];
+    if (ids.length === 0) return blocks;
+    const codes = new Map((await this.styles(doc, ids)).map((st) => [st.id, st.numberFormat]));
+    for (const b of blocks) {
+      for (const v of b.cells) {
+        const code = v.kind === "number" && v.num !== null ? codes.get(v.style) : undefined;
+        if (!code || v.num === null || /^general$/i.test(code.trim())) continue;
+        const text = formatNumberLite(v.num, code, liteLocaleOf(code));
+        if (text !== null) v.text = text;
+        if (v.num < 0 && /;\s*\[RED\]/i.test(code)) v.color = 0xff0000ff;
+      }
+    }
+    return blocks;
   }
 
   override async cellEditInfo(doc: DocId, sheet: number, r: number, c: number): Promise<CellEditInfo> {
@@ -610,6 +644,8 @@ export class WebMockClient extends MockClient {
     const clip = snap ? { rows: snap.inputs.length, cols: Math.max(1, ...snap.inputs.map((r) => r.length)) } : null;
     const area = pasteArea(target, payload, options, clip);
     if (!area) return false;
+    // Notes count as data (AOO IsBlockEmpty with notes).
+    if (Object.values(this.docExt(doc).v3.notes[sheet] ?? {}).some((n) => n.r >= area.r0 && n.r <= area.r1 && n.c >= area.c0 && n.c <= area.c1)) return true;
     const used = (await super.sheetLayout(doc, sheet)).used;
     if (!used || area.r0 > used.r1 || area.r1 < used.r0 || area.c0 > used.c1 || area.c1 < used.c0) return false;
     const [block] = await this.cells(doc, sheet, [{ r0: Math.max(area.r0, used.r0), c0: Math.max(area.c0, used.c0), r1: Math.min(area.r1, used.r1), c1: Math.min(area.c1, used.c1) }]);
@@ -890,7 +926,21 @@ export class WebMockClient extends MockClient {
   override async copy(doc: DocId, sel: SelectionDto): Promise<ClipboardOut> {
     const out = await super.copy(doc, sel);
     const range = sel.ranges[0];
-    if (range) this.clips.set(out.token, await this.snapshot(doc, sel.sheet, range));
+    if (range) {
+      this.clips.set(out.token, await this.snapshot(doc, sel.sheet, range));
+      const [block] = await this.cells(doc, sel.sheet, [range]);
+      const kinds: ClipKind[][] = [];
+      for (let r = range.r0; r <= range.r1; r++) {
+        const row: ClipKind[] = [];
+        for (let c = range.c0; c <= range.c1; c++) {
+          const v = block?.cells.find((x) => x.r === r && x.c === c);
+          const value: PasteValueKind | null = !v || v.kind === "empty" ? null : v.kind === "number" ? (/[/-]/.test(v.text) ? "dateTime" : "numbers") : v.kind === "text" ? (v.text === "" ? null : "text") : "numbers";
+          row.push({ formula: v !== undefined && (v.flags & 1) !== 0, value });
+        }
+        kinds.push(row);
+      }
+      this.clipInfo.set(out.token, { sheet: sel.sheet, r0: range.r0, c0: range.c0, kinds });
+    }
     return out;
   }
 
@@ -1545,42 +1595,8 @@ export class WebMockClient extends MockClient {
         }
         return out;
       }
-      case "pasteSpecial": {
-        const o = op.options;
-        let rows: string[][];
-        if (op.payload.type === "internal") {
-          const clip = this.clips.get(op.payload.token);
-          if (!clip) return fail("not_found", "The clipboard has expired.");
-          rows = o.valuesOnly ? clip.texts : clip.inputs;
-        } else {
-          rows = op.payload.text.replace(/\r?\n$/, "").split(/\r?\n/).map((l) => l.split("\t"));
-        }
-        if (o.formatsOnly) return [{ type: "applyStyle", sheet: op.sheet, ranges: [{ ...op.target }], patch: EMPTY_PATCH }];
-        if (o.transpose) {
-          const w = Math.max(0, ...rows.map((r) => r.length));
-          rows = Array.from({ length: w }, (_, c) => rows.map((r) => r[c] ?? ""));
-        }
-        const out: Op[] = [];
-        const [block] = await this.cells(doc, op.sheet, [{ r0: op.target.r0, c0: op.target.c0, r1: op.target.r0 + rows.length - 1, c1: op.target.c0 + Math.max(0, ...rows.map((r) => r.length)) - 1 }]);
-        rows.forEach((row, i) =>
-          row.forEach((input, j) => {
-            if (o.skipEmpty && input === "") return;
-            const r = op.target.r0 + i;
-            const c = op.target.c0 + j;
-            let next = input;
-            if (o.operation !== "none") {
-              const cur = block?.cells.find((v) => v.r === r && v.c === c);
-              const a = cur?.num ?? (cur ? numberOf(cur.text) : 0) ?? 0;
-              const b = numberOf(input);
-              if (b === null) return;
-              const n = o.operation === "add" ? a + b : o.operation === "subtract" ? a - b : o.operation === "multiply" ? a * b : b === 0 ? NaN : a / b;
-              next = Number.isFinite(n) ? String(Number(n.toPrecision(15))) : "#DIV/0!";
-            }
-            out.push({ type: "setCellInput", sheet: op.sheet, r, c, input: next });
-          }),
-        );
-        return out;
-      }
+      case "pasteSpecial":
+        return this.pasteSpecialOps(doc, op, fail);
       case "fillRange":
         return emulateFill({ client: this, doc, sheet: op.sheet }, op.source, op.target, op.mode);
       case "applyStyle":
@@ -1588,6 +1604,80 @@ export class WebMockClient extends MockClient {
       default:
         return [op];
     }
+  }
+
+  /**
+   * Paste Special, emulated like the engine's `paste_internal` (AOO
+   * `PasteFromClip`): Shift cells first inserts cells (the `insertCells`
+   * emulation); the Selection kinds pick the cells (formulas off: their
+   * results as values); without Skip empty the rest of the block is
+   * cleared; Link writes `=$Sheet.$A$1` references; an operation mixes the
+   * target with what is pasted (AOO `MixData`). Formats and notes are not
+   * emulated.
+   */
+  private async pasteSpecialOps(doc: DocId, op: Extract<Op, { type: "pasteSpecial" }>, fail: (code: string, message: string) => Op[]): Promise<Op[]> {
+    const o = op.options;
+    const out: Op[] = [];
+    const clip = op.payload.type === "internal" ? this.clips.get(op.payload.token) : undefined;
+    const info = op.payload.type === "internal" ? this.clipInfo.get(op.payload.token) : undefined;
+    if (op.payload.type === "internal" && !clip) return fail("not_found", "The clipboard has expired.");
+    if (o.link && !info) return fail("invalid_argument", "Link needs cells copied from this document");
+    if (o.shift === "up" || o.shift === "left") return fail("invalid_argument", "Paste Special shifts cells down or right");
+    const shifting = o.shift === "down" || o.shift === "right";
+    if (shifting) {
+      const dims = clip ? { rows: clip.inputs.length, cols: Math.max(1, ...clip.inputs.map((r) => r.length)) } : null;
+      const area = pasteArea(op.target, op.payload, o, dims);
+      if (area) {
+        const res = await applyW56Op(this.docExt(doc).w56, { type: "insertCells", sheet: op.sheet, range: area, shift: o.shift as "down" | "right" }, this.w56Ctx(doc));
+        if (res.kind === "error") return fail(res.code, res.message);
+        if (res.kind === "handled") out.push(...res.ops);
+      }
+    }
+    const all = !o.selection && !o.valuesOnly && !o.formatsOnly;
+    const k = o.selection ?? (o.valuesOnly ? { text: true, numbers: true, dateTime: true, formulas: false, notes: false, formats: false } : o.formatsOnly ? { text: false, numbers: false, dateTime: false, formulas: false, notes: false, formats: true } : { text: true, numbers: true, dateTime: true, formulas: true, notes: true, formats: true });
+    const cellsOn = k.text || k.numbers || k.dateTime || k.formulas;
+    if (!cellsOn) {
+      if (k.formats) out.push({ type: "applyStyle", sheet: op.sheet, ranges: [{ ...op.target }], patch: EMPTY_PATCH });
+      return out;
+    }
+    // AOO lclCanCloneValue: a number goes with Numbers, a date/time-formatted one with Date & time.
+    const wants = (kind: PasteValueKind | null): boolean => (kind === "text" ? k.text : kind === "numbers" ? k.numbers : kind === "dateTime" ? k.dateTime : false);
+    let rows: string[][];
+    if (clip && info) {
+      const name = this.w56Ctx(doc).sheetName(info.sheet);
+      rows = clip.inputs.map((row, i) =>
+        row.map((input, j) => {
+          const kind = info.kinds[i]?.[j] ?? { formula: false, value: null };
+          if (o.link) return all || (kind.formula ? k.formulas : wants(kind.value)) ? `=$${name}.$${colLetters(info.c0 + j)}$${info.r0 + i + 1}` : "";
+          if (kind.formula) return k.formulas ? input : wants(kind.value) ? (clip.texts[i]?.[j] ?? "") : "";
+          return wants(kind.value) ? input : "";
+        }),
+      );
+    } else {
+      rows = op.payload.type === "tsv" ? op.payload.text.replace(/\r?\n$/, "").split(/\r?\n/).map((l) => l.split("\t")) : [];
+    }
+    if (o.transpose) {
+      const w = Math.max(0, ...rows.map((r) => r.length));
+      rows = Array.from({ length: w }, (_, c) => rows.map((r) => r[c] ?? ""));
+    }
+    const width = Math.max(0, ...rows.map((r) => r.length));
+    if (rows.length === 0 || width === 0) return out;
+    for (const [i, row] of rows.entries()) {
+      for (let j = 0; j < width; j++) {
+        const pasted = row[j] ?? "";
+        if (o.skipEmpty && pasted === "") continue;
+        const r = op.target.r0 + i;
+        const c = op.target.c0 + j;
+        let next = pasted;
+        if (o.operation !== "none") {
+          // After a shift the target cells are new (empty).
+          const orig = shifting ? "" : (await super.cellEditInfo(doc, op.sheet, r, c)).input;
+          next = mixInputs(orig, pasted, o.operation);
+        }
+        out.push({ type: "setCellInput", sheet: op.sheet, r, c, input: next });
+      }
+    }
+    return out;
   }
 
   /**

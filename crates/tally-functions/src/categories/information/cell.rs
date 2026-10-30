@@ -248,7 +248,7 @@ fn base_code(first: &str) -> String {
     } else if plain.contains("e+") || plain.contains("e-") {
         let mantissa = plain.split('e').next().unwrap_or("");
         format!("S{}", decimals(mantissa))
-    } else if ["$", "€", "£", "¥"].iter().any(|c| raw.contains(c)) {
+    } else if ["$", "€", "£", "¥", "￥"].iter().any(|c| raw.contains(c)) {
         format!("C{dec}")
     } else if plain.contains("#,#") || plain.contains(",0") || plain.contains("0,0") {
         format!(",{dec}")

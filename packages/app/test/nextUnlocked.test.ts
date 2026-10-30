@@ -61,10 +61,11 @@ describe("paste target (the engine's paste_area)", () => {
     expect(pasteArea(A1_A10, { type: "tsv", text: "x" }, o, null)).toEqual({ r0: 0, c0: 0, r1: 0, c1: 0 });
     expect(pasteArea({ r0: 2, c0: 1, r1: 2, c1: 1 }, { type: "tsv", text: "a\tb\nc\n" }, { transpose: true }, null)).toEqual({ r0: 2, c0: 1, r1: 3, c1: 2 });
   });
-  it("an internal block tiles over whole multiples of its size", () => {
+  it("an internal block fills a larger target, the last copy cut (AOO CopyFromClip)", () => {
     const p = { type: "internal", token: "t" } as const;
     expect(pasteArea(A1_A10, p, o, { rows: 2, cols: 1 })).toEqual(A1_A10);
-    expect(pasteArea({ r0: 0, c0: 0, r1: 2, c1: 0 }, p, o, { rows: 2, cols: 1 })).toEqual({ r0: 0, c0: 0, r1: 1, c1: 0 });
+    expect(pasteArea({ r0: 0, c0: 0, r1: 2, c1: 0 }, p, o, { rows: 2, cols: 1 })).toEqual({ r0: 0, c0: 0, r1: 2, c1: 0 });
+    expect(pasteArea({ r0: 0, c0: 0, r1: 0, c1: 0 }, p, o, { rows: 2, cols: 3 })).toEqual({ r0: 0, c0: 0, r1: 1, c1: 2 });
     expect(pasteArea({ r0: 0, c0: 0, r1: 0, c1: 0 }, p, o, null)).toBeNull();
   });
 });

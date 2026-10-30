@@ -78,7 +78,12 @@ pub(crate) enum Part {
         den_value: Option<u32>,
     },
     Text(String),
-    Currency(String),
+    /// `number:currency-symbol`: the symbol and, from `number:language` /
+    /// `number:country`, the hex locale id of `[$€-407]`.
+    Currency {
+        symbol: String,
+        lcid: Option<String>,
+    },
     TextContent,
     Boolean,
     Fill(char),
@@ -125,6 +130,9 @@ pub(crate) struct DataStyle {
     pub maps: Vec<(String, String)>,
     /// `number:truncate-on-overflow` (false means elapsed `[HH]`).
     pub truncate: bool,
+    /// The style's `number:language` / `number:country` as a hex locale id:
+    /// the format's language, `[$-407]` in the code.
+    pub language: Option<String>,
 }
 
 impl DataStyle {
@@ -135,14 +143,23 @@ impl DataStyle {
             color: None,
             maps: Vec::new(),
             truncate: true,
+            language: None,
         }
     }
 
     /// The OOo format code; `lookup` resolves `style:map` targets.
+    ///
+    /// The format's language is the main style's `number:language` (AOO
+    /// reads it there, xmlnumfi.cxx), written once as a leading `[$-407]`;
+    /// the mapped styles' languages are ignored.
     pub fn to_code<'a>(&'a self, lookup: impl Fn(&str) -> Option<&'a DataStyle>) -> String {
+        let lang = self
+            .language
+            .as_ref()
+            .map_or_else(String::new, |l| format!("[$-{l}]"));
         let main = self.section_code();
         if self.maps.is_empty() {
-            return main;
+            return lang + &main;
         }
         let mapped: Vec<(String, String)> = self
             .maps
@@ -166,7 +183,7 @@ impl DataStyle {
             }
         }
         out.push_str(&main);
-        out
+        lang + &out
     }
 
     fn section_code(&self) -> String {
@@ -232,13 +249,15 @@ impl DataStyle {
                     }
                 }
                 Part::Text(t) => push_literal(&mut out, t, self.kind),
-                Part::Currency(sym) => {
-                    if sym == "$" {
-                        out.push('$');
-                    } else {
-                        let _ = write!(out, "[${sym}]");
+                Part::Currency { symbol, lcid } => match lcid {
+                    Some(l) => {
+                        let _ = write!(out, "[${symbol}-{l}]");
                     }
-                }
+                    None if symbol == "$" => out.push('$'),
+                    None => {
+                        let _ = write!(out, "[${symbol}]");
+                    }
+                },
                 Part::TextContent => out.push('@'),
                 Part::Boolean => out.push_str("BOOLEAN"),
                 Part::Fill(c) => {
@@ -396,6 +415,8 @@ struct Section {
     elapsed: bool,
     parts: Vec<Part>,
     percent: bool,
+    /// `[$-407]`: the format's language as a known hex locale id.
+    language: Option<String>,
 }
 
 impl Section {
@@ -424,7 +445,11 @@ impl Section {
             Kind::Time
         } else if self.parts.iter().any(|p| matches!(p, Part::Boolean)) {
             Kind::Boolean
-        } else if self.parts.iter().any(|p| matches!(p, Part::Currency(_))) {
+        } else if self
+            .parts
+            .iter()
+            .any(|p| matches!(p, Part::Currency { .. }))
+        {
             Kind::Currency
         } else if self.percent {
             Kind::Percentage
@@ -528,11 +553,26 @@ fn tokenize_section(src: &str) -> Result<Section, String> {
                 let inner: String = chars[i + 1..i + end].iter().collect();
                 i += end + 1;
                 if let Some(cur) = inner.strip_prefix('$') {
-                    let sym = cur.split('-').next().unwrap_or_default();
+                    let (sym, hex) = match cur.split_once('-') {
+                        Some((sym, hex)) => (sym, Some(hex)),
+                        None => (cur, None),
+                    };
+                    // Only locale ids with an ISO language / country can be
+                    // written; others are dropped (the symbol is kept).
+                    let lcid = hex
+                        .filter(|h| tally_numfmt::lcid_language(h).is_some())
+                        .and_then(|h| u32::from_str_radix(h, 16).ok())
+                        .map(|v| format!("{v:X}"));
                     if sym.is_empty() {
-                        return Err(format!("unsupported locale modifier [{inner}]"));
+                        if lcid.is_some() {
+                            s.language = lcid;
+                        }
+                    } else {
+                        s.parts.push(Part::Currency {
+                            symbol: sym.to_string(),
+                            lcid,
+                        });
                     }
-                    s.parts.push(Part::Currency(sym.to_string()));
                 } else if inner.starts_with(['<', '>', '=']) {
                     let cond = parse_condition(&format!("value(){inner}"))
                         .ok_or_else(|| format!("bad condition [{inner}]"))?;
@@ -573,7 +613,10 @@ fn tokenize_section(src: &str) -> Result<Section, String> {
                 i += 1;
             }
             '$' => {
-                s.parts.push(Part::Currency("$".into()));
+                s.parts.push(Part::Currency {
+                    symbol: "$".into(),
+                    lcid: None,
+                });
                 i += 1;
             }
             _ if c.is_ascii_alphabetic() => {
@@ -588,8 +631,8 @@ fn tokenize_section(src: &str) -> Result<Section, String> {
     // `$` in a date/time section is just text.
     if s.kind().is_datetime() {
         for p in &mut s.parts {
-            if let Part::Currency(sym) = p {
-                *p = Part::Text(sym.clone());
+            if let Part::Currency { symbol, .. } = p {
+                *p = Part::Text(symbol.clone());
             }
         }
         merge_texts(&mut s.parts);
@@ -840,6 +883,12 @@ pub(crate) fn code_to_xml(code: &str, name: &str, out: &mut String) -> Result<()
             return Err("text placeholder mixed with numbers".into());
         }
     }
+    // The code's language goes on every section's style: AOO reads it from
+    // the main style, the one with the style:map elements.
+    let language = sections.iter().find_map(|s| s.language.clone());
+    for s in &mut sections {
+        s.language.clone_from(&language);
+    }
     let n = sections.len();
     let mut main = sections.pop().ok_or("empty code")?;
     if main.condition.is_some() && n == 1 {
@@ -875,6 +924,9 @@ fn emit_style(s: &Section, name: &str, maps: &[(String, String)], out: &mut Stri
     if s.elapsed {
         out.push_str(" number:truncate-on-overflow=\"false\"");
     }
+    if let Some(lang) = &s.language {
+        push_language(lang, out);
+    }
     out.push('>');
     if let Some(c) = s.color {
         let _ = write!(
@@ -894,6 +946,21 @@ fn emit_style(s: &Section, name: &str, maps: &[(String, String)], out: &mut Stri
         out.push_str("\"/>");
     }
     let _ = write!(out, "</{}>", kind.element());
+}
+
+/// ` number:language="de" number:country="DE"` for a hex locale id.
+fn push_language(lcid: &str, out: &mut String) {
+    if let Some((lang, country)) = tally_numfmt::lcid_language(lcid) {
+        let _ = write!(
+            out,
+            " number:language=\"{lang}\" number:country=\"{country}\""
+        );
+    }
+}
+
+/// The hex locale id of an element's `number:language` / `number:country`.
+pub(crate) fn language_lcid(language: Option<&str>, country: Option<&str>) -> Option<String> {
+    tally_numfmt::lcid_for_language(language?, country).map(str::to_string)
 }
 
 fn style_attr(long: bool) -> &'static str {
@@ -966,16 +1033,14 @@ fn emit_part(part: &Part, out: &mut String) {
             escape_text(t, out);
             out.push_str("</number:text>");
         }
-        Part::Currency(sym) => {
-            if sym == "$" {
-                out.push_str(
-                    "<number:currency-symbol number:language=\"en\" number:country=\"US\">$</number:currency-symbol>",
-                );
-            } else {
-                out.push_str("<number:currency-symbol>");
-                escape_text(sym, out);
-                out.push_str("</number:currency-symbol>");
+        Part::Currency { symbol, lcid } => {
+            out.push_str("<number:currency-symbol");
+            if let Some(l) = lcid {
+                push_language(l, out);
             }
+            out.push('>');
+            escape_text(symbol, out);
+            out.push_str("</number:currency-symbol>");
         }
         Part::TextContent => out.push_str("<number:text-content/>"),
         Part::Boolean => out.push_str("<number:boolean/>"),

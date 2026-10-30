@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 tally-types.workspace = true
 tally-model.workspace = true
+tally-numfmt.workspace = true
 quick-xml.workspace = true
 zip.workspace = true
 thiserror.workspace = true

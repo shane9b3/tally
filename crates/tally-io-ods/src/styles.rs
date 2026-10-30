@@ -852,6 +852,7 @@ pub(crate) fn parse_data_style<R: BufRead>(
     const MAX_LIT: usize = 4096;
     let mut ds = DataStyle::new(kind);
     ds.truncate = e.attr("number:truncate-on-overflow") != Some("false");
+    ds.language = crate::numfmt::language_lcid(e.attr("number:language"), e.attr("number:country"));
     let d = xml.depth();
     loop {
         match xml.next()? {
@@ -898,8 +899,21 @@ pub(crate) fn parse_data_style<R: BufRead>(
                         continue;
                     }
                     "number:currency-symbol" => {
-                        let t = xml.text_content(MAX_LIT)?;
-                        ds.parts.push(Part::Currency(t));
+                        let lcid = crate::numfmt::language_lcid(
+                            p.attr("number:language"),
+                            p.attr("number:country"),
+                        );
+                        let mut t = xml.text_content(MAX_LIT)?;
+                        // An empty symbol is AOO's automatic one: the
+                        // currency of the symbol's locale (`€` for de-DE).
+                        let mut lcid = lcid;
+                        if t.is_empty() {
+                            match lcid.as_deref().and_then(tally_numfmt::locale_by_lcid) {
+                                Some(l) => t = l.currency_symbol.to_string(),
+                                None => lcid = None,
+                            }
+                        }
+                        ds.parts.push(Part::Currency { symbol: t, lcid });
                         continue;
                     }
                     "number:fill-character" => {

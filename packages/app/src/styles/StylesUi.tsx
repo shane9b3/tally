@@ -10,9 +10,7 @@ import { useMemo, useState } from "react";
 import dlg from "../components/Dialogs.module.css";
 import { cx, useController } from "../context";
 import { a1 } from "../dataOps";
-import { NUMBER_FORMATS } from "../formats";
 import { t } from "../i18n";
-import { formatNumberLite } from "../numfmtLite";
 import { rgbaToHex } from "../palette";
 import { useW56Store, type W56Dialog } from "../data/store";
 import { Check, ColorField, Field, Tabs, W56Shell, closeW56 } from "../data/W56Shell";
@@ -24,6 +22,8 @@ import pick from "../components/FontPickers.module.css";
 import { APP_FONT, FONT_SIZE_LIST, TYPEFACE_LABELS, familyTypefaces, findFamily, formatFontSize, parseFontSize, typefaceOf, type Typeface } from "../fonts/fontModel";
 import { useFontStore } from "../fonts/fontStore";
 import { arrowNav } from "../components/dialogA11y";
+import { useV3Store } from "../stores/v3Store";
+import { NumbersTab, numbersPreview } from "./NumbersTab";
 
 type D<K extends W56Dialog["kind"]> = Extract<W56Dialog, { kind: K }>;
 
@@ -236,13 +236,13 @@ export function FormatCellsDialog({ d }: { d: D<"formatCells"> }) {
   const error = formatCellsError(st);
   return (
     <W56Shell title={t("cells.title", "Format Cells")} ok={t("dialog.ok", "OK")} size="xwide" testId="format-cells" valid={error === null} onSubmit={() => void ctl.w56.applyFormatCells(d.ranges, patchFromState(st, d.style, docFont), protection)}>
-      <FormatCellsTabs st={st} setSt={setSt} showProtection protection={protection} setProtection={setProtection} sample={d.sample} />
+      <FormatCellsTabs st={st} setSt={setSt} showProtection protection={protection} setProtection={setProtection} sample={d.sample} sampleNum={d.sampleNum} />
       {error ? <p className={dlg.error}>{error}</p> : null}
     </W56Shell>
   );
 }
 
-function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection, sample }: { st: FormatCellsState; setSt: (s: FormatCellsState) => void; showProtection: boolean; protection?: { locked: boolean | null; hiddenFormula: boolean | null }; setProtection?: (p: { locked: boolean | null; hiddenFormula: boolean | null }) => void; sample?: string }) {
+function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection, sample, sampleNum }: { st: FormatCellsState; setSt: (s: FormatCellsState) => void; showProtection: boolean; protection?: { locked: boolean | null; hiddenFormula: boolean | null }; setProtection?: (p: { locked: boolean | null; hiddenFormula: boolean | null }) => void; sample?: string; sampleNum?: number | null }) {
   const [tab, setTab] = useState<CellsTab>("numbers");
   const docFont = useDocumentFont();
   const tabs: { id: CellsTab; label: string }[] = [
@@ -254,13 +254,14 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
     { id: "background", label: t("cells.background", "Background") },
     ...(showProtection ? [{ id: "protection" as const, label: t("cells.protection", "Cell Protection") }] : []),
   ];
-  const samples = useMemo(() => [1234.5, -1234.5, 0].map((v) => formatNumberLite(v, st.numberFormat.trim() || "General")), [st.numberFormat]);
+  const docTag = useV3Store((s) => s.locale);
+  const shown = useMemo(() => numbersPreview(st.numberFormat, docTag, sampleNum, sample), [st.numberFormat, docTag, sampleNum, sample]);
   const previewStyle: React.CSSProperties = {
     fontWeight: st.bold && !st.indeterminate.typeface ? 700 : 400,
     fontStyle: st.italic && !st.indeterminate.typeface ? "italic" : "normal",
     textDecoration: [st.underline ? "underline" : "", st.strike ? "line-through" : ""].filter(Boolean).join(" ") || undefined,
     textDecorationStyle: st.underline ? (st.underlineStyle === "double" || st.underlineStyle === "doubleAccounting" ? "double" : st.underlineStyle === "dotted" ? "dotted" : st.underlineStyle === "dashed" ? "dashed" : st.underlineStyle === "wave" ? "wavy" : "solid") : undefined,
-    color: st.color === null ? undefined : rgbaToHex(st.color).slice(0, 7),
+    color: shown.color ?? (st.color === null ? undefined : rgbaToHex(st.color).slice(0, 7)),
     background: st.fill === null ? undefined : rgbaToHex(st.fill).slice(0, 7),
     fontFamily: st.indeterminate.fontFamily ? undefined : previewFamily(shownFamily(st.fontFamily, docFont)),
     fontSize: Math.min(28, st.fontSizePt) * 1.2,
@@ -274,28 +275,7 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
   return (
     <>
       <Tabs label={t("menu.format", "Format")} tabs={tabs} value={tab} onChange={setTab} />
-      {tab === "numbers" ? (
-        <div>
-          <div className={w56.chips}>
-            {NUMBER_FORMATS.map((f) => (
-              <button key={f.id} type="button" className={st.numberFormat.toLowerCase() === f.code.toLowerCase() ? w56.chipOn : w56.chip} onClick={() => setSt({ ...st, numberFormat: f.code })} data-testid={`cells-fmt-${f.id}`}>
-                {t(`fmt.${f.id}`, f.label)}
-              </button>
-            ))}
-          </div>
-          <Field label={t("fmt.formatCode", "Format code")} className={dlg.gap}>
-            <input className={cx(dlg.input, dlg.mono)} value={st.numberFormat} spellCheck={false} onChange={(e) => setSt({ ...st, numberFormat: e.target.value })} data-testid="cells-format-code" />
-          </Field>
-          <div className={dlg.preview}>
-            {samples.map((s, i) => (
-              <div key={i} className={dlg.previewRow}>
-                <span className={dlg.previewIn}>{[1234.5, -1234.5, 0][i]}</span>
-                <span className={dlg.previewOut}>{s ?? t("stylesUi.engineFormats", "(engine formats)")}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      {tab === "numbers" ? <NumbersTab code={st.numberFormat} onChange={(code) => setSt({ ...st, numberFormat: code })} /> : null}
       {tab === "font" ? <FontTab st={st} setSt={setSt} sample={sample} /> : null}
       {tab === "effects" ? (
         <div className={w56.grid2}>
@@ -409,7 +389,7 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
           <div className={w56.section}>{t("font.preview", "Preview")}</div>
           <div style={{ overflow: "hidden", padding: 8, border: "1px solid var(--tally-border-subtle)", borderRadius: 8 }}>
             <span style={previewStyle} data-testid="cells-preview">
-              {samples[0] ?? "1234.5"}
+              {shown.text}
             </span>
           </div>
         </>

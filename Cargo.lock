@@ -4305,6 +4305,7 @@ version = "0.1.0"
 dependencies = [
  "quick-xml",
  "tally-model",
+ "tally-numfmt",
  "tally-types",
  "thiserror 2.0.21",
  "zip",

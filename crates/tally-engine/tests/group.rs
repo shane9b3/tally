@@ -858,12 +858,17 @@ fn fill_sheets_operations_and_skip_empty() {
     );
     assert_eq!(d.num(t, "B1"), 7.0);
     assert_eq!(d.num(t, "A1"), 1.0);
-    // Operations combine numbers with the target's.
-    for (op, want) in [
-        (PasteOperation::Add, 10.0),
-        (PasteOperation::Subtract, 8.0),
-        (PasteOperation::Multiply, 9.0),
-        (PasteOperation::Divide, 9.0),
+    // Operations combine numbers with the target's, as AOO's MixData
+    // does: an empty source counts as 0 (Multiply gives 0, Divide #VALUE!).
+    for (op, want, b1) in [
+        (PasteOperation::Add, 10.0, Value::Number(7.0)),
+        (PasteOperation::Subtract, 8.0, Value::Number(7.0)),
+        (PasteOperation::Multiply, 9.0, Value::Number(0.0)),
+        (
+            PasteOperation::Divide,
+            9.0,
+            Value::Error(tally_types::ErrorKind::Value),
+        ),
     ] {
         let mut d = fill_doc();
         let res = fill(
@@ -876,7 +881,7 @@ fn fill_sheets_operations_and_skip_empty() {
         );
         assert!(res.errors.is_empty(), "{op:?}: {:?}", res.errors);
         assert_eq!(d.num(t, "A1"), want, "{op:?}");
-        assert_eq!(d.num(t, "B1"), 7.0, "{op:?} keeps cells of empty sources");
+        assert_eq!(d.value(t, "B1"), b1, "{op:?} with an empty source");
     }
 }
 

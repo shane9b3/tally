@@ -603,7 +603,8 @@ impl DocumentService for EngineService {
                 "the selection is too large to copy",
             ));
         }
-        let (snap, tsv, html) = copy_range(&d.wb, range, &mut self.rng);
+        let (mut snap, tsv, html) = copy_range(&d.wb, range, &mut self.rng);
+        snap.source_doc = Some(doc);
         let token = snap.token.clone();
         *leaf(&self.shared.clipboard) = Some(Arc::new(snap));
         Ok(ClipboardOut { tsv, html, token })
@@ -652,10 +653,14 @@ impl DocumentService for EngineService {
         else {
             return Ok(false);
         };
+        // Notes count as data (AOO `IsBlockEmpty` with bIgnoreNotes off,
+        // document.hxx:882).
         Ok((area.c0..=area.c1).any(|c| {
             s.column(c)
                 .is_some_and(|col| col.cells.iter_range(area.r0, area.r1).next().is_some())
-        }))
+        }) || crate::annotations::entries_in(&s.meta.notes, &area)
+            .next()
+            .is_some())
     }
 
     fn resolve_name_box(&self, doc: DocId, text: &str) -> Result<SelectionDto> {

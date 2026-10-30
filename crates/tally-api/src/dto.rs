@@ -707,8 +707,8 @@ pub enum Op {
         /// Replacement (regex mode: `$1`, `&` for the whole match).
         replace: String,
     },
-    /// Paste with options (values only, formats only, transpose, skip
-    /// empty cells, arithmetic with the target).
+    /// Paste with options (AOO Paste Special: content kinds, arithmetic
+    /// with the target, skip empty cells, transpose, link, shift cells).
     PasteSpecial {
         /// Sheet.
         sheet: SheetId,
@@ -1476,6 +1476,45 @@ pub struct PasteOptions {
     pub skip_empty: bool,
     /// Combine with the target's numbers (internal payloads only).
     pub operation: PasteOperation,
+    /// The content kinds to paste (AOO's Selection check boxes); absent or
+    /// `null` means "Paste all" (unless `values_only` / `formats_only`).
+    /// Internal payloads only; a TSV paste reads only `formulas`.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub selection: Option<PasteSelection>,
+    /// Paste references to the source cells (`=$Sheet1.$A$1`) instead of
+    /// their contents (AOO "Link"); internal payloads from the same
+    /// document only. Absent or `null` = `false`.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub link: Option<bool>,
+    /// Insert cells for the pasted block first, shifting the cells
+    /// `down` or `right` (AOO "Shift cells"); absent or `null` = don't
+    /// shift. `up` / `left` are refused.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub shift: Option<ShiftDir>,
+}
+
+/// The content kinds of a Paste Special (AOO `IDF_STRING`, `IDF_VALUE`,
+/// `IDF_DATETIME`, `IDF_FORMULA`, `IDF_NOTE`, `IDF_ATTRIB`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PasteSelection {
+    /// Text (constants, and text results of formulas when `formulas` is off).
+    pub text: bool,
+    /// Numbers whose format is not a date or time.
+    pub numbers: bool,
+    /// Numbers whose format is a date or time.
+    pub date_time: bool,
+    /// Formulas (off: formula cells paste their results as values, by the
+    /// kinds above).
+    pub formulas: bool,
+    /// Notes (comments).
+    pub notes: bool,
+    /// Formats (cell attributes, merges, conditional formats, validations).
+    pub formats: bool,
 }
 
 /// Arithmetic for [`PasteOptions::operation`].

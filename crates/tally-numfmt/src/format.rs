@@ -25,8 +25,8 @@ use tally_types::{round_to_15_digits, DateEpoch, ErrorKind, Value};
 use crate::date::{civil_from_days, iso_week_number, unix_days_from_serial, weekday_sun0};
 use crate::decimal::Decimal;
 use crate::format_ast::{
-    CompareOp, DateLayout, DateTimeToken, Digit, ElapsedUnit, FormatAst, NumberLayout, Section,
-    SectionKind, Token,
+    CompareOp, DateLayout, DateTimeToken, Digit, ElapsedUnit, FormatAst, GeneralKeyword,
+    NumberLayout, Section, SectionKind, Token,
 };
 use crate::locale::Locale;
 
@@ -86,8 +86,24 @@ pub fn format_value(
 
 /// Formats `value` with `ast`. `width_chars` is the column width in
 /// characters (General shrinks to it; other formats show `###` past it);
-/// `epoch` interprets date serials.
+/// `epoch` interprets date serials. A cell format's language tag
+/// (`[$-407]`, see [`format_language`]) picks the locale.
 pub fn format_value_with(
+    value: &Value,
+    ast: &FormatAst,
+    locale: &Locale,
+    width_chars: Option<u16>,
+    epoch: DateEpoch,
+) -> Formatted {
+    let locale = format_language(ast).unwrap_or(locale);
+    format_value_in_locale(value, ast, locale, width_chars, epoch)
+}
+
+/// [`format_value_with`] in `locale` whatever the code's `[$-LCID]` tag
+/// says. For TEXT() and FIXED: AOO formats their code in the document
+/// language, a `[$-407]` inside it only sets the NatNum language
+/// (zformat.cxx), and Excel ignores it for numbers too.
+pub fn format_value_in_locale(
     value: &Value,
     ast: &FormatAst,
     locale: &Locale,
@@ -110,10 +126,28 @@ pub fn format_value_with(
         // Excel centres errors; we do the same as a hint.
         Value::Error(e) => Formatted::plain(e.display().into_owned(), AlignHint::Center),
         Value::Array(m) => match m.data.first() {
-            Some(v) => format_value_with(v, ast, locale, width_chars, epoch),
+            Some(v) => format_value_in_locale(v, ast, locale, width_chars, epoch),
             None => Formatted::plain("", AlignHint::Left),
         },
     }
+}
+
+/// The locale named by a language-only tag (`[$-407]`, no currency symbol)
+/// in a cell's code. Tally keeps the format's language (AOO's format
+/// LanguageType, ODS `number:language`) as this tag, so separators, month
+/// and day names follow it. A tag with a symbol (`[$€-407]`) only
+/// picks the symbol, and a language Tally has no data for is ignored.
+pub fn format_language(ast: &FormatAst) -> Option<&'static Locale> {
+    ast.sections
+        .iter()
+        .flat_map(|s| s.tokens.iter())
+        .find_map(|t| match t {
+            Token::Currency {
+                symbol,
+                locale: Some(hex),
+            } if symbol.is_empty() => crate::locale::locale_by_lcid(hex),
+            _ => None,
+        })
 }
 
 /// Output buffer shared by the section formatters.
@@ -715,6 +749,17 @@ fn general_section(x: f64, tokens: &[Token], locale: &Locale, width: Option<usiz
         let mut any = false;
         for t in tokens {
             match t {
+                Token::General(GeneralKeyword::Boolean) => {
+                    // AOO's BOOLEAN format: TRUE for any non-zero number.
+                    let g = if x != 0.0 {
+                        locale.true_name
+                    } else {
+                        locale.false_name
+                    };
+                    glen += g.chars().count();
+                    out.text.push_str(g);
+                    any = true;
+                }
                 Token::General(_) | Token::At => {
                     let g = general_string(x, w, locale);
                     glen += g.chars().count();
@@ -1070,6 +1115,62 @@ fn date_section(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_language_tag() {
+        let f = |code: &str, x: f64| {
+            let ast = crate::parse_format(code).unwrap();
+            format_value(&Value::Number(x), &ast, &crate::EN_US, None).text
+        };
+        // `[$-407]`: German separators and month names in an en-US document.
+        assert_eq!(f("[$-407]#,##0.00", 1234.5), "1.234,50");
+        assert_eq!(f("[$-407]DD. MMMM YYYY", 46000.0), "09. Dezember 2025");
+        // A currency tag only picks the symbol (AOO, Excel).
+        assert_eq!(f("#,##0.00 [$€-407]", 1234.5), "1,234.50 €");
+        // Unknown languages fall back to the document locale.
+        assert_eq!(f("[$-416]#,##0.00", 1234.5), "1,234.50");
+        let ast = crate::parse_format("[$-40C]0.00").unwrap();
+        assert_eq!(format_language(&ast).map(|l| l.tag), Some("fr-FR"));
+        // TEXT / FIXED keep the document locale.
+        let ast = crate::parse_format("[$-407]#,##0.00").unwrap();
+        let t = format_value_in_locale(
+            &Value::Number(1234.5),
+            &ast,
+            &crate::EN_US,
+            None,
+            DateEpoch::D1899,
+        );
+        assert_eq!(t.text, "1,234.50");
+    }
+
+    #[test]
+    fn general_with_language_and_boolean() {
+        let p = |c: &str| crate::parse_format(c).unwrap();
+        // A language-tagged General is still General (input recognition,
+        // column fit, the format bar).
+        assert!(p("General").is_general());
+        assert!(p("[$-407]General").is_general());
+        assert!(p("[$-409]Standard").is_general());
+        assert!(!p("[$€-407]General").is_general());
+        assert!(!p("General;-General").is_general());
+        assert!(!p("BOOLEAN").is_general());
+        assert!(crate::is_general_code("[$-407]General"));
+        assert!(crate::is_general_code(" general "));
+        assert!(!crate::is_general_code("[$€-407]General"));
+        assert!(!crate::is_general_code("[$-407]0.00"));
+        // AOO's BOOLEAN: TRUE / FALSE for numbers (was "BOOL1899AN").
+        let f = |c: &str, v: Value, l: &Locale| format_value(&v, &p(c), l, None).text;
+        assert_eq!(f("BOOLEAN", Value::Number(1.0), &crate::EN_US), "TRUE");
+        assert_eq!(f("BOOLEAN", Value::Number(-2.5), &crate::EN_US), "TRUE");
+        assert_eq!(f("BOOLEAN", Value::Number(0.0), &crate::EN_US), "FALSE");
+        assert_eq!(f("BOOLEAN", Value::Bool(false), &crate::EN_US), "FALSE");
+        assert_eq!(
+            f("[$-407]BOOLEAN", Value::Number(1.0), &crate::EN_US),
+            "WAHR"
+        );
+        assert_eq!(f("BOOLEAN", Value::Number(1.0), &crate::DE_DE), "WAHR");
+        assert_eq!(crate::print_format(&p("[RED]BOOLEAN")), "[RED]BOOLEAN");
+    }
 
     #[test]
     fn rational() {

@@ -70,12 +70,16 @@ pub fn op_cost(wb: &Workbook, op: &Op, clip: Option<&ClipSnapshot>) -> u64 {
         // A small target still receives the whole block (review M3).
         Op::Paste {
             target, payload, ..
-        }
-        | Op::PasteSpecial {
-            target, payload, ..
         } => area(target)
             .min(MAX_OP_CELLS)
             .max(paste_block_cells(payload, clip)),
+        Op::PasteSpecial {
+            sheet,
+            target,
+            payload,
+            options,
+        } => paste_special_cost(wb, *sheet, target, payload, options, clip)
+            .max(area(target).min(MAX_OP_CELLS)),
         Op::FillRange { target, .. } => area(target),
         Op::FillSheets {
             sheet, ranges, to, ..
@@ -92,6 +96,43 @@ pub fn op_cost(wb: &Workbook, op: &Op, clip: Option<&ClipSnapshot>) -> u64 {
         _ => crate::tools::tool_op_cost(wb, op).unwrap_or(1),
     };
     cost.max(1)
+}
+
+/// Paste Special's cost: the cells written (Link with Paste all writes a
+/// formula into every cell of the pasted area, empty or not), plus the
+/// band Shift cells moves (as `Op::InsertCells` counts it).
+fn paste_special_cost(
+    wb: &Workbook,
+    sheet: SheetId,
+    target: &RangeDto,
+    payload: &tally_api::PastePayload,
+    options: &PasteOptions,
+    clip: Option<&ClipSnapshot>,
+) -> u64 {
+    let block = paste_block_cells(payload, clip);
+    let Ok(t) = to_range(sheet, target) else {
+        return block;
+    };
+    let Ok(Some(pasted)) = crate::clipboard::paste_area(sheet, t, payload, options, clip) else {
+        return block;
+    };
+    let link_all = options.link == Some(true)
+        && options.selection.is_none()
+        && !options.values_only
+        && !options.formats_only;
+    let written = if link_all { pasted.cell_count() } else { block };
+    let shifted = options.shift.map_or(0, |shift| {
+        crate::tools::tool_op_cost(
+            wb,
+            &Op::InsertCells {
+                sheet,
+                range: crate::document::range_dto(&pasted),
+                shift,
+            },
+        )
+        .unwrap_or(0)
+    });
+    written.saturating_add(shifted)
 }
 
 /// The cells of a paste payload's block: the snapshot's cells for the

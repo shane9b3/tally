@@ -15,6 +15,7 @@
 import type { CellPos, CellView, RangeDto } from "@tally/bridge";
 import { colToLetters } from "@tally/grid";
 import { formatNumberLite, isDateCode } from "./numfmtLite";
+import { liteLocaleOf } from "./styles/numberFormat";
 
 /** Cells fetched at most (the panel says "Sampled" beyond). */
 export const GLANCE_CELL_CAP = 20_000;
@@ -93,7 +94,7 @@ export interface GlanceResult {
 }
 
 function fmt(v: number, code: string): string {
-  return formatNumberLite(v, code) ?? String(Number(v.toPrecision(12)));
+  return formatNumberLite(v, code, liteLocaleOf(code)) ?? String(Number(v.toPrecision(12)));
 }
 
 /**

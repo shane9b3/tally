@@ -16,6 +16,7 @@ import type {
   Op,
   PasteOperation,
   PasteOptions,
+  PasteSelection,
   RangeDto,
   SortKey,
 } from "@tally/bridge";
@@ -192,23 +193,100 @@ export function columnFilterOp(sheet: number, col: number, filter: ColumnFilter 
 
 // -- paste special ----------------------------------------------------------------
 
+/**
+ * A Paste Special choice (AOO's ScInsertContentsDlg). `what` is "Paste all",
+ * one of Tally's quick presets ("values": text, numbers and dates, formula
+ * results as values; "formats") or "custom" with `kinds`.
+ */
 export interface PasteSpecialChoice {
-  what: "all" | "values" | "formats";
+  what: "all" | "values" | "formats" | "custom";
+  /** The Selection check boxes, for `what: "custom"`. */
+  kinds?: PasteSelection;
   transpose: boolean;
   skipEmpty: boolean;
   operation: PasteOperation;
+  /** Paste references to the source cells (AOO "Link"). */
+  link?: boolean;
+  /** Insert cells first (AOO "Shift cells"). */
+  shift?: PasteShift;
 }
+
+export type PasteShift = "none" | "down" | "right";
+
+export type PasteKind = keyof PasteSelection;
+
+/** The Selection check boxes in AOO's order. */
+export const PASTE_KINDS: readonly PasteKind[] = ["text", "numbers", "dateTime", "formulas", "notes", "formats"];
+
+export const ALL_KINDS: PasteSelection = { text: true, numbers: true, dateTime: true, formulas: true, notes: true, formats: true };
+const VALUES_KINDS: PasteSelection = { text: true, numbers: true, dateTime: true, formulas: false, notes: false, formats: false };
+const FORMATS_KINDS: PasteSelection = { text: false, numbers: false, dateTime: false, formulas: false, notes: false, formats: true };
 
 export const DEFAULT_PASTE_SPECIAL: PasteSpecialChoice = { what: "all", transpose: false, skipEmpty: false, operation: "none" };
 
+const sameKinds = (a: PasteSelection, b: PasteSelection): boolean => PASTE_KINDS.every((k) => a[k] === b[k]);
+
+/** The check boxes a choice stands for. */
+export function pasteKinds(choice: PasteSpecialChoice): PasteSelection {
+  switch (choice.what) {
+    case "all":
+      return { ...ALL_KINDS };
+    case "values":
+      return { ...VALUES_KINDS };
+    case "formats":
+      return { ...FORMATS_KINDS };
+    case "custom":
+      return { ...(choice.kinds ?? ALL_KINDS) };
+  }
+}
+
+/** The choice for the dialog's "Paste all" box and Selection boxes (a preset when they match one). */
+export function pasteWhat(all: boolean, kinds: PasteSelection): Pick<PasteSpecialChoice, "what" | "kinds"> {
+  if (all) return { what: "all" };
+  if (sameKinds(kinds, VALUES_KINDS)) return { what: "values" };
+  if (sameKinds(kinds, FORMATS_KINDS)) return { what: "formats" };
+  return { what: "custom", kinds: { ...kinds } };
+}
+
+/** Whether the choice pastes cell contents (text, numbers, dates or formulas): operations apply to them only. */
+export function pastesCells(choice: PasteSpecialChoice): boolean {
+  const k = pasteKinds(choice);
+  return k.text || k.numbers || k.dateTime || k.formulas;
+}
+
+/** Whether OK can paste anything (some kind, or Link with a cell kind). */
+export function pasteChoiceValid(choice: PasteSpecialChoice): boolean {
+  const k = pasteKinds(choice);
+  return PASTE_KINDS.some((x) => k[x]);
+}
+
+/** Whether the "pasting over data" question applies (AOO: not with an operation, a shift or formats/notes only). */
+export function pasteAsksOverwrite(choice: PasteSpecialChoice): boolean {
+  return pastesCells(choice) && choice.operation === "none" && (choice.shift ?? "none") === "none";
+}
+
+/**
+ * Which Shift cells directions the dialog offers (AOO cellsh1.cxx:1296-1316:
+ * none that would push the block from the cursor past the sheet's last
+ * column or row; the size is the copied block's, untransposed).
+ */
+export function pasteShiftAllowed(at: { r: number; c: number }, block: { rows: number; cols: number } | null, maxRows = 1_048_576, maxCols = 16_384): { down: boolean; right: boolean } {
+  if (!block) return { down: true, right: true };
+  return { down: at.r + block.rows - 1 < maxRows - 1, right: at.c + block.cols - 1 < maxCols - 1 };
+}
+
 export function pasteOptions(choice: PasteSpecialChoice): PasteOptions {
-  return {
+  const out: PasteOptions = {
     valuesOnly: choice.what === "values",
     formatsOnly: choice.what === "formats",
     transpose: choice.transpose,
     skipEmpty: choice.skipEmpty,
-    operation: choice.operation,
+    operation: pastesCells(choice) ? choice.operation : "none",
   };
+  if (choice.what === "custom") out.selection = pasteKinds(choice);
+  if (choice.link) out.link = true;
+  if (choice.shift && choice.shift !== "none") out.shift = choice.shift;
+  return out;
 }
 
 // -- find -------------------------------------------------------------------------
