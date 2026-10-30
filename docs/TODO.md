@@ -24,7 +24,7 @@ real-file corpus).
   - Accessibility: keyboard-only dialogs, ARIA throughout, axe + keyboard e2e specs; WCAG AA contrast in light and dark, gated by axe (cdd91b3, de70ada).
   - Code-split bundle: main chunk 1.65 MB → 511 kB; lazy parts behind error boundaries.
   - Docs: `docs/parity-deviations.md` (110 entries), 1.0 status in the inventories, `docs/perf-baseline.md` (`cargo xtask perf`).
-  - 3D references evaluate (2026-10-29): `Sheet1.A5:Sheet3.A5` / `Sheet1:Sheet3!A5` span the sheets in tab order (AOO `svDoubleRef` with `Tab1 != Tab2`); sequence functions iterate every sheet, lookups / `*IF` / matrices give AOO's Err:504 / Err:502, scalar use intersects on the formula's sheet; deleting an end sheet shrinks the span; INDIRECT returns 3D references. Remaining gaps: `docs/parity-deviations.md` P19, U26.
+  - 3D references evaluate (2026-10-29): `Sheet1.A5:Sheet3.A5` / `Sheet1:Sheet3!A5` span the sheets in tab order (AOO `svDoubleRef` with `Tab1 != Tab2`); sequence functions iterate every sheet, lookups / `*IF` / matrices give AOO's Err:504 / Err:502, scalar use intersects on the formula's sheet; deleting an end sheet shrinks the span; INDIRECT returns 3D references. Remaining gaps: `docs/parity-deviations.md` P19. References can be picked on other sheets while typing (2026-10-30, U26).
 - Gates at de70ada: 1,734 Rust tests, 907 TS unit tests, 135 e2e; clippy (also tally-engine without `io`, xtask `perf`) and fmt clean; release bundle builds (Tally.app 27.8 MiB).
 
 ## Known gaps / follow-ups

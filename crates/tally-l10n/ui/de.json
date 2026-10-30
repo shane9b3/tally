@@ -1334,6 +1334,8 @@
   "formulaUi.noNames": "Noch keine Namen (Daten ▸ Bereich definieren…)",
   "formulaUi.sheetOnly": "Nur {sheet}",
   "formulaUi.arrayEnter": "Matrixformel {range} · ⌃⇧↩ zum Eingeben",
+  "formulaUi.pickHome": "Bearbeitung von {cell} auf {sheet}",
+  "formulaUi.pickOther": "Bearbeitung von {cell} auf {sheet}, angezeigt: {other}",
   "formulaUi.arrayFormula": "Matrixformel {range}",
   "formulaUi.argumentsNone": "Argumente: keine.",
   "shell.sortTip": "Tabelle nach der aktiven Spalte sortieren",

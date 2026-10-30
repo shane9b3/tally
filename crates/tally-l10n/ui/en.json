@@ -1334,6 +1334,8 @@
   "formulaUi.noNames": "No names yet (Data ▸ Define Name…)",
   "formulaUi.sheetOnly": "{sheet} only",
   "formulaUi.arrayEnter": "Array formula {range} · ⌃⇧↩ to enter",
+  "formulaUi.pickHome": "Editing {cell} on {sheet}",
+  "formulaUi.pickOther": "Editing {cell} on {sheet}, showing {other}",
   "formulaUi.arrayFormula": "Array formula {range}",
   "formulaUi.argumentsNone": "Arguments: none.",
   "shell.sortTip": "Sort the table by the active column",

@@ -25,6 +25,7 @@ const PROP_KEYS = [
   "selection",
   "edit",
   "pointMode",
+  "editElsewhere",
   "refHighlights",
   "editHighlights",
   "arrayRange",

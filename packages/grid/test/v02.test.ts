@@ -178,6 +178,40 @@ describe("Grid pointer interactions", () => {
     expect(onPointRange).toHaveBeenCalledTimes(3);
   });
 
+  it("point mode: a column or row header picks the whole column / row", () => {
+    const onPointRange = vi.fn();
+    const onCommitEdit = vi.fn();
+    const { grid, scroller } = make({ onPointRange, onCommitEdit });
+    grid.update({ edit: { cell: { r: 0, c: 0 }, text: "=", caret: 1 }, pointMode: true });
+    pointer(scroller, "pointerdown", { clientX: 164 + 50, clientY: 10 });
+    expect(onCommitEdit).not.toHaveBeenCalled();
+    const col = onPointRange.mock.calls.at(-1)?.[0];
+    expect([col.c0, col.c1, col.r0]).toEqual([1, 1, 0]);
+    expect(col.r1).toBeGreaterThan(1000);
+    pointer(scroller, "pointerdown", { clientX: 20, clientY: 24 + 2 * 24 + 12 });
+    const row = onPointRange.mock.calls.at(-1)?.[0];
+    expect([row.r0, row.r1, row.c0]).toEqual([2, 2, 0]);
+    expect(onCommitEdit).not.toHaveBeenCalled();
+  });
+
+  it("editElsewhere: the editor is hidden, other clicks and the context menu do nothing, a commit leaves the selection", () => {
+    const onCommitEdit = vi.fn();
+    const onSelectionChange = vi.fn();
+    const onContextMenu = vi.fn();
+    const { grid, scroller, ta } = make({ onCommitEdit, onSelectionChange, onContextMenu, selection: cellSelection({ r: 3, c: 2 }) });
+    grid.update({ edit: { cell: { r: 3, c: 2 }, text: "=SUM(A1)", caret: 8 }, pointMode: true, editElsewhere: true });
+    grid.flush();
+    expect(ta.style.opacity).toBe("0");
+    pointer(scroller, "pointerdown", { clientX: 5, clientY: 5 });
+    pointer(scroller, "pointerdown", at(1, 1), { button: 2 });
+    scroller.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, ...at(1, 1) }));
+    expect(onContextMenu).not.toHaveBeenCalled();
+    expect(onCommitEdit).not.toHaveBeenCalled();
+    ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    expect(onCommitEdit).toHaveBeenCalledWith("down");
+    expect(onSelectionChange).not.toHaveBeenCalled();
+  });
+
   it("onEditorKeyDown can swallow editor keys", () => {
     const onCommitEdit = vi.fn();
     const onEditorKeyDown = vi.fn(() => true);

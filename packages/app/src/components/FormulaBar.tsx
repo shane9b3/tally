@@ -20,6 +20,7 @@ import { useSelectionStore } from "../stores/selectionStore";
 import { rangeAddress } from "../sumRange";
 import { a1, parseAbsoluteRef } from "../dataOps";
 import { useDataStore } from "../stores/dataStore";
+import { quoteSheet } from "@tally/formula-ts";
 import { ChevronIcon } from "./icons";
 import { usePeekStore } from "../chrome/chromeActions";
 import { Popover } from "./Popover";
@@ -38,7 +39,10 @@ function NameBox() {
     const p = parseAbsoluteRef(n.refersTo);
     return p !== null && p.sheet === sheetName && p.range.r0 === range.r0 && p.range.c0 === range.c0 && p.range.r1 === range.r1 && p.range.c1 === range.c1;
   });
-  const address = named?.name ?? rangeAddress(range);
+  // A formula edit showing another sheet: the edited cell, with its sheet (the selection mirrors it).
+  const editElsewhere = useEditStore((s) => (s.edit !== null && s.sheet !== null && s.sheet !== sheet ? s.sheet : null));
+  const editSheetName = useDocStore((s) => (editElsewhere === null ? null : (s.info?.sheets.find((x) => x.id === editElsewhere)?.name ?? null)));
+  const address = editSheetName !== null ? `${quoteSheet(editSheetName)}.${rangeAddress(range)}` : (named?.name ?? rangeAddress(range));
   const [text, setText] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   return (

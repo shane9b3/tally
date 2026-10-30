@@ -123,3 +123,56 @@ export function formatRef(range: RefRange, opts: { sheet?: string | null } = {})
   }
   return prefix + body;
 }
+
+/** `R`, `C`, `R1C1`, `RC2`, `r3`… (any case): Excel quotes such sheet names (printer.rs `looks_like_r1c1`). */
+function looksLikeR1C1(name: string): boolean {
+  return /^(R[0-9]*C?[0-9]*|C[0-9]*)$/i.test(name) && name !== "";
+}
+
+/** Whether Excel needs a sheet name quoted (printer.rs `excel_needs_quotes`). */
+export function excelSheetNeedsQuotes(name: string): boolean {
+  return sheetNeedsQuotes(name) || looksLikeR1C1(name);
+}
+
+/** A sheet name as Excel writes it, quoted and escaped when needed. */
+function quoteExcelSheet(name: string): string {
+  return excelSheetNeedsQuotes(name) ? `'${name.replace(/'/g, "''")}'` : name;
+}
+
+/** Where a picked reference points: its sheet(s), named only when they differ from the formula's sheet. */
+export interface PickedRefOptions {
+  /** The sheet the reference is on, or `null` / absent for the formula's own sheet (no prefix). */
+  sheet?: string | null;
+  /** The last sheet of a 3D reference (`Sheet1.A1:Sheet3.A1`); ignored when equal to `sheet`. */
+  sheet2?: string | null;
+  /** `calc-a1` (default): `Sheet2.A1`; `excel-a1`: `Sheet2!A1`, 3D `Sheet1:Sheet3!A1`. */
+  dialect?: "calc-a1" | "excel-a1";
+}
+
+/**
+ * The text point mode inserts for a picked range, relative as AOO's
+ * `ScInputHandler::SetReference` writes it (no `$`, the sheet named only
+ * when it is not the formula's own: `ScRange::Format` with `SCA_TAB_3D`):
+ * `A1:B3`, `Sheet2.A1:B3`, `'My Sheet'.A1`, and a 3D reference with both
+ * sheets, `Sheet1.A1:Sheet3.B3`. Excel A1 writes `Sheet2!A1:B3` and
+ * `Sheet1:Sheet3!A1:B3`.
+ */
+export function formatPickedRef(range: RefRange, opts: PickedRefOptions = {}): string {
+  const s1 = opts.sheet ?? null;
+  const s2 = opts.sheet2 && s1 !== null && opts.sheet2.toLowerCase() !== s1.toLowerCase() ? opts.sheet2 : null;
+  if (opts.dialect === "excel-a1") {
+    const body = formatRef(range);
+    if (s1 === null) return body;
+    if (s2 === null) return `${quoteExcelSheet(s1)}!${body}`;
+    // One quoted pair around both names when either needs quotes ('My Sheet:Sheet3'!A1).
+    const quote = excelSheetNeedsQuotes(s1) || excelSheetNeedsQuotes(s2);
+    const both = `${s1}:${s2}`;
+    return `${quote ? `'${both.replace(/'/g, "''")}'` : both}!${body}`;
+  }
+  if (s1 === null) return formatRef(range);
+  if (s2 === null) return formatRef(range, { sheet: s1 });
+  // 3D: both endpoints carry their sheet (whole rows/columns are written as cells).
+  const a = `${colLetters(range.c0)}${range.r0 + 1}`;
+  const b = `${colLetters(range.c1)}${range.r1 + 1}`;
+  return `${quoteSheet(s1)}.${a}:${quoteSheet(s2)}.${b}`;
+}

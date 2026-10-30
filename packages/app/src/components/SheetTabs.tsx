@@ -135,17 +135,29 @@ export function SheetTabs({ renaming, setRenaming }: SheetTabsProps) {
               dropAt === i && dragging !== null && styles.dropBefore,
             )}
             draggable
+            onMouseDown={(e) => {
+              // Picking references for a formula: the editor (cell or formula bar) keeps the focus.
+              if (ctl.keepsEditAcrossSheets()) e.preventDefault();
+            }}
             onClick={(e) => ctl.clickTab(s.id, { toggle: e.metaKey || e.ctrlKey, range: e.shiftKey })}
             onDoubleClick={(e) => {
+              // Picking references: the clicks only showed the sheet; no rename over an open formula.
+              if (ctl.keepsEditAcrossSheets()) return;
               if (!e.metaKey && !e.ctrlKey && !e.shiftKey && group.length <= 1) setRenaming(s.id);
             }}
             onContextMenu={(e) => {
               e.preventDefault();
+              // No tab menu while a formula picks references (AOO ignores it in reference input).
+              if (ctl.keepsEditAcrossSheets()) return;
               // Inside the selection the tab becomes active and the selection stays (AOO).
               ctl.showSheet(s.id, false, group.includes(s.id));
               setMenu({ sheet: s.id, x: e.clientX, y: e.clientY - 4 });
             }}
             onDragStart={(e) => {
+              if (ctl.keepsEditAcrossSheets()) {
+                e.preventDefault();
+                return;
+              }
               setDragging(s.id);
               e.dataTransfer.effectAllowed = "move";
               e.dataTransfer.setData("text/x-tally-sheet", String(s.id));

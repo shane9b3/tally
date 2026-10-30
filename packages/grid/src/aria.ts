@@ -234,6 +234,17 @@ export class AriaMirror {
     this.live.textContent = text;
   }
 
+  /**
+   * Announces `text` in the live region now (an app event the selection
+   * does not describe, e.g. a formula edit showing another sheet).
+   */
+  announce(text: string): void {
+    if (this.props.silent || text === "") return;
+    this.lastAnnounced = text;
+    this.live.textContent = "";
+    this.live.textContent = text;
+  }
+
   /** The last announcement (tests). */
   get announcement(): string {
     return this.live.textContent ?? "";

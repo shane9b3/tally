@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { colLetters, formatRef, MAX_COLS, MAX_ROWS, parseRef, referencesIn, tokenize } from "../src/index";
+import { colLetters, formatPickedRef, formatRef, MAX_COLS, MAX_ROWS, parseRef, referencesIn, tokenize } from "../src/index";
 
 describe("referencesIn", () => {
   it("finds cells and ranges with spans", () => {
@@ -79,5 +79,55 @@ describe("formatting", () => {
     const text = formatRef({ r0: 0, c0: 0, r1: 9, c1: 3 }, { sheet: "Q1 sales" });
     const toks = tokenize(`=${text}`).filter((t) => t.kind !== "Prefix");
     expect(toks.map((t) => t.kind)).toEqual(["RangeRef"]);
+  });
+});
+
+describe("formatPickedRef (point mode across sheets)", () => {
+  const a1 = { r0: 0, c0: 0, r1: 0, c1: 0 };
+  const b2c4 = { r0: 1, c0: 1, r1: 3, c1: 2 };
+  it("writes the formula's own sheet without a prefix", () => {
+    expect(formatPickedRef(a1)).toBe("A1");
+    expect(formatPickedRef(b2c4, { sheet: null })).toBe("B2:C4");
+  });
+  it("names another sheet, relative, quoting when needed (Calc A1)", () => {
+    expect(formatPickedRef(a1, { sheet: "Sheet2" })).toBe("Sheet2.A1");
+    expect(formatPickedRef(b2c4, { sheet: "Sheet2" })).toBe("Sheet2.B2:C4");
+    expect(formatPickedRef(a1, { sheet: "My Sheet" })).toBe("'My Sheet'.A1");
+    expect(formatPickedRef(a1, { sheet: "O'Brien 2" })).toBe("'O''Brien 2'.A1");
+    expect(formatPickedRef({ r0: 0, c0: 2, r1: MAX_ROWS - 1, c1: 2 }, { sheet: "Data" })).toBe("Data.C:C");
+  });
+  it("writes a 3D reference with both sheets", () => {
+    expect(formatPickedRef(a1, { sheet: "Sheet1", sheet2: "Sheet3" })).toBe("Sheet1.A1:Sheet3.A1");
+    expect(formatPickedRef(b2c4, { sheet: "Sheet1", sheet2: "My Sheet" })).toBe("Sheet1.B2:'My Sheet'.C4");
+    // The same sheet twice is a plain sheet reference.
+    expect(formatPickedRef(a1, { sheet: "Sheet2", sheet2: "sheet2" })).toBe("Sheet2.A1");
+  });
+  it("Excel A1 syntax", () => {
+    expect(formatPickedRef(a1, { sheet: "Sheet2", dialect: "excel-a1" })).toBe("Sheet2!A1");
+    expect(formatPickedRef(b2c4, { sheet: "My Sheet", dialect: "excel-a1" })).toBe("'My Sheet'!B2:C4");
+    expect(formatPickedRef(a1, { sheet: "Sheet1", sheet2: "Sheet3", dialect: "excel-a1" })).toBe("Sheet1:Sheet3!A1");
+    expect(formatPickedRef(a1, { dialect: "excel-a1" })).toBe("A1");
+    // R1C1-looking names are quoted in Excel syntax (printer.rs excel_needs_quotes), not in Calc.
+    expect(formatPickedRef(a1, { sheet: "R1C1", dialect: "excel-a1" })).toBe("'R1C1'!A1");
+    expect(formatPickedRef(a1, { sheet: "rc", dialect: "excel-a1" })).toBe("'rc'!A1");
+    expect(formatPickedRef(a1, { sheet: "C", sheet2: "Sheet3", dialect: "excel-a1" })).toBe("'C:Sheet3'!A1");
+    expect(formatPickedRef(a1, { sheet: "Rx", dialect: "excel-a1" })).toBe("Rx!A1");
+    expect(formatPickedRef(a1, { sheet: "R1C1" })).toBe("R1C1.A1");
+  });
+  it("lexes as one reference", () => {
+    for (const [text, sheet, sheet2] of [
+      ["=SUM(Sheet1.A1:Sheet3.A1)", "Sheet1", "Sheet3"],
+      ["=SUM('My Sheet'.B2:C4)", "My Sheet", null],
+      ["=SUM(A1:Sheet3.A1)", null, "Sheet3"],
+    ] as const) {
+      const refs = referencesIn(text);
+      expect(refs).toHaveLength(1);
+      expect(refs[0]?.sheet).toBe(sheet);
+      expect(refs[0]?.sheet2).toBe(sheet2);
+    }
+    for (const text of ["=SUM(Sheet1:Sheet3!A1)", "=SUM('My Sheet'!B2:C4)"]) {
+      const kinds = tokenize(text, "excel-a1").map((t) => t.kind);
+      expect(kinds).toEqual(["Prefix", "Func", "LParen", "RangeRef", "RParen"]);
+    }
   });
 });

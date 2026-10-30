@@ -132,6 +132,7 @@ export class Grid {
     Object.assign(spacer.style, { width: "1px", height: "1px", pointerEvents: "none" });
     scroller.appendChild(spacer);
     this.editor = new CellEditor(doc);
+    this.editor.hidden = props.editElsewhere ?? false;
     root.append(main, overlay, scroller);
     this.objects = new ObjectLayer(doc, {
       onObjectSelect: (id) => {
@@ -200,7 +201,7 @@ export class Grid {
       },
       pointMode: () => (self.props.pointMode ?? false) && self.editor.open,
       rangePick: () => !self.editor.open && (self.pick !== null || (self.props.rangePick ?? false)),
-      pointRange: (range, phase) => self.pointRange(range, phase),
+      pointRange: (range, phase, extend) => self.pointRange(range, phase, extend),
       cancelPick: () => self.settlePick(null),
       setResizeGuide: (g) => {
         self.resizeGuide = g;
@@ -214,6 +215,7 @@ export class Grid {
         return v && v.flags & CELL_FLAGS.link && v.link ? v.link : null;
       },
       hoverCell: (cell) => self.setHoverCell(cell),
+      editElsewhere: () => (self.props.editElsewhere ?? false) && self.editor.open,
       editorChanged: () => {
         // Show/grow the editor immediately, not a frame later.
         self.layoutEditor();
@@ -255,6 +257,8 @@ export class Grid {
     }
     if ("sheet" in partial && partial.sheet !== prev.sheet) {
       this.tracker.reset(this.props.sheet);
+      // A pick on the previous sheet does not extend onto this one.
+      this.interaction.resetPoint();
       this.layout = null;
       relayout = true;
       this.contentX = 0;
@@ -287,6 +291,12 @@ export class Grid {
       this.invalidate("overlay");
     }
     if ("pointMode" in partial && !partial.pointMode && prev.pointMode) this.interaction.resetPoint();
+    if ("editElsewhere" in partial && (partial.editElsewhere ?? false) !== (prev.editElsewhere ?? false)) {
+      this.editor.hidden = this.props.editElsewhere ?? false;
+      this.editor.setHighlights(this.props.editHighlights ?? []);
+      this.layoutEditor();
+      this.invalidate("overlay");
+    }
     if ("refHighlights" in partial && partial.refHighlights !== prev.refHighlights) this.invalidate("overlay");
     if ("arrayRange" in partial && partial.arrayRange !== prev.arrayRange) this.invalidate("overlay");
     if ("clipRange" in partial && partial.clipRange !== prev.clipRange) this.invalidate("overlay");
@@ -397,8 +407,9 @@ export class Grid {
     return this.aria;
   }
 
-  private pointRange(range: RangeDto, phase: PointPhase): void {
-    this.props.onPointRange?.(range, phase);
+  private pointRange(range: RangeDto, phase: PointPhase, extend?: boolean): void {
+    if (extend) this.props.onPointRange?.(range, phase, true);
+    else this.props.onPointRange?.(range, phase);
     if (phase === "end" && this.pick) this.settlePick(range);
   }
 
@@ -990,6 +1001,7 @@ export class Grid {
         ...base,
         selection: this.selection,
         editing: this.editor.open,
+        hideSelection: this.editor.open && this.editor.hidden,
         objectSelected: this.objects.selected !== null,
         hoverGutter: this.hoverGutter,
         resizeGuide: this.resizeGuide,

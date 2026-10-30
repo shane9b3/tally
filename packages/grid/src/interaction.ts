@@ -69,10 +69,12 @@ export interface InteractionHost {
   setFillPreview(range: RangeDto | null): void;
   /** Whether point mode is on (the `pointMode` prop). */
   pointMode(): boolean;
+  /** The open edit belongs to another sheet's cell (the `editElsewhere` prop): a commit leaves the selection alone. */
+  editElsewhere?(): boolean;
   /** Whether range-pick mode is on without an edit (the `rangePick` prop or `Grid.pickRange()`). */
   rangePick(): boolean;
   /** A reference was picked (point mode or range pick); the grid forwards `onPointRange` and settles `pickRange()`. */
-  pointRange(range: RangeDto, phase: "start" | "move" | "end"): void;
+  pointRange(range: RangeDto, phase: "start" | "move" | "end", extend?: boolean): void;
   /** Escape in range-pick mode: the grid rejects a pending `pickRange()` with `null`. */
   cancelPick(): void;
   invalidateOverlay(): void;
@@ -228,10 +230,32 @@ export class Interaction {
     if (e.button === 0 && this.picking() && hit.area === "cell") {
       const cell = { r: hit.r, c: hit.c };
       const base = this.pointSel ?? cellSelection(host.editor.cell ?? sel.active);
+      // Shift with nothing picked on this sheet yet: the app may extend another sheet's pick (3D).
+      const extend = e.shiftKey && this.pointSel === null && host.editor.open;
       this.pointSel = e.shiftKey && this.pointSel ? extendTo(base, cell) : cellSelection(cell);
-      host.pointRange({ ...this.pointSel.range }, "start");
+      if (extend) host.pointRange({ ...this.pointSel.range }, "start", true);
+      else host.pointRange({ ...this.pointSel.range }, "start");
       this.drag = { kind: "point" };
       this.capture(e);
+      return;
+    }
+    // A column / row header picks the whole column / row (Shift extends the pick), as in AOO.
+    if (e.button === 0 && host.editor.open && this.picking() && (hit.area === "colHeader" || hit.area === "rowHeader")) {
+      const whole = hit.area === "colHeader" ? selectCols(hit.c, hit.c, lim, hit.c, 0) : selectRows(hit.r, hit.r, lim, hit.r, 0);
+      const prev = this.pointSel;
+      const range =
+        e.shiftKey && prev
+          ? { r0: Math.min(prev.range.r0, whole.range.r0), c0: Math.min(prev.range.c0, whole.range.c0), r1: Math.max(prev.range.r1, whole.range.r1), c1: Math.max(prev.range.c1, whole.range.c1) }
+          : whole.range;
+      this.pointSel = { ...whole, range };
+      host.pointRange({ ...range }, "start");
+      host.pointRange({ ...range }, "end");
+      e.preventDefault();
+      return;
+    }
+    // Picking on another sheet than the edited cell's: nothing else here commits or selects.
+    if (host.editElsewhere?.()) {
+      e.preventDefault();
       return;
     }
 
@@ -517,6 +541,7 @@ export class Interaction {
     if (this.onScrollbar(e)) return;
     e.preventDefault();
     const host = this.host;
+    if (host.editElsewhere?.()) return;
     const p = this.point(e);
     const geo = host.geometry();
     const lim = host.limits();
@@ -568,10 +593,11 @@ export class Interaction {
     const host = this.host;
     const ed = host.editor;
     if (!ed.open) return;
+    const elsewhere = host.editElsewhere?.() ?? false;
     host.events().onCommitEdit?.(move);
     ed.end();
     host.editorChanged();
-    if (move === "none") return;
+    if (move === "none" || elsewhere) return;
     const sel = host.selection();
     const lim = host.limits();
     const key = this.lastCommitKey;

@@ -24,8 +24,36 @@ export interface Command {
   run: (args?: CommandArgs) => void | Promise<void>;
 }
 
+/**
+ * A state that disables every command except `allow(id)` (a formula edit
+ * picking references on another sheet: AOO disables the slots during
+ * reference input), with the reason shown for them.
+ */
+export interface CommandGate {
+  active(): boolean;
+  allow(id: string): boolean;
+  reason(): string;
+}
+
 export class CommandRegistry {
   private readonly commands = new Map<string, Command>();
+  private gate: CommandGate | null = null;
+
+  /** Installs (or with `null` removes) the gate checked by `isEnabled` and `run`. */
+  setGate(gate: CommandGate | null): void {
+    this.gate = gate;
+  }
+
+  private gated(id: string): boolean {
+    const g = this.gate;
+    return g !== null && !g.allow(id) && g.active();
+  }
+
+  /** Why a command is disabled now (the gate's reason first), if it says. */
+  reasonFor(id: string): string | undefined {
+    if (this.gated(id)) return this.gate?.reason();
+    return this.commands.get(id)?.reason;
+  }
 
   register(cmd: Command): () => void {
     this.commands.set(cmd.id, cmd);
@@ -49,7 +77,7 @@ export class CommandRegistry {
 
   isEnabled(id: string): boolean {
     const c = this.commands.get(id);
-    return c !== undefined && (c.enabled?.() ?? true);
+    return c !== undefined && !this.gated(id) && (c.enabled?.() ?? true);
   }
 
   /** Visible commands in registration order. */
@@ -60,7 +88,7 @@ export class CommandRegistry {
   /** Runs a command (with optional arguments); returns false if unknown or disabled. */
   run(id: string, args?: CommandArgs): boolean {
     const c = this.commands.get(id);
-    if (!c || !(c.enabled?.() ?? true)) return false;
+    if (!c || this.gated(id) || !(c.enabled?.() ?? true)) return false;
     void c.run(args);
     return true;
   }

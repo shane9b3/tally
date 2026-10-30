@@ -7,7 +7,7 @@
 import type { FunctionInfo, RangeDto } from "@tally/bridge";
 import {
   callAt,
-  formatRef,
+  formatPickedRef,
   groupedReferences,
   identifierAt,
   isFormulaText,
@@ -36,22 +36,56 @@ export interface FormulaHighlights {
 
 const NONE: FormulaHighlights = { spans: [], refs: [] };
 
+/** The sheets around a formula edit, for outlines when the edit and the view are on different sheets. */
+export interface HighlightSheets {
+  /** The edited cell's sheet (unqualified references point there); defaults to the shown sheet. */
+  editSheet?: string | null;
+  /** Every sheet name in tab order (whether a 3D reference spans the shown sheet). */
+  order?: readonly string[];
+}
+
+/**
+ * Whether reference `r` (of a formula on sheet `editSheet`) covers sheet
+ * `shown`: an unqualified reference points at the formula's own sheet, a
+ * 3D one at every sheet from its first to its last in tab order.
+ */
+export function refOnSheet(
+  r: { sheet: string | null; sheet2: string | null },
+  shown: string | null,
+  sheets: HighlightSheets = {},
+  lcOrder: readonly string[] | undefined = sheets.order?.map((s) => s.toLowerCase()),
+): boolean {
+  const own = sheets.editSheet === undefined ? shown : sheets.editSheet;
+  const lc = (s: string | null) => (s === null ? null : s.toLowerCase());
+  const first = lc(r.sheet ?? own);
+  const last = lc(r.sheet2 ?? r.sheet ?? own);
+  const here = lc(shown);
+  if (first === here || last === here) return here !== null || (r.sheet === null && r.sheet2 === null);
+  if (first === null || last === null || here === null || !lcOrder) return false;
+  const a = lcOrder.indexOf(first);
+  const b = lcOrder.indexOf(last);
+  const i = lcOrder.indexOf(here);
+  return a >= 0 && b >= 0 && i >= Math.min(a, b) && i <= Math.max(a, b);
+}
+
 /**
  * Colours every reference of a formula; the same reference (ignoring `$`)
- * gets the same colour. Outlines are only produced for references to
- * `sheetName` (or unqualified ones).
+ * gets the same colour. Outlines are only produced for references to the
+ * shown sheet `sheetName`: qualified with it, unqualified while the edited
+ * cell is on it (`sheets.editSheet`), or a 3D reference spanning it.
  */
-export function formulaHighlights(text: string, sheetName: string | null, theme: ResolvedTheme): FormulaHighlights {
+export function formulaHighlights(text: string, sheetName: string | null, theme: ResolvedTheme, sheets: HighlightSheets = {}): FormulaHighlights {
   if (!isFormulaText(text)) return NONE;
   const refs = groupedReferences(text);
   if (refs.length === 0) return NONE;
   const spans: TextHighlight[] = [];
   const outlines: RefHighlight[] = [];
   const seen = new Set<number>();
+  const lcOrder = sheets.order?.map((s) => s.toLowerCase());
   for (const r of refs) {
     const color = refColor(r.group, theme);
     spans.push({ start: r.start, end: r.end, color });
-    const here = r.sheet === null || (sheetName !== null && r.sheet.toLowerCase() === sheetName.toLowerCase());
+    const here = refOnSheet(r, sheetName, sheets, lcOrder);
     if (here && !seen.has(r.group)) {
       seen.add(r.group);
       outlines.push({ range: { ...r.range }, color });
@@ -74,21 +108,31 @@ export function isPointMode(text: string, caret: number, pointSpan: Span | null)
   return isFormulaText(text) && pointTarget(text, caret, pointSpan) !== null;
 }
 
-/** `A1` / `A1:B3` for a picked range. */
-export function refText(range: RangeDto): string {
-  return formatRef(range);
+/**
+ * The text of a picked range: `A1` / `A1:B3` on the formula's own sheet,
+ * `Sheet2.A1:B3` on another (`sheet`), `Sheet1.A1:Sheet3.A1` for a 3D pick
+ * (`sheet2`). Relative, as AOO inserts it.
+ */
+export function refText(range: RangeDto, sheet: string | null = null, sheet2: string | null = null): string {
+  return formatPickedRef(range, { sheet, sheet2 });
 }
 
-/** Inserts or replaces a picked reference. Returns the new text, caret and the reference's span. */
+/**
+ * Inserts or replaces a picked reference. Returns the new text, caret and
+ * the reference's span. `sheet` / `sheet2` name the picked sheet(s) when
+ * they are not the formula's own (see `refText`).
+ */
 export function applyPoint(
   text: string,
   caret: number,
   pointSpan: Span | null,
   range: RangeDto,
+  sheet: string | null = null,
+  sheet2: string | null = null,
 ): { text: string; caret: number; span: Span } | null {
   const at = pointTarget(text, caret, pointSpan);
   if (!at) return null;
-  const ref = refText(range);
+  const ref = refText(range, sheet, sheet2);
   const next = text.slice(0, at.start) + ref + text.slice(at.end);
   const end = at.start + ref.length;
   return { text: next, caret: end, span: { start: at.start, end } };

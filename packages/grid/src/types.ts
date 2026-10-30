@@ -211,9 +211,11 @@ export interface GridEvents {
   /**
    * Point mode (only while `pointMode` is set): the user picked `range` with
    * a click/drag or an arrow key in the editor. The app inserts or replaces
-   * the reference at the caret.
+   * the reference at the caret. `extend` (on "start"): Shift was held for a
+   * new pick on this sheet (nothing picked here yet), so the app may extend
+   * an earlier pick on another sheet to a 3D reference.
    */
-  onPointRange(range: RangeDto, phase: PointPhase): void;
+  onPointRange(range: RangeDto, phase: PointPhase, extend?: boolean): void;
   /**
    * Called first for every key pressed in the open in-cell editor. Return
    * true if the app handled it (the grid then does nothing else). Used for
@@ -301,6 +303,14 @@ export interface GridProps extends Partial<GridEvents> {
    * (`onPointRange`) instead of committing.
    */
   pointMode?: boolean;
+  /**
+   * The edit belongs to a cell on another sheet than the one shown (a
+   * formula picking references across sheets): the editor stays open and
+   * focused for typing but is not drawn over this sheet, the selection
+   * (cell cursor) is not drawn, and a commit leaves the selection to the
+   * app (which returns to the edited cell's sheet).
+   */
+  editElsewhere?: boolean;
   /** Coloured outlines of the references in the formula being edited. */
   refHighlights?: RefHighlight[];
   /** Coloured spans of the editor text (formula references). */

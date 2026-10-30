@@ -32,8 +32,10 @@ import {
   type WorkbookInfo,
 } from "@tally/bridge";
 import {
+  cellAddress,
   cellSelection,
   drawStyleId,
+  stepWithin,
   EngineClientSource,
   MAX_COLS,
   MAX_ROWS,
@@ -69,6 +71,7 @@ import { cappedRange, currentRegion } from "./glance";
 import { useDataStore } from "./stores/dataStore";
 import { useW56Store } from "./data/store";
 import { applyCompletion, applyPoint, assistFor, assistKey } from "./formulaEdit";
+import { isFormulaText } from "@tally/formula-ts";
 import { chipColorsFor } from "./palette";
 import { useDocStore } from "./stores/docStore";
 import { GROUP_OPS } from "@tally/bridge";
@@ -116,6 +119,9 @@ const TOGGLE_LABELS: Record<StyleToggle, string> = {
   strike: "Strikethrough",
   wrap: "Wrap text",
 };
+
+/** Commands that stay enabled while a formula edit shows another sheet (editor undo, zoom, sheet stepping). */
+const PICKING_COMMANDS: ReadonlySet<string> = new Set(["edit.undo", "edit.redo", "view.zoomIn", "view.zoomOut", "view.zoomReset", "sheet.next", "sheet.prev"]);
 
 function errorOf(e: unknown): ApiError {
   if (isApiError(e)) return e;
@@ -171,6 +177,13 @@ export class AppController {
     this.w5 = new W5Features(this);
     this.w56 = new W56Features(this);
     this.tabs = new TabsFeature(this);
+    // While a formula picks references on another sheet only editing and
+    // viewing commands run: everything else would act on the shown sheet.
+    this.registry.setGate({
+      active: () => this.editingElsewhere,
+      allow: (id) => PICKING_COMMANDS.has(id) || id.startsWith("window."),
+      reason: () => t("msg.reason.finishEditing", "Finish editing the cell first"),
+    });
   }
 
   // -- lifecycle --------------------------------------------------------------
@@ -187,7 +200,7 @@ export class AppController {
       this.client.onMenuAction((e) => {
         if (this.registry.run(e.id)) return;
         // The native menu has no enabled state: say why a disabled command did nothing.
-        const reason = this.registry.has(e.id) ? this.registry.get(e.id)?.reason : undefined;
+        const reason = this.registry.has(e.id) ? this.registry.reasonFor(e.id) : undefined;
         if (reason) useUiStore.getState().pushToast("info", reason);
         else console.warn(`menu-action: unknown or disabled command ${e.id}`);
       }),
@@ -326,10 +339,14 @@ export class AppController {
    */
   handleResult(res: ApplyResult, ops: readonly Op[] | null = null, restoreSelection = true): void {
     const before = this.sheet;
+    const elsewhere = this.editingElsewhere;
+    const groupBefore = [...useDocStore.getState().groupSheets];
     useDocStore.getState().source?.applyResult(res);
     useDocStore.getState().applyResult(res);
-    const after = this.sheet;
-    if (after !== before) this.showSheet(after, false);
+    if (!this.settleEditAfterResult(before, elsewhere, groupBefore)) {
+      const after = this.sheet;
+      if (after !== before) this.showSheet(after, false);
+    }
     // Undo/redo (and ops that name their own selection) put the cursor back;
     // a plain edit must not, or Enter/Tab would snap back to the edited cell
     // after the grid has already moved on.
@@ -352,6 +369,39 @@ export class AppController {
   }
 
   /**
+   * After a result changed the sheets (from another window, an undo…) while
+   * a formula edit is open: an edit whose own sheet is gone is cancelled; a
+   * pick on another sheet stays there when that sheet still exists, else
+   * goes back to the edited cell's sheet with the edit open. Returns true
+   * when it settled the shown sheet itself.
+   */
+  private settleEditAfterResult(shownBefore: number, elsewhere: boolean, groupBefore: number[]): boolean {
+    const st = useEditStore.getState();
+    if (!st.edit || st.sheet === null) return false;
+    if (!this.sheetExists(st.sheet)) {
+      this.pickHome = null;
+      useEditStore.getState().end();
+      return false;
+    }
+    if (!elsewhere) return false;
+    const shown = this.info?.sheets.find((s) => s.id === shownBefore);
+    if (shown && !shown.hidden) {
+      // Keep picking there; the result may have moved the active sheet or pruned the group.
+      if (this.sheet !== shownBefore) {
+        useDocStore.setState({ activeSheet: shownBefore, groupSheets: groupBefore });
+        useDocStore.getState().source?.setSheet(shownBefore);
+      }
+      return true;
+    }
+    // The shown sheet is gone: back to the edited cell's sheet, still editing.
+    if (!this.returnToEditSheet()) {
+      this.viewSheet(st.sheet, cellSelection(st.edit.cell), null);
+      this.syncActiveSheet(st.sheet);
+    }
+    return true;
+  }
+
+  /**
    * Applies ops as one undoable transaction. With several sheets selected
    * a group edit carries the group (the active sheet first, the others in
    * tab order): the engine repeats the active sheet's cell, format and
@@ -363,6 +413,11 @@ export class AppController {
   async apply(label: string, ops: Op[], after?: Selection, keepClip = false, opts: { group?: boolean } = {}): Promise<ApplyResult | null> {
     try {
       const doc = this.requireDoc();
+      // Backstop: the shown sheet is not the edited cell's and the selection is that cell's copy.
+      if (this.editingElsewhere) {
+        useUiStore.getState().pushToast("info", t("msg.reason.finishEditing", "Finish editing the cell first"));
+        return null;
+      }
       // Any other edit ends a pending copy/cut (as in Calc and Excel).
       if (!keepClip && useDataStore.getState().clip) useDataStore.getState().setClip(null);
       const sel = this.selection;
@@ -570,16 +625,19 @@ export class AppController {
 
   /** Starts the shared EditSession (grid or formula bar). */
   startEdit = (cell: CellPos, seed?: string, origin: "grid" | "bar" = "grid"): void => {
+    // A formula picking references on another sheet is not replaced (the shown sheet's cell is not editable).
+    if (this.editingElsewhere) return;
     const store = useEditStore.getState();
     const active = store.active;
     const known = active && active.sheet === this.sheet && active.cell.r === cell.r && active.cell.c === cell.c ? active.input : null;
     this.editOriginal = known;
     const session = ++this.editSession;
+    this.pickHome = null;
     if (seed !== undefined) {
-      store.start(cell, seed, origin);
+      store.start(cell, seed, origin, this.sheet);
       return;
     }
-    store.start(cell, known ?? "", origin);
+    store.start(cell, known ?? "", origin, this.sheet);
     if (known !== null) return;
     const info = this.info;
     if (!info) return;
@@ -617,12 +675,24 @@ export class AppController {
     // Counted before end() so the shell's "edited" flag does not blink off.
     this.committing++;
     try {
+      // References picked on another sheet: back to the edited cell's sheet
+      // first (AOO ScInputHandler::EnterHandler), so the input, its undo
+      // selection and a sheet group all belong to that sheet.
+      const homeSel = this.pickHome;
+      const editSheet = useEditStore.getState().sheet;
+      if (editSheet !== null && !this.sheetExists(editSheet)) {
+        // The edited cell's sheet is gone (deleted meanwhile): nothing to commit into.
+        this.pickHome = null;
+        useEditStore.getState().end();
+        return false;
+      }
+      const away = this.returnToEditSheet();
       useEditStore.getState().end();
       const sheet = this.sheet;
       const unchanged = this.editOriginal !== null && edit.text === this.editOriginal;
       // Editing `{=…}` inside an array block re-enters the whole block.
       const active = useEditStore.getState().active;
-      const block = active && active.cell.r === edit.cell.r && active.cell.c === edit.cell.c ? active.arrayRange : null;
+      const block = !away && active && active.sheet === sheet && active.cell.r === edit.cell.r && active.cell.c === edit.cell.c ? active.arrayRange : null;
       const arrayOp = block && edit.text.trim().startsWith("{=") ? arrayFormulaOp(sheet, block, edit.text) : null;
       // apply() builds the transaction synchronously, so selectionBefore is the pre-move selection.
       const pending = unchanged
@@ -631,7 +701,13 @@ export class AppController {
           ? this.apply(t("msg.undo.arrayFormula", "Array formula"), [arrayOp])
           : this.apply(t("msg.undo.typing", "Typing"), this.typingOps(sheet, edit.cell, edit.text));
       if (pending) this.lastCommit = pending;
-      if (origin === "bar") {
+      // The formula bar (and a commit from another sheet, where the grid
+      // leaves its selection alone) moves the cursor here.
+      if (away) {
+        if (move !== "none") this.moveAfterCommitHome(homeSel?.selection ?? cellSelection(edit.cell), move, homeSel?.protectedNav ?? false);
+        else this.revealSoon(edit.cell);
+        this.focusGrid();
+      } else if (origin === "bar") {
         if (move !== "none") {
           const [dr, dc] = MOVES[move];
           const next = {
@@ -671,10 +747,195 @@ export class AppController {
   };
 
   cancelEdit = (): void => {
-    const origin = useEditStore.getState().origin;
+    const { origin, edit } = useEditStore.getState();
+    // Escape on another sheet returns to the edited cell (AOO ScInputHandler::CancelHandler).
+    const away = this.returnToEditSheet();
     useEditStore.getState().end();
-    if (origin === "bar") this.focusGrid();
+    if (away && edit) this.revealSoon(edit.cell);
+    if (origin === "bar" || away) this.focusGrid();
   };
+
+  // -- references across sheets (AOO reference input with SetTabNo) ---------------
+
+  /** The edited cell's selection and the sheet group, saved when the view left its sheet. */
+  private pickHome: { selection: Selection; group: number[]; protectedNav: boolean } | null = null;
+
+  private sheetExists(id: number): boolean {
+    return this.info?.sheets.some((s) => s.id === id) ?? false;
+  }
+
+  /**
+   * Enter / Tab committed from another sheet: the edited cell's selection
+   * steps as the grid would (within a multi-cell selection; on a protected
+   * sheet to the next unlocked cell, asked of the engine).
+   */
+  private moveAfterCommitHome(sel: Selection, move: Exclude<CommitMove, "none">, protectedNav: boolean): void {
+    const lim = { rows: LAST_ROW + 1, cols: LAST_COL + 1, pageRows: 1, pageCols: 1, used: null };
+    const set = (next: Selection) => {
+      useSelectionStore.getState().setSelection(next);
+      this.revealSoon(next.active);
+    };
+    const r = sel.range;
+    const single = r.r0 === r.r1 && r.c0 === r.c1;
+    if (protectedNav) {
+      void this.nextUnlocked(sel.active, move, single ? null : { ...r }).then(
+        (cell) => {
+          if (cell) set(single ? cellSelection(cell) : { range: { ...r }, active: cell, anchor: { ...cell } });
+          else this.revealSoon(sel.active);
+        },
+        () => this.revealSoon(sel.active),
+      );
+      return;
+    }
+    set(stepWithin(sel, move, lim));
+  }
+
+  /** The sheet of the open edit (the displayed sheet when idle). */
+  get editSheet(): number {
+    return useEditStore.getState().sheet ?? this.sheet;
+  }
+
+  /** The open edit's text, or `null` when no edit is open. */
+  get editText(): string | null {
+    return useEditStore.getState().edit?.text ?? null;
+  }
+
+  /** Whether a formula edit shows another sheet than its own (references picked there). */
+  get editingElsewhere(): boolean {
+    const st = useEditStore.getState();
+    return st.edit !== null && st.sheet !== null && st.sheet !== this.sheet;
+  }
+
+  /**
+   * Whether a sheet switch keeps the open edit (AOO `ScModule::IsFormulaMode`:
+   * text starting with `=`, `+` or `-`), showing the other sheet for picking
+   * references; other edits are committed first.
+   */
+  keepsEditAcrossSheets(): boolean {
+    const edit = useEditStore.getState().edit;
+    return edit !== null && isFormulaText(edit.text);
+  }
+
+  private sheetNameOf(id: number): string | null {
+    return this.info?.sheets.find((s) => s.id === id)?.name ?? null;
+  }
+
+  /**
+   * Shows `sheet` while a formula edit stays open (AOO ScTabControl::Select
+   * in reference mode: no InputEnterHandler, the tab selection untouched).
+   * `extend` (Shift+click on a tab, ⇧⌃PgDn) turns the last picked reference
+   * into a 3D one ending on `sheet`. Hidden sheets are ignored.
+   */
+  pickOnSheet(sheet: number, extend = false): void {
+    const st = useEditStore.getState();
+    const info = this.info;
+    const target = info?.sheets.find((s) => s.id === sheet);
+    if (!st.edit || !info || !target || target.hidden) return;
+    const home = st.sheet ?? this.sheet;
+    if (extend) this.extendPick3d(sheet);
+    if (sheet === this.sheet) return;
+    if (this.sheet === home && !this.pickHome) {
+      this.pickHome = {
+        selection: this.selection,
+        group: [...useDocStore.getState().groupSheets],
+        protectedNav: useV3Store.getState().protection?.sheetProtected === true,
+      };
+    }
+    const saved = this.pickHome;
+    if (sheet === home) {
+      // Back on the edited cell's sheet: its selection and group again, the editor over the cell.
+      this.pickHome = null;
+      this.viewSheet(sheet, saved?.selection ?? cellSelection(st.edit.cell), saved?.group ?? null);
+    } else {
+      // No cell cursor of its own: the selection only mirrors the edited cell's (hidden by the grid).
+      this.viewSheet(sheet, saved?.selection ?? cellSelection(st.edit.cell), null);
+    }
+    const homeName = this.sheetNameOf(home) ?? "";
+    const shown = target.name;
+    const cell = cellAddress(st.edit.cell.r, st.edit.cell.c);
+    this.grid?.ariaMirror.announce(
+      sheet === home
+        ? t("formulaUi.pickHome", "Editing {cell} on {sheet}", { cell, sheet: homeName })
+        : t("formulaUi.pickOther", "Editing {cell} on {sheet}, showing {other}", { cell, sheet: homeName, other: shown }),
+    );
+    if (useEditStore.getState().origin !== "bar") this.focusGrid();
+  }
+
+  /**
+   * Shift+click on a tab: the reference just picked (caret still at its end)
+   * becomes a 3D reference from its sheet to `sheet` (`Sheet1.A1:Sheet3.A1`,
+   * the first sheet in tab order first).
+   */
+  private extendPick3d(sheet: number): void {
+    const st = useEditStore.getState();
+    const edit = st.edit;
+    const ref = st.pointRef;
+    if (!edit || !ref || !st.pointSpan || edit.caret !== st.pointSpan.end) return;
+    this.pick3d(ref.sheet, sheet, ref.range);
+  }
+
+  /**
+   * Replaces the last pick with a reference over `range` on the sheets from
+   * `from` to `to` (tab order; one sheet gives a plain reference, named
+   * unless it is the edited cell's).
+   */
+  private pick3d(from: number, to: number, range: RangeDto): void {
+    const st = useEditStore.getState();
+    const edit = st.edit;
+    const info = this.info;
+    if (!edit || !info) return;
+    const order = info.sheets.map((s) => s.id);
+    const [a, b] = order.indexOf(from) <= order.indexOf(to) ? [from, to] : [to, from];
+    const home = st.sheet ?? this.sheet;
+    const nameA = a === b && a === home ? null : this.sheetNameOf(a);
+    const nameB = a === b ? null : this.sheetNameOf(b);
+    const res = applyPoint(edit.text, edit.caret, st.pointSpan, range, nameA, nameB);
+    if (!res) return;
+    st.replace(res.text, res.caret, res.span, a === b ? { sheet: a, range: { ...range } } : { sheet: a, sheet2: b, range: { ...range } });
+  }
+
+  /** A Shift+click on another sheet extending an earlier pick to 3D: that pick's sheet and range, until the drag ends. */
+  private pickAnchor3d: { sheet: number; range: RangeDto } | null = null;
+
+  /**
+   * Shows `sheet` without touching the open edit or the engine's active
+   * sheet (the view only): the grid source, the selection and the
+   * sheet-level state. `group` restores a sheet group (`null` keeps the
+   * current one).
+   */
+  private viewSheet(sheet: number, selection: Selection, group: number[] | null): void {
+    const doc = useDocStore.getState();
+    // Raw: setActiveSheet would drop a group without the shown sheet; the group belongs to the edited cell.
+    useDocStore.setState({ activeSheet: sheet });
+    // A restored group is normalised (sheets deleted or hidden meanwhile drop out).
+    if (group) useDocStore.getState().setGroup(group);
+    doc.source?.setSheet(sheet);
+    useSelectionStore.getState().setSelection(selection);
+    this.refreshSheetState();
+  }
+
+  /**
+   * Ends the view of another sheet: shows the edited cell's sheet again with
+   * its selection and group and tells the engine. Returns whether it did
+   * (the edit was elsewhere).
+   */
+  private returnToEditSheet(): boolean {
+    const st = useEditStore.getState();
+    const saved = this.pickHome;
+    this.pickHome = null;
+    if (!st.edit || st.sheet === null || (st.sheet === this.sheet && !saved)) return false;
+    const home = st.sheet;
+    if (!this.sheetExists(home)) return false;
+    this.viewSheet(home, saved?.selection ?? cellSelection(st.edit.cell), saved?.group ?? null);
+    this.syncActiveSheet(home);
+    return true;
+  }
+
+  /** Scrolls a cell into view once the grid shows the sheet just switched to. */
+  private revealSoon(cell: CellPos): void {
+    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (f: () => void) => setTimeout(f, 0);
+    raf(() => raf(() => this.grid?.scrollCellIntoView(cell)));
+  }
 
   deleteContents = (range: RangeDto): void => {
     // The grid reports the current range; clear every range of a multi-selection.
@@ -783,13 +1044,35 @@ export class AppController {
   // -- formula editing --------------------------------------------------------------
 
   /** Point mode: insert or replace the picked reference at the caret (both editors mirror it). */
-  onPointRange = (range: RangeDto, _phase: PointPhase): void => {
+  onPointRange = (range: RangeDto, phase: PointPhase, extend = false): void => {
     const st = useEditStore.getState();
     const edit = st.edit;
     if (!edit) return;
-    const res = applyPoint(edit.text, edit.caret, st.pointSpan, range);
+    // Shift+click on another sheet after a pick elsewhere (AOO ScTabView::UpdateRef
+    // with a new tab): a 3D reference from the earlier pick to this cell.
+    if (phase === "start") {
+      const ref = st.pointRef;
+      const atPick = st.pointSpan !== null && edit.caret === st.pointSpan.end;
+      this.pickAnchor3d = extend && ref && atPick && ref.sheet !== this.sheet ? { sheet: ref.sheet, range: { ...ref.range } } : null;
+    }
+    const anchor = this.pickAnchor3d;
+    if (anchor) {
+      if (phase === "end") this.pickAnchor3d = null;
+      const a = anchor.range;
+      this.pick3d(anchor.sheet, this.sheet, {
+        r0: Math.min(a.r0, range.r0),
+        c0: Math.min(a.c0, range.c0),
+        r1: Math.max(a.r1, range.r1),
+        c1: Math.max(a.c1, range.c1),
+      });
+      return;
+    }
+    // On another sheet the reference names it (`Sheet2.A1`), on the edited cell's own sheet not.
+    const shown = this.sheet;
+    const other = st.sheet !== null && st.sheet !== shown ? this.sheetNameOf(shown) : null;
+    const res = applyPoint(edit.text, edit.caret, st.pointSpan, range, other);
     if (!res) return;
-    st.replace(res.text, res.caret, res.span);
+    st.replace(res.text, res.caret, res.span, { sheet: shown, range: { ...range } });
   };
 
   /** Inserts `NAME(` for the identifier being typed. */
@@ -816,6 +1099,13 @@ export class AppController {
     if (this.w56.editorKey(e)) return true;
     const mod = e.metaKey || e.ctrlKey;
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (mod && !e.altKey && (e.key === "PageDown" || e.key === "PageUp") && this.keepsEditAcrossSheets()) {
+      // ⌃PgDn / ⌃PgUp show the next sheet for picking; with Shift the pick extends to it (3D).
+      const info = this.info;
+      const next = info ? stepVisible(info.sheets, this.sheet, e.key === "PageDown" ? 1 : -1, !e.shiftKey) : null;
+      if (next !== null) this.pickOnSheet(next, e.shiftKey);
+      return true;
+    }
     if (e.key === "Enter" && mod && e.shiftKey && !e.altKey) {
       void this.commitArray();
       return true;
@@ -1123,8 +1413,13 @@ export class AppController {
    * that sheet; one inside it (or with `keepGroup`) keeps it.
    */
   showSheet(sheet: number, focus = true, keepGroup = false): void {
+    if (useEditStore.getState().edit) {
+      // An edit showing another sheet goes back to its own first (its group and selection).
+      this.returnToEditSheet();
+      useEditStore.getState().end();
+    }
+    this.pickHome = null;
     const doc = useDocStore.getState();
-    if (useEditStore.getState().edit) useEditStore.getState().end();
     if (!keepGroup && !doc.groupSheets.includes(sheet)) doc.selectOnly(sheet);
     if (doc.activeSheet !== sheet) {
       const group = useDocStore.getState().groupSheets;
@@ -1135,6 +1430,12 @@ export class AppController {
     this.syncActiveSheet(sheet);
     doc.source?.setSheet(sheet);
     useSelectionStore.getState().reset();
+    this.refreshSheetState();
+    if (focus) this.focusGrid();
+  }
+
+  /** Re-reads the shown sheet's state: active cell info, filter, page setup, objects, outline. */
+  private refreshSheetState(): void {
     useDataStore.getState().setFilter(null);
     useV3Store.getState().reset();
     void this.refreshActive();
@@ -1142,7 +1443,6 @@ export class AppController {
     void this.v3.refreshSheet();
     this.w5.refreshSheet();
     this.w56.onSheet();
-    if (focus) this.focusGrid();
   }
 
   private pendingActive: { doc: DocId; sheet: number } | null = null;
@@ -1177,6 +1477,16 @@ export class AppController {
     const info = this.info;
     if (!info) return;
     const next = stepVisible(info.sheets, this.sheet, delta, true);
+    if (this.keepsEditAcrossSheets()) {
+      if (next !== null) this.pickOnSheet(next);
+      return;
+    }
+    if (useEditStore.getState().edit) {
+      void this.commitEdit("none").then((ok) => {
+        if (ok) this.stepSheet(delta);
+      });
+      return;
+    }
     useDocStore.getState().selectOnly(next ?? this.sheet);
     if (next !== null) this.showSheet(next);
   }
@@ -1208,6 +1518,21 @@ export class AppController {
    * the sheets from the active one to it.
    */
   clickTab(sheet: number, mods: { toggle?: boolean; range?: boolean } = {}): void {
+    // While a formula is edited the tab only shows the sheet for picking
+    // references (Shift extends the last pick to a 3D reference; ⌘ is
+    // ignored, the tab selection stays); any other edit is committed first
+    // (AOO ScTabControl::Select: InputEnterHandler unless in reference mode).
+    if (this.keepsEditAcrossSheets()) {
+      this.pickOnSheet(sheet, mods.range === true);
+      return;
+    }
+    if (useEditStore.getState().edit) {
+      // Switch only once the engine took the input (a validation Stop keeps the user here).
+      void this.commitEdit("none").then((ok) => {
+        if (ok) this.clickTab(sheet, mods);
+      });
+      return;
+    }
     const doc = useDocStore.getState();
     if (mods.range) doc.extendTo(sheet);
     else if (mods.toggle) doc.toggleSheet(sheet);
@@ -1993,9 +2318,13 @@ export class AppController {
     const st = useEditStore.getState();
     const edit = st.edit;
     if (!edit) return;
-    const origin = st.origin;
     const active = st.active;
-    const block = active && active.cell.r === edit.cell.r && active.cell.c === edit.cell.c ? active.arrayRange : null;
+    // From another sheet: the array goes over the edited cell's selection on its own sheet
+    // (the shown sheet's array block, in `active`, is not the edited cell's).
+    const away = this.returnToEditSheet();
+    if (away) this.revealSoon(edit.cell);
+    const origin = st.origin;
+    const block = !away && active && active.sheet === this.sheet && active.cell.r === edit.cell.r && active.cell.c === edit.cell.c ? active.arrayRange : null;
     const sel = this.selection.range;
     const inSel = edit.cell.r >= sel.r0 && edit.cell.r <= sel.r1 && edit.cell.c >= sel.c0 && edit.cell.c <= sel.c1;
     const range = block ?? (inSel ? { ...sel } : { r0: edit.cell.r, c0: edit.cell.c, r1: edit.cell.r, c1: edit.cell.c });

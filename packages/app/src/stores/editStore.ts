@@ -22,6 +22,17 @@ export interface ActiveInfo {
   arrayRange?: RangeDto | null;
 }
 
+/**
+ * The reference last picked by point mode: the sheet it was picked on (and
+ * the last sheet of a 3D pick) and its range, for Shift+click on a sheet tab
+ * (extend it to a 3D reference).
+ */
+export interface PointRef {
+  sheet: number;
+  sheet2?: number;
+  range: RangeDto;
+}
+
 interface Snapshot {
   text: string;
   caret: number;
@@ -33,6 +44,12 @@ export const EDIT_HISTORY = 200;
 export interface EditStoreState {
   edit: EditState | null;
   origin: EditOrigin | null;
+  /**
+   * The sheet the edit belongs to (the commit's target). While a formula is
+   * edited it may differ from the displayed sheet (references picked on
+   * another sheet, AOO's reference input across sheets); `null` when idle.
+   */
+  sheet: number | null;
   /** `cellEditInfo` of the active cell (may lag the selection briefly). */
   active: ActiveInfo | null;
   /** Editor-local history: past states (oldest first) and redo states. */
@@ -40,17 +57,20 @@ export interface EditStoreState {
   future: Snapshot[];
   /** The reference last inserted by point mode (replaced by the next pick). */
   pointSpan: { start: number; end: number } | null;
+  /** What the reference at `pointSpan` points at (sheet and range). */
+  pointRef: PointRef | null;
   /** The last history step was plain typing (the next keystroke joins it). */
   typing: boolean;
   /** Highlighted row of the function autocomplete list. */
   assistIndex: number;
   /** Autocomplete hidden for this identifier (Esc) until the text changes. */
   assistDismissed: string | null;
-  start(cell: CellPos, text: string, origin: EditOrigin): void;
+  /** Starts a session; `sheet` defaults to the current session's sheet (a restart from the formula bar). */
+  start(cell: CellPos, text: string, origin: EditOrigin, sheet?: number): void;
   /** Typing: records history (coalescing single-character steps). */
   change(text: string, caret?: number): void;
   /** A programmatic change (point mode, autocomplete): its own history step. */
-  replace(text: string, caret: number, pointSpan?: { start: number; end: number } | null): void;
+  replace(text: string, caret: number, pointSpan?: { start: number; end: number } | null, pointRef?: PointRef | null): void;
   undo(): boolean;
   redo(): boolean;
   setOrigin(origin: EditOrigin): void;
@@ -61,7 +81,7 @@ export interface EditStoreState {
   reset(): void;
 }
 
-const blank = { past: [] as Snapshot[], future: [] as Snapshot[], pointSpan: null, typing: false, assistIndex: 0, assistDismissed: null };
+const blank = { past: [] as Snapshot[], future: [] as Snapshot[], pointSpan: null, pointRef: null, typing: false, assistIndex: 0, assistDismissed: null };
 
 /** Whether `b` is one typed character more or less than `a` (coalesced in history). */
 function isSmallStep(a: string, b: string): boolean {
@@ -87,9 +107,11 @@ export function isPendingEdit(edit: Pick<EditState, "text"> | null | undefined, 
 export const useEditStore = create<EditStoreState>()((set, get) => ({
   edit: null,
   origin: null,
+  sheet: null,
   active: null,
   ...blank,
-  start: (cell, text, origin) => set({ edit: { cell: { ...cell }, text, caret: text.length }, origin, ...blank }),
+  start: (cell, text, origin, sheet) =>
+    set((s) => ({ edit: { cell: { ...cell }, text, caret: text.length }, origin, sheet: sheet ?? s.sheet, ...blank })),
   change: (text, caret) =>
     set((s) => {
       if (!s.edit) return {};
@@ -104,11 +126,12 @@ export const useEditStore = create<EditStoreState>()((set, get) => ({
         typing: small,
         future: [],
         pointSpan: null,
+        pointRef: null,
         assistDismissed: null,
         assistIndex: 0,
       };
     }),
-  replace: (text, caret, pointSpan = null) =>
+  replace: (text, caret, pointSpan = null, pointRef = null) =>
     set((s) => {
       if (!s.edit) return {};
       return {
@@ -116,6 +139,7 @@ export const useEditStore = create<EditStoreState>()((set, get) => ({
         past: [...s.past, { text: s.edit.text, caret: s.edit.caret }].slice(-EDIT_HISTORY),
         future: [],
         pointSpan,
+        pointRef: pointSpan ? pointRef : null,
         typing: false,
         assistIndex: 0,
       };
@@ -129,6 +153,7 @@ export const useEditStore = create<EditStoreState>()((set, get) => ({
       past: s.past.slice(0, -1),
       future: [...s.future, { text: s.edit.text, caret: s.edit.caret }],
       pointSpan: null,
+      pointRef: null,
       typing: false,
     });
     return true;
@@ -142,6 +167,7 @@ export const useEditStore = create<EditStoreState>()((set, get) => ({
       future: s.future.slice(0, -1),
       past: [...s.past, { text: s.edit.text, caret: s.edit.caret }],
       pointSpan: null,
+      pointRef: null,
       typing: false,
     });
     return true;
@@ -149,7 +175,7 @@ export const useEditStore = create<EditStoreState>()((set, get) => ({
   setOrigin: (origin) => set({ origin }),
   setAssist: (assistIndex) => set({ assistIndex }),
   dismissAssist: (assistDismissed) => set({ assistDismissed }),
-  end: () => set({ edit: null, origin: null, ...blank }),
+  end: () => set({ edit: null, origin: null, sheet: null, ...blank }),
   setActive: (active) => set({ active }),
-  reset: () => set({ edit: null, origin: null, active: null, ...blank }),
+  reset: () => set({ edit: null, origin: null, sheet: null, active: null, ...blank }),
 }));

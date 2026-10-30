@@ -34,6 +34,11 @@ export function GridHost() {
   const selection = useSelectionStore((s) => s.selection);
   const edit = useEditStore((s) => s.edit);
   const pointSpan = useEditStore((s) => s.pointSpan);
+  // A formula edit of another sheet's cell (references picked on this one).
+  const editSheet = useEditStore((s) => s.sheet);
+  const elsewhere = edit !== null && editSheet !== null && editSheet !== sheet;
+  const editSheetName = useDocStore((s) => (editSheet === null ? null : (s.info?.sheets.find((x) => x.id === editSheet)?.name ?? null)));
+  const sheetOrder = useDocStore((s) => s.info?.sheets);
   const zoom = useUiStore((s) => s.zoom);
   const resolved = useUiStore((s) => s.theme);
   // The canvas cannot use CSS variables: re-read the tokens when the theme flips.
@@ -42,8 +47,12 @@ export function GridHost() {
     return readTheme();
   }, [resolved]);
   const text = edit?.text ?? "";
-  const hl = useMemo(() => formulaHighlights(text, sheetName, resolved), [text, sheetName, resolved]);
-  const pointMode = edit !== null && isPointMode(edit.text, edit.caret, pointSpan);
+  const hl = useMemo(
+    () => formulaHighlights(text, sheetName, resolved, { editSheet: editSheetName ?? sheetName, order: sheetOrder?.map((x) => x.name) }),
+    [text, sheetName, resolved, editSheetName, sheetOrder],
+  );
+  // On another sheet every click picks (a click where no reference may go does nothing, it never commits there).
+  const pointMode = edit !== null && (elsewhere || isPointMode(edit.text, edit.caret, pointSpan));
   const active = useEditStore((s) => s.active);
   const cell = selection.active;
   const arrayRange = active && active.sheet === sheet && active.cell.r === cell.r && active.cell.c === cell.c ? (active.arrayRange ?? null) : null;
@@ -116,7 +125,7 @@ export function GridHost() {
 
   if (!source) return <div className={styles.host} data-testid="grid-loading" />;
   return (
-    <div className={styles.host} data-testid="grid" data-point-mode={pointMode ? "true" : undefined} data-split={split ? split.axis : undefined} data-page-break-preview={pageBreakPreview ? "true" : undefined}>
+    <div className={styles.host} data-testid="grid" data-point-mode={pointMode ? "true" : undefined} data-edit-elsewhere={elsewhere ? "true" : undefined} data-split={split ? split.axis : undefined} data-page-break-preview={pageBreakPreview ? "true" : undefined}>
       <GridComponent
         {...w5Props}
         {...splitProps}
@@ -130,6 +139,7 @@ export function GridHost() {
         selection={selection}
         edit={edit}
         pointMode={pointMode}
+        editElsewhere={elsewhere}
         refHighlights={hl.refs}
         editHighlights={hl.spans}
         arrayRange={arrayRange}

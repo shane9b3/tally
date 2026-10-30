@@ -279,6 +279,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | AutoInput | done | |
 | Function name suggestions while typing | done | Tab / Enter accepts |
 | Function tips in the input line | done | Signature with the current argument (`components/FormulaAssist.tsx` `signatureAt`); test `formulaEdit.test.ts` "shows the signature with the current argument" |
+| Picking references on other sheets while typing a formula | deviation (U26) | Done 2026-10-30: a tab click or ⌃PgDn/⌃PgUp shows the other sheet with the edit open, picks insert `Sheet2.A1`, Shift+click (cell or tab) builds `Sheet1.A1:Sheet3.A1`, Enter / Escape return to the edited cell (`controller.ts` `pickOnSheet`); tests `packages/app/test/crossSheetPick.test.ts`, `tests/e2e/cross-sheet-pick.spec.ts` |
 
 ### 24. Protection
 

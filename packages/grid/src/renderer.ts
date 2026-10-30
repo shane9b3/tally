@@ -246,6 +246,8 @@ export interface OverlayFrame extends MainFrame {
   editing: boolean;
   /** A chart or picture is selected: the cell selection and header highlight are not drawn. */
   objectSelected?: boolean;
+  /** The selection is not drawn (an edit of another sheet's cell picks references here). */
+  hideSelection?: boolean;
   /** Header gutter under the pointer. */
   hoverGutter: { axis: "col" | "row"; index: number } | null;
   /** Live resize: the axis, index and its new far edge (screen px). */
@@ -1360,7 +1362,7 @@ export class Renderer {
     ctx.clearRect(0, 0, geo.width, geo.height);
     const range = selection.range;
     // While a chart or picture is selected the cell cursor is not shown (as in Calc).
-    const hideSel = f.objectSelected === true;
+    const hideSel = f.objectSelected === true || f.hideSelection === true;
     const others = hideSel ? [] : (selection.others ?? []);
     const ranges = hideSel ? [] : [...others, range];
     const lw = Math.max(1, Math.round(dpr)) / dpr;

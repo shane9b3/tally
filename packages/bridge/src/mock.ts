@@ -5,7 +5,7 @@
  * It is deliberately tiny and is NOT a spreadsheet engine:
  * - inputs are recognised as number, TRUE/FALSE, formula or text;
  * - formulas support only `=ref`, `=a OP b` (OP one of + - * /, operands a
- *   cell reference or a number) and `=SUM|COUNT|AVERAGE|MIN|MAX(range)`,
+ *   cell reference, optionally on a named sheet (`Sheet2.B2`), or a number) and `=SUM|COUNT|AVERAGE|MIN|MAX(range)`,
  *   where the range may name a sheet (`Sheet2.A1:B2`) or span sheets in
  *   tab order (`Sheet1.A1:Sheet3.A1`, a 3D reference); anything else is
  *   `#NAME?`;
@@ -369,15 +369,17 @@ function kindOf(v: Scalar): ValueKind {
   return "error";
 }
 
-const OPERAND = String.raw`(\$?[A-Za-z]{1,3}\$?\d{1,7}|[+-]?(?:\d+\.?\d*|\.\d+))`;
-const BINARY_RE = new RegExp(String.raw`^${OPERAND}\s*([-+*/])\s*${OPERAND}$`);
-const SINGLE_RE = new RegExp(String.raw`^${OPERAND}$`);
+/** An unquoted sheet name: a letter or `_`, then letters, digits or `_` (Unicode, as the engine's identifiers). */
+const SHEET_NAME = String.raw`[\p{Alphabetic}_][\p{Alphabetic}\p{Nd}\p{Nl}\p{No}_]*`;
+const OPERAND = String.raw`((?:\$?(?:'(?:[^']|'')+'|${SHEET_NAME})\.)?\$?[A-Za-z]{1,3}\$?\d{1,7}|[+-]?(?:\d+\.?\d*|\.\d+))`;
+const BINARY_RE = new RegExp(String.raw`^${OPERAND}\s*([-+*/])\s*${OPERAND}$`, "u");
+const SINGLE_RE = new RegExp(String.raw`^${OPERAND}$`, "u");
 const SUM_RE = /^SUM\(\s*([$A-Za-z0-9]+(?::[$A-Za-z0-9]+)?)\s*\)$/i;
 /** `FN(ref)` for the aggregates the mock evaluates. */
 const AGG_RE = /^(SUM|COUNT|AVERAGE|MIN|MAX)\(\s*(.+?)\s*\)$/i;
 /** An optional sheet qualifier (`$Sheet1.`, `'My Sheet'.`) and a cell. */
-const QUAL_CELL = String.raw`(?:\$?('(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_]*)\.)?(\$?[A-Za-z]{1,3}\$?\d{1,7})`;
-const AGG_REF_RE = new RegExp(String.raw`^${QUAL_CELL}(?::${QUAL_CELL})?$`);
+const QUAL_CELL = String.raw`(?:\$?('(?:[^']|'')+'|${SHEET_NAME})\.)?(\$?[A-Za-z]{1,3}\$?\d{1,7})`;
+const AGG_REF_RE = new RegExp(String.raw`^${QUAL_CELL}(?::${QUAL_CELL})?$`, "u");
 
 /**
  * Parses an aggregate's reference: a range on the formula's sheet, on a
@@ -494,6 +496,10 @@ class Evaluator {
   private operand(text: string): Scalar {
     const pos = parseA1(text);
     if (pos) return this.value(pos.r, pos.c);
+    // A cell on a named sheet (`Sheet2.B2`, `'My Sheet'.A1`).
+    const ref = text.includes(".") && !NUMBER_RE.test(text) ? parseSheetRange(text, this.sheet, this.sheets) : null;
+    if (ref && ref.sheets.length === 1 && ref.sheets[0]) return this.on(ref.sheets[0]).value(ref.range.r0, ref.range.c0);
+    if (text.includes(".") && !NUMBER_RE.test(text)) return { error: "#REF!" };
     if (NUMBER_RE.test(text)) return Number(text);
     return { error: "#NAME?" };
   }

@@ -34,6 +34,8 @@ export class CellEditor {
   private mirrorKey = "";
   private textColor = "";
   open = false;
+  /** Open but not drawn (the edited cell is on another sheet); keys still go to the textarea. */
+  hidden = false;
   mode: EditMode = "enter";
   cell: CellPos | null = null;
   composing = false;
@@ -94,7 +96,7 @@ export class CellEditor {
   }
 
   private get mirrored(): boolean {
-    return this.open && this.highlights.length > 0;
+    return this.open && !this.hidden && this.highlights.length > 0;
   }
 
   /** Rebuilds the mirror's text runs (cheap no-op when unchanged). */
@@ -215,13 +217,18 @@ export class CellEditor {
    * visible editor over the edited cell. Cheap when nothing changed.
    */
   layout(geo: Geometry, active: CellPos, info: EditorStyleInfo, measurer: TextMeasurer): void {
-    const cell = this.open && this.cell ? this.cell : active;
+    const cell = this.open && this.cell && !this.hidden ? this.cell : active;
     const rect = geo.cellBox(cell.r, cell.c);
     const zoom = geo.zoom;
-    if (!this.open) {
+    if (!this.open || this.hidden) {
+      if (this.open) {
+        // Parked like the idle editor: typing still reaches it, nothing is drawn.
+        this.setHidden();
+        this.renderMirror();
+      }
       const x = clampN(rect.x, geo.headerW, Math.max(geo.headerW, geo.width - 2));
       const y = clampN(rect.y, geo.headerH, Math.max(geo.headerH, geo.height - 2));
-      const key = `idle:${x}:${y}:${rect.h}`;
+      const key = `${this.open ? "hidden" : "idle"}:${x}:${y}:${rect.h}`;
       if (key === this.lastBox) return;
       this.lastBox = key;
       const s = this.el.style;

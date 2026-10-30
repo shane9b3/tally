@@ -35,9 +35,11 @@ function Pill({ command, label, icon, children, active, iconOnly, tooltip }: Pil
   useDocStore((s) => s.info?.sheets.length);
   useDocStore((s) => s.groupSheets.length);
   useEditStore((s) => s.edit !== null);
+  useDocStore((s) => s.activeSheet);
   const cmd = ctl.registry.get(command);
   const enabled = ctl.registry.isEnabled(command);
-  const tip = !enabled && cmd?.reason ? cmd.reason : [tooltip ?? label, cmd?.shortcut].filter(Boolean).join("  ");
+  const reason = enabled ? undefined : ctl.registry.reasonFor(command);
+  const tip = reason ? reason : [tooltip ?? label, cmd?.shortcut].filter(Boolean).join("  ");
   return (
     <button
       type="button"

@@ -1334,6 +1334,8 @@
   "formulaUi.noNames": "Aún no hay nombres (Datos ▸ Definir nombre…)",
   "formulaUi.sheetOnly": "Solo {sheet}",
   "formulaUi.arrayEnter": "Fórmula matricial {range} · ⌃⇧↩ para introducir",
+  "formulaUi.pickHome": "Editando {cell} en {sheet}",
+  "formulaUi.pickOther": "Editando {cell} en {sheet}, mostrando {other}",
   "formulaUi.arrayFormula": "Fórmula matricial {range}",
   "formulaUi.argumentsNone": "Argumentos: ninguno.",
   "shell.sortTip": "Ordenar la tabla por la columna activa",
