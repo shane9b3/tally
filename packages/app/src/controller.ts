@@ -91,6 +91,7 @@ import { canReuseWindow, type WindowShell } from "./windows";
 import { W56Features } from "./data/w56";
 import { t } from "./i18n";
 import { useCsvPromptStore } from "./csvExport";
+import { displayTitle, lockedMessage, parseLock, readOnlyGate, ReadOnlyFeature } from "./readOnly";
 
 export interface ControllerOptions {
   /** Inside Tauri: the native menu owns its accelerators. */
@@ -168,6 +169,8 @@ export class AppController {
   readonly w56: W56Features;
   /** Document tabs (tabs.ts): the strip's and the Window menu's actions. */
   readonly tabs: TabsFeature;
+  /** Read-only mode and document locks (readOnly.ts). */
+  readonly readOnly: ReadOnlyFeature;
 
   constructor(
     readonly client: EngineClientV3,
@@ -178,9 +181,13 @@ export class AppController {
     this.w5 = new W5Features(this);
     this.w56 = new W56Features(this);
     this.tabs = new TabsFeature(this);
+    this.readOnly = new ReadOnlyFeature(this);
+    // A read-only document runs only viewing, copying, finding, printing
+    // and Save As (AOO disables the editing slots).
+    this.registry.addGate(readOnlyGate(() => this.readOnly.active));
     // While a formula picks references on another sheet only editing and
     // viewing commands run: everything else would act on the shown sheet.
-    this.registry.setGate({
+    this.registry.addGate({
       active: () => this.editingElsewhere,
       allow: (id) => PICKING_COMMANDS.has(id) || id.startsWith("window."),
       reason: () => t("msg.reason.finishEditing", "Finish editing the cell first"),
@@ -323,6 +330,12 @@ export class AppController {
     const err = errorOf(e);
     if (err.code === CANCELLED) return;
     console.warn("tally:", err);
+    // Someone else's lock (a Save As target): AOO's wording, not the JSON.
+    const lock = parseLock(err);
+    if (lock) {
+      useUiStore.getState().pushToast("error", lockedMessage(lock));
+      return;
+    }
     useUiStore.getState().pushToast("error", friendlyError(err.code, err.message));
   };
 
@@ -628,6 +641,8 @@ export class AppController {
   startEdit = (cell: CellPos, seed?: string, origin: "grid" | "bar" = "grid"): void => {
     // A formula picking references on another sheet is not replaced (the shown sheet's cell is not editable).
     if (this.editingElsewhere) return;
+    // A read-only document: AOO's "Document opened in read-only mode." (typing does nothing).
+    if (this.readOnly.refuseEdit(origin === "bar" && seed === undefined)) return;
     const store = useEditStore.getState();
     const active = store.active;
     const known = active && active.sheet === this.sheet && active.cell.r === cell.r && active.cell.c === cell.c ? active.input : null;
@@ -1632,7 +1647,8 @@ export class AppController {
     // The first change makes the start-up blank workbook a real document (no window reuse).
     if (edited) this.pristineDoc = null;
     const doc = info?.doc ?? null;
-    const title = info?.title ?? null;
+    // AOO appends " (read-only)" to the title of a read-only document.
+    const title = info ? displayTitle(info) : null;
     if ((edited === this.reportedEdited && doc === this.reportedDoc && title === this.reportedTitle) || !this.closeShell.setDocumentEdited) return;
     this.reportedEdited = edited;
     this.reportedDoc = doc;
@@ -1702,6 +1718,16 @@ export class AppController {
    * Resolves `false` when the commit was refused (the Stop alert is up) or
    * an editor is still open, so the replace/close aborts.
    */
+  /**
+   * Commits typed text (or ends an unchanged edit) and waits for the
+   * commit to land: `false` when the commit was refused (Edit Mode).
+   */
+  settleEdits = async (): Promise<boolean> => {
+    if (!(await this.commitPendingEdit())) return false;
+    await this.lastCommit;
+    return true;
+  };
+
   private async commitPendingEdit(): Promise<boolean> {
     if (!useEditStore.getState().edit) return true;
     if (!this.pendingEdit) {
@@ -1855,11 +1881,16 @@ export class AppController {
     }
   };
 
-  /** File ▸ Open…: a file already open in a window brings that window to the front (the shell answers `null`). */
-  openDialog = async (): Promise<void> => {
+  /**
+   * File ▸ Open… (File ▸ Open Read-Only… with `readOnly`): a file already
+   * open in a window brings that window to the front (the shell answers
+   * `null`); a file someone else has locked asks AOO's "Document in Use"
+   * question first.
+   */
+  openDialog = async (readOnly = false): Promise<void> => {
     if (!(await this.replaceGuard())) return;
     try {
-      const info = await this.shell.openDialog();
+      const info = await this.shell.openDialog(readOnly).catch((e: unknown) => this.readOnly.resolveLockedOpen(e));
       if (info) await this.present(info);
     } catch (e) {
       this.notifyError(e);
@@ -1869,7 +1900,8 @@ export class AppController {
   openRecent = async (path: string): Promise<void> => {
     if (!(await this.replaceGuard())) return;
     try {
-      await this.present(await this.client.open(path));
+      const info = await this.client.open(path).catch((e: unknown) => this.readOnly.resolveLockedOpen(e));
+      if (info) await this.present(info);
     } catch (e) {
       this.notifyError(e);
     }

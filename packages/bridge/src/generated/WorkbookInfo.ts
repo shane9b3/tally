@@ -46,4 +46,16 @@ warnings: Array<string>,
  * references, linked sheets); absent or `null` when there are none
  * (v0.6).
  */
-externalLinks?: Array<ExternalLinkWarning> | null, };
+externalLinks?: Array<ExternalLinkWarning> | null, 
+/**
+ * The document is open read-only (AOO's read-only medium or
+ * "Edit Mode" off): the engine refuses every edit with code
+ * `read_only`, and Save to its own file is refused.
+ */
+readOnly?: boolean, 
+/**
+ * The file asks to be opened read-only (ODS `settings.xml`
+ * `LoadReadonly`, AOO's File ▸ Properties ▸ Security "Open file
+ * read-only"); kept and written back on save.
+ */
+loadReadonly?: boolean, };

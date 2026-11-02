@@ -369,24 +369,9 @@ pub fn write_atomically(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
     result
 }
 
-fn file_title(path: &Path) -> String {
-    path.file_name().map_or_else(
-        || "Untitled".to_owned(),
-        |n| n.to_string_lossy().into_owned(),
-    )
-}
-
-impl DocumentService for EngineService {
-    fn new_workbook(&mut self, template: Option<&str>) -> Result<WorkbookInfo> {
-        let (wb, title) = match template {
-            None => (Workbook::new(), "Untitled"),
-            Some(t) => templates::build(t)
-                .ok_or_else(|| ApiError::not_found(format!("no template {t:?}")))?,
-        };
-        Ok(self.open_workbook(wb, title))
-    }
-
-    fn open(&mut self, path: &Path) -> Result<WorkbookInfo> {
+impl EngineService {
+    /// Reads and decodes `path` into a document with id `id` (not filed).
+    fn load_file(&self, id: DocId, path: &Path) -> Result<Document> {
         let meta =
             std::fs::metadata(path).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
         if meta.len() > MAX_FILE_BYTES {
@@ -437,13 +422,63 @@ impl DocumentService for EngineService {
             decoded.recognize_text,
             decoded.evaluate_formulas,
         );
-        let id = self.next_doc_id();
         let budget = RecalcBudget::within(self.open_max_evaluated, self.open_time_limit);
         let mut doc = Document::with_budget(id, wb, &file_title(path), &budget);
         doc.path = Some(path.to_path_buf());
         if let Some(o) = decoded.csv_options {
             doc.csv_options = o;
         }
+        Ok(doc)
+    }
+
+    /// The document, if it may be edited; [`ApiError::READ_ONLY`] if it is
+    /// read-only.
+    fn editable(&mut self, doc: DocId) -> Result<&mut Document> {
+        let d = self.document_mut(doc)?;
+        if d.read_only {
+            return Err(read_only_error());
+        }
+        Ok(d)
+    }
+}
+
+/// The error of an edit to a read-only document (AOO's `STR_READONLYERR`).
+pub fn read_only_error() -> ApiError {
+    ApiError::new(ApiError::READ_ONLY, "Document opened in read-only mode.")
+}
+
+/// `true` if `a` and `b` name the same file (as given, or canonicalized).
+fn same_file(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
+}
+
+fn file_title(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || "Untitled".to_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+impl DocumentService for EngineService {
+    fn new_workbook(&mut self, template: Option<&str>) -> Result<WorkbookInfo> {
+        let (wb, title) = match template {
+            None => (Workbook::new(), "Untitled"),
+            Some(t) => templates::build(t)
+                .ok_or_else(|| ApiError::not_found(format!("no template {t:?}")))?,
+        };
+        Ok(self.open_workbook(wb, title))
+    }
+
+    fn open(&mut self, path: &Path) -> Result<WorkbookInfo> {
+        let id = self.next_doc_id();
+        let mut doc = self.load_file(id, path)?;
+        // AOO opens a file whose `LoadReadonly` is set read-only (its
+        // "read-only UI"; Edit Mode switches it off without a reload).
+        doc.read_only = doc.wb.load_readonly;
         let info = doc.info();
         // Warnings are delivered once, with the open result.
         doc.warnings.clear();
@@ -465,6 +500,11 @@ impl DocumentService for EngineService {
                 .clone()
                 .ok_or_else(|| ApiError::invalid_argument("the document has no file path yet"))?,
         };
+        // A read-only document is never written over its own file (AOO
+        // disables Save); Save As to another file makes it editable.
+        if d.read_only && d.path.as_deref().is_some_and(|p| same_file(p, &target)) {
+            return Err(read_only_error());
+        }
         let warnings = self.write_doc(doc, &target, format)?;
         let d = self
             .docs
@@ -473,6 +513,7 @@ impl DocumentService for EngineService {
         d.title = file_title(&target);
         d.path = Some(target);
         d.dirty = false;
+        d.read_only = false;
         let mut info = d.info();
         // Save warnings (CSV: unquoted delimiters, unmappable characters).
         info.warnings.extend(warnings);
@@ -485,6 +526,9 @@ impl DocumentService for EngineService {
         d.path = None;
         d.title = "Untitled".to_owned();
         d.dirty = dirty;
+        // A copy (recovery, a template, AOO's Open Copy) is editable.
+        d.read_only = false;
+        info.read_only = false;
         info.path = None;
         info.title = d.title.clone();
         info.dirty = dirty;
@@ -497,6 +541,48 @@ impl DocumentService for EngineService {
 
     fn is_dirty(&self, doc: DocId) -> Result<bool> {
         Ok(self.document(doc)?.dirty)
+    }
+
+    fn set_read_only(&mut self, doc: DocId, read_only: bool) -> Result<WorkbookInfo> {
+        let d = self.document_mut(doc)?;
+        if read_only && d.dirty {
+            // AOO saves or discards (a reload) before switching to read-only.
+            return Err(ApiError::invalid_argument(
+                "save or discard the changes before switching to read-only",
+            ));
+        }
+        d.read_only = read_only;
+        Ok(d.info())
+    }
+
+    fn reload(&mut self, doc: DocId) -> Result<WorkbookInfo> {
+        let old = self.document(doc)?;
+        let path = old
+            .path
+            .clone()
+            .ok_or_else(|| ApiError::invalid_argument("the document has no file to reload"))?;
+        let (read_only, version, title) = (old.read_only, old.version, old.title.clone());
+        let mut fresh = self.load_file(doc, &path)?;
+        fresh.read_only = read_only;
+        // Versions only grow, so the UI never mistakes the reloaded cells
+        // for cached ones.
+        fresh.version = version.saturating_add(1);
+        fresh.title = title;
+        let info = fresh.info();
+        fresh.warnings.clear();
+        if let Ok(cache) = self.chart_cache.get_mut() {
+            cache.forget(doc.0);
+        }
+        self.docs.insert(doc.0, fresh);
+        Ok(info)
+    }
+
+    fn detach_path(&mut self, doc: DocId) -> Result<WorkbookInfo> {
+        let d = self.document_mut(doc)?;
+        d.path = None;
+        d.title = "Untitled".to_owned();
+        d.read_only = false;
+        Ok(d.info())
     }
 
     fn save_copy(&self, doc: DocId, path: &Path, format: FileFormat) -> Result<()> {
@@ -567,19 +653,16 @@ impl DocumentService for EngineService {
     fn apply(&mut self, doc: DocId, tx: Transaction) -> Result<ApplyResult> {
         // A clone of the Arc: the clipboard lock is not held during the apply.
         let clip = leaf(&self.shared.clipboard).clone();
-        let d = self
-            .docs
-            .get_mut(&doc.0)
-            .ok_or_else(|| not_found_doc(doc))?;
+        let d = self.editable(doc)?;
         Ok(d.apply(tx, clip.as_deref()))
     }
 
     fn undo(&mut self, doc: DocId) -> Result<ApplyResult> {
-        Ok(self.document_mut(doc)?.undo())
+        Ok(self.editable(doc)?.undo())
     }
 
     fn redo(&mut self, doc: DocId) -> Result<ApplyResult> {
-        Ok(self.document_mut(doc)?.redo())
+        Ok(self.editable(doc)?.redo())
     }
 
     fn selection_stats(&self, doc: DocId, sel: &SelectionDto) -> Result<SelectionStats> {
@@ -904,7 +987,7 @@ impl DocumentService for EngineService {
     }
 
     fn set_locale(&mut self, doc: DocId, locale: &str) -> Result<ApplyResult> {
-        self.document_mut(doc)?.set_locale(locale)
+        self.editable(doc)?.set_locale(locale)
     }
 
     // ----- v0.5 (W5-2) ----------------------------------------------------

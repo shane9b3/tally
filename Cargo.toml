@@ -59,6 +59,8 @@ tauri-plugin-dialog = "=2.8.3"
 # macOS only: the window's "document edited" dot (`closing.rs`), through the
 # safe objc2 bindings Tauri's own tao already links (same versions as Cargo.lock).
 objc2 = { version = "=0.6.5", default-features = false, features = ["std"] }
+# O_NOFOLLOW / O_NONBLOCK constants for reading foreign lock files (tally-desktop doclock.rs; no unsafe).
+libc = "=0.2.191"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow"] }
 # macOS only, tally-macos-terminate: queue AppKit calls on the main run loop

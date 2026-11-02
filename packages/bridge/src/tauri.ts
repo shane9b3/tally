@@ -90,7 +90,7 @@ import type { TraceDto } from "./generated/TraceDto";
 import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
 import type { CellsOptions } from "./generated/CellsOptions";
 import { isApiError, type EngineClientV4, type SheetId, type Unsubscribe } from "./client";
-import type { FontFamilyInfo, ShellClient, TemplateInfo } from "./shell";
+import type { EditModeOption, EditModeResult, FontFamilyInfo, OpenMode, ShellClient, TemplateInfo } from "./shell";
 
 export { CANCELLED, type FontFamilyInfo, type TemplateInfo } from "./shell";
 
@@ -122,6 +122,8 @@ export const COMMANDS = {
   save: "wb_save",
   saveCsv: "wb_save_csv",
   close: "wb_close",
+  // Read-only mode and lock files: apps/desktop/src-tauri/src/{commands,doclock}.rs
+  setReadOnly: "wb_set_read_only",
   sheetLayout: "sheet_layout",
   cells: "get_cells",
   styles: "get_styles",
@@ -260,6 +262,9 @@ export const V4_METHODS = [
 /** The W5-6 shell commands (prefs, autosave, templates, UI language); `w56shell.test.ts` covers them. */
 export const W56_SHELL_COMMANDS = ["getPrefs", "setPrefs", "autosave", "listRecovery", "recoverSnapshot", "discardRecovery", "saveAsTemplate", "listUserTemplates", "newFromUserTemplate", "setUiLanguage", "clearRecent"] as const satisfies readonly (keyof typeof COMMANDS)[];
 
+/** The read-only mode's shell commands; `readOnly.test.ts` covers them. */
+export const READ_ONLY_SHELL_COMMANDS = ["setReadOnly"] as const satisfies readonly (keyof typeof COMMANDS)[];
+
 /** The unsaved-changes guard's shell commands (closing.rs); `unsaved.test.ts` covers them. */
 export const CLOSE_SHELL_COMMANDS = ["setDocumentEdited", "confirmClose", "cancelQuit"] as const satisfies readonly (keyof typeof COMMANDS)[];
 
@@ -371,6 +376,16 @@ export class TauriClient implements EngineClientV4, ShellClient {
     return this.call(COMMANDS.open, { path });
   }
 
+  /** `wb_open(path, mode)`: the lock dialog's answer, or File ▸ Open Read-Only of a recent file. */
+  openWith(path: string, mode: OpenMode): Promise<WorkbookInfo> {
+    return this.call(COMMANDS.open, { path, mode });
+  }
+
+  /** `wb_set_read_only`: Edit ▸ Edit Mode. */
+  setReadOnly(doc: DocId, readOnly: boolean, mode: EditModeOption | null = null): Promise<EditModeResult> {
+    return this.call(COMMANDS.setReadOnly, { doc, readOnly, mode });
+  }
+
   /**
    * `wb_save`. The webview never chooses arbitrary paths: `path === null`
    * saves to the document's file (asking only if it has none); any other
@@ -387,9 +402,9 @@ export class TauriClient implements EngineClientV4, ShellClient {
 
   // -- shell-only ------------------------------------------------------------
 
-  /** Native Open dialog, then open; `null` when cancelled. */
-  openDialog(): Promise<WorkbookInfo | null> {
-    return this.call(COMMANDS.openDialog);
+  /** Native Open dialog, then open (read-only when asked); `null` when cancelled. */
+  openDialog(readOnly = false): Promise<WorkbookInfo | null> {
+    return readOnly ? this.call(COMMANDS.openDialog, { readOnly: true }) : this.call(COMMANDS.openDialog);
   }
 
   /** `wb_save` with explicit dialog control; rejects with code `cancelled` if dismissed. */

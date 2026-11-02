@@ -736,6 +736,117 @@ Details for §7 above.
 | Engine calls run on `tauri::async_runtime::spawn_blocking` workers, so a long open or recalc never parks the async runtime's workers (which the dialog commands also need). | `src/commands.rs` (`blocking`) |
 | Saving is atomic: the file is written to a temporary file in the same directory, `fsync`ed, then renamed over the target (keeping its permissions). A crash or full disk leaves the original intact, and a symlink at the target is replaced, not written through. Test: `tally-engine::security::files::save_is_atomic_and_does_not_follow_symlinks`. | `tally-engine` `service::write_atomically` |
 
+### Document lock files (`src/doclock.rs`)
+
+While a document is open for editing, Tally keeps an Apache OpenOffice /
+LibreOffice lock file next to it, so OpenOffice shows its "Document in Use"
+question instead of letting two programs overwrite each other's work, and
+Tally asks the same question about OpenOffice's locks (AOO 4.1:
+`svl/source/misc/documentlockfile.cxx`, `sfx2/source/doc/docfile.cxx`
+`LockOrigFileOnDemand`).
+
+- **Where.** `<dir>/.~lock.<file name>#`, where `<dir>` is the directory of
+  the document *after* symbolic links are resolved (AOO's `ResolveLinks`), so
+  the lock sits next to the real file. The document path itself is always one
+  the shell already allows (opened from the allowlist above, or chosen in a
+  Save dialog); the lock path is derived from it and never comes from the
+  webview. No new arbitrary-path write exists: the only files written are the
+  lock and a temporary `.~lock.<name>#.tally-<pid>-<n>` renamed over it.
+- **What.** One entry, UTF-8, no newline: `name,system user,host,DD.MM.YYYY
+  HH:MM,user installation URL;` with `\`, `,` and `;` escaped by a
+  backslash. Tally writes the account's full name (`/usr/bin/id -F` on
+  macOS, the passwd GECOS field via `/usr/bin/getent` on Linux; empty
+  elsewhere), the account name (`USER`/`LOGNAME`, else `/usr/bin/id -un`),
+  the host name (`/bin/hostname`; `COMPUTERNAME` on Windows), local time,
+  and its own config directory as a `file://` URL. Those are what
+  OpenOffice writes too; they reveal the user's name, host and home path to
+  anyone who can read the document's directory, exactly as OpenOffice's
+  lock does. The commands run once, by absolute path with a fixed argv and
+  no shell, lazily on a worker thread at the first lock (never on the main
+  thread). If the account name stays unknown, no lock is ever treated as
+  Tally's own (none is taken over or removed).
+- **How it is written.** `O_CREAT|O_EXCL` (`create_new`), mode 0644 before
+  the umask, so an existing lock or a planted symbolic link is never
+  followed or overwritten; replacing our own stale lock writes a new file
+  and renames it over the old one (a link there is replaced, not written
+  through). A directory Tally cannot write into (read-only folder or
+  volume) means no lock and no error: the document still opens for editing,
+  as in AOO with its default settings (`UseDocumentSystemFileLocking`).
+  Writing a lock never fails an open or a save.
+- **Reading another lock.** Only a regular file is read: `symlink_metadata`
+  first, then `open` with `O_NOFOLLOW | O_NONBLOCK` (std's
+  `OpenOptionsExt::custom_flags`; the constants come from the `libc` crate,
+  no FFI call), then `fstat` of the opened file, so a link or FIFO swapped
+  in between can neither redirect nor block the read. At most 32,000 bytes
+  are read (AOO's buffer; larger is malformed). A malformed lock, a link, a
+  directory or a FIFO at the lock path counts as "locked by Unknown User".
+  Owner, time and file name from a lock are shown without control or
+  Unicode format characters (bidi marks, embeddings, overrides, isolates,
+  zero-width characters, tags), the owner capped at 64 characters, and in
+  `<bdi>` elements (Unicode isolates in toasts), so a crafted lock cannot
+  reorder or disguise the question.
+- **Never deleting someone else's lock.** On close, Save As to another
+  file, switching to read-only and quit (`RunEvent::Exit`), Tally removes the
+  lock only if it still names Tally's own system user, host and user URL
+  (AOO's `DocumentLockFile::RemoveFile` check). Anything else is left alone.
+  To avoid a check-then-delete race the lock is renamed to a private name
+  next to it, checked there, and deleted only if ours; otherwise it is
+  hard-linked back (which never overwrites a lock created meanwhile; if that
+  fails the file stays under its private name and is logged). Residuals:
+  between the rename and the link-back the lock is briefly absent; and
+  replacing our own stale lock (check, then rename a new file over it) would
+  replace a lock another program wrote in that instant.
+- **Tally against itself.** One file is opened by at most one document:
+  the "already open" check and a reservation of the canonical path are one
+  step under a lock, so two concurrent opens cannot both lock it (the loser
+  is `cancelled`). A lock held by another document is never taken over,
+  and Save As onto a file another Tally document has open (locked or
+  read-only) is refused with AOO's "locked for editing by <you>". A second
+  Tally process is detected by an exclusive advisory lock on
+  `<config dir>/instance.lock` (std `File::try_lock`, released by the OS on
+  exit or crash); while another Tally of the same user runs, a lock with
+  Tally's own identity may be live, so it is asked about ("locked by
+  yourself on a different system") instead of being taken over as a crash
+  leftover, and Save As onto it is refused.
+  A crash leaves Tally's lock behind, like AOO's; the next open by the same
+  user, host and installation takes it over silently (AOO does the same for
+  its own stale lock). The one exception is the user's explicit "Open" in
+  "locked for editing by yourself on a different system", which replaces a
+  lock of the *same* OS account (AOO's `OverwriteOwnLockFile`); a lock of
+  any other account can only be answered with Open Read-Only, Open Copy or
+  Cancel.
+- **Save As onto a locked file** is refused (`locked`, AOO's access denied),
+  so Tally never writes over a file another program has open.
+- **Autosave and recovery** snapshots live in the app's own directory and
+  are unaffected; a recovered document has no path and takes no lock.
+- Tests: `tally-desktop::doclock::tests::*` (format round trip against an
+  AOO line, escaping of `,` `;` `\` and Unicode, malformed locks, path
+  derivation and symlinks, unwritable directory, a symlink at the lock path,
+  foreign locks never removed, own stale lock, Finder-locked files),
+  `tally-desktop::tests::open_reports_a_foreign_lock_and_its_answers_work`,
+  `open_locks_close_unlocks_and_save_as_moves_the_lock`,
+  `our_stale_lock_is_taken_over_and_own_lock_elsewhere_is_asked`,
+  `edit_mode_round_trip_and_unwritable_files`,
+  `save_as_onto_a_file_open_in_another_document_is_refused`,
+  `concurrent_opens_of_one_file_open_it_once`; doclock also
+  `a_lock_held_by_another_document_is_busy`,
+  `the_instance_lock_detects_another_tally`,
+  `bidi_and_format_characters_are_stripped_and_owner_is_capped`,
+  `an_unknown_account_never_owns_a_lock`,
+  `release_restores_a_lock_that_is_not_ours`, `a_fifo_lock_does_not_block`;
+  `packages/app/test/readOnly.test.ts` (`<bdi>`, the locked toast).
+
+### Read-only documents
+
+A read-only document is enforced by the engine, not only the UI: every
+`apply`, `undo`, `redo` and `set_locale` is refused with `read_only`, and a
+save to the document's own file too (`tally-engine::read_only::*`). A file
+Tally cannot write is detected without `unsafe`: a regular file, not
+`uchg`/`schg` flagged (Finder's "Locked", `std::os::macos::fs::MetadataExt`),
+that opens for writing (no truncate, no create; AOO also probes with a
+read-write stream). `wb_open`'s and `wb_set_read_only`'s `mode` strings are
+checked in `limits.rs` (`open_mode`, `edit_mode`).
+
 ### `wb_open(path)` allowlist
 
 JS cannot make the shell read an arbitrary path. `wb_open` accepts a path only if it is:

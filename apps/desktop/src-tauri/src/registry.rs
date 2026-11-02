@@ -1338,6 +1338,8 @@ mod tests {
             version: 0,
             warnings: Vec::new(),
             external_links: None,
+            read_only: false,
+            load_readonly: false,
         }
     }
 

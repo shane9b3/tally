@@ -19,6 +19,7 @@ export { useEditStore, type EditOrigin } from "./stores/editStore";
 export { useUiStore, type Toast } from "./stores/uiStore";
 export { guardDecision, isSequence, proceedAfter, useSavePromptStore, type CloseKind, type CloseShell, type SaveChoice } from "./unsaved";
 export { canReuseWindow, type ReuseState, type ThemeChoice, type WindowShell } from "./windows";
+export { allowedWhileReadOnly, displayTitle, readOnlyGate, ReadOnlyFeature, READ_ONLY_COMMANDS, useLockPromptStore } from "./readOnly";
 export { canDetach, cycleTab, openDocuments, tabByNumber, useTabsStore, TabsFeature, type TabShell, type TabsState, type TabInfo } from "./tabs";
 // `WebMockClient` is deliberately not exported here: the desktop bundle must
 // not ship the dev mock (security review 3, MEDIUM-7). Dev/e2e builds load it

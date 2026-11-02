@@ -286,6 +286,9 @@ pub struct Workbook {
     /// family use it); `None` for the application font (see
     /// [`crate::fonts`]).
     pub default_font: Option<String>,
+    /// The file's `LoadReadonly` setting (ODS `settings.xml`): open it
+    /// read-only. Written back on save.
+    pub load_readonly: bool,
     /// External links the reader disabled by policy (v0.6, W5-3; see
     /// [`crate::external`]).
     pub external_links: Vec<tally_api::ExternalLinkWarning>,
@@ -338,6 +341,7 @@ impl Workbook {
             cell_styles: Vec::new(),
             custom_sort_lists: Vec::new(),
             default_font: None,
+            load_readonly: false,
             external_links: Vec::new(),
             table_op_calls: 0,
             table_op_work: 0,

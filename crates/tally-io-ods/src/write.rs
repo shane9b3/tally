@@ -272,6 +272,12 @@ fn settings_xml(data: &WorkbookData) -> String {
     s.push_str(
         "</config:config-item-map-entry></config:config-item-map-indexed></config:config-item-set>",
     );
+    if data.settings.load_readonly {
+        // AOO's File ▸ Properties ▸ Security "Open file read-only".
+        s.push_str(r#"<config:config-item-set config:name="ooo:configuration-settings">"#);
+        config_item(&mut s, "LoadReadonly", "boolean", "true");
+        s.push_str("</config:config-item-set>");
+    }
     s.push_str("</office:settings></office:document-settings>");
     s
 }

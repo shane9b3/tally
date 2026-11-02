@@ -138,6 +138,8 @@ export const BINDINGS: readonly Binding[] = [
   { key: "F11", mod: false, shift: true, command: "file.saveAsTemplate", menu: true, label: "⇧F11" },
   { key: "F9", mod: false, shift: false, command: "data.recalc", label: "F9" },
   { key: "m", mod: true, shift: false, command: "edit.clearFormats", label: "⌘M" },
+  // Edit ▸ Edit Mode (AOO 4.1 has no shortcut for its "Edit File" button; LibreOffice uses ⇧⌘M).
+  { key: "m", mod: true, shift: true, command: "edit.editMode", menu: true, global: true, label: "⇧⌘M" },
   // Document tabs (desktop; tabs.ts). The native Window menu has ⌃⇥ / ⌃⇧⇥.
   // ⌘1 stays Format Cells and ⌃PgDn/⌃PgUp switch sheets (spreadsheet
   // conventions), so tabs by number are ⌥⌘N on macOS and Alt+N elsewhere.

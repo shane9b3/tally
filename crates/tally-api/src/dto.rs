@@ -72,6 +72,18 @@ pub struct WorkbookInfo {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub external_links: Option<Vec<ExternalLinkWarning>>,
+    /// The document is open read-only (AOO's read-only medium or
+    /// "Edit Mode" off): the engine refuses every edit with code
+    /// `read_only`, and Save to its own file is refused.
+    #[serde(default)]
+    #[ts(as = "Option<bool>", optional)]
+    pub read_only: bool,
+    /// The file asks to be opened read-only (ODS `settings.xml`
+    /// `LoadReadonly`, AOO's File ▸ Properties ▸ Security "Open file
+    /// read-only"); kept and written back on save.
+    #[serde(default)]
+    #[ts(as = "Option<bool>", optional)]
+    pub load_readonly: bool,
 }
 
 /// One sheet tab.
@@ -2250,6 +2262,16 @@ impl ApiError {
     /// A Save picked a CSV file: the shell waits for the Text Export
     /// options (`wb_save_csv`); the message is the file name.
     pub const CSV_OPTIONS: &'static str = "csv_options";
+    /// The document is open read-only: edits and Save to its own file are
+    /// refused (AOO's "Document opened in read-only mode.").
+    pub const READ_ONLY: &'static str = "read_only";
+    /// The file is locked for editing by someone else (an AOO/LibreOffice
+    /// `.~lock.<name>#` file; shell only). The message is a JSON object
+    /// describing the lock (see the desktop shell's `doclock.rs`).
+    pub const LOCKED: &'static str = "locked";
+    /// The file cannot be written (permissions, a locked/immutable file, a
+    /// read-only volume), so it cannot be switched to Edit Mode (shell only).
+    pub const NOT_WRITABLE: &'static str = "not_writable";
 
     /// Creates an error.
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {

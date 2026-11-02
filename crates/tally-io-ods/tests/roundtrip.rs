@@ -262,6 +262,7 @@ fn sample() -> WorkbookData {
                 algorithm: Some("sha256".into()),
                 ..tally_model::SheetProtectionData::default()
             }),
+            load_readonly: true,
             ..Default::default()
         },
         meta: DocMeta {
@@ -387,6 +388,30 @@ fn output_shape_matches_odf_conventions() {
         .read_to_string(&mut settings)
         .unwrap();
     assert!(settings.contains(r#"<config:config-item config:name="ActiveTable" config:type="string">Third</config:config-item>"#));
+    // AOO's File ▸ Properties ▸ Security "Open file read-only".
+    assert!(settings.contains(r#"<config:config-item-set config:name="ooo:configuration-settings"><config:config-item config:name="LoadReadonly" config:type="boolean">true</config:config-item></config:config-item-set>"#));
+}
+
+/// `LoadReadonly` is read only from `ooo:configuration-settings` (AOO
+/// writes `false` there for ordinary files), and an ordinary file writes
+/// no configuration set at all.
+#[test]
+fn load_readonly_round_trips() {
+    let mut wb = sample();
+    wb.settings.load_readonly = false;
+    let bytes = write_to_vec(&wb);
+    let back = read_ods(Cursor::new(&bytes), &Limits::default()).unwrap();
+    assert!(!back.settings.load_readonly);
+    let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut settings = String::new();
+    zip.by_name("settings.xml")
+        .unwrap()
+        .read_to_string(&mut settings)
+        .unwrap();
+    assert!(!settings.contains("LoadReadonly"));
+    wb.settings.load_readonly = true;
+    let back = read_ods(Cursor::new(write_to_vec(&wb)), &Limits::default()).unwrap();
+    assert!(back.settings.load_readonly);
 }
 
 #[test]

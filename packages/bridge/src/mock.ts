@@ -94,7 +94,7 @@ import type { EngineClientV4, SheetId, Unsubscribe } from "./client";
 import type { FillSheetOptions } from "./generated/FillSheetOptions";
 import { expandGroup, groupOf, groupSheets } from "./group";
 import { mockTemplate } from "./mockTemplates";
-import { BUILTIN_TEMPLATES, FALLBACK_FONTS, type FontFamilyInfo, type ShellClient, type TemplateInfo } from "./shell";
+import { BUILTIN_TEMPLATES, FALLBACK_FONTS, LOCKED, NOT_WRITABLE, READ_ONLY, type EditModeOption, type EditModeResult, type FontFamilyInfo, type LockInfo, type ShellClient, type TemplateInfo } from "./shell";
 
 /** Grid limits, matching `tally_types::{MAX_ROWS, MAX_COLS}`. */
 export const MAX_ROWS = 1_048_576;
@@ -212,6 +212,12 @@ interface MockDoc {
   title: string;
   path: string | null;
   dirty: boolean;
+  /** Read-only (Edit Mode off): edits reject with `read_only`, like the engine. */
+  readOnly?: boolean;
+  /** The file asked to open read-only (ODS `LoadReadonly`). */
+  loadReadonly?: boolean;
+  /** The mock "holds the lock" (a `LoadReadonly` file keeps it while read-only, as AOO). */
+  lockHeld?: boolean;
   version: number;
   state: DocState;
   undo: UndoEntry[];
@@ -581,6 +587,14 @@ export class MockClient implements EngineClientV4, ShellClient {
 
   // -- documents ------------------------------------------------------------
 
+  /**
+   * e2e/demo hooks for read-only mode (`?readonly=1`): every new workbook
+   * opens as a saved file flagged `LoadReadonly` (sticky: React's strict
+   * mode starts the app twice in dev); Edit Mode then finds the file locked
+   * by `lockedBy` or unwritable (`unwritable`).
+   */
+  readonly readOnlyHooks: { openReadOnly: boolean; lockedBy: LockInfo | null; unwritable: boolean } = { openReadOnly: false, lockedBy: null, unwritable: false };
+
   newWorkbook(template?: string | null): Promise<WorkbookInfo> {
     const tpl = template ? mockTemplate(template) : undefined;
     if (template && !tpl) return Promise.reject(apiError("not_found", `no template "${template}"`));
@@ -597,8 +611,54 @@ export class MockClient implements EngineClientV4, ShellClient {
       redo: [],
     };
     if (tpl) this.fillTemplate(doc, tpl.rows, tpl.currencyCols, tpl.widths);
+    if (this.readOnlyHooks.openReadOnly) {
+      doc.title = `${tpl ? tpl.title : "Book"}.ods`;
+      doc.path = `/mock/${doc.title}`;
+      doc.readOnly = true;
+      doc.loadReadonly = true;
+      doc.lockHeld = true;
+    }
     this.docs.set(id, doc);
     return Promise.resolve(this.info(doc));
+  }
+
+  /** Throws the engine's `read_only` error when `doc` is read-only. */
+  protected assertEditable(doc: DocId): void {
+    if (this.docs.get(doc)?.readOnly) throw apiError(READ_ONLY, "Document opened in read-only mode.");
+  }
+
+  /**
+   * Edit ▸ Edit Mode, like the shell's `wb_set_read_only`: to read-only only
+   * when saved (or `discard`, which the mock models as dropping the dirty
+   * flag); to edit fails with `locked` / `not_writable` per {@link readOnlyHooks}.
+   */
+  setReadOnly(doc: DocId, readOnly: boolean, mode: EditModeOption | null = null): Promise<EditModeResult> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      if (readOnly) {
+        if (d.dirty && mode !== "discard") throw apiError("invalid_argument", "save or discard the changes before switching to read-only");
+        const reloaded = mode === "discard";
+        if (reloaded) d.dirty = false;
+        d.readOnly = true;
+        d.lockHeld = false;
+        d.version++;
+        return { info: this.info(d), reloaded };
+      }
+      if (mode === "copy") {
+        d.path = null;
+        d.title = "Untitled";
+        d.readOnly = false;
+        return { info: this.info(d), reloaded: false };
+      }
+      if (d.readOnly && d.path !== null && !(d.loadReadonly && d.lockHeld)) {
+        if (this.readOnlyHooks.unwritable) throw apiError(NOT_WRITABLE, "This document cannot be edited, possibly due to missing access rights.");
+        const busy = this.readOnlyHooks.lockedBy;
+        if (busy && !(busy.own && mode === "ignoreLock")) throw apiError(LOCKED, JSON.stringify(busy));
+      }
+      d.readOnly = false;
+      d.lockHeld = d.path !== null;
+      return { info: this.info(d), reloaded: false };
+    });
   }
 
   /** Writes a template's cells and styles (not an undo step). */
@@ -626,6 +686,9 @@ export class MockClient implements EngineClientV4, ShellClient {
       const d = this.doc(doc);
       const target = path ?? d.path;
       if (target === null) throw apiError("invalid_argument", "document has no path; pass one");
+      // Like the engine: never over its own file while read-only; Save As makes an editable copy.
+      if (d.readOnly && path === null) throw apiError(READ_ONLY, "Document opened in read-only mode.");
+      d.readOnly = false;
       d.path = target;
       d.title = target.split(/[\\/]/).pop() ?? target;
       d.dirty = false;
@@ -1298,6 +1361,7 @@ export class MockClient implements EngineClientV4, ShellClient {
   apply(doc: DocId, tx: Transaction): Promise<ApplyResult> {
     return this.run(() => {
       const d = this.doc(doc);
+      this.assertEditable(doc);
       const before = cloneState(d.state);
       // A sheet group (multi-sheet selection) is all-or-nothing, like the engine.
       const grouped = groupOf(tx) !== null;
@@ -1347,6 +1411,7 @@ export class MockClient implements EngineClientV4, ShellClient {
   undo(doc: DocId): Promise<ApplyResult> {
     return this.run(() => {
       const d = this.doc(doc);
+      this.assertEditable(doc);
       const entry = d.undo.pop();
       if (!entry) throw apiError("invalid_argument", "nothing to undo");
       d.redo.push({ ...entry, state: d.state });
@@ -1357,6 +1422,7 @@ export class MockClient implements EngineClientV4, ShellClient {
   redo(doc: DocId): Promise<ApplyResult> {
     return this.run(() => {
       const d = this.doc(doc);
+      this.assertEditable(doc);
       const entry = d.redo.pop();
       if (!entry) throw apiError("invalid_argument", "nothing to redo");
       d.undo.push({ ...entry, state: d.state });
@@ -1468,6 +1534,8 @@ export class MockClient implements EngineClientV4, ShellClient {
       dirty: d.dirty,
       version: d.version,
       warnings: [],
+      readOnly: d.readOnly ?? false,
+      loadReadonly: d.loadReadonly ?? false,
     };
   }
 

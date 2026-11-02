@@ -82,6 +82,8 @@ export function FormatBar() {
   // Re-render on selection / layout changes for the merge toggle.
   useSelectionStore((s) => s.selection);
   useDocStore((s) => s.rev);
+  // Read-only: every formatting tool is off (AOO greys the bar out).
+  const readOnly = useDocStore((s) => s.info?.readOnly === true);
   const merged = ctl.selectionIsMerged();
   const hidden = useW56Store((s) => s.prefs.chrome.hidden.formatting);
   const fontInfo = useFontInfo();
@@ -246,7 +248,7 @@ export function FormatBar() {
   };
 
   return (
-    <div className={styles.bar} role="toolbar" aria-label={t("menu.format", "Format")} data-testid="format-bar" onContextMenu={barMenu.onContextMenu} onKeyDown={(e) => void arrowNav(e)}>
+    <div className={styles.bar} role="toolbar" aria-label={t("menu.format", "Format")} aria-disabled={readOnly || undefined} inert={readOnly || undefined} style={readOnly ? { opacity: 0.5 } : undefined} data-testid="format-bar" onContextMenu={barMenu.onContextMenu} onKeyDown={(e) => void arrowNav(e)}>
       <OverflowRow slots={slots} renderSlot={renderSlot} compactable={(s) => s.kind === "el" && (s.el === "highlight" || s.el === "colorByValue")} testId="format-row" className={styles.row} />
       {menu?.kind === "format" ? (
         <Popover

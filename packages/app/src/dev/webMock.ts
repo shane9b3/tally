@@ -685,6 +685,7 @@ export class WebMockClient extends MockClient {
   }
 
   override async setLocale(doc: DocId, locale: string): Promise<ApplyResult> {
+    this.assertEditable(doc);
     this.recordedCalls.push({ type: "setLocale", locale });
     if (!MOCK_LOCALES.some((l) => l.tag === locale)) throw { code: "invalid_argument", message: `unknown locale "${locale}"` };
     this.docExt(doc).v3.locale = locale;
@@ -966,6 +967,8 @@ export class WebMockClient extends MockClient {
   // -- mutations ---------------------------------------------------------------------
 
   override async apply(doc: DocId, tx: Transaction): Promise<ApplyResult> {
+    // A read-only document refuses before anything is recorded (as the engine).
+    this.assertEditable(doc);
     this.recorded.push(...tx.ops.map((op) => structuredClone(op)));
     const group = groupOf(tx);
     return group ? this.applyGroup(doc, tx, group) : this.applyOnce(doc, tx);

@@ -39,6 +39,9 @@ pub struct Document {
     /// Options of the document's CSV exports (the last Text Export
     /// dialog choices; defaults until set).
     pub csv_options: tally_api::CsvExportOptions,
+    /// Read-only (AOO's read-only medium / Edit Mode off): the service
+    /// refuses every edit with [`tally_api::ApiError::READ_ONLY`].
+    pub read_only: bool,
 }
 
 /// Formats a colour `0xRRGGBBAA` as `#rrggbb`.
@@ -77,6 +80,7 @@ impl Document {
             recalc_incomplete: report.incomplete,
             warnings,
             csv_options: tally_api::CsvExportOptions::default(),
+            read_only: false,
         }
     }
 
@@ -113,6 +117,8 @@ impl Document {
             warnings: self.warnings.clone(),
             external_links: (!self.wb.external_links.is_empty())
                 .then(|| self.wb.external_links.clone()),
+            read_only: self.read_only,
+            load_readonly: self.wb.load_readonly,
         }
     }
 

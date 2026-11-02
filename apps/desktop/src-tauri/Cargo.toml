@@ -32,12 +32,18 @@ tally-engine = { workspace = true, features = ["io"] }
 tally-assist.workspace = true
 tally-l10n.workspace = true
 zip.workspace = true
+# Local time in lock files (doclock.rs; `DD.MM.YYYY HH:MM`, as AOO).
+chrono.workspace = true
 # The installed-font list for the font pickers (fonts.rs; metadata only).
 tally-io-pdf.workspace = true
 # macOS: the Dock's Quit and log-out ask about unsaved changes too
 # (closing.rs); the workspace's one crate allowed `unsafe`, see docs/security.md.
 # Does nothing on the other platforms.
 tally-macos-terminate.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# Open flags only (`O_NOFOLLOW | O_NONBLOCK` for foreign lock files, doclock.rs); no FFI calls.
+libc.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The red close button's "document edited" dot and native tabs off (native.rs); safe API only.

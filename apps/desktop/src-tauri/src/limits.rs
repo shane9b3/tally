@@ -26,6 +26,31 @@ use tally_types::{MAX_COLS, MAX_ROWS};
 
 use crate::commands::CmdResult;
 
+/// `wb_open`'s `mode`: `normal` (the default), `readOnly`, `copy`, `ignoreLock`.
+pub fn open_mode(mode: Option<&str>) -> CmdResult<crate::commands::OpenMode> {
+    use crate::commands::OpenMode;
+    Ok(match mode {
+        None | Some("normal") => OpenMode::Normal,
+        Some("readOnly") => OpenMode::ReadOnly,
+        Some("copy") => OpenMode::Copy,
+        Some("ignoreLock") => OpenMode::IgnoreLock,
+        Some(_) => return Err(ApiError::invalid_argument("unknown open mode")),
+    })
+}
+
+/// `wb_set_read_only`'s `mode`: none, `discard` (to read-only), `copy` or
+/// `ignoreLock` (to edit).
+pub fn edit_mode(read_only: bool, mode: Option<&str>) -> CmdResult<crate::commands::EditMode> {
+    use crate::commands::EditMode;
+    Ok(match (read_only, mode) {
+        (_, None) => EditMode::Plain,
+        (true, Some("discard")) => EditMode::Discard,
+        (false, Some("copy")) => EditMode::Copy,
+        (false, Some("ignoreLock")) => EditMode::IgnoreLock,
+        _ => return Err(ApiError::invalid_argument("unknown edit mode")),
+    })
+}
+
 /// Longest string argument in bytes (find text, regex, cell input, formulas).
 pub const MAX_TEXT: usize = 64 * 1024;
 /// Longest name (defined name, sheet name) in characters.

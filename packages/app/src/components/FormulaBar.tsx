@@ -133,6 +133,7 @@ export function FormulaBar() {
   const mirror = useRef<HTMLDivElement>(null);
   const theme = useUiStore((s) => s.theme);
   const sheetName = useDocStore((s) => s.info?.sheets.find((x) => x.id === s.activeSheet)?.name ?? null);
+  const readOnly = useDocStore((s) => s.info?.readOnly === true);
 
   const current = active && active.cell.r === cell.r && active.cell.c === cell.c ? active : null;
   const raw = current?.input ?? "";
@@ -190,6 +191,7 @@ export function FormulaBar() {
         spellCheck={false}
         autoComplete="off"
         value={value}
+        readOnly={readOnly}
         onFocus={() => {
           setFocused(true);
           ensureEdit();

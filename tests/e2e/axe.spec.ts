@@ -73,6 +73,27 @@ test("the main window has no serious or critical axe violations", async ({ page 
   expect(await violations(page)).toEqual([]);
 });
 
+test("axe: a read-only document (info bar) and the Document in Use prompt", async ({ page }) => {
+  await ready(page, "/?template=invoices&readonly=1");
+  await expect(page.getByTestId("read-only-banner")).toBeVisible();
+  expect(await violations(page)).toEqual([]);
+  await page.evaluate(() => {
+    const c = window.__tally!.client as unknown as { readOnlyHooks: { lockedBy: unknown } };
+    c.readOnlyHooks.lockedBy = { file: "Invoices.ods", path: "/mock/Invoices.ods", owner: "Jane Doe", time: "02.11.2026 15:04", own: false };
+  });
+  // Edit on, off (releasing the lock), then on again: Jane holds it now.
+  await run(page, "edit.editMode");
+  await expect(page.getByTestId("read-only-banner")).toHaveCount(0);
+  await run(page, "edit.editMode");
+  await expect(page.getByTestId("read-only-banner")).toBeVisible();
+  await run(page, "edit.editMode");
+  await expect(page.getByTestId("lock-prompt")).toBeVisible();
+  await expect(page.getByTestId("lock-prompt")).toContainText("Jane Doe ( 02.11.2026 15:04 )");
+  expect(await violations(page, "[role=alertdialog]")).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("lock-prompt")).toHaveCount(0);
+});
+
 for (const d of DIALOG_COMMANDS) {
   test(`axe: ${d.name} dialog`, async ({ page }) => {
     await ready(page);

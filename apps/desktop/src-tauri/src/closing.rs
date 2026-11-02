@@ -357,7 +357,10 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &tauri::RunEvent) {
             if cfg!(debug_assertions) {
                 eprintln!("tally(debug): RunEvent::Exit");
             }
-            exit_snapshot(app)
+            exit_snapshot(app);
+            // Our lock files go with us (a crash leaves them, as AOO's;
+            // the next open takes our own stale lock over).
+            app.state::<AppState>().locks.release_all();
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {

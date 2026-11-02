@@ -289,7 +289,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Protect document structure | done | `tools.protectDocument` |
 | Cell protection attributes | done | |
 | File password to open / to modify | missing | X11 |
-| Read-only mode | missing | No open-read-only or Edit File toggle |
+| Read-only mode | done (2026-11-02) | AOO lock files (`.~lock.<name>#`, read and written, "Document in Use" with Open Read-Only / Open Copy / Cancel, own lock elsewhere Open Read-Only / Open / Cancel), File ▸ Open Read-Only…, unwritable or Finder-locked files open read-only, ODS `LoadReadonly`, Edit ▸ Edit Mode (⇧⌘M) with AOO's save-first and "edit a copy" questions, info bar, " (read-only)" title, engine refuses edits (`read_only`). Deviations U28 / X25. Tests `tally-engine::read_only`, `tally-desktop::doclock`, `packages/app/test/readOnly.test.ts`, `tests/e2e/read-only.spec.ts`; manual `docs/qa/read-only-manual.md` |
 | Record changes, shared workbooks | missing | T14 |
 
 ### 25. Printing and page setup

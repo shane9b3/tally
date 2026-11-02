@@ -223,6 +223,7 @@ impl Workbook {
             .default_font
             .as_deref()
             .and_then(tally_model::clean_font_name);
+        wb.load_readonly = data.settings.load_readonly;
         let style_ids: Vec<StyleId> = data
             .styles
             .iter()
@@ -513,6 +514,7 @@ impl Workbook {
                 structure_protection: self.structure_protection.clone(),
                 custom_sort_lists: self.custom_sort_lists.clone(),
                 default_font: self.default_font.clone(),
+                load_readonly: self.load_readonly,
             },
             meta: self.meta.clone(),
             warnings: Vec::new(),

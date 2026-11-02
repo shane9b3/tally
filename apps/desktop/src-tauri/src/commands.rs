@@ -28,6 +28,7 @@ use tally_api::{
 use tally_types::SheetId;
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::doclock::{self, Acquired};
 use crate::files::{self, TemplateInfo};
 use crate::limits;
 use crate::links;
@@ -97,10 +98,12 @@ pub fn with_new_doc(
 }
 
 /// Closes `doc` in the engine and forgets its service (also when the engine
-/// close fails, so a broken document cannot linger).
+/// close fails, so a broken document cannot linger). Its lock file goes
+/// (if it is still ours).
 pub fn close_engine_doc(state: &AppState, doc: DocId) -> CmdResult<()> {
     let result = with_doc(state, doc, |s| s.close(doc));
     state.remove_doc(doc);
+    state.locks.forget(doc.0);
     // A CSV save waiting for its options dies with the document.
     lock(&state.pending_csv).remove(&doc.0);
     result
@@ -136,11 +139,205 @@ pub fn track_path(state: &AppState, info: &WorkbookInfo) -> CmdResult<()> {
 }
 
 /// Opens a path through the engine and remembers it for Save (no allowlist
-/// check; callers check first).
+/// check and no lock; callers check first).
 pub fn open_path(state: &AppState, path: &std::path::Path) -> CmdResult<WorkbookInfo> {
     let info = with_new_doc(state, |s| s.open(path))?;
     track_path(state, &info)?;
+    state.locks.remember(info.doc.0, path);
     Ok(info)
+}
+
+/// How a file is opened (`wb_open(path, mode)`, the lock dialog's answers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenMode {
+    /// For editing: lock it, or report someone else's lock (`locked`).
+    Normal,
+    /// Read-only (File ▸ Open Read-Only…, the lock dialog's Open Read-Only):
+    /// no lock.
+    ReadOnly,
+    /// An untitled editable copy (the lock dialog's Open Copy): no path, no lock.
+    Copy,
+    /// For editing, taking over a lock of this OS account written
+    /// elsewhere (the "locked by yourself" dialog's Open).
+    IgnoreLock,
+}
+
+/// Opens `canon` (already allowlisted and canonical) as AOO's
+/// `LockOrigFileOnDemand` decides: a file Tally cannot write opens
+/// read-only; otherwise it is locked, or someone else's lock is reported
+/// with code `locked` (the UI asks, then opens again with its answer).
+pub fn open_with_mode(
+    state: &AppState,
+    canon: &std::path::Path,
+    mode: OpenMode,
+) -> CmdResult<WorkbookInfo> {
+    match mode {
+        OpenMode::Copy => {
+            let info = with_new_doc(state, |s| s.open_untitled(canon, false))?;
+            track_path(state, &info)?;
+            Ok(info)
+        }
+        OpenMode::ReadOnly => open_read_only(state, canon),
+        OpenMode::Normal | OpenMode::IgnoreLock => {
+            if !doclock::is_writable(canon) {
+                return open_read_only(state, canon);
+            }
+            let me = state.locks.identity();
+            match state
+                .locks
+                .try_acquire(None, canon, mode == OpenMode::IgnoreLock)
+            {
+                Acquired::Busy(info) => Err(info.error()),
+                Acquired::Unlocked => open_path(state, canon),
+                Acquired::Locked(lp) => match open_path(state, canon) {
+                    Ok(info) => {
+                        state.locks.adopt(info.doc.0, lp);
+                        Ok(info)
+                    }
+                    Err(e) => {
+                        doclock::release(me, &lp);
+                        Err(e)
+                    }
+                },
+            }
+        }
+    }
+}
+
+/// [`open_with_mode`] once per file: the file must not be open in another
+/// document or being opened right now (checked and reserved in one step, so
+/// two concurrent opens of one file cannot both lock it; the loser gets
+/// `cancelled`, which the UI ignores). An untitled copy is always allowed.
+pub fn open_unique(
+    state: &AppState,
+    canon: &std::path::Path,
+    mode: OpenMode,
+) -> CmdResult<WorkbookInfo> {
+    if mode == OpenMode::Copy {
+        return open_with_mode(state, canon, mode);
+    }
+    let already = || ApiError::new(ApiError::CANCELLED, "already open");
+    let _reserved = {
+        let paths = lock(&state.paths);
+        if doc_with_path(paths.iter(), canon).is_some() {
+            return Err(already());
+        }
+        state.locks.reserve(canon).ok_or_else(already)?
+    };
+    open_with_mode(state, canon, mode)
+}
+
+/// Opens `canon` read-only (no lock).
+fn open_read_only(state: &AppState, canon: &std::path::Path) -> CmdResult<WorkbookInfo> {
+    let info = open_path(state, canon)?;
+    if info.read_only {
+        return Ok(info);
+    }
+    with_doc(state, info.doc, |s| s.set_read_only(info.doc, true))
+}
+
+/// Result of `wb_set_read_only`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditModeResult {
+    /// The document now.
+    pub info: WorkbookInfo,
+    /// It was read again from disk (it changed there, or changes were
+    /// discarded).
+    pub reloaded: bool,
+}
+
+/// How Edit Mode is switched (`wb_set_read_only(doc, readOnly, mode)`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditMode {
+    /// Plain switch.
+    Plain,
+    /// To read-only: discard unsaved changes (read the file again), AOO's
+    /// reload after "Don't Save".
+    Discard,
+    /// To edit: make it an untitled editable copy (AOO's "edit a copy"
+    /// when the file is locked or cannot be written).
+    Copy,
+    /// To edit: take over a lock of this OS account written elsewhere.
+    IgnoreLock,
+}
+
+/// Edit ▸ Edit Mode (AOO's `SID_EDITDOC`, `sfx2/source/view/viewfrm.cxx`).
+///
+/// To read-only: the document must be saved (or `Discard` reads the file
+/// again); its lock is released. To edit: a document opened read-only
+/// only because of `LoadReadonly` still holds its lock and just switches
+/// (AOO's "read-only UI"); otherwise the file must be writable
+/// (`not_writable`) and lockable (`locked`), and it is read again if it
+/// changed on disk meanwhile (AOO always reloads here).
+pub fn set_edit_mode(
+    state: &AppState,
+    doc: DocId,
+    read_only: bool,
+    mode: EditMode,
+) -> CmdResult<EditModeResult> {
+    let path = lock(&state.paths).get(&doc.0).cloned();
+    if read_only {
+        let mut reloaded = false;
+        if mode == EditMode::Discard && path.is_some() {
+            with_doc(state, doc, |s| s.reload(doc))?;
+            reloaded = true;
+        }
+        let info = with_doc(state, doc, |s| s.set_read_only(doc, true))?;
+        state.locks.release(doc.0);
+        if let Some(p) = &path {
+            state.locks.remember(doc.0, p);
+        }
+        return Ok(EditModeResult { info, reloaded });
+    }
+    let Some(path) = path else {
+        let info = with_doc(state, doc, |s| s.set_read_only(doc, false))?;
+        return Ok(EditModeResult {
+            info,
+            reloaded: false,
+        });
+    };
+    if mode == EditMode::Copy {
+        let info = with_doc(state, doc, |s| s.detach_path(doc))?;
+        track_path(state, &info)?;
+        state.locks.forget(doc.0);
+        return Ok(EditModeResult {
+            info,
+            reloaded: false,
+        });
+    }
+    let current = with_doc(state, doc, |s| s.info(doc))?;
+    if !current.read_only {
+        return Ok(EditModeResult {
+            info: current,
+            reloaded: false,
+        });
+    }
+    if !(current.load_readonly && state.locks.holds(doc.0)) {
+        if !doclock::is_writable(&path) {
+            return Err(ApiError::new(
+                ApiError::NOT_WRITABLE,
+                "This document cannot be edited, possibly due to missing access rights.",
+            ));
+        }
+        if let Acquired::Busy(info) =
+            state
+                .locks
+                .acquire(doc.0, &path, mode == EditMode::IgnoreLock)
+        {
+            return Err(info.error());
+        }
+    }
+    let reloaded = state.locks.changed_on_disk(doc.0, &path);
+    if reloaded {
+        if let Err(e) = with_doc(state, doc, |s| s.reload(doc)) {
+            state.locks.release(doc.0);
+            return Err(e);
+        }
+        state.locks.remember(doc.0, &path);
+    }
+    let info = with_doc(state, doc, |s| s.set_read_only(doc, false))?;
+    Ok(EditModeResult { info, reloaded })
 }
 
 /// Pure: the open document whose file is `canon`, among the remembered
@@ -158,10 +355,12 @@ pub fn doc_with_path<'a>(
 /// Opens an allowlisted path and records it in the recent list. A file that
 /// is already open is not opened twice: its window comes to the front with
 /// its tab shown and the result is `cancelled` (the UI shows nothing).
+/// Someone else's lock is reported as `locked` ([`open_with_mode`]).
 pub fn open_checked<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
     path: &std::path::Path,
+    mode: OpenMode,
 ) -> CmdResult<WorkbookInfo> {
     let canon = files::check_open_allowed(state, path)?;
     let open_doc = doc_with_path(lock(&state.paths).iter(), &canon);
@@ -175,7 +374,7 @@ pub fn open_checked<R: Runtime>(
             return Err(ApiError::new(ApiError::CANCELLED, "already open"));
         }
     }
-    let info = open_path(state, &canon)?;
+    let info = open_unique(state, &canon, mode)?;
     files::push_recent(app, state, &canon);
     Ok(info)
 }
@@ -189,16 +388,58 @@ pub fn new_workbook(state: &AppState, template: Option<&str>) -> CmdResult<Workb
 }
 
 /// Saves `doc` to `path` (already chosen in a dialog or remembered) and
-/// remembers it for the next Save.
+/// remembers it for the next Save. Saving to another file than the
+/// document's own refuses a file someone else has locked (`locked`, as
+/// AOO's access-denied on a locked target) and moves the document's lock
+/// there (a read-only document becomes editable: Save As makes an editable
+/// copy).
 pub fn save_to(
     state: &AppState,
     doc: DocId,
     path: &std::path::Path,
     format: FileFormat,
 ) -> CmdResult<WorkbookInfo> {
+    let old = lock(&state.paths).get(&doc.0).cloned();
+    let moving = !old.as_deref().is_some_and(|o| same_file(o, path));
+    if moving {
+        // Another of our documents has that file open (AOO: locked for
+        // editing, by us): writing it would leave two documents on one file
+        // and one lock.
+        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let other = doc_with_path(
+            lock(&state.paths).iter().filter(|(d, _)| **d != doc.0),
+            &canon,
+        );
+        if other.is_some() {
+            let me = state.locks.identity();
+            let lp = doclock::lock_path(path);
+            return Err(doclock::LockInfo::ours(path, me, lp.as_deref()).error());
+        }
+        if let Some(busy) = state.locks.foreign(path, doc.0) {
+            return Err(busy.error());
+        }
+    }
     let info = with_doc(state, doc, |s| s.save(doc, Some(path), format))?;
     track_path(state, &info)?;
+    if moving {
+        state.locks.release(doc.0);
+        if !info.read_only {
+            // Best effort: a directory Tally cannot write a lock into is
+            // fine, and the target was checked above.
+            let _ = state.locks.acquire(doc.0, path, false);
+        }
+    }
+    state.locks.remember(doc.0, path);
     Ok(info)
+}
+
+/// `true` if `a` and `b` name the same file (as given or canonicalized).
+pub fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
 }
 
 #[tauri::command]
@@ -210,12 +451,30 @@ pub async fn wb_new(app: AppHandle, template: Option<String>) -> CmdResult<Workb
 }
 
 #[tauri::command]
-pub async fn wb_open(app: AppHandle, path: String) -> CmdResult<WorkbookInfo> {
+pub async fn wb_open(
+    app: AppHandle,
+    path: String,
+    mode: Option<String>,
+) -> CmdResult<WorkbookInfo> {
     limits::text_max("the path", &path, limits::MAX_PATH)?;
+    let mode = limits::open_mode(mode.as_deref())?;
     blocking(app, move |app, st| {
-        open_checked(app, st, std::path::Path::new(&path))
+        open_checked(app, st, std::path::Path::new(&path), mode)
     })
     .await
+}
+
+/// `wb_set_read_only(doc, readOnly, mode)`: Edit ▸ Edit Mode
+/// ([`set_edit_mode`]).
+#[tauri::command]
+pub async fn wb_set_read_only(
+    app: AppHandle,
+    doc: DocId,
+    read_only: bool,
+    mode: Option<String>,
+) -> CmdResult<EditModeResult> {
+    let mode = limits::edit_mode(read_only, mode.as_deref())?;
+    blocking(app, move |_, st| set_edit_mode(st, doc, read_only, mode)).await
 }
 
 #[tauri::command]

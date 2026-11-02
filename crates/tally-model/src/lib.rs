@@ -1488,6 +1488,11 @@ pub struct DocSettings {
     /// application font. A name from the file, never a path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_font: Option<String>,
+    /// ODS `settings.xml` `ooo:configuration-settings` `LoadReadonly`: the
+    /// file asks to be opened read-only (AOO's File ▸ Properties ▸
+    /// Security "Open file read-only"). Kept for the round trip.
+    #[serde(default)]
+    pub load_readonly: bool,
 }
 
 /// Document metadata. Timestamps are ISO 8601 strings as stored in the file.
@@ -1987,6 +1992,7 @@ mod tests {
                 structure_protection: None,
                 custom_sort_lists: vec![vec!["Q1".into(), "Q2".into()]],
                 default_font: Some("Arial".into()),
+                load_readonly: true,
             },
             meta: DocMeta {
                 title: Some("Sample".into()),

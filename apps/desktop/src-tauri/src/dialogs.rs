@@ -8,7 +8,7 @@ use tally_api::{ApiError, CsvExportOptions, DocId, FileFormat, WorkbookInfo};
 use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::commands::{blocking, open_checked, save_to, with_doc, CmdResult};
+use crate::commands::{blocking, open_checked, save_to, with_doc, CmdResult, OpenMode};
 use crate::files;
 use crate::state::{lock, AppState};
 
@@ -150,13 +150,19 @@ pub fn save_plan(current: Option<&Path>, format: Option<FileFormat>) -> SavePlan
     }
 }
 
-/// Shows the Open dialog ([`OPEN_FILTERS`]), then opens the chosen file.
-/// `None` when the user cancels, or when the file is already open in a
-/// window, which is brought to the front instead ([`open_checked`]).
-pub async fn pick_and_open<R: Runtime>(app: AppHandle<R>) -> CmdResult<Option<WorkbookInfo>> {
+/// Shows the Open dialog ([`OPEN_FILTERS`]), then opens the chosen file
+/// (read-only for File ▸ Open Read-Only…). `None` when the user cancels,
+/// or when the file is already open in a window, which is brought to the
+/// front instead ([`open_checked`]). A file someone else has locked is
+/// `locked` (the UI asks and opens it again with `wb_open(path, mode)`).
+pub async fn pick_and_open<R: Runtime>(
+    app: AppHandle<R>,
+    read_only: bool,
+) -> CmdResult<Option<WorkbookInfo>> {
     let handle = app.clone();
+    let title = if read_only { "Open Read-Only" } else { "Open" };
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        let dialog = handle.dialog().file().set_title("Open");
+        let dialog = handle.dialog().file().set_title(title);
         let dialog = OPEN_FILTERS
             .iter()
             .fold(dialog, |d, (label, exts)| d.add_filter(*label, exts));
@@ -171,27 +177,54 @@ pub async fn pick_and_open<R: Runtime>(app: AppHandle<R>) -> CmdResult<Option<Wo
         .into_path()
         .map_err(|e| ApiError::invalid_argument(format!("unsupported location: {e}")))?;
     files::allow(&app.state::<AppState>(), &path)?;
-    match blocking(app, move |app, st| open_checked(app, st, &path)).await {
+    let mode = if read_only {
+        OpenMode::ReadOnly
+    } else {
+        OpenMode::Normal
+    };
+    match blocking(app, move |app, st| open_checked(app, st, &path, mode)).await {
         Ok(info) => Ok(Some(info)),
         Err(e) if e.code == ApiError::CANCELLED => Ok(None),
         Err(e) => Err(e),
     }
 }
 
-/// `wb_open_dialog`: [`pick_and_open`] for the calling webview, which then
-/// places the document (`place_document`). Returns `null` when the user
-/// cancels or the file is already open in a window (now in front).
+/// `wb_open_dialog(readOnly)`: [`pick_and_open`] for the calling webview,
+/// which then places the document (`place_document`). Returns `null` when
+/// the user cancels or the file is already open in a window (now in front).
 #[tauri::command]
-pub async fn wb_open_dialog(app: AppHandle) -> CmdResult<Option<WorkbookInfo>> {
-    pick_and_open(app).await
+pub async fn wb_open_dialog(
+    app: AppHandle,
+    read_only: Option<bool>,
+) -> CmdResult<Option<WorkbookInfo>> {
+    pick_and_open(app, read_only.unwrap_or(false)).await
 }
 
 /// File ▸ Open… with no document window (macOS): the dialog, then a window
-/// for the file. Errors are logged (there is no webview to show them).
-pub fn spawn_open<R: Runtime>(app: &AppHandle<R>) {
+/// for the file. Errors are logged (there is no webview to show them). A
+/// file someone else has locked opens read-only: with no window to ask in,
+/// this is AOO's answer when there is no interaction handler
+/// (`SfxMedium::ShowLockedDocumentDialog`).
+pub fn spawn_open<R: Runtime>(app: &AppHandle<R>, read_only: bool) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        match pick_and_open(app.clone()).await {
+        let opened = match pick_and_open(app.clone(), read_only).await {
+            Err(e) if e.code == ApiError::LOCKED => {
+                let path = serde_json::from_str::<serde_json::Value>(&e.message)
+                    .ok()
+                    .and_then(|v| v["path"].as_str().map(PathBuf::from));
+                match path {
+                    Some(p) => blocking(app.clone(), move |app, st| {
+                        open_checked(app, st, &p, OpenMode::ReadOnly)
+                    })
+                    .await
+                    .map(Some),
+                    None => Err(e),
+                }
+            }
+            other => other,
+        };
+        match opened {
             Ok(Some(info)) => crate::windows::spawn_doc_window(&app, Some(info)),
             Ok(None) => {}
             Err(e) => eprintln!("tally: open: {}", e.message),

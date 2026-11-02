@@ -65,6 +65,7 @@ Generated from `packages/app/src/keymap.ts` (`BINDINGS`, `GRID_KEYS`) and `packa
 | ⇧⌘T | Go to the Name Box | `edit.focusNameBox` |
 | ⇧F11 | Save as template… | `file.saveAsTemplate` |
 | ⌘M | Clear formats | `edit.clearFormats` |
+| ⇧⌘M | Edit mode | `edit.editMode` |
 | ⌃⇥ / ⇧⌘] (macOS) | Show Next Tab | `window.nextTab` |
 | ⌃⇧⇥ / ⇧⌘[ (macOS) | Show Previous Tab | `window.prevTab` |
 | ⌥⌘1 (macOS) / Alt+1 (Windows/Linux) | Show tab 1 | `window.selectTab1` |

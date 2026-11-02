@@ -61,6 +61,7 @@ const FILE: &[Entry] = &[
     Item("file.new", "New", Some("CmdOrCtrl+N")),
     Item("file.templates", "New from Template…", None),
     Item("file.open", "Open…", Some("CmdOrCtrl+O")),
+    Item("file.openReadOnly", "Open Read-Only…", None),
     Sub(
         "Open Recent",
         &[Item("file.clearRecent", "Clear Menu", None)],
@@ -177,6 +178,10 @@ const EDIT_TAIL: &[Entry] = &[
         "Find & Replace…",
         Some("Alt+CmdOrCtrl+F"),
     ),
+    Sep,
+    // AOO 4.1's "Edit File" (`.uno:EditDoc`, Standard toolbar, no shortcut);
+    // Tally adds the menu item and ⇧⌘M (LibreOffice's Edit Mode).
+    Item("edit.editMode", "Edit Mode", Some("Shift+CmdOrCtrl+M")),
 ];
 
 const NUMBER_FORMATS: &[Entry] = &[
@@ -649,6 +654,8 @@ pub enum Route {
     NewWindow,
     /// No document window: the Open dialog, then a window (File ▸ Open…).
     OpenDialog,
+    /// No document window: File ▸ Open Read-Only….
+    OpenReadOnlyDialog,
     /// ⌘W while a print window is the key window: close that window.
     ClosePrint(String),
     /// Nothing to do.
@@ -685,6 +692,7 @@ pub fn route(id: &str, front: Option<&str>, key_print: Option<&str>) -> Route {
         (Some(label), _) => Route::Emit(label.to_owned()),
         (None, "file.new") => Route::NewWindow,
         (None, "file.open") => Route::OpenDialog,
+        (None, "file.openReadOnly") => Route::OpenReadOnlyDialog,
         (None, _) => Route::Ignore,
     }
 }
@@ -747,7 +755,8 @@ pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         Route::Window(action) => window_action(app, action),
         Route::Emit(label) => emit_menu_action(app, &label, id),
         Route::NewWindow => crate::windows::spawn_doc_window(app, None),
-        Route::OpenDialog => crate::dialogs::spawn_open(app),
+        Route::OpenDialog => crate::dialogs::spawn_open(app, false),
+        Route::OpenReadOnlyDialog => crate::dialogs::spawn_open(app, true),
         Route::ClosePrint(label) => {
             if let Some(w) = app.get_webview_window(&label) {
                 if let Err(e) = w.destroy() {

@@ -1,5 +1,5 @@
 /** Desktop-only wiring: TauriClient and the window title. */
-import { useDocStore, type AppController, type PickedImage, type W5Shell, type WindowChrome } from "@tally/app";
+import { displayTitle, useDocStore, type AppController, type PickedImage, type W5Shell, type WindowChrome } from "@tally/app";
 import { TauriClient } from "@tally/bridge/tauri";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -46,7 +46,7 @@ export function setWindowTitle(_ctl: AppController, mac: boolean): void {
   let last = "";
   const update = (): void => {
     const info = useDocStore.getState().info;
-    const title = info ? `${info.title}${info.dirty && !mac ? " — Edited" : ""}` : "Tally";
+    const title = info ? `${displayTitle(info)}${info.dirty && !mac ? " — Edited" : ""}` : "Tally";
     if (title === last) return;
     last = title;
     document.title = title;

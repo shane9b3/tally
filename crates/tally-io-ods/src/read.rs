@@ -126,6 +126,7 @@ pub(crate) fn read_with(
     wb.settings.locale = locale;
     wb.settings.default_font = default_font;
     wb.settings.structure_protection = content.structure_protection;
+    wb.settings.load_readonly = settings.load_readonly;
     if let Some(calc) = content.calc {
         wb.settings.calc_settings = calc;
     }
@@ -229,6 +230,8 @@ struct Settings {
     /// Sheet name → Window ▸ Split position in 1/100 mm (`SplitMode` 1,
     /// whose positions are pixels at 100 %).
     splits: HashMap<String, tally_model::SplitData>,
+    /// `ooo:configuration-settings` `LoadReadonly`.
+    load_readonly: bool,
 }
 
 #[derive(Default)]
@@ -256,6 +259,15 @@ fn parse_settings<R: BufRead>(xml: &mut XmlReader<R>) -> Result<Settings, OdsErr
                         .next()
                         .is_some_and(|n| n == "ooo:view-settings");
                     if !in_view {
+                        // Directly in the set, not in a map inside it.
+                        let mut named = stack.iter().flatten();
+                        let in_config = named
+                            .next()
+                            .is_some_and(|n| n == "ooo:configuration-settings")
+                            && named.next().is_none();
+                        if in_config && name == "LoadReadonly" {
+                            s.load_readonly = text.trim() == "true";
+                        }
                         continue;
                     }
                     let depth = stack.len();

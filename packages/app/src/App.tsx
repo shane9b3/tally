@@ -28,6 +28,8 @@ import { SheetTabs } from "./components/SheetTabs";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { SavePrompt } from "./components/SavePrompt";
+import { LockPrompt } from "./components/LockPrompt";
+import { ReadOnlyBanner } from "./components/ReadOnlyBanner";
 import { CsvExportPrompts } from "./components/CsvExportDialog";
 import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
@@ -135,6 +137,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
         {sidebarOpen ? <Sidebar inset={trafficLights} /> : null}
         <main className={styles.main}>
           {bars.toolbar ? <Toolbar inset={trafficLights && !sidebarOpen} /> : <TitleStrip inset={trafficLights && !sidebarOpen} trafficLights={trafficLights} />}
+          <ReadOnlyBanner />
           {bars.formatting ? <FormatBar /> : null}
           {bars.formulaBar || peekFormulaBar ? <FormulaBar /> : null}
           <div className={styles.work}>
@@ -180,6 +183,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
         <CellPopovers />
         <W56Chrome />
         <SavePrompt />
+        <LockPrompt />
         <CsvExportPrompts />
         <Toasts />
         {about ? (

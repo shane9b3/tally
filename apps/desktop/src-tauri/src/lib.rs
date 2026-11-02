@@ -11,6 +11,7 @@ mod closing;
 mod commands;
 mod commands_v4;
 mod dialogs;
+mod doclock;
 mod events;
 mod files;
 mod fonts;
@@ -51,6 +52,11 @@ pub fn run() {
             let recent = files::load_recent(app.handle());
             let state = app.state::<AppState>();
             *state::lock(&state.recent) = recent;
+            // Lock files (doclock.rs): the config dir is the user
+            // installation URL; the instance lock tells whether another
+            // Tally runs. The identity (`id`, `hostname`) is detected later,
+            // on a worker, at the first lock.
+            state.locks.start(app.path().app_config_dir().ok());
             print::setup(app.handle());
             // Our own document list (the sidebar) replaces native macOS window tabs.
             native::disable_automatic_tabbing(app.handle());
@@ -68,6 +74,7 @@ pub fn run() {
             dialogs::wb_save,
             dialogs::wb_save_csv,
             commands::wb_close,
+            commands::wb_set_read_only,
             commands::sheet_layout,
             commands::get_cells,
             commands::get_styles,

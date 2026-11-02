@@ -65,6 +65,29 @@ pub trait DocumentService {
         ))
     }
 
+    /// Sets `doc` read-only or editable (AOO's Edit ▸ Edit Mode). While it
+    /// is read-only every edit (`apply`, `undo`, `redo`, `set_locale`) is
+    /// refused with [`ApiError::READ_ONLY`], and so is a save to the
+    /// document's own file; a save to another file makes it editable.
+    fn set_read_only(&mut self, doc: DocId, read_only: bool) -> Result<WorkbookInfo> {
+        let _ = (doc, read_only);
+        Err(ApiError::unsupported("read-only mode is not supported"))
+    }
+
+    /// Reads `doc`'s file again into the same document id (discarding
+    /// unsaved changes and the undo history), keeping its read-only flag.
+    fn reload(&mut self, doc: DocId) -> Result<WorkbookInfo> {
+        let _ = doc;
+        Err(ApiError::unsupported("reload is not supported"))
+    }
+
+    /// Makes `doc` an untitled copy: no path (Save asks where), title
+    /// `Untitled`, editable (AOO's "edit a copy of the document").
+    fn detach_path(&mut self, doc: DocId) -> Result<WorkbookInfo> {
+        let _ = doc;
+        Err(ApiError::unsupported("untitled copies are not supported"))
+    }
+
     /// Whether `doc` has unsaved changes (`WorkbookInfo.dirty`), for the
     /// shell's exit snapshot, which must not copy a clean document.
     fn is_dirty(&self, doc: DocId) -> Result<bool> {

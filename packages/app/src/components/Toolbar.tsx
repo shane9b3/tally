@@ -36,6 +36,7 @@ function Pill({ command, label, icon, children, active, iconOnly, tooltip }: Pil
   useDocStore((s) => s.groupSheets.length);
   useEditStore((s) => s.edit !== null);
   useDocStore((s) => s.activeSheet);
+  useDocStore((s) => s.info?.readOnly);
   const cmd = ctl.registry.get(command);
   const enabled = ctl.registry.isEnabled(command);
   const reason = enabled ? undefined : ctl.registry.reasonFor(command);

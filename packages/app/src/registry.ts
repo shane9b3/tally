@@ -27,7 +27,9 @@ export interface Command {
 /**
  * A state that disables every command except `allow(id)` (a formula edit
  * picking references on another sheet: AOO disables the slots during
- * reference input), with the reason shown for them.
+ * reference input; a read-only document: AOO disables the editing slots),
+ * with the reason shown for them. Several gates may be installed; the
+ * first active one that refuses a command gives its reason.
  */
 export interface CommandGate {
   active(): boolean;
@@ -37,21 +39,34 @@ export interface CommandGate {
 
 export class CommandRegistry {
   private readonly commands = new Map<string, Command>();
-  private gate: CommandGate | null = null;
+  private gates: CommandGate[] = [];
 
-  /** Installs (or with `null` removes) the gate checked by `isEnabled` and `run`. */
+  /** Installs `gate` as the only gate (`null` removes every gate). */
   setGate(gate: CommandGate | null): void {
-    this.gate = gate;
+    this.gates = gate ? [gate] : [];
+  }
+
+  /** Adds a gate checked by `isEnabled` and `run`; returns its removal. */
+  addGate(gate: CommandGate): () => void {
+    this.gates = [...this.gates, gate];
+    return () => {
+      this.gates = this.gates.filter((g) => g !== gate);
+    };
+  }
+
+  /** The first active gate that refuses `id`. */
+  private refusing(id: string): CommandGate | undefined {
+    return this.gates.find((g) => !g.allow(id) && g.active());
   }
 
   private gated(id: string): boolean {
-    const g = this.gate;
-    return g !== null && !g.allow(id) && g.active();
+    return this.refusing(id) !== undefined;
   }
 
-  /** Why a command is disabled now (the gate's reason first), if it says. */
+  /** Why a command is disabled now (a gate's reason first), if it says. */
   reasonFor(id: string): string | undefined {
-    if (this.gated(id)) return this.gate?.reason();
+    const g = this.refusing(id);
+    if (g) return g.reason();
     return this.commands.get(id)?.reason;
   }
 

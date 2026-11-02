@@ -24,11 +24,16 @@ fn state() -> AppState {
     AppState::new(build_service())
 }
 
+/// A fresh path under `.targets/scratch` (saves now write lock files next
+/// to the document, so the tests keep out of the system temp dir).
 fn temp_path(name: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    std::env::temp_dir().join(format!(
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../.targets/scratch/desktop-tests");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(format!(
         "tally-desktop-{}-{nanos}-{name}",
         std::process::id()
     ))
@@ -2011,5 +2016,297 @@ fn closing_a_document_drops_its_pending_csv_save() -> CmdResult<()> {
     crate::state::lock(&st.pending_csv).insert(info.doc.0, temp_path("p.csv"));
     crate::commands::close_engine_doc(&st, info.doc)?;
     assert!(crate::state::lock(&st.pending_csv).is_empty());
+    Ok(())
+}
+
+// -- Document lock files and read-only mode (doclock.rs) ----------------------
+
+fn lock_test_state() -> AppState {
+    let st = state();
+    st.locks.set_identity(crate::doclock::Identity {
+        name: "Test User".into(),
+        sys_user: "tester".into(),
+        host: "test-host".into(),
+        user_url: "file:///test/tally".into(),
+    });
+    st
+}
+
+/// A saved one-cell ODS file in its own scratch directory.
+fn saved_book(st: &AppState, name: &str) -> CmdResult<PathBuf> {
+    let dir = temp_path(name);
+    std::fs::create_dir_all(&dir).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+    let path = dir.join("Book.ods");
+    let info = new_workbook(st, None)?;
+    set(st, &info, 0, 0, "42")?;
+    save_to(st, info.doc, &path, FileFormat::Ods)?;
+    crate::commands::close_engine_doc(st, info.doc)?;
+    crate::state::lock(&st.paths).remove(&info.doc.0);
+    Ok(std::fs::canonicalize(&path).unwrap_or(path))
+}
+
+const AOO_LOCK: &[u8] =
+    b"Jane Doe,jane,other-mac.local,02.11.2026 15:04,file:///Users/jane/Library/Application%20Support/OpenOffice/4;";
+
+#[test]
+fn open_reports_a_foreign_lock_and_its_answers_work() -> CmdResult<()> {
+    use crate::commands::{open_with_mode, OpenMode};
+    let st = lock_test_state();
+    let path = saved_book(&st, "foreign")?;
+    let lp = crate::doclock::lock_path(&path).unwrap_or_default();
+    assert!(!lp.exists(), "closing removed our lock");
+    std::fs::write(&lp, AOO_LOCK).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+
+    let err = open_with_mode(&st, &path, OpenMode::Normal).unwrap_err();
+    assert_eq!(err.code, ApiError::LOCKED);
+    let v: serde_json::Value = serde_json::from_str(&err.message).unwrap_or_default();
+    assert_eq!(v["owner"], "Jane Doe");
+    assert_eq!(v["time"], "02.11.2026 15:04");
+    assert_eq!(v["file"], "Book.ods");
+    assert_eq!(v["own"], false);
+    // "Open" is only for our own account's lock.
+    assert_eq!(
+        open_with_mode(&st, &path, OpenMode::IgnoreLock)
+            .unwrap_err()
+            .code,
+        ApiError::LOCKED
+    );
+
+    // Open Read-Only: no lock taken, edits refused, Save refused.
+    let ro = open_with_mode(&st, &path, OpenMode::ReadOnly)?;
+    assert!(ro.read_only);
+    assert!(!st.locks.holds(ro.doc.0));
+    let tx = Transaction {
+        ops: vec![Op::SetCellInput {
+            sheet: ro.active_sheet,
+            r: 0,
+            c: 0,
+            input: "x".into(),
+        }],
+        label: None,
+        selection_before: None,
+        selection_after: None,
+        group: None,
+    };
+    let e = with_doc(&st, ro.doc, |s| s.apply(ro.doc, tx)).unwrap_err();
+    assert_eq!(e.code, ApiError::READ_ONLY);
+    // Edit Mode: still locked by Jane.
+    let e = crate::commands::set_edit_mode(&st, ro.doc, false, crate::commands::EditMode::Plain)
+        .unwrap_err();
+    assert_eq!(e.code, ApiError::LOCKED);
+    crate::commands::close_engine_doc(&st, ro.doc)?;
+
+    // Open Copy: untitled, editable, no path, no lock.
+    let copy = open_with_mode(&st, &path, OpenMode::Copy)?;
+    assert!(!copy.read_only);
+    assert_eq!(copy.path, None);
+    crate::commands::close_engine_doc(&st, copy.doc)?;
+
+    // Jane's lock was never touched.
+    assert_eq!(std::fs::read(&lp).unwrap_or_default(), AOO_LOCK);
+    Ok(())
+}
+
+#[test]
+fn open_locks_close_unlocks_and_save_as_moves_the_lock() -> CmdResult<()> {
+    use crate::commands::{open_with_mode, OpenMode};
+    let st = lock_test_state();
+    let path = saved_book(&st, "move")?;
+    let lp = crate::doclock::lock_path(&path).unwrap_or_default();
+    let info = open_with_mode(&st, &path, OpenMode::Normal)?;
+    assert!(!info.read_only);
+    let text = std::fs::read_to_string(&lp).unwrap_or_default();
+    assert!(text.starts_with("Test User,tester,test-host,"), "{text}");
+    assert!(text.ends_with(",file:///test/tally;"), "{text}");
+
+    // Save As: the lock moves with the document.
+    let other = path.with_file_name("Other.ods");
+    save_to(&st, info.doc, &other, FileFormat::Ods)?;
+    assert!(!lp.exists(), "old lock removed");
+    let other_lp = crate::doclock::lock_path(&other).unwrap_or_default();
+    assert!(other_lp.exists(), "new lock written");
+
+    // Save As onto a file Jane is editing is refused, her lock kept.
+    let janes = path.with_file_name("Janes.ods");
+    std::fs::write(
+        crate::doclock::lock_path(&janes).unwrap_or_default(),
+        AOO_LOCK,
+    )
+    .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+    let e = save_to(&st, info.doc, &janes, FileFormat::Ods).unwrap_err();
+    assert_eq!(e.code, ApiError::LOCKED);
+    assert!(!janes.exists());
+    assert!(other_lp.exists(), "still holding our lock");
+
+    // Close removes it.
+    crate::commands::close_engine_doc(&st, info.doc)?;
+    assert!(!other_lp.exists());
+    Ok(())
+}
+
+#[test]
+fn our_stale_lock_is_taken_over_and_own_lock_elsewhere_is_asked() -> CmdResult<()> {
+    use crate::commands::{open_with_mode, OpenMode};
+    let st = lock_test_state();
+    let path = saved_book(&st, "stale")?;
+    let lp = crate::doclock::lock_path(&path).unwrap_or_default();
+    // A crash left our lock: opened for editing without asking.
+    std::fs::write(
+        &lp,
+        b"Test User,tester,test-host,01.01.2026 10:00,file:///test/tally;",
+    )
+    .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+    let info = open_with_mode(&st, &path, OpenMode::Normal)?;
+    assert!(st.locks.holds(info.doc.0));
+    crate::commands::close_engine_doc(&st, info.doc)?;
+    assert!(!lp.exists());
+    // Our account in OpenOffice: asked ("locked by yourself"), then Open.
+    std::fs::write(
+        &lp,
+        b"Test User,tester,test-host,01.01.2026 10:00,file:///Users/tester/OpenOffice/4;",
+    )
+    .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+    let err = open_with_mode(&st, &path, OpenMode::Normal).unwrap_err();
+    let v: serde_json::Value = serde_json::from_str(&err.message).unwrap_or_default();
+    assert_eq!(v["own"], true);
+    let info = open_with_mode(&st, &path, OpenMode::IgnoreLock)?;
+    assert!(!info.read_only);
+    crate::commands::close_engine_doc(&st, info.doc)?;
+    assert!(!lp.exists());
+    Ok(())
+}
+
+#[test]
+fn edit_mode_round_trip_and_unwritable_files() -> CmdResult<()> {
+    use crate::commands::{open_with_mode, set_edit_mode, EditMode, OpenMode};
+    let st = lock_test_state();
+    let path = saved_book(&st, "editmode")?;
+    let lp = crate::doclock::lock_path(&path).unwrap_or_default();
+    let info = open_with_mode(&st, &path, OpenMode::Normal)?;
+    let doc = info.doc;
+    // To read-only with unsaved changes needs Save or Discard first.
+    set(&st, &info, 1, 0, "unsaved")?;
+    assert!(set_edit_mode(&st, doc, true, EditMode::Plain).is_err());
+    let r = set_edit_mode(&st, doc, true, EditMode::Discard)?;
+    assert!(r.info.read_only && r.reloaded && !r.info.dirty);
+    assert!(!lp.exists(), "read-only holds no lock");
+    // Back to editing: locked again, not reloaded (unchanged on disk).
+    let r = set_edit_mode(&st, doc, false, EditMode::Plain)?;
+    assert!(!r.info.read_only && !r.reloaded);
+    assert!(lp.exists());
+    // Changed on disk while read-only: reloaded when switching back.
+    set_edit_mode(&st, doc, true, EditMode::Plain)?;
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let writer = new_workbook(&st, None)?;
+    set(&st, &writer, 0, 0, "from elsewhere")?;
+    with_doc(&st, writer.doc, |s| {
+        s.save_copy(writer.doc, &path, FileFormat::Ods)
+    })?;
+    crate::commands::close_engine_doc(&st, writer.doc)?;
+    let r = set_edit_mode(&st, doc, false, EditMode::Plain)?;
+    assert!(r.reloaded);
+    let view = cells(&st, doc, r.info.active_sheet, range(0, 0, 0, 0))?;
+    assert_eq!(
+        cell(&view, 0, 0).map(|v| v.text.as_str()),
+        Some("from elsewhere")
+    );
+
+    // A file that cannot be written: opens read-only, Edit Mode refuses.
+    set_edit_mode(&st, doc, true, EditMode::Plain)?;
+    let mut p = std::fs::metadata(&path)
+        .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?
+        .permissions();
+    p.set_readonly(true);
+    std::fs::set_permissions(&path, p).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+    let e = set_edit_mode(&st, doc, false, EditMode::Plain).unwrap_err();
+    assert_eq!(e.code, ApiError::NOT_WRITABLE);
+    let other = open_with_mode(&st, &path, OpenMode::Normal);
+    // "edit a copy": untitled and editable.
+    let r = set_edit_mode(&st, doc, false, EditMode::Copy)?;
+    assert!(!r.info.read_only && r.info.path.is_none());
+    let mut p = std::fs::metadata(&path)
+        .map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?
+        .permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    p.set_readonly(false);
+    std::fs::set_permissions(&path, p).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+    let other = other?;
+    assert!(other.read_only, "an unwritable file opens read-only");
+    assert!(!st.locks.holds(other.doc.0));
+    crate::commands::close_engine_doc(&st, other.doc)?;
+    crate::commands::close_engine_doc(&st, doc)?;
+    assert!(!lp.exists());
+    Ok(())
+}
+
+#[test]
+fn save_as_onto_a_file_open_in_another_document_is_refused() -> CmdResult<()> {
+    use crate::commands::{open_with_mode, OpenMode};
+    let st = lock_test_state();
+    let path = saved_book(&st, "saveas-open")?;
+    let lp = crate::doclock::lock_path(&path).unwrap_or_default();
+    let a = open_with_mode(&st, &path, OpenMode::Normal)?;
+    let before = std::fs::read(&path).unwrap_or_default();
+    let b = new_workbook(&st, None)?;
+    set(&st, &b, 0, 0, "other")?;
+    let e = save_to(&st, b.doc, &path, FileFormat::Ods).unwrap_err();
+    assert_eq!(e.code, ApiError::LOCKED);
+    let v: serde_json::Value = serde_json::from_str(&e.message).unwrap_or_default();
+    assert_eq!(v["owner"], "Test User");
+    assert_eq!(v["own"], false);
+    assert_eq!(
+        std::fs::read(&path).unwrap_or_default(),
+        before,
+        "not written"
+    );
+    // Closing the other document leaves A's lock alone.
+    crate::commands::close_engine_doc(&st, b.doc)?;
+    assert!(lp.exists());
+    // A read-only (unlocked) document's file is protected too.
+    crate::commands::close_engine_doc(&st, a.doc)?;
+    let ro = open_with_mode(&st, &path, OpenMode::ReadOnly)?;
+    let c = new_workbook(&st, None)?;
+    assert_eq!(
+        save_to(&st, c.doc, &path, FileFormat::Ods)
+            .unwrap_err()
+            .code,
+        ApiError::LOCKED
+    );
+    crate::commands::close_engine_doc(&st, ro.doc)?;
+    crate::commands::close_engine_doc(&st, c.doc)?;
+    Ok(())
+}
+
+#[test]
+fn concurrent_opens_of_one_file_open_it_once() -> CmdResult<()> {
+    use crate::commands::{open_unique, OpenMode};
+    let st = lock_test_state();
+    let path = saved_book(&st, "race")?;
+    let lp = crate::doclock::lock_path(&path).unwrap_or_default();
+    for _ in 0..8 {
+        let results: Vec<CmdResult<WorkbookInfo>> = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..4)
+                .map(|_| s.spawn(|| open_unique(&st, &path, OpenMode::Normal)))
+                .collect();
+            hs.into_iter()
+                .map(|h| {
+                    h.join()
+                        .unwrap_or_else(|_| Err(ApiError::new(ApiError::INTERNAL, "panic")))
+                })
+                .collect()
+        });
+        let opened: Vec<&WorkbookInfo> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+        assert_eq!(opened.len(), 1, "{results:?}");
+        for r in &results {
+            if let Err(e) = r {
+                assert_eq!(e.code, ApiError::CANCELLED);
+            }
+        }
+        let doc = opened[0].doc;
+        assert!(st.locks.holds(doc.0));
+        crate::commands::close_engine_doc(&st, doc)?;
+        crate::state::lock(&st.paths).remove(&doc.0);
+        assert!(!lp.exists(), "the one lock went with the one document");
+    }
     Ok(())
 }

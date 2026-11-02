@@ -11,6 +11,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "wb_save",
     "wb_save_csv",
     "wb_close",
+    "wb_set_read_only",
     "sheet_layout",
     "get_cells",
     "get_styles",

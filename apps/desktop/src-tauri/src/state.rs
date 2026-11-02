@@ -13,7 +13,8 @@
 //! 1. one document's service (a [`DocSlot`]): at most one at a time; no code
 //!    path holds two documents' locks, and none may be added without a fixed
 //!    order (ascending doc id);
-//! 2. `paths`, then `recent`, then `allowed` (small maps);
+//! 2. `paths`, then `recent`, then `allowed` (small maps), and the lock
+//!    files' maps in `locks` (leaf maps; never held across file I/O);
 //! 3. leaf locks, held only for a lookup, insert, remove or clone and never
 //!    while taking another lock: `hub` (to fork), `docs` (to find or file a
 //!    document's slot), and the engine's shared clipboard / print-job locks.
@@ -49,6 +50,9 @@ pub struct AppState {
     /// CSV files picked in a Save dialog that wait for the Text Export
     /// options (`wb_save` → code `csv_options` → `wb_save_csv`).
     pub pending_csv: Mutex<HashMap<u32, PathBuf>>,
+    /// Document lock files (`.~lock.<name>#`, AOO's format) and file
+    /// stamps; its maps are leaf locks (`doclock.rs`).
+    pub locks: crate::doclock::Locks,
 }
 
 impl AppState {
@@ -61,6 +65,7 @@ impl AppState {
             allowed: Mutex::new(HashSet::new()),
             paths: Mutex::new(HashMap::new()),
             pending_csv: Mutex::new(HashMap::new()),
+            locks: crate::doclock::Locks::default(),
         }
     }
 

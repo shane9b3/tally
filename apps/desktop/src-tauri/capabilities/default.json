@@ -18,6 +18,7 @@
     "allow-wb-save",
     "allow-wb-save-csv",
     "allow-wb-close",
+    "allow-wb-set-read-only",
     "allow-sheet-layout",
     "allow-get-cells",
     "allow-get-styles",

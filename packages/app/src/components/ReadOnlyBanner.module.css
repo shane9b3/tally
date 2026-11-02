@@ -1,0 +1,45 @@
+/* The read-only info bar (LibreOffice's infobar; AOO 4.1 shows only the
+   title suffix and the Edit File button). Accent-subtle surface, one line. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--tally-space-3);
+  min-height: 34px;
+  padding: 0 var(--tally-space-4);
+  border-bottom: 1px solid var(--tally-accent-border);
+  background: var(--tally-accent-subtle);
+  color: var(--tally-text);
+  font-size: var(--tally-font-size-sm);
+}
+
+.icon {
+  flex: none;
+  color: var(--tally-accent-text);
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+}
+
+.button {
+  flex: none;
+  height: 24px;
+  padding: 0 12px;
+  border: 1px solid var(--tally-accent-border);
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-bg);
+  color: var(--tally-accent-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: default;
+}
+
+.button:hover {
+  background: var(--tally-hover);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--tally-accent);
+  outline-offset: 1px;
+}

@@ -35,6 +35,8 @@ async function pickClient(): Promise<Client | null> {
     // `?tabs=<n>`: a mock tab shell, to see and drive the sidebar's "Open" list.
     const tabs = Number(params.get("tabs") ?? "0");
     if (tabs > 0) dev.installMockTabs(client, tabs);
+    // `?readonly=1`: workbooks open like files flagged read-only (e2e).
+    if (params.get("readonly") === "1") client.readOnlyHooks.openReadOnly = true;
     return client;
   }
   return null;
