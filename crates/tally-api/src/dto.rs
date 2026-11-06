@@ -84,6 +84,12 @@ pub struct WorkbookInfo {
     #[serde(default)]
     #[ts(as = "Option<bool>", optional)]
     pub load_readonly: bool,
+    /// The file holds macros (an `.xlsm` VBA project, ODS Basic modules)
+    /// that Tally neither runs nor saves: the UI says so once, like
+    /// `warnings` (set in the open result only).
+    #[serde(default)]
+    #[ts(as = "Option<bool>", optional)]
+    pub has_macros: bool,
 }
 
 /// One sheet tab.

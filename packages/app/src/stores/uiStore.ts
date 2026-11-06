@@ -3,6 +3,7 @@ import type { CellPos, DocPropertiesDto, NameInfo, PageSetupDto, RangeDto, SortK
 import type { HighlightPreset } from "../v03";
 import type { ContextArea } from "@tally/grid";
 import { create } from "zustand";
+import { t } from "../i18n";
 import { clampZoom, nextZoom } from "../formats";
 import {
   applyThemeAttr,
@@ -193,4 +194,18 @@ export const useUiStore = create<UiState>()((set, get) => ({
  */
 export function toastWarnings(warnings: readonly string[] | undefined): void {
   for (const w of warnings ?? []) useUiStore.getState().pushToast("info", w);
+}
+
+/**
+ * The one-shot notices of a document just opened: the macro notice when the
+ * file held macros Tally drops (`hasMacros`, an `.xlsm` VBA project, ODS
+ * Basic), then the engine's warnings.
+ */
+export function openNotices(info: { readonly warnings: readonly string[]; readonly hasMacros?: boolean }): string[] {
+  const out: string[] = [];
+  if (info.hasMacros) {
+    out.push(t("msg.toast.macrosRemoved", "This document contains macros. Tally does not run macros; they will be removed when you save."));
+  }
+  out.push(...info.warnings);
+  return out;
 }

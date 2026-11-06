@@ -14,12 +14,19 @@ information. All readers produce, and all writers consume,
 | SXC (StarOffice 6 / OpenOffice.org 1.x) | `tally-io-ods` (`sxc.rs`) | yes | no | read + write |
 | HTML tables | `tally-io-html` | yes | yes | read + write |
 | dBase III/IV (`.dbf`) | `tally-io-dbf` | yes | yes | read + write |
+| Flat XML ODF spreadsheet (`.fods`) | `tally-io-ods` (`read_fods`) | yes | no | read + write |
+| Excel 2003 XML (SpreadsheetML, `.xml`) | `tally-io-xmlss` | yes | no | read + write |
+| SYLK (`.slk`) | `tally-io-sylk` | yes | no | read + write |
+| DIF (`.dif`) | `tally-io-dif` | yes | no | read + write |
 | PDF | `tally-io-pdf` (krilla 0.8.2) | no | yes (export, print, preview) | export |
 
 AOO 4.1 imports `.xlsx` but cannot save it (see
 `docs/calc-features-inventory.md`, "Calc MS Excel 2007 XML"). Tally writes it.
 XLSB, XLSM macros, XLS export and strict-OOXML-only packages are not
-supported; an `.xlsb` is reported as `XlsxError::Unsupported`. The wave-5
+supported; an `.xlsb` is reported as `XlsxError::Unsupported`. `.xlsm`,
+`.xltx` and `.xltm` open through the XLSX reader (their macro-enabled and
+template content types are accepted); see "Read-only formats and macros"
+below. The wave-5
 formats are described at the end of this page.
 
 ## v0.3 feature coverage
@@ -435,11 +442,60 @@ loses.
 
 ## Wave 5 formats (W5-3)
 
-Formats are sniffed by content before the extension (`service/codec.rs`): a
-zip whose `mimetype` is the ODS or SXC type, the OLE2 signature for XLS, the
-dBase header (only with a `.dbf` extension or no extension), HTML tags for
+Formats are sniffed by content before the extension (`codec::detect` in
+`service/codec.rs`): a zip whose `mimetype` is the ODS or SXC type or whose
+content types name a spreadsheet main part (XLSX family), the OLE2
+signature for XLS, a flat ODF `office:document` root with the ODS media
+type, a SpreadsheetML root or `mso-application` instruction, the SYLK `ID;`
+and DIF `TABLE`/`0,1` headers (not trusted on `.csv`/`.tsv`/`.txt`/`.tab`
+files: `ID;Price;…` is a semicolon CSV), then by extension: the dBase header
+(only with a `.dbf` extension or no extension), HTML tags for
 `.html`/`.htm`/`.xhtml` (and extension-less or `.txt` files that start with
-a document), else CSV.
+a document), else CSV. A renamed file therefore opens by its content.
+
+### Read-only formats and macros
+
+Save writes a file in place only in a format Tally writes (`.ods`, `.ots`,
+`.xlsx`, the CSV family, `.html`/`.htm`, `.dbf`;
+`dialogs::writable_in_place`). Every other format (`.xls`, `.xlt`,
+`.xlw`, `.xlsm`, `.xltm`, `.xltx`, `.xml`, `.fods`, `.sxc`, `.stc`, `.slk`,
+`.dif`) goes to Save As, opened in the file's folder with the same base
+name and XLSX preselected for the Excel family, ODS for the rest. Tally
+never writes a plain workbook into an `.xlsm` name (Excel refuses one
+without its VBA project and content type).
+
+Macros are never read or run. When the opened file holds them — a VBA
+project (`xl/vbaProject.bin`) or Excel 4.0 macro sheets in an OOXML package
+(`tally_io_xlsx::has_macros`), a `_VBA_PROJECT_CUR` storage in an `.xls`
+(`tally_io_xls::has_macros`), Basic modules or scripts in an ODS/SXC
+package (`Basic/<lib>/<module>.xml`, `Scripts/`; `tally_io_ods::has_macros`)
+or `ooo:module` in a flat ODS (`fods_has_macros`) — the open result has
+`WorkbookInfo::has_macros` set once, and the UI shows the localised notice
+"This document contains macros. Tally does not run macros; they will be
+removed when you save." (`msg.toast.macrosRemoved`).
+
+The desktop Open dialog lists every readable extension ("All
+Spreadsheets", one filter per format, "All Files"). On macOS no filter is
+set (the dialog plugin merges filters into one allowed list), so any file
+can be chosen and is sniffed, as AOO's default "All files" filter. The app
+bundle declares these formats (`bundle.fileAssociations` →
+`CFBundleDocumentTypes`, Editor for formats Tally writes, Viewer for the
+read-only ones), and files opened from Finder (`RunEvent::Opened`) or, on
+Windows and Linux, from the command line go through the same open path
+(allowlist, lock, already-open check) in a new window.
+
+### Flat XML ODF spreadsheet (`.fods`, `tally_io_ods::read_fods`, read only)
+
+One XML file with an `office:document` root (`office:mimetype` the ODS
+type) holding what a package splits into `meta.xml`, `settings.xml`,
+`styles.xml` and `content.xml`. Read with the ODS parsers in two passes
+over the bytes: meta and settings (stopping at `office:body`), then common
+styles, automatic styles, master pages and the body
+(`content::parse_content_with(.., flat = true)`). Everything ODS reads is
+read, except charts and pictures (embedded `office:document` objects and
+`office:binary-data` images), which are dropped with a warning. Not
+written (Save As offers ODS).
+
 
 ### XLS, Excel 97–2003 (`crates/tally-io-xls`, read only)
 
@@ -520,6 +576,89 @@ all dates → `D`, all booleans → `L`, all numbers → `N` with the widest
 integer part and most decimals seen (≤ 20 characters), otherwise `C` with
 the longest encoded text (≤ 254 bytes, longer text is cut). Unencodable
 characters become `?`.
+
+### Excel 2003 XML (SpreadsheetML) (`crates/tally-io-xmlss`, read only)
+
+Import of the `.xml` "XML Spreadsheet" format of Excel 2002/2003, following
+AOO 4.1's XSLT import filter (`spreadsheetml2ooo.xsl`). Sniffed from the
+first 4 KiB: `<?mso-application progid="Excel.Sheet"?>` or a root
+`Workbook` element in the `urn:schemas-microsoft-com:office:spreadsheet`
+namespace (prefixed or not). Input is UTF-8 (BOM allowed); UTF-16 and a
+declared non-UTF-8 `encoding=` are decoded with `encoding_rs`.
+
+Read: document properties (title, subject, author, last author, created,
+last saved, keywords, description); the active sheet and the 1904 date
+system (`x:ExcelWorkbook`); styles with `ss:Parent` inheritance (every
+style inherits `Default`): font (family, size, bold, italic, underline
+style, strikethrough, colour), fill (`Solid`, other patterns mixed with
+`ss:PatternColor` as AOO does), borders (four sides and diagonals, weight
+0–3, continuous/double/dotted/dashed), alignment (horizontal, vertical,
+wrap, indent, rotation, vertical text, shrink to fit), cell protection and
+number formats: named formats (`General Date`, `Short Date`, `Currency`,
+`Standard`, `Percent`, `Yes/No`, … mapped as the XSL does) and Excel codes
+translated like XLSX ones. The `Default` style's font becomes the document
+font. Sheets: names (made unique and non-empty), hidden sheets
+(`SheetHidden`/`SheetVeryHidden`), frozen panes, sheet protection (without
+a password), the AutoFilter range; columns and rows with `ss:Index`,
+`ss:Span`, widths and heights (points; a row height is fixed unless
+`ss:AutoFitHeight="1"`), hidden columns/rows, `ss:DefaultColumnWidth`,
+column styles (whole-column style runs) and row styles; cells with
+`ss:Index`, `ss:MergeAcross`/`ss:MergeDown` (merged areas), values
+(`Number`, `String` including rich HTML text, `Boolean`, `DateTime` →
+date serial, with a `YYYY-MM-DD[ HH:MM:SS]` or `HH:MM:SS` format when the
+style has none, `Error`), R1C1 formulas converted to OpenFormula with
+their cached values (`tally_io_xlsx::r1c1_formula_to_of`: R1C1 references
+are rewritten to A1 relative to the cell, then parsed as ExcelA1; an
+untranslatable formula keeps its text and cached value, with a warning),
+`ss:ArrayRange` array formulas, `ss:HRef` hyperlinks and comments (notes
+with author and "show always"); named ranges at workbook and sheet level
+(sheet references made absolute), `Print_Area` and `Print_Titles` as the
+sheet's print range and repeated rows/columns.
+
+Dropped with a warning: conditional formatting, data validation,
+AutoFilter criteria, pivot tables. Dropped silently: page setup, headers
+and footers, print options, sorting and advanced filters, unfrozen splits,
+zoom and view flags, tab colours, named cell styles, superscript and
+subscript, custom document properties, `ss:DefaultRowHeight`.
+
+Limits (`tally_io_xmlss::Limits`): 512 MiB of input, 10 M cells, 1 GiB of
+text, 10,000 sheets, 64,000 styles, 100,000 names; see
+`docs/security.md` §3c. Not written.
+
+### SYLK (`crates/tally-io-sylk`, read only)
+
+As AOO's `ScImportExport::Sylk2Doc` (`sc/source/ui/docshell/impex.cxx`).
+Sniffed by an `ID;` first record. Records: `ID;P<program>` (`CALCOOO32`
+and `SCALC3` are AOO's own files, any other producer is foreign), `C`
+cells (`X`/`Y` persist between records; `K"text"`, `K<number>`; a value
+followed by `;I` is ignored; `E` formula; `M` matrix formula over `R`/`C`
+→ an array formula block), `P;P<code>` number formats (Excel codes,
+translated as XLSX's) applied by `F;P<n>` at `X`/`Y`, `E` end. String and
+formula escapes follow AOO's version rules (`;;` → `;`; StarCalc 3's
+doubled quotes; `ESC :` → line break). The single sheet takes the file
+name. AOO's own files carry native A1 formulas (`SUM(A1:B1;3)`), read as
+`oooc:=` text with bracketed references
+(`tally_io_ods::native_formula_to_of`). Dropped as in AOO: column widths
+(`F;W`), fonts and styles (`P;F`, `F;S`), bounds, options, names.
+Deviations: foreign (Excel) R1C1 formulas are converted (AOO drops them
+and keeps the value; a formula that does not convert keeps the value
+alone); `KTRUE`/`KFALSE` are booleans and `K#N/A`-style values errors (AOO
+reads 0). Text is UTF-8 if valid, else Windows-1252.
+
+### DIF (`crates/tally-io-dif`, read only)
+
+As AOO's `ScFormatFilterPluginImpl::ScImportDif` / `DifParser`
+(`sc/source/filter/dif/difimp.cxx`). Header topics (`TABLE` names the
+sheet; `VECTORS`, `TUPLES`, `LABEL`, … are skipped) up to `DATA`, then
+entries: `-1,0` + `BOT` (new row) / `EOD`; `0,<n>` + `V` (number), `TRUE`
+/ `FALSE` (boolean), `NA` / `ERROR` (that text), other indicators (text
+`#IND: x?`), an unparsable number (text `#ERR: n (x)`); `1,0` + a quoted
+string (`""` → `"`; multi-line strings end at a line followed by an
+entry, AOO's look-ahead; an empty string leaves the cell empty). Values
+past the sheet are dropped with a warning (AOO's `eERR_RNGOVRFLW`).
+Deviation: numbers use AOO's "plain" syntax (`ScanFloatVal`, `.` or `,`
+decimal) instead of its number formatter, so no number format is
+recognised. Text is UTF-8 if valid, else Windows-1252.
 
 ### PDF, printing and preview (`crates/tally-io-pdf`)
 

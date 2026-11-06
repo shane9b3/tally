@@ -58,4 +58,10 @@ readOnly?: boolean,
  * `LoadReadonly`, AOO's File ▸ Properties ▸ Security "Open file
  * read-only"); kept and written back on save.
  */
-loadReadonly?: boolean, };
+loadReadonly?: boolean, 
+/**
+ * The file holds macros (an `.xlsm` VBA project, ODS Basic modules)
+ * that Tally neither runs nor saves: the UI says so once, like
+ * `warnings` (set in the open result only).
+ */
+hasMacros?: boolean, };

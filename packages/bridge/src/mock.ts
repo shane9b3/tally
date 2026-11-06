@@ -597,6 +597,13 @@ export class MockClient implements EngineClientV4, ShellClient {
    */
   readonly readOnlyHooks: { openReadOnly: boolean; lockedBy: LockInfo | null; unwritable: boolean } = { openReadOnly: false, lockedBy: null, unwritable: false };
 
+  /**
+   * e2e/demo hook (`?macros=1`): every new workbook opens as a saved
+   * `Book.xlsm` whose macros Tally drops (`hasMacros` in that open result
+   * only, as the engine reports it once).
+   */
+  readonly macroHooks: { openWithMacros: boolean } = { openWithMacros: false };
+
   newWorkbook(template?: string | null): Promise<WorkbookInfo> {
     const tpl = template ? mockTemplate(template) : undefined;
     if (template && !tpl) return Promise.reject(apiError("not_found", `no template "${template}"`));
@@ -620,8 +627,14 @@ export class MockClient implements EngineClientV4, ShellClient {
       doc.loadReadonly = true;
       doc.lockHeld = true;
     }
+    if (this.macroHooks.openWithMacros) {
+      doc.title = "Book.xlsm";
+      doc.path = "/mock/Book.xlsm";
+    }
     this.docs.set(id, doc);
-    return Promise.resolve(this.info(doc));
+    const info = this.info(doc);
+    if (this.macroHooks.openWithMacros) info.hasMacros = true;
+    return Promise.resolve(info);
   }
 
   /** Throws the engine's `read_only` error when `doc` is read-only. */

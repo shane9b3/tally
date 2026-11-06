@@ -672,6 +672,10 @@ pub struct WindowInit {
     /// A close sequence is asking this document (the webview was reloaded
     /// while asked): ask again with this kind.
     pub ask: Option<CloseKind>,
+    /// Files the OS asked to open before any webview had started (Tally
+    /// launched by opening them): the webview opens them, the first in
+    /// place of its blank workbook (`dialogs::OsOpen`).
+    pub open_paths: Vec<String>,
 }
 
 /// `window_init()`: the document the calling tab shows (from the engine,
@@ -697,12 +701,20 @@ pub async fn window_init(app: AppHandle, webview: Webview) -> CmdResult<WindowIn
         };
         (r.window_of_tab(&label), ask)
     });
+    let open_paths = app
+        .try_state::<crate::dialogs::OsOpen>()
+        .map(|o| o.take_pending())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| p.display().to_string())
+        .collect();
     Ok(WindowInit {
         doc,
         offer_recovery,
         tabs: win.and_then(|w| tabs_state(&app, &w)),
         label,
         ask,
+        open_paths,
     })
 }
 
@@ -971,10 +983,11 @@ mod tests {
             label: "doc-1".into(),
             tabs: None,
             ask: None,
+            open_paths: vec!["/tmp/a.xlsm".into()],
         };
         assert_eq!(
             serde_json::to_string(&init).unwrap_or_default(),
-            r#"{"doc":null,"offerRecovery":true,"label":"doc-1","tabs":null,"ask":null}"#
+            r#"{"doc":null,"offerRecovery":true,"label":"doc-1","tabs":null,"ask":null,"openPaths":["/tmp/a.xlsm"]}"#
         );
     }
 }

@@ -431,6 +431,7 @@ impl EngineService {
         if let Some(o) = decoded.csv_options {
             doc.csv_options = o;
         }
+        doc.has_macros = decoded.has_macros;
         Ok(doc)
     }
 
@@ -485,6 +486,7 @@ impl DocumentService for EngineService {
         let info = doc.info();
         // Warnings are delivered once, with the open result.
         doc.warnings.clear();
+        doc.has_macros = false;
         self.docs.insert(id.0, doc);
         Ok(info)
     }
@@ -573,6 +575,7 @@ impl DocumentService for EngineService {
         fresh.title = title;
         let info = fresh.info();
         fresh.warnings.clear();
+        fresh.has_macros = false;
         if let Ok(cache) = self.chart_cache.get_mut() {
             cache.forget(doc.0);
         }

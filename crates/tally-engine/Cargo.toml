@@ -19,6 +19,9 @@ io = [
     "dep:tally-io-xls",
     "dep:tally-io-html",
     "dep:tally-io-dbf",
+    "dep:tally-io-xmlss",
+    "dep:tally-io-sylk",
+    "dep:tally-io-dif",
     "pdf",
 ]
 # Print preview and PDF export through `tally-io-pdf` (krilla/hayro).
@@ -37,6 +40,9 @@ tally-io-xlsx = { workspace = true, optional = true }
 tally-io-xls = { workspace = true, optional = true }
 tally-io-html = { workspace = true, optional = true }
 tally-io-dbf = { workspace = true, optional = true }
+tally-io-xmlss = { workspace = true, optional = true }
+tally-io-sylk = { workspace = true, optional = true }
+tally-io-dif = { workspace = true, optional = true }
 tally-io-pdf = { workspace = true, optional = true }
 slotmap.workspace = true
 smallvec.workspace = true

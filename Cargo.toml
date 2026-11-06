@@ -16,6 +16,9 @@ members = [
     "crates/tally-io-xls",
     "crates/tally-io-html",
     "crates/tally-io-dbf",
+    "crates/tally-io-xmlss",
+    "crates/tally-io-sylk",
+    "crates/tally-io-dif",
     "crates/tally-assist",
     "crates/tally-cli",
     "crates/tally-macos-terminate",
@@ -49,6 +52,9 @@ tally-io-pdf = { path = "crates/tally-io-pdf", version = "0.1.0" }
 tally-io-xls = { path = "crates/tally-io-xls", version = "0.1.0" }
 tally-io-html = { path = "crates/tally-io-html", version = "0.1.0" }
 tally-io-dbf = { path = "crates/tally-io-dbf", version = "0.1.0" }
+tally-io-xmlss = { path = "crates/tally-io-xmlss", version = "0.1.0" }
+tally-io-sylk = { path = "crates/tally-io-sylk", version = "0.1.0" }
+tally-io-dif = { path = "crates/tally-io-dif", version = "0.1.0" }
 tally-assist = { path = "crates/tally-assist", version = "0.1.0" }
 tally-macos-terminate = { path = "crates/tally-macos-terminate", version = "0.1.0" }
 
@@ -56,6 +62,9 @@ tally-macos-terminate = { path = "crates/tally-macos-terminate", version = "0.1.
 tauri = "=2.12.4"
 tauri-build = "=2.7.3"
 tauri-plugin-dialog = "=2.8.3"
+# Second launches hand their files to the running instance (file
+# associations on Windows and Linux; dialogs::open_os_files). No JS API.
+tauri-plugin-single-instance = "=2.5.5"
 # macOS only: the window's "document edited" dot (`closing.rs`), through the
 # safe objc2 bindings Tauri's own tao already links (same versions as Cargo.lock).
 objc2 = { version = "=0.6.5", default-features = false, features = ["std"] }

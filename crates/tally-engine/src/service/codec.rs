@@ -1,9 +1,11 @@
 //! File codecs behind a trait, so the engine builds while the IO crates are
 //! being written. [`UnsupportedCodec`] is the default; with the `io` feature
-//! [`IoCodec`] reads ODS/OTS, SXC (OOo 1.x), XLSX/XLSM, XLS (BIFF), HTML,
+//! [`IoCodec`] reads ODS/OTS, flat ODS (`.fods`), SXC/STC (OOo 1.x),
+//! XLSX/XLSM/XLTX/XLTM, XLS/XLT (BIFF), Excel 2003 XML, SYLK, DIF, HTML,
 //! dBase and CSV/TSV, and writes ODS, XLSX, CSV, HTML and dBase through the
-//! `tally-io-*` crates. Formats are sniffed by magic bytes first (zip
-//! `mimetype`, OLE2 signature, dBase header, HTML tags), then by extension.
+//! `tally-io-*` crates. Formats are sniffed by their content first (zip
+//! `mimetype`, OLE2 signature, XML roots, SYLK/DIF headers, dBase header,
+//! HTML tags), then by extension ([`detect`]).
 //!
 //! Wiring (one line in the shell):
 //! `let svc = EngineService::new().with_codec(Box::new(tally_engine::service::IoCodec));`
@@ -25,6 +27,8 @@ pub struct Decoded {
     /// CSV: the delimiters and character set found on import, which a
     /// later CSV save reuses (AOO keeps the import's filter options).
     pub csv_options: Option<tally_api::CsvExportOptions>,
+    /// The file holds macros (VBA, Basic) that Tally drops.
+    pub has_macros: bool,
 }
 
 /// What a codec needs to write a file.
@@ -71,125 +75,227 @@ impl FileCodec for UnsupportedCodec {
 #[derive(Copy, Clone, Debug, Default)]
 pub struct IoCodec;
 
+/// What [`IoCodec`] reads a file as ([`detect`]).
+#[cfg(feature = "io")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// ODS / OTS package.
+    Ods,
+    /// Flat XML ODF spreadsheet (`.fods`).
+    Fods,
+    /// XLSX / XLSM / XLTX / XLTM package.
+    Xlsx,
+    /// OOo 1.x package (`.sxc`, `.stc`).
+    Sxc,
+    /// Excel 97–2003 (BIFF in an OLE2 compound file).
+    Xls,
+    /// Excel 2003 XML (SpreadsheetML).
+    Xmlss,
+    /// SYLK.
+    Sylk,
+    /// Data Interchange Format.
+    Dif,
+    /// dBase.
+    Dbf,
+    /// HTML tables.
+    Html,
+    /// CSV / TSV / text.
+    Csv,
+}
+
+/// What `bytes` with lowercase extension `ext` are read as: the content
+/// first (zip `mimetype` / content types, the OLE2 signature, the flat ODF
+/// and SpreadsheetML roots, the SYLK `ID;` and DIF `TABLE` headers), then
+/// the extension (AOO's type detection also prefers the content). The SYLK
+/// and DIF headers are not trusted on a CSV-family file: `ID;Price;…` is a
+/// semicolon CSV. `None`: not a format Tally reads.
+#[cfg(feature = "io")]
+pub fn detect(bytes: &[u8], ext: &str) -> Option<Kind> {
+    let text_family = matches!(ext, "csv" | "tsv" | "txt" | "tab");
+    let sniffed = if tally_io_ods::sniff_is_ods(bytes) {
+        Some(Kind::Ods)
+    } else if tally_io_xlsx::sniff_is_xlsx(bytes) {
+        Some(Kind::Xlsx)
+    } else if tally_io_ods::sniff_is_sxc(bytes) {
+        Some(Kind::Sxc)
+    } else if tally_io_xls::sniff_is_xls(bytes) {
+        Some(Kind::Xls)
+    } else if tally_io_ods::sniff_is_fods(bytes) {
+        Some(Kind::Fods)
+    } else if tally_io_xmlss::sniff_is_xmlss(bytes) {
+        Some(Kind::Xmlss)
+    } else if !text_family
+        && tally_io_sylk::sniff_is_sylk(bytes)
+        && (!ext.is_empty() || has_sylk_cells(bytes))
+    {
+        Some(Kind::Sylk)
+    } else if !text_family && tally_io_dif::sniff_is_dif(bytes) {
+        Some(Kind::Dif)
+    } else {
+        None
+    };
+    if sniffed.is_some() {
+        return sniffed;
+    }
+    Some(match ext {
+        "ods" | "ots" => Kind::Ods,
+        "fods" => Kind::Fods,
+        "xlsx" | "xlsm" | "xltx" | "xltm" => Kind::Xlsx,
+        "sxc" | "stc" => Kind::Sxc,
+        "xls" | "xlt" | "xlw" => Kind::Xls,
+        "xml" => Kind::Xmlss,
+        "slk" => Kind::Sylk,
+        "dif" => Kind::Dif,
+        "dbf" => Kind::Dbf,
+        "" if tally_io_dbf::sniff_is_dbf(bytes) => Kind::Dbf,
+        "html" | "htm" | "xhtml" => Kind::Html,
+        "txt" | "" if tally_io_html::sniff_is_html(bytes) => Kind::Html,
+        "csv" | "tsv" | "txt" | "tab" | "" => Kind::Csv,
+        _ => return None,
+    })
+}
+
+/// An extension-less file starting `ID;` is SYLK only if a `C;` record
+/// follows in its first 64 KiB: `ID;Name;Price` is a semicolon CSV.
+#[cfg(feature = "io")]
+fn has_sylk_cells(bytes: &[u8]) -> bool {
+    bytes[..bytes.len().min(64 * 1024)]
+        .windows(3)
+        .any(|w| (w[0] == b'\n' || w[0] == b'\r') && w[1] == b'C' && w[2] == b';')
+}
+
+#[cfg(feature = "io")]
+fn bad_file(e: impl std::fmt::Display) -> ApiError {
+    ApiError::new(ApiError::BAD_FILE, e.to_string())
+}
+
+#[cfg(feature = "io")]
+impl Decoded {
+    /// A workbook read as stored (no text recognition).
+    fn plain(data: WorkbookData, has_macros: bool) -> Self {
+        Self {
+            data,
+            recognize_text: false,
+            evaluate_formulas: false,
+            csv_options: None,
+            has_macros,
+        }
+    }
+}
+
 #[cfg(feature = "io")]
 impl FileCodec for IoCodec {
     fn read(&self, bytes: &[u8], ext: &str) -> Result<Decoded, ApiError> {
-        if tally_io_ods::sniff_is_ods(bytes) || ext == "ods" || ext == "ots" {
-            let data = tally_io_ods::read_ods(
-                std::io::Cursor::new(bytes),
-                &tally_io_ods::Limits::default(),
-            )
-            .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
-            return Ok(Decoded {
-                data,
-                recognize_text: false,
-                evaluate_formulas: false,
-                csv_options: None,
-            });
+        let Some(kind) = detect(bytes, ext) else {
+            return Err(ApiError::unsupported(format!(
+                "unsupported file type .{ext}"
+            )));
+        };
+        match kind {
+            Kind::Ods => {
+                let data = tally_io_ods::read_ods(
+                    std::io::Cursor::new(bytes),
+                    &tally_io_ods::Limits::default(),
+                )
+                .map_err(bad_file)?;
+                Ok(Decoded::plain(data, tally_io_ods::has_macros(bytes)))
+            }
+            Kind::Fods => {
+                let data = tally_io_ods::read_fods(bytes, &tally_io_ods::Limits::default())
+                    .map_err(bad_file)?;
+                Ok(Decoded::plain(data, tally_io_ods::fods_has_macros(bytes)))
+            }
+            Kind::Xlsx => {
+                let data = tally_io_xlsx::read_xlsx(
+                    std::io::Cursor::new(bytes),
+                    &tally_io_xlsx::Limits::default(),
+                )
+                .map_err(bad_file)?;
+                Ok(Decoded::plain(data, tally_io_xlsx::has_macros(bytes)))
+            }
+            Kind::Sxc => {
+                let data = tally_io_ods::read_sxc(
+                    std::io::Cursor::new(bytes),
+                    &tally_io_ods::Limits::default(),
+                )
+                .map_err(bad_file)?;
+                Ok(Decoded::plain(data, tally_io_ods::has_macros(bytes)))
+            }
+            Kind::Xls => {
+                let data = tally_io_xls::read_xls(bytes, &tally_io_xls::Limits::default())
+                    .map_err(bad_file)?;
+                Ok(Decoded::plain(data, tally_io_xls::has_macros(bytes)))
+            }
+            Kind::Xmlss => {
+                let data = tally_io_xmlss::read_xmlss(bytes, &tally_io_xmlss::Limits::default())
+                    .map_err(bad_file)?;
+                Ok(Decoded::plain(data, false))
+            }
+            Kind::Sylk => {
+                let data = tally_io_sylk::read_sylk(bytes, &tally_io_sylk::Limits::default())
+                    .map_err(bad_file)?;
+                Ok(Decoded::plain(data, false))
+            }
+            Kind::Dif => {
+                let data = tally_io_dif::read_dif(bytes, &tally_io_dif::Limits::default())
+                    .map_err(bad_file)?;
+                Ok(Decoded::plain(data, false))
+            }
+            Kind::Dbf => {
+                let data = tally_io_dbf::read_dbf(
+                    bytes,
+                    &tally_io_dbf::DbfOptions::default(),
+                    &tally_io_dbf::Limits::default(),
+                )
+                .map_err(bad_file)?;
+                Ok(Decoded::plain(data, false))
+            }
+            Kind::Html => {
+                let (mut data, warnings) = tally_io_html::read_html(bytes).map_err(bad_file)?;
+                data.warnings.extend(warnings);
+                // Cells are text: the document locale's recognizer makes
+                // numbers and dates of them (formulas stay text).
+                Ok(Decoded {
+                    recognize_text: true,
+                    ..Decoded::plain(data, false)
+                })
+            }
+            Kind::Csv => {
+                let delimiter = if ext == "tsv" || ext == "tab" {
+                    b'\t'
+                } else {
+                    tally_io_csv::detect_delimiter(&bytes[..bytes.len().min(64 * 1024)])
+                };
+                let opts = tally_io_csv::CsvOptions {
+                    delimiter,
+                    ..tally_io_csv::CsvOptions::default()
+                };
+                let sheet = tally_io_csv::read_csv(bytes, &opts).map_err(bad_file)?;
+                let charset = match tally_io_csv::detect_encoding(bytes) {
+                    tally_io_csv::Encoding::Utf16 => tally_api::CsvCharset::Utf16,
+                    tally_io_csv::Encoding::Windows1252 => tally_api::CsvCharset::Windows1252,
+                    tally_io_csv::Encoding::Latin1 => tally_api::CsvCharset::Iso88591,
+                    _ => tally_api::CsvCharset::Utf8,
+                };
+                let csv_options = Some(tally_api::CsvExportOptions {
+                    field_delimiter: char::from(delimiter).to_string(),
+                    text_delimiter: char::from(opts.quote).to_string(),
+                    charset,
+                    ..tally_api::CsvExportOptions::default()
+                })
+                .filter(|o| o.delimiters().is_ok());
+                Ok(Decoded {
+                    data: WorkbookData {
+                        sheets: vec![sheet],
+                        ..WorkbookData::default()
+                    },
+                    recognize_text: true,
+                    evaluate_formulas: opts.evaluate_formulas,
+                    csv_options,
+                    has_macros: false,
+                })
+            }
         }
-        if tally_io_xlsx::sniff_is_xlsx(bytes) || ext == "xlsx" || ext == "xlsm" {
-            let data = tally_io_xlsx::read_xlsx(
-                std::io::Cursor::new(bytes),
-                &tally_io_xlsx::Limits::default(),
-            )
-            .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
-            return Ok(Decoded {
-                data,
-                recognize_text: false,
-                evaluate_formulas: false,
-                csv_options: None,
-            });
-        }
-        if tally_io_ods::sniff_is_sxc(bytes) || ext == "sxc" || ext == "stc" {
-            let data = tally_io_ods::read_sxc(
-                std::io::Cursor::new(bytes),
-                &tally_io_ods::Limits::default(),
-            )
-            .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
-            return Ok(Decoded {
-                data,
-                recognize_text: false,
-                evaluate_formulas: false,
-                csv_options: None,
-            });
-        }
-        if tally_io_xls::sniff_is_xls(bytes) || ext == "xls" || ext == "xlt" {
-            let data = tally_io_xls::read_xls(bytes, &tally_io_xls::Limits::default())
-                .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
-            return Ok(Decoded {
-                data,
-                recognize_text: false,
-                evaluate_formulas: false,
-                csv_options: None,
-            });
-        }
-        if ext == "dbf" || (ext.is_empty() && tally_io_dbf::sniff_is_dbf(bytes)) {
-            let data = tally_io_dbf::read_dbf(
-                bytes,
-                &tally_io_dbf::DbfOptions::default(),
-                &tally_io_dbf::Limits::default(),
-            )
-            .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
-            return Ok(Decoded {
-                data,
-                recognize_text: false,
-                evaluate_formulas: false,
-                csv_options: None,
-            });
-        }
-        if matches!(ext, "html" | "htm" | "xhtml")
-            || (matches!(ext, "txt" | "") && tally_io_html::sniff_is_html(bytes))
-        {
-            let (mut data, warnings) = tally_io_html::read_html(bytes)
-                .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
-            data.warnings.extend(warnings);
-            // Cells are text: the document locale's recognizer makes
-            // numbers and dates of them (formulas stay text).
-            return Ok(Decoded {
-                data,
-                recognize_text: true,
-                evaluate_formulas: false,
-                csv_options: None,
-            });
-        }
-        if matches!(ext, "csv" | "tsv" | "txt" | "tab" | "") {
-            let delimiter = if ext == "tsv" || ext == "tab" {
-                b'\t'
-            } else {
-                tally_io_csv::detect_delimiter(&bytes[..bytes.len().min(64 * 1024)])
-            };
-            let opts = tally_io_csv::CsvOptions {
-                delimiter,
-                ..tally_io_csv::CsvOptions::default()
-            };
-            let sheet = tally_io_csv::read_csv(bytes, &opts)
-                .map_err(|e| ApiError::new(ApiError::BAD_FILE, e.to_string()))?;
-            let charset = match tally_io_csv::detect_encoding(bytes) {
-                tally_io_csv::Encoding::Utf16 => tally_api::CsvCharset::Utf16,
-                tally_io_csv::Encoding::Windows1252 => tally_api::CsvCharset::Windows1252,
-                tally_io_csv::Encoding::Latin1 => tally_api::CsvCharset::Iso88591,
-                _ => tally_api::CsvCharset::Utf8,
-            };
-            let csv_options = Some(tally_api::CsvExportOptions {
-                field_delimiter: char::from(delimiter).to_string(),
-                text_delimiter: char::from(opts.quote).to_string(),
-                charset,
-                ..tally_api::CsvExportOptions::default()
-            })
-            .filter(|o| o.delimiters().is_ok());
-            return Ok(Decoded {
-                data: WorkbookData {
-                    sheets: vec![sheet],
-                    ..WorkbookData::default()
-                },
-                recognize_text: true,
-                evaluate_formulas: opts.evaluate_formulas,
-                csv_options,
-            });
-        }
-        Err(ApiError::unsupported(format!(
-            "unsupported file type .{ext}"
-        )))
     }
 
     fn write(&self, export: &Export<'_>, format: FileFormat) -> Result<Vec<u8>, ApiError> {

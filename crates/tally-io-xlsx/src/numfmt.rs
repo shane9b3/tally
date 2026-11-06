@@ -102,7 +102,7 @@ fn preprocess_excel(code: &str) -> String {
 }
 
 /// Excel format code → OOo code, or `None` for General / untranslatable.
-pub(crate) fn excel_to_ooo(code: &str) -> Option<String> {
+pub fn excel_to_ooo(code: &str) -> Option<String> {
     let code = code.trim();
     if code.is_empty() || code.eq_ignore_ascii_case("general") {
         return None;

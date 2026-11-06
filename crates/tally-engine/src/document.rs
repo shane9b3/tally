@@ -36,6 +36,9 @@ pub struct Document {
     pub recalc_incomplete: bool,
     /// Warnings for the next [`Self::info`] (taken by the service once).
     pub warnings: Vec<String>,
+    /// The opened file held macros Tally drops; reported once with the
+    /// open result, like [`Self::warnings`].
+    pub has_macros: bool,
     /// Options of the document's CSV exports (the last Text Export
     /// dialog choices; defaults until set).
     pub csv_options: tally_api::CsvExportOptions,
@@ -92,6 +95,7 @@ impl Document {
             dirty: false,
             recalc_incomplete: report.incomplete,
             warnings,
+            has_macros: false,
             csv_options: tally_api::CsvExportOptions::default(),
             read_only: false,
             detective_auto: true,
@@ -178,6 +182,7 @@ impl Document {
                 .then(|| self.wb.external_links.clone()),
             read_only: self.read_only,
             load_readonly: self.wb.load_readonly,
+            has_macros: self.has_macros,
         }
     }
 

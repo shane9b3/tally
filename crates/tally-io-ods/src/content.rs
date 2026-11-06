@@ -365,6 +365,19 @@ pub(crate) fn parse_content<R: BufRead>(
     styles: &mut StyleSheet,
     limits: &Limits,
 ) -> Result<Content, OdsError> {
+    parse_content_with(xml, styles, limits, false)
+}
+
+/// [`parse_content`]; with `flat`, `xml` is a flat ODF document (`.fods`,
+/// root `office:document`), whose common styles and master pages come
+/// before the body in the same stream (what `styles.xml` holds in a
+/// package).
+pub(crate) fn parse_content_with<R: BufRead>(
+    xml: &mut XmlReader<R>,
+    styles: &mut StyleSheet,
+    limits: &Limits,
+    flat: bool,
+) -> Result<Content, OdsError> {
     let mut out = Content::default();
     let mut p = Parser {
         styles,
@@ -386,6 +399,11 @@ pub(crate) fn parse_content<R: BufRead>(
         match xml.next()? {
             Ev::Start(e) => match e.name.as_str() {
                 "office:document-content" | "office:body" => {}
+                "office:document" if flat => {}
+                "office:styles" if flat => p.styles.parse_block(xml, Origin::Styles)?,
+                "office:master-styles" if flat => {
+                    p.styles.master_pages = crate::v03::parse_master_styles(xml)?;
+                }
                 "office:font-face-decls" => p.styles.parse_font_faces(xml)?,
                 "office:automatic-styles" => p.styles.parse_block(xml, Origin::Content)?,
                 "office:spreadsheet" => {

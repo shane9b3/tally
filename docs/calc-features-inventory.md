@@ -372,12 +372,14 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 | SXC, STC | done | missing | X9 |
 | XLS BIFF8 / BIFF5 | partial | missing | X7; BIFF2-4 refused |
 | XLSX | done | done | Write is an extension (X1); gaps in X3 |
-| XLTX, XLT, XLSB | missing | missing | X2, X10 |
+| XLTX, XLTM, XLSM, XLT | done | missing | X2, X10a (Save As XLSX) |
+| XLSB | missing | missing | X2 |
 | CSV / TXT | done | done | X17; export has an injection guard (X18) |
 | HTML | done | done | Web Query missing (X19) |
 | XHTML export | missing | missing | |
 | dBase DBF | done | done | X20 |
-| DIF, SYLK, Lotus, Quattro Pro, RTF, StarCalc 1-5, UOF, Pocket Excel, MiniCalc, SpreadsheetML 2003 | missing | missing | X10 |
+| Flat ODS (.fods), SpreadsheetML 2003, SYLK, DIF | done | missing | X10a |
+| Lotus, Quattro Pro, RTF, StarCalc 1-5, UOF, Pocket Excel, MiniCalc | missing | missing | X10 |
 | PDF | n/a | done | |
 | CSV import options (separators, text delimiter, from row, character set, quoted as text, detect special numbers, column types, fixed width) | partial | | X17 |
 | CSV export options (character set, delimiters, as shown, quote all) | n/a | done | Text Export dialog after the file is picked (`CsvExportDialog.tsx`, `wb_save` → `csv_options` → `wb_save_csv`): field delimiter, text delimiter (or none), quote all text cells, save as shown, UTF-8 / UTF-16 / Windows-1252 / ISO-8859-1; last choices remembered for the session and by the document; "Keep current format" prompt on Save with the active-sheet-only note (`service/codec.rs`, `tally-io-csv`) |

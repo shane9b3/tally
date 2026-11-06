@@ -362,6 +362,12 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &tauri::RunEvent) {
             // the next open takes our own stale lock over).
             app.state::<AppState>().locks.release_all();
         }
+        // Finder: double-click, Open With, a file dropped on the Dock icon.
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Opened { urls } => {
+            let urls: Vec<&str> = urls.iter().map(|u| u.as_str()).collect();
+            crate::dialogs::open_os_files(app, crate::dialogs::file_paths(&urls));
+        }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {
             has_visible_windows,

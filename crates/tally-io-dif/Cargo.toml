@@ -1,0 +1,17 @@
+[package]
+name = "tally-io-dif"
+description = "DIF (Data Interchange Format) reader."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tally-types.workspace = true
+tally-model.workspace = true
+tally-io-csv.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

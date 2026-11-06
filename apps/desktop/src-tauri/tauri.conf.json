@@ -14,7 +14,10 @@
     "windows": [],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'",
-      "capabilities": ["default", "windows-titlebar"]
+      "capabilities": [
+        "default",
+        "windows-titlebar"
+      ]
     }
   },
   "bundle": {
@@ -28,6 +31,170 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "name": "OpenDocument Spreadsheet",
+        "description": "ODF Spreadsheet",
+        "ext": [
+          "ods",
+          "ots"
+        ],
+        "role": "Editor",
+        "rank": "Default",
+        "contentTypes": [
+          "org.oasis-open.opendocument.spreadsheet",
+          "org.oasis-open.opendocument.spreadsheet-template"
+        ],
+        "mimeType": "application/vnd.oasis.opendocument.spreadsheet"
+      },
+      {
+        "name": "Flat XML ODF Spreadsheet",
+        "description": "ODF Spreadsheet (Flat XML)",
+        "ext": [
+          "fods"
+        ],
+        "role": "Viewer",
+        "rank": "Default",
+        "mimeType": "application/vnd.oasis.opendocument.spreadsheet-flat-xml"
+      },
+      {
+        "name": "Excel Workbook",
+        "description": "Microsoft Excel 2007-365 workbook",
+        "ext": [
+          "xlsx"
+        ],
+        "role": "Editor",
+        "rank": "Alternate",
+        "contentTypes": [
+          "org.openxmlformats.spreadsheetml.sheet"
+        ],
+        "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      },
+      {
+        "name": "Excel Macro-Enabled Workbook or Template",
+        "description": "Microsoft Excel 2007-365 macro-enabled workbook or template",
+        "ext": [
+          "xlsm",
+          "xltx",
+          "xltm"
+        ],
+        "role": "Viewer",
+        "rank": "Alternate",
+        "contentTypes": [
+          "org.openxmlformats.spreadsheetml.sheet.macroenabled",
+          "org.openxmlformats.spreadsheetml.template",
+          "org.openxmlformats.spreadsheetml.template.macroenabled"
+        ],
+        "mimeType": "application/vnd.ms-excel.sheet.macroEnabled.12"
+      },
+      {
+        "name": "Excel 97-2003 Workbook",
+        "description": "Microsoft Excel 97-2003 workbook",
+        "ext": [
+          "xls",
+          "xlt",
+          "xlw"
+        ],
+        "role": "Viewer",
+        "rank": "Alternate",
+        "contentTypes": [
+          "com.microsoft.excel.xls",
+          "com.microsoft.excel.xlt",
+          "com.microsoft.excel.xlw"
+        ],
+        "mimeType": "application/vnd.ms-excel"
+      },
+      {
+        "name": "Excel 2003 XML Spreadsheet",
+        "description": "Microsoft Excel 2003 XML spreadsheet",
+        "ext": [
+          "xml"
+        ],
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "name": "OpenOffice.org 1.0 Spreadsheet",
+        "description": "OpenOffice.org 1.0 spreadsheet",
+        "ext": [
+          "sxc",
+          "stc"
+        ],
+        "role": "Viewer",
+        "rank": "Alternate",
+        "contentTypes": [
+          "org.openoffice.spreadsheet",
+          "org.openoffice.spreadsheet-template"
+        ],
+        "mimeType": "application/vnd.sun.xml.calc"
+      },
+      {
+        "name": "SYLK Spreadsheet",
+        "description": "SYLK spreadsheet",
+        "ext": [
+          "slk"
+        ],
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "name": "DIF Spreadsheet",
+        "description": "Data Interchange Format spreadsheet",
+        "ext": [
+          "dif"
+        ],
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "name": "CSV Document",
+        "description": "Comma- or tab-separated text",
+        "ext": [
+          "csv",
+          "tsv"
+        ],
+        "role": "Editor",
+        "rank": "Alternate",
+        "contentTypes": [
+          "public.comma-separated-values-text",
+          "public.tab-separated-values-text"
+        ],
+        "mimeType": "text/csv"
+      },
+      {
+        "name": "Tab-Separated Text",
+        "description": "Tab-separated text",
+        "ext": [
+          "tab"
+        ],
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "name": "HTML Table",
+        "description": "HTML document",
+        "ext": [
+          "html",
+          "htm"
+        ],
+        "role": "Editor",
+        "rank": "Alternate",
+        "contentTypes": [
+          "public.html"
+        ],
+        "mimeType": "text/html"
+      },
+      {
+        "name": "dBase Table",
+        "description": "dBase table",
+        "ext": [
+          "dbf"
+        ],
+        "role": "Editor",
+        "rank": "Alternate",
+        "mimeType": "application/x-dbf"
+      }
     ]
   }
 }

@@ -445,3 +445,58 @@ fn time_serials_below_one_day_are_not_shifted() {
     assert_eq!(v(1), 45000.5);
     assert_eq!(v(2), 31.25);
 }
+
+/// Review L3: macros are found in the compound file's directory and the
+/// sheet list, not by a byte scan.
+#[test]
+fn macros_from_directory_and_boundsheets() {
+    use tally_io_xls::{has_macros, prescan::build_container};
+    fn rec(typ: u16, body: &[u8]) -> Vec<u8> {
+        let mut v = typ.to_le_bytes().to_vec();
+        v.extend((body.len() as u16).to_le_bytes());
+        v.extend(body);
+        v
+    }
+    let bof = rec(0x0809, &[0, 6, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let sheet = |dt: u8| rec(0x0085, &[0, 0, 0, 0, 0, dt, 1, 0, b'M']);
+    let eof = rec(0x000A, &[]);
+    let book = |dt: u8| {
+        let mut s = bof.clone();
+        s.extend(sheet(dt));
+        s.extend(&eof);
+        // Padding past the mini-stream cutoff, so the stream is in the FAT.
+        s.extend(std::iter::repeat_n(0u8, 5000));
+        build_container(s).0
+    };
+    assert!(!has_macros(&book(0)));
+    assert!(has_macros(&book(1)), "an Excel 4.0 macro sheet");
+    // A VBA storage: rename the root entry in the directory.
+    let mut f = book(0);
+    let root: Vec<u8> = "Root Entry"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let at = f
+        .windows(root.len())
+        .position(|w| w == root.as_slice())
+        .unwrap();
+    let vba: Vec<u8> = "_VBA_PROJECT"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    f[at..at + 64].fill(0);
+    f[at..at + vba.len()].copy_from_slice(&vba);
+    assert!(has_macros(&f));
+    // The name as plain bytes elsewhere (in a cell) is not a VBA project.
+    let mut s = bof.clone();
+    s.extend(sheet(0));
+    let name: Vec<u8> = "_VBA_PROJECT_CUR"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    s.extend(rec(0x0204, &name));
+    s.extend(&eof);
+    s.extend(std::iter::repeat_n(0u8, 5000));
+    assert!(!has_macros(&build_container(s).0));
+    assert!(!has_macros(b"not ole"));
+}

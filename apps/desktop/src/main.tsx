@@ -37,6 +37,8 @@ async function pickClient(): Promise<Client | null> {
     if (tabs > 0) dev.installMockTabs(client, tabs);
     // `?readonly=1`: workbooks open like files flagged read-only (e2e).
     if (params.get("readonly") === "1") client.readOnlyHooks.openReadOnly = true;
+    // `?macros=1`: workbooks open like an `.xlsm` with macros (e2e).
+    if (params.get("macros") === "1") client.macroHooks.openWithMacros = true;
     return client;
   }
   return null;

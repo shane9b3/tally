@@ -149,9 +149,27 @@ struct DirEntry {
     len: u64,
 }
 
-/// Extracts the workbook stream (`Workbook`, `Book`, `WORKBOOK`, `BOOK`,
-/// in calamine's order).
-pub fn extract_workbook_stream(file: &[u8]) -> Result<Vec<u8>, Refusal> {
+/// A parsed compound-file directory.
+struct Directory<'a> {
+    c: Container<'a>,
+    dirs: Vec<DirEntry>,
+    version: u16,
+    mini_fat_start: u32,
+    mini_fat_len: usize,
+    size: usize,
+}
+
+/// The names of the compound file's directory entries (storages and
+/// streams), read with the same strict chain walks as the workbook stream.
+pub fn directory_names(file: &[u8]) -> Result<Vec<String>, Refusal> {
+    Ok(read_directory(file)?
+        .dirs
+        .into_iter()
+        .map(|d| d.name)
+        .collect())
+}
+
+fn read_directory(file: &[u8]) -> Result<Directory<'_>, Refusal> {
     if file.len() < 512 || !file.starts_with(&crate::OLE2_MAGIC) {
         return Err(bad("not a compound file"));
     }
@@ -235,6 +253,27 @@ pub fn extract_workbook_stream(file: &[u8]) -> Result<Vec<u8>, Refusal> {
             }
         })
         .collect();
+    Ok(Directory {
+        c,
+        dirs,
+        version,
+        mini_fat_start,
+        mini_fat_len,
+        size,
+    })
+}
+
+/// Extracts the workbook stream (`Workbook`, `Book`, `WORKBOOK`, `BOOK`,
+/// in calamine's order).
+pub fn extract_workbook_stream(file: &[u8]) -> Result<Vec<u8>, Refusal> {
+    let Directory {
+        c,
+        dirs,
+        version,
+        mini_fat_start,
+        mini_fat_len,
+        size,
+    } = read_directory(file)?;
     let Some(root) = dirs.first() else {
         return Err(bad("empty root directory"));
     };

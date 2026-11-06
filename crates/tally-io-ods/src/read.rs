@@ -88,6 +88,95 @@ pub(crate) fn read_with(
         .unwrap_or_default();
 
     let frames = std::mem::take(&mut content.frames);
+    let mut wb = assemble(content, styles, settings, meta);
+    // Wave 5 (W5-1): chart objects and pictures the frames refer to.
+    if !frames.is_empty() {
+        let media = manifest.map(|m| m.media).unwrap_or_default();
+        crate::frame::attach_objects(&mut pkg, &mut wb, frames, &media, limits)?;
+    }
+    Ok(wb)
+}
+
+/// Reads a flat ODF spreadsheet (`.fods`): one XML document, root
+/// `office:document` with `office:mimetype` the ODS media type, holding
+/// what a package splits into `meta.xml`, `settings.xml`, `styles.xml` and
+/// `content.xml`. The same XML limits apply as to `content.xml` (its byte
+/// cap bounds the whole file). Charts and pictures (embedded objects and
+/// `office:binary-data` images) are not read; a warning says so.
+pub(crate) fn read_flat(bytes: &[u8], limits: &Limits) -> Result<WorkbookData, OdsError> {
+    if bytes.len() as u64 > limits.max_content_xml_bytes {
+        return Err(OdsError::LimitExceeded {
+            what: "flat XML bytes",
+            limit: limits.max_content_xml_bytes,
+        });
+    }
+    let _attr_budget = crate::xml::AttrBudget::install(limits.max_attr_bytes);
+    let xl = XmlLimits {
+        max_depth: limits.max_xml_depth,
+        max_attrs: limits.max_attrs_per_element,
+    };
+    // Pass 1: the root's media type, `office:meta` and `office:settings`
+    // (they precede the body; the body is not parsed in this pass).
+    let mut settings = Settings::default();
+    let mut meta = DocMeta::default();
+    {
+        let mut xml = XmlReader::new(bytes, xl);
+        let mut root = false;
+        loop {
+            match xml.next()? {
+                Ev::Start(e) if !root => {
+                    if e.name != "office:document" {
+                        return Err(OdsError::NotOds);
+                    }
+                    let mt = e.attr("office:mimetype").unwrap_or_default();
+                    if !mt.starts_with(MIMETYPE) {
+                        return Err(OdsError::NotOds);
+                    }
+                    root = true;
+                }
+                Ev::Start(e) => match e.name.as_str() {
+                    "office:meta" => meta = parse_meta(&mut xml)?,
+                    "office:settings" => settings = parse_settings(&mut xml)?,
+                    "office:body" => break,
+                    _ => xml.skip()?,
+                },
+                Ev::Eof => break,
+                _ => {}
+            }
+        }
+        if !root {
+            return Err(OdsError::NotOds);
+        }
+    }
+    // Pass 2: styles, master pages and the body.
+    let mut styles = StyleSheet::default();
+    let mut content = crate::content::parse_content_with(
+        &mut XmlReader::new(bytes, xl),
+        &mut styles,
+        limits,
+        true,
+    )?;
+    if !content.is_spreadsheet {
+        return Err(OdsError::NotOds);
+    }
+    let frames = std::mem::take(&mut content.frames);
+    let mut wb = assemble(content, styles, settings, meta);
+    if !frames.is_empty() {
+        wb.warnings.push(format!(
+            "{} charts or pictures in this flat XML file were not imported.",
+            frames.len()
+        ));
+    }
+    Ok(wb)
+}
+
+/// The workbook from the parsed parts of a package (or a flat file).
+fn assemble(
+    content: crate::content::Content,
+    mut styles: StyleSheet,
+    settings: Settings,
+    meta: DocMeta,
+) -> WorkbookData {
     let mut sheets = content.sheets;
     for (sheet, extra) in sheets.iter_mut().zip(&content.extras) {
         let name = extra.master_page.as_deref().unwrap_or("Default");
@@ -154,12 +243,7 @@ pub(crate) fn read_with(
     }
     // Wave 5 (W5-2): named cell styles (`office:styles`).
     wb.cell_styles = named_styles;
-    // Wave 5 (W5-1): chart objects and pictures the frames refer to.
-    if !frames.is_empty() {
-        let media = manifest.map(|m| m.media).unwrap_or_default();
-        crate::frame::attach_objects(&mut pkg, &mut wb, frames, &media, limits)?;
-    }
-    Ok(wb)
+    wb
 }
 
 #[derive(Debug, Default)]
@@ -242,7 +326,10 @@ struct SplitInfo {
     v_pos: u32,
 }
 
+/// `settings.xml`, or an `office:settings` element of a flat file (the
+/// parse stops at its end).
 fn parse_settings<R: BufRead>(xml: &mut XmlReader<R>) -> Result<Settings, OdsError> {
+    let d = xml.depth();
     let mut s = Settings::default();
     // config:name of each open set / map / entry element (None for others).
     let mut stack: Vec<Option<String>> = Vec::new();
@@ -301,6 +388,7 @@ fn parse_settings<R: BufRead>(xml: &mut XmlReader<R>) -> Result<Settings, OdsErr
                 }
                 stack.push(e.attr("config:name").map(str::to_string));
             }
+            Ev::End if xml.depth() < d => break,
             Ev::End => {
                 stack.pop();
             }
@@ -397,7 +485,10 @@ fn legacy_maps(sheet: &mut tally_model::SheetData, styles: &StyleSheet) {
     }
 }
 
+/// `meta.xml`, or an `office:meta` element of a flat file (the parse stops
+/// at its end).
 fn parse_meta<R: BufRead>(xml: &mut XmlReader<R>) -> Result<DocMeta, OdsError> {
+    let d = xml.depth();
     let mut m = DocMeta::default();
     loop {
         match xml.next()? {
@@ -426,6 +517,7 @@ fn parse_meta<R: BufRead>(xml: &mut XmlReader<R>) -> Result<DocMeta, OdsError> {
                 };
                 *slot = Some(xml.text_content(MAX_META_TEXT)?);
             }
+            Ev::End if xml.depth() < d => return Ok(m),
             Ev::Eof => return Ok(m),
             _ => {}
         }

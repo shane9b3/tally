@@ -327,6 +327,8 @@ export interface WindowInit {
   tabs?: TabsState | null;
   /** A close sequence is asking this document (the webview reloaded while asked): ask again with this kind. */
   ask?: "window" | "quit" | "tabs" | null;
+  /** Files the OS asked to open before any window had started (Tally launched by opening them): open them, the first in place of the blank workbook. */
+  openPaths?: string[];
 }
 
 /** `place_document`: shown in the calling webview (`"here"`), as a new tab of its window (`"tab"`) or in a new window (`"window"`). */

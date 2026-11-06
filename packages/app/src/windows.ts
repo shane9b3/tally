@@ -28,7 +28,7 @@ export type ThemeChoice = "system" | "light" | "dark";
 /** Optional desktop-shell hooks for document windows (`TauriClient`; the browser has none). */
 export interface WindowShell {
   /** `window_init`: the document handed to this webview, whether it offers recovery, its own label and its window's tabs. */
-  windowInit?(): Promise<{ doc: WorkbookInfo | null; offerRecovery: boolean; label?: string; tabs?: TabsState | null; ask?: "window" | "quit" | "tabs" | null }>;
+  windowInit?(): Promise<{ doc: WorkbookInfo | null; offerRecovery: boolean; label?: string; tabs?: TabsState | null; ask?: "window" | "quit" | "tabs" | null; openPaths?: string[] }>;
   /**
    * `place_document`: show document `doc` here (`"here"`), as a new tab of
    * this window (`"tab"`) or in a new window (`"window"`), per the "Open

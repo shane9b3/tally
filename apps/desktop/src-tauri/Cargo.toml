@@ -24,6 +24,7 @@ tauri-build = { workspace = true, features = [] }
 # tabs; windows.rs). It makes every webview a child webview, see docs/security.md.
 tauri = { workspace = true, features = ["unstable"] }
 tauri-plugin-dialog.workspace = true
+tauri-plugin-single-instance.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tally-api.workspace = true

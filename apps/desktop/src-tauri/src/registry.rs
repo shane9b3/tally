@@ -1340,6 +1340,7 @@ mod tests {
             external_links: None,
             read_only: false,
             load_readonly: false,
+            has_macros: false,
         }
     }
 

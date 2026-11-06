@@ -31,6 +31,7 @@ mod dates;
 mod drawing_read;
 mod formula;
 mod numfmt;
+mod r1c1;
 mod read;
 mod sheet;
 mod sheet_v03;
@@ -50,7 +51,8 @@ use tally_model::WorkbookData;
 
 pub use dates::{excel_serial_to_tally, tally_serial_to_excel};
 pub use formula::excel_formula_to_of;
-pub use numfmt::{builtin_format_code, is_date_format};
+pub use numfmt::{builtin_format_code, excel_to_ooo, is_date_format};
+pub use r1c1::{r1c1_formula_to_of, r1c1_to_a1};
 
 /// Excel's default column width (8.43 characters, 64 px), in 1/100 mm.
 /// Columns without a `<col>` entry use it; they are not recorded in
@@ -258,6 +260,95 @@ pub fn sniff_is_xlsx(bytes: &[u8]) -> bool {
     }
     let ct = String::from_utf8_lossy(&ct);
     ct.contains("spreadsheetml.sheet.main+xml") || ct.contains("spreadsheetml.template.main+xml")
+}
+
+/// Returns `true` if the package holds macros Tally drops: the workbook
+/// part has a VBA project relationship
+/// (`…/office/2006/relationships/vbaProject`, as `.xlsm`/`.xltm` files
+/// carry) or an Excel 4.0 macro sheet (`…/xlMacrosheet`) whose target is in
+/// the package. The relationships are found from `_rels/.rels`
+/// (`officeDocument`); at most 1 MiB of each `.rels` part is read, after
+/// the same end-of-central-directory precheck as [`sniff_is_xlsx`].
+pub fn has_macros(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(b"PK\x03\x04") {
+        return false;
+    }
+    let mut cur = Cursor::new(bytes);
+    if archive::precheck(&mut cur, &Limits::default()).is_err() {
+        return false;
+    }
+    let Ok(mut zip) = zip::ZipArchive::new(cur) else {
+        return false;
+    };
+    let mut part = |name: &str| -> Option<String> {
+        let f = zip.by_name(name).ok()?;
+        let mut v = Vec::new();
+        f.take(1024 * 1024).read_to_end(&mut v).ok()?;
+        String::from_utf8(v).ok()
+    };
+    let Some(root) = part("_rels/.rels") else {
+        return false;
+    };
+    let Some(wb) = relationships(&root)
+        .into_iter()
+        .find(|(t, _)| t.ends_with("/officeDocument"))
+        .map(|(_, target)| target.trim_start_matches('/').to_string())
+    else {
+        return false;
+    };
+    let (dir, file) = wb.rsplit_once('/').unwrap_or(("", wb.as_str()));
+    let rels_name = if dir.is_empty() {
+        format!("_rels/{file}.rels")
+    } else {
+        format!("{dir}/_rels/{file}.rels")
+    };
+    let Some(rels) = part(&rels_name) else {
+        return false;
+    };
+    let targets: Vec<String> = relationships(&rels)
+        .into_iter()
+        .filter(|(t, _)| t.ends_with("/vbaProject") || t.ends_with("/xlMacrosheet"))
+        .map(|(_, target)| {
+            if let Some(abs) = target.strip_prefix('/') {
+                abs.to_string()
+            } else if dir.is_empty() {
+                target
+            } else {
+                format!("{dir}/{target}")
+            }
+        })
+        .collect();
+    targets.iter().any(|t| zip.index_for_name(t).is_some())
+}
+
+/// `(Type, Target)` of each `Relationship` in a `.rels` part (attributes
+/// as written; entity references in them are not expected and not
+/// decoded). Malformed XML ends the list.
+fn relationships(xml: &str) -> Vec<(String, String)> {
+    use quick_xml::events::Event;
+    let mut r = quick_xml::Reader::from_str(xml);
+    let mut out = Vec::new();
+    loop {
+        match r.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e))
+                if e.local_name().into_inner() == "Relationship" && out.len() < 10_000 =>
+            {
+                let mut ty = String::new();
+                let mut target = String::new();
+                for a in e.attributes().flatten() {
+                    let v = a.value.to_string();
+                    match a.key.local_name().into_inner() {
+                        "Type" => ty = v,
+                        "Target" => target = v,
+                        _ => {}
+                    }
+                }
+                out.push((ty, target));
+            }
+            Ok(Event::Eof) | Err(_) => return out,
+            _ => {}
+        }
+    }
 }
 
 /// `limit` for messages: byte limits in KiB/MiB/GiB, counts as plain numbers.

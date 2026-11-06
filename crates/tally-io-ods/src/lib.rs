@@ -166,6 +166,78 @@ pub fn read_sxc(reader: impl Read + Seek, limits: &Limits) -> Result<WorkbookDat
     read::read_with(reader, limits, true)
 }
 
+/// Reads a flat XML ODF spreadsheet (`.fods`, one `office:document`
+/// XML file): the same parsers and limits as [`read_ods`] (the whole file
+/// counts against `max_content_xml_bytes`). Charts and pictures are not
+/// read (a warning says how many were dropped).
+pub fn read_fods(bytes: &[u8], limits: &Limits) -> Result<WorkbookData, OdsError> {
+    read::read_flat(bytes, limits)
+}
+
+/// Returns `true` if `bytes` start like a flat XML ODF spreadsheet: within
+/// the first 16 KiB (the root carries every namespace declaration), an
+/// `office:document` root whose `office:mimetype` is
+/// the ODS (or ODS template) media type.
+pub fn sniff_is_fods(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(16 * 1024)];
+    let head = String::from_utf8_lossy(head);
+    let Some(at) = head.find("<office:document") else {
+        return false;
+    };
+    // Not `office:document-content` / `-styles` / `-meta`.
+    let rest = &head[at + "<office:document".len()..];
+    if !rest.starts_with(|c: char| c.is_ascii_whitespace() || c == '>') {
+        return false;
+    }
+    let tag = rest.split('>').next().unwrap_or_default();
+    tag.contains(r#"office:mimetype="application/vnd.oasis.opendocument.spreadsheet"#)
+        || tag.contains(r#"office:mimetype='application/vnd.oasis.opendocument.spreadsheet"#)
+}
+
+/// Returns `true` if a flat XML ODF file embeds Basic modules
+/// (`ooo:module` / `ooo:source-code` in the `http://openoffice.org/2004/office`
+/// namespace, whatever the prefix), which Tally drops. The XML is
+/// streamed with namespace resolution, so comments, CDATA and text that
+/// merely contain the words do not count; it stops at `office:body` (the
+/// scripts come before it) and at the first XML error.
+pub fn fods_has_macros(bytes: &[u8]) -> bool {
+    use quick_xml::events::Event;
+    use quick_xml::name::ResolveResult;
+    const OOO: &str = "http://openoffice.org/2004/office";
+    const OFFICE: &str = "urn:oasis:names:tc:opendocument:xmlns:office:1.0";
+    let mut r = quick_xml::NsReader::from_reader(bytes);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let ev = match r.read_resolved_event_into(&mut buf) {
+            Ok((ns, ev)) => (ns, ev),
+            Err(_) => return false,
+        };
+        match ev {
+            (ResolveResult::Bound(ns), Event::Start(e) | Event::Empty(e)) => {
+                let local = e.local_name();
+                let local = local.into_inner();
+                if ns.0 == OOO && matches!(local, "module" | "source-code") {
+                    return true;
+                }
+                if ns.0 == OFFICE && local == "body" {
+                    return false;
+                }
+            }
+            (_, Event::Eof) => return false,
+            _ => {}
+        }
+    }
+}
+
+/// A formula in OpenOffice's native A1 syntax (`SUM(A1:B2;Sheet2.C3)`,
+/// AOO's `GRAM_PODF_A1`, with or without `=`) as model text
+/// (`oooc:=SUM([.A1:.B2];[Sheet2.C3])`): references are bracketed as the
+/// `.sxc` reader does. Used by the SYLK reader for AOO's own files.
+pub fn native_formula_to_of(text: &str) -> String {
+    sxc::map_formula(text)
+}
+
 /// Returns `true` if `bytes` look like an OOo 1.x spreadsheet package
 /// (`mimetype` entry `application/vnd.sun.xml.calc`).
 pub fn sniff_is_sxc(bytes: &[u8]) -> bool {
@@ -240,6 +312,37 @@ fn sniff_mimetype(bytes: &[u8], ok: impl Fn(&[u8]) -> bool) -> bool {
         return false;
     }
     ok(mt.trim_ascii())
+}
+
+/// Returns `true` if the package holds macros Tally drops: a Basic module
+/// (`Basic/<library>/<module>.xml`; the library index files
+/// `script-lc.xml` / `script-lb.xml` alone are not macros) or a script
+/// under `Scripts/` (BeanShell, JavaScript, Python). Only the zip index is
+/// read, after the end-of-central-directory precheck.
+pub fn has_macros(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(b"PK\x03\x04") {
+        return false;
+    }
+    let mut cur = Cursor::new(bytes);
+    if archive::precheck(&mut cur, &Limits::default()).is_err() {
+        return false;
+    }
+    let Ok(zip) = zip::ZipArchive::new(cur) else {
+        return false;
+    };
+    let found = zip.file_names().flatten().any(|n| {
+        let n: &str = &n;
+        let is_file = !n.ends_with('/');
+        let basic = n.starts_with("Basic/")
+            && is_file
+            && !n.ends_with("/script-lb.xml")
+            && !n.ends_with("/script-lc.xml")
+            && !n.ends_with("/dialog-lb.xml")
+            && !n.ends_with("/dialog-lc.xml")
+            && n != "Basic/script-lc.xml";
+        basic || (n.starts_with("Scripts/") && is_file)
+    });
+    found
 }
 
 /// `limit` for messages: byte limits in KiB/MiB/GiB, counts as plain numbers.

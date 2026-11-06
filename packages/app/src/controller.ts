@@ -80,7 +80,10 @@ import { extendStep, moveBlockSteps, nextActiveAfterDelete, selectedIds, stepVis
 import { isPendingEdit, useEditStore } from "./stores/editStore";
 import { useFunctionsStore } from "./stores/functionsStore";
 import { fromSelectionDto, selectionRanges, toSelectionDto, useSelectionStore } from "./stores/selectionStore";
-import { toastWarnings, useUiStore } from "./stores/uiStore";
+import { openNotices, toastWarnings, useUiStore } from "./stores/uiStore";
+
+/** The `menu-action` id prefix of a file the OS asked to open (`dialogs::OS_OPEN_ACTION`). */
+export const OS_OPEN_ACTION = "os.open:";
 import { detectSumRange, sumFormula, sumScanRanges } from "./sumRange";
 import { V3Features } from "./features";
 import { useV3Store } from "./stores/v3Store";
@@ -206,6 +209,12 @@ export class AppController {
         }
       }),
       this.client.onMenuAction((e) => {
+        // A file the OS asked to open (Finder, Open With, a second launch):
+        // opened like a recent file, in place of an untouched blank workbook.
+        if (e.id.startsWith(OS_OPEN_ACTION)) {
+          void this.openRecent(e.id.slice(OS_OPEN_ACTION.length));
+          return;
+        }
         if (this.registry.run(e.id)) return;
         // The native menu has no enabled state: say why a disabled command did nothing.
         const reason = this.registry.has(e.id) ? this.registry.reasonFor(e.id) : undefined;
@@ -252,11 +261,13 @@ export class AppController {
     );
     let offerRecovery = true;
     let ask: CloseKind | null = null;
+    let openPaths: readonly string[] = [];
     try {
       const init = this.windowShell.windowInit ? await this.windowShell.windowInit() : null;
       if (init) {
         offerRecovery = init.offerRecovery;
         ask = init.ask ?? null;
+        openPaths = init.openPaths ?? [];
         if (init.label !== undefined) useTabsStore.getState().setSelf(init.label);
         if (init.tabs !== undefined) useTabsStore.getState().setState(init.tabs);
       }
@@ -269,6 +280,9 @@ export class AppController {
     } catch (e) {
       this.notifyError(e);
     }
+    // Tally was launched by opening files: the first replaces the blank
+    // workbook just shown (it is untouched), the others open beside it.
+    for (const path of openPaths) await this.openRecent(path);
     if (offerRecovery) void this.w56.offerRecovery();
     // A close sequence was asking this document when its webview reloaded:
     // ask again, so the sequence does not wait for an answer forever.
@@ -297,7 +311,7 @@ export class AppController {
     doc.setSource(source);
     useDataStore.getState().reset();
     useV3Store.getState().reset();
-    toastWarnings(info.warnings);
+    toastWarnings(openNotices(info));
     void this.refreshActive();
     void this.refreshFilter();
     void this.refreshNames();
@@ -1692,7 +1706,7 @@ export class AppController {
       if ((await place.call(this.windowShell, info.doc, this.canReuseWindow())) === "here") this.load(info);
       // The new tab or window shows the engine's summary, which no longer has the
       // open warnings (they are delivered once): show them here.
-      else toastWarnings(info.warnings.map((w) => `${info.title}: ${w}`));
+      else toastWarnings(openNotices(info).map((w) => `${info.title}: ${w}`));
     } catch (e) {
       this.notifyError(e);
     }

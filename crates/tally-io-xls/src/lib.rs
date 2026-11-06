@@ -88,6 +88,43 @@ pub fn sniff_is_xls(bytes: &[u8]) -> bool {
     bytes.starts_with(&OLE2_MAGIC)
 }
 
+/// Returns `true` if the workbook holds macros Tally drops: a VBA project
+/// (a `_VBA_PROJECT_CUR` or `_VBA_PROJECT` storage in the compound file's
+/// directory, walked like the workbook stream) or an Excel 4.0 macro sheet
+/// (a `BOUNDSHEET` record of type 1 in the workbook globals). A file whose
+/// container does not parse has none (it will not open either).
+pub fn has_macros(bytes: &[u8]) -> bool {
+    if !sniff_is_xls(bytes) {
+        return false;
+    }
+    let Ok(names) = prescan::directory_names(bytes) else {
+        return false;
+    };
+    if names.iter().any(|n| {
+        n.eq_ignore_ascii_case("_VBA_PROJECT_CUR") || n.eq_ignore_ascii_case("_VBA_PROJECT")
+    }) {
+        return true;
+    }
+    let Ok(stream) = prescan::extract_workbook_stream(bytes) else {
+        return false;
+    };
+    // The globals: records up to the first EOF (0x000A).
+    let mut pos = 0usize;
+    while let Some(h) = stream.get(pos..pos + 4) {
+        let typ = u16::from_le_bytes([h[0], h[1]]);
+        let len = usize::from(u16::from_le_bytes([h[2], h[3]]));
+        let body = stream.get(pos + 4..pos + 4 + len).unwrap_or_default();
+        match typ {
+            0x000A => break,
+            // BOUNDSHEET: lbPlyPos (4), hsState (1), dt (1): 1 = macro sheet.
+            0x0085 if body.get(5) == Some(&1) => return true,
+            _ => {}
+        }
+        pos += 4 + len;
+    }
+    false
+}
+
 fn err_kind(e: calamine::CellErrorType) -> ErrorKind {
     use calamine::CellErrorType as C;
     match e {

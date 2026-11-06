@@ -1,0 +1,20 @@
+[package]
+name = "tally-io-xmlss"
+description = "Excel 2003 XML (SpreadsheetML) reader."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tally-types.workspace = true
+tally-model.workspace = true
+tally-numfmt.workspace = true
+tally-io-xlsx.workspace = true
+quick-xml.workspace = true
+encoding_rs.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

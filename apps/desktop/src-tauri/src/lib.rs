@@ -41,9 +41,28 @@ pub fn run() {
     let service = assist::build_service();
 
     let result = tauri::Builder::default()
+        // First: a second launch (a file association on Windows and Linux,
+        // `open -n` on macOS) hands its files to this instance and quits.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            let cwd = std::path::PathBuf::from(cwd);
+            let paths: Vec<std::path::PathBuf> = argv
+                .iter()
+                .skip(1)
+                .map(|a| cwd.join(a))
+                .filter(|p| p.is_file())
+                .collect();
+            if let Some(win) = app
+                .try_state::<registry::Windows>()
+                .and_then(|w| w.with(|r| r.front_window()))
+            {
+                windows::focus_window(app, &win);
+            }
+            dialogs::open_os_files(app, paths);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new(service))
         .manage(registry::Windows::default())
+        .manage(dialogs::OsOpen::default())
         .menu(menu::build)
         .on_menu_event(menu::on_event)
         .on_window_event(closing::on_window_event)
@@ -65,6 +84,16 @@ pub fn run() {
             // `windows::open_document`).
             windows::open_document(app.handle(), registry::Target::NewWindow, None)
                 .map_err(|e| e.message)?;
+            // Windows and Linux pass the files of a file association on
+            // the command line (macOS sends `RunEvent::Opened` instead).
+            if !cfg!(target_os = "macos") {
+                let paths: Vec<std::path::PathBuf> = std::env::args_os()
+                    .skip(1)
+                    .map(std::path::PathBuf::from)
+                    .filter(|p| p.is_file())
+                    .collect();
+                dialogs::open_os_files(app.handle(), paths);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
