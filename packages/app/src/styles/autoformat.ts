@@ -5,6 +5,7 @@
  * which parts the engine applies.
  */
 import type { AutoFormatOptions } from "@tally/bridge";
+import { t } from "../i18n";
 
 export interface AutoFormatPreset {
   name: string;
@@ -76,3 +77,8 @@ export function previewText(preset: AutoFormatPreset, r: number, c: number, opti
   if (preset.currency && options.numberFormat && r > 0 && c > 0) return `$${raw}.00`;
   return raw;
 }
+
+const PRESET_KEYS: Readonly<Record<string, string>> = {"Default": "stylesUi.preset.default", "3D": "stylesUi.preset.threeD", "Black 1": "stylesUi.preset.black1", "Black 2": "stylesUi.preset.black2", "Blue": "stylesUi.preset.blue", "Brown": "stylesUi.preset.brown", "Currency": "stylesUi.preset.currency", "Currency 3D": "stylesUi.preset.currency3d", "Currency Gray": "stylesUi.preset.currencyGray", "Currency Lavender": "stylesUi.preset.currencyLavender", "Currency Turquoise": "stylesUi.preset.currencyTurquoise", "Gray": "stylesUi.preset.gray", "Green": "stylesUi.preset.green", "Lavender": "stylesUi.preset.lavender", "Red": "stylesUi.preset.red", "Turquoise": "stylesUi.preset.turquoise", "Yellow": "stylesUi.preset.yellow"};
+
+/** Option and preset labels live in the model files in English; they are translated when drawn. */
+export const presetLabel = (name: string): string => t(PRESET_KEYS[name] ?? "", name);

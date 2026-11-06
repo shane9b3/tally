@@ -29,9 +29,10 @@ use rust_xlsxwriter::{
 };
 use tally_formula::Resolver;
 use tally_model::{
-    ChartAxisData, ChartData, ChartKindData, ChartRangeData, ChartSeriesData, ErrorBarDirData,
-    ErrorBarKindData, LabelPosData, LegendPosData, MarkerShapeData, SeriesNameData, SheetData,
-    StackingData, StockVariantData, TrendKindData,
+    AxisCrossData, AxisLabelPosData, AxisTypeData, ChartAxisData, ChartData, ChartKindData,
+    ChartRangeData, ChartSeriesData, ErrorBarDirData, ErrorBarKindData, LabelPosData,
+    LegendPosData, MarkerShapeData, SeriesNameData, SheetData, StackingData, StockVariantData,
+    TimeIntervalData, TimeUnitData, TrendKindData,
 };
 
 use crate::colors::model_to_rgb;
@@ -228,7 +229,75 @@ fn label_position(p: LabelPosData, kind: ChartKindData) -> Option<ChartDataLabel
     }
 }
 
+fn date_unit(u: TimeUnitData) -> rust_xlsxwriter::ChartAxisDateUnitType {
+    match u {
+        TimeUnitData::Days => rust_xlsxwriter::ChartAxisDateUnitType::Days,
+        TimeUnitData::Months => rust_xlsxwriter::ChartAxisDateUnitType::Months,
+        TimeUnitData::Years => rust_xlsxwriter::ChartAxisDateUnitType::Years,
+    }
+}
+
+/// The scale type of the category axis: `c:catAx` with `c:auto` for
+/// automatic, without it for text, `c:dateAx` for a date axis (and for an
+/// automatic one with date intervals, with `c:auto`). The date resolution
+/// (`c:baseTimeUnit`) is not written: rust_xlsxwriter has no setter.
+fn apply_category_type(axis: &mut rust_xlsxwriter::ChartAxis, a: &ChartAxisData) {
+    let timed = a.major_time.is_some() || a.minor_time.is_some();
+    match a.axis_type {
+        AxisTypeData::Text => {
+            axis.set_text_axis(true);
+        }
+        AxisTypeData::Auto if !timed => {}
+        AxisTypeData::Auto | AxisTypeData::Date => {
+            axis.set_date_axis(true);
+            if a.axis_type == AxisTypeData::Auto {
+                axis.set_automatic_axis(true);
+            }
+            if let Some(v) = a.min {
+                axis.set_min(v);
+            }
+            if let Some(v) = a.max {
+                axis.set_max(v);
+            }
+            let unit = |t: TimeIntervalData| (t.number, date_unit(t.unit));
+            if let Some((n, u)) = a.major_time.map(unit) {
+                axis.set_major_unit(n);
+                axis.set_major_unit_date_type(u);
+            }
+            if let Some((n, u)) = a.minor_time.map(unit) {
+                axis.set_minor_unit(n);
+                axis.set_minor_unit_date_type(u);
+            }
+        }
+    }
+}
+
+/// `c:crosses`/`c:crossesAt` of `a` (rust_xlsxwriter writes an axis'
+/// crossing from the other axis' setting, so this goes on `other`).
+/// `category`: `other` is a text category axis (crossing by category
+/// number).
+fn apply_crossing(other: &mut rust_xlsxwriter::ChartAxis, a: &ChartAxisData, category: bool) {
+    use rust_xlsxwriter::ChartAxisCrossing as X;
+    let crossing = match a.crosses {
+        None => return,
+        Some(AxisCrossData::Start) => X::Min,
+        Some(AxisCrossData::End) => X::Max,
+        Some(AxisCrossData::Value(v)) if category => X::CategoryNumber(v.round().max(1.0) as u32),
+        Some(AxisCrossData::Value(v)) => X::AxisValue(v),
+    };
+    other.set_crossing(crossing);
+}
+
 fn apply_axis(axis: &mut rust_xlsxwriter::ChartAxis, a: &ChartAxisData, value_axis: bool) {
+    match a.label_position {
+        AxisLabelPosData::NearAxis | AxisLabelPosData::NearAxisOtherSide => {}
+        AxisLabelPosData::OutsideStart => {
+            axis.set_label_position(rust_xlsxwriter::ChartAxisLabelPosition::Low);
+        }
+        AxisLabelPosData::OutsideEnd => {
+            axis.set_label_position(rust_xlsxwriter::ChartAxisLabelPosition::High);
+        }
+    }
     if let Some(t) = &a.title {
         axis.set_name(t.as_str());
     }
@@ -562,6 +631,18 @@ pub(crate) fn build_chart(
     let xy = matches!(kind, ChartKindData::Scatter);
     apply_axis(chart.x_axis(), &c.x_axis, xy);
     apply_axis(chart.y_axis(), &c.y_axis, true);
+    let category_x = !xy && !matches!(kind, ChartKindData::Pie | ChartKindData::Radar);
+    if category_x {
+        apply_category_type(chart.x_axis(), &c.x_axis);
+    }
+    let text_x = category_x
+        && match c.x_axis.axis_type {
+            AxisTypeData::Text => true,
+            AxisTypeData::Auto => c.x_axis.major_time.is_none() && c.x_axis.minor_time.is_none(),
+            AxisTypeData::Date => false,
+        };
+    apply_crossing(chart.y_axis(), &c.x_axis, false);
+    apply_crossing(chart.x_axis(), &c.y_axis, text_x);
     if let Some(y2) = &c.y2_axis {
         apply_axis(chart.y2_axis(), y2, true);
     }

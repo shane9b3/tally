@@ -32,6 +32,10 @@ export interface V3Ext {
   protection: Record<number, SheetProtection | null>;
   /** Unlocked ranges per sheet (cells are locked by default). */
   unlocked: Record<number, RangeDto[]>;
+  /** "Hide all" ranges per sheet (shown blank while the sheet is protected). */
+  hiddenAll?: Record<number, RangeDto[]>;
+  /** "Hide when printing" ranges per sheet. */
+  hidePrint?: Record<number, RangeDto[]>;
   structure: { password: string | null } | null;
   pages: Record<number, PageSetupDto>;
   props: DocPropertiesDto;
@@ -73,9 +77,24 @@ export function subtract(rg: RangeDto, cut: RangeDto): RangeDto[] {
   return out;
 }
 
-/** Whether `cell` is locked on `sheet` (all cells are, unless unlocked). */
+/** Whether `cell` is locked on `sheet` (all cells are, unless unlocked; "Hide all" implies locked). */
 export function isLocked(x: V3Ext, sheet: number, cell: CellPos): boolean {
-  return !(x.unlocked[sheet] ?? []).some((rg) => inRange(rg, cell.r, cell.c));
+  return !(x.unlocked[sheet] ?? []).some((rg) => inRange(rg, cell.r, cell.c)) || (x.hiddenAll?.[sheet] ?? []).some((rg) => inRange(rg, cell.r, cell.c));
+}
+
+/** "Hide all" in effect: the cell has it and the sheet is protected. */
+export function isHiddenCell(x: V3Ext, sheet: number, r: number, c: number): boolean {
+  return !!x.protection[sheet] && (x.hiddenAll?.[sheet] ?? []).some((rg) => inRange(rg, r, c));
+}
+
+/** "Hide when printing" (whether or not the sheet is protected). */
+export function isHidePrint(x: V3Ext, sheet: number, r: number, c: number): boolean {
+  return (x.hidePrint?.[sheet] ?? []).some((rg) => inRange(rg, r, c));
+}
+
+/** `list` with `ranges` added (`on`) or cut out. */
+function withRanges(list: RangeDto[], ranges: RangeDto[], on: boolean): RangeDto[] {
+  return on ? [...list, ...ranges.map((r) => ({ ...r }))] : list.flatMap((rg) => ranges.reduce<RangeDto[]>((acc, cut) => acc.flatMap((a) => subtract(a, cut)), [rg]));
 }
 
 /** The cells an op writes (for protection), or `null` if it writes none. */
@@ -313,13 +332,13 @@ export function applyV3Op(x: V3Ext, op: Op, now: () => string = () => new Date()
     case "protectSheet":
       if (x.protection[op.sheet]) return err("protected", "The sheet is already protected.");
       x.protection[op.sheet] = { password: op.password || null, options: op.options ?? { selectLocked: true, selectUnlocked: true, insertRows: false, insertCols: false, deleteRows: false, deleteCols: false, formatCells: false, sort: false, autoFilter: false } };
-      return { kind: "handled", touched: [], layout: true };
+      return { kind: "handled", touched: (x.hiddenAll?.[op.sheet] ?? []).map((r) => ({ ...r })), layout: true };
     case "unprotectSheet": {
       const p = x.protection[op.sheet];
       if (!p) return { kind: "handled", touched: [], layout: false };
       if (p.password && p.password !== (op.password ?? "")) return err("protected", "The password is not right.");
       x.protection[op.sheet] = null;
-      return { kind: "handled", touched: [], layout: true };
+      return { kind: "handled", touched: (x.hiddenAll?.[op.sheet] ?? []).map((r) => ({ ...r })), layout: true };
     }
     case "setCellProtection": {
       if (x.protection[op.sheet]) return err("protected", "The sheet is protected.");
@@ -329,7 +348,9 @@ export function applyV3Op(x: V3Ext, op: Op, now: () => string = () => new Date()
         else list = [...list, ...op.ranges];
         x.unlocked[op.sheet] = list;
       }
-      return { kind: "handled", touched: [], layout: false };
+      if (op.hidden != null) x.hiddenAll = { ...x.hiddenAll, [op.sheet]: withRanges(x.hiddenAll?.[op.sheet] ?? [], op.ranges, op.hidden) };
+      if (op.hidePrint != null) x.hidePrint = { ...x.hidePrint, [op.sheet]: withRanges(x.hidePrint?.[op.sheet] ?? [], op.ranges, op.hidePrint) };
+      return { kind: "handled", touched: op.hidden != null ? op.ranges : [], layout: false };
     }
     case "protectDocument":
       x.structure = { password: op.password || null };

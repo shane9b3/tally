@@ -143,3 +143,53 @@ fn autoformat_blue_preset() {
     f.svc.undo(f.doc).unwrap();
     assert!(style_of(&f, "B1").fill.is_none());
 }
+
+fn fill_patch(fill: u32, bold: bool) -> tally_api::StylePatch {
+    let mut p: tally_api::StylePatch = serde_json::from_str(
+        r#"{"bold":null,"italic":null,"underline":null,"strike":null,"fontFamily":null,"fontSizePt":null,"color":null,"fill":null,"hAlign":null,"vAlign":null,"wrap":null,"numberFormat":null}"#,
+    )
+    .unwrap();
+    p.fill = Some(fill);
+    p.bold = Some(bold);
+    p
+}
+
+#[test]
+fn custom_auto_format_lays_the_16_slots_over_the_range() {
+    let mut f = Fixture::new();
+    let cells: Vec<_> = (0..16u32)
+        .map(|i| fill_patch(((i + 1) << 8) | 0xff, i < 4))
+        .collect();
+    let r = f.apply(vec![Op::ApplyAutoFormatCustom {
+        sheet: f.sheet,
+        range: range("B2:G9"),
+        cells,
+        autofit: false,
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let fill = |a1: &str| style_of(&f, a1).fill;
+    let slot = |n: u32| Some(((n + 1) << 8) | 0xff);
+    assert_eq!(fill("B2"), slot(0));
+    assert!(style_of(&f, "C2").bold);
+    assert_eq!(fill("G2"), slot(3));
+    assert_eq!(fill("C3"), slot(5)); // odd inner row, odd inner column
+    assert_eq!(fill("D3"), slot(6)); // odd row, even column
+    assert_eq!(fill("C4"), slot(9)); // even row, odd column
+    assert_eq!(fill("G9"), slot(15));
+    assert_eq!(fill("A1"), None);
+    // too small, wrong slot count
+    let bad = f.apply(vec![Op::ApplyAutoFormatCustom {
+        sheet: f.sheet,
+        range: range("A1:B5"),
+        cells: vec![fill_patch(1, false); 16],
+        autofit: false,
+    }]);
+    assert!(!bad.errors.is_empty());
+    let bad = f.apply(vec![Op::ApplyAutoFormatCustom {
+        sheet: f.sheet,
+        range: range("A1:C5"),
+        cells: vec![fill_patch(1, false); 3],
+        autofit: false,
+    }]);
+    assert!(!bad.errors.is_empty());
+}

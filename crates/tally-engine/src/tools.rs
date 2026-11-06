@@ -2608,6 +2608,9 @@ pub fn copy_sheet(
         s.hidden = hidden;
         s.tab_color = tab_color;
         let mut m = meta;
+        // Detective operations and arrows stay with the source sheet (AOO
+        // copies only cells and attributes; the list is document-level).
+        m.detective = Arc::default();
         // Rule formulas, charts and pivots are re-pointed: areas on the
         // source sheet now name the copy (pivot targets and outputs are
         // sheet-local, so the copied pivots stay on the copy).

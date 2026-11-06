@@ -1,11 +1,12 @@
 /**
  * App preferences (Tools ▸ Options): persisted by the desktop shell in
- * `prefs.json` (`get_prefs` / `set_prefs`, ≤ 64 KiB) and, in the browser
+ * `prefs.json` (`get_prefs` / `set_prefs`, ≤ 1 MiB) and, in the browser
  * build, in `localStorage`. Document-level settings (calculation, view,
  * custom sort lists) live in the document and go through ops instead.
  */
 
 import { DEFAULT_CHROME, parseChrome, type ChromePrefs } from "../chrome/chromeModel";
+import { parseUserAutoFormats, serializeUserAutoFormats, type UserAutoFormat } from "../styles/userAutoFormat";
 
 export type UiLanguage = "en" | "de" | "fr" | "es";
 export type EnterMoves = "down" | "right" | "up" | "left";
@@ -50,10 +51,14 @@ export interface AppPrefs {
   deleteKeyDialog: boolean;
   /** AOO "Show overwrite warning when pasting data": ask before a paste replaces cells that hold data. */
   pasteOverwriteWarning: boolean;
+  /** Tools ▸ Detective ▸ AutoRefresh (AOO `Input/DetectiveAuto`, on by default): redraw the arrows after changes. */
+  detectiveAuto: boolean;
   /** Desktop: new and opened documents become tabs of the front window, or get windows of their own. */
   openDocumentsIn: OpenDocumentsIn;
   /** Which bars and toolbar buttons show (View ▸ Toolbars, Customize Toolbars…). */
   chrome: ChromePrefs;
+  /** The user's own AutoFormats (AOO's autotbl.fmt; at most 100). */
+  autoFormats: UserAutoFormat[];
 }
 
 export const DEFAULT_AUTOCORRECT: AutoCorrectPrefs = {
@@ -77,8 +82,10 @@ export const DEFAULT_PREFS: AppPrefs = {
   defaultLocale: "en-US",
   deleteKeyDialog: true,
   pasteOverwriteWarning: true,
+  detectiveAuto: true,
   openDocumentsIn: "tabs",
   chrome: DEFAULT_CHROME,
+  autoFormats: [],
 };
 
 export const UI_LANGUAGES: readonly { id: UiLanguage; label: string; tag: string }[] = [
@@ -89,7 +96,7 @@ export const UI_LANGUAGES: readonly { id: UiLanguage; label: string; tag: string
 ];
 
 /** Longest prefs document the shell accepts (bytes). */
-export const MAX_PREFS_BYTES = 64 * 1024;
+export const MAX_PREFS_BYTES = 1024 * 1024;
 
 function bool(v: unknown, dflt: boolean): boolean {
   return typeof v === "boolean" ? v : dflt;
@@ -124,14 +131,17 @@ export function parsePrefs(raw: unknown): AppPrefs {
     defaultLocale: locale,
     deleteKeyDialog: bool(o.deleteKeyDialog, DEFAULT_PREFS.deleteKeyDialog),
     pasteOverwriteWarning: bool(o.pasteOverwriteWarning, DEFAULT_PREFS.pasteOverwriteWarning),
+    detectiveAuto: bool(o.detectiveAuto, DEFAULT_PREFS.detectiveAuto),
     openDocumentsIn: oneOf(o.openDocumentsIn, ["tabs", "windows"] as const, DEFAULT_PREFS.openDocumentsIn),
     chrome: parseChrome(o.chrome),
+    autoFormats: parseUserAutoFormats(o.autoFormats),
   };
 }
 
 /** Serialises prefs for `set_prefs` (stable key order, compact). */
 export function serializePrefs(p: AppPrefs): string {
-  return JSON.stringify(parsePrefs(p));
+  const clean = parsePrefs(p);
+  return JSON.stringify({ ...clean, autoFormats: serializeUserAutoFormats(clean.autoFormats) });
 }
 
 const STORAGE_KEY = "tally.prefs";

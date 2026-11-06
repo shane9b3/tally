@@ -789,3 +789,101 @@ fn cross_format_ods_xlsx_ods() {
         assert_eq!(got.series.len(), c.series.len());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Date axis and crossing (T18)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn roundtrip_axis_type_intervals_and_crossing() {
+    use tally_model::{
+        AxisCrossData, AxisLabelPosData, AxisTypeData, TimeIntervalData, TimeUnitData,
+    };
+    // Date axis: c:dateAx without c:auto, its time units, and crossings.
+    let mut c = chart(ChartKindData::Line);
+    c.x_axis.axis_type = AxisTypeData::Date;
+    c.x_axis.major_time = Some(TimeIntervalData {
+        number: 2,
+        unit: TimeUnitData::Months,
+    });
+    c.x_axis.minor_time = Some(TimeIntervalData {
+        number: 10,
+        unit: TimeUnitData::Days,
+    });
+    c.x_axis.min = Some(46_023.0);
+    c.x_axis.crosses = Some(AxisCrossData::Value(50.0));
+    c.x_axis.label_position = AxisLabelPosData::OutsideStart;
+    c.y_axis.crosses = Some(AxisCrossData::End);
+    c.y_axis.label_position = AxisLabelPosData::OutsideEnd;
+    let (got, _) = back(c.clone());
+    assert_core(&got, &c);
+    assert_eq!(got.x_axis.axis_type, AxisTypeData::Date);
+    assert_eq!(got.x_axis.major_time, c.x_axis.major_time);
+    assert_eq!(got.x_axis.minor_time, c.x_axis.minor_time);
+    assert_eq!(got.x_axis.min, Some(46_023.0));
+    assert_eq!(got.x_axis.crosses, Some(AxisCrossData::Value(50.0)));
+    assert_eq!(got.x_axis.label_position, AxisLabelPosData::OutsideStart);
+    assert_eq!(got.y_axis.crosses, Some(AxisCrossData::End));
+    assert_eq!(got.y_axis.label_position, AxisLabelPosData::OutsideEnd);
+    // Text (c:catAx, no c:auto) and automatic (c:auto val=1); the value
+    // axis crossing a text axis at a category number (c:crossesAt).
+    for t in [AxisTypeData::Text, AxisTypeData::Auto] {
+        let mut c = chart(ChartKindData::Column);
+        c.x_axis.axis_type = t;
+        c.y_axis.crosses = Some(AxisCrossData::Value(2.0));
+        c.x_axis.crosses = Some(AxisCrossData::Start);
+        let (got, _) = back(c);
+        assert_eq!(got.x_axis.axis_type, t);
+        assert_eq!(got.y_axis.crosses, Some(AxisCrossData::Value(2.0)));
+        assert_eq!(got.x_axis.crosses, Some(AxisCrossData::Start));
+    }
+    // Automatic with date intervals: c:dateAx with c:auto.
+    let mut c = chart(ChartKindData::Area);
+    c.x_axis.major_time = Some(TimeIntervalData {
+        number: 1,
+        unit: TimeUnitData::Years,
+    });
+    let (got, _) = back(c);
+    assert_eq!(got.x_axis.axis_type, AxisTypeData::Auto);
+    assert_eq!(
+        got.x_axis.major_time.map(|t| t.unit),
+        Some(TimeUnitData::Years)
+    );
+}
+
+#[test]
+fn reads_excel_date_axis_as_aoo() {
+    use tally_model::{AxisCrossData, AxisTypeData, TimeIntervalData, TimeUnitData};
+    let part = |axis: &str| {
+        format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:lineChart><c:ser><c:idx val="0"/><c:val><c:numRef><c:f>S!$A$1:$A$3</c:f></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart>{axis}<c:valAx><c:axId val="2"/><c:crosses val="max"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#
+        )
+    };
+    let read = |axis: &str| {
+        let wb = read_xlsx(Cursor::new(package(1, &[part(axis)])), &Limits::default()).unwrap();
+        wb.sheets[0].charts[0].clone()
+    };
+    // oox AxisConverter: dateAx without auto = DATE; base unit, major unit
+    // and time unit become the time increment.
+    let c = read(
+        r#"<c:dateAx><c:axId val="1"/><c:baseTimeUnit val="months"/><c:majorUnit val="3"/><c:majorTimeUnit val="months"/><c:crossesAt val="12.5"/></c:dateAx>"#,
+    );
+    assert_eq!(c.x_axis.axis_type, AxisTypeData::Date);
+    assert_eq!(c.x_axis.time_resolution, Some(TimeUnitData::Months));
+    assert_eq!(
+        c.x_axis.major_time,
+        Some(TimeIntervalData {
+            number: 3,
+            unit: TimeUnitData::Months
+        })
+    );
+    assert_eq!(c.x_axis.major, None);
+    assert_eq!(c.x_axis.crosses, Some(AxisCrossData::Value(12.5)));
+    assert_eq!(c.y_axis.crosses, Some(AxisCrossData::End));
+    // catAx with c:auto (Excel's default) is AOO's automatic axis.
+    let c = read(r#"<c:catAx><c:axId val="1"/><c:auto val="1"/></c:catAx>"#);
+    assert_eq!(c.x_axis.axis_type, AxisTypeData::Auto);
+    assert_eq!(c.x_axis.crosses, None);
+    let c = read(r#"<c:dateAx><c:axId val="1"/><c:auto val="1"/></c:dateAx>"#);
+    assert_eq!(c.x_axis.axis_type, AxisTypeData::Auto);
+}

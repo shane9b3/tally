@@ -1176,42 +1176,132 @@ export class Renderer {
   }
 
   /**
-   * Detective arrows stub (wave 5 seam): a line from the centre of `from`
-   * to the centre of `to` with an arrowhead; precedents in the accent
+   * Detective arrows (AOO `ScDetectiveFunc::InsertArrow`): a line from the
+   * source cell's centre to the target's with a dot at the start and an
+   * arrowhead at the end; a source range of several cells gets a box and
+   * a thicker line; an end on another sheet is a small sheet icon 10 mm
+   * up and to the side (`InsertToOtherTab`). Precedents in the accent
    * colour, dependents in the link colour, errors in red.
    */
   private drawTraces(f: OverlayFrame, traces: readonly TraceArrow[]): void {
     const ctx = this.overlay;
     const { geo } = f;
     const c = f.theme.colors;
-    ctx.save();
-    ctx.lineWidth = Math.max(1, 1.25 * geo.zoom);
+    // AOO offsets other-sheet ends by 1000 (1/100 mm) = 10 mm ≈ 38 CSS px.
+    const off = 38 * geo.zoom;
+    const centre = (r: number, col: number): { x: number; y: number } => {
+      const b = geo.cellRect(r, col);
+      return { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+    };
+    const minX = geo.headerW;
+    const minY = geo.headerH;
+    // Frozen panes: each arrow is clipped to the panes its ends lie in, so
+    // scrolled arrows never draw over the frozen cells (as `rangeRect`).
+    const fr = geo.frozen.rows;
+    const fc = geo.frozen.cols;
+    const pane = (r: number, col: number): number => (r < fr ? 0 : 2) + (col < fc ? 0 : 1);
+    const groups = new Map<number, TraceArrow[]>();
     for (const t of traces) {
-      const a = geo.cellRect(t.from.r, t.from.c);
-      const b = geo.cellRect(t.to.r, t.to.c);
-      const x0 = a.x + a.w / 2;
-      const y0 = a.y + a.h / 2;
-      const x1 = b.x + b.w / 2;
-      const y1 = b.y + b.h / 2;
+      const a = t.fromOtherSheet ? pane(t.to.r, t.to.c) : pane(t.from.r, t.from.c);
+      const b = t.toOtherSheet ? a : pane(t.to.r, t.to.c);
+      const key = (1 << a) | (1 << b);
+      const g = groups.get(key);
+      if (g) g.push(t);
+      else groups.set(key, [t]);
+    }
+    const xs = [geo.headerW, geo.headerW + geo.frozenW, geo.headerW + geo.cellsW];
+    const ys = [geo.headerH, geo.headerH + geo.frozenH, geo.headerH + geo.cellsH];
+    for (const [key, list] of groups) {
+      ctx.save();
+      ctx.beginPath();
+      for (let p = 0; p < 4; p++) {
+        if (!(key & (1 << p))) continue;
+        const ci = p & 1;
+        const ri = p >> 1;
+        ctx.rect(xs[ci]!, ys[ri]!, xs[ci + 1]! - xs[ci]!, ys[ri + 1]! - ys[ri]!);
+      }
+      ctx.clip();
+      for (const t of list) this.drawTrace(f, t, centre, off, minX, minY);
+      ctx.restore();
+    }
+  }
+
+  /** One detective arrow (see `drawTraces`). */
+  private drawTrace(f: OverlayFrame, t: TraceArrow, centre: (r: number, c: number) => { x: number; y: number }, off: number, minX: number, minY: number): void {
+    const ctx = this.overlay;
+    const { geo } = f;
+    const c = f.theme.colors;
+    {
       const color = t.kind === "error" ? c.chipRedFg : t.kind === "dependent" ? c.link : c.accent;
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
+      const area = !!t.fromRange && (t.fromRange.r0 !== t.fromRange.r1 || t.fromRange.c0 !== t.fromRange.c1);
+      if (area && t.fromRange && !t.fromOtherSheet) {
+        const box = geo.rangeRect(t.fromRange, false);
+        ctx.lineWidth = Math.max(1, 1.25 * geo.zoom);
+        if (box.w > 1 && box.h > 1) ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.w - 1, box.h - 1);
+      }
+      ctx.lineWidth = Math.max(1, (area ? 2.5 : 1.25) * geo.zoom);
+      let p0: { x: number; y: number };
+      let p1: { x: number; y: number };
+      if (t.fromOtherSheet) {
+        p1 = centre(t.to.r, t.to.c);
+        p0 = { x: p1.x - off, y: p1.y - off };
+        if (p0.x < minX) p0.x += 2 * off;
+        if (p0.y < minY) p0.y += 2 * off;
+      } else if (t.toOtherSheet) {
+        p0 = centre(t.from.r, t.from.c);
+        p1 = { x: p0.x + off, y: p0.y - off };
+        if (p1.y < minY) p1.y += 2 * off;
+      } else {
+        p0 = centre(t.from.r, t.from.c);
+        p1 = centre(t.to.r, t.to.c);
+      }
       ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      ctx.lineTo(x1, y1);
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
       ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(x0, y0, 2.5 * geo.zoom, 0, Math.PI * 2);
-      ctx.fill();
-      const ang = Math.atan2(y1 - y0, x1 - x0);
-      const len = 7 * geo.zoom;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x1 - len * Math.cos(ang - 0.4), y1 - len * Math.sin(ang - 0.4));
-      ctx.lineTo(x1 - len * Math.cos(ang + 0.4), y1 - len * Math.sin(ang + 0.4));
-      ctx.closePath();
-      ctx.fill();
+      if (t.fromOtherSheet) this.drawSheetIcon(p0.x, p0.y, geo.zoom, color);
+      else {
+        ctx.beginPath();
+        ctx.arc(p0.x, p0.y, 2.5 * geo.zoom, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (t.toOtherSheet) this.drawSheetIcon(p1.x, p1.y, geo.zoom, color);
+      else {
+        const ang = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+        const len = 7 * geo.zoom;
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p1.x - len * Math.cos(ang - 0.4), p1.y - len * Math.sin(ang - 0.4));
+        ctx.lineTo(p1.x - len * Math.cos(ang + 0.4), p1.y - len * Math.sin(ang + 0.4));
+        ctx.closePath();
+        ctx.fill();
+      }
     }
+  }
+
+  /** The small spreadsheet icon at an arrow end on another sheet. */
+  private drawSheetIcon(x: number, y: number, zoom: number, color: string): void {
+    const ctx = this.overlay;
+    const w = 12 * zoom;
+    const h = 10 * zoom;
+    const x0 = x - w / 2;
+    const y0 = y - h / 2;
+    ctx.save();
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(x0, y0, w, h);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, zoom);
+    ctx.strokeRect(x0, y0, w, h);
+    ctx.beginPath();
+    for (let i = 1; i < 3; i++) {
+      ctx.moveTo(x0, y0 + (h * i) / 3);
+      ctx.lineTo(x0 + w, y0 + (h * i) / 3);
+      ctx.moveTo(x0 + (w * i) / 3, y0);
+      ctx.lineTo(x0 + (w * i) / 3, y0 + h);
+    }
+    ctx.stroke();
     ctx.restore();
   }
 

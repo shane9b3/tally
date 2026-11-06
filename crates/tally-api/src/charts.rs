@@ -334,6 +334,96 @@ pub struct ChartSeriesDto {
     pub mean_line: bool,
 }
 
+/// Scale type of a category axis (AOO "Scale ▸ Type").
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AxisType {
+    /// A date axis when every category is a date, else text.
+    #[default]
+    Auto,
+    /// Text categories.
+    Text,
+    /// Date axis.
+    Date,
+}
+
+/// A date axis time unit.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum TimeUnit {
+    /// Days.
+    #[default]
+    Days,
+    /// Months.
+    Months,
+    /// Years.
+    Years,
+}
+
+/// A date axis interval.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TimeIntervalDto {
+    /// Count of units (1 to 10,000).
+    pub number: u32,
+    /// Unit.
+    pub unit: TimeUnit,
+}
+
+/// Where an axis crosses the other axis (AOO "Cross other axis at").
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export)]
+pub enum AxisCross {
+    /// The start of the other axis.
+    Start,
+    /// The end of the other axis.
+    End,
+    /// A value of the other axis (on a category axis, the 1-based
+    /// category number).
+    Value {
+        /// The value.
+        value: f64,
+    },
+}
+
+/// Axis label placement (AOO "Place labels").
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AxisLabelPos {
+    /// Near the axis line.
+    #[default]
+    NearAxis,
+    /// Near the axis line, other side.
+    NearAxisOtherSide,
+    /// Outside the plot area at the start.
+    OutsideStart,
+    /// Outside the plot area at the end.
+    OutsideEnd,
+}
+
+/// Interval mark placement (AOO "Place marks").
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AxisMarkPos {
+    /// At the labels and the axis line.
+    #[default]
+    AtLabelsAndAxis,
+    /// At the labels.
+    AtLabels,
+    /// At the axis line.
+    AtAxis,
+}
+
 /// An axis.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -361,6 +451,27 @@ pub struct ChartAxisDto {
     pub minor_grid: bool,
     /// Number format code of the labels.
     pub number_format: Option<String>,
+    /// Scale type (category axes; `auto` when absent).
+    #[serde(default)]
+    pub axis_type: AxisType,
+    /// Date axis resolution (`null`: automatic).
+    #[serde(default)]
+    pub time_resolution: Option<TimeUnit>,
+    /// Date axis major interval (`null`: automatic).
+    #[serde(default)]
+    pub major_time: Option<TimeIntervalDto>,
+    /// Date axis minor interval (`null`: automatic).
+    #[serde(default)]
+    pub minor_time: Option<TimeIntervalDto>,
+    /// Where the axis crosses the other axis (`null`: at value 0).
+    #[serde(default)]
+    pub crosses: Option<AxisCross>,
+    /// Label placement.
+    #[serde(default)]
+    pub label_position: AxisLabelPos,
+    /// Interval mark placement.
+    #[serde(default)]
+    pub mark_position: AxisMarkPos,
 }
 
 /// The wizard's "data range".
@@ -478,6 +589,21 @@ pub struct TrendDataDto {
     pub r2: f64,
 }
 
+/// A date category axis as resolved from the category cells.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DateAxisDto {
+    /// Each category as days since 1970-01-01, floored to the resolution
+    /// (`null`: an empty category, its points are not drawn).
+    pub days: Vec<Option<f64>>,
+    /// The resolution (explicit, or AOO's automatic choice).
+    pub resolution: TimeUnit,
+    /// Label number format: the axis format, else the first category
+    /// cell's.
+    pub number_format: Option<String>,
+}
+
 /// Result of `chart_data`: the resolved values of a chart, read from
 /// cached cell values without recalculating. Caps: 255 series and 32,000
 /// points per series; one call also visits at most 2,000,000 cells and
@@ -494,6 +620,11 @@ pub struct ChartDataDto {
     pub version: u64,
     /// Category labels.
     pub categories: Vec<String>,
+    /// The date axis in effect (AOO's automatic or explicit date axis),
+    /// absent for text categories.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub date_axis: Option<DateAxisDto>,
     /// Series.
     pub series: Vec<SeriesDataDto>,
     /// Series or points were dropped because of the caps.

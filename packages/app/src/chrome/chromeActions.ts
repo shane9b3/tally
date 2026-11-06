@@ -7,7 +7,7 @@ import { withBar, type BarId, type ChromePrefs } from "./chromeModel";
 
 /** Stores new chrome prefs (prefs.json + every window in the desktop app, localStorage in the browser). */
 export function saveChrome(ctl: AppController, next: ChromePrefs): Promise<void> {
-  return ctl.w56.savePrefs({ ...useW56Store.getState().prefs, chrome: next });
+  return ctl.w56.savePrefs({ ...useW56Store.getState().prefs, chrome: next }).then(() => undefined);
 }
 
 /** The formula bar shown for a moment while it is hidden (⇧⌘T Go to the Name Box). */

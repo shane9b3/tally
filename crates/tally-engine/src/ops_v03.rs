@@ -511,6 +511,8 @@ pub fn apply(
             ranges,
             locked,
             hidden_formula,
+            hidden,
+            hide_print,
         } => (|| {
             check_sheet(wb, *sheet)?;
             if wb
@@ -534,6 +536,12 @@ pub fn apply(
                     }
                     if let Some(h) = hidden_formula {
                         p.hidden_formula = *h;
+                    }
+                    if let Some(h) = hidden {
+                        p.hidden = *h;
+                    }
+                    if let Some(h) = hide_print {
+                        p.hide_print = *h;
                     }
                     d.protection = (p != CellProtectionData::default()).then_some(p);
                     t.intern(d)

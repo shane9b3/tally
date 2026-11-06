@@ -256,6 +256,46 @@ pub async fn dependents(
     .await
 }
 
+/// `detective(doc, sheet, r, c, action)`: Tools ▸ Detective (trace, remove,
+/// refresh; recorded in the document's operation list).
+#[tauri::command]
+pub async fn detective(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    r: u32,
+    c: u32,
+    action: tally_api::DetectiveAction,
+) -> CmdResult<tally_api::DetectiveState> {
+    limits::pos("detective", r, c)?;
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.detective(doc, sheet, r, c, action))
+    })
+    .await
+}
+
+/// `detective_arrows(doc, sheet)`: the sheet's detective arrows.
+#[tauri::command]
+pub async fn detective_arrows(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+) -> CmdResult<tally_api::DetectiveState> {
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.detective_arrows(doc, sheet))
+    })
+    .await
+}
+
+/// `set_detective_auto(doc, on)`: Tools ▸ Detective ▸ AutoRefresh.
+#[tauri::command]
+pub async fn set_detective_auto(app: AppHandle, doc: DocId, on: bool) -> CmdResult<()> {
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.set_detective_auto(doc, on))
+    })
+    .await
+}
+
 // ----- integration pass: queries the UI needs from the real engine ------------
 
 /// `image_data(doc, sheet, id)`: a picture's bytes, base64 (≤ 16 MiB decoded).
@@ -390,6 +430,9 @@ pub const COMMAND_NAMES: &[&str] = &[
     "solver",
     "precedents",
     "dependents",
+    "detective",
+    "detective_arrows",
+    "set_detective_auto",
     "image_data",
     "view_options",
     "invalid_cells",

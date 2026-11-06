@@ -125,6 +125,34 @@ pub fn copy_range(
     range: CellRange,
     rng: &mut Rng,
 ) -> (ClipSnapshot, String, String) {
+    copy_range_with(wb, range, rng, false)
+}
+
+/// [`copy_range`] for Edit ▸ Copy / Cut: on a protected sheet the content
+/// of "Hide all" cells (and their notes) is left out and hidden formulas
+/// become their values (AOO `ScTable::CopyToClip` → `ScColumn::RemoveProtected`).
+pub fn copy_to_clipboard(
+    wb: &Workbook,
+    range: CellRange,
+    rng: &mut Rng,
+) -> (ClipSnapshot, String, String) {
+    copy_range_with(wb, range, rng, true)
+}
+
+fn copy_range_with(
+    wb: &Workbook,
+    range: CellRange,
+    rng: &mut Rng,
+    remove_protected: bool,
+) -> (ClipSnapshot, String, String) {
+    // The protection attributes in effect (`None`: nothing to remove).
+    let prot_at = |r: u32, c: u32| {
+        if !remove_protected {
+            return None;
+        }
+        crate::protection::effective_cell_protection(wb, range.sheet, r, c)
+            .filter(|p| p.hidden || p.hidden_formula)
+    };
     let token = format!("{:016x}{:016x}", rng.next_u64(), rng.next_u64());
     let mut cells = Vec::new();
     let mut styles: Vec<StyleData> = Vec::new();
@@ -146,13 +174,21 @@ pub fn copy_range(
             rows.dedup();
             for r in rows {
                 let addr = CellAddr::new(range.sheet, r, c);
-                let value = wb.value(addr);
-                let content = match wb.array_at(addr) {
+                let mut value = wb.value(addr);
+                let mut content = match wb.array_at(addr) {
                     Some((_, f)) if f.array_range().is_some_and(|b| !range.contains_range(&b)) => {
                         (!value.is_empty()).then(|| SnapContent::Value(value.clone()))
                     }
                     _ => wb.snapshot_content(addr),
                 };
+                if let Some(p) = prot_at(r, c) {
+                    if p.hidden {
+                        content = None;
+                        value = Value::Empty;
+                    } else if wb.formula_at(addr).is_some() || wb.array_at(addr).is_some() {
+                        content = (!value.is_empty()).then(|| SnapContent::Value(value.clone()));
+                    }
+                }
                 let st = col.styles.get(r);
                 let si = (st != StyleId::DEFAULT).then(|| {
                     if let Some((_, i)) = style_idx.iter().find(|(s, _)| *s == st) {
@@ -207,13 +243,15 @@ pub fn copy_range(
                 .filter_map(|v| clip_rules(&range, &v.ranges, v.origin, &**v))
                 .collect();
             let notes: Vec<_> = crate::annotations::entries_in(&s.meta.notes, &range)
+                .filter(|((r, c), _)| !prot_at(*r, *c).is_some_and(|p| p.hidden))
                 .map(|((r, c), n)| (r - range.r0, c - range.c0, n.clone()))
                 .collect();
             (cf, va, notes)
         })
         .unwrap_or_default();
-    let tsv = render_tsv(wb, range);
-    let html = render_html(wb, range, &token);
+    let hidden = |addr: CellAddr| prot_at(addr.row, addr.col).is_some_and(|p| p.hidden);
+    let tsv = render_tsv(wb, range, &hidden);
+    let html = render_html(wb, range, &token, &hidden);
     (
         ClipSnapshot {
             token,
@@ -237,12 +275,17 @@ fn display(wb: &Workbook, addr: CellAddr) -> String {
     crate::service::view::display_text(wb, addr)
 }
 
-fn render_tsv(wb: &Workbook, range: CellRange) -> String {
+fn render_tsv(wb: &Workbook, range: CellRange, hidden: &dyn Fn(CellAddr) -> bool) -> String {
     let mut out = String::new();
     for r in range.r0..=range.r1 {
         let mut line: Vec<String> = Vec::with_capacity(range.cols() as usize);
         for c in range.c0..=range.c1 {
-            line.push(display(wb, CellAddr::new(range.sheet, r, c)));
+            let addr = CellAddr::new(range.sheet, r, c);
+            line.push(if hidden(addr) {
+                String::new()
+            } else {
+                display(wb, addr)
+            });
         }
         out.push_str(line.join("\t").trim_end_matches('\t'));
         out.push('\n');
@@ -266,7 +309,12 @@ pub fn escape_html(s: &str) -> String {
     out
 }
 
-fn render_html(wb: &Workbook, range: CellRange, token: &str) -> String {
+fn render_html(
+    wb: &Workbook,
+    range: CellRange,
+    token: &str,
+    hidden: &dyn Fn(CellAddr) -> bool,
+) -> String {
     let mut out = format!("<table data-tally-clip=\"{}\">", escape_html(token));
     for r in range.r0..=range.r1 {
         out.push_str("<tr>");
@@ -285,7 +333,9 @@ fn render_html(wb: &Workbook, range: CellRange, token: &str) -> String {
             } else {
                 out.push_str(&format!("<td style=\"{css}\">"));
             }
-            out.push_str(&escape_html(&display(wb, addr)));
+            if !hidden(addr) {
+                out.push_str(&escape_html(&display(wb, addr)));
+            }
             out.push_str("</td>");
         }
         out.push_str("</tr>");

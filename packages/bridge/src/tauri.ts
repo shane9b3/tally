@@ -87,6 +87,8 @@ import type { ScenarioDto } from "./generated/ScenarioDto";
 import type { SolverRequest } from "./generated/SolverRequest";
 import type { SolverResult } from "./generated/SolverResult";
 import type { TraceDto } from "./generated/TraceDto";
+import type { DetectiveAction } from "./generated/DetectiveAction";
+import type { DetectiveState } from "./generated/DetectiveState";
 import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
 import type { CellsOptions } from "./generated/CellsOptions";
 import { isApiError, type EngineClientV4, type SheetId, type Unsubscribe } from "./client";
@@ -184,6 +186,9 @@ export const COMMANDS = {
   solver: "solver",
   precedents: "precedents",
   dependents: "dependents",
+  detective: "detective",
+  detectiveArrows: "detective_arrows",
+  setDetectiveAuto: "set_detective_auto",
   imageData: "image_data",
   viewOptions: "view_options",
   invalidCells: "invalid_cells",
@@ -251,6 +256,9 @@ export const V4_METHODS = [
   "solver",
   "precedents",
   "dependents",
+  "detective",
+  "detectiveArrows",
+  "setDetectiveAuto",
   "imageData",
   "viewOptions",
   "invalidCells",
@@ -673,6 +681,18 @@ export class TauriClient implements EngineClientV4, ShellClient {
 
   dependents(doc: DocId, sheet: SheetId, r: number, c: number): Promise<TraceDto[]> {
     return this.call(COMMANDS.dependents, { doc, sheet, r, c });
+  }
+
+  detective(doc: DocId, sheet: SheetId, r: number, c: number, action: DetectiveAction): Promise<DetectiveState> {
+    return this.call(COMMANDS.detective, { doc, sheet, r, c, action });
+  }
+
+  detectiveArrows(doc: DocId, sheet: SheetId): Promise<DetectiveState> {
+    return this.call(COMMANDS.detectiveArrows, { doc, sheet });
+  }
+
+  setDetectiveAuto(doc: DocId, on: boolean): Promise<void> {
+    return this.call(COMMANDS.setDetectiveAuto, { doc, on });
   }
 
   imageData(doc: DocId, sheet: SheetId, id: number): Promise<string> {

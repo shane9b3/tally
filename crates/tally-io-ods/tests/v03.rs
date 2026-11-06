@@ -377,6 +377,51 @@ fn cell_protection_round_trips() {
     assert_eq!(back.styles[st as usize].protection, wb.styles[0].protection);
 }
 
+/// Every combination of the four `ScProtectionAttr` flags through ODS.
+/// Without "Hide all" the round trip is exact; "hidden-and-protected"
+/// reads back with "Protected" and "Hide formula" set, as AOO's
+/// `XmlScPropHdl_CellProtection` does (#i105964#: "Hide all" implies them).
+/// "Hide when printing" is `style:print-content="false"`.
+#[test]
+fn every_cell_protection_combination_round_trips() {
+    for bits in 0u8..16 {
+        let p = CellProtectionData {
+            locked: bits & 1 != 0,
+            hidden_formula: bits & 2 != 0,
+            hidden: bits & 4 != 0,
+            hide_print: bits & 8 != 0,
+        };
+        let mut wb = sample();
+        wb.styles.push(StyleData {
+            protection: (p != CellProtectionData::default()).then_some(p),
+            ..StyleData::default()
+        });
+        wb.sheets[0].cells[0].style = Some(0);
+        let back = round_trip(&wb);
+        let got = back.sheets[0].cells[0]
+            .style
+            .and_then(|st| back.styles[st as usize].protection)
+            .unwrap_or_default();
+        let want = if p.hidden {
+            CellProtectionData {
+                locked: true,
+                hidden_formula: true,
+                ..p
+            }
+        } else {
+            p
+        };
+        assert_eq!(got, want, "{p:?}");
+        // Saving again is stable.
+        let again = round_trip(&back);
+        let got2 = again.sheets[0].cells[0]
+            .style
+            .and_then(|st| again.styles[st as usize].protection)
+            .unwrap_or_default();
+        assert_eq!(got2, want, "{p:?} second round trip");
+    }
+}
+
 #[test]
 fn ods_specifics() {
     let mut wb = sample();

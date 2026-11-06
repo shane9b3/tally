@@ -38,6 +38,8 @@ export const GROUP_OPS: readonly string[] = [
   "setRowsHidden",
   "setColsHidden",
   "autoFitRows",
+  "applyAutoFormat",
+  "applyAutoFormatCustom",
   "paste",
   "pasteSpecial",
   "fillRange",

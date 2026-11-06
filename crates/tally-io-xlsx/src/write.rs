@@ -48,6 +48,13 @@ impl crate::write_v03::Warn for Report {
 }
 
 impl Report {
+    /// [`Report::warn`] unless the same warning was already given.
+    fn warn_once(&mut self, w: &str) {
+        if !self.warnings.iter().any(|x| x == w) {
+            self.warn(w);
+        }
+    }
+
     fn warn(&mut self, w: impl Into<String>) {
         if self.warnings.len() < MAX_WARNINGS {
             self.warnings.push(w.into());
@@ -250,8 +257,20 @@ fn format_of(s: &StyleData, base: &Format, report: &mut Report) -> Format {
         if !p.locked {
             f = f.set_unlocked();
         }
+        // AOO `XclExpCellProt` (xestyle.cxx): `hidden` = hide formula or
+        // hide all; Excel has no "Hide all" or "Hide when printing".
         if p.hidden_formula || p.hidden {
             f = f.set_hidden();
+        }
+        if p.hidden {
+            report.warn_once(
+                "the cell protection \"Hide all\" has no Excel equivalent; written as \"Hide formula\"",
+            );
+        }
+        if p.hide_print {
+            report.warn_once(
+                "the cell protection \"Hide when printing\" has no Excel equivalent and was dropped",
+            );
         }
     }
     if let Some(code) = &s.number_format {

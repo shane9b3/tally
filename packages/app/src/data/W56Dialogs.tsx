@@ -1,7 +1,7 @@
 /** The W5-6 dialog dispatcher, in its own module so the dialogs load as one lazy chunk. */
 import type { W56Dialog } from "./store";
 import { CustomizeToolbarsDialog } from "../chrome/ChromeUi";
-import { AutoFormatDialog, FormatCellsDialog, StyleEditorDialog } from "../styles/StylesUi";
+import { AutoFormatDialog, AutoFormatNameDialog, FormatCellsDialog, StyleEditorDialog } from "../styles/StylesUi";
 import { OptionsDialog } from "../options/OptionsDialog";
 import { DataPilotDialog } from "../pivot/DataPilotDialog";
 import {
@@ -76,7 +76,9 @@ export function W56DialogFor({ d }: { d: W56Dialog }) {
     case "mergePrompt":
       return <MergePromptDialog d={d} />;
     case "autoFormat":
-      return <AutoFormatDialog d={d} />;
+      return <AutoFormatDialog key={d.select ?? ""} d={d} />;
+    case "autoFormatName":
+      return <AutoFormatNameDialog d={d} />;
     case "formatCells":
       return <FormatCellsDialog d={d} />;
     case "styleEditor":

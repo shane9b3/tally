@@ -63,7 +63,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Backspace clears, Delete opens Delete Contents | done | An option turns the dialog off |
 | Switch to edit mode on Enter, Expand formatting, Expand references, Use Tab column, Printer metrics | missing | Not in Options > Input |
 | Show references in colour while editing | done | Editor spans and grid outlines (`formulaEdit.ts:44`); always on, no option; test `formulaEdit.test.ts` "colours each distinct reference" |
-| Highlight selection in headers, overwrite warning when pasting, detective auto-refresh | partial (T12) | Header highlight done (`grid/src/renderer.ts:1369`); overwrite warning done (Options > Input "Show overwrite warning when pasting data", on by default; `controller.ts` `confirmPasteOverData` asks the engine `paste_overwrites`, which uses the engine's own paste area; tests `v03.rs` `paste_overwrites_matches_the_engine_target`, `nextUnlocked.test.ts`, `tests/e2e/input-ux.spec.ts`); traces are not redrawn after edits |
+| Highlight selection in headers, overwrite warning when pasting, detective auto-refresh | done | Header highlight done (`grid/src/renderer.ts:1369`); overwrite warning done (Options > Input "Show overwrite warning when pasting data", on by default; `controller.ts` `confirmPasteOverData` asks the engine `paste_overwrites`, which uses the engine's own paste area; tests `v03.rs` `paste_overwrites_matches_the_engine_target`, `nextUnlocked.test.ts`, `tests/e2e/input-ux.spec.ts`); detective AutoRefresh done (Tools ▸ Detective ▸ AutoRefresh, app option on by default, replays the operation list after formula changes; T12) |
 | Automatic number recognition (dates, percent, currency, fractions, booleans) | done | Locale-aware (en, de, fr, es) |
 | Leading apostrophe forces text, leading `+`/`-` starts a formula | done | `'123` is text; typed `+B1+B2` is stored `=+B1+B2` unless it is a number, does not compile or uses an unknown name (AOO `EnterData`; `workbook.rs` `set_typed_input`, P18); paste and CSV do not convert; tests `inventory_1_0.rs` `apostrophe_forces_text_and_signs_stay_numbers`, `fill_signed_input.rs`, e2e `fill-signed.spec.ts` |
 | Alt+arrows row height / column width (Shift = optimal) | done | |
@@ -115,11 +115,11 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Alignment: Filled, text direction, hyphenation | missing | G3 |
 | Borders: styles, colours, diagonals | partial | No spacing to contents, no shadow (G4) |
 | Background colour | done | |
-| Cell protection: Protected, Hide formula | done | `StylesUi.tsx` protection tab. "Hide all" and "Hide when printing" only round-trip through ODS: no UI, not applied (G15) |
+| Cell protection: Protected, Hide formula, Hide all, Hide when printing | done | `StylesUi.tsx` protection tab (AOO enabling rules); Hide all blanks the cell, input line, copy and CSV on a protected sheet; Hide when printing leaves the text out of print and PDF; ODS round trip, XLSX `hidden` (G15) |
 | Merge and unmerge | done | |
 | Ctrl+B/I/U, L/E/R/J, Ctrl+Shift+1..6 | deviation (U6) | Different keys for alignment; no justify key |
 | Default formatting (Ctrl+M) | done | `edit.clearFormats`, `⌘M` |
-| AutoFormat | partial | 17 fixed presets and options (`styles/autoformat.ts:25`); no Add / Rename / Delete |
+| AutoFormat | done | 17 presets and the six options (`styles/autoformat.ts`); Add… from the selection (4 × 4 sample, AOO's 16 slots), Rename…, Delete for user formats, kept in the prefs (`styles/userAutoFormat.ts`) |
 | Row height, column width, optimal size, hide/show | done | |
 | Group and outline (F12 / Ctrl+F12), AutoOutline | done | |
 | Value highlighting (Ctrl+F8) | done | |
@@ -214,7 +214,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | 3D charts and scene settings | missing | Flag stored, not rendered (T10) |
 | Titles, legend, axes, grids, data labels | done | |
 | Axis scale: logarithmic, reverse | done | |
-| Axis scale: date axis, crossing positions | missing (T18) | `ChartAxisData` has no axis type or crossing (`tally-model/src/charts.rs:349`) |
+| Axis scale: date axis, crossing positions | done (2026-11-06; T18 lists the gaps) | `ChartAxisData.axis_type` / `crosses` (`tally-model/src/charts.rs`), `charts/chartAxes.ts`; tests `toEcharts.test.ts` "date axis and crossing", `tests/e2e/chart-axes.spec.ts` |
 | Trend lines (linear, log, exp, power), equation, R-squared | done | |
 | Mean-value line, error bars | done | Dropped on XLSX save (X5) |
 | Wizard (4 steps) | deviation (T10) | Editor panel |
@@ -261,7 +261,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Comments: insert, show/hide, indicator, author and date | done | `⇧F2`, `⌥⌘C` |
 | Comments printable | partial | T13 |
 | Trace precedents / dependents / error, remove traces, mark invalid | done | |
-| Fill Mode, Refresh Traces, AutoRefresh | missing (T12) | `commands.ts:323-326` has trace, remove and mark invalid only |
+| Remove precedents / dependents (by level), Fill Mode, Refresh Traces, AutoRefresh, arrows across sheets, ODS `table:detective` | done (2026-11-06; deviations T12) | `crates/tally-engine/src/detective.rs`, `packages/app/src/detective/detective.ts`; tests `crates/tally-engine/tests/detective.rs`, `tests/e2e/detective.spec.ts` |
 
 ### 23. Find, spelling, AutoCorrect
 

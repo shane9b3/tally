@@ -942,6 +942,17 @@ export async function applyW56Op(x: W56Ext, op: Op, ctx: W56Ctx): Promise<W56Out
       if (!s) return err("not_found", `style ${op.name} not found`);
       return handled([{ type: "applyStyle", sheet: op.sheet, ranges: op.ranges, patch: styleToPatch(s.style) }], op.sheet, op.ranges);
     }
+    case "applyAutoFormatCustom": {
+      const r = op.range;
+      const rows = r.r1 - r.r0 + 1;
+      const cols = r.c1 - r.c0 + 1;
+      if (rows < 3 || cols < 3 || op.cells.length !== 16) return err("invalid_argument", "AutoFormat needs a range of at least 3 × 3 cells");
+      const role = (i: number, n: number) => (i === 0 ? 0 : i === n - 1 ? 3 : i % 2 === 1 ? 1 : 2);
+      const bySlot: RangeDto[][] = Array.from({ length: 16 }, () => []);
+      for (let dr = 0; dr < rows; dr++) for (let dc = 0; dc < cols; dc++) bySlot[role(dr, rows) * 4 + role(dc, cols)]!.push({ r0: r.r0 + dr, c0: r.c0 + dc, r1: r.r0 + dr, c1: r.c0 + dc });
+      const ops: Op[] = bySlot.flatMap((ranges, i) => (ranges.length > 0 ? [{ type: "applyStyle" as const, sheet: op.sheet, ranges, patch: op.cells[i]! }] : []));
+      return handled(ops, op.sheet, [r]);
+    }
     case "applyAutoFormat": {
       const preset = AUTOFORMAT_PRESETS.find((p) => p.name === op.preset);
       if (!preset) return err("not_found", `AutoFormat ${op.preset} not found`);

@@ -72,6 +72,11 @@ pub struct HashDepIndex {
     names: HashMap<String, HashSet<FormulaCellId>>,
     /// Formula → the name keys it is registered under.
     name_back: SecondaryMap<FormulaCellId, Vec<String>>,
+    /// Bumped by every registration change (a formula added, removed or
+    /// re-pointed): the detective's AutoRefresh redraws only when it moved
+    /// (AOO `ScDocument::IsDetectiveDirty`, set in `StartListeningTo` /
+    /// `EndListeningTo`).
+    generation: u64,
 }
 
 impl HashDepIndex {
@@ -118,6 +123,7 @@ impl HashDepIndex {
         if spans.is_empty() {
             return;
         }
+        self.generation = self.generation.wrapping_add(1);
         let mut locs: SmallVec<[Loc; 4]> = self.back.remove(id).unwrap_or_default();
         for s in spans {
             self.spans.push(SpanEntry {
@@ -130,6 +136,11 @@ impl HashDepIndex {
         self.back.insert(id, locs);
     }
 
+    /// The registration generation (see the field).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Number of single-cell keys.
     pub fn single_count(&self) -> usize {
         self.singles.len()
@@ -137,6 +148,7 @@ impl HashDepIndex {
 
     /// Drops everything.
     pub fn clear(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         self.singles.clear();
         self.areas.clear();
         self.spans.clear();
@@ -216,6 +228,7 @@ impl HashDepIndex {
 
 impl DepIndex for HashDepIndex {
     fn add(&mut self, id: FormulaCellId, precedents: &[CellRange]) {
+        self.generation = self.generation.wrapping_add(1);
         let mut locs: SmallVec<[Loc; 4]> = self.back.remove(id).unwrap_or_default();
         // Each cell is registered once per formula: deduplicate against this
         // formula's own entries, never by scanning the cell's reader list.
@@ -258,6 +271,7 @@ impl DepIndex for HashDepIndex {
     }
 
     fn remove(&mut self, id: FormulaCellId) {
+        self.generation = self.generation.wrapping_add(1);
         self.volatile.remove(&id);
         let Some(mut locs) = self.back.remove(id) else {
             return;

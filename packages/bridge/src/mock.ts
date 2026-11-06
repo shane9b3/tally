@@ -88,6 +88,8 @@ import type { ScenarioDto } from "./generated/ScenarioDto";
 import type { SolverRequest } from "./generated/SolverRequest";
 import type { SolverResult } from "./generated/SolverResult";
 import type { TraceDto } from "./generated/TraceDto";
+import type { DetectiveAction } from "./generated/DetectiveAction";
+import type { DetectiveState } from "./generated/DetectiveState";
 import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
 import type { CellsOptions } from "./generated/CellsOptions";
 import type { EngineClientV4, SheetId, Unsubscribe } from "./client";
@@ -1248,6 +1250,33 @@ export class MockClient implements EngineClientV4, ShellClient {
     });
   }
 
+  detective(doc: DocId, sheet: SheetId, _r: number, _c: number, _action: DetectiveAction): Promise<DetectiveState> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      this.sheet(d, sheet);
+      return { done: false, arrows: [], hasOps: false, dirty: d.dirty, incomplete: false };
+    });
+  }
+
+  detectiveArrows(doc: DocId, sheet: SheetId): Promise<DetectiveState> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      this.sheet(d, sheet);
+      return { done: false, arrows: [], hasOps: false, dirty: d.dirty, incomplete: false };
+    });
+  }
+
+  /** A detective command changed something (subclasses): the document is modified, as in the engine. */
+  protected markDetectiveDirty(doc: DocId): void {
+    this.doc(doc).dirty = true;
+  }
+
+  setDetectiveAuto(doc: DocId, _on: boolean): Promise<void> {
+    return this.run(() => {
+      this.doc(doc);
+    });
+  }
+
   imageData(doc: DocId, sheet: SheetId, id: number): Promise<string> {
     return this.run(() => {
       this.sheet(this.doc(doc), sheet);
@@ -2056,8 +2085,11 @@ function styleWith(styles: StyleDto[], baseId: number, patch: StylePatch): numbe
   const base = styles[baseId] ?? defaultStyle();
   const next: StyleDto = { ...structuredClone(base), id: 0 };
   for (const [k, v] of Object.entries(patch) as [keyof StylePatch, unknown][]) {
+    if (k === "clearFill" || k === "clearColor") continue;
     if (v !== null && v !== undefined) (next as unknown as Record<string, unknown>)[k] = v;
   }
+  if (patch.clearFill) next.fill = null;
+  if (patch.clearColor) next.color = null;
   const sig = JSON.stringify(next);
   const found = styles.findIndex((s) => JSON.stringify({ ...s, id: 0 }) === sig);
   if (found >= 0) return found;

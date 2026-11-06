@@ -139,6 +139,14 @@ impl Workbook {
         if self.sheet(sh.sheet).is_none() || sh.count == 0 || sh.at >= sh.limit() {
             return Vec::new();
         }
+        // 0. Detective operations and arrows move here, on do, undo and redo
+        // alike: they are not part of the undo snapshots (AOO's operation
+        // list survives undo; `ScDetOpList::UpdateReference`).
+        if let Some(sheet) = self.sheet_mut(sh.sheet) {
+            if !sheet.meta.detective.is_empty() {
+                crate::detective::adjust_structure(Arc::make_mut(&mut sheet.meta.detective), &sh);
+            }
+        }
         // 1. Rewrite references.
         let mut old = Vec::new();
         let mut rewritten: Vec<(FormulaCellId, Arc<tally_formula::Formula>)> = Vec::new();

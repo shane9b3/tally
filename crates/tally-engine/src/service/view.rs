@@ -428,6 +428,27 @@ fn decorate(
     }
 }
 
+/// "Hide all" on a protected sheet: the cell's content is not shown (AOO
+/// `ScDocument::FillInfo` sets `bEmptyCellText` from `GetHideCell()` when
+/// the tab is protected). Fill, borders and the comment and validation
+/// marks stay; text, value, conditional decorations and the link go.
+fn hide_protected(wb: &Workbook, views: &mut [CellView]) {
+    for v in views.iter_mut() {
+        if !crate::protection::cell_protection(wb, StyleId(v.style)).hidden {
+            continue;
+        }
+        v.text.clear();
+        v.kind = ValueKind::Empty;
+        v.num = None;
+        v.color = None;
+        v.cf_bar = None;
+        v.cf_icon = None;
+        v.link = None;
+        v.flags = (v.flags & (cell_flags::COMMENT | cell_flags::VALIDATION_DROPDOWN))
+            | cell_flags::HIDDEN;
+    }
+}
+
 /// Cell views for the requested ranges (non-empty or styled cells only).
 pub fn cells(
     wb: &Workbook,
@@ -503,6 +524,9 @@ pub fn cells_with_cf_budget(
             let req = CellRange::new(sheet, r.r0, r.c0, r.r1, r.c1);
             decorate(wb, s, &eval, &req, &mut views);
         }
+        if s.meta.protection.is_some() {
+            hide_protected(wb, &mut views);
+        }
         views.sort_by_key(|v| (v.r, v.c));
         out.push(CellBlock {
             sheet,
@@ -540,6 +564,9 @@ pub fn apply_cells_options(
     let protected = s.meta.protection.is_some();
     for b in blocks.iter_mut() {
         for v in &mut b.cells {
+            if v.flags & cell_flags::HIDDEN != 0 {
+                continue;
+            }
             let content = s.get(v.r, v.c);
             let formula_id = match content {
                 Some(CellContent::Formula(id) | CellContent::ArrayPart(id)) => Some(*id),
@@ -558,19 +585,25 @@ pub fn apply_cells_options(
                 if let Some(id) = formula_id {
                     let hidden = protected
                         && crate::protection::cell_protection(wb, s.style(v.r, v.c)).hidden_formula;
-                    if !hidden {
-                        if let Some(text) = wb.formula_text(id) {
-                            let array = wb.formulas.get(id).is_some_and(|f| f.array.is_some())
-                                || matches!(content, Some(CellContent::ArrayPart(_)));
-                            v.text =
-                                cap_view_text(if array { format!("{{{text}}}") } else { text });
-                            v.kind = ValueKind::Text;
-                            v.num = None;
-                            if !opts.value_highlighting {
-                                v.color = None;
-                            }
-                            continue;
+                    if hidden {
+                        // AOO `FillInfo`: in formula view a hidden formula
+                        // leaves the cell empty (`bFormulaMode && bHideFormula`).
+                        v.text.clear();
+                        v.kind = ValueKind::Empty;
+                        v.num = None;
+                        v.color = None;
+                        continue;
+                    }
+                    if let Some(text) = wb.formula_text(id) {
+                        let array = wb.formulas.get(id).is_some_and(|f| f.array.is_some())
+                            || matches!(content, Some(CellContent::ArrayPart(_)));
+                        v.text = cap_view_text(if array { format!("{{{text}}}") } else { text });
+                        v.kind = ValueKind::Text;
+                        v.num = None;
+                        if !opts.value_highlighting {
+                            v.color = None;
                         }
+                        continue;
                     }
                 }
             }
@@ -816,6 +849,11 @@ pub fn cell_edit_info(
         array: None,
         array_range: None,
     };
+    // AOO `ScTabViewShell::UpdateInputHandler`: "Hide all" on a protected
+    // sheet leaves the input line empty.
+    if crate::protection::cell_hidden(wb, sheet, r, c) {
+        return Ok(plain(String::new()));
+    }
     match s.get(r, c) {
         None => Ok(plain(String::new())),
         Some(CellContent::Value(v)) => Ok(plain(edit_text(wb, v, wb.styles.get(s.style(r, c))))),

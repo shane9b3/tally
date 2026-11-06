@@ -951,6 +951,8 @@ struct Extras<'a> {
     vals: Vec<(&'a [CellRangeLocal], String)>,
     notes: HashMap<(u32, u32), &'a tally_model::NoteData>,
     links: HashMap<(u32, u32), &'a str>,
+    /// `table:detective` content per cell: saved arrows, operations.
+    detective: HashMap<(u32, u32), DetectiveCell<'a>>,
     derived: &'a HashMap<(usize, u32, u32), String>,
 }
 
@@ -964,6 +966,72 @@ impl Extras<'_> {
             })
             .map(|(_, n)| n.as_str())
     }
+}
+
+/// What one cell's `table:detective` holds (AOO `ScXMLExport::WriteDetective`).
+#[derive(Default)]
+struct DetectiveCell<'a> {
+    arrows: Vec<&'a tally_model::DetectiveArrowData>,
+    ops: Vec<&'a tally_model::DetectiveOpData>,
+}
+
+/// Groups a sheet's detective arrows and operations by the cell they are
+/// written in: an arrow at the cell it points to, or at its source when
+/// it points to another sheet (`ScMyDetectiveObjContainer::AddObject`).
+fn detective_cells(sheet: &SheetData) -> HashMap<(u32, u32), DetectiveCell<'_>> {
+    let mut m: HashMap<(u32, u32), DetectiveCell<'_>> = HashMap::new();
+    for a in &sheet.detective_arrows {
+        let at = match (a.to, a.from) {
+            (Some(to), _) => to,
+            (None, Some(f)) => (f.r0, f.c0),
+            (None, None) => continue,
+        };
+        m.entry(at).or_default().arrows.push(a);
+    }
+    for o in &sheet.detective_ops {
+        m.entry((o.row, o.col)).or_default().ops.push(o);
+    }
+    m
+}
+
+/// Writes `table:detective` (after the annotation, ODF 1.2 §9.1.4).
+fn write_detective(s: &mut String, sheet: &SheetData, d: &DetectiveCell<'_>) {
+    use tally_model::DetectiveOpKindData as K;
+    s.push_str("<table:detective>");
+    let name = odf_sheet_name(&sheet.name);
+    for a in &d.arrows {
+        s.push_str("<table:highlighted-range");
+        let dir = match (a.from, a.to) {
+            (Some(_), Some(_)) => "from-same-table",
+            (Some(_), None) => "to-another-table",
+            _ => "from-another-table",
+        };
+        if let Some(f) = a.from {
+            s.push_str(r#" table:cell-range-address=""#);
+            escape_attr(&crate::v03::range_list(&name, &[f]), s);
+            s.push('"');
+        }
+        let _ = write!(s, r#" table:direction="{dir}""#);
+        if a.error {
+            s.push_str(r#" table:contains-error="true""#);
+        }
+        s.push_str("/>");
+    }
+    for o in &d.ops {
+        let n = match o.kind {
+            K::TraceDependents => "trace-dependents",
+            K::TracePrecedents => "trace-precedents",
+            K::TraceErrors => "trace-errors",
+            K::RemoveDependents => "remove-dependents",
+            K::RemovePrecedents => "remove-precedents",
+        };
+        let _ = write!(
+            s,
+            r#"<table:operation table:name="{n}" table:index="{}"/>"#,
+            o.index
+        );
+    }
+    s.push_str("</table:detective>");
 }
 
 /// A vertical run of empty cells with a style and/or a validation.
@@ -1249,6 +1317,7 @@ pub(crate) fn write_sheet<W: Write + Seek>(
             .iter()
             .map(|l| ((l.row, l.col), &*l.url))
             .collect(),
+        detective: detective_cells(sheet),
         derived: &plan.derived,
     };
 
@@ -1272,6 +1341,9 @@ pub(crate) fn write_sheet<W: Write + Seek>(
             .notes
             .keys()
             .chain(extras.links.keys())
+            // Cells with detective operations are written even if empty
+            // (AOO #123981).
+            .chain(extras.detective.keys())
             .copied()
             // Chart and picture anchors (W5-1) get an empty cell too.
             .chain(crate::v04::frame_anchor_cells(sheet))
@@ -1962,13 +2034,17 @@ fn write_cell(
     let note = x.notes.get(&(cell.row, cell.col));
     let link = x.links.get(&(cell.row, cell.col));
     let frame = crate::v04::cell_has_frame(x.sheet, cell.row, cell.col);
-    if text.is_none() && note.is_none() && link.is_none() && !frame {
+    let detective = x.detective.get(&(cell.row, cell.col));
+    if text.is_none() && note.is_none() && link.is_none() && !frame && detective.is_none() {
         s.push_str("/>");
         return;
     }
     s.push('>');
     if let Some(n) = note {
         crate::v03::write_annotation(s, n);
+    }
+    if let Some(d) = detective {
+        write_detective(s, x.sheet, d);
     }
     if frame {
         // Wave 5: charts and pictures anchored in this cell.

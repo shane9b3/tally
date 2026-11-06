@@ -764,6 +764,80 @@ pub fn apply_auto_format(
     Ok(out)
 }
 
+/// The slot (0 first, 1 odd inner, 2 even inner, 3 last) of offset `i` of `n`
+/// (`ScAutoFormatData::GetIdx`).
+fn slot_role(i: u32, n: u32) -> usize {
+    if i == 0 {
+        0
+    } else if i + 1 == n {
+        3
+    } else if i % 2 == 1 {
+        1
+    } else {
+        2
+    }
+}
+
+/// `Op::ApplyAutoFormatCustom`.
+pub fn apply_auto_format_custom(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    range: &RangeDto,
+    cells: &[tally_api::StylePatch],
+    autofit: bool,
+    fx: &mut Effects,
+) -> Result<Vec<Change>, ApiError> {
+    check_sheet(wb, sheet)?;
+    let range = to_range(sheet, range)?;
+    check_format(wb, &[range])?;
+    if cells.len() != 16 {
+        return Err(ApiError::invalid_argument(
+            "a custom AutoFormat has 16 cell formats",
+        ));
+    }
+    for p in cells {
+        if let Some(code) = &p.number_format {
+            crate::ops::check_format_len(code)?;
+            tally_numfmt::parse_format(code)
+                .map_err(|e| ApiError::invalid_argument(format!("bad number format: {e}")))?;
+        }
+    }
+    if range.cell_count() > crate::ops::MAX_OP_CELLS {
+        return Err(ApiError::invalid_argument("the range is too large"));
+    }
+    if range.rows() < 3 || range.cols() < 3 {
+        return Err(ApiError::invalid_argument(
+            "AutoFormat needs a range of at least 3 × 3 cells",
+        ));
+    }
+    let snap = crate::undo::capture_range(wb, range, false, true);
+    let (rows, cols) = (range.rows(), range.cols());
+    for dr in 0..rows {
+        for dc in 0..cols {
+            let Some(p) = cells.get(slot_role(dr, rows) * 4 + slot_role(dc, cols)) else {
+                continue;
+            };
+            let cell = CellRange::new(
+                sheet,
+                range.r0 + dr,
+                range.c0 + dc,
+                range.r0 + dr,
+                range.c0 + dc,
+            );
+            map_styles(wb, cell, |t, old| t.patched(old, p));
+            if let Some(b) = &p.borders {
+                crate::styles::apply_borders(wb, cell, b);
+            }
+        }
+    }
+    let mut out = vec![Change::Range(snap)];
+    if autofit {
+        out.extend(fit_range(wb, range));
+        fx.layout(sheet);
+    }
+    Ok(out)
+}
+
 /// AOO's built-in "Default" AutoFormat (`ScAutoFormat::ScAutoFormat`,
 /// `sc/source/core/tool/autoform.cxx:939-991`): white on blue header
 /// row, white on gray 70 % left column, black on gray 20 % right column

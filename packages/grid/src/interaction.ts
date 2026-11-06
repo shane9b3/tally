@@ -73,6 +73,8 @@ export interface InteractionHost {
   editElsewhere?(): boolean;
   /** Whether range-pick mode is on without an edit (the `rangePick` prop or `Grid.pickRange()`). */
   rangePick(): boolean;
+  /** Whether detective Fill Mode is on (the `detectiveFill` prop). */
+  detectiveFill?(): boolean;
   /** A reference was picked (point mode or range pick); the grid forwards `onPointRange` and settles `pickRange()`. */
   pointRange(range: RangeDto, phase: "start" | "move" | "end", extend?: boolean): void;
   /** Escape in range-pick mode: the grid rejects a pending `pickRange()` with `null`. */
@@ -97,6 +99,10 @@ type Drag =
   | { kind: "resize"; axis: "col" | "row"; i: number; start: number; end: number; startPos: number; startSize: number; px: number; px0: number }
   | { kind: "fill"; source: RangeDto; target: RangeDto | null }
   | { kind: "point" };
+
+/** AOO's `POINTER_FILL` (a paint bucket) for detective Fill Mode, hotspot at the spout. */
+export const FILL_CURSOR =
+  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'><path d='M4 9 L10 3 L17 10 L11 16 Z' fill='white' stroke='black' stroke-width='1.2'/><path d='M4 9 L17 10' stroke='black' stroke-width='1'/><path d='M3 11 C1.5 14 2 16 3 16 C4 16 4.5 14 3 11 Z' fill='black'/></svg>\") 3 16, crosshair";
 
 const DIRS: Record<string, Dir> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
 
@@ -224,6 +230,22 @@ export class Interaction {
     const hit = geo.hit(p.x, p.y);
     const sel = host.selection();
     const add = (e.metaKey || e.ctrlKey) && !e.shiftKey;
+
+    // Detective Fill Mode (AOO `ScGridWindow::MouseButtonDown`, bDetective):
+    // a plain left click on a cell traces it; nothing selects or edits, and
+    // other buttons or modified clicks do nothing (the mode stays on, as in
+    // AOO). A click outside the cells ends the mode.
+    if (this.fillMode()) {
+      e.preventDefault();
+      this.focus();
+      if (e.button !== 0) return;
+      if (hit.area === "cell") {
+        if (!e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) host.events().onDetectiveFill?.({ r: hit.r, c: hit.c });
+      } else {
+        host.events().onDetectiveFill?.(null);
+      }
+      return;
+    }
 
     // Point mode: clicking cells picks references for the formula being edited
     // (or, in range-pick mode, for the dialog that asked).
@@ -379,6 +401,10 @@ export class Interaction {
       host.hoverCell(hit.area === "cell" ? { r: hit.r, c: hit.c } : null);
       if (host.scroller.style.cursor === "not-allowed") return; // a refused edit's feedback is showing
       const overButton = hit.area === "cell" && !host.editor.open && host.cellButtonAt(p.x, p.y) !== null;
+      if (this.fillMode()) {
+        host.scroller.style.cursor = hit.area === "cell" ? FILL_CURSOR : "default";
+        return;
+      }
       host.scroller.style.cursor = overButton
         ? "pointer"
         : gutter
@@ -512,8 +538,23 @@ export class Interaction {
     }
   }
 
+  /**
+   * Detective Fill Mode is in charge of the pointer: the prop is on, no
+   * edit is open and no range pick is pending (a pick or a formula's
+   * reference picking keeps its clicks).
+   */
+  private fillMode(): boolean {
+    const host = this.host;
+    return (host.detectiveFill?.() ?? false) && !host.editor.open && !host.rangePick();
+  }
+
   private onDoubleClick(e: MouseEvent): void {
     if (this.onScrollbar(e)) return;
+    // Fill Mode: no editor, no fill-handle AutoFill, no AutoFit.
+    if (this.fillMode()) {
+      e.preventDefault();
+      return;
+    }
     const p = this.point(e);
     const host = this.host;
     const geo = host.geometry();
@@ -542,6 +583,8 @@ export class Interaction {
     e.preventDefault();
     const host = this.host;
     if (host.editElsewhere?.()) return;
+    // Fill Mode: no context menu (AOO shows its Fill Mode popup instead).
+    if (this.fillMode()) return;
     const p = this.point(e);
     const geo = host.geometry();
     const lim = host.limits();
@@ -578,6 +621,8 @@ export class Interaction {
     const ed = host.editor;
     const cell = host.selection().active;
     if (ed.open) return;
+    // Editing ends Fill Mode (AOO switches to the edit shell).
+    if (host.detectiveFill?.()) host.events().onDetectiveFill?.(null);
     ed.begin(cell, mode);
     if (seed !== undefined) {
       ed.noteEmitted(seed);
@@ -716,6 +761,11 @@ export class Interaction {
       return;
     }
 
+    if (e.key === "Escape" && this.fillMode()) {
+      e.preventDefault();
+      host.events().onDetectiveFill?.(null);
+      return;
+    }
     const sel = host.selection();
     const lim = host.limits();
     // Range-pick mode (no edit): arrows move/extend the pick, Enter settles it, Escape cancels.

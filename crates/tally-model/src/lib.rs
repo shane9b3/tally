@@ -177,6 +177,16 @@ pub struct SheetData {
     /// Window ▸ Split position (v0.5).
     #[serde(default)]
     pub split: Option<SplitData>,
+    /// Tools ▸ Detective operations recorded on this sheet's cells, the
+    /// replay list of Refresh Traces (AOO `ScDetOpList`; ODS
+    /// `table:detective`/`table:operation`).
+    #[serde(default)]
+    pub detective_ops: Vec<DetectiveOpData>,
+    /// The detective arrows on this sheet when it was saved (ODS
+    /// `table:highlighted-range`; written for other readers, while Tally
+    /// itself rebuilds the arrows from [`Self::detective_ops`] on load).
+    #[serde(default)]
+    pub detective_arrows: Vec<DetectiveArrowData>,
 }
 
 // ---------------------------------------------------------------------------
@@ -690,6 +700,49 @@ pub struct NoteData {
     pub shown: bool,
 }
 
+/// A Tools ▸ Detective operation (AOO `ScDetOpType`; ODS
+/// `table:operation table:name`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DetectiveOpKindData {
+    /// Trace Dependents (`trace-dependents`).
+    TraceDependents,
+    /// Remove Dependents (`remove-dependents`).
+    RemoveDependents,
+    /// Trace Precedents (`trace-precedents`).
+    TracePrecedents,
+    /// Remove Precedents (`remove-precedents`).
+    RemovePrecedents,
+    /// Trace Error (`trace-errors`).
+    TraceErrors,
+}
+
+/// One entry of the detective operation list, at a cell of its sheet.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DetectiveOpData {
+    /// Row.
+    pub row: u32,
+    /// Column.
+    pub col: u32,
+    /// The operation.
+    pub kind: DetectiveOpKindData,
+    /// Position in the document-wide list (`table:index`); replay runs in
+    /// this order.
+    pub index: u32,
+}
+
+/// A detective arrow on a sheet: from a range to a cell, either end
+/// possibly on another sheet (AOO draws a sheet icon there).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DetectiveArrowData {
+    /// The range the arrow starts at; `None`: it comes from another sheet.
+    pub from: Option<CellRangeLocal>,
+    /// The cell the arrow points at `(row, col)`; `None`: it points to
+    /// another sheet.
+    pub to: Option<(u32, u32)>,
+    /// Red: the source holds an error.
+    pub error: bool,
+}
+
 /// A hyperlink on a cell.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct LinkData {
@@ -793,6 +846,15 @@ impl Default for CellProtectionData {
             hidden: false,
             hide_print: false,
         }
+    }
+}
+
+impl CellProtectionData {
+    /// `true` when the cell cannot be edited on a protected sheet: locked,
+    /// or hidden ("Hide all" implies "Protected", AOO `ScAttrArray::HasAttrib`
+    /// with `HASATTR_PROTECTED`).
+    pub fn is_protected(&self) -> bool {
+        self.locked || self.hidden
     }
 }
 
@@ -1965,6 +2027,17 @@ mod tests {
                     x_hmm: 5000,
                     y_hmm: 0,
                 }),
+                detective_ops: vec![DetectiveOpData {
+                    row: 1,
+                    col: 1,
+                    kind: DetectiveOpKindData::TracePrecedents,
+                    index: 0,
+                }],
+                detective_arrows: vec![DetectiveArrowData {
+                    from: None,
+                    to: Some((1, 1)),
+                    error: false,
+                }],
             };
         WorkbookData {
             sheets: vec![

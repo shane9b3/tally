@@ -788,12 +788,13 @@ fn apply_cell_props(s: &mut RawCellStyle, p: &Elem) {
     }
     if let Some(v) = p.attr("style:cell-protect") {
         let t: Vec<&str> = v.split_whitespace().collect();
+        // AOO `XmlScPropHdl_CellProtection::importXML`: "hidden-and-protected"
+        // sets all three flags.
+        let all = t.contains(&"hidden-and-protected");
         s.protect = Some(CellProtectionData {
-            locked: t
-                .iter()
-                .any(|x| matches!(*x, "protected" | "hidden-and-protected")),
-            hidden_formula: t.contains(&"formula-hidden"),
-            hidden: t.contains(&"hidden-and-protected"),
+            locked: all || t.contains(&"protected"),
+            hidden_formula: all || t.contains(&"formula-hidden"),
+            hidden: all,
             hide_print: false,
         });
     }

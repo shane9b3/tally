@@ -15,8 +15,8 @@ import { rgbaToHex } from "../palette";
 import { useW56Store, type W56Dialog } from "../data/store";
 import { Check, ColorField, Field, Tabs, W56Shell, closeW56 } from "../data/W56Shell";
 import w56 from "../data/W56.module.css";
-import { AUTOFORMAT_OPTION_LABELS, AUTOFORMAT_PRESETS, DEFAULT_AUTOFORMAT_OPTIONS, PREVIEW_ROWS, previewCell, previewText } from "./autoformat";
-import { BORDER_EDGES, BORDER_STYLES, H_ALIGNS, UNDERLINE_STYLES, V_ALIGNS, formatCellsError, patchFromState, presetEdges, shownFamily, stateFromStyle, styleFamily, toggleEdge, withFamily, withSize, withTypeface, type FormatCellsState } from "./formatCells";
+import { presetLabel, AUTOFORMAT_OPTION_LABELS, AUTOFORMAT_PRESETS, DEFAULT_AUTOFORMAT_OPTIONS, PREVIEW_ROWS, previewCell, previewText } from "./autoformat";
+import { BORDER_EDGES, BORDER_STYLES, H_ALIGNS, UNDERLINE_STYLES, V_ALIGNS, formatCellsError, patchFromState, presetEdges, protectionChange, protectionEnabled, protectionOf, shownFamily, stateFromStyle, styleFamily, toggleEdge, withFamily, withSize, withTypeface, type FormatCellsState, type TriProtection } from "./formatCells";
 import { FontListField, SimpleList, fontMissing, previewFamily, useDocumentFont, useInstalledFonts } from "../components/FontPickers";
 import pick from "../components/FontPickers.module.css";
 import { APP_FONT, FONT_SIZE_LIST, TYPEFACE_LABELS, familyTypefaces, findFamily, formatFontSize, parseFontSize, typefaceOf, type Typeface } from "../fonts/fontModel";
@@ -24,6 +24,7 @@ import { useFontStore } from "../fonts/fontStore";
 import { arrowNav } from "../components/dialogA11y";
 import { useV3Store } from "../stores/v3Store";
 import { NumbersTab, numbersPreview } from "./NumbersTab";
+import { MAX_AUTOFORMAT_NAME, autoFormatNameError, sampleError, userPreviewCell, userPreviewText } from "./userAutoFormat";
 
 type D<K extends W56Dialog["kind"]> = Extract<W56Dialog, { kind: K }>;
 
@@ -42,11 +43,8 @@ function sampleStyle(s: StyleDto): React.CSSProperties {
   };
 }
 
-const PRESET_KEYS: Readonly<Record<string, string>> = {"Default": "stylesUi.preset.default", "3D": "stylesUi.preset.threeD", "Black 1": "stylesUi.preset.black1", "Black 2": "stylesUi.preset.black2", "Blue": "stylesUi.preset.blue", "Brown": "stylesUi.preset.brown", "Currency": "stylesUi.preset.currency", "Currency 3D": "stylesUi.preset.currency3d", "Currency Gray": "stylesUi.preset.currencyGray", "Currency Lavender": "stylesUi.preset.currencyLavender", "Currency Turquoise": "stylesUi.preset.currencyTurquoise", "Gray": "stylesUi.preset.gray", "Green": "stylesUi.preset.green", "Lavender": "stylesUi.preset.lavender", "Red": "stylesUi.preset.red", "Turquoise": "stylesUi.preset.turquoise", "Yellow": "stylesUi.preset.yellow"};
 const AUTOFORMAT_OPTION_KEYS: Readonly<Record<string, string>> = { numberFormat: "toolbar.numberFormat", font: "toolbar.font", alignment: "cells.alignment", borders: "cells.borders", pattern: "stylesUi.optPattern", autofit: "stylesUi.optAutofit" };
 
-/** Option and preset labels live in the model files in English; they are translated when drawn. */
-const presetLabel = (name: string): string => t(PRESET_KEYS[name] ?? "", name);
 
 export function StylesPanel() {
   const ctl = useController();
@@ -176,20 +174,62 @@ export function StyleEditorDialog({ d }: { d: D<"styleEditor"> }) {
 // AutoFormat
 // ---------------------------------------------------------------------------
 
+/** The formatting options chosen last, kept while the name dialogs (Add / Rename / Delete) swap in. */
+let lastAutoFormatOptions: AutoFormatOptions = DEFAULT_AUTOFORMAT_OPTIONS;
+
+const slug = (name: string): string => name.replace(/\s+/g, "-").toLowerCase();
+
 export function AutoFormatDialog({ d }: { d: D<"autoFormat"> }) {
   const ctl = useController();
-  const [preset, setPreset] = useState(AUTOFORMAT_PRESETS[4]?.name ?? "Default");
-  const [options, setOptions] = useState<AutoFormatOptions>(DEFAULT_AUTOFORMAT_OPTIONS);
-  const p = AUTOFORMAT_PRESETS.find((x) => x.name === preset) ?? AUTOFORMAT_PRESETS[0]!;
+  const user = useW56Store((s) => s.prefs.autoFormats);
+  const [preset, setPreset] = useState(d.select ?? AUTOFORMAT_PRESETS[4]?.name ?? "Default");
+  const [options, setOptionsState] = useState<AutoFormatOptions>(lastAutoFormatOptions);
+  const setOptions = (o: AutoFormatOptions) => {
+    lastAutoFormatOptions = o;
+    setOptionsState(o);
+  };
+  const builtin = AUTOFORMAT_PRESETS.find((x) => x.name === preset);
+  const mine = builtin ? undefined : user.find((x) => x.name === preset);
+  const p = builtin ?? AUTOFORMAT_PRESETS[0]!;
+  const apply = (name: string) => (user.some((x) => x.name === name) ? void ctl.w56.applyUserAutoFormat(d.range, name, options) : void ctl.w56.applyAutoFormat(d.range, name, options));
+  const rows = d.range.r1 - d.range.r0 + 1;
+  const cols = d.range.c1 - d.range.c0 + 1;
+  const canAdd = sampleError(rows, cols) === null;
+  const nameDialog = (mode: "add" | "rename" | "delete", name: string) => useW56Store.getState().openDialog({ kind: "autoFormatName", range: d.range, mode, name });
   return (
-    <W56Shell title={t("cmd.format.autoFormat", "AutoFormat").replace(/…$/, "")} ok={t("dialog.ok", "OK")} size="xwide" testId="autoformat-dialog" onSubmit={() => void ctl.w56.applyAutoFormat(d.range, preset, options)}>
+    <W56Shell
+      title={t("cmd.format.autoFormat", "AutoFormat").replace(/…$/, "")}
+      ok={t("dialog.ok", "OK")}
+      size="xwide"
+      testId="autoformat-dialog"
+      onSubmit={() => apply(preset)}
+      extra={
+        <>
+          <button type="button" className={dlg.secondary} disabled={!canAdd} title={canAdd ? undefined : sampleError(rows, cols) ?? undefined} onClick={() => nameDialog("add", "")} data-testid="autoformat-add">
+            {t("stylesUi.afAdd", "Add…")}
+          </button>
+          <button type="button" className={dlg.secondary} disabled={!mine} onClick={() => nameDialog("delete", preset)} data-testid="autoformat-delete">
+            {t("stylesUi.afDelete", "Delete")}
+          </button>
+          <button type="button" className={dlg.secondary} disabled={!mine} onClick={() => nameDialog("rename", preset)} data-testid="autoformat-rename">
+            {t("stylesUi.afRename", "Rename…")}
+          </button>
+        </>
+      }
+    >
       <p className={dlg.lead}>{t("stylesUi.autoFormatLead", "Applies a table format to {range}: the first row and column are headers, the last ones totals.", { range: a1(d.range) })}</p>
       <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 12 }}>
         <div className={w56.list} role="listbox" aria-label={t("menu.format", "Format")} style={{ maxHeight: 300 }}>
           {AUTOFORMAT_PRESETS.map((x) => (
-            <button key={x.name} type="button" role="option" aria-selected={x.name === preset} className={x.name === preset ? w56.listItemOn : w56.listItem} onClick={() => setPreset(x.name)} onDoubleClick={() => (closeW56(), void ctl.w56.applyAutoFormat(d.range, x.name, options))} data-testid={`autoformat-${x.name.replace(/\s+/g, "-").toLowerCase()}`}>
+            <button key={x.name} type="button" role="option" aria-selected={x.name === preset} className={x.name === preset ? w56.listItemOn : w56.listItem} onClick={() => setPreset(x.name)} onDoubleClick={() => (closeW56(), apply(x.name))} data-testid={`autoformat-${slug(x.name)}`}>
               <span className={w56.styleSample} style={{ background: x.header[0], borderColor: x.border }} />
               {presetLabel(x.name)}
+            </button>
+          ))}
+          {user.map((x) => (
+            <button key={`u:${x.name}`} type="button" role="option" aria-selected={x.name === preset} className={x.name === preset ? w56.listItemOn : w56.listItem} onClick={() => setPreset(x.name)} onDoubleClick={() => (closeW56(), apply(x.name))} data-testid={`autoformat-user-${slug(x.name)}`}>
+              <span className={w56.styleSample} style={{ background: userPreviewCell(x, 0, 1, 5, 5, DEFAULT_AUTOFORMAT_OPTIONS).bg }} />
+              {x.name}
             </button>
           ))}
         </div>
@@ -198,7 +238,15 @@ export function AutoFormatDialog({ d }: { d: D<"autoFormat"> }) {
             <tbody>
               {PREVIEW_ROWS.map((row, r) => (
                 <tr key={r}>
-                  {row.map((_, c) => {
+                  {row.map((raw, c) => {
+                    if (mine) {
+                      const u = userPreviewCell(mine, r, c, PREVIEW_ROWS.length, row.length, options);
+                      return (
+                        <td key={c} style={{ background: u.bg, color: u.fg, fontWeight: u.bold ? 700 : 400, fontStyle: u.italic ? "italic" : "normal", border: `1px solid ${u.border}`, textAlign: u.align === "general" ? (c > 0 ? "right" : "left") : u.align }}>
+                          {userPreviewText(mine, raw, r, c, PREVIEW_ROWS.length, row.length, options)}
+                        </td>
+                      );
+                    }
                     const cell = previewCell(p, r, c, options);
                     return (
                       <td key={c} style={{ background: cell.bg, color: cell.fg, fontWeight: cell.bold ? 700 : 400, border: options.borders ? `1px solid ${p.border}` : "1px solid transparent", textAlign: options.alignment && c > 0 ? "right" : "left" }}>
@@ -222,6 +270,39 @@ export function AutoFormatDialog({ d }: { d: D<"autoFormat"> }) {
   );
 }
 
+/** Add… / Rename… (ask for a name) and Delete (asks to confirm): AOO's small dialogs over the AutoFormat dialog. */
+export function AutoFormatNameDialog({ d }: { d: D<"autoFormatName"> }) {
+  const ctl = useController();
+  const user = useW56Store((s) => s.prefs.autoFormats);
+  const [name, setName] = useState(d.mode === "rename" ? d.name : "");
+  const back = (select?: string) => useW56Store.getState().openDialog({ kind: "autoFormat", range: d.range, select });
+  const error = d.mode === "delete" ? null : autoFormatNameError(name, user, d.mode === "rename" ? d.name : undefined);
+  const title = d.mode === "add" ? t("stylesUi.afAddTitle", "Add AutoFormat") : d.mode === "rename" ? t("stylesUi.afRenameTitle", "Rename AutoFormat") : t("stylesUi.afDeleteTitle", "Delete AutoFormat");
+  const submit = async () => {
+    const target = name.trim();
+    if (d.mode === "add") back((await ctl.w56.addAutoFormat(d.range, target)) ? target : undefined);
+    else if (d.mode === "rename") back((await ctl.w56.renameAutoFormat(d.name, target)) ? target : d.name);
+    else {
+      await ctl.w56.deleteAutoFormat(d.name);
+      back();
+    }
+  };
+  return (
+    <W56Shell title={title} ok={d.mode === "delete" ? t("stylesUi.afDelete", "Delete") : t("dialog.ok", "OK")} danger={d.mode === "delete"} testId="autoformat-name-dialog" valid={error === null} onSubmit={submit} onClose={() => back(d.mode === "add" ? undefined : d.name)}>
+      {d.mode === "delete" ? (
+        <p className={dlg.lead}>{t("stylesUi.afDeleteConfirm", "Do you really want to delete the AutoFormat {name}?", { name: d.name })}</p>
+      ) : (
+        <>
+          <Field label={t("stylesUi.afName", "Name")}>
+            <input value={name} maxLength={MAX_AUTOFORMAT_NAME} onChange={(e) => setName(e.target.value)} data-testid="autoformat-name" autoFocus />
+          </Field>
+          {error && name.trim() !== "" ? <p className={dlg.error}>{error}</p> : null}
+        </>
+      )}
+    </W56Shell>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Format Cells (⌘1)
 // ---------------------------------------------------------------------------
@@ -232,17 +313,18 @@ export function FormatCellsDialog({ d }: { d: D<"formatCells"> }) {
   const ctl = useController();
   const docFont = useDocumentFont();
   const [st, setSt] = useState<FormatCellsState>(() => stateFromStyle(d.style, d.mixed));
-  const [protection, setProtection] = useState<{ locked: boolean | null; hiddenFormula: boolean | null }>({ locked: null, hiddenFormula: null });
+  const [initialProtection] = useState<TriProtection>(() => d.protection ?? protectionOf(d.style));
+  const [protection, setProtection] = useState<TriProtection>(initialProtection);
   const error = formatCellsError(st);
   return (
-    <W56Shell title={t("cells.title", "Format Cells")} ok={t("dialog.ok", "OK")} size="xwide" testId="format-cells" valid={error === null} onSubmit={() => void ctl.w56.applyFormatCells(d.ranges, patchFromState(st, d.style, docFont), protection)}>
+    <W56Shell title={t("cells.title", "Format Cells")} ok={t("dialog.ok", "OK")} size="xwide" testId="format-cells" valid={error === null} onSubmit={() => void ctl.w56.applyFormatCells(d.ranges, patchFromState(st, d.style, docFont), protectionChange(initialProtection, protection))}>
       <FormatCellsTabs st={st} setSt={setSt} showProtection protection={protection} setProtection={setProtection} sample={d.sample} sampleNum={d.sampleNum} />
       {error ? <p className={dlg.error}>{error}</p> : null}
     </W56Shell>
   );
 }
 
-function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection, sample, sampleNum }: { st: FormatCellsState; setSt: (s: FormatCellsState) => void; showProtection: boolean; protection?: { locked: boolean | null; hiddenFormula: boolean | null }; setProtection?: (p: { locked: boolean | null; hiddenFormula: boolean | null }) => void; sample?: string; sampleNum?: number | null }) {
+function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection, sample, sampleNum }: { st: FormatCellsState; setSt: (s: FormatCellsState) => void; showProtection: boolean; protection?: TriProtection; setProtection?: (p: TriProtection) => void; sample?: string; sampleNum?: number | null }) {
   const [tab, setTab] = useState<CellsTab>("numbers");
   const docFont = useDocumentFont();
   const tabs: { id: CellsTab; label: string }[] = [
@@ -379,9 +461,16 @@ function FormatCellsTabs({ st, setSt, showProtection, protection, setProtection,
       ) : null}
       {tab === "protection" && protection && setProtection ? (
         <div>
-          <p className={dlg.lead}>{t("stylesUi.protectionNote", "Takes effect once the sheet is protected (Tools ▸ Protect Sheet…).")}</p>
-          <Check label={t("cells.protected", "Protected")} checked={protection.locked ?? st.locked} onChange={(v) => setProtection({ ...protection, locked: v })} testId="cells-locked" />
-          <Check label={t("cells.hideFormula", "Hide formula")} checked={protection.hiddenFormula ?? st.hiddenFormula} onChange={(v) => setProtection({ ...protection, hiddenFormula: v })} />
+          <div className={w56.section}>{t("cells.protectionGroup", "Protection")}</div>
+          <Check label={t("cells.hideAll", "Hide all")} checked={protection.hidden === true} indeterminate={protection.hidden === null} onChange={(v) => setProtection({ ...protection, hidden: v })} testId="cells-hide-all" />
+          <div style={{ paddingLeft: 20 }}>
+            <Check label={t("cells.protected", "Protected")} checked={protection.locked === true} indeterminate={protection.locked === null} disabled={!protectionEnabled(protection).locked} onChange={(v) => setProtection({ ...protection, locked: v })} testId="cells-locked" />
+            <Check label={t("cells.hideFormula", "Hide formula")} checked={protection.hiddenFormula === true} indeterminate={protection.hiddenFormula === null} disabled={!protectionEnabled(protection).hiddenFormula} onChange={(v) => setProtection({ ...protection, hiddenFormula: v })} testId="cells-hide-formula" />
+          </div>
+          <p className={dlg.note} style={{ whiteSpace: "pre-line" }}>{t("stylesUi.protectionNote", "Cell protection is only effective after the current sheet has been protected.\n\nChoose Tools ▸ Protect / unprotect sheet… to protect it.")}</p>
+          <div className={w56.section}>{t("cells.printGroup", "Print")}</div>
+          <Check label={t("cells.hidePrint", "Hide when printing")} checked={protection.hidePrint === true} indeterminate={protection.hidePrint === null} onChange={(v) => setProtection({ ...protection, hidePrint: v })} testId="cells-hide-print" />
+          <p className={dlg.note}>{t("stylesUi.hidePrintNote", "The cells selected will be omitted when printing.")}</p>
         </div>
       ) : null}
       {tab === "font" ? null : (

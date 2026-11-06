@@ -270,6 +270,12 @@ pub fn style_dto(id: u32, d: &StyleData, format_code: &str) -> StyleDto {
         underline_style: (d.font.underline && d.font.underline_style != UnderlineStyleData::Single)
             .then(|| underline_dto(d.font.underline_style)),
         style_name: d.style_name.clone(),
+        protection: d.protection.map(|p| tally_api::CellProtectionDto {
+            locked: p.locked,
+            hidden_formula: p.hidden_formula,
+            hidden: p.hidden,
+            hide_print: p.hide_print,
+        }),
     }
 }
 

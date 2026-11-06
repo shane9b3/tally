@@ -1151,6 +1151,13 @@ fn dependents_setup() -> (Fixture, u32) {
         major_grid: false,
         minor_grid: false,
         number_format: None,
+        axis_type: tally_api::AxisType::Auto,
+        time_resolution: None,
+        major_time: None,
+        minor_time: None,
+        crosses: None,
+        label_position: tally_api::AxisLabelPos::NearAxis,
+        mark_position: tally_api::AxisMarkPos::AtLabelsAndAxis,
     };
     let chart = tally_api::ChartDto {
         id: 0,

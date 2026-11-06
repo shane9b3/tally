@@ -116,10 +116,20 @@ export function Field({ label, children, className }: { label: string; children:
   );
 }
 
-export function Check({ label, checked, onChange, testId, disabled }: { label: string; checked: boolean; onChange: (v: boolean) => void; testId?: string; disabled?: boolean }) {
+export function Check({ label, checked, onChange, testId, disabled, indeterminate }: { label: string; checked: boolean; onChange: (v: boolean) => void; testId?: string; disabled?: boolean; indeterminate?: boolean }) {
   return (
     <label className={dlg.checkRow}>
-      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} data-testid={testId} />
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        aria-checked={indeterminate ? "mixed" : undefined}
+        ref={(el) => {
+          if (el) el.indeterminate = indeterminate === true;
+        }}
+        onChange={(e) => onChange(e.target.checked)}
+        data-testid={testId}
+      />
       <span>{label}</span>
     </label>
   );

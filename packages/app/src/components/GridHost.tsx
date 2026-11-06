@@ -94,6 +94,7 @@ export function GridHost() {
   const objects = useMemo(() => objectsFor(charts, images), [charts, images]);
   const traces = useW5Store((s) => s.traces);
   const invalidCells = useW5Store((s) => s.invalidCells);
+  const detectiveFill = useW5Store((s) => s.detectiveFill);
   const pageBreakPreview = useW5Store((s) => s.pageBreakPreview);
   const w5Breaks = useW5Store((s) => s.pageBreaks);
   const previewBreaks = useMemo(() => (w5Breaks ? toGridBreaks(w5Breaks) : null), [w5Breaks]);
@@ -103,6 +104,8 @@ export function GridHost() {
     objects,
     traces: traces.length > 0 ? traces : null,
     invalidCells: invalidCells.length > 0 ? invalidCells : null,
+    detectiveFill,
+    onDetectiveFill: w5.detective.onFill,
     pageBreakPreview,
     pageBreaks: pageBreakPreview ? (previewBreaks ?? pageBreaks) : pageBreaksOn ? pageBreaks : null,
     printRange: pageBreakPreview || pageBreaksOn ? printRange : null,

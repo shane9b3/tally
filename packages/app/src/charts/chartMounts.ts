@@ -13,7 +13,14 @@ import type { Grid, GridGeometryInfo } from "@tally/grid";
 import { echarts, type ECharts } from "./echarts";
 import { objectId } from "./chartStore";
 import { nodeVisible } from "./nodeVisible";
-import { toEchartsOption, type ChartTheme } from "./toEcharts";
+import { applyAxisCrossFixes } from "./chartAxes";
+import { axisCrossFixes, toEchartsOption, type ChartTheme } from "./toEcharts";
+
+/** Sets a chart's option and finishes the crossing axes that need the layout (T18). */
+function render(chart: ECharts, dto: ChartDto, data: ChartDataDto, theme: ChartTheme): void {
+  chart.setOption(toEchartsOption(dto, data, theme), true);
+  applyAxisCrossFixes(chart, axisCrossFixes(dto, data, theme));
+}
 
 /** Live instances kept at once. */
 export const MAX_LIVE_CHARTS = 20;
@@ -116,7 +123,7 @@ export class ChartMounts {
       for (const k of kept) if (!k.parentNode) node.appendChild(k);
       m = { chart, dto, data, theme, w, h };
       this.mounts.set(dto.id, m);
-      m.chart.setOption(toEchartsOption(dto, data ?? emptyData(dto), theme), true);
+      render(m.chart, dto, data ?? emptyData(dto), theme);
       this.observe(node);
       if (this.exposeHooks) expose(dto.id, chart);
       return;
@@ -125,12 +132,13 @@ export class ChartMounts {
       m.w = w;
       m.h = h;
       m.chart.resize({ width: Math.max(1, w), height: Math.max(1, h) });
+      applyAxisCrossFixes(m.chart, axisCrossFixes(m.dto, m.data ?? emptyData(m.dto), m.theme));
     }
     if (m.dto !== dto || m.data !== data || m.theme !== theme) {
       m.dto = dto;
       m.data = data;
       m.theme = theme;
-      m.chart.setOption(toEchartsOption(dto, data ?? emptyData(dto), theme), true);
+      render(m.chart, dto, data ?? emptyData(dto), theme);
     }
   }
 
@@ -148,6 +156,7 @@ export class ChartMounts {
           m.w = w;
           m.h = h;
           m.chart.resize({ width: w, height: h });
+          applyAxisCrossFixes(m.chart, axisCrossFixes(m.dto, m.data ?? emptyData(m.dto), m.theme));
         }
       }
     });

@@ -382,3 +382,41 @@ fn cell_protection_round_trips() {
     let st = back.sheets[0].cells[0].style.unwrap();
     assert_eq!(back.styles[st as usize].protection, wb.styles[0].protection);
 }
+
+/// XLSX `<protection hidden="1">` is AOO's "Hide formula" (oox
+/// `Protection::finalizeImport`); on export "Hide all" is written as
+/// `hidden` too (`XclExpCellProt`: HideFormula || HideCell) and "Hide when
+/// printing" has no equivalent: both are reported.
+#[test]
+fn cell_protection_hidden_maps_to_hide_formula() {
+    let mut wb = sample();
+    wb.styles.push(StyleData {
+        protection: Some(CellProtectionData {
+            locked: true,
+            hidden_formula: false,
+            hidden: true,
+            hide_print: true,
+        }),
+        ..StyleData::default()
+    });
+    wb.sheets[0].cells[0].style = Some(0);
+    let mut buf = Cursor::new(Vec::new());
+    let report = write_xlsx(&wb, &mut buf).unwrap();
+    assert_eq!(report.warnings.len(), 2, "{:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w.contains("Hide all")));
+    assert!(report
+        .warnings
+        .iter()
+        .any(|w| w.contains("Hide when printing")));
+    let back = read_xlsx(Cursor::new(buf.into_inner()), &Limits::default()).unwrap();
+    let st = back.sheets[0].cells[0].style.unwrap();
+    assert_eq!(
+        back.styles[st as usize].protection,
+        Some(CellProtectionData {
+            locked: true,
+            hidden_formula: true,
+            hidden: false,
+            hide_print: false,
+        })
+    );
+}

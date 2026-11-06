@@ -12,6 +12,7 @@
 import {
   isApiError,
   type ApplyResult,
+  type AutoFormatOptions,
   type CalcSettingsDto,
   type CellPos,
   type CellStyleDto,
@@ -51,9 +52,10 @@ import { applyAutoCorrectToEdit } from "../autocorrect/autocorrect";
 import { ghostSuffix, wantsCompletion } from "../autocorrect/autoinput";
 import { formulaLangOf, localizeFunctions, toCanonicalFormula, toDisplayFormula, type FormulaLang } from "../i18n/formulaNames";
 import { setUiLanguage as installUiLanguage } from "../i18n/locales";
-import { DEFAULT_PREFS, parsePrefs, readLocalPrefs, serializePrefs, writeLocalPrefs, type AppPrefs, type UiLanguage } from "../options/prefs";
+import { DEFAULT_PREFS, MAX_PREFS_BYTES, parsePrefs, readLocalPrefs, serializePrefs, writeLocalPrefs, type AppPrefs, type UiLanguage } from "../options/prefs";
 import { emptyLayout, fromPivotDto, layoutError, pivotAtCell, toPivotDto, type PivotLayoutState } from "../pivot/pivotModel";
-import { mixedOf, stateFromStyle } from "../styles/formatCells";
+import { mixedOf, protectionOf, selectionProtection, selectionStyles, stateFromStyle, type TriProtection } from "../styles/formatCells";
+import { addAutoFormat, buildAutoFormat, deleteAutoFormat, renameAutoFormat, sampleError, sampleOffsets, userAutoFormatOps } from "../styles/userAutoFormat";
 import { selectionFont } from "../fonts/fontModel";
 import { usePeekStore } from "../chrome/chromeActions";
 import { copySheetName, deleteContentsOp, groupAxisFor, hiddenContentCount, mergedContent, maxOutlineLevel } from "./builders";
@@ -867,8 +869,10 @@ export class W56Features {
 
   async openAutoFormat(): Promise<void> {
     const range = (await this.ctl.dataRegion().catch(() => null)) ?? { ...this.ctl.selection.range };
-    if (range.r0 === range.r1 || range.c0 === range.c1) {
-      this.toast("info", "Select at least 2 rows and 2 columns to AutoFormat.");
+    // AOO offers AutoFormat for at least 3 × 3 cells (cellsh3.cxx).
+    const small = sampleError(range.r1 - range.r0 + 1, range.c1 - range.c0 + 1);
+    if (small) {
+      this.toast("info", small);
       return;
     }
     this.store.openDialog({ kind: "autoFormat", range });
@@ -876,6 +880,62 @@ export class W56Features {
 
   async applyAutoFormat(range: RangeDto, preset: string, options: Parameters<typeof this.autoFormatOp>[2]): Promise<void> {
     await this.ctl.apply(t("msg.undo.autoFormat", "AutoFormat {name}", { name: preset }), [this.autoFormatOp(range, preset, options)]);
+  }
+
+  /** Applies one of the user's own AutoFormats (ordinary style ops; the columns are fitted afterwards). */
+  async applyUserAutoFormat(range: RangeDto, name: string, options: AutoFormatOptions): Promise<void> {
+    const f = this.store.prefs.autoFormats.find((x) => x.name === name);
+    if (!f) return;
+    try {
+      const ops = userAutoFormatOps(this.sheet, range, f, options);
+      await this.ctl.apply(t("msg.undo.autoFormat", "AutoFormat {name}", { name }), ops);
+    } catch (e) {
+      this.ctl.notifyError(e);
+    }
+  }
+
+  /** Add…: builds a format from the selection's formats (4 × 4 sample) under `name` and stores it in the prefs. */
+  async addAutoFormat(range: RangeDto, name: string): Promise<boolean> {
+    try {
+      const rows = range.r1 - range.r0 + 1;
+      const cols = range.c1 - range.c0 + 1;
+      const err = sampleError(rows, cols);
+      if (err) throw new Error(err);
+      const doc = this.ctl.requireDoc();
+      const ro = sampleOffsets(rows);
+      const co = sampleOffsets(cols);
+      const picks = [...new Set(ro)].flatMap((dr) => [...new Set(co)].map((dc) => ({ r0: range.r0 + dr, r1: range.r0 + dr, c0: range.c0 + dc, c1: range.c0 + dc })));
+      const blocks = await this.client.cells(doc, this.sheet, picks);
+      const ids = new Map<string, number>();
+      for (const blk of blocks) for (const c of blk.cells) ids.set(`${c.r},${c.c}`, c.style);
+      const wanted = [...new Set([0, ...ids.values()])];
+      const styles = await this.client.styles(doc, wanted);
+      const byId = new Map(wanted.map((id, i) => [id, styles[i]!] as const));
+      const at = (dr: number, dc: number): StyleDto => byId.get(ids.get(`${range.r0 + dr},${range.c0 + dc}`) ?? 0) ?? byId.get(0)!;
+      const f = buildAutoFormat(name, rows, cols, at);
+      return await this.savePrefs({ ...this.store.prefs, autoFormats: addAutoFormat(this.store.prefs.autoFormats, f) });
+    } catch (e) {
+      this.ctl.notifyError(e);
+      return false;
+    }
+  }
+
+  async renameAutoFormat(from: string, to: string): Promise<boolean> {
+    try {
+      return await this.savePrefs({ ...this.store.prefs, autoFormats: renameAutoFormat(this.store.prefs.autoFormats, from, to) });
+    } catch (e) {
+      this.ctl.notifyError(e);
+      return false;
+    }
+  }
+
+  async deleteAutoFormat(name: string): Promise<boolean> {
+    try {
+      return await this.savePrefs({ ...this.store.prefs, autoFormats: deleteAutoFormat(this.store.prefs.autoFormats, name) });
+    } catch (e) {
+      this.ctl.notifyError(e);
+      return false;
+    }
   }
 
   private autoFormatOp(range: RangeDto, preset: string, options: Extract<Op, { type: "applyAutoFormat" }>["options"]): Op {
@@ -892,17 +952,19 @@ export class W56Features {
       const sel = source ? selectionFont(source, this.ctl.ranges, a, source.getLayout(this.sheet).used ?? null) : undefined;
       const cell = source?.getCell(a.r, a.c);
       const sample = cell?.text ?? "";
-      this.store.openDialog({ kind: "formatCells", style: base, ranges: this.ctl.ranges, mixed: mixedOf(sel), sample, sampleNum: cell?.num ?? null });
+      const protection = source ? selectionProtection(selectionStyles(source, this.ctl.ranges, a, source.getLayout(this.sheet).used ?? null)) : protectionOf(base);
+      this.store.openDialog({ kind: "formatCells", style: base, ranges: this.ctl.ranges, mixed: mixedOf(sel), sample, sampleNum: cell?.num ?? null, protection });
     } catch (e) {
       this.ctl.notifyError(e);
     }
   }
 
-  async applyFormatCells(ranges: RangeDto[], patch: StylePatch, protection: { locked: boolean | null; hiddenFormula: boolean | null } | null): Promise<void> {
+  /** Format Cells ▸ OK; `protection` has a value for each changed box (`null` fields leave each cell's flag as it is), or is `null`. */
+  async applyFormatCells(ranges: RangeDto[], patch: StylePatch, protection: TriProtection | null): Promise<void> {
     const ops: Op[] = [];
     const changes = Object.entries(patch).some(([, v]) => v !== null && v !== undefined);
     if (changes) ops.push({ type: "applyStyle", sheet: this.sheet, ranges: ranges.map((r) => ({ ...r })), patch });
-    if (protection && (protection.locked !== null || protection.hiddenFormula !== null)) ops.push({ type: "setCellProtection", sheet: this.sheet, ranges: ranges.map((r) => ({ ...r })), locked: protection.locked, hiddenFormula: protection.hiddenFormula });
+    if (protection) ops.push({ type: "setCellProtection", sheet: this.sheet, ranges: ranges.map((r) => ({ ...r })), locked: protection.locked, hiddenFormula: protection.hiddenFormula, hidden: protection.hidden, hidePrint: protection.hidePrint });
     if (ops.length > 0) await this.ctl.apply(t("lbl.protect.opt.formatCells", "Format cells"), ops);
   }
 
@@ -986,21 +1048,35 @@ export class W56Features {
     this.restartAutosave();
   }
 
-  async savePrefs(prefs: AppPrefs): Promise<void> {
+  /**
+   * Stores the prefs. Returns `false` (and keeps the old prefs, in the store, in
+   * localStorage and in the shell) when the document would exceed the shell's size
+   * limit or the shell refuses it.
+   */
+  async savePrefs(prefs: AppPrefs): Promise<boolean> {
     const prev = this.store.prefs;
+    const text = serializePrefs(prefs);
+    if (new TextEncoder().encode(text).length > MAX_PREFS_BYTES) {
+      this.toast("error", t("stylesUi.afErr.full", "AutoFormat storage is full: delete some AutoFormats first."));
+      return false;
+    }
     this.store.setPrefs(prefs);
     writeLocalPrefs(prefs);
     if (this.shell.setPrefs) {
       try {
-        await this.shell.setPrefs(serializePrefs(prefs));
+        await this.shell.setPrefs(text);
       } catch (e) {
+        this.store.setPrefs(prev);
+        writeLocalPrefs(prev);
         this.ctl.notifyError(e);
+        return false;
       }
     }
     if (prefs.uiLanguage !== prev.uiLanguage) await this.applyUiLanguage(prefs.uiLanguage, true);
     if (prefs.autosaveMinutes !== prev.autosaveMinutes) this.restartAutosave();
     // The other document windows re-read the prefs (`prefs-changed`).
     this.ctl.broadcastPrefs(null);
+    return true;
   }
 
   /**

@@ -12,7 +12,9 @@ import type { CellView, ChartDataDto, ChartDto, ChartKind, ChartSeriesDto, Chart
 import { absoluteRef, parseAbsoluteRef } from "../dataOps";
 import { currentRegion } from "../glance";
 import { autoPageBreaks, defaultPageSetup, paperMm } from "../v03";
-import { AOO_PALETTE } from "../charts/toEcharts";
+import { AOO_PALETTE, DEFAULT_AXIS } from "../charts/toEcharts";
+import { floorUnit, supportsDateAxis } from "../charts/chartAxes";
+import { isDateCode } from "../numfmtLite";
 import { hfShown, pageBoxes } from "../print/hfLayout";
 
 export interface W5Ext {
@@ -256,7 +258,44 @@ function stats(values: (number | null)[]): { mean: number; sd: number; se: numbe
 }
 
 /** `chart_data` for a chart from the mock's cells. */
-export async function chartDataFor(sheet: number, chart: ChartDto, version: number, cells: CellLookup, sheets: SheetResolver): Promise<ChartDataDto> {
+/** The engine's `date_axis_of`: AOO's automatic/explicit date axis over the category cells (days since 1970, floored to the resolution). */
+export async function dateAxisFor(chart: ChartDto, catCells: CellView[] | null, formatOf: (style: number) => Promise<string | null>): Promise<ChartDataDto["dateAxis"]> {
+  const type = chart.xAxis.axisType;
+  if (type === "text" || !supportsDateAxis(chart.kind) || !catCells || catCells.length === 0) return null;
+  const days: (number | null)[] = [];
+  let firstFormat: string | null = null;
+  for (const c of catCells) {
+    if (c.kind === "empty" || (c.kind === "text" && c.text === "")) {
+      days.push(null);
+      continue;
+    }
+    if (c.kind !== "number" || c.num === null) return null;
+    const code = await formatOf(c.style);
+    const date = code !== null && isDateCode(code);
+    if (type === "auto" && !date) return null;
+    if (firstFormat === null && code !== null && !/^general$/i.test(code.trim())) firstFormat = code;
+    days.push(Math.floor(c.num) - 25_569);
+  }
+  const sorted = days.filter((d): d is number => d !== null).sort((a, b) => a - b);
+  if (sorted.length === 0) return null;
+  let res = chart.xAxis.timeResolution;
+  if (res === null) {
+    res = "years";
+    for (let i = 1; i < sorted.length; i++) {
+      const a = new Date(sorted[i - 1]! * 86_400_000);
+      const b = new Date(sorted[i]! * 86_400_000);
+      if (res === "years" && a.getUTCFullYear() === b.getUTCFullYear()) res = "months";
+      if (res === "months" && a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth()) {
+        res = "days";
+        break;
+      }
+    }
+  }
+  const r = res;
+  return { days: days.map((d) => (d === null ? null : floorUnit(d, r))), resolution: r, numberFormat: chart.xAxis.numberFormat ?? firstFormat };
+}
+
+export async function chartDataFor(sheet: number, chart: ChartDto, version: number, cells: CellLookup, sheets: SheetResolver, formatOf: (style: number) => Promise<string | null> = async () => null): Promise<ChartDataDto> {
   const problems: string[] = [];
   const catCells = await readRef(chart.categories, cells, sheets, problems);
   let categories = (catCells ?? []).map((c) => c.text);
@@ -318,7 +357,8 @@ export async function chartDataFor(sheet: number, chart: ChartDto, version: numb
     });
   }
   if (categories.length === 0 && series.length > 0) categories = (series[0]?.values ?? []).map((_, j) => String(j + 1));
-  return { chart: { sheet, id: chart.id }, version, categories, series: series.slice(0, 255), truncated: series.length > 255, problems };
+  const dateAxis = await dateAxisFor(chart, catCells, formatOf);
+  return { chart: { sheet, id: chart.id }, version, categories, dateAxis, series: series.slice(0, 255), truncated: series.length > 255, problems };
 }
 
 /** `suggest_chart`: the region around the selection, labels heuristic, anchored right of it (16 × 9 cm). */
@@ -358,8 +398,8 @@ export async function suggestChartFor(sheetName: string, sel: RangeDto, kind: Ch
     title: null,
     subtitle: null,
     legend: "right",
-    xAxis: { visible: true, title: null, min: null, max: null, major: null, minorCount: null, log: false, reverse: false, majorGrid: false, minorGrid: false, numberFormat: null },
-    yAxis: { visible: true, title: null, min: null, max: null, major: null, minorCount: null, log: false, reverse: false, majorGrid: true, minorGrid: false, numberFormat: null },
+    xAxis: { ...DEFAULT_AXIS, majorGrid: false },
+    yAxis: { ...DEFAULT_AXIS },
     y2Axis: null,
     background: null,
     plotBackground: null,

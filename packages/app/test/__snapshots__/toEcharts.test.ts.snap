@@ -1,5 +1,1067 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`date axis and crossing (T18) > snapshot: line over dates with a gap 1`] = `
+{
+  "animation": false,
+  "backgroundColor": "#ffffff",
+  "grid": {
+    "backgroundColor": undefined,
+    "borderWidth": 0,
+    "bottom": 32,
+    "containLabel": true,
+    "left": 48,
+    "right": 110,
+    "show": false,
+    "top": 34,
+  },
+  "legend": {
+    "bottom": undefined,
+    "left": undefined,
+    "orient": "vertical",
+    "right": 8,
+    "show": true,
+    "textStyle": {
+      "color": "#111827",
+    },
+    "top": "middle",
+    "type": "scroll",
+  },
+  "series": [
+    {
+      "areaStyle": undefined,
+      "connectNulls": false,
+      "data": [
+        [
+          1767571200000,
+          10,
+        ],
+        [
+          1767657600000,
+          20,
+        ],
+        [
+          1767830400000,
+          30,
+        ],
+        [
+          1767916800000,
+          40,
+        ],
+      ],
+      "itemStyle": {
+        "color": "#004586",
+      },
+      "label": {
+        "show": false,
+      },
+      "lineStyle": {
+        "color": "#004586",
+        "width": 2,
+      },
+      "markLine": undefined,
+      "name": "North",
+      "showSymbol": false,
+      "smooth": false,
+      "stack": undefined,
+      "symbol": "none",
+      "symbolSize": 7,
+      "type": "line",
+      "yAxisIndex": 0,
+    },
+  ],
+  "textStyle": {
+    "color": "#111827",
+    "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+  },
+  "title": {
+    "left": "center",
+    "show": true,
+    "subtext": "",
+    "subtextStyle": {
+      "color": "#6b7280",
+    },
+    "text": "Sales",
+    "textStyle": {
+      "color": "#111827",
+      "fontSize": 14,
+      "fontWeight": 600,
+    },
+    "top": 6,
+  },
+  "tooltip": {
+    "confine": true,
+    "trigger": "axis",
+  },
+  "useUTC": true,
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "customValues": [
+          1767571200000,
+          1767657600000,
+          1767744000000,
+          1767830400000,
+          1767916800000,
+        ],
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "axisTick": {
+        "customValues": [
+          1767571200000,
+          1767657600000,
+          1767744000000,
+          1767830400000,
+          1767916800000,
+        ],
+      },
+      "inverse": false,
+      "max": 1767916800000,
+      "min": 1767571200000,
+      "minorTick": {
+        "show": false,
+      },
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": false,
+      },
+      "type": "time",
+    },
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#6b7280",
+        "formatter": [Function],
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+      },
+      "interval": undefined,
+      "inverse": false,
+      "max": undefined,
+      "min": undefined,
+      "minorSplitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+          "opacity": 0.6,
+        },
+        "show": false,
+      },
+      "minorTick": undefined,
+      "name": undefined,
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#6b7280",
+      },
+      "show": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e5e7eb",
+        },
+        "show": true,
+      },
+      "type": "value",
+    },
+  ],
+}
+`;
+
+exports[`date axis and crossing (T18) > snapshot: x crosses at end 1`] = `
+{
+  "fixes": [],
+  "option": {
+    "animation": false,
+    "backgroundColor": "#ffffff",
+    "grid": {
+      "backgroundColor": undefined,
+      "borderWidth": 0,
+      "bottom": 32,
+      "containLabel": true,
+      "left": 48,
+      "right": 110,
+      "show": false,
+      "top": 34,
+    },
+    "legend": {
+      "bottom": undefined,
+      "left": undefined,
+      "orient": "vertical",
+      "right": 8,
+      "show": true,
+      "textStyle": {
+        "color": "#111827",
+      },
+      "top": "middle",
+      "type": "scroll",
+    },
+    "series": [
+      {
+        "barMaxWidth": 48,
+        "data": [
+          10,
+          20,
+          30,
+        ],
+        "itemStyle": {
+          "color": "#004586",
+        },
+        "label": {
+          "show": false,
+        },
+        "markLine": undefined,
+        "name": "North",
+        "stack": undefined,
+        "type": "bar",
+        "yAxisIndex": 0,
+      },
+      {
+        "barMaxWidth": 48,
+        "data": [
+          5,
+          null,
+          15,
+        ],
+        "itemStyle": {
+          "color": "#ff420e",
+        },
+        "label": {
+          "show": false,
+        },
+        "markLine": undefined,
+        "name": "South",
+        "stack": undefined,
+        "type": "bar",
+        "yAxisIndex": 0,
+      },
+    ],
+    "textStyle": {
+      "color": "#111827",
+      "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+    },
+    "title": {
+      "left": "center",
+      "show": true,
+      "subtext": "",
+      "subtextStyle": {
+        "color": "#6b7280",
+      },
+      "text": "Sales",
+      "textStyle": {
+        "color": "#111827",
+        "fontSize": 14,
+        "fontWeight": 600,
+      },
+      "top": 6,
+    },
+    "tooltip": {
+      "confine": true,
+      "trigger": "axis",
+    },
+    "xAxis": [
+      {
+        "axisLabel": {
+          "color": "#6b7280",
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "onZero": false,
+        },
+        "axisTick": {
+          "alignWithLabel": true,
+        },
+        "boundaryGap": true,
+        "data": [
+          "Jan",
+          "Feb",
+          "Mar",
+        ],
+        "inverse": false,
+        "name": undefined,
+        "nameGap": 28,
+        "nameLocation": "middle",
+        "nameTextStyle": {
+          "color": "#6b7280",
+        },
+        "position": "top",
+        "show": true,
+        "splitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "show": false,
+        },
+        "type": "category",
+      },
+    ],
+    "yAxis": [
+      {
+        "axisLabel": {
+          "color": "#6b7280",
+          "formatter": [Function],
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+        },
+        "interval": undefined,
+        "inverse": false,
+        "max": undefined,
+        "min": undefined,
+        "minorSplitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+            "opacity": 0.6,
+          },
+          "show": false,
+        },
+        "minorTick": undefined,
+        "name": undefined,
+        "nameGap": 28,
+        "nameLocation": "middle",
+        "nameTextStyle": {
+          "color": "#6b7280",
+        },
+        "show": true,
+        "splitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "show": true,
+        },
+        "type": "value",
+      },
+    ],
+  },
+}
+`;
+
+exports[`date axis and crossing (T18) > snapshot: x crosses at start 1`] = `
+{
+  "fixes": [],
+  "option": {
+    "animation": false,
+    "backgroundColor": "#ffffff",
+    "grid": {
+      "backgroundColor": undefined,
+      "borderWidth": 0,
+      "bottom": 32,
+      "containLabel": true,
+      "left": 48,
+      "right": 110,
+      "show": false,
+      "top": 34,
+    },
+    "legend": {
+      "bottom": undefined,
+      "left": undefined,
+      "orient": "vertical",
+      "right": 8,
+      "show": true,
+      "textStyle": {
+        "color": "#111827",
+      },
+      "top": "middle",
+      "type": "scroll",
+    },
+    "series": [
+      {
+        "barMaxWidth": 48,
+        "data": [
+          10,
+          20,
+          30,
+        ],
+        "itemStyle": {
+          "color": "#004586",
+        },
+        "label": {
+          "show": false,
+        },
+        "markLine": undefined,
+        "name": "North",
+        "stack": undefined,
+        "type": "bar",
+        "yAxisIndex": 0,
+      },
+      {
+        "barMaxWidth": 48,
+        "data": [
+          5,
+          null,
+          15,
+        ],
+        "itemStyle": {
+          "color": "#ff420e",
+        },
+        "label": {
+          "show": false,
+        },
+        "markLine": undefined,
+        "name": "South",
+        "stack": undefined,
+        "type": "bar",
+        "yAxisIndex": 0,
+      },
+    ],
+    "textStyle": {
+      "color": "#111827",
+      "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+    },
+    "title": {
+      "left": "center",
+      "show": true,
+      "subtext": "",
+      "subtextStyle": {
+        "color": "#6b7280",
+      },
+      "text": "Sales",
+      "textStyle": {
+        "color": "#111827",
+        "fontSize": 14,
+        "fontWeight": 600,
+      },
+      "top": 6,
+    },
+    "tooltip": {
+      "confine": true,
+      "trigger": "axis",
+    },
+    "xAxis": [
+      {
+        "axisLabel": {
+          "color": "#6b7280",
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "onZero": false,
+        },
+        "axisTick": {
+          "alignWithLabel": true,
+        },
+        "boundaryGap": true,
+        "data": [
+          "Jan",
+          "Feb",
+          "Mar",
+        ],
+        "inverse": false,
+        "name": undefined,
+        "nameGap": 28,
+        "nameLocation": "middle",
+        "nameTextStyle": {
+          "color": "#6b7280",
+        },
+        "position": "bottom",
+        "show": true,
+        "splitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "show": false,
+        },
+        "type": "category",
+      },
+    ],
+    "yAxis": [
+      {
+        "axisLabel": {
+          "color": "#6b7280",
+          "formatter": [Function],
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+        },
+        "interval": undefined,
+        "inverse": false,
+        "max": undefined,
+        "min": undefined,
+        "minorSplitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+            "opacity": 0.6,
+          },
+          "show": false,
+        },
+        "minorTick": undefined,
+        "name": undefined,
+        "nameGap": 28,
+        "nameLocation": "middle",
+        "nameTextStyle": {
+          "color": "#6b7280",
+        },
+        "show": true,
+        "splitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "show": true,
+        },
+        "type": "value",
+      },
+    ],
+  },
+}
+`;
+
+exports[`date axis and crossing (T18) > snapshot: x crosses at value 50 1`] = `
+{
+  "fixes": [
+    {
+      "axis": "xAxis",
+      "color": "#e5e7eb",
+      "mode": "move",
+      "other": "yAxis",
+      "position": "bottom",
+      "value": 50,
+    },
+  ],
+  "option": {
+    "animation": false,
+    "backgroundColor": "#ffffff",
+    "grid": {
+      "backgroundColor": undefined,
+      "borderWidth": 0,
+      "bottom": 32,
+      "containLabel": true,
+      "left": 48,
+      "right": 110,
+      "show": false,
+      "top": 34,
+    },
+    "legend": {
+      "bottom": undefined,
+      "left": undefined,
+      "orient": "vertical",
+      "right": 8,
+      "show": true,
+      "textStyle": {
+        "color": "#111827",
+      },
+      "top": "middle",
+      "type": "scroll",
+    },
+    "series": [
+      {
+        "barMaxWidth": 48,
+        "data": [
+          10,
+          20,
+          30,
+        ],
+        "itemStyle": {
+          "color": "#004586",
+        },
+        "label": {
+          "show": false,
+        },
+        "markLine": undefined,
+        "name": "North",
+        "stack": undefined,
+        "type": "bar",
+        "yAxisIndex": 0,
+      },
+      {
+        "barMaxWidth": 48,
+        "data": [
+          5,
+          null,
+          15,
+        ],
+        "itemStyle": {
+          "color": "#ff420e",
+        },
+        "label": {
+          "show": false,
+        },
+        "markLine": undefined,
+        "name": "South",
+        "stack": undefined,
+        "type": "bar",
+        "yAxisIndex": 0,
+      },
+    ],
+    "textStyle": {
+      "color": "#111827",
+      "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+    },
+    "title": {
+      "left": "center",
+      "show": true,
+      "subtext": "",
+      "subtextStyle": {
+        "color": "#6b7280",
+      },
+      "text": "Sales",
+      "textStyle": {
+        "color": "#111827",
+        "fontSize": 14,
+        "fontWeight": 600,
+      },
+      "top": 6,
+    },
+    "tooltip": {
+      "confine": true,
+      "trigger": "axis",
+    },
+    "xAxis": [
+      {
+        "axisLabel": {
+          "color": "#6b7280",
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "onZero": false,
+        },
+        "axisTick": {
+          "alignWithLabel": true,
+        },
+        "boundaryGap": true,
+        "data": [
+          "Jan",
+          "Feb",
+          "Mar",
+        ],
+        "inverse": false,
+        "name": undefined,
+        "nameGap": 28,
+        "nameLocation": "middle",
+        "nameTextStyle": {
+          "color": "#6b7280",
+        },
+        "position": "bottom",
+        "show": true,
+        "splitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "show": false,
+        },
+        "type": "category",
+      },
+    ],
+    "yAxis": [
+      {
+        "axisLabel": {
+          "color": "#6b7280",
+          "formatter": [Function],
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+        },
+        "interval": undefined,
+        "inverse": false,
+        "max": undefined,
+        "min": undefined,
+        "minorSplitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+            "opacity": 0.6,
+          },
+          "show": false,
+        },
+        "minorTick": undefined,
+        "name": undefined,
+        "nameGap": 28,
+        "nameLocation": "middle",
+        "nameTextStyle": {
+          "color": "#6b7280",
+        },
+        "show": true,
+        "splitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "show": true,
+        },
+        "type": "value",
+      },
+    ],
+  },
+}
+`;
+
+exports[`date axis and crossing (T18) > snapshot: x labels near axis other side 1`] = `
+{
+  "fixes": [],
+  "option": {
+    "animation": false,
+    "backgroundColor": "#ffffff",
+    "grid": {
+      "backgroundColor": undefined,
+      "borderWidth": 0,
+      "bottom": 32,
+      "containLabel": true,
+      "left": 48,
+      "right": 110,
+      "show": false,
+      "top": 34,
+    },
+    "legend": {
+      "bottom": undefined,
+      "left": undefined,
+      "orient": "vertical",
+      "right": 8,
+      "show": true,
+      "textStyle": {
+        "color": "#111827",
+      },
+      "top": "middle",
+      "type": "scroll",
+    },
+    "series": [
+      {
+        "barMaxWidth": 48,
+        "data": [
+          10,
+          20,
+          30,
+        ],
+        "itemStyle": {
+          "color": "#004586",
+        },
+        "label": {
+          "show": false,
+        },
+        "markLine": undefined,
+        "name": "North",
+        "stack": undefined,
+        "type": "bar",
+        "yAxisIndex": 0,
+      },
+      {
+        "barMaxWidth": 48,
+        "data": [
+          5,
+          null,
+          15,
+        ],
+        "itemStyle": {
+          "color": "#ff420e",
+        },
+        "label": {
+          "show": false,
+        },
+        "markLine": undefined,
+        "name": "South",
+        "stack": undefined,
+        "type": "bar",
+        "yAxisIndex": 0,
+      },
+    ],
+    "textStyle": {
+      "color": "#111827",
+      "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+    },
+    "title": {
+      "left": "center",
+      "show": true,
+      "subtext": "",
+      "subtextStyle": {
+        "color": "#6b7280",
+      },
+      "text": "Sales",
+      "textStyle": {
+        "color": "#111827",
+        "fontSize": 14,
+        "fontWeight": 600,
+      },
+      "top": 6,
+    },
+    "tooltip": {
+      "confine": true,
+      "trigger": "axis",
+    },
+    "xAxis": [
+      {
+        "axisLabel": {
+          "color": "#6b7280",
+          "inside": true,
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+        },
+        "axisTick": {
+          "alignWithLabel": true,
+        },
+        "boundaryGap": true,
+        "data": [
+          "Jan",
+          "Feb",
+          "Mar",
+        ],
+        "inverse": false,
+        "name": undefined,
+        "nameGap": 28,
+        "nameLocation": "middle",
+        "nameTextStyle": {
+          "color": "#6b7280",
+        },
+        "show": true,
+        "splitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "show": false,
+        },
+        "type": "category",
+      },
+    ],
+    "yAxis": [
+      {
+        "axisLabel": {
+          "color": "#6b7280",
+          "formatter": [Function],
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+        },
+        "interval": undefined,
+        "inverse": false,
+        "max": undefined,
+        "min": undefined,
+        "minorSplitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+            "opacity": 0.6,
+          },
+          "show": false,
+        },
+        "minorTick": undefined,
+        "name": undefined,
+        "nameGap": 28,
+        "nameLocation": "middle",
+        "nameTextStyle": {
+          "color": "#6b7280",
+        },
+        "show": true,
+        "splitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "show": true,
+        },
+        "type": "value",
+      },
+    ],
+  },
+}
+`;
+
+exports[`date axis and crossing (T18) > snapshot: y crosses at category 2, labels outside start 1`] = `
+{
+  "fixes": [
+    {
+      "axis": "yAxis",
+      "color": "#e5e7eb",
+      "mode": "line",
+      "other": "xAxis",
+      "position": "left",
+      "value": 1,
+    },
+  ],
+  "option": {
+    "animation": false,
+    "backgroundColor": "#ffffff",
+    "grid": {
+      "backgroundColor": undefined,
+      "borderWidth": 0,
+      "bottom": 32,
+      "containLabel": true,
+      "left": 48,
+      "right": 110,
+      "show": false,
+      "top": 34,
+    },
+    "legend": {
+      "bottom": undefined,
+      "left": undefined,
+      "orient": "vertical",
+      "right": 8,
+      "show": true,
+      "textStyle": {
+        "color": "#111827",
+      },
+      "top": "middle",
+      "type": "scroll",
+    },
+    "series": [
+      {
+        "barMaxWidth": 48,
+        "data": [
+          10,
+          20,
+          30,
+        ],
+        "itemStyle": {
+          "color": "#004586",
+        },
+        "label": {
+          "show": false,
+        },
+        "markLine": undefined,
+        "name": "North",
+        "stack": undefined,
+        "type": "bar",
+        "yAxisIndex": 0,
+      },
+      {
+        "barMaxWidth": 48,
+        "data": [
+          5,
+          null,
+          15,
+        ],
+        "itemStyle": {
+          "color": "#ff420e",
+        },
+        "label": {
+          "show": false,
+        },
+        "markLine": undefined,
+        "name": "South",
+        "stack": undefined,
+        "type": "bar",
+        "yAxisIndex": 0,
+      },
+    ],
+    "textStyle": {
+      "color": "#111827",
+      "fontFamily": ""Inter Variable", "Inter", system-ui, sans-serif",
+    },
+    "title": {
+      "left": "center",
+      "show": true,
+      "subtext": "",
+      "subtextStyle": {
+        "color": "#6b7280",
+      },
+      "text": "Sales",
+      "textStyle": {
+        "color": "#111827",
+        "fontSize": 14,
+        "fontWeight": 600,
+      },
+      "top": 6,
+    },
+    "tooltip": {
+      "confine": true,
+      "trigger": "axis",
+    },
+    "xAxis": [
+      {
+        "axisLabel": {
+          "color": "#6b7280",
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+        },
+        "axisTick": {
+          "alignWithLabel": true,
+        },
+        "boundaryGap": true,
+        "data": [
+          "Jan",
+          "Feb",
+          "Mar",
+        ],
+        "inverse": false,
+        "name": undefined,
+        "nameGap": 28,
+        "nameLocation": "middle",
+        "nameTextStyle": {
+          "color": "#6b7280",
+        },
+        "show": true,
+        "splitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "show": false,
+        },
+        "type": "category",
+      },
+    ],
+    "yAxis": [
+      {
+        "axisLabel": {
+          "color": "#6b7280",
+          "formatter": [Function],
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "onZero": false,
+          "show": false,
+        },
+        "interval": undefined,
+        "inverse": false,
+        "max": undefined,
+        "min": undefined,
+        "minorSplitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+            "opacity": 0.6,
+          },
+          "show": false,
+        },
+        "minorTick": undefined,
+        "name": undefined,
+        "nameGap": 28,
+        "nameLocation": "middle",
+        "nameTextStyle": {
+          "color": "#6b7280",
+        },
+        "position": "left",
+        "show": true,
+        "splitLine": {
+          "lineStyle": {
+            "color": "#e5e7eb",
+          },
+          "show": true,
+        },
+        "type": "value",
+      },
+    ],
+  },
+}
+`;
+
 exports[`toEchartsOption snapshots > area 1`] = `
 {
   "animation": false,

@@ -14,10 +14,11 @@
 use std::io::BufRead;
 
 use tally_model::{
-    CellRangeLocal, ChartAxisData, ChartData, ChartKindData, ChartRangeData, ChartSeriesData,
-    ChartValuesData, DataLabelsData, ErrorBarDirData, ErrorBarKindData, ErrorBarsData,
-    LabelPosData, LegendPosData, MarkerShapeData, SeriesNameData, StackingData, StockVariantData,
-    TrendKindData, TrendLineData,
+    AxisCrossData, AxisLabelPosData, AxisTypeData, CellRangeLocal, ChartAxisData, ChartData,
+    ChartKindData, ChartRangeData, ChartSeriesData, ChartValuesData, DataLabelsData,
+    ErrorBarDirData, ErrorBarKindData, ErrorBarsData, LabelPosData, LegendPosData, MarkerShapeData,
+    SeriesNameData, StackingData, StockVariantData, TimeIntervalData, TimeUnitData, TrendKindData,
+    TrendLineData,
 };
 
 use crate::colors::{parse_argb, THEME};
@@ -415,6 +416,59 @@ fn axis_of(n: &Node, names_unused: &[String]) -> ChartAxisData {
             a.minor_count = Some((major / minor).round().clamp(1.0, 1000.0) as u32);
         }
     }
+    // Scale type as AOO's oox AxisConverter maps it: `c:auto` makes an
+    // automatic category/date axis; without it a `c:dateAx` is a date
+    // axis and a `c:catAx` a text axis.
+    let auto = n.child_flag("auto", false);
+    match n.name.as_str() {
+        "catAx" => {
+            a.axis_type = if auto {
+                AxisTypeData::Auto
+            } else {
+                AxisTypeData::Text
+            }
+        }
+        "dateAx" => {
+            a.axis_type = if auto {
+                AxisTypeData::Auto
+            } else {
+                AxisTypeData::Date
+            };
+            let unit = |name: &str| match n.child_val(name) {
+                Some("months") => TimeUnitData::Months,
+                Some("years") => TimeUnitData::Years,
+                _ => TimeUnitData::Days,
+            };
+            let interval = |value: &str, unit_name: &str| {
+                n.child_f64(value)
+                    .filter(|v| *v >= 1.0 && *v <= 10_000.0)
+                    .map(|v| TimeIntervalData {
+                        number: v as u32,
+                        unit: unit(unit_name),
+                    })
+            };
+            a.major_time = interval("majorUnit", "majorTimeUnit");
+            a.minor_time = interval("minorUnit", "minorTimeUnit");
+            a.time_resolution = n.child("baseTimeUnit").map(|_| unit("baseTimeUnit"));
+            // The units are time intervals, not value-axis steps.
+            a.major = None;
+            a.minor_count = None;
+        }
+        _ => {}
+    }
+    a.crosses = match n.child_f64("crossesAt") {
+        Some(v) => Some(AxisCrossData::Value(v)),
+        None => match n.child_val("crosses") {
+            Some("min") => Some(AxisCrossData::Start),
+            Some("max") => Some(AxisCrossData::End),
+            _ => None,
+        },
+    };
+    a.label_position = match n.child_val("tickLblPos") {
+        Some("high") => AxisLabelPosData::OutsideEnd,
+        Some("low") => AxisLabelPosData::OutsideStart,
+        _ => AxisLabelPosData::NearAxis,
+    };
     a
 }
 

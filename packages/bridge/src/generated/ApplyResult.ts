@@ -78,4 +78,10 @@ created?: Array<CreatedId> | null,
  * The pivot table list changed (create, update, delete, refresh)
  * (v0.5).
  */
-pivotsChanged?: boolean | null, };
+pivotsChanged?: boolean | null, 
+/**
+ * The detective arrows changed (AutoRefresh redrew them, or rows or
+ * columns moved them): re-fetch `detective_arrows` for the visible
+ * sheet.
+ */
+detectiveChanged?: boolean | null, };

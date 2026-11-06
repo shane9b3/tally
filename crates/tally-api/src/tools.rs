@@ -616,6 +616,66 @@ pub struct TraceDto {
     pub error: bool,
 }
 
+/// A Tools ▸ Detective command run on a cell (`DocumentService::detective`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum DetectiveAction {
+    /// Trace Precedents: one more level of arrows into the cell.
+    TracePrecedents,
+    /// Remove Precedents: the outermost level of precedent arrows.
+    RemovePrecedents,
+    /// Trace Dependents: one more level of arrows out of the cell.
+    TraceDependents,
+    /// Remove Dependents: the outermost level of dependent arrows.
+    RemoveDependents,
+    /// Trace Error: arrows down to the cells where an error starts.
+    TraceError,
+    /// Remove All Traces: the arrows of the sheet and the whole
+    /// operation list.
+    RemoveAll,
+    /// Refresh Traces: redraws every sheet's arrows from the operation
+    /// list.
+    Refresh,
+}
+
+/// A detective arrow on the requested sheet.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DetectiveArrowDto {
+    /// The range the arrow starts at (a box is drawn around a range of
+    /// more than one cell); `None`: it comes from another sheet.
+    pub from: Option<RangeDto>,
+    /// The cell it points at; `None`: it points to another sheet.
+    pub to: Option<crate::dto::CellPos>,
+    /// Red: the source holds an error.
+    pub error: bool,
+}
+
+/// The detective state of a sheet after a command or query.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DetectiveState {
+    /// The command changed something (AOO: it was recorded in the
+    /// operation list). Always `false` for queries.
+    pub done: bool,
+    /// The sheet's arrows.
+    pub arrows: Vec<DetectiveArrowDto>,
+    /// The document's operation list is not empty (Refresh Traces has
+    /// something to replay).
+    pub has_ops: bool,
+    /// The document has unsaved changes after the command (a command that
+    /// did something marks it modified, as AOO's `SetDocumentModified`).
+    #[serde(default)]
+    pub dirty: bool,
+    /// The last replay ran out of its work or time budget: the arrows are
+    /// the ones drawn until then (AOO just stops).
+    #[serde(default)]
+    pub incomplete: bool,
+}
+
 /// An entry of the Navigator.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

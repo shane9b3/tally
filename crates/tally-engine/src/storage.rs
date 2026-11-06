@@ -679,6 +679,11 @@ pub struct SheetMeta {
     pub view_options: Option<Arc<tally_model::ViewOptionsData>>,
     /// Window ▸ Split position (v0.5).
     pub split: Option<tally_model::SplitData>,
+    /// Tools ▸ Detective operations and arrows (see [`crate::detective`]).
+    /// Not part of the undo snapshots ([`MetaPart`]): AOO's operation list
+    /// survives undo; row and column changes move it in
+    /// [`crate::workbook::Workbook::structure_change`] on undo too.
+    pub detective: Arc<crate::detective::SheetDetective>,
 }
 
 impl SheetMeta {

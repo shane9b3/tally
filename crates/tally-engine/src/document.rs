@@ -42,6 +42,15 @@ pub struct Document {
     /// Read-only (AOO's read-only medium / Edit Mode off): the service
     /// refuses every edit with [`tally_api::ApiError::READ_ONLY`].
     pub read_only: bool,
+    /// Tools ▸ Detective ▸ AutoRefresh (AOO's application option
+    /// `Input/DetectiveAuto`, on by default; the app mirrors it here).
+    pub detective_auto: bool,
+    /// The dependency generation the arrows were last checked against
+    /// (AOO `IsDetectiveDirty`).
+    detective_gen: u64,
+    /// Identity of each sheet's detective state at the last result, to
+    /// report `detective_changed` when rows or columns or undo moved them.
+    detective_ptrs: Vec<(SheetId, usize, u64)>,
 }
 
 /// Formats a colour `0xRRGGBBAA` as `#rrggbb`.
@@ -60,6 +69,10 @@ impl Document {
     /// [`Self::recalc_incomplete`] is set and a warning is queued.
     pub fn with_budget(id: DocId, mut wb: Workbook, title: &str, budget: &RecalcBudget) -> Self {
         let report = hard_recalc_with(&mut wb, budget);
+        // Detective arrows from the file's operation list.
+        crate::detective::refresh_all(&mut wb);
+        let detective_gen = wb.deps.generation();
+        let detective_ptrs = detective_ptrs(&wb);
         let mut warnings = std::mem::take(&mut wb.import_warnings);
         if report.incomplete {
             warnings.push(format!(
@@ -81,7 +94,53 @@ impl Document {
             warnings,
             csv_options: tally_api::CsvExportOptions::default(),
             read_only: false,
+            detective_auto: true,
+            detective_gen,
+            detective_ptrs,
         }
+    }
+
+    /// Detective AutoRefresh after a change (`ScDocShell::SetDocumentModified`):
+    /// with the option on and a non-empty operation list, the arrows are
+    /// replayed when formulas were added, removed or re-pointed since the
+    /// last check, or always while the list holds a Trace Error. Returns
+    /// whether any sheet's arrows changed (replayed, or moved by a
+    /// structure change or undo).
+    fn detective_after_change(&mut self) -> bool {
+        let gen = self.wb.deps.generation();
+        let formulas_changed = gen != self.detective_gen;
+        if self.detective_auto
+            && crate::detective::has_ops(&self.wb)
+            && (formulas_changed || crate::detective::has_add_error(&self.wb))
+        {
+            crate::detective::refresh_all(&mut self.wb);
+        }
+        // Replaying reads but never re-registers formulas.
+        self.detective_gen = self.wb.deps.generation();
+        let ptrs = detective_ptrs(&self.wb);
+        let changed = ptrs != self.detective_ptrs;
+        self.detective_ptrs = ptrs;
+        changed
+    }
+
+    /// Runs a Tools ▸ Detective command (not undoable; the document becomes
+    /// dirty when it changed something, unless it is read-only).
+    pub fn detective(
+        &mut self,
+        sheet: SheetId,
+        r: u32,
+        c: u32,
+        action: tally_api::DetectiveAction,
+    ) -> Result<tally_api::DetectiveState, tally_api::ApiError> {
+        let done = crate::detective::run(&mut self.wb, sheet, r, c, action)?;
+        if done && !self.read_only {
+            self.dirty = true;
+        }
+        self.detective_gen = self.wb.deps.generation();
+        self.detective_ptrs = detective_ptrs(&self.wb);
+        let mut st = crate::detective::state(&self.wb, sheet, done);
+        st.dirty = self.dirty;
+        Ok(st)
     }
 
     /// Evaluates formula `text` at `addr` without committing it
@@ -158,6 +217,7 @@ impl Document {
         if self.wb.sheet(self.wb.active_sheet).is_none() {
             self.wb.active_sheet = self.wb.sheets.first().map_or(0, |s| s.id);
         }
+        let detective_changed = self.detective_after_change().then_some(true);
         let layout_changed: Vec<SheetId> = fx
             .layout_changed
             .into_iter()
@@ -179,6 +239,7 @@ impl Document {
             objects_changed: fx.objects_changed,
             created: fx.created,
             pivots_changed: fx.pivots_changed,
+            detective_changed,
         }
     }
 
@@ -447,6 +508,17 @@ impl Document {
         self.dirty = true;
         self.result(report, fx, Vec::new(), selection)
     }
+}
+
+/// The identity of every sheet's detective state.
+fn detective_ptrs(wb: &Workbook) -> Vec<(SheetId, usize, u64)> {
+    wb.sheets
+        .iter()
+        .map(|s| {
+            let d = &s.meta.detective;
+            (s.id, std::sync::Arc::as_ptr(d) as usize, d.moves)
+        })
+        .collect()
 }
 
 /// A range as a DTO.

@@ -38,6 +38,13 @@ fn axis() -> ChartAxisDto {
         major_grid: false,
         minor_grid: false,
         number_format: None,
+        axis_type: tally_api::AxisType::Auto,
+        time_resolution: None,
+        major_time: None,
+        minor_time: None,
+        crosses: None,
+        label_position: tally_api::AxisLabelPos::NearAxis,
+        mark_position: tally_api::AxisMarkPos::AtLabelsAndAxis,
     }
 }
 

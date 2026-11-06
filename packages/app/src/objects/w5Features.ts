@@ -44,6 +44,8 @@ export class W5Features {
     useChartStore.getState().reset();
     void this.objects.refreshObjects();
     void this.view.refreshPageBreaks();
+    // The sheet's detective arrows (they live in the engine and the file).
+    this.detective.onSheet();
   }
 
   /** After an engine result (`AppController.handleResult`). */
@@ -53,14 +55,16 @@ export class W5Features {
     if (w5.pageBreakPreview && (ops === null || ops.some((o) => o.type === "setPageBreak" || o.type === "setPageSetup") || res.layoutChanged.length > 0 || res.changed.length > 0)) {
       void this.view.refreshPageBreaks();
     }
-    // Arrows and circles point at cells that may have moved: structural edits clear them.
-    if (ops?.some((o) => ["insertRows", "deleteRows", "insertCols", "deleteCols", "moveRange", "sortRange"].includes(o.type))) this.detective.removeTraces();
+    // AutoRefresh redrew the arrows, or rows/columns moved them (the engine keeps them).
+    this.detective.afterResult(res.detectiveChanged);
+    // "Mark invalid data" circles point at cells that may have moved: structural edits clear them.
+    if (ops?.some((o) => ["insertRows", "deleteRows", "insertCols", "deleteCols", "moveRange", "sortRange"].includes(o.type))) useW5Store.getState().setInvalidCells([]);
   }
 
   /** A snapshot of the view state (e2e hook, status readouts). */
-  state(): { traces: number; invalidCells: number; split: string | null; pageBreakPreview: boolean } {
+  state(): { traces: number; invalidCells: number; split: string | null; pageBreakPreview: boolean; detectiveFill: boolean } {
     const w5 = useW5Store.getState();
-    return { traces: w5.traces.length, invalidCells: w5.invalidCells.length, split: w5.split?.axis ?? null, pageBreakPreview: w5.pageBreakPreview };
+    return { traces: w5.traces.length, invalidCells: w5.invalidCells.length, split: w5.split?.axis ?? null, pageBreakPreview: w5.pageBreakPreview, detectiveFill: w5.detectiveFill };
   }
 
   /** ⌘C/⌘X while a chart is selected go to the chart; returns true when handled. */

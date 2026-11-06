@@ -76,6 +76,13 @@ export const READ_ONLY_COMMANDS: ReadonlySet<string> = new Set([
   "tools.traceDependents",
   "tools.removeTraces",
   "tools.markInvalid",
+  // AOO's detective slots are ReadOnlyDoc = TRUE (sc/sdi/scalc.sdi), except
+  // RefreshArrows (Refresh Traces).
+  "tools.removePrecedents",
+  "tools.removeDependents",
+  "tools.traceError",
+  "tools.autoRefreshTraces",
+  "tools.detectiveFillMode",
   "data.recalc",
   "chart.copyImage",
 ]);

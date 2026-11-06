@@ -4,17 +4,22 @@
  */
 import type { CellView, ValidationDto } from "@tally/bridge";
 import { describe, expect, it } from "vitest";
-import { cellValid, invalidCells, traceArrows } from "../src/detective/detective";
+import { cellValid, invalidCells, toTraceArrows } from "../src/detective/detective";
 
 const cell = (r: number, c: number, text: string, kind: CellView["kind"] = "text", num: number | null = null): CellView => ({ r, c, text, kind, num, style: 0, color: null, flags: 0 });
 
 describe("trace arrows", () => {
-  it("precedents point at the formula cell; dependents away from it; other sheets are counted", () => {
-    const { arrows, otherSheets } = traceArrows({ r: 2, c: 2 }, [{ sheet: 1, range: { r0: 0, c0: 0, r1: 1, c1: 0 }, error: false }, { sheet: 2, range: { r0: 0, c0: 0, r1: 0, c1: 0 }, error: true }], 1, "precedent");
-    expect(arrows).toEqual([{ from: { r: 0, c: 0 }, to: { r: 2, c: 2 }, kind: "precedent" }]);
-    expect(otherSheets).toBe(1);
-    const dep = traceArrows({ r: 0, c: 0 }, [{ sheet: 1, range: { r0: 5, c0: 1, r1: 5, c1: 1 }, error: true }], 1, "dependent");
-    expect(dep.arrows).toEqual([{ from: { r: 0, c: 0 }, to: { r: 5, c: 1 }, kind: "error" }]);
+  it("map the engine's arrows: ranges get a box, other sheets a sheet icon, errors are red", () => {
+    const arrows = toTraceArrows([
+      { from: { r0: 0, c0: 0, r1: 1, c1: 0 }, to: { r: 2, c: 2 }, error: false },
+      { from: { r0: 4, c0: 4, r1: 4, c1: 4 }, to: { r: 2, c: 2 }, error: true },
+      { from: null, to: { r: 3, c: 1 }, error: false },
+      { from: { r0: 5, c0: 0, r1: 5, c1: 0 }, to: null, error: false },
+    ]);
+    expect(arrows[0]).toEqual({ from: { r: 0, c: 0 }, to: { r: 2, c: 2 }, kind: "precedent", fromRange: { r0: 0, c0: 0, r1: 1, c1: 0 } });
+    expect(arrows[1]).toEqual({ from: { r: 4, c: 4 }, to: { r: 2, c: 2 }, kind: "error", fromRange: null });
+    expect(arrows[2]).toMatchObject({ to: { r: 3, c: 1 }, fromOtherSheet: true });
+    expect(arrows[3]).toMatchObject({ from: { r: 5, c: 0 }, toOtherSheet: true });
   });
 });
 

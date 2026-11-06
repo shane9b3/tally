@@ -34,7 +34,7 @@ pub struct PrefsChangedEvent {
 }
 
 /// Largest prefs document accepted (bytes).
-pub const MAX_PREFS_BYTES: usize = 64 * 1024;
+pub const MAX_PREFS_BYTES: usize = 1024 * 1024;
 const PREFS_FILE: &str = "prefs.json";
 
 fn io_err(what: &str, e: &std::io::Error) -> ApiError {
@@ -43,6 +43,26 @@ fn io_err(what: &str, e: &std::io::Error) -> ApiError {
 
 fn prefs_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|d| d.join(PREFS_FILE))
+}
+
+/// The prefs key of the user's own AutoFormats (a list the webview validates).
+pub const AUTO_FORMATS_KEY: &str = "autoFormats";
+/// Most user AutoFormats stored.
+pub const MAX_AUTO_FORMATS: usize = 100;
+
+/// `autoFormats`, when present, must be a list of at most [`MAX_AUTO_FORMATS`] objects.
+fn check_auto_formats(v: Option<&Value>) -> Result<(), ApiError> {
+    match v {
+        None => Ok(()),
+        Some(Value::Array(list))
+            if list.len() <= MAX_AUTO_FORMATS && list.iter().all(Value::is_object) =>
+        {
+            Ok(())
+        }
+        Some(_) => Err(ApiError::invalid_argument(format!(
+            "autoFormats must be a list of at most {MAX_AUTO_FORMATS} objects"
+        ))),
+    }
 }
 
 /// Validates a prefs document: a JSON object, at most [`MAX_PREFS_BYTES`].
@@ -54,7 +74,7 @@ pub fn check(json: &str) -> Result<(), ApiError> {
         )));
     }
     match serde_json::from_str::<Value>(json) {
-        Ok(Value::Object(_)) => Ok(()),
+        Ok(Value::Object(o)) => check_auto_formats(o.get(AUTO_FORMATS_KEY)),
         Ok(_) => Err(ApiError::invalid_argument(
             "the preferences must be a JSON object",
         )),
@@ -70,9 +90,35 @@ pub fn load<R: Runtime>(app: &AppHandle<R>) -> String {
         return "{}".to_owned();
     };
     match fs::read_to_string(path) {
-        Ok(text) if check(&text).is_ok() => text,
+        Ok(text) => sanitize(&text).unwrap_or_else(|| "{}".to_owned()),
         _ => "{}".to_owned(),
     }
+}
+
+/// A stored prefs text made loadable: a bad `autoFormats` (not a list, or
+/// entries that are not objects, or more than [`MAX_AUTO_FORMATS`]) is
+/// repaired and the other prefs are kept. `None` when the text is not a
+/// JSON object or is over the size limit.
+pub fn sanitize(json: &str) -> Option<String> {
+    if json.len() > MAX_PREFS_BYTES {
+        return None;
+    }
+    let mut v: Value = serde_json::from_str(json).ok()?;
+    let obj = v.as_object_mut()?;
+    if check_auto_formats(obj.get(AUTO_FORMATS_KEY)).is_ok() {
+        return Some(json.to_owned());
+    }
+    let kept: Vec<Value> = match obj.get(AUTO_FORMATS_KEY) {
+        Some(Value::Array(list)) => list
+            .iter()
+            .filter(|e| e.is_object())
+            .take(MAX_AUTO_FORMATS)
+            .cloned()
+            .collect(),
+        _ => Vec::new(),
+    };
+    obj.insert(AUTO_FORMATS_KEY.to_owned(), Value::Array(kept));
+    serde_json::to_string(&v).ok()
 }
 
 /// Writes the prefs text (validated first).
@@ -126,7 +172,7 @@ pub async fn get_prefs(app: AppHandle) -> Result<String, ApiError> {
     Ok(load(&app))
 }
 
-/// `set_prefs`: stores the prefs.json text (a JSON object ≤ 64 KiB).
+/// `set_prefs`: stores the prefs.json text (a JSON object ≤ 1 MiB).
 #[tauri::command]
 pub async fn set_prefs(app: AppHandle, json: String) -> Result<(), ApiError> {
     store(&app, &json)
@@ -187,6 +233,47 @@ mod tests {
         );
         let big = format!("{{\"k\":\"{}\"}}", "x".repeat(MAX_PREFS_BYTES));
         assert_eq!(check(&big).unwrap_err().code, ApiError::INVALID_ARGUMENT);
+    }
+
+    #[test]
+    fn user_autoformats_are_a_capped_list_of_objects() {
+        assert!(check(r#"{"autoFormats":[]}"#).is_ok());
+        assert!(check(r#"{"autoFormats":[{"name":"Mine","cells":[]}]}"#).is_ok());
+        assert!(check(r#"{"autoFormats":"x"}"#).is_err());
+        assert!(check(r#"{"autoFormats":[1]}"#).is_err());
+        let many = format!("{{\"autoFormats\":[{}]}}", vec!["{}"; 101].join(","));
+        assert!(check(&many).is_err());
+        let ok = format!("{{\"autoFormats\":[{}]}}", vec!["{}"; 100].join(","));
+        assert!(check(&ok).is_ok());
+    }
+
+    #[test]
+    fn a_bad_autoformats_entry_keeps_the_other_prefs() {
+        let bad =
+            r#"{"uiLanguage":"de","theme":"dark","autoFormats":[{"name":"a"},7,"x",{"name":"b"}]}"#;
+        assert!(check(bad).is_err());
+        let fixed = sanitize(bad).unwrap();
+        assert!(check(&fixed).is_ok());
+        assert_eq!(ui_language(&fixed), "de");
+        assert_eq!(string_key(&fixed, "theme").as_deref(), Some("dark"));
+        let v: Value = serde_json::from_str(&fixed).unwrap();
+        assert_eq!(v["autoFormats"].as_array().unwrap().len(), 2);
+        let wrong_type = sanitize(r#"{"uiLanguage":"fr","autoFormats":"x"}"#).unwrap();
+        assert_eq!(ui_language(&wrong_type), "fr");
+        assert!(check(&wrong_type).is_ok());
+        let many = format!(
+            "{{\"uiLanguage\":\"es\",\"autoFormats\":[{}]}}",
+            vec!["{}"; 150].join(",")
+        );
+        let capped = sanitize(&many).unwrap();
+        assert_eq!(ui_language(&capped), "es");
+        let v: Value = serde_json::from_str(&capped).unwrap();
+        assert_eq!(v["autoFormats"].as_array().unwrap().len(), MAX_AUTO_FORMATS);
+        // a good document is returned as it is; garbage is not repaired
+        let good = r#"{"uiLanguage":"de"}"#;
+        assert_eq!(sanitize(good).as_deref(), Some(good));
+        assert_eq!(sanitize("[]"), None);
+        assert_eq!(sanitize("junk"), None);
     }
 
     #[test]

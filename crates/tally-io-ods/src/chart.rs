@@ -17,10 +17,11 @@ use std::fmt::Write as _;
 use std::io::BufRead;
 
 use tally_model::{
-    CellContentData, CellRangeLocal, ChartAxisData, ChartData, ChartKindData, ChartRangeData,
-    ChartSeriesData, ChartSourceData, ChartValuesData, DataLabelsData, ErrorBarDirData,
-    ErrorBarKindData, ErrorBarsData, LabelPosData, LegendPosData, MarkerShapeData, SeriesNameData,
-    SheetData, StackingData, StockVariantData, TrendKindData, TrendLineData,
+    AxisCrossData, AxisLabelPosData, AxisMarkPosData, AxisTypeData, CellContentData,
+    CellRangeLocal, ChartAxisData, ChartData, ChartKindData, ChartRangeData, ChartSeriesData,
+    ChartSourceData, ChartValuesData, DataLabelsData, ErrorBarDirData, ErrorBarKindData,
+    ErrorBarsData, LabelPosData, LegendPosData, MarkerShapeData, SeriesNameData, SheetData,
+    StackingData, StockVariantData, TimeIntervalData, TimeUnitData, TrendKindData, TrendLineData,
 };
 use tally_types::{col_to_letters, letters_to_col, Value, MAX_COLS, MAX_ROWS};
 
@@ -51,6 +52,7 @@ const CHART_NS: &str = concat!(
     r#" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#,
     r#" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0""#,
     r#" xmlns:ooo="http://openoffice.org/2004/office""#,
+    r#" xmlns:chartooo="http://openoffice.org/2010/chart""#,
     r#" xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0""#,
     r#" xmlns:tally="urn:tally:names:experimental:1.0""#,
 );
@@ -360,7 +362,80 @@ fn axis_style(st: &mut Styles, a: &ChartAxisData) -> String {
     if let Some(f) = &a.number_format {
         attr(&mut p, "tally:number-format", f);
     }
+    // ODF 1.2 axis positioning, as AOO 4.1 writes it
+    // (XMLAxisPositionPropertyHdl, aXMLChartAxisLabelPositionEnumMap).
+    match a.crosses {
+        Some(AxisCrossData::Start) => attr(&mut p, "chart:axis-position", "start"),
+        Some(AxisCrossData::End) => attr(&mut p, "chart:axis-position", "end"),
+        Some(AxisCrossData::Value(v)) => attr(&mut p, "chart:axis-position", &fmt_f64(v)),
+        None => {}
+    }
+    let label_pos = match a.label_position {
+        AxisLabelPosData::NearAxis => None,
+        AxisLabelPosData::NearAxisOtherSide => Some("near-axis-other-side"),
+        AxisLabelPosData::OutsideStart => Some("outside-start"),
+        AxisLabelPosData::OutsideEnd => Some("outside-end"),
+    };
+    if let Some(v) = label_pos {
+        attr(&mut p, "chart:axis-label-position", v);
+    }
+    let mark_pos = match a.mark_position {
+        AxisMarkPosData::AtLabelsAndAxis => None,
+        AxisMarkPosData::AtLabels => Some("at-labels"),
+        AxisMarkPosData::AtAxis => Some("at-axis"),
+    };
+    if let Some(v) = mark_pos {
+        attr(&mut p, "chart:tick-mark-position", v);
+    }
     st.add(&p, "", "")
+}
+
+fn time_unit_token(u: TimeUnitData) -> &'static str {
+    match u {
+        TimeUnitData::Days => "days",
+        TimeUnitData::Months => "months",
+        TimeUnitData::Years => "years",
+    }
+}
+
+fn time_unit_of(v: &str) -> TimeUnitData {
+    // AOO's lcl_getTimeUnit: anything else is days.
+    match v {
+        "months" => TimeUnitData::Months,
+        "years" => TimeUnitData::Years,
+        _ => TimeUnitData::Days,
+    }
+}
+
+/// `chartooo:axis-type` and the `chartooo:date-scale` element of a
+/// category axis, as AOO 4.1 writes them (SchXMLExport.cxx
+/// `lcl_exportAxisType` / `exportDateScale`): `auto` and `date` carry a
+/// date scale with the resolution and intervals that are not automatic.
+fn axis_type_attr(a: &ChartAxisData) -> &'static str {
+    match a.axis_type {
+        AxisTypeData::Auto => "auto",
+        AxisTypeData::Text => "text",
+        AxisTypeData::Date => "date",
+    }
+}
+
+fn write_date_scale(s: &mut String, a: &ChartAxisData) {
+    if a.axis_type == AxisTypeData::Text {
+        return;
+    }
+    s.push_str("<chartooo:date-scale");
+    if let Some(u) = a.time_resolution {
+        attr(s, "chart:base-time-unit", time_unit_token(u));
+    }
+    if let Some(t) = a.major_time {
+        attr(s, "chart:major-interval-value", &t.number.to_string());
+        attr(s, "chart:major-interval-unit", time_unit_token(t.unit));
+    }
+    if let Some(t) = a.minor_time {
+        attr(s, "chart:minor-interval-value", &t.number.to_string());
+        attr(s, "chart:minor-interval-unit", time_unit_token(t.unit));
+    }
+    s.push_str("/>");
 }
 
 fn write_axis(
@@ -370,12 +445,20 @@ fn write_axis(
     name: &str,
     a: &ChartAxisData,
     categories: Option<&str>,
+    category_axis: bool,
 ) {
     let style = axis_style(st, a);
     let _ = write!(
         s,
-        r#"<chart:axis chart:dimension="{dim}" chart:name="{name}" chart:style-name="{style}">"#
+        r#"<chart:axis chart:dimension="{dim}" chart:name="{name}" chart:style-name="{style}""#
     );
+    if category_axis {
+        attr(s, "chartooo:axis-type", axis_type_attr(a));
+    }
+    s.push('>');
+    if category_axis {
+        write_date_scale(s, a);
+    }
     if let Some(t) = &a.title {
         let ts = st.add("", "", r#" fo:font-size="9pt""#);
         let _ = write!(s, r#"<chart:title chart:style-name="{ts}"><text:p>"#);
@@ -831,10 +914,11 @@ pub(crate) fn content_xml(
         "primary-x",
         &c.x_axis,
         cat_addr.as_deref(),
+        !matches!(c.kind, ChartKindData::Scatter | ChartKindData::Bubble),
     );
-    write_axis(&mut body, &mut st, "y", "primary-y", &c.y_axis, None);
+    write_axis(&mut body, &mut st, "y", "primary-y", &c.y_axis, None, false);
     if let Some(y2) = &c.y2_axis {
-        write_axis(&mut body, &mut st, "y", "secondary-y", y2, None);
+        write_axis(&mut body, &mut st, "y", "secondary-y", y2, None, false);
     }
 
     for sv in c.series.iter().take(MAX_SERIES) {
@@ -1090,6 +1174,31 @@ fn axis_of(
         ..ChartAxisData::default()
     };
     if let Some(s) = style {
+        a.crosses = match s.chart_attr("chart:axis-position") {
+            Some("start") => Some(AxisCrossData::Start),
+            Some("end") => Some(AxisCrossData::End),
+            // "0" is AOO's default (ChartAxisPosition_ZERO).
+            Some(v) => v
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite() && *v != 0.0)
+                .map(AxisCrossData::Value),
+            None => None,
+        };
+        a.label_position = match s.chart_attr("chart:axis-label-position") {
+            Some("near-axis-other-side") => AxisLabelPosData::NearAxisOtherSide,
+            Some("outside-start" | "outside-minimum") => AxisLabelPosData::OutsideStart,
+            Some("outside-end" | "outside-maximum") => AxisLabelPosData::OutsideEnd,
+            _ => AxisLabelPosData::NearAxis,
+        };
+        a.mark_position = match s.chart_attr("chart:tick-mark-position") {
+            Some("at-labels") => AxisMarkPosData::AtLabels,
+            Some("at-axis") => AxisMarkPosData::AtAxis,
+            _ => AxisMarkPosData::AtLabelsAndAxis,
+        };
+    }
+    if let Some(s) = style {
         a.visible = s.flag("chart:visible").unwrap_or(true)
             && s.flag("chart:display-label").unwrap_or(true);
         a.log = s.flag("chart:logarithmic").unwrap_or(false);
@@ -1106,6 +1215,38 @@ fn axis_of(
             .map(|f| f.chars().take(MAX_TEXT).collect());
     }
     a
+}
+
+/// The scale type of a category axis as AOO 4.1 reads it
+/// (SchXMLAxisContext.cxx): `text` and `date` as written; `auto` (or no
+/// attribute) is a date-capable axis only with a `date-scale` element,
+/// else text (`AutoDateAxis = false`, "different default for older
+/// documents").
+fn apply_axis_type(a: &mut ChartAxisData, kind: Option<&str>, scale: Option<&[(String, String)]>) {
+    a.axis_type = match kind {
+        Some("text") => AxisTypeData::Text,
+        Some("date") => AxisTypeData::Date,
+        _ if scale.is_some() => AxisTypeData::Auto,
+        _ => AxisTypeData::Text,
+    };
+    let Some(scale) = scale else { return };
+    let get = |k: &str| scale.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    a.time_resolution = get("chart:base-time-unit").map(time_unit_of);
+    let interval = |value: &str, unit: &str| -> Option<TimeIntervalData> {
+        let v = get(value);
+        let u = get(unit);
+        if v.is_none() && u.is_none() {
+            return None;
+        }
+        // AOO starts from TimeInterval(1, DAY) and overrides what is set.
+        let number = v.map_or(Some(1), |v| v.trim().parse::<u32>().ok())?;
+        (1..=10_000).contains(&number).then(|| TimeIntervalData {
+            number,
+            unit: u.map_or(TimeUnitData::Days, time_unit_of),
+        })
+    };
+    a.major_time = interval("chart:major-interval-value", "chart:major-interval-unit");
+    a.minor_time = interval("chart:minor-interval-value", "chart:minor-interval-unit");
 }
 
 /// Cached values of a `local-table`.
@@ -1196,6 +1337,10 @@ struct RawAxis {
     grids: (bool, bool),
     title: Option<String>,
     categories: Option<String>,
+    /// `chartooo:axis-type` (or `chart:axis-type`).
+    axis_type: Option<String>,
+    /// The `date-scale` element's attributes, when present.
+    date_scale: Option<Vec<(String, String)>>,
 }
 
 /// What the reader gathers per series before the styles are applied.
@@ -1308,11 +1453,29 @@ pub(crate) fn parse_content_xml<R: BufRead>(
                             grids: (false, false),
                             title: None,
                             categories: None,
+                            axis_type: e
+                                .attr("chartooo:axis-type")
+                                .or_else(|| e.attr("chart:axis-type"))
+                                .map(str::to_string),
+                            date_scale: None,
                         });
                         cur_axis = Some((axes.len() - 1, xml.depth()));
                     } else {
                         xml.skip()?;
                     }
+                }
+                "chartooo:date-scale" | "chart:date-scale" | "loext:date-scale" => {
+                    if let Some((i, _)) = cur_axis {
+                        axes[i].date_scale = Some(
+                            e.attrs
+                                .iter()
+                                .filter(|(k, _)| k.starts_with("chart:"))
+                                .take(8)
+                                .cloned()
+                                .collect(),
+                        );
+                    }
+                    xml.skip()?;
                 }
                 "chart:categories" => {
                     if let Some((i, _)) = cur_axis {
@@ -1493,7 +1656,10 @@ pub(crate) fn parse_content_xml<R: BufRead>(
     let mut categories: Option<ChartRangeData> = None;
     for ax in axes {
         let st = ax.style.as_ref().and_then(|n| styles.get(n));
-        let a = axis_of(st, ax.grids, ax.title);
+        let mut a = axis_of(st, ax.grids, ax.title);
+        if ax.dim == "x" && !matches!(c.kind, ChartKindData::Scatter | ChartKindData::Bubble) {
+            apply_axis_type(&mut a, ax.axis_type.as_deref(), ax.date_scale.as_deref());
+        }
         if let Some(addr) = ax.categories {
             categories = Some(parse_range_address(&addr, look));
         }

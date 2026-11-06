@@ -159,6 +159,9 @@ impl Workbook {
         // Names before formulas, so formulas resolve them while parsing.
         load_names(&mut wb, &data.names, &ids);
         let mut merges_capped = false;
+        // One operation list per document (AOO): the newest MAX_OPS.
+        let detective_cut =
+            crate::detective::ops_cut(sheet_data.iter().map(|s| &s.detective_ops[..]));
         for (i, (sd, &sheet)) in sheet_data.iter().zip(&ids).enumerate() {
             // The AutoFilter (taken when the data is owned, so its value
             // lists are not copied), its area clamped to the sheet's cells:
@@ -207,8 +210,8 @@ impl Workbook {
         }
         // v0.3 sheet state (after the names, so rule formulas resolve them).
         let mut v03_stats = LoadV03Stats::default();
-        for (sd, &sheet) in sheet_data.iter().zip(&ids) {
-            load_v03(&mut wb, sheet, sd, &mut v03_stats);
+        for (i, (sd, &sheet)) in sheet_data.iter().zip(&ids).enumerate() {
+            load_v03(&mut wb, sheet, sd, i, detective_cut, &mut v03_stats);
             load_v04(&mut wb, sheet, sd);
         }
         for w in v03_stats.warnings() {
@@ -478,9 +481,19 @@ impl Workbook {
                 subtotals: sheet.meta.subtotals.as_deref().cloned(),
                 view_options: sheet.meta.view_options.as_deref().cloned(),
                 split: sheet.meta.split,
+                detective_ops: crate::detective::ops_to_model(&sheet.meta.detective),
+                detective_arrows: sheet.meta.detective.arrows.clone(),
             };
             crate::outline::export_hidden(self, sheet.id, &mut sd);
             sheets.push(sd);
+        }
+        // One document-wide operation list (`table:index`), sheet by sheet.
+        for (index, op) in sheets
+            .iter_mut()
+            .flat_map(|s| s.detective_ops.iter_mut())
+            .enumerate()
+        {
+            op.index = index as u32;
         }
         let mut names: Vec<NameData> = Vec::new();
         for (_, e) in self.names.defined() {
@@ -674,6 +687,8 @@ fn load_v03(
     wb: &mut Workbook,
     sheet: tally_types::SheetId,
     sd: &SheetData,
+    tab: usize,
+    detective_cut: Option<(u32, usize, usize)>,
     stats: &mut LoadV03Stats,
 ) {
     let mut next_id = 1u32;
@@ -751,6 +766,16 @@ fn load_v03(
         links.insert((l.row, l.col), l.url.clone());
     }
     s.meta.links = Arc::new(links);
+    if !sd.detective_ops.is_empty() {
+        // Arrows are rebuilt from the operations once the workbook is
+        // calculated (`Document::with_budget`).
+        s.meta.detective = Arc::new(crate::detective::SheetDetective {
+            ops: crate::detective::ops_from_model(&sd.detective_ops, tab, detective_cut),
+            arrows: Vec::new(),
+            incomplete: false,
+            moves: 0,
+        });
+    }
     s.meta.protection = sd.protection.as_ref().map(|p| {
         let mut p = p.clone();
         let too_long = |v: &Option<String>| {

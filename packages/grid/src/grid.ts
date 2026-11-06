@@ -201,6 +201,7 @@ export class Grid {
       },
       pointMode: () => (self.props.pointMode ?? false) && self.editor.open,
       rangePick: () => !self.editor.open && (self.pick !== null || (self.props.rangePick ?? false)),
+      detectiveFill: () => self.props.detectiveFill ?? false,
       pointRange: (range, phase, extend) => self.pointRange(range, phase, extend),
       cancelPick: () => self.settlePick(null),
       setResizeGuide: (g) => {
@@ -308,9 +309,15 @@ export class Grid {
     }
     // Wave 5 seams.
     if ("rangePick" in partial && !partial.rangePick && prev.rangePick) this.interaction.resetPoint();
+    if ("rangePick" in partial && partial.rangePick && this.props.detectiveFill) this.props.onDetectiveFill?.(null);
     if ("outline" in partial && partial.outline !== prev.outline) this.relayout();
     if ("pageBreakPreview" in partial && partial.pageBreakPreview !== prev.pageBreakPreview) this.invalidate("main");
     if ("traces" in partial && partial.traces !== prev.traces) this.invalidate("overlay");
+    if ("detectiveFill" in partial && partial.detectiveFill !== prev.detectiveFill) {
+      if (partial.detectiveFill) this.root.dataset.detectiveFill = "true";
+      else delete this.root.dataset.detectiveFill;
+      if (!partial.detectiveFill && this.scroller.style.cursor !== "not-allowed") this.scroller.style.cursor = "default";
+    }
     if ("invalidCells" in partial && partial.invalidCells !== prev.invalidCells) this.invalidate("overlay");
     if ("showGridlines" in partial && partial.showGridlines !== prev.showGridlines) this.invalidate("main");
     if ("decimalSep" in partial && partial.decimalSep !== prev.decimalSep) this.invalidate("main");
@@ -359,6 +366,8 @@ export class Grid {
    */
   pickRange(): Promise<RangeDto | null> {
     this.settlePick(null);
+    // A pick ends detective Fill Mode.
+    if (this.props.detectiveFill) this.props.onDetectiveFill?.(null);
     return new Promise((resolve) => {
       this.pick = { resolve };
       this.root.dataset.rangePick = "true";

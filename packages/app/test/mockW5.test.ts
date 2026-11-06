@@ -152,3 +152,39 @@ describe("detective in the browser mock", () => {
     expect(dep.some((t) => t.range.r0 === 30 && t.range.c0 === 0)).toBe(true);
   });
 });
+
+describe("detective commands in the browser mock (engine detective.rs port)", () => {
+  const pairs = (arrows: { from: { r0: number; c0: number } | null; to: { r: number; c: number } | null }[]) =>
+    arrows.map((a) => `${a.from ? `${a.from.r0},${a.from.c0}` : "*"}>${a.to ? `${a.to.r},${a.to.c}` : "*"}`).sort();
+  it("adds a level per trace, removes the outermost, and AutoRefresh replays after edits", async () => {
+    const client = new WebMockClient();
+    const info = await client.newWorkbook();
+    const doc = info.doc;
+    const sheet = info.sheets[0]!.id;
+    const set = (r: number, c: number, input: string) => client.apply(doc, tx([{ type: "setCellInput", sheet, r, c, input }]));
+    await set(0, 0, "1");
+    await set(0, 1, "=A1");
+    await set(0, 2, "=B1");
+    let st = await client.detective(doc, sheet, 0, 2, "tracePrecedents");
+    expect(st.done).toBe(true);
+    expect(pairs(st.arrows)).toEqual(["0,1>0,2"]);
+    st = await client.detective(doc, sheet, 0, 2, "tracePrecedents");
+    expect(pairs(st.arrows)).toEqual(["0,0>0,1", "0,1>0,2"]);
+    expect((await client.detective(doc, sheet, 0, 2, "tracePrecedents")).done).toBe(false);
+    st = await client.detective(doc, sheet, 0, 2, "removePrecedents");
+    expect(pairs(st.arrows)).toEqual(["0,1>0,2"]);
+    // AutoRefresh: the formula now reads D1 as well.
+    const res = await set(0, 2, "=B1+D1");
+    expect(res.detectiveChanged).toBe(true);
+    expect(pairs((await client.detectiveArrows(doc, sheet)).arrows)).toEqual(["0,1>0,2", "0,3>0,2"]);
+    // Off: stale until Refresh Traces.
+    await client.setDetectiveAuto(doc, false);
+    await set(0, 2, "=B1");
+    expect(pairs((await client.detectiveArrows(doc, sheet)).arrows)).toEqual(["0,1>0,2", "0,3>0,2"]);
+    st = await client.detective(doc, sheet, 0, 0, "refresh");
+    expect(pairs(st.arrows)).toEqual(["0,1>0,2"]);
+    st = await client.detective(doc, sheet, 0, 0, "removeAll");
+    expect(st.arrows).toEqual([]);
+    expect(st.hasOps).toBe(false);
+  });
+});

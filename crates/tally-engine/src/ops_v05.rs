@@ -165,6 +165,12 @@ pub fn apply(
             preset,
             options,
         } => crate::cellstyles::apply_auto_format(wb, *sheet, range, preset, options, fx),
+        Op::ApplyAutoFormatCustom {
+            sheet,
+            range,
+            cells,
+            autofit,
+        } => crate::cellstyles::apply_auto_format_custom(wb, *sheet, range, cells, *autofit, fx),
         Op::CopySheet { sheet, name, index } => {
             crate::tools::copy_sheet(wb, *sheet, name.as_deref(), *index, fx)
         }

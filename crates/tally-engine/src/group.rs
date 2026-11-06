@@ -15,6 +15,8 @@
 //! `AddConditionalFormat`, `AddValidation`, `InsertRows`, `DeleteRows`,
 //! `InsertCols`, `DeleteCols`, `InsertCells`, `DeleteCells`, `SetColWidth`,
 //! `SetRowHeight`, `SetRowsHidden`, `SetColsHidden`, `AutoFitRows`,
+//! `ApplyAutoFormat`, `ApplyAutoFormatCustom` (AOO's `ScDocFunc::AutoFormat`
+//! runs on every marked sheet),
 //! `Paste`, `PasteSpecial`, `FillRange`, `FillSeries` and `ReplaceAll`
 //! (with `sheet` set).
 
@@ -62,6 +64,8 @@ pub const GROUP_OPS: &[&str] = &[
     "setRowsHidden",
     "setColsHidden",
     "autoFitRows",
+    "applyAutoFormat",
+    "applyAutoFormatCustom",
     "paste",
     "pasteSpecial",
     "fillRange",
@@ -97,6 +101,8 @@ fn group_sheet_mut(op: &mut Op) -> Option<&mut SheetId> {
         | Op::SetRowsHidden { sheet, .. }
         | Op::SetColsHidden { sheet, .. }
         | Op::AutoFitRows { sheet, .. }
+        | Op::ApplyAutoFormat { sheet, .. }
+        | Op::ApplyAutoFormatCustom { sheet, .. }
         | Op::Paste { sheet, .. }
         | Op::PasteSpecial { sheet, .. }
         | Op::FillRange { sheet, .. }

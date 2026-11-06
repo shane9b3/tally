@@ -61,6 +61,8 @@ const PROP_KEYS = [
   "outline",
   "pageBreakPreview",
   "traces",
+  "detectiveFill",
+  "onDetectiveFill",
   "aria",
   "objects",
   "onViewportChange",

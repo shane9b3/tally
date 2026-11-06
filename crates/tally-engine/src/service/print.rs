@@ -625,9 +625,28 @@ mod pdf {
             }
         }
         let mut views: HashMap<(u32, u32), CellView> = HashMap::new();
+        let sheet_protected = sheet.meta.protection.is_some();
         if let Ok(blocks) = crate::service::view::cells(wb, version, page.sheet, &ranges) {
             for b in blocks {
-                for v in b.cells {
+                for mut v in b.cells {
+                    // AOO `lcl_HidePrint` (printfun.cxx): "Hide when
+                    // printing" empties the cell text whether or not the
+                    // sheet is protected; fill and borders still print. With
+                    // formulas printed, a hidden formula on a protected sheet
+                    // empties the cell too (`ScDocument::FillInfo`).
+                    let prot = crate::protection::cell_protection(wb, StyleId(v.style));
+                    let hidden_formula = setup.print_formulas
+                        && sheet_protected
+                        && prot.hidden_formula
+                        && v.flags & cell_flags::FORMULA != 0;
+                    if prot.hide_print || hidden_formula {
+                        v.text.clear();
+                        v.kind = ValueKind::Empty;
+                        v.num = None;
+                        v.flags &= !cell_flags::FORMULA;
+                        v.cf_bar = None;
+                        v.cf_icon = None;
+                    }
                     views.insert((v.r, v.c), v);
                 }
             }
@@ -940,5 +959,191 @@ mod pdf {
             assert!(is_general_number_text("-12.5", '.') && is_general_number_text("1.5E+10", '.'));
             assert!(!is_general_number_text("$1.00", '.') && !is_general_number_text("1,000", '.'));
         }
+    }
+}
+
+#[cfg(all(test, feature = "pdf"))]
+mod hide_print_tests {
+    #![allow(clippy::unwrap_used)]
+
+    use tally_api::{
+        DocumentService, Op, PageSetupDto, PrintOptionsDto, PrintSheets, RangeDto, Transaction,
+    };
+    use tally_io_pdf::Item;
+
+    use super::super::EngineService;
+
+    fn tx(ops: Vec<Op>) -> Transaction {
+        Transaction {
+            ops,
+            label: None,
+            selection_before: None,
+            selection_after: None,
+            group: None,
+        }
+    }
+
+    fn cell(r: u32, c: u32) -> Vec<RangeDto> {
+        vec![RangeDto {
+            r0: r,
+            c0: c,
+            r1: r,
+            c1: c,
+        }]
+    }
+
+    /// The cell texts of the job's first page.
+    fn printed(svc: &mut EngineService, doc: tally_api::DocId) -> Vec<String> {
+        let opts = PrintOptionsDto {
+            sheets: PrintSheets::Active,
+            selection: None,
+            suppress_empty_pages: true,
+            page_from: None,
+            page_to: None,
+            active_sheet: None,
+            page_ranges: None,
+        };
+        let info = svc.prepare_print_job(doc, &opts, &[]).unwrap();
+        let job = svc.job(info.job).unwrap();
+        job.job.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn protect(
+        sheet: u32,
+        (r, c): (u32, u32),
+        hidden: bool,
+        hidden_formula: bool,
+        hide_print: bool,
+    ) -> Op {
+        Op::SetCellProtection {
+            sheet,
+            ranges: cell(r, c),
+            locked: None,
+            hidden_formula: Some(hidden_formula),
+            hidden: Some(hidden),
+            hide_print: Some(hide_print),
+        }
+    }
+
+    #[test]
+    fn hide_when_printing_omits_the_text_with_or_without_sheet_protection() {
+        let mut svc = EngineService::new();
+        let info = svc.new_workbook(None).unwrap();
+        let (doc, sheet) = (info.doc, info.sheets[0].id);
+        let input = |r: u32, c: u32, t: &str| Op::SetCellInput {
+            sheet,
+            r,
+            c,
+            input: t.into(),
+        };
+        let p = protect(sheet, (0, 1), false, false, true);
+        svc.apply(
+            doc,
+            tx(vec![
+                input(0, 0, "shown"),
+                input(0, 1, "secret"),
+                input(1, 1, "=1+2"),
+                p,
+            ]),
+        )
+        .unwrap();
+        let t = printed(&mut svc, doc);
+        assert!(t.contains(&"shown".to_string()), "{t:?}");
+        assert!(t.contains(&"3".to_string()), "{t:?}");
+        assert!(!t.contains(&"secret".to_string()), "{t:?}");
+        // Still on screen: hide-print only acts on output.
+        let v = svc.cells(doc, sheet, &cell(0, 1)).unwrap();
+        assert_eq!(v[0].cells[0].text, "secret");
+        // Protected: also omitted ("Hide all" is not set, so shown on screen).
+        svc.apply(
+            doc,
+            tx(vec![Op::ProtectSheet {
+                sheet,
+                password: None,
+                options: None,
+            }]),
+        )
+        .unwrap();
+        let t = printed(&mut svc, doc);
+        assert!(!t.contains(&"secret".to_string()), "{t:?}");
+        assert_eq!(
+            svc.cells(doc, sheet, &cell(0, 1)).unwrap()[0].cells[0].text,
+            "secret"
+        );
+    }
+
+    #[test]
+    fn hide_all_and_hidden_formulas_print_empty_only_on_a_protected_sheet() {
+        let mut svc = EngineService::new();
+        let info = svc.new_workbook(None).unwrap();
+        let (doc, sheet) = (info.doc, info.sheets[0].id);
+        svc.apply(
+            doc,
+            tx(vec![
+                Op::SetCellInput {
+                    sheet,
+                    r: 0,
+                    c: 0,
+                    input: "hidden text".into(),
+                },
+                Op::SetCellInput {
+                    sheet,
+                    r: 1,
+                    c: 0,
+                    input: "=6*7".into(),
+                },
+                protect(sheet, (0, 0), true, false, false),
+                protect(sheet, (1, 0), false, true, false),
+            ]),
+        )
+        .unwrap();
+        let t = printed(&mut svc, doc);
+        assert!(t.contains(&"hidden text".to_string()), "{t:?}");
+        svc.apply(
+            doc,
+            tx(vec![Op::ProtectSheet {
+                sheet,
+                password: None,
+                options: None,
+            }]),
+        )
+        .unwrap();
+        let t = printed(&mut svc, doc);
+        assert!(!t.contains(&"hidden text".to_string()), "{t:?}");
+        // A hidden formula prints its result...
+        assert!(t.contains(&"42".to_string()), "{t:?}");
+        // ...but nothing when formulas are printed (AOO `FillInfo`).
+        let mut setup: PageSetupDto = svc.page_setup(doc, sheet).unwrap();
+        setup.print_formulas = Some(true);
+        svc.apply(
+            doc,
+            tx(vec![Op::UnprotectSheet {
+                sheet,
+                password: None,
+            }]),
+        )
+        .unwrap();
+        svc.apply(doc, tx(vec![Op::SetPageSetup { sheet, setup }]))
+            .unwrap();
+        let t = printed(&mut svc, doc);
+        assert!(t.contains(&"=6*7".to_string()), "{t:?}");
+        svc.apply(
+            doc,
+            tx(vec![Op::ProtectSheet {
+                sheet,
+                password: None,
+                options: None,
+            }]),
+        )
+        .unwrap();
+        let t = printed(&mut svc, doc);
+        assert!(!t.iter().any(|x| x.contains("6*7") || x == "42"), "{t:?}");
     }
 }

@@ -31,12 +31,20 @@
  * - axis labels are formatted with `numfmtLite` when a number format is
  *   set; colours come from the engine (`SeriesDataDto.color`, AOO palette).
  * - dark theme: text, axis and grid colours from the theme tokens.
+ * - date axis (T18, chartAxes.ts): when `ChartDataDto.dateAxis` is set the
+ *   category axis is an ECharts `time` axis over the category dates (gaps
+ *   for missing dates), ticks at AOO's major interval, labels in the
+ *   category number format; series data become `[time, value]` pairs.
+ * - crossing (T18): Start/End place the axis at an edge; a value crossing
+ *   or outside labels need the layout and are finished by
+ *   `applyAxisCrossFixes(instance, axisCrossFixes(chart, data, theme))`.
  */
 import type { ChartAxisDto, ChartDataDto, ChartDto, ChartKind, ChartSeriesDto, LabelPos, SeriesDataDto } from "@tally/bridge";
 import type { ComposeOption } from "echarts/core";
 import type { BarSeriesOption, CandlestickSeriesOption, CustomSeriesOption, LineSeriesOption, PieSeriesOption, RadarSeriesOption, ScatterSeriesOption } from "echarts/charts";
 import type { DatasetComponentOption, GridComponentOption, LegendComponentOption, TitleComponentOption, TooltipComponentOption } from "echarts/components";
 import { formatNumberLite } from "../numfmtLite";
+import { activeDateAxis, crossingOf, DAY_MS, dateScale, timeAxisOption, type AxisCrossFix, type DateScale } from "./chartAxes";
 import { liteLocaleOf } from "../styles/numberFormat";
 
 export type EChartsOption = ComposeOption<
@@ -163,10 +171,11 @@ interface LabelParams {
 }
 
 /** A data-label formatter for a series, or `undefined` when labels are off. */
-function labelFormatter(spec: ChartSeriesDto, data: SeriesDataDto | undefined, categories: readonly string[]): ((p: LabelParams) => string) | undefined {
+function labelFormatter(spec: ChartSeriesDto, data: SeriesDataDto | undefined, categories: readonly string[], indexMap?: readonly number[]): ((p: LabelParams) => string) | undefined {
   const l = spec.labels;
   if (!l.value && !l.percent && !l.category && !l.seriesName) return undefined;
-  return (p) => {
+  return (q) => {
+    const p = indexMap ? { ...q, dataIndex: indexMap[q.dataIndex] ?? q.dataIndex } : q;
     const parts: string[] = [];
     if (l.seriesName) parts.push(p.seriesName ?? data?.name ?? "");
     if (l.category) parts.push(categories[p.dataIndex] ?? p.name ?? "");
@@ -280,13 +289,20 @@ export function effectiveKind(chart: ChartDto, spec: ChartSeriesDto | undefined)
 }
 
 /** Trend-line and error-bar companion series for cartesian charts. */
-function statistics(chart: ChartDto, data: ChartDataDto, i: number, color: string, horizontal: boolean, isValueX: boolean): AnySeries[] {
+function statistics(chart: ChartDto, data: ChartDataDto, i: number, color: string, horizontal: boolean, isValueX: boolean, dates: DateScale | null = null): AnySeries[] {
   const spec = chart.series[i];
   const d = data.series[i];
   if (!spec || !d) return [];
   const out: AnySeries[] = [];
   if (spec.trend && d.trend) {
-    const pts = d.trend.points.map(([x, y]) => (isValueX ? [x, y] : [x - 1, y]));
+    const pts = d.trend.points
+      .map(([x, y]) => {
+        if (isValueX) return [x, y];
+        if (!dates) return [x - 1, y];
+        const day = dates.posAt(x);
+        return day === null ? null : [day * DAY_MS, y];
+      })
+      .filter((p): p is number[] => p !== null);
     const eq = [spec.trend.showEquation ? d.trend.equation : "", spec.trend.showR2 ? `R² = ${Math.round(d.trend.r2 * 10000) / 10000}` : ""].filter((s) => s !== "").join("\n");
     out.push({
       type: "line",
@@ -308,7 +324,8 @@ function statistics(chart: ChartDto, data: ChartDataDto, i: number, color: strin
     const items = d.values.map((y, j) => {
       const e = d.errors?.[j];
       if (y === null || !e) return null;
-      const x = isValueX ? (d.x?.[j] ?? j) : j;
+      const day = dates ? dates.pos(j) : null;
+      const x = isValueX ? (d.x?.[j] ?? j) : dates ? (day === null ? null : day * DAY_MS) : j;
       if (x === null) return null;
       return [x, y, dir === "plus" ? 0 : e[0], dir === "minus" ? 0 : e[1]];
     });
@@ -405,8 +422,50 @@ export function toEchartsOption(chart: ChartDto, data: ChartDataDto, theme: Char
   }
 }
 
+/** Deep-merges crossing properties into an axis option. */
+function withCrossing(axis: Record<string, unknown>, props: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...axis };
+  for (const [k, v] of Object.entries(props)) {
+    const base = out[k];
+    out[k] = v && typeof v === "object" && base && typeof base === "object" ? { ...(base as object), ...(v as object) } : v;
+  }
+  return out;
+}
+
+/** Crossing properties and fixes of the primary axes, by ECharts axis. */
+function crossings(chart: ChartDto, data: ChartDataDto, theme: ChartTheme): { xAxis: ReturnType<typeof crossingOf>; yAxis: ReturnType<typeof crossingOf> } {
+  const valueX = chart.kind === "scatter" || chart.kind === "bubble";
+  const catKind = valueX ? "value" : activeDateAxis(chart, data) ? "time" : "category";
+  const horizontal = chart.kind === "bar";
+  const yAxis = chart.yAxis;
+  // The model x axis' line crosses the y axis (a value axis); the y axis' line crosses the x axis.
+  const ofX = crossingOf(chart.xAxis, horizontal ? "yAxis" : "xAxis", yAxis, "value", theme.gridLine);
+  const ofY = crossingOf(yAxis, horizontal ? "xAxis" : "yAxis", chart.xAxis, catKind, theme.gridLine);
+  return horizontal ? { xAxis: ofY, yAxis: ofX } : { xAxis: ofX, yAxis: ofY };
+}
+
+/** The layout fixes `applyAxisCrossFixes` applies after `setOption` (value crossings, outside labels). */
+export function axisCrossFixes(chart: ChartDto, data: ChartDataDto, theme: ChartTheme = LIGHT_CHART_THEME): AxisCrossFix[] {
+  if (chart.kind === "pie" || chart.kind === "radar") return [];
+  if (data.problems.length > 0 && data.series.length === 0) return [];
+  const c = crossings(chart, data, theme);
+  return [c.xAxis.fix, c.yAxis.fix].filter((f): f is AxisCrossFix => f !== null);
+}
+
 function cartesianOption(chart: ChartDto, data: ChartDataDto, categories: readonly string[], theme: ChartTheme): EChartsOption {
   const horizontal = chart.kind === "bar";
+  const dateAxis = activeDateAxis(chart, data);
+  const dates = dateAxis ? dateScale(chart, dateAxis) : null;
+  // On a date axis each point is `[time, value]` (`[value, time]` for bars); empty categories are left out.
+  const kept = dates ? categories.map((_, j) => j).filter((j) => dates.pos(j) !== null) : null;
+  const onAxis = (vals: (number | null)[]): unknown[] => {
+    if (!dates || !kept) return vals;
+    return kept.map((j) => {
+      const t = (dates.pos(j) ?? 0) * DAY_MS;
+      const v = vals[j] ?? null;
+      return horizontal ? [v, t] : [t, v];
+    });
+  };
   const stacked = chart.stacking !== "none";
   const values = chart.stacking === "percent" ? percentStackByAxis(data.series.map((s) => s.values), data.series.map((_, i) => (chart.series[i]?.secondaryAxis ? 1 : 0))) : data.series.map((s) => s.values);
   const series: AnySeries[] = [];
@@ -415,11 +474,11 @@ function cartesianOption(chart: ChartDto, data: ChartDataDto, categories: readon
     const spec = chart.series[i];
     const kind = effectiveKind(chart, spec);
     const color = seriesColor(d, i);
-    const fmt = labelFormatter(spec ?? EMPTY_SPEC, d, categories);
+    const fmt = labelFormatter(spec ?? EMPTY_SPEC, d, categories, kept ?? undefined);
     const label = fmt ? { show: true, position: labelPosition(spec?.labels.position ?? "auto", kind, horizontal), formatter: fmt, color: theme.text } : { show: false };
     const common = {
       name: d.name,
-      data: values[i] ?? [],
+      data: onAxis(values[i] ?? []) as (number | null)[],
       itemStyle: { color },
       label,
       yAxisIndex: spec?.secondaryAxis ? 1 : 0,
@@ -444,13 +503,15 @@ function cartesianOption(chart: ChartDto, data: ChartDataDto, categories: readon
         connectNulls: false,
       } satisfies LineSeriesOption);
     }
-    series.push(...statistics(chart, data, i, color, horizontal, false));
+    series.push(...statistics(chart, data, i, color, horizontal, false, dates));
   });
   const fallbackFmt = data.series.find((s) => s.numberFormat)?.numberFormat ?? null;
-  const cat = categoryAxis(chart.xAxis, categories, theme);
-  const val = valueAxis(chart.yAxis, theme, chart.stacking === "percent" ? "0\"%\"" : fallbackFmt);
+  const cross = crossings(chart, data, theme);
+  const cat = withCrossing(dates ? timeAxisOption(chart.xAxis, dates, theme) : categoryAxis(chart.xAxis, categories, theme), (horizontal ? cross.yAxis : cross.xAxis).props);
+  const val = withCrossing(valueAxis(chart.yAxis, theme, chart.stacking === "percent" ? "0\"%\"" : fallbackFmt), (horizontal ? cross.xAxis : cross.yAxis).props);
   const y2 = secondary ? [valueAxis(chart.y2Axis ?? DEFAULT_AXIS, theme, fallbackFmt)] : [];
   return {
+    ...(dates ? { useUTC: true } : {}),
     grid: gridFor(chart),
     xAxis: horizontal ? [val, ...y2.map((a) => ({ ...a, position: "top" }))] : [cat],
     yAxis: horizontal ? [cat] : [val, ...y2.map((a) => ({ ...a, position: "right" }))],
@@ -473,7 +534,26 @@ const EMPTY_SPEC: ChartSeriesDto = {
   meanLine: false,
 };
 
-export const DEFAULT_AXIS: ChartAxisDto = { visible: true, title: null, min: null, max: null, major: null, minorCount: null, log: false, reverse: false, majorGrid: true, minorGrid: false, numberFormat: null };
+export const DEFAULT_AXIS: ChartAxisDto = {
+  visible: true,
+  title: null,
+  min: null,
+  max: null,
+  major: null,
+  minorCount: null,
+  log: false,
+  reverse: false,
+  majorGrid: true,
+  minorGrid: false,
+  numberFormat: null,
+  axisType: "auto",
+  timeResolution: null,
+  majorTime: null,
+  minorTime: null,
+  crosses: null,
+  labelPosition: "nearAxis",
+  markPosition: "atLabelsAndAxis",
+};
 
 function pieSeries(chart: ChartDto, data: ChartDataDto, categories: readonly string[]): PieSeriesOption[] {
   const rings = Math.max(1, data.series.length);
@@ -568,10 +648,11 @@ function scatterOption(chart: ChartDto, data: ChartDataDto, theme: ChartTheme): 
   });
   const secondary = chart.series.some((s) => s.secondaryAxis);
   const fmt = data.series.find((s) => s.numberFormat)?.numberFormat ?? null;
+  const cross = crossings(chart, data, theme);
   return {
     grid: gridFor(chart),
-    xAxis: [{ ...valueAxis(chart.xAxis, theme, null), scale: true }],
-    yAxis: [valueAxis(chart.yAxis, theme, fmt), ...(secondary ? [{ ...valueAxis(chart.y2Axis ?? DEFAULT_AXIS, theme, fmt), position: "right" }] : [])],
+    xAxis: [withCrossing({ ...valueAxis(chart.xAxis, theme, null), scale: true }, cross.xAxis.props)],
+    yAxis: [withCrossing(valueAxis(chart.yAxis, theme, fmt), cross.yAxis.props), ...(secondary ? [{ ...valueAxis(chart.y2Axis ?? DEFAULT_AXIS, theme, fmt), position: "right" }] : [])],
     series,
   } as EChartsOption;
 }
@@ -598,17 +679,21 @@ function stockOption(chart: ChartDto, data: ChartDataDto, categories: readonly s
     return i >= 0 ? data.series[i] : undefined;
   };
   const n = categories.length;
+  const dateAxis = activeDateAxis(chart, data);
+  const dates = dateAxis ? dateScale(chart, dateAxis) : null;
+  const kept = Array.from({ length: n }, (_, j) => j).filter((j) => !dates || dates.pos(j) !== null);
   const low = by("low");
   const high = by("high");
   const close = by("close");
   const open = by("open");
   const volume = by("volume");
-  const candles = Array.from({ length: n }, (_, j) => {
+  const candles = kept.map((j) => {
     const c = close?.values[j] ?? null;
     const o = open ? (open.values[j] ?? null) : c;
     const l = low?.values[j] ?? null;
     const h = high?.values[j] ?? null;
-    return o === null || c === null || l === null || h === null ? [null, null, null, null] : [o, c, l, h];
+    const row = o === null || c === null || l === null || h === null ? [null, null, null, null] : [o, c, l, h];
+    return dates ? [(dates.pos(j) ?? 0) * DAY_MS, ...row] : row;
   });
   const up = "#579d1c";
   const down = "#c5000b";
@@ -617,6 +702,7 @@ function stockOption(chart: ChartDto, data: ChartDataDto, categories: readonly s
       type: "candlestick",
       name: close?.name ?? "Stock",
       data: candles,
+      ...(dates ? { encode: { x: 0, y: [1, 2, 3, 4] } } : {}),
       itemStyle: { color: up, color0: down, borderColor: up, borderColor0: down },
       barMaxWidth: 14,
       yAxisIndex: 0,
@@ -626,18 +712,20 @@ function stockOption(chart: ChartDto, data: ChartDataDto, categories: readonly s
     series.unshift({
       type: "bar",
       name: volume.name,
-      data: volume.values,
+      data: dates ? kept.map((j) => [(dates.pos(j) ?? 0) * DAY_MS, volume.values[j] ?? null]) : volume.values,
       yAxisIndex: 1,
       itemStyle: { color: seriesColor(volume, 0), opacity: 0.6 },
       barMaxWidth: 14,
     } satisfies BarSeriesOption);
   }
   const fmt = close?.numberFormat ?? null;
+  const cross = crossings(chart, data, theme);
   return {
+    ...(dates ? { useUTC: true } : {}),
     grid: gridFor(chart),
-    xAxis: [categoryAxis(chart.xAxis, categories, theme)],
+    xAxis: [withCrossing(dates ? timeAxisOption(chart.xAxis, dates, theme) : categoryAxis(chart.xAxis, categories, theme), cross.xAxis.props)],
     yAxis: [
-      { ...valueAxis(chart.yAxis, theme, fmt), scale: true },
+      withCrossing({ ...valueAxis(chart.yAxis, theme, fmt), scale: true }, cross.yAxis.props),
       ...(volume ? [{ ...valueAxis(chart.y2Axis ?? { ...DEFAULT_AXIS, majorGrid: false }, theme, null), position: "right", max: (v: { max: number }) => v.max * 3 }] : []),
     ],
     series,

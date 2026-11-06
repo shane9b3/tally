@@ -70,6 +70,8 @@ import type { ScenarioDto } from "./generated/ScenarioDto";
 import type { SolverRequest } from "./generated/SolverRequest";
 import type { SolverResult } from "./generated/SolverResult";
 import type { TraceDto } from "./generated/TraceDto";
+import type { DetectiveAction } from "./generated/DetectiveAction";
+import type { DetectiveState } from "./generated/DetectiveState";
 import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
 import type { CellsOptions } from "./generated/CellsOptions";
 
@@ -259,6 +261,12 @@ export interface EngineClientV4 extends EngineClientV3 {
   precedents(doc: DocId, sheet: SheetId, r: number, c: number): Promise<TraceDto[]>;
   /** Detective: the formulas that read a cell. */
   dependents(doc: DocId, sheet: SheetId, r: number, c: number): Promise<TraceDto[]>;
+  /** Tools ▸ Detective: runs a command on a cell (recorded in the document's operation list); the sheet's arrows. */
+  detective(doc: DocId, sheet: SheetId, r: number, c: number, action: DetectiveAction): Promise<DetectiveState>;
+  /** The detective arrows of a sheet (`done` is false). */
+  detectiveArrows(doc: DocId, sheet: SheetId): Promise<DetectiveState>;
+  /** Tools ▸ Detective ▸ AutoRefresh for this document (the app option mirrored into the engine). */
+  setDetectiveAuto(doc: DocId, on: boolean): Promise<void>;
   /** A picture's bytes, base64 (pictures from files carry no `data` in `images`). */
   imageData(doc: DocId, sheet: SheetId, id: number): Promise<string>;
   /** A sheet's view options with the persisted split (`null` when not split). */

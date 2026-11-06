@@ -194,7 +194,7 @@ cell-value operand that does not parse (e.g. `Paid`) is taken as text.
 | `clearLink` | `sheet, ranges` | |
 | `protectSheet` | `sheet, password, options: ProtectionOptions \| null` | Locked cells can no longer be edited (`protected` OpError); `options` allow inserting/deleting rows/cols, formatting, sorting, AutoFilter. |
 | `unprotectSheet` | `sheet, password` | Wrong password → `protected`. |
-| `setCellProtection` | `sheet, ranges, locked, hiddenFormula` | Refused while the sheet is protected. Cells are locked by default. Hidden formulas show an empty `cellEditInfo.input` while protected. |
+| `setCellProtection` | `sheet, ranges, locked, hiddenFormula, hidden?, hidePrint?` | Refused while the sheet is protected. Cells are locked by default. Hidden formulas show an empty `cellEditInfo.input` while protected. Absent or `null` fields leave each cell's flag as it is. `hidden` ("Hide all") empties the cell's view, input line, copy and CSV text while the sheet is protected, and implies locked. `hidePrint` leaves the text out of print and PDF whether or not the sheet is protected. |
 | `protectDocument` / `unprotectDocument` | `password` | Structure protection: sheets cannot be added, deleted, renamed or moved. |
 | `setPageSetup` | `sheet, setup: PageSetupDto` | Print model only (no rendering yet). Header/footer placeholders `&[PAGE] &[PAGES] &[SHEET] &[FILE] &[DATE] &[TIME]`. |
 | `setPageBreak` | `sheet, axis: row \| col, at, present` | Manual break above row / left of column `at` (> 0). |
@@ -228,8 +228,11 @@ v0.3 DTO additions (all optional):
   `showValue: false` the `text` is empty.
 - `CellView.link?: string | null` (the link attribute, or the URL of a top-level
   `HYPERLINK()` formula); flags `8` = note, `16` = list validation with a dropdown,
-  `32` = link. Empty cells with a note, link, dropdown or matching conditional style get
-  a `CellView`.
+  `32` = link, `64` = content hidden by cell protection ("Hide all" on a protected
+  sheet: no text, value, link or conditional decoration). Empty cells with a note,
+  link, dropdown or matching conditional style get a `CellView`.
+- `StyleDto.protection?: CellProtectionDto | null` (`{ locked, hiddenFormula, hidden,
+  hidePrint }`; absent = protected, nothing hidden).
 - `ApplyResult.warnings?: OpError[] | null` (validation warnings/info),
   `ApplyResult.fittedRows?: DimRunPx[] | null` (`autoFitRows`),
   `ApplyResult.replaced?: number | null` (cells changed by `replaceAll`).
@@ -326,7 +329,7 @@ registered command. The shell-only `wb_export_pdf` and `wb_print` take a job id.
 | Tauri command | Arguments | Returns | `DocumentService` method | `EngineClientV4` method |
 |---|---|---|---|---|
 | `charts` | `doc, sheet` | `ChartDto[]` (id order) | `charts(doc, sheet)` | `charts(doc, sheet)` |
-| `chart_data` | `doc, sheet, id` | `ChartDataDto` (cached values, ≤ 255 series, ≤ 32,000 points, `truncated`) | `chart_data(doc, sheet, id)` | `chartData(doc, sheet, id)` |
+| `chart_data` | `doc, sheet, id` | `ChartDataDto` (cached values, ≤ 255 series, ≤ 32,000 points, `truncated`; `dateAxis` when AOO's automatic or explicit date axis applies) | `chart_data(doc, sheet, id)` | `chartData(doc, sheet, id)` |
 | `suggest_chart` | `doc, sheet, sel: RangeDto, kind: ChartKind` | `ChartDto` (region detection, labels heuristic, anchored right of the region at 16 × 9 cm; nothing is added) | `suggest_chart(doc, sheet, sel, kind)` | `suggestChart(doc, sheet, sel, kind)` |
 | `images` | `doc, sheet` | `ImageDto[]` (`data` empty) | `images(doc, sheet)` | `images(doc, sheet)` |
 | `image_data` | `doc, sheet, id` | `string` (the picture's bytes, base64, ≤ 16 MiB decoded) | `image_data(doc, sheet, id)` | `imageData(doc, sheet, id)` |
@@ -349,6 +352,9 @@ registered command. The shell-only `wb_export_pdf` and `wb_print` take a job id.
 | `solver` | `doc, req: SolverRequest` | `SolverResult` (sandboxed; nothing changes; `status`: `optimal`, `infeasible`, `unbounded`, `limit`, or `notLinear` when the model is not linear in the variables, with the current values) | `solver(doc, &req)` | `solver(doc, req)` |
 | `precedents` | `doc, sheet, r, c` | `TraceDto[]` | `precedents(doc, sheet, r, c)` | `precedents(doc, sheet, r, c)` |
 | `dependents` | `doc, sheet, r, c` | `TraceDto[]` | `dependents(doc, sheet, r, c)` | `dependents(doc, sheet, r, c)` |
+| `detective` | `doc, sheet, r, c, action` | `DetectiveState` | `detective(doc, sheet, r, c, action)` | `detective(doc, sheet, r, c, action)` |
+| `detective_arrows` | `doc, sheet` | `DetectiveState` | `detective_arrows(doc, sheet)` | `detectiveArrows(doc, sheet)` |
+| `set_detective_auto` | `doc, on` | `()` | `set_detective_auto(doc, on)` | `setDetectiveAuto(doc, on)` |
 | `view_options` | `doc, sheet` | `ViewOptionsDto` (toggles plus the persisted `split`, `null` when not split) | `view_options(doc, sheet)` | `viewOptions(doc, sheet)` |
 | `invalid_cells` | `doc, sheet, range?: RangeDto` | `CellPos[]` (Mark Invalid Data; ≤ 10,000 cells, row-major, the validation work budget applies; nothing changes) | `invalid_cells(doc, sheet, range)` | `invalidCells(doc, sheet, range)` |
 | `image_data` | `doc, sheet, id` | `string` (base64; pictures from files come without `data` in `images`) | `image_data(doc, sheet, id)` | `imageData(doc, sheet, id)` |
@@ -473,7 +479,7 @@ stand-ins).
 | Tauri command | Arguments | Returns | What it does |
 |---|---|---|---|
 | `get_prefs` | — | `string` | The `prefs.json` text (`{}` when none). The schema lives in `packages/app/src/options/prefs.ts`. |
-| `set_prefs` | `json` | `void` | Stores the text after checking it is a JSON object of at most 64 KiB. |
+| `set_prefs` | `json` | `void` | Stores the text after checking it is a JSON object of at most 1 MiB (`autoFormats`, if present, a list of at most 100 objects). |
 | `autosave_snapshot` | `doc` | `void` | Writes `<app data>/autosave/doc-<id>-<name>.ods` plus a `.json` sidecar (title, original path, time) with the engine's `save_copy`, so the document keeps its path, title and dirty flag. |
 | `list_recovery` | — | `RecoveryFile[]` (`{ path, title, savedAt }`) | Snapshots left by a crashed session. |
 | `recover_snapshot` | `path` | `WorkbookInfo` | Opens a snapshot (only inside the autosave dir) as an untitled, dirty workbook (`open_untitled(path, true)`) and deletes it. |

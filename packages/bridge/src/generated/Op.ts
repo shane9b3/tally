@@ -583,7 +583,16 @@ locked: boolean | null,
 /**
  * Hide formulas (`None`: unchanged).
  */
-hiddenFormula: boolean | null, } | { "type": "protectDocument", 
+hiddenFormula: boolean | null, 
+/**
+ * Hide all: the content is not shown while the sheet is protected
+ * (`None` or absent: unchanged).
+ */
+hidden?: boolean | null, 
+/**
+ * Hide when printing (`None` or absent: unchanged).
+ */
+hidePrint?: boolean | null, } | { "type": "protectDocument", 
 /**
  * Optional password.
  */
@@ -1095,7 +1104,23 @@ preset: string,
 /**
  * Which parts to apply.
  */
-options: AutoFormatOptions, } | { "type": "copySheet", 
+options: AutoFormatOptions, } | { "type": "applyAutoFormatCustom", 
+/**
+ * Sheet.
+ */
+sheet: number, 
+/**
+ * The area (at least 3 × 3 cells).
+ */
+range: RangeDto, 
+/**
+ * The 16 slot patches; a `borders` patch sets the cell's own four edges.
+ */
+cells: Array<StylePatch>, 
+/**
+ * Fit the range's column widths and row heights afterwards.
+ */
+autofit: boolean, } | { "type": "copySheet", 
 /**
  * Sheet.
  */

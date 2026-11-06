@@ -217,6 +217,9 @@ pub mod cell_flags {
     pub const VALIDATION_DROPDOWN: u8 = 16;
     /// The cell has a hyperlink (attribute or `HYPERLINK()` result).
     pub const LINK: u8 = 32;
+    /// The content is hidden by cell protection ("Hide all" on a protected
+    /// sheet): the view carries no text, value or link.
+    pub const HIDDEN: u8 = 64;
 }
 
 /// What the grid needs to draw one cell.
@@ -337,6 +340,26 @@ pub struct StyleDto {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub style_name: Option<String>,
+    /// Cell protection attributes; absent = protected, nothing hidden.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub protection: Option<CellProtectionDto>,
+}
+
+/// Cell protection attributes (Format Cells ▸ Cell Protection, AOO
+/// `ScProtectionAttr`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CellProtectionDto {
+    /// Protected (locked).
+    pub locked: bool,
+    /// Hide formula.
+    pub hidden_formula: bool,
+    /// Hide all.
+    pub hidden: bool,
+    /// Hide when printing.
+    pub hide_print: bool,
 }
 
 /// Horizontal alignment.
@@ -859,6 +882,15 @@ pub enum Op {
         locked: Option<bool>,
         /// Hide formulas (`None`: unchanged).
         hidden_formula: Option<bool>,
+        /// Hide all: the content is not shown while the sheet is protected
+        /// (`None` or absent: unchanged).
+        #[serde(default)]
+        #[ts(optional = nullable)]
+        hidden: Option<bool>,
+        /// Hide when printing (`None` or absent: unchanged).
+        #[serde(default)]
+        #[ts(optional = nullable)]
+        hide_print: Option<bool>,
     },
     /// Protects the document structure (sheets cannot be added, deleted,
     /// renamed or moved).
@@ -1287,6 +1319,19 @@ pub enum Op {
         preset: String,
         /// Which parts to apply.
         options: AutoFormatOptions,
+    },
+    /// Applies a user-defined AutoFormat: 16 style patches (a 4 × 4 grid of
+    /// first / odd inner / even inner / last row × the same column roles,
+    /// row-major) laid over `range` as AOO's `ScAutoFormatData::GetIdx` does.
+    ApplyAutoFormatCustom {
+        /// Sheet.
+        sheet: SheetId,
+        /// The area (at least 3 × 3 cells).
+        range: RangeDto,
+        /// The 16 slot patches; a `borders` patch sets the cell's own four edges.
+        cells: Vec<StylePatch>,
+        /// Fit the range's column widths and row heights afterwards.
+        autofit: bool,
     },
     // ----- v0.5: sheets, names, view, settings ----------------------------
     /// Copies a sheet (formulas in the copy point at the copy).
@@ -1785,6 +1830,12 @@ pub struct ApplyResult {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub pivots_changed: Option<bool>,
+    /// The detective arrows changed (AutoRefresh redrew them, or rows or
+    /// columns moved them): re-fetch `detective_arrows` for the visible
+    /// sheet.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub detective_changed: Option<bool>,
 }
 
 /// An id allocated by an `Add*`/`Create*` op (`ApplyResult.created`).

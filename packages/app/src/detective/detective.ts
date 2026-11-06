@@ -1,34 +1,61 @@
 /**
- * Tools ▸ Detective (W5-5, §4 item 34): trace precedents / dependents
- * through the engine's `precedents()` / `dependents()` queries, drawn as
- * grid `traces` arrows; "Mark invalid data" circles the cells the
- * engine's `invalid_cells` query reports. `cellValid` / `invalidCells`
- * are the browser mock's approximation of that query.
+ * Tools ▸ Detective (W5-5, §4 item 34; AOO 4.1 parity): every command goes
+ * to the engine's `detective()` (AOO `ScDocFunc::Detective*`), which keeps
+ * the arrows and the document's operation list (Refresh Traces replays it;
+ * AutoRefresh replays it after changes and the result says
+ * `detectiveChanged`). The arrows are drawn as grid `traces`; Fill Mode
+ * (AOO's auditing shell) turns clicks on cells into Trace Precedents.
+ * "Mark invalid data" circles the cells the engine's `invalid_cells` query
+ * reports; `cellValid` / `invalidCells` are the browser mock's
+ * approximation of that query.
  */
-import type { CellPos, CellView, CmpOp, RangeDto, TraceDto, ValidationDto } from "@tally/bridge";
-import type { TraceArrow } from "@tally/grid";
+import type { CellPos, CellView, CmpOp, DetectiveAction, DetectiveArrowDto, RangeDto, ValidationDto } from "@tally/bridge";
+import { cellSelection, type TraceArrow } from "@tally/grid";
 import type { AppController } from "../controller";
 import { useUiStore } from "../stores/uiStore";
+import { useSelectionStore } from "../stores/selectionStore";
 import { useW5Store } from "../objects/w5Store";
+import { useW56Store } from "../data/store";
+import { useDocStore } from "../stores/docStore";
 import { clientV4 } from "../objects/shell";
+import { t } from "../i18n";
 
 /** Cells the browser mock scans at most for "Mark invalid data". */
 export const INVALID_SCAN_CAP = 50_000;
 
-/** Arrows for the traces of `cell` (precedents point at it, dependents away from it); other sheets are skipped. */
-export function traceArrows(cell: CellPos, traces: readonly TraceDto[], sheet: number, direction: "precedent" | "dependent"): { arrows: TraceArrow[]; otherSheets: number } {
-  const arrows: TraceArrow[] = [];
-  let otherSheets = 0;
-  for (const t of traces) {
-    if (t.sheet !== sheet) {
-      otherSheets++;
-      continue;
-    }
-    const target = { r: t.range.r0, c: t.range.c0 };
-    const kind = t.error ? "error" : direction;
-    arrows.push(direction === "precedent" ? { from: target, to: { ...cell }, kind } : { from: { ...cell }, to: target, kind });
+/** Grid arrows for the engine's arrows of a sheet. */
+export function toTraceArrows(arrows: readonly DetectiveArrowDto[]): TraceArrow[] {
+  const out: TraceArrow[] = [];
+  for (const a of arrows) {
+    if (!a.from && !a.to) continue;
+    const from = a.from ? { r: a.from.r0, c: a.from.c0 } : { ...(a.to as CellPos) };
+    const to = a.to ? { ...a.to } : { ...from };
+    out.push({
+      from,
+      to,
+      kind: a.error ? "error" : "precedent",
+      fromRange: a.from && (a.from.r0 !== a.from.r1 || a.from.c0 !== a.from.c1) ? { ...a.from } : null,
+      ...(a.from ? {} : { fromOtherSheet: true }),
+      ...(a.to ? {} : { toOtherSheet: true }),
+    });
   }
-  return { arrows, otherSheets };
+  return out;
+}
+
+/** The message for a command that changed nothing (AOO beeps). */
+function nothingMessage(action: DetectiveAction): string {
+  switch (action) {
+    case "tracePrecedents":
+      return t("detective.none.tracePrecedents", "No further precedents to trace.");
+    case "traceDependents":
+      return t("detective.none.traceDependents", "No further dependents to trace.");
+    case "traceError":
+      return t("detective.none.traceError", "This cell holds no error to trace.");
+    case "refresh":
+      return t("detective.none.refresh", "There are no traces to refresh.");
+    default:
+      return t("detective.none.remove", "There are no traces to remove here.");
+  }
 }
 
 const inRange = (rg: RangeDto, r: number, c: number): boolean => r >= rg.r0 && r <= rg.r1 && c >= rg.c0 && c <= rg.c1;
@@ -111,45 +138,174 @@ export function invalidCells(validations: readonly ValidationDto[], cells: reado
 }
 
 export class Detective {
-  constructor(private readonly ctl: AppController) {}
+  /** The document AutoRefresh was last sent to. */
+  private syncedDoc: number | null = null;
+  /** Bumped by every arrow fetch, so a slow answer never overwrites a newer one. */
+  private seq = 0;
+
+  constructor(private readonly ctl: AppController) {
+    // AutoRefresh follows the app option (this window's toggle or another window's prefs).
+    useW56Store.subscribe((s, prev) => {
+      if (s.prefs.detectiveAuto !== prev.prefs.detectiveAuto) void this.syncAuto();
+    });
+  }
 
   private toast(kind: "info" | "error", message: string): void {
     useUiStore.getState().pushToast(kind, message);
   }
 
-  /** ⇧F7: arrows from the cells the active formula reads. */
-  async tracePrecedents(): Promise<void> {
-    await this.trace("precedent");
+  private setArrows(arrows: readonly DetectiveArrowDto[]): void {
+    useW5Store.getState().setTraces(toTraceArrows(arrows));
   }
 
-  /** ⇧F5: arrows to the formulas reading the active cell. */
-  async traceDependents(): Promise<void> {
-    await this.trace("dependent");
+  /** A command that did something modified the document (engine `dirty`): the close guard must ask. */
+  private noteDirty(doc: number, dirty: boolean): void {
+    if (!dirty) return;
+    useDocStore.setState((s) => (s.info && s.info.doc === doc && !s.info.dirty ? { info: { ...s.info, dirty: true } } : {}));
   }
 
-  private async trace(direction: "precedent" | "dependent"): Promise<void> {
+  /** Runs a command on `cell` (the active cell by default) and shows the sheet's arrows. */
+  async run(action: DetectiveAction, cell?: CellPos): Promise<boolean> {
     try {
       const doc = this.ctl.requireDoc();
       const sheet = this.ctl.sheet;
-      const cell = { ...this.ctl.selection.active };
-      const list = direction === "precedent" ? await clientV4(this.ctl).precedents(doc, sheet, cell.r, cell.c) : await clientV4(this.ctl).dependents(doc, sheet, cell.r, cell.c);
-      const { arrows, otherSheets } = traceArrows(cell, list, sheet, direction);
-      if (arrows.length === 0 && otherSheets === 0) {
-        this.toast("info", direction === "precedent" ? "This cell has no precedents (it is not a formula, or it reads nothing)." : "No formula reads this cell.");
-        return;
-      }
-      useW5Store.getState().addTraces(arrows);
-      if (otherSheets > 0) this.toast("info", `${otherSheets} ${direction === "precedent" ? "precedent" : "dependent"}${otherSheets === 1 ? "" : "s"} on other sheets (not drawn).`);
+      const at = cell ?? { ...this.ctl.selection.active };
+      const seq = ++this.seq;
+      const st = await clientV4(this.ctl).detective(doc, sheet, at.r, at.c, action);
+      this.noteDirty(doc, st.dirty);
+      if (seq === this.seq && this.ctl.sheet === sheet) this.setArrows(st.arrows);
+      if (!st.done) this.toast("info", nothingMessage(action));
+      else if (st.incomplete) this.toast("info", t("detective.incomplete", "Not every trace could be drawn: the detective stopped at its work limit."));
+      return st.done;
+    } catch (e) {
+      this.ctl.notifyError(e);
+      return false;
+    }
+  }
+
+  /** ⇧F7: one more level of arrows into the active cell. */
+  async tracePrecedents(): Promise<void> {
+    await this.run("tracePrecedents");
+  }
+
+  /** Remove Precedents: the outermost level of precedent arrows. */
+  async removePrecedents(): Promise<void> {
+    await this.run("removePrecedents");
+  }
+
+  /** ⇧F5: one more level of arrows out of the active cell. */
+  async traceDependents(): Promise<void> {
+    await this.run("traceDependents");
+  }
+
+  /** Remove Dependents: the outermost level of dependent arrows. */
+  async removeDependents(): Promise<void> {
+    await this.run("removeDependents");
+  }
+
+  /** Trace Error: arrows down to where the active cell's error starts. */
+  async traceError(): Promise<void> {
+    await this.run("traceError");
+  }
+
+  /** Refresh Traces: every arrow redrawn from the operation list. */
+  async refreshTraces(): Promise<void> {
+    await this.run("refresh");
+  }
+
+  /** Tools ▸ Detective ▸ Remove All Traces: the sheet's arrows and circles, and the operation list. */
+  async removeTraces(): Promise<void> {
+    const circles = useW5Store.getState().invalidCells.length > 0;
+    useW5Store.getState().setInvalidCells([]);
+    try {
+      const doc = this.ctl.requireDoc();
+      const sheet = this.ctl.sheet;
+      // A refresh still in flight must not redraw the removed arrows.
+      const seq = ++this.seq;
+      const st = await clientV4(this.ctl).detective(doc, sheet, 0, 0, "removeAll");
+      this.noteDirty(doc, st.dirty);
+      if (seq === this.seq && this.ctl.sheet === sheet) this.setArrows(st.arrows);
+      if (!st.done && !circles) this.toast("info", nothingMessage("removeAll"));
     } catch (e) {
       this.ctl.notifyError(e);
     }
   }
 
-  /** Tools ▸ Detective ▸ Remove All Traces. */
-  removeTraces(): void {
-    useW5Store.getState().setTraces([]);
-    useW5Store.getState().setInvalidCells([]);
+  /** Tools ▸ Detective ▸ AutoRefresh (an application option, on by default as in AOO). */
+  toggleAutoRefresh(): void {
+    const p = useW56Store.getState().prefs;
+    const on = !p.detectiveAuto;
+    void this.ctl.w56.savePrefs({ ...p, detectiveAuto: on });
+    this.toast("info", on ? t("detective.autoRefreshOn", "Detective AutoRefresh is on.") : t("detective.autoRefreshOff", "Detective AutoRefresh is off."));
   }
+
+  /** Whether AutoRefresh is on. */
+  get autoRefresh(): boolean {
+    return useW56Store.getState().prefs.detectiveAuto;
+  }
+
+  /** Sends the AutoRefresh option to the engine for this document. */
+  private async syncAuto(): Promise<void> {
+    const doc = this.ctl.info?.doc;
+    if (doc === undefined) return;
+    this.syncedDoc = doc;
+    try {
+      await clientV4(this.ctl).setDetectiveAuto(doc, useW56Store.getState().prefs.detectiveAuto);
+    } catch {
+      // An engine without the detective: nothing to keep in sync.
+    }
+  }
+
+  /** Re-reads the shown sheet's arrows. */
+  async refreshArrows(): Promise<void> {
+    const doc = this.ctl.info?.doc;
+    if (doc === undefined) return;
+    const sheet = this.ctl.sheet;
+    const seq = ++this.seq;
+    try {
+      const st = await clientV4(this.ctl).detectiveArrows(doc, sheet);
+      if (seq === this.seq && this.ctl.sheet === sheet && this.ctl.info?.doc === doc) this.setArrows(st.arrows);
+    } catch {
+      // Unsupported (older engines): no arrows.
+    }
+  }
+
+  /** A document was loaded or the shown sheet changed. */
+  onSheet(): void {
+    const doc = this.ctl.info?.doc;
+    if (doc !== undefined && doc !== this.syncedDoc) void this.syncAuto();
+    void this.refreshArrows();
+  }
+
+  /** After an engine result: AutoRefresh or a row/column change moved the arrows. */
+  afterResult(changed: boolean | null | undefined): void {
+    if (changed) void this.refreshArrows();
+  }
+
+  // -- Fill Mode (AOO `ScAuditingShell`, `SID_DETECTIVE_FILLMODE`) -----------------------
+
+  /** Ends Fill Mode (editing starts, another document loads). */
+  endFillMode(): void {
+    if (useW5Store.getState().detectiveFill) useW5Store.getState().setDetectiveFill(false);
+  }
+
+  /** Tools ▸ Detective ▸ Fill Mode: on (a click on a cell traces its precedents) or off. */
+  toggleFillMode(): void {
+    const on = !useW5Store.getState().detectiveFill;
+    useW5Store.getState().setDetectiveFill(on);
+    if (on) this.toast("info", t("detective.fillModeOn", "Fill mode: click a cell to trace its precedents. Press Esc to end."));
+  }
+
+  /** The grid's `onDetectiveFill`: a click on a cell, or `null` to end the mode (Esc, a click outside the cells). */
+  onFill = (cell: CellPos | null): void => {
+    if (cell === null) {
+      useW5Store.getState().setDetectiveFill(false);
+      return;
+    }
+    // AOO `SID_FILL_SELECT`: move the cursor there, then Trace Precedents.
+    useSelectionStore.getState().setSelection(cellSelection(cell));
+    void this.run("tracePrecedents", cell);
+  };
 
   /** Tools ▸ Detective ▸ Mark Invalid Data: circles the cells the engine's `invalid_cells` reports (≤ 10,000). */
   async markInvalid(): Promise<void> {

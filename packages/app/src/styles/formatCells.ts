@@ -92,6 +92,10 @@ export interface FormatCellsState {
   fill: number | null;
   locked: boolean;
   hiddenFormula: boolean;
+  /** Cell protection "Hide all". */
+  hidden: boolean;
+  /** Cell protection "Hide when printing". */
+  hidePrint: boolean;
   /** Font fields the selection mixed when the dialog opened. */
   mixed: MixedFields;
   /** Font fields still indeterminate (mixed and not set in the dialog). */
@@ -129,9 +133,104 @@ export function stateFromStyle(s: StyleDto | undefined, mixed: MixedFields = {})
     borderStyle: "solid",
     borderWidth: 1,
     fill: s?.fill ?? null,
-    locked: true,
-    hiddenFormula: false,
+    locked: s?.protection?.locked ?? true,
+    hiddenFormula: s?.protection?.hiddenFormula ?? false,
+    hidden: s?.protection?.hidden ?? false,
+    hidePrint: s?.protection?.hidePrint ?? false,
   };
+}
+
+/** The Cell Protection tab's four check boxes (AOO `ScProtectionAttr`). */
+export interface ProtectionState {
+  locked: boolean;
+  hiddenFormula: boolean;
+  hidden: boolean;
+  hidePrint: boolean;
+}
+
+/** The boxes over a selection: `null` = the selected cells differ (an indeterminate box). */
+export type TriProtection = { [K in keyof ProtectionState]: boolean | null };
+
+export const PROTECTION_KEYS: readonly (keyof ProtectionState)[] = ["locked", "hiddenFormula", "hidden", "hidePrint"];
+
+/** The protection attributes of a style (the default: protected, nothing hidden). */
+export function protectionOf(s: StyleDto | undefined): ProtectionState {
+  const st = stateFromStyle(s);
+  return { locked: st.locked, hiddenFormula: st.hiddenFormula, hidden: st.hidden, hidePrint: st.hidePrint };
+}
+
+/**
+ * The boxes for the selected cells' styles: a flag the styles agree on is
+ * definite, one they differ on is `null`. `undefined` styles (not loaded)
+ * are skipped; none at all gives the default.
+ */
+export function selectionProtection(styles: Iterable<StyleDto | undefined>): TriProtection {
+  let out: TriProtection | undefined;
+  for (const s of styles) {
+    if (!s) continue;
+    const p = protectionOf(s);
+    if (!out) {
+      out = { ...p };
+      continue;
+    }
+    for (const k of PROTECTION_KEYS) if (out[k] !== null && out[k] !== p[k]) out[k] = null;
+  }
+  return out ?? protectionOf(undefined);
+}
+
+/**
+ * Which boxes are enabled (AOO `ScTabPageProtection::UpdateButtons`):
+ * a checked "Hide all" disables "Protected" and "Hide formula" (it implies
+ * both); their values are kept. An indeterminate "Hide all" leaves them
+ * enabled. "Hide when printing" is always available.
+ */
+/**
+ * The styles of the selected cells from the loaded cells (as
+ * `selectionFont`): the active cell's, then each selected cell inside the
+ * used range, at most `limit` cells; cells outside the used range are
+ * empty, so one default style stands for them.
+ */
+export function selectionStyles(
+  source: { getCell(r: number, c: number): { style: number } | undefined; getStyle(id: number): StyleDto | undefined },
+  ranges: readonly { r0: number; c0: number; r1: number; c1: number }[],
+  active: { r: number; c: number },
+  used: { r0: number; c0: number; r1: number; c1: number } | null,
+  limit = 10_000,
+): (StyleDto | undefined)[] {
+  const ids = new Set<number>([source.getCell(active.r, active.c)?.style ?? 0]);
+  let budget = limit;
+  for (const rg of ranges) {
+    const r0 = used ? Math.max(rg.r0, used.r0) : 0;
+    const r1 = used ? Math.min(rg.r1, used.r1) : -1;
+    const c0 = used ? Math.max(rg.c0, used.c0) : 0;
+    const c1 = used ? Math.min(rg.c1, used.c1) : -1;
+    if (!used || r0 > rg.r0 || r1 < rg.r1 || c0 > rg.c0 || c1 < rg.c1) ids.add(0);
+    for (let r = r0; r <= r1 && budget > 0; r++) {
+      for (let c = c0; c <= c1 && budget > 0; c++, budget--) ids.add(source.getCell(r, c)?.style ?? 0);
+    }
+  }
+  return [...ids].map((id) => source.getStyle(id));
+}
+
+export function protectionEnabled(p: TriProtection): Record<keyof ProtectionState, boolean> {
+  return { hidden: true, locked: p.hidden !== true, hiddenFormula: p.hidden !== true, hidePrint: true };
+}
+
+/**
+ * The `setCellProtection` fields: a definite value for each box the user
+ * changed, `null` ("leave each cell as it is") for the others; `null`
+ * when nothing changed.
+ */
+export function protectionChange(before: TriProtection, after: TriProtection): TriProtection | null {
+  const out: TriProtection = { locked: null, hiddenFormula: null, hidden: null, hidePrint: null };
+  let any = false;
+  for (const k of PROTECTION_KEYS) {
+    if (after[k] !== null && after[k] !== before[k]) {
+      out[k] = after[k];
+      any = true;
+    }
+  }
+  return any ? out : null;
 }
 
 function edge(line: BorderLineDto | null | undefined): BorderEdgePatch | null {

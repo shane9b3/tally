@@ -528,7 +528,7 @@ fn unlocked_runs(wb: &Workbook, s: &crate::storage::Sheet) -> Vec<[i64; 4]> {
     for c in 0..u32::try_from(s.columns.len()).unwrap_or(u32::MAX) {
         let Some(col) = s.column(c) else { continue };
         for (a, b, id) in col.styles.runs_in(0, MAX_ROWS - 1) {
-            if cell_protection(wb, id).locked {
+            if cell_protection(wb, id).is_protected() {
                 continue;
             }
             let (a, b, c) = (i64::from(a), i64::from(b), i64::from(c));
@@ -598,7 +598,7 @@ pub fn next_unlocked(
     );
     // Transformed space: (major, minor) = row-major position, negated going back.
     let mut rects: Vec<[i64; 4]> = Vec::new();
-    let runs = if cell_protection(wb, StyleId::DEFAULT).locked {
+    let runs = if cell_protection(wb, StyleId::DEFAULT).is_protected() {
         unlocked_runs(wb, s)
     } else {
         vec![[0, 0, i64::from(MAX_ROWS - 1), i64::from(MAX_COLS - 1)]]
@@ -682,12 +682,33 @@ pub fn sheet_protection(wb: &Workbook, sheet: SheetId) -> Option<&SheetProtectio
     wb.sheet(sheet).and_then(|s| s.meta.protection())
 }
 
+/// The protection attributes of a cell that are in effect: those of its
+/// style while the sheet is protected, `None` on an unprotected sheet
+/// ("Hide all" and "Hide formula" only act on a protected sheet, AOO
+/// `ScDocument::FillInfo` and `ScTabViewShell::UpdateInputHandler`).
+pub fn effective_cell_protection(
+    wb: &Workbook,
+    sheet: SheetId,
+    r: u32,
+    c: u32,
+) -> Option<CellProtectionData> {
+    let s = wb.sheet(sheet)?;
+    s.meta.protection()?;
+    Some(cell_protection(wb, s.style(r, c)))
+}
+
+/// `true` when the cell's content is hidden: "Hide all" on a protected
+/// sheet.
+pub fn cell_hidden(wb: &Workbook, sheet: SheetId, r: u32, c: u32) -> bool {
+    effective_cell_protection(wb, sheet, r, c).is_some_and(|p| p.hidden)
+}
+
 /// `true` if every cell of `range` is unlocked.
 pub fn all_unlocked(wb: &Workbook, range: &CellRange) -> bool {
     let Some(s) = wb.sheet(range.sheet) else {
         return true;
     };
-    let unlocked = |id: StyleId| !cell_protection(wb, id).locked;
+    let unlocked = |id: StyleId| !cell_protection(wb, id).is_protected();
     // Gaps between style runs have the default (locked) style.
     for c in range.c0..=range.c1 {
         let Some(col) = s.column(c) else {

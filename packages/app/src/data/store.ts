@@ -4,7 +4,7 @@
  * and view options, the document's pivot tables, the AutoInput ghost, the
  * selection modes (F8 / ⇧F8) and the UI language revision. Never undoable.
  */
-import type { MixedFields } from "../styles/formatCells";
+import type { MixedFields, TriProtection } from "../styles/formatCells";
 import type {
   CalcSettingsDto,
   CellPos,
@@ -48,8 +48,9 @@ export type W56Dialog =
   | { kind: "showOutlineLevel"; axis: "rows" | "cols"; max: number }
   | { kind: "solver"; objective: string }
   | { kind: "mergePrompt"; range: RangeDto; hidden: number; onMove: () => void; onKeep: () => void }
-  | { kind: "autoFormat"; range: RangeDto }
-  | { kind: "formatCells"; style: StyleDto; ranges: RangeDto[]; mixed?: MixedFields; sample?: string; sampleNum?: number | null }
+  | { kind: "autoFormat"; range: RangeDto; select?: string }
+  | { kind: "autoFormatName"; range: RangeDto; mode: "add" | "rename" | "delete"; name: string }
+  | { kind: "formatCells"; style: StyleDto; ranges: RangeDto[]; mixed?: MixedFields; sample?: string; sampleNum?: number | null; protection?: TriProtection }
   | { kind: "customizeToolbars" }
   | { kind: "styleEditor"; style: CellStyleDto; isNew: boolean; fromSelection: StyleDto | null }
   | { kind: "options"; tab: OptionsTab; calc: CalcSettingsDto; view: ViewOptionsDto; lists: string[][] }

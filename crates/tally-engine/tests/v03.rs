@@ -660,6 +660,8 @@ fn sheet_and_cell_protection() {
             ranges: vec![range("B1:B5")],
             locked: Some(false),
             hidden_formula: None,
+            hidden: None,
+            hide_print: None,
         }],
     );
     f.apply(vec![Op::SetCellProtection {
@@ -667,6 +669,8 @@ fn sheet_and_cell_protection() {
         ranges: vec![range("A1")],
         locked: None,
         hidden_formula: Some(true),
+        hidden: None,
+        hide_print: None,
     }]);
     not_undoable(
         &mut f,
@@ -1126,6 +1130,8 @@ fn cell_protect_info() {
         ranges: vec![range("B1")],
         locked: Some(false),
         hidden_formula: None,
+        hidden: None,
+        hide_print: None,
     }]);
     f.svc.recalc_all(f.doc).unwrap();
     assert_eq!(f.value("A1"), Value::Number(0.0));
@@ -1160,6 +1166,8 @@ fn next_unlocked_skips_locked_hidden_and_covered_cells() {
             ranges: vec![range("B2:C2"), range("E2"), range("B4:B5")],
             locked: Some(false),
             hidden_formula: None,
+            hidden: None,
+            hide_print: None,
         },
     ]);
     // Not protected: no answer.

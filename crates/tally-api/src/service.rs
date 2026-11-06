@@ -26,8 +26,8 @@ use crate::print::{
     SolverRequest, SolverResult,
 };
 use crate::tools::{
-    AutocompleteDto, CellStyleDto, CellsOptions, DatabaseRangeDto, DocumentStatsDto, NavigatorDto,
-    ScenarioDto, TraceDto, ViewOptionsDto,
+    AutocompleteDto, CellStyleDto, CellsOptions, DatabaseRangeDto, DetectiveAction, DetectiveState,
+    DocumentStatsDto, NavigatorDto, ScenarioDto, TraceDto, ViewOptionsDto,
 };
 
 /// Result type of every fallible [`DocumentService`] method.
@@ -501,6 +501,39 @@ pub trait DocumentService {
     /// Detective: the formulas that read a cell (direct dependents).
     fn dependents(&self, doc: DocId, sheet: SheetId, r: u32, c: u32) -> Result<Vec<TraceDto>> {
         let _ = (doc, sheet, r, c);
+        Err(ApiError::unsupported("the detective is not supported"))
+    }
+
+    /// Tools ▸ Detective: runs `action` on cell `(r, c)` of `sheet` as AOO
+    /// does (each Trace adds one level, each Remove takes the outermost
+    /// one away) and records it in the document's operation list, which
+    /// Refresh Traces replays and ODS saves. Not undoable; allowed on a
+    /// read-only document. Returns the sheet's arrows.
+    fn detective(
+        &mut self,
+        doc: DocId,
+        sheet: SheetId,
+        r: u32,
+        c: u32,
+        action: DetectiveAction,
+    ) -> Result<DetectiveState> {
+        let _ = (doc, sheet, r, c, action);
+        Err(ApiError::unsupported("the detective is not supported"))
+    }
+
+    /// The detective arrows of a sheet.
+    fn detective_arrows(&self, doc: DocId, sheet: SheetId) -> Result<DetectiveState> {
+        let _ = (doc, sheet);
+        Err(ApiError::unsupported("the detective is not supported"))
+    }
+
+    /// Tools ▸ Detective ▸ AutoRefresh (an application option in AOO,
+    /// `Input/DetectiveAuto`, on by default): when on, the arrows are
+    /// redrawn after a change that touched formulas (or any change while
+    /// the list has a Trace Error), and `ApplyResult::detective_changed`
+    /// says so.
+    fn set_detective_auto(&mut self, doc: DocId, on: bool) -> Result<()> {
+        let _ = (doc, on);
         Err(ApiError::unsupported("the detective is not supported"))
     }
 

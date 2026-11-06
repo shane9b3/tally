@@ -6,7 +6,8 @@
  */
 import type { ChartDataDto, ChartDto, ChartSeriesDto } from "@tally/bridge";
 import { describe, expect, it } from "vitest";
-import { AOO_PALETTE, cssColor, DEFAULT_AXIS, LIGHT_CHART_THEME, paletteColor, percentStack, percentStackByAxis, stockRoles, toEchartsOption, type EChartsOption } from "../src/charts/toEcharts";
+import { AOO_PALETTE, axisCrossFixes, cssColor, DEFAULT_AXIS, LIGHT_CHART_THEME, paletteColor, percentStack, percentStackByAxis, stockRoles, toEchartsOption, type EChartsOption } from "../src/charts/toEcharts";
+import { addUnits, applyAxisCrossFixes, axisRangeInvalid, DAY_MS, dateScale, floorUnit, isoToSerial, serialToIso } from "../src/charts/chartAxes";
 
 function series(values: string, extra: Partial<ChartSeriesDto> = {}): ChartSeriesDto {
   return { name: null, values, xValues: null, sizes: null, kind: null, secondaryAxis: false, color: null, marker: null, labels: { value: false, percent: false, category: false, seriesName: false, position: "auto" }, trend: null, errorBars: null, meanLine: false, ...extra };
@@ -220,5 +221,131 @@ describe("percent stacking per axis (review 4 M45)", () => {
     expect(out[0]).toEqual([50, 25]);
     expect(out[1]).toEqual([50, 75]);
     expect(out[2]).toEqual([100, 100]);
+  });
+});
+
+describe("date axis and crossing (T18)", () => {
+  const day = (y: number, m: number, d: number) => Date.UTC(y, m - 1, d) / DAY_MS;
+  // 5, 6, 8 and 9 January 2026: the 7th is missing.
+  const days = [day(2026, 1, 5), day(2026, 1, 6), day(2026, 1, 8), day(2026, 1, 9)];
+  const dateData = (p: Partial<ChartDataDto> = {}): Partial<ChartDataDto> => ({
+    categories: ["01/05/26", "01/06/26", "01/08/26", "01/09/26"],
+    dateAxis: { days, resolution: "days", numberFormat: "MM/DD/YY" },
+    series: [{ ...data().series[0]!, values: [10, 20, 30, 40], labels: ["10", "20", "30", "40"] }],
+    ...p,
+  });
+  const line = { kind: "line" as const, series: [series("$Sheet1.$B$2:$B$5")] };
+
+  it("snapshot: line over dates with a gap", () => {
+    expect(build(line, dateData())).toMatchSnapshot();
+  });
+
+  it("places points by date, leaving the missing day empty", () => {
+    const o = build(line, dateData());
+    const x = axes(o).x as { type: string; min: number; max: number; axisLabel: { customValues: number[]; formatter: (v: number) => string } };
+    expect(x.type).toBe("time");
+    expect(seriesOf(o)[0]?.data).toEqual(days.map((d, i) => [d * DAY_MS, (i + 1) * 10]));
+    expect(x.min).toBe(days[0]! * DAY_MS);
+    expect(x.max).toBe(days[3]! * DAY_MS);
+    // Daily labels in the category format, one per day including the gap.
+    expect(x.axisLabel.customValues.map((v) => x.axisLabel.formatter(v))).toEqual(["01/05/26", "01/06/26", "01/07/26", "01/08/26", "01/09/26"]);
+    expect(o.useUTC).toBe(true);
+  });
+
+  it("columns sit in the middle of their day and the axis runs one day further", () => {
+    const o = build({ series: [series("b")] }, dateData());
+    const x = axes(o).x as { max: number };
+    expect(x.max).toBe((days[3]! + 1) * DAY_MS);
+    expect((seriesOf(o)[0]?.data as number[][])[0]).toEqual([(days[0]! + 0.5) * DAY_MS, 10]);
+  });
+
+  it("text type keeps the category axis", () => {
+    const o = build({ ...line, xAxis: { ...DEFAULT_AXIS, majorGrid: false, axisType: "text" } }, dateData());
+    expect(axes(o).x?.type).toBe("category");
+  });
+
+  it("a fixed major interval of 2 months on a year of monthly dates", () => {
+    const monthly = Array.from({ length: 12 }, (_, i) => day(2025, i + 1, 1));
+    const c = chart({ ...line, xAxis: { ...DEFAULT_AXIS, majorTime: { number: 2, unit: "months" } } });
+    const s = dateScale(c, { days: monthly, resolution: "months", numberFormat: "MMM YY" })!;
+    expect(s.ticks.map((t) => s.label(t))).toEqual(["Jan 25", "Mar 25", "May 25", "Jul 25", "Sep 25", "Nov 25"]);
+    expect(s.major).toEqual({ number: 2, unit: "months" });
+  });
+
+  it("automatic interval: weekly for two months of daily dates (AOO rounds 3-6 days to 7)", () => {
+    const daily = Array.from({ length: 60 }, (_, i) => day(2026, 1, 1) + i);
+    const s = dateScale(chart({ ...line, legend: "none" }), { days: daily, resolution: "days", numberFormat: "MM/DD" })!;
+    // 160 mm leave room for 11 labels: 59 days / 11 = 5 days, raised to a week.
+    expect(s.ticks.length).toBe(9);
+    expect(s.major).toEqual({ number: 7, unit: "days" });
+  });
+
+  it("month arithmetic keeps the day, clamped (AOO DateHelper)", () => {
+    expect(addUnits(day(2026, 1, 31), "months", 1)).toBe(day(2026, 2, 28));
+    expect(addUnits(day(2024, 2, 29), "years", 1)).toBe(day(2025, 2, 28));
+    expect(floorUnit(day(2026, 7, 19), "years")).toBe(day(2026, 1, 1));
+  });
+
+  const crossCases: [string, Partial<ChartDto>][] = [
+    ["x crosses at start", { xAxis: { ...DEFAULT_AXIS, majorGrid: false, crosses: { type: "start" } } }],
+    ["x crosses at end", { xAxis: { ...DEFAULT_AXIS, majorGrid: false, crosses: { type: "end" } } }],
+    ["x crosses at value 50", { xAxis: { ...DEFAULT_AXIS, majorGrid: false, crosses: { type: "value", value: 50 } } }],
+    ["y crosses at category 2, labels outside start", { yAxis: { ...DEFAULT_AXIS, crosses: { type: "value", value: 2 }, labelPosition: "outsideStart" } }],
+    ["x labels near axis other side", { xAxis: { ...DEFAULT_AXIS, majorGrid: false, labelPosition: "nearAxisOtherSide" } }],
+  ];
+  for (const [name, c] of crossCases) {
+    it(`snapshot: ${name}`, () => {
+      expect({ option: build(c), fixes: axisCrossFixes(chart(c), data()) }).toMatchSnapshot();
+    });
+  }
+
+  it("crossing at a value moves the axis after layout; start/end need no layout", () => {
+    expect(axisCrossFixes(chart(), data())).toEqual([]);
+    const start = build({ xAxis: { ...DEFAULT_AXIS, crosses: { type: "start" } } });
+    expect(axes(start).x).toMatchObject({ position: "bottom", axisLine: { onZero: false } });
+    const end = build({ xAxis: { ...DEFAULT_AXIS, crosses: { type: "end" } } });
+    expect(axes(end).x).toMatchObject({ position: "top" });
+    const fixes = axisCrossFixes(chart({ xAxis: { ...DEFAULT_AXIS, crosses: { type: "value", value: 50 } } }), data());
+    expect(fixes).toEqual([{ axis: "xAxis", other: "yAxis", value: 50, mode: "move", position: "bottom", color: LIGHT_CHART_THEME.gridLine }]);
+  });
+
+  it("applyAxisCrossFixes offsets the axis to the crossing pixel", () => {
+    const calls: Record<string, unknown>[] = [];
+    const inst = {
+      getModel: () => ({ getComponent: () => ({ coordinateSystem: { getRect: () => ({ x: 40, y: 20, width: 300, height: 200 }) } }) }),
+      convertToPixel: (_f: Record<string, number>, v: number) => 220 - v * 2,
+      setOption: (o: Record<string, unknown>) => void calls.push(o),
+    };
+    applyAxisCrossFixes(inst, [{ axis: "xAxis", other: "yAxis", value: 50, mode: "move", position: "bottom", color: "#000" }]);
+    // Value 50 is at y = 120; the bottom edge is 220: offset -100.
+    expect(calls[0]).toEqual({ xAxis: [{ offset: -100 }] });
+  });
+});
+
+describe("axis editor helpers (review L4/L5)", () => {
+  it("serialToIso: none, dates in years 1-9999, null outside (shown as a number)", () => {
+    expect(serialToIso(null)).toBe("");
+    expect(serialToIso(46027)).toBe("2026-01-05");
+    expect(serialToIso(46027.75)).toBe("2026-01-05");
+    expect(serialToIso(1)).toBe("1899-12-31");
+    expect(serialToIso(-693_593)).toBe("0001-01-01");
+    expect(serialToIso(-693_594)).toBeNull();
+    expect(serialToIso(2_958_465)).toBe("9999-12-31");
+    expect(serialToIso(2_958_466)).toBeNull();
+    // Values that used to throw (RangeError) or give "+010113-09".
+    for (const v of [1e9, 3e6, -1e9, Number.NaN, Number.POSITIVE_INFINITY]) expect(serialToIso(v)).toBeNull();
+  });
+
+  it("isoToSerial round trips and refuses junk", () => {
+    for (const v of [-693_593, 1, 46027, 2_958_465]) expect(isoToSerial(serialToIso(v)!)).toBe(v);
+    expect(isoToSerial("")).toBeNull();
+    expect(isoToSerial("+010113-09-01")).toBeNull();
+  });
+
+  it("axisRangeInvalid: min at or above max", () => {
+    expect(axisRangeInvalid({ min: null, max: 5 })).toBe(false);
+    expect(axisRangeInvalid({ min: 1, max: 5 })).toBe(false);
+    expect(axisRangeInvalid({ min: 5, max: 5 })).toBe(true);
+    expect(axisRangeInvalid({ min: 6, max: 5 })).toBe(true);
   });
 });

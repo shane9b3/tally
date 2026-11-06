@@ -41,6 +41,13 @@ fn axis() -> ChartAxisDto {
         major_grid: false,
         minor_grid: false,
         number_format: None,
+        axis_type: tally_api::AxisType::Auto,
+        time_resolution: None,
+        major_time: None,
+        minor_time: None,
+        crosses: None,
+        label_position: tally_api::AxisLabelPos::NearAxis,
+        mark_position: tally_api::AxisMarkPos::AtLabelsAndAxis,
     }
 }
 
@@ -1095,4 +1102,169 @@ fn charts_survive_save_and_reopen() {
     let again = wb.to_data();
     assert_eq!(again.sheets[0].charts, data.sheets[0].charts);
     assert_eq!(again.sheets[0].images, data.sheets[0].images);
+}
+
+// ---------------------------------------------------------------------------
+// Date axis (T18)
+// ---------------------------------------------------------------------------
+
+/// Days since 1970-01-01 of a date.
+fn unix_day(y: i32, m: u32, d: u32) -> f64 {
+    tally_numfmt::date::serial_from_ymd(tally_types::DateEpoch::D1899, y, m, d).unwrap() - 25_569.0
+}
+
+/// A1:B5 with dates (ISO input: date-formatted numbers) and values.
+fn fill_dates(f: &mut Fixture, dates: &[&str]) {
+    let s = f.sheet;
+    let mut ops = vec![input(s, "A1", "Day"), input(s, "B1", "Sales")];
+    for (i, d) in dates.iter().enumerate() {
+        ops.push(input(s, &format!("A{}", i + 2), d));
+        ops.push(input(
+            s,
+            &format!("B{}", i + 2),
+            &((i + 1) * 10).to_string(),
+        ));
+    }
+    let res = f.apply(ops);
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+}
+
+fn date_chart(kind: ChartKind, n: usize) -> ChartDto {
+    ChartDto {
+        kind,
+        categories: Some(format!("$Sheet1.$A$2:$A${}", n + 1)),
+        series: vec![series(&format!("$Sheet1.$B$2:$B${}", n + 1), None)],
+        ..column_chart()
+    }
+}
+
+#[test]
+fn automatic_axis_is_a_date_axis_over_date_categories() {
+    let mut f = Fixture::new();
+    fill_dates(
+        &mut f,
+        &["2026-01-05", "2026-01-06", "2026-01-08", "2026-01-09"],
+    );
+    let (id, _) = add(&mut f, date_chart(ChartKind::Line, 4));
+    let d = f.svc.chart_data(f.doc, f.sheet, id).unwrap();
+    let axis = d.date_axis.expect("AOO's automatic type picks a date axis");
+    // Two dates share a month: resolution days (calculateTimeResolutionOnXAxis).
+    assert_eq!(axis.resolution, tally_api::TimeUnit::Days);
+    assert_eq!(
+        axis.days,
+        vec![
+            Some(unix_day(2026, 1, 5)),
+            Some(unix_day(2026, 1, 6)),
+            Some(unix_day(2026, 1, 8)),
+            Some(unix_day(2026, 1, 9))
+        ]
+    );
+    assert!(axis.number_format.is_some_and(|f| f.contains("YY")));
+    // Text type, and kinds without a date axis (pie, net), keep text categories.
+    let mut text = date_chart(ChartKind::Line, 4);
+    text.x_axis.axis_type = tally_api::AxisType::Text;
+    let (id, _) = add(&mut f, text);
+    assert!(f
+        .svc
+        .chart_data(f.doc, f.sheet, id)
+        .unwrap()
+        .date_axis
+        .is_none());
+    let (id, _) = add(&mut f, date_chart(ChartKind::Pie, 4));
+    assert!(f
+        .svc
+        .chart_data(f.doc, f.sheet, id)
+        .unwrap()
+        .date_axis
+        .is_none());
+}
+
+#[test]
+fn date_axis_resolution_and_explicit_type() {
+    let mut f = Fixture::new();
+    // One date per month: months; the days floor to the 1st.
+    fill_dates(&mut f, &["2026-01-15", "2026-02-15", "2026-04-15"]);
+    let (id, _) = add(&mut f, date_chart(ChartKind::Column, 3));
+    let d = f
+        .svc
+        .chart_data(f.doc, f.sheet, id)
+        .unwrap()
+        .date_axis
+        .unwrap();
+    assert_eq!(d.resolution, tally_api::TimeUnit::Months);
+    assert_eq!(d.days[0], Some(unix_day(2026, 1, 1)));
+    assert_eq!(d.days[2], Some(unix_day(2026, 4, 1)));
+    // An explicit resolution wins.
+    let mut c = date_chart(ChartKind::Column, 3);
+    c.x_axis.time_resolution = Some(tally_api::TimeUnit::Years);
+    let (id, _) = add(&mut f, c);
+    let d = f
+        .svc
+        .chart_data(f.doc, f.sheet, id)
+        .unwrap()
+        .date_axis
+        .unwrap();
+    assert_eq!(d.days, vec![Some(unix_day(2026, 1, 1)); 3]);
+    // Plain numbers: automatic stays text, Date places them as dates.
+    let mut f = Fixture::new();
+    fill_dates(&mut f, &["46000", "46001", "46003"]);
+    let s = f.sheet;
+    let (id, _) = add(&mut f, date_chart(ChartKind::Line, 3));
+    assert!(f
+        .svc
+        .chart_data(f.doc, f.sheet, id)
+        .unwrap()
+        .date_axis
+        .is_none());
+    let mut c = date_chart(ChartKind::Line, 3);
+    c.x_axis.axis_type = tally_api::AxisType::Date;
+    let (id, _) = add(&mut f, c);
+    let d = f
+        .svc
+        .chart_data(f.doc, f.sheet, id)
+        .unwrap()
+        .date_axis
+        .unwrap();
+    assert_eq!(d.days[2], Some(46_003.0 - 25_569.0));
+    // A text category makes it a text axis even when Date is asked for.
+    f.apply(vec![input(s, "A3", "later")]);
+    let d = f.svc.chart_data(f.doc, f.sheet, id).unwrap();
+    assert!(d.date_axis.is_none());
+}
+
+#[test]
+fn axis_settings_validated_and_kept() {
+    let mut f = Fixture::new();
+    fill_data(&mut f);
+    let mut c = column_chart();
+    c.x_axis.axis_type = tally_api::AxisType::Date;
+    c.x_axis.major_time = Some(tally_api::TimeIntervalDto {
+        number: 2,
+        unit: tally_api::TimeUnit::Months,
+    });
+    c.x_axis.crosses = Some(tally_api::AxisCross::Value { value: 50.0 });
+    c.x_axis.label_position = tally_api::AxisLabelPos::OutsideStart;
+    c.y_axis.crosses = Some(tally_api::AxisCross::End);
+    c.y_axis.mark_position = tally_api::AxisMarkPos::AtAxis;
+    let (id, _) = add(&mut f, c.clone());
+    let got = charts(&f).into_iter().find(|x| x.id == id).unwrap();
+    assert_eq!(got.x_axis, c.x_axis);
+    assert_eq!(got.y_axis, c.y_axis);
+    let mut bad = column_chart();
+    bad.x_axis.major_time = Some(tally_api::TimeIntervalDto {
+        number: 0,
+        unit: tally_api::TimeUnit::Days,
+    });
+    let res = f.apply(vec![Op::AddChart {
+        sheet: f.sheet,
+        chart: bad,
+    }]);
+    assert!(!res.errors.is_empty());
+    let mut bad = column_chart();
+    bad.y_axis.crosses = Some(tally_api::AxisCross::Value { value: f64::NAN });
+    let res = f.apply(vec![Op::AddChart {
+        sheet: f.sheet,
+        chart: bad,
+    }]);
+    assert!(!res.errors.is_empty());
 }

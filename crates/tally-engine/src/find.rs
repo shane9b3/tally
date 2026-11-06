@@ -101,6 +101,12 @@ fn searched_text(
     content: &CellContent,
     in_formulas: bool,
 ) -> Option<String> {
+    // "Hide all" cells of a protected sheet are not searchable either, as
+    // they are not shown or copied (deviation: AOO's `ScTable::Search`
+    // finds them).
+    if crate::protection::cell_hidden(wb, addr.sheet, addr.row, addr.col) {
+        return None;
+    }
     if in_formulas {
         // Hidden formulas on a protected sheet are not searchable
         // (security review 3, LOW-9), as they are not shown or copied.

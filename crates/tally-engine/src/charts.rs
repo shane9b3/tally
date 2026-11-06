@@ -16,19 +16,21 @@
 use std::sync::Arc;
 
 use tally_api::{
-    ApiError, ChartAnchor, ChartAxisDto, ChartDataDto, ChartDto, ChartKind, ChartRef,
-    ChartSeriesDto, ChartSourceDto, DataLabelsDto, ErrorBarDir, ErrorBarKind, ErrorBarsDto,
-    LabelPos, LegendPos, MarkerShape, RangeDto, SeriesDataDto, SeriesName, Stacking, StockVariant,
+    ApiError, AxisCross, AxisLabelPos, AxisMarkPos, AxisType, ChartAnchor, ChartAxisDto,
+    ChartDataDto, ChartDto, ChartKind, ChartRef, ChartSeriesDto, ChartSourceDto, DataLabelsDto,
+    DateAxisDto, ErrorBarDir, ErrorBarKind, ErrorBarsDto, LabelPos, LegendPos, MarkerShape,
+    RangeDto, SeriesDataDto, SeriesName, Stacking, StockVariant, TimeIntervalDto, TimeUnit,
     TrendDataDto, TrendKind, TrendLineDto,
 };
 use tally_formula::{
     print_expr, BinOp, CellRefExpr, Expr, RefCoord, RefExpr, ResolvedRef, SheetRef,
 };
 use tally_model::{
-    CellRangeLocal, ChartAnchorData, ChartAxisData, ChartData, ChartKindData, ChartRangeData,
-    ChartSeriesData, ChartSourceData, ChartValuesData, DataLabelsData, ErrorBarDirData,
-    ErrorBarKindData, ErrorBarsData, ImageData, LabelPosData, LegendPosData, MarkerShapeData,
-    SeriesNameData, StackingData, StockVariantData, TrendKindData, TrendLineData,
+    AxisCrossData, AxisLabelPosData, AxisMarkPosData, AxisTypeData, CellRangeLocal,
+    ChartAnchorData, ChartAxisData, ChartData, ChartKindData, ChartRangeData, ChartSeriesData,
+    ChartSourceData, ChartValuesData, DataLabelsData, ErrorBarDirData, ErrorBarKindData,
+    ErrorBarsData, ImageData, LabelPosData, LegendPosData, MarkerShapeData, SeriesNameData,
+    StackingData, StockVariantData, TimeIntervalData, TimeUnitData, TrendKindData, TrendLineData,
 };
 use tally_types::{CellAddr, CellRange, SheetId, Value, MAX_COLS, MAX_ROWS};
 
@@ -714,6 +716,33 @@ fn axis_from_api(a: &ChartAxisDto, what: &str) -> Result<ChartAxisData, ApiError
             "{what}: a logarithmic axis needs a positive minimum"
         )));
     }
+    let interval = |t: Option<TimeIntervalDto>, which: &str| -> Result<_, ApiError> {
+        match t {
+            Some(t) if t.number == 0 || t.number > MAX_TIME_INTERVAL => {
+                Err(ApiError::invalid_argument(format!(
+                    "{what}: the {which} interval must be 1 to {MAX_TIME_INTERVAL}"
+                )))
+            }
+            Some(t) => Ok(Some(TimeIntervalData {
+                number: t.number,
+                unit: time_unit_from_api(t.unit),
+            })),
+            None => Ok(None),
+        }
+    };
+    let crosses = match a.crosses {
+        Some(AxisCross::Value { value }) => {
+            if !value.is_finite() {
+                return Err(ApiError::invalid_argument(format!(
+                    "{what}: the crossing value is not a number"
+                )));
+            }
+            Some(AxisCrossData::Value(value))
+        }
+        Some(AxisCross::Start) => Some(AxisCrossData::Start),
+        Some(AxisCross::End) => Some(AxisCrossData::End),
+        None => None,
+    };
     Ok(ChartAxisData {
         visible: a.visible,
         title: text_opt(&a.title, "axis title")?,
@@ -726,7 +755,47 @@ fn axis_from_api(a: &ChartAxisDto, what: &str) -> Result<ChartAxisData, ApiError
         major_grid: a.major_grid,
         minor_grid: a.minor_grid,
         number_format: text_opt(&a.number_format, "number format")?,
+        axis_type: match a.axis_type {
+            AxisType::Auto => AxisTypeData::Auto,
+            AxisType::Text => AxisTypeData::Text,
+            AxisType::Date => AxisTypeData::Date,
+        },
+        time_resolution: a.time_resolution.map(time_unit_from_api),
+        major_time: interval(a.major_time, "major")?,
+        minor_time: interval(a.minor_time, "minor")?,
+        crosses,
+        label_position: match a.label_position {
+            AxisLabelPos::NearAxis => AxisLabelPosData::NearAxis,
+            AxisLabelPos::NearAxisOtherSide => AxisLabelPosData::NearAxisOtherSide,
+            AxisLabelPos::OutsideStart => AxisLabelPosData::OutsideStart,
+            AxisLabelPos::OutsideEnd => AxisLabelPosData::OutsideEnd,
+        },
+        mark_position: match a.mark_position {
+            AxisMarkPos::AtLabelsAndAxis => AxisMarkPosData::AtLabelsAndAxis,
+            AxisMarkPos::AtLabels => AxisMarkPosData::AtLabels,
+            AxisMarkPos::AtAxis => AxisMarkPosData::AtAxis,
+        },
     })
+}
+
+/// Largest date axis interval count (AOO's spin field allows more, but
+/// 10,000 years is past every serial date).
+const MAX_TIME_INTERVAL: u32 = 10_000;
+
+fn time_unit_from_api(u: TimeUnit) -> TimeUnitData {
+    match u {
+        TimeUnit::Days => TimeUnitData::Days,
+        TimeUnit::Months => TimeUnitData::Months,
+        TimeUnit::Years => TimeUnitData::Years,
+    }
+}
+
+fn time_unit_to_api(u: TimeUnitData) -> TimeUnit {
+    match u {
+        TimeUnitData::Days => TimeUnit::Days,
+        TimeUnitData::Months => TimeUnit::Months,
+        TimeUnitData::Years => TimeUnit::Years,
+    }
 }
 
 fn axis_to_api(a: &ChartAxisData) -> ChartAxisDto {
@@ -742,6 +811,36 @@ fn axis_to_api(a: &ChartAxisData) -> ChartAxisDto {
         major_grid: a.major_grid,
         minor_grid: a.minor_grid,
         number_format: a.number_format.clone(),
+        axis_type: match a.axis_type {
+            AxisTypeData::Auto => AxisType::Auto,
+            AxisTypeData::Text => AxisType::Text,
+            AxisTypeData::Date => AxisType::Date,
+        },
+        time_resolution: a.time_resolution.map(time_unit_to_api),
+        major_time: a.major_time.map(|t| TimeIntervalDto {
+            number: t.number,
+            unit: time_unit_to_api(t.unit),
+        }),
+        minor_time: a.minor_time.map(|t| TimeIntervalDto {
+            number: t.number,
+            unit: time_unit_to_api(t.unit),
+        }),
+        crosses: a.crosses.map(|c| match c {
+            AxisCrossData::Start => AxisCross::Start,
+            AxisCrossData::End => AxisCross::End,
+            AxisCrossData::Value(value) => AxisCross::Value { value },
+        }),
+        label_position: match a.label_position {
+            AxisLabelPosData::NearAxis => AxisLabelPos::NearAxis,
+            AxisLabelPosData::NearAxisOtherSide => AxisLabelPos::NearAxisOtherSide,
+            AxisLabelPosData::OutsideStart => AxisLabelPos::OutsideStart,
+            AxisLabelPosData::OutsideEnd => AxisLabelPos::OutsideEnd,
+        },
+        mark_position: match a.mark_position {
+            AxisMarkPosData::AtLabelsAndAxis => AxisMarkPos::AtLabelsAndAxis,
+            AxisMarkPosData::AtLabels => AxisMarkPos::AtLabels,
+            AxisMarkPosData::AtAxis => AxisMarkPos::AtAxis,
+        },
     }
 }
 
@@ -1117,6 +1216,10 @@ struct Point {
     value: Option<f64>,
     label: String,
     format: Option<Arc<str>>,
+    /// The cell holds a number (not a boolean).
+    number: bool,
+    /// The cell's number format is a date or time format.
+    date: bool,
 }
 
 /// The work and size budget of one `chart_data` call: cells visited
@@ -1252,6 +1355,8 @@ fn point_of(wb: &Workbook, addr: CellAddr) -> Point {
         value,
         label,
         format,
+        number: matches!(v, Value::Number(n) if n.is_finite()),
+        date: style.format.is_date(),
     }
 }
 
@@ -1507,6 +1612,96 @@ fn sample_points(points: Vec<[f64; 2]>, max: usize) -> Vec<[f64; 2]> {
     (0..max).map(|i| points[i * (n - 1) / (max - 1)]).collect()
 }
 
+/// A category as the date axis sees it: its number (`None`: empty or
+/// not a number), whether its format is a date format, and the format.
+type CatPoint = (Option<f64>, bool, Option<Arc<str>>);
+
+/// Chart types that can show a date category axis (AOO
+/// `ChartTypeHelper::isSupportingDateAxis`: category charts except pie
+/// and net).
+fn supports_date_axis(kind: ChartKindData) -> bool {
+    matches!(
+        kind,
+        ChartKindData::Column
+            | ChartKindData::Bar
+            | ChartKindData::Line
+            | ChartKindData::Area
+            | ChartKindData::Stock
+    )
+}
+
+/// The date axis in effect, as AOO 4.1 decides it
+/// (`ExplicitCategoriesProvider` / `lcl_fillDateCategories`): the axis
+/// type is `Date`, or `Auto` and every non-empty category is a
+/// date-formatted number; at least one category must be a date. The
+/// days are floored to the resolution, which is the axis' own or AOO's
+/// automatic one (`VSeriesPlotter::calculateTimeResolutionOnXAxis`:
+/// years, months when two neighbouring sorted dates share a year, days
+/// when two share a month).
+fn date_axis_of(wb: &Workbook, c: &ChartData, points: &[CatPoint]) -> Option<DateAxisDto> {
+    let auto = match c.x_axis.axis_type {
+        AxisTypeData::Text => return None,
+        AxisTypeData::Auto => true,
+        AxisTypeData::Date => false,
+    };
+    if !supports_date_axis(c.kind) || points.is_empty() {
+        return None;
+    }
+    let epoch = wb.settings.date_epoch;
+    let mut days: Vec<Option<i64>> = Vec::with_capacity(points.len());
+    for (v, date, _) in points {
+        match v {
+            None => days.push(None),
+            Some(_) if auto && !date => return None,
+            Some(n) => days.push(Some(tally_numfmt::date::unix_days_from_serial(epoch, *n)?)),
+        }
+    }
+    let mut sorted: Vec<i64> = days.iter().flatten().copied().collect();
+    if sorted.is_empty() {
+        return None;
+    }
+    sorted.sort_unstable();
+    let ymd = |d: i64| {
+        tally_numfmt::date::ymd_from_serial(tally_types::DateEpoch::D1899, (d + 25_569) as f64)
+            .unwrap_or((1970, 1, 1))
+    };
+    let resolution = c.x_axis.time_resolution.unwrap_or_else(|| {
+        let mut r = TimeUnitData::Years;
+        for w in sorted.windows(2) {
+            let (a, b) = (ymd(w[0]), ymd(w[1]));
+            if r == TimeUnitData::Years && a.0 == b.0 {
+                r = TimeUnitData::Months;
+            }
+            if r == TimeUnitData::Months && a.0 == b.0 && a.1 == b.1 {
+                r = TimeUnitData::Days;
+                break;
+            }
+        }
+        r
+    });
+    let floor = |d: i64| -> f64 {
+        let (y, m, _) = ymd(d);
+        let (m, day) = match resolution {
+            TimeUnitData::Days => return d as f64,
+            TimeUnitData::Months => (m, 1),
+            TimeUnitData::Years => (1, 1),
+        };
+        tally_numfmt::date::serial_from_ymd(tally_types::DateEpoch::D1899, y, m, day)
+            .map_or(d as f64, |s| s - 25_569.0)
+    };
+    let number_format = c.x_axis.number_format.clone().or_else(|| {
+        points
+            .iter()
+            .find(|p| p.0.is_some())
+            .and_then(|p| p.2.as_ref().map(|f| f.to_string()))
+    });
+    Some(DateAxisDto {
+        days: days.into_iter().map(|d| d.map(floor)).collect(),
+        resolution: time_unit_to_api(resolution),
+        number_format,
+    })
+}
+
 /// Resolves a chart's data from the cached cell values (no recalculation),
 /// within [`MAX_CHART_VISITS`] visited cells and [`MAX_CHART_POINTS`]
 /// points (`truncated` past either; the series that did not fit are
@@ -1516,6 +1711,9 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
     let hidden = c.include_hidden;
     let mut budget = DataBudget::new();
     let mut problems = Vec::new();
+    // Category points for the date axis.
+    let mut cat_points: Vec<CatPoint> = Vec::new();
+    let mut cat_any_text = false;
     let mut categories: Vec<String> = match (&c.categories, &c.literal_categories) {
         (Some(r), _) if !r.is_unset() => {
             if range_is_invalid(wb, r) {
@@ -1524,7 +1722,15 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
             } else {
                 resolve_points(wb, r, hidden, &mut budget)
                     .into_iter()
-                    .map(|p| p.label)
+                    .map(|p| {
+                        if p.number {
+                            cat_points.push((p.value, p.date, p.format.clone()));
+                        } else {
+                            cat_any_text |= !p.label.is_empty();
+                            cat_points.push((None, false, None));
+                        }
+                        p.label
+                    })
                     .collect()
             }
         }
@@ -1532,21 +1738,30 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
             let k = literal_take(t.len(), &mut budget);
             t.iter().take(k).cloned().collect()
         }
-        (_, Some(ChartValuesData::Literal(v))) => v
-            .iter()
-            .take(literal_take(v.len(), &mut budget))
-            .map(|x| {
-                x.map(|n| {
-                    crate::service::view::format_with(
-                        wb,
-                        &Value::Number(n),
-                        wb.styles.get(crate::storage::StyleId(0)),
-                    )
-                    .text
+        (_, Some(ChartValuesData::Literal(v))) => {
+            // Own data: dates when the axis has a date format or none (AOO's
+            // lcl_fillDateCategories). One axis format: parsed once.
+            let date = c
+                .x_axis
+                .number_format
+                .as_deref()
+                .is_none_or(|f| tally_numfmt::parse_format(f).is_ok_and(|f| f.is_date()));
+            v.iter()
+                .take(literal_take(v.len(), &mut budget))
+                .inspect(|x| cat_points.push((**x, date, None)))
+                .map(|x| {
+                    x.map(|n| {
+                        crate::service::view::format_with(
+                            wb,
+                            &Value::Number(n),
+                            wb.styles.get(crate::storage::StyleId(0)),
+                        )
+                        .text
+                    })
+                    .unwrap_or_default()
                 })
-                .unwrap_or_default()
-            })
-            .collect(),
+                .collect()
+        }
         _ => Vec::new(),
     };
     let mut series = Vec::new();
@@ -1582,6 +1797,8 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
                         value: v,
                         label: v.map(fmt_coef).unwrap_or_default(),
                         format: None,
+                        number: v.is_some(),
+                        date: false,
                     })
                     .collect(),
             }
@@ -1658,6 +1875,11 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
             mean,
         });
     }
+    let date_axis = if cat_any_text {
+        None
+    } else {
+        date_axis_of(wb, c, &cat_points)
+    };
     if categories.is_empty() && longest > 0 {
         categories = (1..=longest).map(|i| i.to_string()).collect();
     }
@@ -1668,6 +1890,7 @@ pub fn resolve_data(wb: &Workbook, sheet: SheetId, chart: &Chart, version: u64) 
         },
         version,
         categories,
+        date_axis,
         series,
         truncated: budget.truncated,
         problems,

@@ -112,19 +112,27 @@ const LOCALES: &[Entry] = &[
     Item("view.locale.jaJP", "日本語 (日本)", None),
 ];
 
+/// AOO 4.1 `menubar.xml` `.uno:AuditMenu`, in its order.
 const DETECTIVE: &[Entry] = &[
     Item(
         "tools.tracePrecedents",
         "Trace Precedents",
         Some("Shift+F7"),
     ),
+    Item("tools.removePrecedents", "Remove Precedents", None),
     Item(
         "tools.traceDependents",
         "Trace Dependents",
         Some("Shift+F5"),
     ),
+    Item("tools.removeDependents", "Remove Dependents", None),
     Item("tools.removeTraces", "Remove All Traces", None),
+    Sep,
+    Item("tools.traceError", "Trace Error", None),
     Item("tools.markInvalid", "Mark Invalid Data", None),
+    Item("tools.refreshTraces", "Refresh Traces", None),
+    Item("tools.autoRefreshTraces", "AutoRefresh", None),
+    Item("tools.detectiveFillMode", "Fill Mode", None),
 ];
 
 const TOOLS: &[Entry] = &[
@@ -990,6 +998,12 @@ mod tests {
             "tools.tracePrecedents",
             "tools.traceDependents",
             "tools.removeTraces",
+            "tools.removePrecedents",
+            "tools.removeDependents",
+            "tools.traceError",
+            "tools.refreshTraces",
+            "tools.autoRefreshTraces",
+            "tools.detectiveFillMode",
             "tools.autoCorrect",
             "tools.autoInput",
             "file.printPreview",

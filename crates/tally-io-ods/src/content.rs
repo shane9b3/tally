@@ -82,6 +82,8 @@ struct CellParsed {
     validation: Option<String>,
     /// `office:annotation`.
     note: Option<tally_model::NoteData>,
+    /// `table:detective/table:operation`s: (operation, `table:index`).
+    detective: Vec<(tally_model::DetectiveOpKindData, u32)>,
     /// The first `text:a` target.
     link: Option<String>,
     /// `draw:frame`s anchored in the cell (W5-1).
@@ -89,6 +91,68 @@ struct CellParsed {
     /// The standard number format of a typed value (`date`, `time`,
     /// `percentage`, `currency`), used when the cell style has none.
     std_format: Option<String>,
+}
+
+/// Most detective operations read per document (AOO keeps one list per
+/// document; the engine keeps the same number): past it the highest
+/// `table:index` values win.
+const MAX_DETECTIVE_OPS: usize = 1_000;
+
+/// Keeps the [`MAX_DETECTIVE_OPS`] entries with the highest index.
+fn trim_highest(v: &mut Vec<(tally_model::DetectiveOpKindData, u32)>) {
+    v.sort_by(|a, b| b.1.cmp(&a.1));
+    v.truncate(MAX_DETECTIVE_OPS);
+}
+
+/// The operation names of `table:operation` (AOO `ScXMLConverter::
+/// GetDetOpTypeFromString`).
+pub(crate) fn detective_op_kind(name: &str) -> Option<tally_model::DetectiveOpKindData> {
+    use tally_model::DetectiveOpKindData as K;
+    Some(match name {
+        "trace-dependents" => K::TraceDependents,
+        "trace-precedents" => K::TracePrecedents,
+        "trace-errors" => K::TraceErrors,
+        "remove-dependents" => K::RemoveDependents,
+        "remove-precedents" => K::RemovePrecedents,
+        _ => return None,
+    })
+}
+
+/// Reads `table:detective`: its `table:operation`s (with a name and a
+/// non-negative `table:index`, as `ScXMLDetectiveOperationContext`);
+/// `table:highlighted-range` (the saved arrows) is skipped, the arrows
+/// are rebuilt from the operations.
+fn parse_detective<R: BufRead>(
+    xml: &mut XmlReader<R>,
+    out: &mut Vec<(tally_model::DetectiveOpKindData, u32)>,
+) -> Result<(), OdsError> {
+    let d = xml.depth();
+    loop {
+        match xml.next()? {
+            Ev::Start(c) => {
+                if c.name == "table:operation" {
+                    let kind = c.attr("table:name").and_then(detective_op_kind);
+                    let index = c
+                        .attr("table:index")
+                        .and_then(|v| v.trim().parse::<u32>().ok());
+                    if let (Some(k), Some(i)) = (kind, index) {
+                        out.push((k, i));
+                        if out.len() > 2 * MAX_DETECTIVE_OPS {
+                            trim_highest(out);
+                        }
+                    }
+                }
+                xml.skip()?;
+            }
+            Ev::End if xml.depth() < d => break,
+            Ev::Eof => break,
+            _ => {}
+        }
+    }
+    if out.len() > MAX_DETECTIVE_OPS {
+        trim_highest(out);
+    }
+    Ok(())
 }
 
 struct Run {
@@ -241,6 +305,8 @@ struct Parser<'a> {
     warnings: Vec<String>,
     /// Frames found so far (W5-1).
     frames: Vec<crate::frame::PlacedFrame>,
+    /// Detective operations kept so far (all sheets).
+    detective_ops: usize,
     /// Shares the allocation of repeated cell texts.
     texts: TextInterner,
 }
@@ -313,6 +379,7 @@ pub(crate) fn parse_content<R: BufRead>(
         val_rects: std::collections::HashMap::new(),
         warnings: Vec::new(),
         frames: Vec::new(),
+        detective_ops: 0,
         texts: TextInterner::default(),
     };
     loop {
@@ -740,6 +807,7 @@ impl Parser<'_> {
                                     || cell.span != (1, 1)
                                     || cell.validation.is_some()
                                     || cell.note.is_some()
+                                    || !cell.detective.is_empty()
                                     || cell.link.is_some()
                                     || !cell.frames.is_empty();
                             if keep {
@@ -802,6 +870,27 @@ impl Parser<'_> {
                         r1: rep_end,
                         c1,
                     });
+                }
+            }
+            // Detective operations belong to the first cell of a repeated
+            // run only (AOO writes those cells one by one).
+            for (kind, index) in std::mem::take(&mut run.cell.detective) {
+                let op = tally_model::DetectiveOpData {
+                    row: *row,
+                    col: run.col,
+                    kind,
+                    index,
+                };
+                if self.detective_ops < MAX_DETECTIVE_OPS {
+                    self.detective_ops += 1;
+                    sheet.detective_ops.push(op);
+                } else if let Some(low) = sheet
+                    .detective_ops
+                    .iter_mut()
+                    .min_by_key(|o| o.index)
+                    .filter(|o| o.index < index)
+                {
+                    *low = op;
                 }
             }
             let cells = u64::from(run.len) * u64::from(rep);
@@ -983,6 +1072,7 @@ impl Parser<'_> {
         let mut paragraphs: Vec<String> = Vec::new();
         let mut budget = MAX_CELL_TEXT;
         let mut note = None;
+        let mut detective = Vec::new();
         let mut link: Option<String> = None;
         let mut frames: Vec<crate::frame::RawFrame> = Vec::new();
         let d = xml.depth();
@@ -994,6 +1084,8 @@ impl Parser<'_> {
                         paragraphs.push(p);
                     } else if c.name == "office:annotation" {
                         note = Some(crate::v03::parse_annotation(xml, &c)?);
+                    } else if c.name == "table:detective" {
+                        parse_detective(xml, &mut detective)?;
                     } else if c.name == "draw:frame" {
                         // A chart or picture anchored to this cell; the
                         // object is loaded later from the package.
@@ -1125,6 +1217,7 @@ impl Parser<'_> {
                 .filter(|n| !n.is_empty())
                 .map(str::to_string),
             note,
+            detective,
             link,
             frames,
         })

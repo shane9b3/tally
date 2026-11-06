@@ -22,12 +22,15 @@ export interface W5State {
   pageBreaks: PageBreaksDto | null;
   traces: TraceArrow[];
   invalidCells: CellPos[];
+  /** Tools ▸ Detective ▸ Fill Mode (clicks trace precedents). */
+  detectiveFill: boolean;
   setSplit(split: SplitState | null): void;
   setPageBreakPreview(on: boolean): void;
   setPageBreaks(b: PageBreaksDto | null): void;
   setTraces(t: TraceArrow[]): void;
   addTraces(t: TraceArrow[]): void;
   setInvalidCells(cells: CellPos[]): void;
+  setDetectiveFill(on: boolean): void;
   /** Sheet change: traces, circles and breaks are per sheet. */
   resetSheet(): void;
 }
@@ -38,12 +41,14 @@ export const useW5Store = create<W5State>()((set) => ({
   pageBreaks: null,
   traces: [],
   invalidCells: [],
+  detectiveFill: false,
   setSplit: (split) => set({ split }),
   setPageBreakPreview: (pageBreakPreview) => set({ pageBreakPreview }),
   setPageBreaks: (pageBreaks) => set({ pageBreaks }),
   setTraces: (traces) => set({ traces }),
   addTraces: (t) => set((s) => ({ traces: dedupe([...s.traces, ...t]) })),
   setInvalidCells: (invalidCells) => set({ invalidCells }),
+  setDetectiveFill: (detectiveFill) => set({ detectiveFill }),
   resetSheet: () => set({ traces: [], invalidCells: [], pageBreaks: null, split: null }),
 }));
 

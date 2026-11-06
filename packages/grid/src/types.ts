@@ -114,6 +114,12 @@ export interface TraceArrow {
   from: CellPos;
   to: CellPos;
   kind?: "precedent" | "dependent" | "error";
+  /** The source range when it is more than one cell: a box is drawn around it and the line is thicker (AOO). */
+  fromRange?: RangeDto | null;
+  /** The source is on another sheet: the arrow starts at a sheet icon above and left of `to` (`from` is ignored). */
+  fromOtherSheet?: boolean;
+  /** The target is on another sheet: the arrow ends at a sheet icon above and right of `from` (`to` is ignored). */
+  toOtherSheet?: boolean;
 }
 
 /** Screen geometry the app reads to place HTML over the canvas (CSS px). */
@@ -146,8 +152,8 @@ export interface ClientRect {
   bottom: number;
 }
 
-/** CellView flags (docs/api.md): formula, error, array, note, list dropdown, link. */
-export const CELL_FLAGS = { formula: 1, error: 2, array: 4, note: 8, dropdown: 16, link: 32 } as const;
+/** CellView flags (docs/api.md): formula, error, array, note, list dropdown, link, content hidden by cell protection. */
+export const CELL_FLAGS = { formula: 1, error: 2, array: 4, note: 8, dropdown: 16, link: 32, hidden: 64 } as const;
 
 /** What a data-source notification covers. */
 export type DirtySet = RangeDto[] | "all";
@@ -284,6 +290,11 @@ export interface GridEvents {
    * `setPageBreak` ops.
    */
   onPageBreakDrag(axis: "row" | "col", from: number, to: number, manual: boolean): void;
+  /**
+   * Detective Fill Mode (`detectiveFill`): a plain click on a cell (`cell`),
+   * or the end of the mode (`null`: Escape, or a click outside the cells).
+   */
+  onDetectiveFill(cell: CellPos | null): void;
 }
 
 /** Everything the grid is configured with. */
@@ -344,6 +355,12 @@ export interface GridProps extends Partial<GridEvents> {
   pageBreakPreview?: boolean;
   /** Detective arrows to draw, or `null`. */
   traces?: TraceArrow[] | null;
+  /**
+   * Tools ▸ Detective ▸ Fill Mode (AOO's auditing shell): the pointer is a
+   * fill cursor over cells, and clicks report `onDetectiveFill` instead of
+   * selecting or editing.
+   */
+  detectiveFill?: boolean;
   /** The ARIA mirror's inputs (sheet name, the active cell's formula). */
   aria?: AriaProps | null;
   /** Cell-anchored objects (charts, pictures) for the overlay layer, or `null`. */

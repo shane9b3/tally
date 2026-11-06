@@ -222,6 +222,8 @@ fn group_ops(s: SheetId, token: &str) -> Vec<Op> {
             ranges: rs("A1:A3"),
             locked: Some(false),
             hidden_formula: None,
+            hidden: None,
+            hide_print: None,
         },
         Op::AddConditionalFormat {
             sheet: s,
@@ -300,6 +302,18 @@ fn group_ops(s: SheetId, token: &str) -> Vec<Op> {
             sheet: s,
             start: 0,
             end: 4,
+        },
+        Op::ApplyAutoFormat {
+            sheet: s,
+            range: range("H1:J3"),
+            preset: "Blue".into(),
+            options: tally_api::AutoFormatOptions::default(),
+        },
+        Op::ApplyAutoFormatCustom {
+            sheet: s,
+            range: range("H5:J7"),
+            cells: vec![patch_fill(0xff00_00ff); 16],
+            autofit: false,
         },
         Op::Paste {
             sheet: s,
@@ -1194,4 +1208,13 @@ fn ops_run_in_order_after_the_group_copies() {
     assert!(res.errors.is_empty(), "{:?}", res.errors);
     assert_eq!(d.num(ids[0], "A1"), 5.0);
     assert_eq!(d.value(ids[1], "A1"), Value::Empty);
+}
+
+fn patch_fill(fill: u32) -> tally_api::StylePatch {
+    let mut p: tally_api::StylePatch = serde_json::from_str(
+        r#"{"bold":null,"italic":null,"underline":null,"strike":null,"fontFamily":null,"fontSizePt":null,"color":null,"fill":null,"hAlign":null,"vAlign":null,"wrap":null,"numberFormat":null}"#,
+    )
+    .unwrap();
+    p.fill = Some(fill);
+    p
 }

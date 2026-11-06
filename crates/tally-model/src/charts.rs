@@ -344,6 +344,81 @@ pub struct ChartSeriesData {
     pub mean_line: bool,
 }
 
+/// Scale type of a category axis (AOO 4.1 "Scale ▸ Type"; ODF
+/// `chartooo:axis-type`). `Auto` draws a date axis when every non-empty
+/// category cell holds a date-formatted number, else text categories.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum AxisTypeData {
+    /// Date axis for date categories, text otherwise (AOO's default for
+    /// new charts).
+    #[default]
+    Auto,
+    /// Text categories, evenly spaced.
+    Text,
+    /// Date axis: categories placed by their date value.
+    Date,
+}
+
+/// A time unit of a date axis.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum TimeUnitData {
+    /// Days.
+    #[default]
+    Days,
+    /// Months.
+    Months,
+    /// Years.
+    Years,
+}
+
+/// A date axis interval (`number` × `unit`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TimeIntervalData {
+    /// Count of units, at least 1.
+    pub number: u32,
+    /// Unit.
+    pub unit: TimeUnitData,
+}
+
+/// Where an axis crosses the other axis (AOO "Positioning ▸ Cross other
+/// axis at"). Absent = AOO's default, the other axis' value 0.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum AxisCrossData {
+    /// At the start (minimum) of the other axis.
+    Start,
+    /// At the end (maximum) of the other axis.
+    End,
+    /// At a value of the other axis; on a category axis the 1-based
+    /// category number.
+    Value(f64),
+}
+
+/// Where the labels of an axis go (AOO "Place labels").
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum AxisLabelPosData {
+    /// Next to the axis line.
+    #[default]
+    NearAxis,
+    /// Next to the axis line, on the other side.
+    NearAxisOtherSide,
+    /// Outside the plot area, at the start of the other axis.
+    OutsideStart,
+    /// Outside the plot area, at the end of the other axis.
+    OutsideEnd,
+}
+
+/// Where the interval marks of an axis go (AOO "Place marks").
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum AxisMarkPosData {
+    /// At the labels and at the axis line.
+    #[default]
+    AtLabelsAndAxis,
+    /// At the labels.
+    AtLabels,
+    /// At the axis line.
+    AtAxis,
+}
+
 /// An axis.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChartAxisData {
@@ -379,6 +454,27 @@ pub struct ChartAxisData {
     /// Number format code of the labels.
     #[serde(default)]
     pub number_format: Option<String>,
+    /// Scale type (category axes).
+    #[serde(default)]
+    pub axis_type: AxisTypeData,
+    /// Date axis resolution (`None`: automatic).
+    #[serde(default)]
+    pub time_resolution: Option<TimeUnitData>,
+    /// Date axis major interval (`None`: automatic).
+    #[serde(default)]
+    pub major_time: Option<TimeIntervalData>,
+    /// Date axis minor interval (`None`: automatic).
+    #[serde(default)]
+    pub minor_time: Option<TimeIntervalData>,
+    /// Where the axis crosses the other axis (`None`: at value 0).
+    #[serde(default)]
+    pub crosses: Option<AxisCrossData>,
+    /// Label placement.
+    #[serde(default)]
+    pub label_position: AxisLabelPosData,
+    /// Interval mark placement.
+    #[serde(default)]
+    pub mark_position: AxisMarkPosData,
 }
 
 impl Default for ChartAxisData {
@@ -395,6 +491,13 @@ impl Default for ChartAxisData {
             major_grid: false,
             minor_grid: false,
             number_format: None,
+            axis_type: AxisTypeData::Auto,
+            time_resolution: None,
+            major_time: None,
+            minor_time: None,
+            crosses: None,
+            label_position: AxisLabelPosData::NearAxis,
+            mark_position: AxisMarkPosData::AtLabelsAndAxis,
         }
     }
 }

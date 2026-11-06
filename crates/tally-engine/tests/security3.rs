@@ -964,6 +964,8 @@ fn protection_gates_page_setup_names_undo_and_find() {
             ranges: vec![rng(0, 1, 0, 1)],
             locked: Some(true),
             hidden_formula: Some(true),
+            hidden: None,
+            hide_print: None,
         },
         Op::DefineName {
             name: "nm".into(),

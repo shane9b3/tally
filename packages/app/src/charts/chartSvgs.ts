@@ -7,7 +7,8 @@
 import type { ChartDataDto, ChartDto, ChartSvgDto } from "@tally/bridge";
 import { PX_PER_MM } from "@tally/grid";
 import { echarts, type ECharts } from "./echarts";
-import { LIGHT_CHART_THEME, toEchartsOption, type ChartTheme } from "./toEcharts";
+import { applyAxisCrossFixes } from "./chartAxes";
+import { axisCrossFixes, LIGHT_CHART_THEME, toEchartsOption, type ChartTheme } from "./toEcharts";
 
 /** Largest SVG the engine accepts (`limits::MAX_SVG_BYTES`). */
 export const MAX_SVG_BYTES = 4 * 1024 * 1024;
@@ -22,6 +23,7 @@ export function renderChartSvg(chart: ChartDto, data: ChartDataDto, theme: Chart
   const inst = echarts.init(null, undefined, { renderer: "svg", ssr: true, width: size.width, height: size.height });
   try {
     inst.setOption(toEchartsOption(chart, data, theme), true);
+    applyAxisCrossFixes(inst, axisCrossFixes(chart, data, theme));
     return inst.renderToSVGString();
   } finally {
     inst.dispose();

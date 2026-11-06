@@ -587,6 +587,13 @@ fn chart_axis() -> tally_api::ChartAxisDto {
         major_grid: true,
         minor_grid: false,
         number_format: None,
+        axis_type: Default::default(),
+        time_resolution: None,
+        major_time: None,
+        minor_time: None,
+        crosses: None,
+        label_position: Default::default(),
+        mark_position: Default::default(),
     }
 }
 

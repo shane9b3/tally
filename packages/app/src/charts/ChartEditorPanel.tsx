@@ -5,7 +5,7 @@
  * is one `updateChart` transaction ("Edit chart"); text fields commit on
  * blur / Enter, pickers at once.
  */
-import type { ChartAxisDto, ChartDto, ChartKind, ChartSeriesDto, ErrorBarKind, LegendPos, Stacking, StockVariant, TrendKind } from "@tally/bridge";
+import type { AxisCross, AxisLabelPos, AxisMarkPos, AxisType, ChartAxisDto, ChartDto, ChartKind, TimeIntervalDto, TimeUnit, ChartSeriesDto, ErrorBarKind, LegendPos, Stacking, StockVariant, TrendKind } from "@tally/bridge";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cx, useController } from "../context";
 import { t } from "../i18n";
@@ -14,6 +14,7 @@ import { CHART_KINDS, KindThumb } from "./chartKinds";
 import { useW56Store } from "../data/store";
 import { selectedChart, useChartStore } from "./chartStore";
 import { DEFAULT_AXIS } from "./toEcharts";
+import { activeDateAxis, axisRangeInvalid, isoToSerial, serialToIso, supportsDateAxis } from "./chartAxes";
 import styles from "./ChartEditorPanel.module.css";
 import { arrowNav } from "../components/dialogA11y";
 
@@ -255,7 +256,17 @@ export function ChartEditorPanel() {
                 </button>
               ))}
             </div>
-            <AxisEditor axis={axisOf(axisTab)} value={!xy && axisTab === "x" ? "category" : "value"} onStage={(p) => setAxis(axisTab, p, false)} onCommit={(p) => setAxis(axisTab, p)} commitDraft={commitDraft} />
+            <AxisEditor
+              axis={axisOf(axisTab)}
+              value={!xy && axisTab === "x" ? "category" : "value"}
+              onStage={(p) => setAxis(axisTab, p, false)}
+              onCommit={(p) => setAxis(axisTab, p)}
+              commitDraft={commitDraft}
+              dateCapable={!xy && axisTab === "x" && supportsDateAxis(draft.kind)}
+              dateActive={!xy && axisTab === "x" && data !== undefined && activeDateAxis(draft, data) !== null}
+              crossing={axisTab === "y2" ? null : axisTab === "x" ? "value" : xy ? "value" : data !== undefined && activeDateAxis(draft, data) !== null ? "date" : "category"}
+              categories={data?.categories ?? []}
+            />
           </Section>
         ) : null}
 
@@ -444,20 +455,223 @@ function SeriesPicker({ series, value, onChange }: { series: ChartSeriesDto[]; v
   );
 }
 
-function AxisEditor({ axis, value, onStage, onCommit, commitDraft }: { axis: ChartAxisDto; value: "category" | "value"; onStage: (p: Partial<ChartAxisDto>) => void; onCommit: (p: Partial<ChartAxisDto>) => void; commitDraft: () => void }) {
-  const num = (k: "min" | "max" | "major") => (
-    <input className={styles.input} type="number" step="any" value={axis[k] ?? ""} onChange={(e) => onStage({ [k]: e.target.value === "" ? null : Number(e.target.value) })} onBlur={commitDraft} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+const timeUnits = (): { id: TimeUnit; label: string }[] => [
+  { id: "days", label: t("cp.days", "Days") },
+  { id: "months", label: t("cp.months", "Months") },
+  { id: "years", label: t("cp.years", "Years") },
+];
+
+
+/** A date axis interval: Automatic, or a count and a unit (AOO "Major interval" / "Minor interval"). */
+function IntervalRow({ label, value, onCommit, testId }: { label: string; value: TimeIntervalDto | null; onCommit: (v: TimeIntervalDto | null) => void; testId: string }) {
+  const cur = value ?? { number: 1, unit: "days" as TimeUnit };
+  return (
+    <Row label={label}>
+      <span className={styles.refRow}>
+        <select className={styles.select} data-testid={`${testId}-mode`} value={value ? "set" : "auto"} onChange={(e) => onCommit(e.target.value === "auto" ? null : cur)}>
+          <option value="auto">{t("cp.automatic", "Automatic")}</option>
+          <option value="set">{t("cp.fixed", "Fixed")}</option>
+        </select>
+        {value ? (
+          <>
+            <input className={styles.input} type="number" min={1} max={10000} data-testid={`${testId}-number`} defaultValue={value.number} key={`${value.number}`} onBlur={(e) => onCommit({ ...cur, number: Math.min(10000, Math.max(1, Math.trunc(Number(e.target.value) || 1))) })} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+            <select className={styles.select} data-testid={`${testId}-unit`} value={value.unit} onChange={(e) => onCommit({ ...cur, unit: e.target.value as TimeUnit })}>
+              {timeUnits().map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.label}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : null}
+      </span>
+    </Row>
   );
+}
+
+/** "Positioning": where the axis crosses the other one, and where its labels and marks go (AOO Axis ▸ Positioning). */
+function PositionEditor({ axis, crossing, categories, onCommit }: { axis: ChartAxisDto; crossing: "value" | "category" | "date"; categories: readonly string[]; onCommit: (p: Partial<ChartAxisDto>) => void }) {
+  const c = axis.crosses;
+  // AOO's default (no setting) is the other axis' value 0; on a category axis it shows as its start.
+  const mode = c === null ? (crossing === "category" ? "start" : "value") : c.type;
+  const value = c?.type === "value" ? c.value : crossing === "category" ? 1 : 0;
+  const setMode = (m: string): void => {
+    const next: AxisCross | null = m === "start" ? { type: "start" } : m === "end" ? { type: "end" } : crossing === "category" ? { type: "value", value: 1 } : null;
+    onCommit({ crosses: next });
+  };
+  const setValue = (v: number): void => onCommit({ crosses: crossing !== "category" && v === 0 ? null : { type: "value", value: v } });
+  return (
+    <>
+      <Row label={t("cp.crossAt", "Cross other axis at")}>
+        <select className={styles.select} data-testid="chart-axis-cross" value={mode} onChange={(e) => setMode(e.target.value)}>
+          <option value="start">{t("cp.crossStart", "Start")}</option>
+          <option value="end">{t("cp.crossEnd", "End")}</option>
+          <option value="value">{crossing === "category" ? t("cp.crossCategory", "Category") : t("cp.crossValue", "Value")}</option>
+        </select>
+      </Row>
+      {mode === "value" ? (
+        <Row label={crossing === "category" ? t("cp.crossCategory", "Category") : t("cp.crossValue", "Value")}>
+          {crossing === "category" ? (
+            <select className={styles.select} data-testid="chart-axis-cross-category" value={Math.round(value)} onChange={(e) => setValue(Number(e.target.value))}>
+              {categories.map((name, i) => (
+                <option key={i} value={i + 1}>
+                  {name || String(i + 1)}
+                </option>
+              ))}
+            </select>
+          ) : crossing === "date" && serialToIso(c?.type === "value" ? c.value : null) !== null ? (
+            <input className={styles.input} type="date" data-testid="chart-axis-cross-date" defaultValue={serialToIso(c?.type === "value" ? c.value : null) ?? ""} key={`d${value}`} onBlur={(e) => setValue(isoToSerial(e.target.value) ?? 0)} />
+          ) : (
+            <input className={styles.input} type="number" step="any" data-testid="chart-axis-cross-value" defaultValue={value} key={`v${value}`} onBlur={(e) => setValue(Number(e.target.value) || 0)} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+          )}
+        </Row>
+      ) : null}
+      <Row label={t("cp.placeLabels", "Place labels")}>
+        <select className={styles.select} data-testid="chart-axis-labels" value={axis.labelPosition} onChange={(e) => onCommit({ labelPosition: e.target.value as AxisLabelPos })}>
+          <option value="nearAxis">{t("cp.nearAxis", "Near axis")}</option>
+          <option value="nearAxisOtherSide">{t("cp.nearAxisOther", "Near axis (other side)")}</option>
+          <option value="outsideStart">{t("cp.outsideStart", "Outside start")}</option>
+          <option value="outsideEnd">{t("cp.outsideEnd", "Outside end")}</option>
+        </select>
+      </Row>
+      <Row label={t("cp.placeMarks", "Place marks")}>
+        <select className={styles.select} data-testid="chart-axis-marks" value={axis.markPosition} onChange={(e) => onCommit({ markPosition: e.target.value as AxisMarkPos })}>
+          <option value="atLabels">{t("cp.atLabels", "At labels")}</option>
+          <option value="atAxis">{t("cp.atAxis", "At axis")}</option>
+          <option value="atLabelsAndAxis">{t("cp.atAxisAndLabels", "At axis and labels")}</option>
+        </select>
+      </Row>
+    </>
+  );
+}
+
+function AxisEditor({
+  axis,
+  value,
+  onStage,
+  onCommit,
+  commitDraft,
+  dateCapable = false,
+  dateActive = false,
+  crossing = null,
+  categories = [],
+}: {
+  axis: ChartAxisDto;
+  value: "category" | "value";
+  onStage: (p: Partial<ChartAxisDto>) => void;
+  onCommit: (p: Partial<ChartAxisDto>) => void;
+  commitDraft: () => void;
+  /** The axis can be a date axis (category axis of a column/bar/line/area/stock chart). */
+  dateCapable?: boolean;
+  /** A date axis is drawn now (explicit, or automatic over date categories). */
+  dateActive?: boolean;
+  /** What the other axis is, for "Cross other axis at" (null: no positioning, e.g. the secondary Y axis). */
+  crossing?: "value" | "category" | "date" | null;
+  categories?: readonly string[];
+}) {
+  // AOO's Scale tab refuses a minimum at or above the maximum with a warning (STR_MIN_GREATER_MAX): keep it staged and say so.
+  const badRange = axisRangeInvalid(axis);
+  const commitRange = (): void => {
+    if (!badRange) commitDraft();
+  };
+  const num = (k: "min" | "max" | "major") => (
+    <input
+      className={styles.input}
+      type="number"
+      step="any"
+      data-testid={`chart-axis-${k}`}
+      aria-invalid={k !== "major" && badRange ? true : undefined}
+      value={axis[k] ?? ""}
+      onChange={(e) => onStage({ [k]: e.target.value === "" || !Number.isFinite(Number(e.target.value)) ? null : Number(e.target.value) })}
+      onBlur={k === "major" ? commitDraft : commitRange}
+      onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+    />
+  );
+  /** A date field; a limit outside years 1-9999 (set as a number on another chart type) stays a number field. */
+  const date = (k: "min" | "max") => {
+    const iso = serialToIso(axis[k]);
+    if (iso === null) {
+      // The field turns into a date field once the value is empty or a date: commit then (its blur never comes).
+      return (
+        <input
+          className={styles.input}
+          type="number"
+          step="any"
+          data-testid={`chart-axis-${k}`}
+          aria-invalid={badRange ? true : undefined}
+          value={axis[k] ?? ""}
+          onChange={(e) => {
+            const v = e.target.value === "" || !Number.isFinite(Number(e.target.value)) ? null : Number(e.target.value);
+            const p = { [k]: v } as Partial<ChartAxisDto>;
+            if (serialToIso(v) !== null && !axisRangeInvalid({ ...axis, ...p })) onCommit(p);
+            else onStage(p);
+          }}
+          onBlur={commitRange}
+          onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        />
+      );
+    }
+    return (
+      <input
+        className={styles.input}
+        type="date"
+        data-testid={`chart-axis-${k}-date`}
+        aria-invalid={badRange ? true : undefined}
+        defaultValue={iso}
+        key={`${k}${axis[k]}`}
+        onBlur={(e) => {
+          const p = { [k]: isoToSerial(e.target.value) } as Partial<ChartAxisDto>;
+          if (axisRangeInvalid({ ...axis, ...p })) onStage(p);
+          else onCommit(p);
+        }}
+      />
+    );
+  };
+  const rangeError = badRange ? (
+    <div className={styles.danger} role="alert" data-testid="chart-axis-range-error">
+      {t("cp.minBelowMax", "The minimum must be lower than the maximum. Check your input.")}
+    </div>
+  ) : null;
+  const showDate = dateCapable && (axis.axisType === "date" || (axis.axisType === "auto" && dateActive));
   return (
     <>
       <Check label={t("cp.showAxis", "Show axis")} checked={axis.visible} onChange={(visible) => onCommit({ visible })} />
       <Row label={t("chart.chartTitle", "Title")}>
         <input className={styles.input} value={axis.title ?? ""} onChange={(e) => onStage({ title: e.target.value || null })} onBlur={commitDraft} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
       </Row>
+      {dateCapable ? (
+        <Row label={t("cp.axisType", "Type")}>
+          <select className={styles.select} data-testid="chart-axis-type" value={axis.axisType} onChange={(e) => onCommit({ axisType: e.target.value as AxisType })}>
+            <option value="auto">{t("cp.automatic", "Automatic")}</option>
+            <option value="text">{t("cp.axisTypeText", "Text")}</option>
+            <option value="date">{t("cp.axisTypeDate", "Date")}</option>
+          </select>
+        </Row>
+      ) : null}
+      {showDate ? (
+        <>
+          <Row label={t("cp.minimum", "Minimum")}>{date("min")}</Row>
+          <Row label={t("cp.maximum", "Maximum")}>{date("max")}</Row>
+          {rangeError}
+          <Row label={t("cp.resolution", "Resolution")}>
+            <select className={styles.select} data-testid="chart-axis-resolution" value={axis.timeResolution ?? "auto"} onChange={(e) => onCommit({ timeResolution: e.target.value === "auto" ? null : (e.target.value as TimeUnit) })}>
+              <option value="auto">{t("cp.automatic", "Automatic")}</option>
+              {timeUnits().map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.label}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <IntervalRow label={t("cp.majorInterval", "Major interval")} value={axis.majorTime} onCommit={(majorTime) => onCommit({ majorTime })} testId="chart-axis-major-time" />
+          <IntervalRow label={t("cp.minorInterval", "Minor interval")} value={axis.minorTime} onCommit={(minorTime) => onCommit({ minorTime })} testId="chart-axis-minor-time" />
+        </>
+      ) : null}
       {value === "value" ? (
         <>
           <Row label={t("cp.minimum", "Minimum")}>{num("min")}</Row>
           <Row label={t("cp.maximum", "Maximum")}>{num("max")}</Row>
+          {rangeError}
           <Row label={t("cp.majorInterval", "Major interval")}>{num("major")}</Row>
           <Row label={t("cp.minorDivisions", "Minor divisions")}>
             <input className={styles.input} type="number" min={0} max={100} value={axis.minorCount ?? ""} onChange={(e) => onStage({ minorCount: e.target.value === "" ? null : Math.max(0, Math.trunc(Number(e.target.value))) })} onBlur={commitDraft} />
@@ -473,6 +687,7 @@ function AxisEditor({ axis, value, onStage, onCommit, commitDraft }: { axis: Cha
         <Check label={t("cp.majorGrid", "Major grid")} checked={axis.majorGrid} onChange={(majorGrid) => onCommit({ majorGrid })} />
         <Check label={t("cp.minorGrid", "Minor grid")} checked={axis.minorGrid} onChange={(minorGrid) => onCommit({ minorGrid })} />
       </div>
+      {crossing ? <PositionEditor axis={axis} crossing={crossing} categories={categories} onCommit={onCommit} /> : null}
     </>
   );
 }

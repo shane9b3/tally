@@ -25,6 +25,8 @@ import {
   groupSheets,
   MockClient,
   type ApplyResult,
+  type DetectiveAction,
+  type DetectiveState,
   type FillSheetsOp,
   type AutoFilterInfo,
   type BordersDto,
@@ -49,11 +51,12 @@ import {
   type Transaction,
 } from "@tally/bridge";
 import { emulateFill } from "./mockFill";
+import { MockDetective, type DetSnapshot } from "./mockDetective";
 import { signedFormulaInput } from "./mockSignedInput";
 import { applyCfPatch, evaluateFormat, type CfDecoration } from "./mockCf";
-import { applyV3Op, cellKey, DEFAULT_VALIDATION_MESSAGE, emptyV3, MOCK_LOCALES, passes, protectionRefusal, validationAt, type V3Ext } from "./mockV3";
+import { applyV3Op, cellKey, DEFAULT_VALIDATION_MESSAGE, emptyV3, isHiddenCell, isHidePrint, MOCK_LOCALES, passes, protectionRefusal, validationAt, type V3Ext } from "./mockV3";
 import { applyW56Op, autocompleteOf, cellStylesOf, decorateSheets, emptyW56, navigatorOf, pivotFieldItemsOf, pivotHitAt, stdFilterHidden, type W56Ctx, type W56Ext } from "./mockW56";
-import { applyW5Op, BLANK_PNG, chartDataFor, chartsTouched, dependentsOf, emptyW5, pageBreaksFor, precedentsOf, printLayoutFor, renderPagePng, suggestChartFor, type W5Ext } from "./mockW5";
+import { applyW5Op, BLANK_PNG, chartDataFor, chartsTouched, dependentsOf, emptyW5, pageBreaksFor, precedentsOf, printLayoutFor, refsIn, renderPagePng, suggestChartFor, type W5Ext } from "./mockW5";
 import { parseAbsoluteRef } from "../dataOps";
 import { nextUnlocked as walkUnlocked } from "./nextUnlocked";
 import { mixInputs, pasteArea } from "@tally/bridge";
@@ -461,6 +464,8 @@ export class WebMockClient extends MockClient {
   }
 
   override async cellEditInfo(doc: DocId, sheet: number, r: number, c: number): Promise<CellEditInfo> {
+    const v3 = this.ext.get(doc)?.v3;
+    if (v3 && isHiddenCell(v3, sheet, r, c)) return { input: "", hint: null, array: null, arrayRange: null };
     const block = this.ext.get(doc)?.sheets[sheet]?.arrays.find((a) => inside(a.range, r, c));
     if (block) return { input: `{${block.input}}`, hint: null, array: true, arrayRange: { ...block.range } };
     return super.cellEditInfo(doc, sheet, r, c);
@@ -854,6 +859,17 @@ export class WebMockClient extends MockClient {
   }
 
   override async cells(doc: DocId, sheet: number, ranges: RangeDto[]): Promise<CellBlock[]> {
+    const blocks = await this.decoratedCells(doc, sheet, ranges);
+    const x = this.ext.get(doc)?.v3;
+    if (!x || !x.protection[sheet] || (x.hiddenAll?.[sheet] ?? []).length === 0) return blocks;
+    // "Hide all" on a protected sheet (the engine's `hide_protected`).
+    for (const b of blocks) {
+      b.cells = b.cells.map((v) => (isHiddenCell(x, sheet, v.r, v.c) ? { ...v, text: "", kind: "empty", num: null, color: null, cfBar: null, cfIcon: null, link: null, flags: (v.flags & (8 | 16)) | 64 } : v));
+    }
+    return blocks;
+  }
+
+  private async decoratedCells(doc: DocId, sheet: number, ranges: RangeDto[]): Promise<CellBlock[]> {
     const blocks = await super.cells(doc, sheet, ranges);
     const x = this.ext.get(doc)?.v3;
     if (!x) return blocks;
@@ -971,7 +987,67 @@ export class WebMockClient extends MockClient {
     this.assertEditable(doc);
     this.recorded.push(...tx.ops.map((op) => structuredClone(op)));
     const group = groupOf(tx);
-    return group ? this.applyGroup(doc, tx, group) : this.applyOnce(doc, tx);
+    return this.detectiveAfter(doc, group ? await this.applyGroup(doc, tx, group) : await this.applyOnce(doc, tx));
+  }
+
+  // -- Tools ▸ Detective (mockDetective.ts; the engine's detective.rs) -------------------
+
+  private readonly detectives = new Map<DocId, MockDetective>();
+
+  private detectiveOf(doc: DocId): MockDetective {
+    let d = this.detectives.get(doc);
+    if (!d) {
+      d = new MockDetective();
+      this.detectives.set(doc, d);
+    }
+    return d;
+  }
+
+  /** Every formula's references and every error cell of the document. */
+  private async detectiveSnapshot(doc: DocId): Promise<DetSnapshot> {
+    const sheets = this.sheetOrder.get(doc) ?? [this.firstSheet(doc)];
+    const names = (n: string) => this.sheetNames.get(doc)?.get(n);
+    const snap: DetSnapshot = { sheets, formulas: new Map(), errors: new Set() };
+    for (const sheet of sheets) {
+      const used = (await super.sheetLayout(doc, sheet)).used;
+      if (!used) continue;
+      for (const v of await this.cellsOf(doc, sheet, used)) {
+        if (v.kind === "error") snap.errors.add(`${sheet}:${v.r}:${v.c}`);
+        if ((v.flags & 1) === 0) continue;
+        const input = (await super.cellEditInfo(doc, sheet, v.r, v.c)).input;
+        snap.formulas.set(`${sheet}:${v.r}:${v.c}`, refsIn(input, sheet, names));
+      }
+    }
+    return snap;
+  }
+
+  override async detective(doc: DocId, sheet: number, r: number, c: number, action: DetectiveAction): Promise<DetectiveState> {
+    await super.detective(doc, sheet, r, c, action);
+    this.recordedCalls.push({ type: "detective", sheet, r, c, action });
+    const d = this.detectiveOf(doc);
+    const done = d.run(await this.detectiveSnapshot(doc), sheet, r, c, action);
+    if (done) this.markDetectiveDirty(doc);
+    const base = await super.detectiveArrows(doc, sheet);
+    return { ...d.state(sheet, done), dirty: base.dirty };
+  }
+
+  override async detectiveArrows(doc: DocId, sheet: number): Promise<DetectiveState> {
+    const base = await super.detectiveArrows(doc, sheet);
+    return { ...this.detectiveOf(doc).state(sheet, false), dirty: base.dirty };
+  }
+
+  override async setDetectiveAuto(doc: DocId, on: boolean): Promise<void> {
+    await super.setDetectiveAuto(doc, on);
+    this.detectiveOf(doc).auto = on;
+  }
+
+  /** AutoRefresh after a change (the mock replays after every change that touched cells). */
+  private async detectiveAfter(doc: DocId, res: ApplyResult): Promise<ApplyResult> {
+    const d = this.detectives.get(doc);
+    if (!d || !d.auto || !d.hasOps() || (res.changed.length === 0 && res.layoutChanged.length === 0)) return res;
+    const before = JSON.stringify([...d.sheets]);
+    d.refresh(await this.detectiveSnapshot(doc));
+    return JSON.stringify([...d.sheets]) === before ? res : { ...res, detectiveChanged: true };
   }
 
   /**
@@ -1167,7 +1243,8 @@ export class WebMockClient extends MockClient {
   override async chartData(doc: DocId, sheet: number, id: number): Promise<ChartDataDto> {
     const chart = (this.docExt(doc).w5.charts[sheet] ?? []).find((c) => c.id === id);
     if (!chart) throw { code: "not_found", message: `chart ${id} not found` };
-    return chartDataFor(sheet, chart, this.versions.get(doc) ?? 0, (s, r) => this.cellsOf(doc, s, r), (n) => this.sheetNames.get(doc)?.get(n));
+    const formatOf = async (style: number): Promise<string | null> => (style === 0 ? null : ((await this.styles(doc, [style]))[0]?.numberFormat ?? null));
+    return chartDataFor(sheet, chart, this.versions.get(doc) ?? 0, (s, r) => this.cellsOf(doc, s, r), (n) => this.sheetNames.get(doc)?.get(n), formatOf);
   }
 
   override async suggestChart(doc: DocId, sheet: number, sel: RangeDto, kind: ChartKind): Promise<ChartDto> {
@@ -1224,7 +1301,10 @@ export class WebMockClient extends MockClient {
     const p = j?.layout.pages[page];
     if (!j || !p) throw { code: "not_found", message: `print job ${job} page ${page} not found` };
     const layout = await this.sheetLayout(j.doc, p.sheet);
-    const cells = await this.cellsOf(j.doc, p.sheet, { r0: p.rows[0], c0: p.cols[0], r1: p.rows[1], c1: p.cols[1] });
+    const v3 = this.ext.get(j.doc)?.v3;
+    // "Hide when printing" (the engine's `lcl_HidePrint` port) empties the text.
+    const cells = (await this.cellsOf(j.doc, p.sheet, { r0: p.rows[0], c0: p.cols[0], r1: p.rows[1], c1: p.cols[1] })).map((v) => (v3 && isHidePrint(v3, p.sheet, v.r, v.c) ? { ...v, text: "", kind: "empty" as const, num: null } : v));
+    this.recordedCalls.push({ type: "printJobPagePng", job, page, texts: cells.filter((v) => v.text !== "").map((v) => ({ r: v.r, c: v.c, text: v.text })) });
     const boxes = (this.docExt(j.doc).w5.charts[p.sheet] ?? [])
       .filter((c) => c.anchor.r >= p.rows[0] && c.anchor.r <= p.rows[1] && c.anchor.c >= p.cols[0] && c.anchor.c <= p.cols[1])
       .map((c) => ({ id: c.id, x: p.originMm[0] + 10 + (c.anchor.c - p.cols[0]) * 20, y: p.originMm[1] + 10 + (c.anchor.r - p.rows[0]) * 6, w: c.anchor.widthMm * (p.scalePct / 100), h: c.anchor.heightMm * (p.scalePct / 100) }));
@@ -1307,7 +1387,7 @@ export class WebMockClient extends MockClient {
       this.extRedo.set(doc, redo);
       this.ext.set(doc, JSON.parse(prev) as DocExt);
     }
-    return this.track(doc, res);
+    return this.detectiveAfter(doc, this.track(doc, res));
   }
 
 
@@ -1320,7 +1400,7 @@ export class WebMockClient extends MockClient {
       this.extUndo.set(doc, undo);
       this.ext.set(doc, JSON.parse(next) as DocExt);
     }
-    return this.track(doc, res);
+    return this.detectiveAfter(doc, this.track(doc, res));
   }
 
   private pushUndo(doc: DocId, snapshot: string): void {

@@ -40,7 +40,7 @@ pub use assist::{AssistProvider, AssistRequest, SheetView};
 pub use codec::IoCodec;
 pub use codec::{Decoded, Export, FileCodec, UnsupportedCodec};
 
-use crate::clipboard::{copy_range, ClipSnapshot};
+use crate::clipboard::{copy_to_clipboard, ClipSnapshot};
 use crate::document::Document;
 use crate::ops::to_range;
 use crate::recalc::RecalcBudget;
@@ -311,6 +311,9 @@ impl EngineService {
                 let v = wb.value(addr);
                 let is_text = matches!(v, Value::Text(_));
                 let text = match &v {
+                    // AOO `ScDocShell::AsciiSave`: "Hide all" cells of a
+                    // protected sheet are written empty.
+                    _ if crate::protection::cell_hidden(wb, sheet_id, r, c) => String::new(),
                     _ if as_shown => view::display_text(wb, addr),
                     Value::Text(t) => t.to_string(),
                     _ => view::edit_text(wb, &v, wb.styles.get(sheet.style(r, c))),
@@ -686,7 +689,7 @@ impl DocumentService for EngineService {
                 "the selection is too large to copy",
             ));
         }
-        let (mut snap, tsv, html) = copy_range(&d.wb, range, &mut self.rng);
+        let (mut snap, tsv, html) = copy_to_clipboard(&d.wb, range, &mut self.rng);
         snap.source_doc = Some(doc);
         let token = snap.token.clone();
         *leaf(&self.shared.clipboard) = Some(Arc::new(snap));
@@ -1137,6 +1140,36 @@ impl DocumentService for EngineService {
         c: u32,
     ) -> Result<Vec<tally_api::TraceDto>> {
         crate::detective::dependents(&self.document(doc)?.wb, sheet, r, c)
+    }
+
+    fn detective(
+        &mut self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        r: u32,
+        c: u32,
+        action: tally_api::DetectiveAction,
+    ) -> Result<tally_api::DetectiveState> {
+        self.document_mut(doc)?.detective(sheet, r, c, action)
+    }
+
+    fn detective_arrows(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+    ) -> Result<tally_api::DetectiveState> {
+        let wb = &self.document(doc)?.wb;
+        if wb.sheet(sheet).is_none() {
+            return Err(ApiError::not_found(format!("no sheet {sheet}")));
+        }
+        let mut st = crate::detective::state(wb, sheet, false);
+        st.dirty = self.document(doc)?.dirty;
+        Ok(st)
+    }
+
+    fn set_detective_auto(&mut self, doc: DocId, on: bool) -> Result<()> {
+        self.document_mut(doc)?.detective_auto = on;
+        Ok(())
     }
 
     fn print_layout(

@@ -290,6 +290,8 @@ export class AppController {
     });
     useEditStore.getState().reset();
     useSelectionStore.getState().reset();
+    // A new view: detective Fill Mode ends (a sheet switch keeps it, as in AOO).
+    this.w5.detective.endFillMode();
     doc.setInfo(info);
     useDocStore.getState().setActiveSheet(info.activeSheet);
     doc.setSource(source);
@@ -643,6 +645,8 @@ export class AppController {
     if (this.editingElsewhere) return;
     // A read-only document: AOO's "Document opened in read-only mode." (typing does nothing).
     if (this.readOnly.refuseEdit(origin === "bar" && seed === undefined)) return;
+    // Editing ends detective Fill Mode (AOO switches to the edit shell).
+    this.w5.detective.endFillMode();
     const store = useEditStore.getState();
     const active = store.active;
     const known = active && active.sheet === this.sheet && active.cell.r === cell.r && active.cell.c === cell.c ? active.input : null;

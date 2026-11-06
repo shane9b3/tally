@@ -385,7 +385,7 @@ pub fn block_range(
 }
 
 /// Refuses number format codes over [`tally_model::MAX_NUMBER_FORMAT_LEN`].
-fn check_format_len(code: &str) -> Result<(), ApiError> {
+pub(crate) fn check_format_len(code: &str) -> Result<(), ApiError> {
     if code.chars().count() > tally_model::MAX_NUMBER_FORMAT_LEN {
         return Err(ApiError::invalid_argument(format!(
             "number format is longer than {} characters",

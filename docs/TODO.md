@@ -28,6 +28,7 @@ real-file corpus).
 - Gates at de70ada: 1,734 Rust tests, 907 TS unit tests, 135 e2e; clippy (also tally-engine without `io`, xtask `perf`) and fmt clean; release bundle builds (Tally.app 27.8 MiB).
 
 - Read-only mode and AOO lock files (2026-11-02): `.~lock.<name>#` read and written in AOO 4.1's format (`apps/desktop/src-tauri/src/doclock.rs`), "Document in Use" prompts, File ▸ Open Read-Only…, unwritable / Finder-locked files and ODS `LoadReadonly` open read-only, Edit ▸ Edit Mode (⇧⌘M), info bar, " (read-only)" title, engine-level `read_only` refusal. Owner's native checks: docs/qa/read-only-manual.md.
+- Chart axes at AOO 4.1 parity (2026-11-06, T18): date axis (Scale ▸ Type Automatic / Text / Date, resolution, major / minor interval; AOO's automatic date axis over date categories, gaps for missing dates, labels in the cells' format) and Positioning (cross other axis at Start / End / Value / Category, label and mark placement), ODS and XLSX round trip.
 
 ## Known gaps / follow-ups
 - Read-only mode: needs the owner's side-by-side check with OpenOffice (docs/qa/read-only-manual.md); Windows/Linux lock behaviour untested; no Properties ▸ Security tab to set `LoadReadonly`; Save As onto our own lock held elsewhere is refused (AOO offers Retry / Save); see docs/parity-deviations.md U28, X25.
@@ -59,10 +60,12 @@ real-file corpus).
   - Input and editing: two-digit year window option (P17, S).
   - Sheets and view: multi-sheet selection and editing, Shift+Ctrl+PgUp/PgDn (wave 5 item 31, L; engine done 2026-10-28: `Transaction.group`, `Op::FillSheets`; UI, mock and dialog in progress); read-only mode (done 2026-11-02, see below); zoom 20-400 % (U18, S); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, M).
   - Fill: Ctrl-drag copies, filtered ranges copy (T16, M); Edit > Fill > Up / Left commands (S); Fill Sheet (engine `Op::FillSheets` done; dialog in progress).
-  - Formatting: Hide all / Hide when printing in the UI and applied on screen and in print (G15, M); `[NatNum]` / `[DBNum]` / calendar modifiers rendered (G7, L); AutoFormat add / rename / delete (M); Load Styles from another document (M).
+  - Formatting: Hide all / Hide when printing (G15, done 2026-11-06); `[NatNum]` / `[DBNum]` / calendar modifiers rendered (G7, L); Load Styles from another document (M).
   - Data: validity "sort entries ascending" incl. ODS `sorted` round trip (G16, S); sort extend-selection prompt (S); DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M); Data > Select Range and Refresh Range (S).
-  - Charts: date axis and axis crossing position (T18, M); chart data table editor for internal data (T18, M); cylinder / cone / pyramid shapes (T10, L).
-  - Tools: detective Fill Mode, Refresh Traces, AutoRefresh (T12, M); hyperlink as button and New Document target (M, button needs form controls T11); Function List sidebar (S); Limit decimals for General incl. ODS `table:decimal-places` (S).
+  - Charts: chart data table editor for internal data (T18, M); cylinder / cone / pyramid shapes (T10, L).
+  - Tools: detective Fill Mode, Refresh Traces, AutoRefresh (T12, done 2026-11-06, see below); hyperlink as button and New Document target (M, button needs form controls T11); Function List sidebar (S); Limit decimals for General incl. ODS `table:decimal-places` (S).
+
+- Tools ▸ Detective at AOO 4.1 parity (2026-11-06): the AOO menu (Trace / Remove Precedents, Trace / Remove Dependents, Remove All Traces, Trace Error, Mark Invalid Data, Refresh Traces, AutoRefresh, Fill Mode); each Trace adds one level and each Remove takes the outermost away (`ScDetectiveFunc::ShowPred` / `FindPredLevel`); the operation list (`ScDetOpList`) moves with rows and columns, is replayed by Refresh Traces and by AutoRefresh after formula changes (any change with a Trace Error), and round-trips as ODS `table:detective`/`table:operation` (plus `table:highlighted-range`); arrows from / to other sheets with a sheet icon; Fill Mode clicks trace precedents until Esc. Remaining differences: T12.
 
 ## Remaining for 1.0 (docs/wave5-plan.md §5)
 1. Functions: keep 408/408; DDE and macro calls marked unsupported (done).

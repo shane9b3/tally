@@ -346,6 +346,7 @@ fn roundtrip_axis_log_min_max() {
         major_grid: true,
         minor_grid: true,
         number_format: Some("#,##0.00".into()),
+        ..ChartAxisData::default()
     };
     c.x_axis.visible = false;
     c.x_axis.title = Some("Month".into());
@@ -800,4 +801,152 @@ impl CellsOf for WorkbookData {
     fn cells_of(&self, sheet: usize) -> &[CellData] {
         &self.sheets[sheet].cells
     }
+}
+
+// ---------------------------------------------------------------------------
+// Axis type, date scale and positioning (T18)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn roundtrip_date_axis_and_crossing() {
+    use tally_model::{
+        AxisCrossData, AxisLabelPosData, AxisMarkPosData, AxisTypeData, TimeIntervalData,
+        TimeUnitData,
+    };
+    let mut c = chart(ChartKindData::Line);
+    c.x_axis.axis_type = AxisTypeData::Date;
+    c.x_axis.time_resolution = Some(TimeUnitData::Months);
+    c.x_axis.major_time = Some(TimeIntervalData {
+        number: 2,
+        unit: TimeUnitData::Months,
+    });
+    c.x_axis.minor_time = Some(TimeIntervalData {
+        number: 7,
+        unit: TimeUnitData::Days,
+    });
+    c.x_axis.min = Some(46_023.0);
+    c.x_axis.crosses = Some(AxisCrossData::Value(50.0));
+    c.x_axis.label_position = AxisLabelPosData::OutsideStart;
+    c.x_axis.mark_position = AxisMarkPosData::AtAxis;
+    c.y_axis.crosses = Some(AxisCrossData::End);
+    c.y_axis.label_position = AxisLabelPosData::NearAxisOtherSide;
+    c.y_axis.mark_position = AxisMarkPosData::AtLabels;
+    assert_round_trip(c.clone());
+    for t in [AxisTypeData::Auto, AxisTypeData::Text] {
+        let mut c = chart(ChartKindData::Column);
+        c.x_axis.axis_type = t;
+        c.y_axis.crosses = Some(AxisCrossData::Start);
+        assert_round_trip(c);
+    }
+    let mut c = chart(ChartKindData::Column);
+    c.y_axis.crosses = Some(AxisCrossData::Value(3.0));
+    c.x_axis.crosses = Some(AxisCrossData::Value(-2.5));
+    assert_round_trip(c);
+}
+
+#[test]
+fn writes_aoo_axis_attributes() {
+    use tally_model::{AxisCrossData, AxisTypeData, TimeIntervalData, TimeUnitData};
+    let mut c = chart(ChartKindData::Line);
+    c.x_axis.axis_type = AxisTypeData::Date;
+    c.x_axis.major_time = Some(TimeIntervalData {
+        number: 1,
+        unit: TimeUnitData::Years,
+    });
+    c.x_axis.crosses = Some(AxisCrossData::Value(50.0));
+    let mut buf = Cursor::new(Vec::new());
+    write_ods(&workbook(vec![c]), &mut buf).unwrap();
+    let mut zip = zip::ZipArchive::new(Cursor::new(buf.into_inner())).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("Object 1/content.xml").unwrap(), &mut xml)
+        .unwrap();
+    // As AOO 4.1 writes them (SchXMLExport.cxx, XMLAxisPositionPropertyHdl).
+    assert!(xml.contains(r#"xmlns:chartooo="http://openoffice.org/2010/chart""#));
+    assert!(xml.contains(r#"chartooo:axis-type="date""#), "{xml}");
+    assert!(xml.contains(
+        r#"<chartooo:date-scale chart:major-interval-value="1" chart:major-interval-unit="years"/>"#
+    ));
+    assert!(xml.contains(r#"chart:axis-position="50""#));
+}
+
+fn axis_chart_xml(x_axis_attrs: &str, x_axis_body: &str) -> String {
+    format!(
+        concat!(
+            "{head}<office:automatic-styles>",
+            r#"<style:style style:name="ax" style:family="chart"><style:chart-properties chart:axis-position="0" chart:axis-label-position="outside-minimum" chart:tick-mark-position="at-axis"/></style:style>"#,
+            r#"<style:style style:name="ay" style:family="chart"><style:chart-properties chart:axis-position="end" chart:axis-label-position="near-axis"/></style:style>"#,
+            "</office:automatic-styles><office:body><office:chart>",
+            r#"<chart:chart chart:class="chart:line" xmlns:chartooo="http://openoffice.org/2010/chart"><chart:plot-area>"#,
+            r#"<chart:axis chart:dimension="x" chart:name="primary-x" chart:style-name="ax"{attrs}>{body}</chart:axis>"#,
+            r#"<chart:axis chart:dimension="y" chart:name="primary-y" chart:style-name="ay"/>"#,
+            "</chart:plot-area></chart:chart></office:chart></office:body></office:document-content>"
+        ),
+        head = HEAD,
+        attrs = x_axis_attrs,
+        body = x_axis_body
+    )
+}
+
+fn read_axis_chart(xml: String) -> ChartData {
+    let objects = vec![("Object 1/content.xml".to_string(), xml.into_bytes())];
+    let wb = read_ods(
+        Cursor::new(package(&frame(1), &objects, &manifest(1))),
+        &Limits::default(),
+    )
+    .unwrap();
+    wb.sheets[0].charts[0].clone()
+}
+
+#[test]
+fn reads_aoo_axis_type_and_positions() {
+    use tally_model::{
+        AxisCrossData, AxisLabelPosData, AxisMarkPosData, AxisTypeData, TimeIntervalData,
+        TimeUnitData,
+    };
+    // AOO 4.1 with an automatic date axis: `auto` plus a date scale.
+    let c = read_axis_chart(axis_chart_xml(
+        r#" chartooo:axis-type="auto""#,
+        r#"<chartooo:date-scale chart:base-time-unit="months" chart:major-interval-value="3" chart:major-interval-unit="months" chart:minor-interval-unit="days"/>"#,
+    ));
+    assert_eq!(c.x_axis.axis_type, AxisTypeData::Auto);
+    assert_eq!(c.x_axis.time_resolution, Some(TimeUnitData::Months));
+    assert_eq!(
+        c.x_axis.major_time,
+        Some(TimeIntervalData {
+            number: 3,
+            unit: TimeUnitData::Months
+        })
+    );
+    // Only the unit given: AOO starts from TimeInterval(1, DAY).
+    assert_eq!(
+        c.x_axis.minor_time,
+        Some(TimeIntervalData {
+            number: 1,
+            unit: TimeUnitData::Days
+        })
+    );
+    // "0" is AOO's default crossing; outside-minimum is the 1.2 alias.
+    assert_eq!(c.x_axis.crosses, None);
+    assert_eq!(c.x_axis.label_position, AxisLabelPosData::OutsideStart);
+    assert_eq!(c.x_axis.mark_position, AxisMarkPosData::AtAxis);
+    assert_eq!(c.y_axis.crosses, Some(AxisCrossData::End));
+    // Older documents (no axis type, no date scale) keep text categories
+    // (SchXMLAxisContext::EndElement sets AutoDateAxis = false).
+    let old = read_axis_chart(axis_chart_xml("", ""));
+    assert_eq!(old.x_axis.axis_type, AxisTypeData::Text);
+    let auto_only = read_axis_chart(axis_chart_xml(r#" chartooo:axis-type="auto""#, ""));
+    assert_eq!(auto_only.x_axis.axis_type, AxisTypeData::Text);
+    // The chart: namespace spelling of the attribute and the element.
+    let date = read_axis_chart(axis_chart_xml(
+        r#" chart:axis-type="date""#,
+        r#"<chart:date-scale chart:major-interval-value="2"/>"#,
+    ));
+    assert_eq!(date.x_axis.axis_type, AxisTypeData::Date);
+    assert_eq!(
+        date.x_axis.major_time,
+        Some(TimeIntervalData {
+            number: 2,
+            unit: TimeUnitData::Days
+        })
+    );
 }
