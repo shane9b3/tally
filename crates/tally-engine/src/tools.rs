@@ -2557,13 +2557,14 @@ pub fn copy_sheet(
     }
     // Sheet-scoped names first, so the copy's formulas resolve them.
     let names = crate::undo::names_snapshot_tx(wb, fx);
-    let scoped: Vec<(String, crate::names::NameDef)> = wb
+    // With their usage flags: AOO copies `ScRangeData` with its type bits.
+    let scoped: Vec<(String, crate::names::NameDef, tally_model::NameUsage)> = wb
         .names
         .defined()
         .filter(|(_, e)| e.scope == Some(sheet))
-        .filter_map(|(_, e)| Some((e.name.to_string(), e.def.clone()?)))
+        .filter_map(|(_, e)| Some((e.name.to_string(), e.def.clone()?, e.usage)))
         .collect();
-    for (n, def) in scoped {
+    for (n, def, usage) in scoped {
         let mut f = (*def.formula).clone();
         // A sheet-local name of the copy names the copy (Excel).
         repoint_sheet_refs(&mut f, sheet, new, false);
@@ -2571,7 +2572,7 @@ pub fn copy_sheet(
         if base.sheet == sheet {
             base.sheet = new;
         }
-        wb.names.define(
+        let id = wb.names.define(
             &n,
             Some(new),
             crate::names::NameDef {
@@ -2579,6 +2580,7 @@ pub fn copy_sheet(
                 base,
             },
         );
+        wb.names.set_usage(id, usage);
     }
     for (a, f, invalid, array) in formulas {
         let mut nf = (*f).clone();

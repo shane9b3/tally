@@ -1171,6 +1171,30 @@ pub(crate) fn write_pivots(s: &mut String, data: &WorkbookData) {
     s.push_str("</table:data-pilot-tables>");
 }
 
+/// Save warnings for pivots whose source filter cannot be written: a
+/// pivot over a database range is saved as `table:database-source-table`,
+/// which carries no `table:filter` (AOO 4.1 `ScXMLExportDataPilot::
+/// WriteDataPilots` writes `WriteDPFilter` only inside
+/// `table:source-cell-range`).
+pub(crate) fn pivot_warnings(data: &WorkbookData) -> Vec<String> {
+    data.sheets
+        .iter()
+        .flat_map(|sh| &sh.pivots)
+        .filter(|p| matches!(p.source, PivotSourceData::DatabaseRange { .. }))
+        .filter(|p| {
+            p.source_filter
+                .as_ref()
+                .is_some_and(|f| !f.conditions.is_empty())
+        })
+        .map(|p| {
+            format!(
+                "pivot table {:?}: the source filter of a pivot over a database range is not saved in ODS",
+                p.name
+            )
+        })
+        .collect()
+}
+
 fn write_pivot(s: &mut String, p: &PivotData, tab: usize, sheet: &SheetData, data: &WorkbookData) {
     let (src_sheet, src_range): (Option<&SheetData>, Option<CellRangeLocal>) = match &p.source {
         PivotSourceData::Range { sheet, range } => (data.sheets.get(*sheet as usize), Some(*range)),
@@ -2361,6 +2385,42 @@ mod tests {
         let mut out = String::new();
         write_pivots(&mut out, &data);
         assert!(!out.contains("table:filter"), "{out}");
+        assert!(pivot_warnings(&data).is_empty());
+    }
+
+    /// Review 5 M2: a database-range source has nowhere to keep the
+    /// filter (AOO writes none on `table:database-source-table`), so the
+    /// save warns.
+    #[test]
+    fn database_range_pivot_filter_warns() {
+        let mut sheets = pivot_sheets();
+        sheets[1].pivots.push(PivotData {
+            name: "DB".into(),
+            source: PivotSourceData::DatabaseRange {
+                name: "Data".into(),
+            },
+            source_filter: Some(PivotSourceFilterData {
+                conditions: vec![StdConditionData {
+                    connector: StdConnectorData::And,
+                    col: 0,
+                    op: StdFilterOpData::Eq,
+                    value: "East".into(),
+                }],
+                case_sensitive: false,
+                regex: false,
+                no_duplicates: false,
+            }),
+            ..PivotData::default()
+        });
+        let mut data = WorkbookData {
+            sheets,
+            ..WorkbookData::default()
+        };
+        let w = pivot_warnings(&data);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("\"DB\""), "{w:?}");
+        data.sheets[1].pivots[0].source_filter = None;
+        assert!(pivot_warnings(&data).is_empty());
     }
 
     #[test]

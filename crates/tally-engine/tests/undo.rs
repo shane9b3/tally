@@ -618,3 +618,42 @@ proptest! {
         prop_assert_eq!(&a.data(), &fin);
     }
 }
+
+/// Security review 5 LOW-1: the stacks are capped by an approximate byte
+/// weight as well as by depth; the newest step always stays.
+#[test]
+fn undo_stack_byte_budget_trims_oldest() {
+    use tally_engine::undo::{record_weight, Change, UndoRecord, UndoStack, UNDO_BUDGET};
+    use tally_types::CellAddr;
+    let rec = |cells: usize, label: &str| UndoRecord {
+        label: Some(label.into()),
+        selection_before: None,
+        selection_after: None,
+        changes: vec![Change::Cells(vec![(CellAddr::new(1, 0, 0), None); cells])],
+    };
+    let w = record_weight(&rec(1_000, ""));
+    assert!(w >= 1_000 * 64, "{w}");
+    assert_eq!(UNDO_BUDGET, 1 << 30);
+    let mut st = UndoStack::default();
+    st.set_depth(1000);
+    st.set_budget(10 * w);
+    for i in 0..20 {
+        st.push(rec(1_000, &i.to_string()));
+    }
+    assert_eq!(st.undo_len(), 10);
+    assert_eq!(st.weight(), 10 * w);
+    // The oldest went first.
+    assert_eq!(st.history(1).undo, ["19"]);
+    assert_eq!(st.undo_records()[0].label.as_deref(), Some("10"));
+    // Undo moves weight to redo; redo-then-undo keeps the total.
+    let r = st.pop_undo().unwrap();
+    st.push_redo(r);
+    assert_eq!((st.undo_len(), st.redo_len()), (9, 1));
+    assert_eq!(st.weight(), 10 * w);
+    // A step heavier than the whole budget is still kept, alone.
+    st.push(rec(20_000, "big"));
+    assert_eq!((st.undo_len(), st.redo_len()), (1, 0));
+    assert_eq!(st.history(1).undo, ["big"]);
+    st.clear();
+    assert_eq!(st.weight(), 0);
+}

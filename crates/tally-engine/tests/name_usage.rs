@@ -159,3 +159,43 @@ fn flags_round_trip_through_ods() {
     assert_eq!(get("Plain"), NameUsage::default());
     assert_eq!(get("Rate"), NameUsage::default());
 }
+
+/// Review 5 L3: a copied sheet's local names keep their usage flags (AOO
+/// copies `ScRangeData` with its type bits).
+#[test]
+fn copy_sheet_keeps_local_name_usage() {
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    let r = f.apply(vec![
+        Op::DefineName {
+            name: "PA".into(),
+            scope: Some(s),
+            refers_to: "$Sheet1.$A$1:$C$9".into(),
+        },
+        Op::SetNameUsage {
+            name: "PA".into(),
+            scope: Some(s),
+            usage: NameUsage {
+                print_range: true,
+                ..NameUsage::default()
+            },
+        },
+    ]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let r = f.apply(vec![Op::CopySheet {
+        sheet: s,
+        name: None,
+        index: None,
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let copy = r.created.unwrap()[0].id;
+    let pa = f
+        .svc
+        .names(f.doc)
+        .unwrap()
+        .into_iter()
+        .find(|n| n.name == "PA" && n.scope == Some(copy))
+        .unwrap();
+    assert!(pa.usage.print_range);
+    assert!(!pa.usage.filter);
+}

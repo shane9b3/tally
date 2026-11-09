@@ -228,14 +228,90 @@ pub struct UndoRecord {
     pub changes: Vec<Change>,
 }
 
+/// Approximate memory budget of one document's undo and redo stacks
+/// together (security review 5, LOW-1): past it the oldest undo steps are
+/// dropped, as past the depth, but the newest one is always kept.
+pub const UNDO_BUDGET: u64 = 1 << 30;
+
+/// Approximate bytes per captured cell (address, content, a formula or
+/// string body on average) in the undo weight.
+const CELL_BYTES: u64 = 96;
+
+/// Approximate retained bytes of a change: cell counts times
+/// [`CELL_BYTES`], runs and table entries at small constants. `Arc`
+/// snapshots shared with the live document are counted as if owned, so
+/// the estimate errs high.
+pub fn change_weight(c: &Change) -> u64 {
+    const BASE: u64 = 64;
+    let n = |x: usize| x as u64;
+    BASE + match c {
+        Change::Range(s) => {
+            n(s.contents.as_ref().map_or(0, Vec::len)) * CELL_BYTES
+                + s.styles
+                    .as_ref()
+                    .map_or(0, |v| v.iter().map(|(_, r)| n(r.len()) * 12 + 32).sum())
+        }
+        Change::Cells(v) => n(v.len()) * CELL_BYTES,
+        Change::ColDims { dims, .. } | Change::RowDims { dims, .. } => n(dims.runs().len()) * 16,
+        Change::InsertSheet {
+            sheet, formulas, ..
+        } => {
+            let cells: usize = sheet.columns.iter().map(|c| c.cells.len()).sum();
+            n(cells + formulas.len()) * CELL_BYTES + n(sheet.columns.len()) * 128
+        }
+        Change::Meta { parts, .. } => parts
+            .iter()
+            .map(|p| match p {
+                // A pivot refresh keeps the previous tables: their label
+                // cells, grid lines and computed values.
+                MetaPart::Pivots(v) => {
+                    v.iter()
+                        .map(|t| {
+                            n(t.cells.len()) * CELL_BYTES
+                                + n(t.grid.rows.len() + t.grid.cols.len()) * 24
+                                + n(t.lookup.values.len()) * 24
+                        })
+                        .sum::<u64>()
+                        + 1024
+                }
+                MetaPart::NoteEntries(e) => n(e.len()) * CELL_BYTES,
+                MetaPart::LinkEntries(e) => n(e.len()) * CELL_BYTES,
+                _ => 1024,
+            })
+            .sum(),
+        Change::Names(t) => n(t.len()) * 256,
+        Change::FilteredRows { rows, .. } => n(rows.spans().len()) * 8,
+        Change::CellStyles(v) => n(v.len()) * 512,
+        Change::CustomSortLists(v) => v.iter().flatten().map(|s| n(s.len()) + 24).sum(),
+        Change::Batch(v) => v.iter().map(change_weight).sum(),
+        Change::DocMeta(_) | Change::Settings(_) | Change::DocView(_) => 1024,
+        Change::RemoveSheet { .. }
+        | Change::RenameSheet { .. }
+        | Change::MoveSheet { .. }
+        | Change::Structure(_)
+        | Change::DocProtection(_)
+        | Change::SheetProps { .. } => 0,
+    }
+}
+
+/// [`change_weight`] of a whole record.
+pub fn record_weight(r: &UndoRecord) -> u64 {
+    256 + r.changes.iter().map(change_weight).sum::<u64>()
+}
+
 /// Undo and redo stacks, holding at most `depth` steps together (AOO keeps
 /// undo and redo actions in one array of `nMaxUndoActions`,
-/// `svl/source/undo/undo.cxx`).
+/// `svl/source/undo/undo.cxx`) and at most about `budget` bytes (Tally:
+/// AOO has no byte cap; see [`UNDO_BUDGET`]).
 #[derive(Clone, Debug)]
 pub struct UndoStack {
     undo: Vec<UndoRecord>,
     redo: Vec<UndoRecord>,
+    /// [`record_weight`] of each entry of `undo` / `redo`.
+    undo_w: Vec<u64>,
+    redo_w: Vec<u64>,
     depth: usize,
+    budget: u64,
 }
 
 impl Default for UndoStack {
@@ -243,7 +319,10 @@ impl Default for UndoStack {
         Self {
             undo: Vec::new(),
             redo: Vec::new(),
+            undo_w: Vec::new(),
+            redo_w: Vec::new(),
             depth: UNDO_DEPTH,
+            budget: UNDO_BUDGET,
         }
     }
 }
@@ -253,8 +332,8 @@ impl UndoStack {
     /// depth are dropped (`SfxUndoManager::ImplAddUndoAction_NoNotify`).
     pub fn push(&mut self, rec: UndoRecord) {
         self.redo.clear();
-        self.undo.push(rec);
-        self.trim_oldest();
+        self.redo_w.clear();
+        self.push_undo_keep_redo(rec);
     }
 
     fn trim_oldest(&mut self) {
@@ -262,7 +341,30 @@ impl UndoStack {
         let over = over.min(self.undo.len());
         if over > 0 {
             self.undo.drain(..over);
+            self.undo_w.drain(..over);
         }
+        // The byte budget: oldest undo steps first, then the redo steps
+        // farthest from the current state; the newest undo step stays.
+        let mut total = self.weight();
+        while total > self.budget && self.undo.len() > 1 {
+            total -= self.undo_w.remove(0);
+            self.undo.remove(0);
+        }
+        while total > self.budget && !self.redo.is_empty() {
+            total -= self.redo_w.remove(0);
+            self.redo.remove(0);
+        }
+    }
+
+    /// The approximate bytes the stacks hold ([`record_weight`] summed).
+    pub fn weight(&self) -> u64 {
+        self.undo_w.iter().chain(&self.redo_w).sum()
+    }
+
+    /// Sets the byte budget (tests; the default is [`UNDO_BUDGET`]).
+    pub fn set_budget(&mut self, budget: u64) {
+        self.budget = budget;
+        self.trim_oldest();
     }
 
     /// The depth (1–1000).
@@ -283,10 +385,12 @@ impl UndoStack {
                 // The redo stack pops its next step from the end: the
                 // farthest one is first.
                 self.redo.remove(0);
+                self.redo_w.remove(0);
                 over -= 1;
             }
             if over > 0 && !self.undo.is_empty() {
                 self.undo.remove(0);
+                self.undo_w.remove(0);
                 over -= 1;
             }
         }
@@ -294,22 +398,26 @@ impl UndoStack {
 
     /// Pops the next undo step.
     pub fn pop_undo(&mut self) -> Option<UndoRecord> {
+        self.undo_w.pop();
         self.undo.pop()
     }
 
     /// Pops the next redo step.
     pub fn pop_redo(&mut self) -> Option<UndoRecord> {
+        self.redo_w.pop();
         self.redo.pop()
     }
 
     /// Pushes onto undo without clearing redo (after a redo).
     pub fn push_undo_keep_redo(&mut self, rec: UndoRecord) {
+        self.undo_w.push(record_weight(&rec));
         self.undo.push(rec);
         self.trim_oldest();
     }
 
     /// Pushes onto redo (after an undo).
     pub fn push_redo(&mut self, rec: UndoRecord) {
+        self.redo_w.push(record_weight(&rec));
         self.redo.push(rec);
     }
 
@@ -360,6 +468,8 @@ impl UndoStack {
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
+        self.undo_w.clear();
+        self.redo_w.clear();
     }
 }
 

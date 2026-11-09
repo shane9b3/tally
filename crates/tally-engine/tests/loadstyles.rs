@@ -380,3 +380,64 @@ mod files {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Review 5 L2: a stored built-in after a user style (`[Mine, Heading]`)
+/// is not reordered by a load that changes nothing, so there is no undo
+/// step and the document stays unmodified.
+#[test]
+fn a_load_that_changes_nothing_records_nothing() {
+    let src = source();
+    let mut f = Fixture::new();
+    define(&mut f, "Mine", "Default", |st| st.bold = true);
+    let mut heading = named(&f, "Heading").unwrap();
+    heading.style.underline = true;
+    f.apply(vec![Op::DefineCellStyle { style: heading }]);
+    let stored = |f: &Fixture| -> Vec<String> {
+        let wb = &f.svc.document(f.doc).unwrap().wb;
+        wb.cell_styles.iter().map(|s| s.name.clone()).collect()
+    };
+    // (Heading1 follows its redefined parent, so it is stored too.)
+    assert_eq!(stored(&f)[..2], ["Mine", "Heading"]);
+    load(&mut f, &src, MERGE);
+    f.svc.document_mut(f.doc).unwrap().dirty = false;
+    let before = f.svc.undo_history(f.doc).unwrap().undo.len();
+    let order = stored(&f);
+    assert_eq!(order[..2], ["Mine", "Heading"]);
+    load(&mut f, &src, MERGE);
+    assert_eq!(f.svc.undo_history(f.doc).unwrap().undo.len(), before);
+    assert!(!f.svc.document(f.doc).unwrap().dirty);
+    assert_eq!(stored(&f), order);
+}
+
+/// Review 5 SEC MEDIUM-1: 10,000 chained styles with long shared-prefix
+/// names load in near-linear time (was 52 s; well under a second in
+/// release, the bound is generous for debug builds under load).
+#[test]
+fn a_long_parent_chain_loads_quickly() {
+    use tally_model::{CellStyleData, StyleData};
+    let p = "S".repeat(240);
+    let mut style = StyleData::default();
+    style.font.bold = true;
+    let cell_styles: Vec<CellStyleData> = (0..10_000)
+        .map(|i| CellStyleData {
+            name: format!("{p}{i:05}"),
+            parent: Some(if i == 0 {
+                "Default".into()
+            } else {
+                format!("{p}{:05}", i - 1)
+            }),
+            style: style.clone(),
+        })
+        .collect();
+    let src = StyleSource {
+        cell_styles,
+        page_setup: None,
+    };
+    let mut f = Fixture::new();
+    let t = std::time::Instant::now();
+    let r = load(&mut f, &src, MERGE);
+    let took = t.elapsed();
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert!(took.as_secs() < 10, "{took:?}");
+    assert_eq!(f.svc.document(f.doc).unwrap().wb.cell_styles.len(), 10_000);
+}

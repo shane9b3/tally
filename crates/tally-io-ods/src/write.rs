@@ -988,6 +988,7 @@ fn write_content<W: Write + Seek>(
     write_database_ranges(&mut s, data);
     // Wave 5: `table:data-pilot-tables` follows `table:database-ranges`.
     crate::v04::write_pivots(&mut s, data);
+    report.warnings.extend(crate::tools::pivot_warnings(data));
     s.push_str("</office:spreadsheet></office:body></office:document-content>");
     flush(&mut s, zip)
 }

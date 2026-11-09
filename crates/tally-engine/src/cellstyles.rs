@@ -15,7 +15,7 @@
 //! (header row, body, total row, left label column; borders, fills, fonts
 //! and number formats) as direct formatting.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tally_api::{ApiError, AutoFormatOptions, CellStyleDto, RangeDto, StyleDto};
 use tally_model::{BorderLine, BorderStyle, CellStyleData, DisplayData, HAlign, StyleData, VAlign};
@@ -97,8 +97,9 @@ pub fn table_of(stored: &[CellStyleData]) -> Vec<CellStyleData> {
             None => out.extend(builtin_data(b)),
         }
     }
+    let mut seen: HashSet<&str> = HashSet::with_capacity(stored.len());
     for s in stored {
-        if !is_builtin(&s.name) && !out.iter().any(|x| x.name == s.name) {
+        if !is_builtin(&s.name) && seen.insert(s.name.as_str()) {
             out.push(s.clone());
         }
     }
@@ -262,9 +263,17 @@ pub fn remap_all(wb: &mut Workbook, mut f: impl FnMut(&mut StyleTable, StyleId) 
 /// definition differs in the current table (after a define, a delete or
 /// an undo).
 pub fn after_table_change(wb: &mut Workbook, old: &[CellStyleData]) {
-    let lookup = |list: &[CellStyleData], name: &str| -> Option<StyleData> {
-        list.iter()
-            .find(|s| s.name == name)
+    // Name indexes: tables hold up to MAX_CELL_STYLES entries, so linear
+    // lookups per name would be quadratic.
+    fn index(list: &[CellStyleData]) -> HashMap<&str, &CellStyleData> {
+        let mut m = HashMap::with_capacity(list.len());
+        for s in list {
+            m.entry(s.name.as_str()).or_insert(s);
+        }
+        m
+    }
+    let lookup = |list: &HashMap<&str, &CellStyleData>, name: &str| -> Option<StyleData> {
+        list.get(name)
             .map(|s| s.style.clone())
             .or_else(|| builtin_data(name).map(|b| b.style))
             .map(|mut s| {
@@ -272,6 +281,7 @@ pub fn after_table_change(wb: &mut Workbook, old: &[CellStyleData]) {
                 s
             })
     };
+    let (old_ix, cur_ix) = (index(old), index(&wb.cell_styles));
     let mut names: Vec<String> = old.iter().map(|s| s.name.clone()).collect();
     names.extend(wb.cell_styles.iter().map(|s| s.name.clone()));
     names.extend(BUILTIN.iter().map(|s| s.to_string()));
@@ -279,15 +289,15 @@ pub fn after_table_change(wb: &mut Workbook, old: &[CellStyleData]) {
     names.dedup();
     let mut changed: HashMap<String, (StyleData, StyleData)> = HashMap::new();
     for n in names {
-        let before = lookup(old, &n);
-        let after = lookup(&wb.cell_styles, &n);
+        let before = lookup(&old_ix, &n);
+        let after = lookup(&cur_ix, &n);
         match (before, after) {
             (Some(b), Some(a)) if b != a => {
                 changed.insert(n, (b, a));
             }
             (Some(b), None) => {
                 // Deleted: fall back to Default.
-                let a = lookup(&wb.cell_styles, "Default").unwrap_or_default();
+                let a = lookup(&cur_ix, "Default").unwrap_or_default();
                 changed.insert(n, (b, a));
             }
             _ => {}

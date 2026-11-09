@@ -28,7 +28,7 @@
 //! Unlike AOO (whose `LoadStylesArgs` records no undo action) the whole
 //! load is one undo step.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tally_api::{ApiError, LoadStylesOptions};
@@ -36,7 +36,8 @@ use tally_model::{CellStyleData, PageSetupData, StyleData, WorkbookData};
 use tally_types::SheetId;
 
 use crate::cellstyles::{
-    after_table_change, builtin_data, check_name, is_builtin, rebase, table_of, MAX_CELL_STYLES,
+    after_table_change, builtin_data, check_name, is_builtin, rebase, table_of, BUILTIN,
+    MAX_CELL_STYLES,
 };
 use crate::undo::{Change, Effects};
 use crate::workbook::Workbook;
@@ -74,51 +75,86 @@ impl StyleSource {
     }
 }
 
-fn lookup(list: &[CellStyleData], name: &str) -> Option<StyleData> {
-    list.iter()
-        .find(|s| s.name == name)
-        .map(|s| s.style.clone())
-        .or_else(|| builtin_data(name).map(|b| b.style))
+/// A style list with a name index (lists hold up to [`MAX_CELL_STYLES`]
+/// entries, so linear lookups would make the load quadratic).
+struct Indexed {
+    list: Vec<CellStyleData>,
+    at: HashMap<String, usize>,
 }
 
-fn parent_of<'a>(list: &'a [CellStyleData], name: &str) -> Option<&'a str> {
-    list.iter()
-        .find(|s| s.name == name)
-        .and_then(|s| s.parent.as_deref())
-}
-
-/// Parent-chain depth of `name` in `list` (cut at [`MAX_DEPTH`]).
-fn depth(list: &[CellStyleData], name: &str) -> usize {
-    let mut d = 0;
-    let mut cur = name;
-    while let Some(p) = parent_of(list, cur) {
-        d += 1;
-        if d >= MAX_DEPTH || p == name {
-            break;
+impl Indexed {
+    fn new(list: Vec<CellStyleData>) -> Self {
+        let mut at = HashMap::with_capacity(list.len());
+        for (i, s) in list.iter().enumerate() {
+            at.entry(s.name.clone()).or_insert(i);
         }
-        cur = p;
+        Self { list, at }
     }
-    d
-}
 
-/// `true` when `parent`'s chain in `list` reaches `name`.
-fn loops(list: &[CellStyleData], name: &str, parent: &str) -> bool {
-    let mut cur = Some(parent);
-    for _ in 0..MAX_DEPTH {
-        match cur {
-            Some(c) if c == name => return true,
-            Some(c) => cur = parent_of(list, c),
-            None => return false,
+    fn get(&self, name: &str) -> Option<&CellStyleData> {
+        self.at.get(name).map(|&i| &self.list[i])
+    }
+
+    fn lookup(&self, name: &str) -> Option<StyleData> {
+        self.get(name)
+            .map(|s| s.style.clone())
+            .or_else(|| builtin_data(name).map(|b| b.style))
+    }
+
+    fn parent_of(&self, name: &str) -> Option<&str> {
+        self.get(name).and_then(|s| s.parent.as_deref())
+    }
+
+    /// Parent-chain depth of `name` (cut at [`MAX_DEPTH`]).
+    fn depth(&self, name: &str) -> usize {
+        let mut d = 0;
+        let mut cur = name;
+        while let Some(p) = self.parent_of(cur) {
+            d += 1;
+            if d >= MAX_DEPTH || p == name {
+                break;
+            }
+            cur = p;
+        }
+        d
+    }
+
+    /// `true` when `parent`'s chain reaches `name`.
+    fn loops(&self, name: &str, parent: &str) -> bool {
+        let mut cur = Some(parent);
+        for _ in 0..MAX_DEPTH {
+            match cur {
+                Some(c) if c == name => return true,
+                Some(c) => cur = self.parent_of(c),
+                None => return false,
+            }
+        }
+        true
+    }
+
+    fn put(&mut self, entry: CellStyleData) {
+        match self.at.get(&entry.name) {
+            Some(&i) => self.list[i] = entry,
+            None => {
+                self.at.insert(entry.name.clone(), self.list.len());
+                self.list.push(entry);
+            }
         }
     }
-    true
 }
 
-fn put(list: &mut Vec<CellStyleData>, entry: CellStyleData) {
-    match list.iter_mut().find(|s| s.name == entry.name) {
-        Some(s) => *s = entry,
-        None => list.push(entry),
+/// This document's stored styles in their stored order, then the
+/// built-ins it does not store (so they can follow a replaced parent;
+/// unchanged ones are dropped again before the comparison with the old
+/// table, so a load that changes nothing leaves the table as it was).
+fn work_of(old: &[CellStyleData]) -> Vec<CellStyleData> {
+    let mut work = old.to_vec();
+    for b in BUILTIN {
+        if !old.iter().any(|s| s.name == b) {
+            work.extend(builtin_data(b));
+        }
     }
+    work
 }
 
 /// Copies the source's cell styles (see the module docs); the inverse
@@ -128,10 +164,12 @@ fn load_cell_styles(
     source: &[CellStyleData],
     overwrite: bool,
 ) -> Result<Vec<Change>, ApiError> {
-    let src = table_of(source);
+    let src = Indexed::new(table_of(source));
     let old = wb.cell_styles.clone();
-    let exists = |name: &str| is_builtin(name) || old.iter().any(|s| s.name == name);
+    let old_names: HashSet<&str> = old.iter().map(|s| s.name.as_str()).collect();
+    let exists = |name: &str| is_builtin(name) || old_names.contains(name);
     let mut picked: Vec<&CellStyleData> = src
+        .list
         .iter()
         .filter(|s| check_name(&s.name).is_ok() && s.name.trim() == s.name)
         .filter(|s| overwrite || !exists(&s.name))
@@ -144,9 +182,10 @@ fn load_cell_styles(
     }
     // Parents before children, so a copied parent is final when its
     // children are re-based on it.
-    picked.sort_by_key(|s| depth(&src, &s.name));
+    picked.sort_by_cached_key(|s| src.depth(&s.name));
     let names: HashSet<&str> = picked.iter().map(|s| s.name.as_str()).collect();
-    let mut work = table_of(&old);
+    let before = Indexed::new(work_of(&old));
+    let mut work = Indexed::new(before.list.clone());
     for s in &picked {
         let name = s.name.clone();
         let parent = if name == "Default" {
@@ -155,16 +194,16 @@ fn load_cell_styles(
             let p = s
                 .parent
                 .clone()
-                .filter(|p| *p != name && (lookup(&src, p).is_some() || lookup(&work, p).is_some()))
+                .filter(|p| *p != name && (src.lookup(p).is_some() || work.lookup(p).is_some()))
                 .unwrap_or_else(|| "Default".into());
-            Some(if loops(&work, &name, &p) {
+            Some(if work.loops(&name, &p) {
                 "Default".to_string()
             } else {
                 p
             })
         };
         let mut style = match parent.as_deref() {
-            Some(p) => match (lookup(&src, p), lookup(&work, p)) {
+            Some(p) => match (src.lookup(p), work.lookup(p)) {
                 (Some(theirs), Some(ours)) => rebase(&theirs, &s.style, &ours),
                 _ => s.style.clone(),
             },
@@ -172,31 +211,27 @@ fn load_cell_styles(
         };
         style.font.family = crate::fonts::own_family(style.font.family, wb.default_font.as_deref());
         style.style_name = Some(name.clone());
-        put(
-            &mut work,
-            CellStyleData {
-                name,
-                parent,
-                style,
-            },
-        );
+        work.put(CellStyleData {
+            name,
+            parent,
+            style,
+        });
     }
     // This document's other styles follow a replaced parent.
-    let before = table_of(&old);
-    let mut rest: Vec<String> = work
+    let mut rest: Vec<(usize, usize)> = work
+        .list
         .iter()
-        .filter(|s| !names.contains(s.name.as_str()))
-        .map(|s| s.name.clone())
+        .enumerate()
+        .filter(|(_, s)| !names.contains(s.name.as_str()))
+        .map(|(i, s)| (work.depth(&s.name), i))
         .collect();
-    rest.sort_by_key(|n| depth(&work, n));
-    for n in rest {
-        let Some(child) = work.iter().find(|s| s.name == n).cloned() else {
-            continue;
-        };
+    rest.sort_by_key(|&(d, _)| d);
+    for (_, i) in rest {
+        let child = work.list[i].clone();
         let Some(p) = child.parent.as_deref() else {
             continue;
         };
-        let (Some(was), Some(now)) = (lookup(&before, p), lookup(&work, p)) else {
+        let (Some(was), Some(now)) = (before.lookup(p), work.lookup(p)) else {
             continue;
         };
         if was == now {
@@ -204,13 +239,14 @@ fn load_cell_styles(
         }
         let mut style = rebase(&was, &child.style, &now);
         style.style_name = Some(child.name.clone());
-        put(&mut work, CellStyleData { style, ..child });
+        work.put(CellStyleData { style, ..child });
     }
     // Built-ins are stored only when this document had them stored or
     // they now differ from AOO's.
+    let mut work = work.list;
     work.retain(|s| {
         !is_builtin(&s.name)
-            || old.iter().any(|o| o.name == s.name)
+            || old_names.contains(s.name.as_str())
             || builtin_data(&s.name).as_ref() != Some(s)
     });
     if work == old {

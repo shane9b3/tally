@@ -365,7 +365,9 @@ loses.
   outside the source but below its width is taken as a source column, `empty`
   / `noempty` read as `=` / `<>` "" and at most 8 conditions are kept. A
   pivot over a named database range (`table:database-source-table`) has no
-  place for the filter in ODF; it is not written there.
+  place for the filter in ODF (AOO 4.1 writes `WriteDPFilter` only inside
+  `table:source-cell-range`, XMLExportDataPilot.cxx); it is not written
+  and the save reports a warning (`tools::pivot_warnings`).
 - **Outline**: `table:table-row-group` / `table:table-column-group`
   (nested, `table:display="false"` for collapsed). The rows/columns of a
   collapsed group are written `table:visibility="collapse"` as AOO does;
