@@ -256,18 +256,21 @@ fn named_expressions_round_trip() {
     wb.names = vec![
         NameData {
             base_cell: None,
+            usage: Default::default(),
             name: "Total".into(),
             sheet: None,
             formula: "of:=[$Sheet1.$A$1:.$B$5]".into(),
         },
         NameData {
             base_cell: None,
+            usage: Default::default(),
             name: "Rate".into(),
             sheet: None,
             formula: "of:=0.07*2".into(),
         },
         NameData {
             base_cell: None,
+            usage: Default::default(),
             name: "Local".into(),
             sheet: Some(1),
             formula: "of:=[$'My Sheet'.$C$3]".into(),

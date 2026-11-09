@@ -1609,14 +1609,22 @@ export class WebMockClient extends MockClient {
       case "defineName": {
         const d = this.docExt(doc);
         const sheetName = op.scope === null ? null : `Sheet${op.scope}`;
-        d.names = d.names.filter((n) => !(n.name.toLowerCase() === op.name.toLowerCase() && n.scope === op.scope));
-        d.names.push({ name: op.name, scope: op.scope, refersTo: op.refersTo, sheetName });
+        // A redefinition keeps the usage flags (the engine's NameTable::define).
+        const old = d.names.find((n) => n.name.toLowerCase() === op.name.toLowerCase() && n.scope === op.scope);
+        d.names = d.names.filter((n) => n !== old);
+        d.names.push({ name: op.name, scope: op.scope, refersTo: op.refersTo, sheetName, usage: old ? { ...old.usage } : { printRange: false, filter: false, repeatRow: false, repeatColumn: false } });
         d.names.sort((a, b) => (a.scope ?? -1) - (b.scope ?? -1) || a.name.localeCompare(b.name));
         return [];
       }
       case "deleteName": {
         const d = this.docExt(doc);
         d.names = d.names.filter((n) => !(n.name.toLowerCase() === op.name.toLowerCase() && n.scope === op.scope));
+        return [];
+      }
+      case "setNameUsage": {
+        const n = this.docExt(doc).names.find((x) => x.name.toLowerCase() === op.name.toLowerCase() && x.scope === op.scope);
+        if (!n) return fail("not_found", `no name "${op.name}"`);
+        n.usage = { ...op.usage };
         return [];
       }
       case "setArrayFormula": {

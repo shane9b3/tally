@@ -1768,6 +1768,12 @@ fn write_named_expressions(s: &mut String, names: &[&NameData], data: &WorkbookD
                 escape_attr(&base, s);
                 s.push_str(r#"" table:cell-range-address=""#);
                 escape_attr(inner, s);
+                // AOO writes the usage flags on ranges only
+                // (`ScXMLExport::WriteNamedExpressions`).
+                if let Some(usage) = n.usage.to_odf() {
+                    s.push_str(r#"" table:range-usable-as=""#);
+                    s.push_str(&usage);
+                }
                 s.push_str(r#""/>"#);
             }
             None => {

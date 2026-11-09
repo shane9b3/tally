@@ -45,6 +45,7 @@ export type { ParamInfo } from "./generated/ParamInfo";
 export type { HAlign } from "./generated/HAlign";
 export type { MenuActionEvent } from "./generated/MenuActionEvent";
 export type { NameInfo } from "./generated/NameInfo";
+export type { NameUsage } from "./generated/NameUsage";
 export type { Op } from "./generated/Op";
 export type { OpError } from "./generated/OpError";
 export type { PasteOperation } from "./generated/PasteOperation";

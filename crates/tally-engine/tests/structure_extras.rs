@@ -248,6 +248,7 @@ fn imported_names_use_base_cells_and_survive_wide_grid_collisions() {
         sheet: None,
         formula: "of:=[.B1]".into(),
         base_cell: Some((0, 0, 2)),
+        usage: Default::default(),
     });
     // `Rel2` is a cell reference in a 16k-column grid, a name in AOO.
     data.names.push(NameData {
@@ -255,12 +256,14 @@ fn imported_names_use_base_cells_and_survive_wide_grid_collisions() {
         sheet: None,
         formula: "of:=[.$B$1]*100".into(),
         base_cell: None,
+        usage: Default::default(),
     });
     data.names.push(NameData {
         name: "bad name".into(),
         sheet: None,
         formula: "of:=1".into(),
         base_cell: None,
+        usage: Default::default(),
     });
     let doc = tally_engine::Document::new(
         tally_api::DocId(1),

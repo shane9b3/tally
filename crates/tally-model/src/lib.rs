@@ -1547,6 +1547,75 @@ pub struct NameData {
     /// first sheet.
     #[serde(default)]
     pub base_cell: Option<(u32, u32, u32)>,
+    /// What the name is offered for (AOO "More >>" options of Define
+    /// Names; ODS `table:range-usable-as`).
+    #[serde(default)]
+    pub usage: NameUsage,
+}
+
+/// The usage flags of a named range (AOO `ScRangeData` types
+/// `RT_PRINTAREA`, `RT_CRITERIA`, `RT_ROWHEADER`, `RT_COLHEADER`; ODS
+/// `table:range-usable-as` tokens `print-range`, `filter`, `repeat-row`,
+/// `repeat-column`). They do not change what the name evaluates to: they
+/// list the name in the print range and Advanced Filter dialogs.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct NameUsage {
+    /// Offered as a print range.
+    #[serde(default)]
+    pub print_range: bool,
+    /// Offered as an Advanced Filter criteria range.
+    #[serde(default)]
+    pub filter: bool,
+    /// Offered as rows to repeat.
+    #[serde(default)]
+    pub repeat_row: bool,
+    /// Offered as columns to repeat.
+    #[serde(default)]
+    pub repeat_column: bool,
+}
+
+impl NameUsage {
+    /// `true` if no flag is set.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The ODS `table:range-usable-as` value in AOO's token order
+    /// (`ScXMLExport::WriteNamedExpressions`: repeat-column, repeat-row,
+    /// filter, print-range); `None` without flags.
+    pub fn to_odf(&self) -> Option<String> {
+        let mut out: Vec<&str> = Vec::new();
+        if self.repeat_column {
+            out.push("repeat-column");
+        }
+        if self.repeat_row {
+            out.push("repeat-row");
+        }
+        if self.filter {
+            out.push("filter");
+        }
+        if self.print_range {
+            out.push("print-range");
+        }
+        (!out.is_empty()).then(|| out.join(" "))
+    }
+
+    /// Parses `table:range-usable-as` (whitespace-separated tokens;
+    /// unknown tokens and `none` are ignored, as in AOO
+    /// `ScXMLImport::GetRangeType`).
+    pub fn from_odf(s: &str) -> Self {
+        let mut u = Self::default();
+        for tok in s.split_ascii_whitespace() {
+            match tok {
+                "repeat-column" => u.repeat_column = true,
+                "repeat-row" => u.repeat_row = true,
+                "filter" => u.filter = true,
+                "print-range" => u.print_range = true,
+                _ => {}
+            }
+        }
+        u
+    }
 }
 
 /// Document-level settings.
@@ -2086,6 +2155,7 @@ mod tests {
             styles: vec![bold],
             names: vec![NameData {
                 base_cell: None,
+                usage: Default::default(),
                 name: "Total".into(),
                 sheet: None,
                 formula: "of:=[$Orders.$A$1:.$A$2]".into(),

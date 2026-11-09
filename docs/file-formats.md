@@ -422,6 +422,16 @@ loses.
   (`Rel2`, `Tax1`) is renamed with a trailing `_` (`Rel2_`), the file's
   formulas still resolve the original spelling, and `WorkbookInfo.warnings`
   lists the renames; invalid names are dropped with a warning.
+- **Name usage flags** (T20): `table:range-usable-as` on `table:named-range`
+  (whitespace-separated `print-range`, `filter`, `repeat-row`,
+  `repeat-column`; unknown tokens such as `none` are ignored, as in AOO
+  `ScXMLImport::GetRangeType`) is read into `NameData::usage` and written
+  back in AOO's token order (repeat-column, repeat-row, filter, print-range;
+  `ScXMLExport::WriteNamedExpressions`). Like AOO, only names that are cell
+  ranges carry it: `table:named-expression` has no such attribute. XLSX has
+  no equivalent; the flags are not written to `definedName` (built-in
+  `_xlnm.Print_Area` / `_xlnm.Print_Titles` map to the sheet's print range
+  and repeats, not to flags).
 
 ### XLSX
 

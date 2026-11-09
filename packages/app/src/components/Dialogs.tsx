@@ -3,13 +3,14 @@
  * Custom number format, Sort…, Find & Replace, Paste Special, Define Name,
  * Manage Names and a generic confirmation.
  */
-import { tsvDims, type NameInfo, type PasteOperation, type PasteSelection, type SortKey } from "@tally/bridge";
+import { tsvDims, type NameInfo, type NameUsage, type PasteOperation, type PasteSelection, type SortKey } from "@tally/bridge";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useController } from "../context";
 import { useW56Store } from "../data/store";
 import { t } from "../i18n";
 import { a1, ALL_KINDS, DEFAULT_PASTE_SPECIAL, isValidName, PASTE_KINDS, pasteChoiceValid, pasteKinds, pasteShiftAllowed, pasteWhat, searchIn, type PasteKind, type PasteShift, type PasteSpecialChoice } from "../dataOps";
 import { useDataStore } from "../stores/dataStore";
+import { NO_USAGE } from "../nameUsage";
 import { NUMBER_FORMATS } from "../formats";
 import { formatNumberLite } from "../numfmtLite";
 import { useDocStore } from "../stores/docStore";
@@ -654,9 +655,22 @@ function DefineNameDialog({ d }: { d: Extract<DialogState, { kind: "defineName" 
   const [name, setName] = useState(d.name);
   const [scope, setScope] = useState<number | null>(d.scope);
   const [refersTo, setRefersTo] = useState(d.refersTo);
+  const [usage, setUsage] = useState<NameUsage>(d.replacing?.usage ?? NO_USAGE);
   const ref = useAutoFocus();
   const err = nameError(name.trim(), scope, names, d.replacing);
   const hard = name.trim() !== "" && !isValidName(name.trim());
+  // Typing the name of an existing entry shows its options (AOO ScNameDlg::UpdateChecks).
+  const changeName = (v: string) => {
+    setName(v);
+    const hit = names.find((n) => n.name.toLowerCase() === v.trim().toLowerCase() && n.scope === scope);
+    if (hit) setUsage({ ...NO_USAGE, ...hit.usage });
+  };
+  const usageBoxes: [keyof NameUsage, string, string][] = [
+    ["printRange", t("names.usePrintRange", "Print range"), "name-use-print"],
+    ["filter", t("names.useFilter", "Filter"), "name-use-filter"],
+    ["repeatColumn", t("names.useRepeatColumn", "Repeat column"), "name-use-repeat-col"],
+    ["repeatRow", t("names.useRepeatRow", "Repeat row"), "name-use-repeat-row"],
+  ];
   return (
     <Shell
       title={d.replacing ? t("dlg.editName", "Edit name") : t("dlg.defineName", "Define name")}
@@ -665,14 +679,19 @@ function DefineNameDialog({ d }: { d: Extract<DialogState, { kind: "defineName" 
       testId="define-name-dialog"
       valid={name.trim() !== "" && !hard && refersTo.trim() !== ""}
       onSubmit={() => {
-        void ctl.defineName(name.trim(), scope, refersTo, d.replacing).then(() => {
+        // Only send the flags when they differ from what the definition keeps
+        // (a redefinition keeps the target's flags; a new name has none).
+        const target = names.find((n) => n.name.toLowerCase() === name.trim().toLowerCase() && n.scope === scope);
+        const base = { ...NO_USAGE, ...target?.usage };
+        const changed = (Object.keys(NO_USAGE) as (keyof NameUsage)[]).some((k) => usage[k] !== base[k]);
+        void ctl.defineName(name.trim(), scope, refersTo, d.replacing, changed ? usage : undefined).then(() => {
           if (d.replacing) useUiStore.getState().openDialog({ kind: "manageNames" });
         });
       }}
     >
       <label className={styles.field}>
         <span>{t("dialog.name", "Name")}</span>
-        <input ref={ref} className={styles.input} value={name} spellCheck={false} placeholder={t("dlg.nameExample", "e.g. TaxRate")} onChange={(e) => setName(e.target.value)} data-testid="name-name" />
+        <input ref={ref} className={styles.input} value={name} spellCheck={false} placeholder={t("dlg.nameExample", "e.g. TaxRate")} onChange={(e) => changeName(e.target.value)} data-testid="name-name" />
       </label>
       {err ? <p className={hard ? styles.error : styles.note}>{err}</p> : null}
       <label className={`${styles.field} ${styles.gap}`}>
@@ -691,6 +710,18 @@ function DefineNameDialog({ d }: { d: Extract<DialogState, { kind: "defineName" 
         <input className={`${styles.input} ${styles.mono}`} value={refersTo} spellCheck={false} onChange={(e) => setRefersTo(e.target.value)} data-testid="name-refers" />
       </label>
       <p className={styles.note}>{t("dlg.refersNote", "A range like $Sheet1.$A$1:$B$5, or a constant like 0.07. Use the name in formulas: =SUM({name}).", { name: name.trim() || t("dialog.name", "Name") })}</p>
+      <fieldset className={styles.fieldset} disabled={name.trim() === ""} data-testid="name-usage">
+        <legend className={styles.legend}>{t("names.rangeOptions", "Range options")}</legend>
+        <div className={styles.optionGrid}>
+          {usageBoxes.map(([k, label, testId]) => (
+            <label key={k} className={styles.checkRow}>
+              <input type="checkbox" checked={usage[k]} onChange={(e) => setUsage((u) => ({ ...u, [k]: e.target.checked }))} data-testid={testId} />
+              <span>{label}</span>
+            </label>
+          ))}
+        </div>
+        <p className={styles.note}>{t("names.rangeOptionsNote", "Offers the range in Page Setup (print range, rows and columns to repeat) and in Advanced Filter.")}</p>
+      </fieldset>
     </Shell>
   );
 }

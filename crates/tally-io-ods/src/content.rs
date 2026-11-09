@@ -1434,6 +1434,11 @@ impl Parser<'_> {
                             }
                             self.names.push(NameData {
                                 base_cell: None,
+                                usage: c
+                                    .attr("table:range-usable-as")
+                                    .filter(|_| c.name == "table:named-range")
+                                    .map(tally_model::NameUsage::from_odf)
+                                    .unwrap_or_default(),
                                 name: name.to_string(),
                                 sheet,
                                 formula,

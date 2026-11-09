@@ -549,3 +549,10 @@
   height: 24px;
   font-size: 11px;
 }
+
+/* The list of flagged names under a print range / repeat field. */
+.nameChoice {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 6px;
+}

@@ -563,7 +563,9 @@ fn typed_op(op: &Op) -> CmdResult<()> {
         Op::AddSheet { name: Some(n), .. } | Op::RenameSheet { name: n, .. } => {
             name("the sheet name", n)
         }
-        Op::DefineName { name: n, .. } | Op::DeleteName { name: n, .. } => name("the name", n),
+        Op::DefineName { name: n, .. }
+        | Op::DeleteName { name: n, .. }
+        | Op::SetNameUsage { name: n, .. } => name("the name", n),
         Op::SetFrozen { rows, cols, .. } => {
             insert_span("the frozen rows", 0, *rows, MAX_ROWS)?;
             insert_span("the frozen columns", 0, *cols, MAX_COLS)

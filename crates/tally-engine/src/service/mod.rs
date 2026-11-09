@@ -975,6 +975,12 @@ impl DocumentService for EngineService {
                     scope: e.scope,
                     refers_to: wb.name_text_of(def),
                     sheet_name,
+                    usage: tally_api::NameUsage {
+                        print_range: e.usage.print_range,
+                        filter: e.usage.filter,
+                        repeat_row: e.usage.repeat_row,
+                        repeat_column: e.usage.repeat_column,
+                    },
                 })
             })
             .collect();

@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use tally_api::ApiError;
 use tally_formula::{Dialect, Expr, Formula, NameId, NameRef};
+use tally_model::NameUsage;
 use tally_types::{CellAddr, ErrorKind, SheetId};
 
 use crate::deps::DepIndex;
@@ -53,6 +54,10 @@ pub struct NameEntry {
     pub scope: Option<SheetId>,
     /// The definition; `None` after deletion.
     pub def: Option<NameDef>,
+    /// Usage flags (print range, filter criteria, repeat row/column):
+    /// AOO `ScRangeData` types `RT_PRINTAREA` … `RT_COLHEADER`. Kept when
+    /// the name is redefined, cleared when it is deleted.
+    pub usage: NameUsage,
 }
 
 /// The workbook's names. Each part sits behind an `Arc` and is edited
@@ -142,6 +147,7 @@ impl NameTable {
             name: name.into(),
             scope,
             def: Some(def),
+            usage: NameUsage::default(),
         });
         Arc::make_mut(&mut self.index).insert((name_key(name), scope), id);
         NameId(id)
@@ -159,10 +165,27 @@ impl NameTable {
         match Arc::make_mut(&mut self.entries).get_mut(id.0 as usize) {
             Some(e) if e.def.is_some() => {
                 e.def = None;
+                e.usage = NameUsage::default();
                 true
             }
             _ => false,
         }
+    }
+
+    /// Sets the usage flags of the defined name `id`; `false` if it is not
+    /// defined.
+    pub fn set_usage(&mut self, id: NameId, usage: NameUsage) -> bool {
+        if self
+            .entries
+            .get(id.0 as usize)
+            .is_none_or(|e| e.def.is_none())
+        {
+            return false;
+        }
+        if let Some(e) = Arc::make_mut(&mut self.entries).get_mut(id.0 as usize) {
+            e.usage = usage;
+        }
+        true
     }
 
     /// Defined names with their ids.
@@ -208,6 +231,7 @@ impl NameTable {
         for e in Arc::make_mut(&mut self.entries).iter_mut() {
             if e.scope == Some(sheet) {
                 e.def = None;
+                e.usage = NameUsage::default();
             }
         }
     }
@@ -530,6 +554,7 @@ pub fn load_from_data(wb: &mut Workbook, names: &[tally_model::NameData], ids: &
                 base,
             },
         );
+        wb.names.set_usage(id, n.usage);
         if let Some(a) = alias {
             wb.names.add_alias(&a, scope, id);
             renamed.push(format!("{a} → {name}"));

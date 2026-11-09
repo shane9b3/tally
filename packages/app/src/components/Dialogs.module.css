@@ -253,6 +253,24 @@
   accent-color: var(--tally-accent);
 }
 
+.fieldset {
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.fieldset:disabled {
+  opacity: 0.55;
+}
+
+.legend {
+  padding: 0;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .optionGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;

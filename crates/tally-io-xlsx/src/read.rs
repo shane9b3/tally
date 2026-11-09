@@ -439,6 +439,7 @@ fn defined_names(
         };
         out.push(NameData {
             base_cell: None,
+            usage: Default::default(),
             name,
             sheet,
             formula,

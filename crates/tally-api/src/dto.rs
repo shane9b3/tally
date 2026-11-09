@@ -640,6 +640,16 @@ pub enum Op {
         /// Its scope.
         scope: Option<SheetId>,
     },
+    /// Sets the usage flags of a defined name (AOO Define Names "More >>"
+    /// options: print range, filter, repeat row, repeat column).
+    SetNameUsage {
+        /// The name.
+        name: String,
+        /// Its scope.
+        scope: Option<SheetId>,
+        /// The flags.
+        usage: NameUsage,
+    },
     /// Enters an array (Ctrl+Shift+Enter) formula over `range`.
     SetArrayFormula {
         /// Sheet.
@@ -2082,6 +2092,29 @@ pub struct NameInfo {
     pub refers_to: String,
     /// Name of the scope sheet.
     pub sheet_name: Option<String>,
+    /// Usage flags.
+    #[serde(default)]
+    pub usage: NameUsage,
+}
+
+/// What a named range is offered for (AOO `RT_PRINTAREA`, `RT_CRITERIA`,
+/// `RT_ROWHEADER`, `RT_COLHEADER`; ODS `table:range-usable-as`).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct NameUsage {
+    /// Listed as a print range (Page Setup ▸ Sheet).
+    #[serde(default)]
+    pub print_range: bool,
+    /// Listed as an Advanced Filter criteria range.
+    #[serde(default)]
+    pub filter: bool,
+    /// Listed as rows to repeat.
+    #[serde(default)]
+    pub repeat_row: bool,
+    /// Listed as columns to repeat.
+    #[serde(default)]
+    pub repeat_column: bool,
 }
 
 /// The AutoFilter of a sheet.

@@ -9,9 +9,12 @@
 import type { AggFn, DeleteContentsFlags, NameLabelFlags, ScenarioDto, SolverConstraint, SolverOp, SolverResult, StdFilterOptions } from "@tally/bridge";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cx, useController } from "../context";
-import { a1 } from "../dataOps";
+import { a1, parseAbsoluteRef } from "../dataOps";
 import { t } from "../i18n";
+import { criteriaChoices } from "../nameUsage";
 import { rgbaToHex } from "../palette";
+import { NameChoiceSelect } from "../components/NameChoiceSelect";
+import { useDataStore } from "../stores/dataStore";
 import { useDocStore } from "../stores/docStore";
 import { useUiStore } from "../stores/uiStore";
 import dlg from "../components/Dialogs.module.css";
@@ -88,12 +91,21 @@ export function StandardFilterDialog({ d }: { d: D<"standardFilter"> }) {
   const conds = filterConditions(rows);
   const copyCell = copyTo.trim() === "" ? null : ctl.w56.parseCellRef(copyTo);
   const criteriaRange = parseRangeText(criteria);
+  // Names marked "filter" (AOO ScSpecialFilterDlg::Init lists RT_CRITERIA names).
+  const names = useDataStore((s) => s.names);
+  useEffect(() => {
+    void ctl.refreshNames();
+  }, [ctl]);
+  const criteriaNames = useMemo(() => criteriaChoices(names), [names]);
+  const sheets = useDocStore((s) => s.info?.sheets ?? []);
+  const criteriaSheetName = parseAbsoluteRef(criteria)?.sheet.toLowerCase();
+  const criteriaSheet = sheets.find((s) => s.name.toLowerCase() === criteriaSheetName)?.id ?? ctl.sheet;
   const error = advanced ? (criteriaRange ? null : t("dd.chooseCriteria", "Choose the criteria range.")) : filterError(conds, options);
   const copyError = copyTo.trim() !== "" && !copyCell ? t("dd.notACell", "“{ref}” is not a cell.", { ref: copyTo }) : null;
   const setRow = (i: number, p: Partial<FilterRow>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...p } : r)));
   const submit = async () => {
     const opts: StdFilterOptions = { ...options, copyTo: copyCell };
-    const op = advanced && criteriaRange ? advancedFilterOp(ctl.sheet, d.range, { sheet: ctl.sheet, range: criteriaRange }, opts) : standardFilterOp(ctl.sheet, d.range, conds, opts);
+    const op = advanced && criteriaRange ? advancedFilterOp(ctl.sheet, d.range, { sheet: criteriaSheet, range: criteriaRange }, opts) : standardFilterOp(ctl.sheet, d.range, conds, opts);
     await ctl.w56.applyOps(advanced ? t("msg.undo.advancedFilter", "Advanced filter") : t("msg.undo.standardFilter", "Standard filter"), [op]);
     await ctl.refreshFilter();
   };
@@ -107,6 +119,7 @@ export function StandardFilterDialog({ d }: { d: D<"standardFilter"> }) {
       <Segmented label={t("dd.filterKind", "Filter kind")} value={advanced ? "advanced" : "standard"} onChange={(v) => setAdvanced(v === "advanced")} options={[{ id: "standard", label: t("dd.conditions", "Conditions") }, { id: "advanced", label: t("dd.criteriaRange", "Criteria range") }]} />
       {advanced ? (
         <div className={dlg.gap}>
+          <NameChoiceSelect className={dlg.select} choices={criteriaNames} text={criteria} onPick={setCriteria} label={t("names.criteriaNames", "Criteria range names")} testId="filter-criteria-names" />
           <RangeField label={t("dd.readCriteriaFrom", "Read filter criteria from")} value={criteria} onChange={setCriteria} testId="filter-criteria" />
           <p className={styles.muted}>{t("dd.criteriaHelp", "The first row of the criteria range holds column labels; each further row is one alternative (OR), the cells of a row combine with AND.")}</p>
         </div>

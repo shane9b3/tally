@@ -92,6 +92,7 @@ fn sample(epoch: DateEpoch) -> WorkbookData {
         }],
         names: vec![NameData {
             base_cell: None,
+            usage: Default::default(),
             name: "Total".into(),
             sheet: None,
             formula: "of:=[$Data.$A$1:.$B$1]".into(),

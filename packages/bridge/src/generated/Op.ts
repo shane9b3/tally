@@ -20,6 +20,7 @@ import type { FillSheetOptions } from "./FillSheetOptions";
 import type { FindQuery } from "./FindQuery";
 import type { ImageDto } from "./ImageDto";
 import type { NameLabelFlags } from "./NameLabelFlags";
+import type { NameUsage } from "./NameUsage";
 import type { NoteDto } from "./NoteDto";
 import type { OutlineAxis } from "./OutlineAxis";
 import type { PageSetupDto } from "./PageSetupDto";
@@ -257,7 +258,19 @@ name: string,
 /**
  * Its scope.
  */
-scope: number | null, } | { "type": "setArrayFormula", 
+scope: number | null, } | { "type": "setNameUsage", 
+/**
+ * The name.
+ */
+name: string, 
+/**
+ * Its scope.
+ */
+scope: number | null, 
+/**
+ * The flags.
+ */
+usage: NameUsage, } | { "type": "setArrayFormula", 
 /**
  * Sheet.
  */

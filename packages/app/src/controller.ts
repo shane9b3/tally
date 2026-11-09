@@ -21,6 +21,7 @@ import {
   type FillMode,
   type FilterOp,
   type NameInfo,
+  type NameUsage,
   type HAlign,
   type ShellClient,
   type Op,
@@ -2333,12 +2334,14 @@ export class AppController {
   };
 
   /** Defines (or redefines) a name; `replacing` is the entry being edited (renamed or re-scoped). */
-  defineName = async (name: string, scope: number | null, refersTo: string, replacing: NameInfo | null): Promise<boolean> => {
+  /** `usage` (the dialog's range options) is set in the same undo step; omitted, a redefinition keeps the flags. */
+  defineName = async (name: string, scope: number | null, refersTo: string, replacing: NameInfo | null, usage?: NameUsage): Promise<boolean> => {
     const ops: Op[] = [];
     if (replacing && (replacing.name.toLowerCase() !== name.toLowerCase() || replacing.scope !== scope)) {
       ops.push({ type: "deleteName", name: replacing.name, scope: replacing.scope });
     }
     ops.push({ type: "defineName", name, scope, refersTo: refersTo.trim().replace(/^=/, "") });
+    if (usage) ops.push({ type: "setNameUsage", name, scope, usage });
     const res = await this.apply(replacing ? t("dlg.editName", "Edit name") : t("dlg.defineName", "Define name"), ops);
     await this.refreshNames();
     return res !== null && res.errors.length === 0;

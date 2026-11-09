@@ -832,6 +832,7 @@ fn resolve_name(
         sheet: local.and_then(|l| u32::try_from(l).ok()),
         formula: refs::absolute_sheets(&of),
         base_cell: None,
+        usage: Default::default(),
     });
 }
 

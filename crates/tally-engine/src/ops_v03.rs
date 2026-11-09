@@ -201,6 +201,7 @@ pub fn meta_op_cost(op: &Op) -> Option<u64> {
         // Names count too (security review 4, MEDIUM-T6).
         | Op::DefineName { .. }
         | Op::DeleteName { .. }
+        | Op::SetNameUsage { .. }
         // Outline and scenario edits are meta edits as well (HIGH-T5,
         // MEDIUM-T7).
         | Op::Group { .. }

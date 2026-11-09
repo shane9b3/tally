@@ -1091,6 +1091,28 @@ fn apply_op_inner(
             wb.refresh_name_dependents(&crate::names::name_key(name));
             Ok(inv.into_iter().collect())
         }
+        Op::SetNameUsage { name, scope, usage } => {
+            // The flags only list the name in dialogs (AOO `ScRangeData`
+            // types); no formula depends on them.
+            crate::protection::check_structure(wb)?;
+            let id = wb
+                .names
+                .lookup(name, *scope)
+                .filter(|id| wb.names.get(*id).is_some_and(|e| e.def.is_some()))
+                .ok_or_else(|| ApiError::not_found(format!("no name {name:?}")))?;
+            let usage = tally_model::NameUsage {
+                print_range: usage.print_range,
+                filter: usage.filter,
+                repeat_row: usage.repeat_row,
+                repeat_column: usage.repeat_column,
+            };
+            if wb.names.get(id).is_some_and(|e| e.usage == usage) {
+                return Ok(Vec::new());
+            }
+            let inv = crate::undo::names_snapshot_tx(wb, fx);
+            wb.names.set_usage(id, usage);
+            Ok(inv.into_iter().collect())
+        }
         Op::SetArrayFormula {
             sheet,
             range,

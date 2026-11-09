@@ -421,6 +421,7 @@ fn unsupported_things_are_reported() {
     wb.styles.push(fmt("0;-0;0;@"));
     wb.names.push(NameData {
         base_cell: None,
+        usage: Default::default(),
         name: "N".into(),
         sheet: None,
         formula: "of:=[$Orders.$A$1]".into(),
@@ -790,4 +791,76 @@ fn style_runs_round_trip() {
     assert_eq!(got, runs);
     assert!(back.styles[got[0].style as usize].font.bold);
     assert!(back.styles[got[1].style as usize].font.italic);
+}
+
+/// Name usage flags: `table:range-usable-as` on `table:named-range`, in
+/// AOO's token order (`ScXMLExport::WriteNamedExpressions`), read back
+/// token by token (`ScXMLImport::GetRangeType`); expressions carry none.
+#[test]
+fn named_range_usable_as_round_trips() {
+    let mut wb = sample();
+    let all = NameUsage {
+        print_range: true,
+        filter: true,
+        repeat_row: true,
+        repeat_column: true,
+    };
+    wb.names.push(NameData {
+        base_cell: None,
+        usage: all,
+        name: "Everything".into(),
+        sheet: None,
+        formula: "of:=[$Orders.$A$1:.$B$4]".into(),
+    });
+    wb.names.push(NameData {
+        base_cell: None,
+        usage: NameUsage {
+            filter: true,
+            ..NameUsage::default()
+        },
+        name: "Crit".into(),
+        sheet: Some(0),
+        formula: "of:=[$Orders.$D$1:.$D$2]".into(),
+    });
+    wb.names.push(NameData {
+        base_cell: None,
+        usage: all,
+        name: "Rate".into(),
+        sheet: None,
+        formula: "of:=0.07".into(),
+    });
+    let bytes = write_to_vec(&wb);
+    let xml = entry(&bytes, "content.xml");
+    assert!(
+        xml.contains(r#"table:range-usable-as="repeat-column repeat-row filter print-range""#),
+        "{xml}"
+    );
+    assert!(xml.contains(r#"table:range-usable-as="filter""#), "{xml}");
+    assert_eq!(
+        xml.matches("range-usable-as").count(),
+        2,
+        "not on expressions"
+    );
+    let back = read_ods(Cursor::new(bytes.clone()), &Limits::default()).unwrap();
+    let get = |n: &str| back.names.iter().find(|x| x.name == n).unwrap().usage;
+    assert_eq!(get("Everything"), all);
+    assert!(get("Crit").filter);
+    assert!(!get("Crit").print_range);
+    assert!(get("Rate").is_empty());
+    // Extra whitespace and unknown tokens (`none`) are tolerated.
+    let edited = with_content(&bytes, |x| {
+        x.replace(
+            r#"table:range-usable-as="filter""#,
+            r#"table:range-usable-as="  none   print-range  bogus""#,
+        )
+    });
+    let back = read_ods(Cursor::new(edited), &Limits::default()).unwrap();
+    let crit = back.names.iter().find(|x| x.name == "Crit").unwrap().usage;
+    assert_eq!(
+        crit,
+        NameUsage {
+            print_range: true,
+            ..NameUsage::default()
+        }
+    );
 }

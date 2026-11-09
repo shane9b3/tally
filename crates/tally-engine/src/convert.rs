@@ -509,6 +509,7 @@ impl Workbook {
             };
             names.push(NameData {
                 base_cell: crate::names::base_cell_of(self, def),
+                usage: e.usage,
                 name: e.name.to_string(),
                 sheet,
                 formula: print(&def.formula, def.base, Dialect::open_formula(), self),

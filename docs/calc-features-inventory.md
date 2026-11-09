@@ -236,7 +236,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Item | Status | Note |
 |---|---|---|
 | Define names | done | `data.defineName` (`⌘F3`), `data.manageNames` |
-| Name options (print range, filter, repeat) | missing | `NameData` has no usage flags (`tally-model/src/lib.rs:1440`); ODS `table:range-usable-as` is dropped |
+| Name options (print range, filter, repeat) | done (deviation T20) | Define Name "Range options" (`NameUsage`, op `SetNameUsage`); flagged names listed in Advanced Filter and Page Setup ▸ Sheet (`nameUsage.ts`); ODS `table:range-usable-as` read and written; XLSX has no equivalent |
 | Insert Name list, Create Names from labels | done | `data.createNamesFromLabels` |
 | Label ranges | missing | P3 |
 | Database ranges (define) | done | `data.defineDatabaseRange` |

@@ -32,7 +32,10 @@ import { sampleAndCall, useDocFormulaLang } from "../i18n/formulaNames";
 import { HF_LINE_MM, hfArea, hfAreaHeightMm, pageBoxes, type HfWhich } from "../print/hfLayout";
 import { rgbaToHex } from "../palette";
 import { useDocStore } from "../stores/docStore";
+import { useDataStore } from "../stores/dataStore";
 import type { DialogState } from "../stores/uiStore";
+import { printChoices } from "../nameUsage";
+import { NameChoiceSelect } from "./NameChoiceSelect";
 import {
   ALERT_STYLES,
   CF_RULE_TYPES,
@@ -1203,6 +1206,12 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
   const [printRange, setPrintRange] = useState(d.setup.printRange ? rangesText([d.setup.printRange]) : "");
   const [repeatRows, setRepeatRows] = useState(spanText(d.setup.repeatRows, "row"));
   const [repeatCols, setRepeatCols] = useState(spanText(d.setup.repeatCols, "col"));
+  // Names marked print range / repeat row / repeat column (AOO ScPrintAreasDlg::Impl_FillLists).
+  const names = useDataStore((st) => st.names);
+  useEffect(() => {
+    void ctl.refreshNames();
+  }, [ctl]);
+  const choices = useMemo(() => ({ print: printChoices(names, "printRange"), rows: printChoices(names, "repeatRow"), cols: printChoices(names, "repeatColumn") }), [names]);
   const set = (p: Partial<PageSetupDto>) => setS((o) => ({ ...o, ...p }));
   const pr = printRange.trim() === "" ? null : parseRanges(printRange);
   const rr = parseSpan(repeatRows, "row");
@@ -1343,13 +1352,20 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
               <Field label={t("v3.printRangeHint", "Print range (empty: the used area)")}>
                 <input className={cx(styles.input, styles.mono)} value={printRange} placeholder="A1:G15" spellCheck={false} onChange={(e) => setPrintRange(e.target.value)} data-testid="page-print-range" />
               </Field>
+              <NameChoiceSelect className={cx(styles.select, v3.nameChoice)} choices={choices.print} text={printRange} onPick={setPrintRange} label={t("names.printRangeNames", "Print range names")} testId="page-print-range-names" />
               <div className={cx(v3.grid2, styles.gap)}>
-                <Field label={t("print.repeatRows", "Rows to repeat")}>
-                  <input className={cx(styles.input, styles.mono)} value={repeatRows} placeholder="1:1" onChange={(e) => setRepeatRows(e.target.value)} data-testid="page-repeat-rows" />
-                </Field>
-                <Field label={t("print.repeatColumns", "Columns to repeat")}>
-                  <input className={cx(styles.input, styles.mono)} value={repeatCols} placeholder="A:A" onChange={(e) => setRepeatCols(e.target.value)} />
-                </Field>
+                <div>
+                  <Field label={t("print.repeatRows", "Rows to repeat")}>
+                    <input className={cx(styles.input, styles.mono)} value={repeatRows} placeholder="1:1" onChange={(e) => setRepeatRows(e.target.value)} data-testid="page-repeat-rows" />
+                  </Field>
+                  <NameChoiceSelect className={cx(styles.select, v3.nameChoice)} choices={choices.rows} text={repeatRows} onPick={setRepeatRows} label={t("names.repeatRowNames", "Names for rows to repeat")} testId="page-repeat-rows-names" />
+                </div>
+                <div>
+                  <Field label={t("print.repeatColumns", "Columns to repeat")}>
+                    <input className={cx(styles.input, styles.mono)} value={repeatCols} placeholder="A:A" onChange={(e) => setRepeatCols(e.target.value)} data-testid="page-repeat-cols" />
+                  </Field>
+                  <NameChoiceSelect className={cx(styles.select, v3.nameChoice)} choices={choices.cols} text={repeatCols} onPick={setRepeatCols} label={t("names.repeatColumnNames", "Names for columns to repeat")} testId="page-repeat-cols-names" />
+                </div>
               </div>
               <div className={styles.optionGrid}>
                 <Check label={t("v3.gridlines", "Gridlines")} checked={s.printGridlines} onChange={(x) => set({ printGridlines: x })} testId="page-gridlines" />

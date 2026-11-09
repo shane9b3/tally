@@ -1977,6 +1977,7 @@ export class MockClient implements EngineClientV4, ShellClient {
       case "deleteCols":
       case "defineName":
       case "deleteName":
+      case "setNameUsage":
       case "setArrayFormula":
       case "moveRange":
       case "mergeCells":
