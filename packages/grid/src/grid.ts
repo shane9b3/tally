@@ -16,7 +16,7 @@ import { AriaMirror } from "./aria";
 import { CellEditor } from "./editor";
 import { ObjectLayer, type AnchorAxes } from "./objectLayer";
 import { OUTLINE_LEVEL_PX, outlineHit, outlineLevels } from "./outline";
-import { Geometry, HEADER_HEIGHT, MIN_ROW_HEADER_WIDTH, NO_FROZEN, type Frozen } from "./geometry";
+import { Geometry, HEADER_HEIGHT, MIN_ROW_HEADER_WIDTH, NO_FROZEN, headerScale, type Frozen } from "./geometry";
 import { Interaction, type InteractionHost, type ResizeGuide } from "./interaction";
 import { AxisModel, ScrollAxisMap, clamp } from "./layout";
 import { CELL_PADDING, Renderer, cellFont, drawStyleId, dropdownButtonRect, filterButtonRect, headerFont, linkButtonRect, type FrameStats } from "./renderer";
@@ -762,7 +762,7 @@ export class Grid {
     const levelPx = (outline?.levelPx ?? OUTLINE_LEVEL_PX) * zoom;
     this.gutterW = outline ? Math.round(outlineLevels(outline.rows) * levelPx) : 0;
     this.gutterH = outline ? Math.round(outlineLevels(outline.cols) * levelPx) : 0;
-    this.headerH = this.gutterH + (this.headersShown ? Math.round(HEADER_HEIGHT * zoom) : 0);
+    this.headerH = this.gutterH + (this.headersShown ? Math.round(HEADER_HEIGHT * headerScale(zoom)) : 0);
     // Row header fits the widest row number currently visible (≥ 3 digits).
     const lastRow = Math.min(this.rowsCount, this.rows.pxToIndex((this.contentY + this.height) / zoom) + 1);
     this.headerW = this.gutterW + this.rowHeaderWidth(lastRow);
@@ -792,7 +792,8 @@ export class Grid {
     if (!this.headersShown) return 0;
     const digits = Math.max(3, String(lastRow).length);
     const digitW = this.renderer.measurer.measure(headerFont(this.props.theme, this.zoom, true), "0".repeat(digits));
-    return Math.max(Math.round(MIN_ROW_HEADER_WIDTH * this.zoom), Math.ceil(digitW + 20 * this.zoom));
+    const hs = headerScale(this.zoom);
+    return Math.max(Math.round(MIN_ROW_HEADER_WIDTH * hs), Math.ceil(digitW + 20 * hs));
   }
 
   private makeGeometry(): Geometry {

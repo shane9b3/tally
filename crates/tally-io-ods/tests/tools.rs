@@ -180,6 +180,12 @@ fn sample() -> WorkbookData {
             ascending: false,
             include_formats: false,
         }),
+        sort: Some(DbSortData {
+            keys: vec![(2, false), (0, true)],
+            case_sensitive: true,
+            include_formats: false,
+            natural: false,
+        }),
     }];
     data.view_options = Some(ViewOptionsData {
         show_gridlines: false,
@@ -331,6 +337,8 @@ fn ods_tools_round_trip() {
     assert_eq!(st.groups[0].columns, vec![3, 2]);
     assert_eq!(st.groups[0].function, AggFnData::Average);
     assert!(st.page_breaks && st.presort && !st.ascending);
+    // Its sort (`table:sort`, field numbers from the range's first column).
+    assert_eq!(db.sort, wb.sheets[0].database_ranges[0].sort);
     assert_eq!(d.view_options, wb.sheets[0].view_options);
     // Pivot.
     let p = &back.sheets[1].pivots[0];

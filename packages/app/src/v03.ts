@@ -499,9 +499,31 @@ export function defaultValidation(ranges: readonly RangeDto[]): ValidationDto {
     kind: defaultValidationKind("list"),
     allowBlank: true,
     showDropdown: true,
+    sortAscending: false,
     inputHelp: null,
     error: { style: "stop", title: "", text: "" },
   };
+}
+
+/**
+ * "Sort entries ascending" as the engine does it (AOO `TypedScStrCollection`):
+ * numbers first by value, then text in code-point order (upper case before
+ * lower case), each entry once. The browser demo engine uses it.
+ */
+export function sortListEntries(items: readonly string[]): string[] {
+  const num = (s: string): number | null => (s.trim() !== "" && Number.isFinite(Number(s)) ? Number(s) : null);
+  const keyed = items.map((s) => ({ s, n: num(s) }));
+  const cmp = (a: { s: string; n: number | null }, b: { s: string; n: number | null }): number => {
+    if (a.n !== null && b.n !== null) return a.n - b.n;
+    if (a.n !== null) return -1;
+    if (b.n !== null) return 1;
+    const x = [...a.s].map((ch) => ch.codePointAt(0) ?? 0);
+    const y = [...b.s].map((ch) => ch.codePointAt(0) ?? 0);
+    for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i]! - y[i]!;
+    return x.length - y.length;
+  };
+  keyed.sort(cmp);
+  return keyed.filter((e, i) => i === 0 || cmp(keyed[i - 1]!, e) !== 0).map((e) => e.s);
 }
 
 /** List items from the inline text: one per line, or comma-separated. */

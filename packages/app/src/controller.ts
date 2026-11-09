@@ -2450,8 +2450,8 @@ export class AppController {
     await this.apply(t("msg.undo.arrayFormula", "Array formula"), [op], { range, active: tl, anchor: tl });
   };
 
-  /** ⌘D / ⌘R: a copy, not AutoFill (AOO Edit ▸ Fill ▸ Down / Right is `FillSimple`). */
-  fillDir = async (dir: "down" | "right"): Promise<void> => {
+  /** ⌘D / ⌘R, Edit ▸ Fill ▸ Up / Left: a copy, not AutoFill (AOO Edit ▸ Fill is `FillSimple`). */
+  fillDir = async (dir: "down" | "right" | "up" | "left"): Promise<void> => {
     const plan = fillDownRight(this.selection.range, dir);
     if (!plan) return;
     await this.onFill(plan.source, plan.target, "copy");

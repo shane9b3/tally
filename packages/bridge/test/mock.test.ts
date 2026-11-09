@@ -274,7 +274,7 @@ describe("MockClient v0.3 stubs", () => {
             ranges: [{ r0: 0, c0: 2, r1: 9, c1: 2 }],
             kind: { type: "list", source: { type: "values", items: ["a", "b"] } },
             allowBlank: true,
-            showDropdown: true,
+            showDropdown: true, sortAscending: false,
             inputHelp: null,
             error: null,
           },

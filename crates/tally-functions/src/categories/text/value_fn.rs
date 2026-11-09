@@ -21,11 +21,10 @@ pub const VALUE: FunctionDef = FunctionDef::new("VALUE", Category::Text, VALUE_P
 /// `settings.text_to_number`. Only a numeric result is accepted.
 pub(super) fn text_to_value(
     s: &str,
-    epoch: tally_types::DateEpoch,
+    ctx: &RecognizeContext,
     locale: &Locale,
 ) -> Option<(f64, Option<String>)> {
-    let ctx = RecognizeContext::now(epoch);
-    let rec = recognize_input_with(s, locale, &ctx);
+    let rec = recognize_input_with(s, locale, ctx);
     match rec.value {
         Value::Number(n) => Some((n, rec.implied_format)),
         _ => None,
@@ -42,9 +41,9 @@ fn value(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         // AOO pushes an illegal argument (Err:502) for empty text.
         Value::Text(s) if s.trim().is_empty() => Err(ErrorKind::InvalidArgument),
         Value::Text(s) => {
-            let epoch = a.ctx().settings().date_epoch;
+            let rc = RecognizeContext::for_settings(a.ctx().settings());
             let locale = locale_of(a.ctx());
-            text_to_value(&s, epoch, locale)
+            text_to_value(&s, &rc, locale)
                 .map(|(n, _)| Value::Number(n))
                 .ok_or(ErrorKind::Value)
         }

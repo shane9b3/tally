@@ -10,6 +10,17 @@ import type { AxisModel } from "./layout";
 export const HEADER_HEIGHT = 24;
 /** Minimum row-header width at zoom 100%. */
 export const MIN_ROW_HEADER_WIDTH = 44;
+/**
+ * Smallest scale of the row and column headers. Below 50 % zoom (down to
+ * AOO's 20 %) the headers stay at their 50 % size so the letters and
+ * numbers remain legible; AOO itself never scales its headers.
+ */
+export const MIN_HEADER_SCALE = 0.5;
+
+/** The scale of the headers at `zoom` (the zoom, but at least {@link MIN_HEADER_SCALE}). */
+export function headerScale(zoom: number): number {
+  return Math.max(MIN_HEADER_SCALE, zoom);
+}
 /** Half-width of the column resize hit zone around a header boundary. */
 export const RESIZE_GUTTER = 4;
 

@@ -152,6 +152,7 @@ fn stop_list(a1: &str) -> ValidationDto {
         },
         allow_blank: true,
         show_dropdown: true,
+        sort_ascending: false,
         input_help: None,
         error: Some(ValidationAlert {
             style: ValidationErrorStyle::Stop,

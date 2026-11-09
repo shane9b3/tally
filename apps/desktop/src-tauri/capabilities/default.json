@@ -82,6 +82,7 @@
     "allow-detective",
     "allow-detective-arrows",
     "allow-set-detective-auto",
+    "allow-set-view-zoom",
     "allow-image-data",
     "allow-view-options",
     "allow-invalid-cells",

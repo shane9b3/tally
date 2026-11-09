@@ -26,8 +26,9 @@ mod recognize;
 
 pub use builtin::{builtin_format, QuickFormat};
 pub use format::{
-    format_language, format_value, format_value_in_locale, format_value_with, general_string,
-    AlignHint, Formatted, OVERFLOW,
+    format_language, format_value, format_value_in_locale, format_value_in_locale_std,
+    format_value_std, format_value_with, general_string, general_string_limited, AlignHint,
+    Formatted, OVERFLOW,
 };
 pub use format_ast::{
     is_general_code, Color, CompareOp, Condition, DateLayout, DateTimeToken, Digit, ElapsedUnit,

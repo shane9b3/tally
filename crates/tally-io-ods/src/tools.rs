@@ -9,7 +9,7 @@ use std::io::BufRead;
 
 use tally_model::{
     AggFnData, AutoShowData, BaseItemData, CellRangeLocal, CellStyleData, DataLayoutData,
-    DatabaseRangeData, DatePartData, OutlineGroupData, PivotData, PivotDataFieldData,
+    DatabaseRangeData, DatePartData, DbSortData, OutlineGroupData, PivotData, PivotDataFieldData,
     PivotFieldData, PivotGroupData, PivotLayoutData, PivotSortData, PivotSourceData,
     PivotSubtotalsData, ScenarioData, SheetData, ShowAsData, ShowAsKindData, StandardFilterData,
     StdConditionData, StdConnectorData, StdFilterOpData, StdFilterOptionsData, SubtotalGroupData,
@@ -668,6 +668,7 @@ pub(crate) fn write_named_database_ranges(s: &mut String, data: &WorkbookData) {
                 d.has_header,
                 d.filter_buttons,
                 d.filter.as_ref(),
+                d.sort.as_ref(),
                 d.subtotals.as_ref(),
                 data,
             );
@@ -693,6 +694,7 @@ pub(crate) fn write_named_database_ranges(s: &mut String, data: &WorkbookData) {
                 has_header,
                 false,
                 sheet.standard_filter.as_ref(),
+                None,
                 sheet.subtotals.as_ref(),
                 data,
             );
@@ -709,6 +711,7 @@ fn write_database_range(
     has_header: bool,
     buttons: bool,
     filter: Option<&StandardFilterData>,
+    sort: Option<&DbSortData>,
     subtotals: Option<&SubtotalsData>,
     data: &WorkbookData,
 ) {
@@ -727,10 +730,75 @@ fn write_database_range(
     if let Some(f) = filter {
         write_standard_filter(s, f, data);
     }
+    if let Some(so) = sort.filter(|so| !so.keys.is_empty()) {
+        write_sort(s, so);
+    }
     if let Some(st) = subtotals {
         write_subtotal_rules(s, st);
     }
     s.push_str("</table:database-range>");
+}
+
+/// `table:sort` of a database range (AOO `ScXMLExportDatabaseRanges::WriteSortDescriptor`):
+/// field numbers count from the range's first column.
+fn write_sort(s: &mut String, so: &DbSortData) {
+    s.push_str("<table:sort");
+    if !so.include_formats {
+        s.push_str(r#" table:bind-styles-to-content="false""#);
+    }
+    if so.case_sensitive {
+        s.push_str(r#" table:case-sensitive="true""#);
+    }
+    s.push('>');
+    for &(field, asc) in so.keys.iter().take(MAX_SORT_KEYS) {
+        let _ = write!(
+            s,
+            r#"<table:sort-by table:field-number="{}" table:data-type="automatic" table:order="{}"/>"#,
+            field,
+            if asc { "ascending" } else { "descending" }
+        );
+    }
+    s.push_str("</table:sort>");
+}
+
+/// Most sort keys read or written (AOO's dialog has three).
+const MAX_SORT_KEYS: usize = 64;
+
+/// Parses `table:sort` (`e`) of a database range over `range`.
+pub(crate) fn parse_sort<R: BufRead>(
+    xml: &mut XmlReader<R>,
+    e: &Elem,
+    range: CellRangeLocal,
+) -> Result<DbSortData, OdsError> {
+    let mut so = DbSortData {
+        keys: Vec::new(),
+        case_sensitive: e.attr("table:case-sensitive") == Some("true"),
+        include_formats: e.attr("table:bind-styles-to-content") != Some("false"),
+        natural: false,
+    };
+    let d = xml.depth();
+    loop {
+        match xml.next()? {
+            Ev::Start(c) => {
+                if c.name == "table:sort-by" && so.keys.len() < MAX_SORT_KEYS {
+                    if let Some(n) = c
+                        .attr("table:field-number")
+                        .and_then(|v| v.trim().parse::<u32>().ok())
+                    {
+                        if n <= range.c1 - range.c0 {
+                            so.keys
+                                .push((n, c.attr("table:order") != Some("descending")));
+                        }
+                    }
+                }
+                xml.skip()?;
+            }
+            Ev::End if xml.depth() < d => break,
+            Ev::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(so)
 }
 
 /// A parsed named database range with its filter and subtotal rules.
@@ -739,6 +807,7 @@ pub(crate) fn database_range_from(
     range: CellRangeLocal,
     e: &Elem,
     filter: Option<StandardFilterData>,
+    sort: Option<DbSortData>,
     subtotals: Option<SubtotalsData>,
 ) -> DatabaseRangeData {
     DatabaseRangeData {
@@ -748,6 +817,7 @@ pub(crate) fn database_range_from(
         filter_buttons: e.attr("table:display-filter-buttons") == Some("true"),
         filter,
         subtotals,
+        sort,
     }
 }
 

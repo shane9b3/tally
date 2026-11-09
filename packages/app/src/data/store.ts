@@ -34,6 +34,8 @@ export type W56Dialog =
   | { kind: "removeDuplicates"; range: RangeDto; labels: string[]; hasHeader: boolean }
   | { kind: "scenarios"; list: ScenarioDto[] }
   | { kind: "defineDatabaseRange"; range: RangeDto; existing: DatabaseRangeDto[] }
+  /** Data ▸ Select Range (AOO SID_SELECT_DB): the database ranges by name. */
+  | { kind: "selectDatabaseRange"; ranges: DatabaseRangeDto[] }
   | { kind: "createNamesFromLabels"; range: RangeDto }
   | { kind: "fillSeries"; range: RangeDto }
   | { kind: "sortOptions"; range: RangeDto; labels: string[]; hasHeader: boolean; lists: string[][] }
@@ -52,6 +54,8 @@ export type W56Dialog =
   | { kind: "autoFormatName"; range: RangeDto; mode: "add" | "rename" | "delete"; name: string }
   | { kind: "formatCells"; style: StyleDto; ranges: RangeDto[]; mixed?: MixedFields; sample?: string; sampleNum?: number | null; protection?: TriProtection }
   | { kind: "customizeToolbars" }
+  /** View ▸ Zoom (AOO Zoom & View Layout): `optimal` is offered for a marked range. */
+  | { kind: "zoom"; optimal: boolean }
   | { kind: "styleEditor"; style: CellStyleDto; isNew: boolean; fromSelection: StyleDto | null }
   | { kind: "options"; tab: OptionsTab; calc: CalcSettingsDto; view: ViewOptionsDto; lists: string[][] }
   | { kind: "documentStats"; stats: DocumentStatsDto }
@@ -68,7 +72,7 @@ export interface RecoveryFile {
   savedAt: string;
 }
 
-export type W56Panel = "styles" | "navigator";
+export type W56Panel = "styles" | "navigator" | "functions";
 
 export interface OutlineState {
   rows: OutlineGroupDto[];

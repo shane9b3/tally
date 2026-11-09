@@ -1130,12 +1130,13 @@ fn normalize_cell_value(v: Value) -> Value {
 }
 
 /// `n` rounded to the decimals the cell's number format shows ("precision
-/// as shown"); `General`, dates and fraction formats keep the full value,
+/// as shown"); `General` (unless its decimals are limited), dates and
+/// fraction formats keep the full value,
 /// scientific formats round to the mantissa's decimals.
 fn shown_number(wb: &Workbook, addr: CellAddr, n: f64) -> f64 {
     let id = wb.style_at(addr);
     let st = wb.styles.get(id);
-    match tally_numfmt::display_decimals_for(&st.format, n) {
+    match crate::calcsettings::shown_decimals(&wb.settings, &st.format, n) {
         Some(d) => crate::calcsettings::round_to_decimals(n, d),
         None => n,
     }
@@ -1313,7 +1314,7 @@ impl EvalContext for CalcCtx<'_> {
                 match v {
                     Value::Number(n) => {
                         let st = wb.styles.get(sheet.style(r, c));
-                        tally_numfmt::display_decimals_for(&st.format, *n)
+                        crate::calcsettings::shown_decimals(&wb.settings, &st.format, *n)
                             .map(|d| Value::Number(crate::calcsettings::round_to_decimals(*n, d)))
                     }
                     _ => None,

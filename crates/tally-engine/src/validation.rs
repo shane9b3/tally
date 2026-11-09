@@ -93,6 +93,8 @@ pub struct Validation {
     pub allow_blank: bool,
     /// Show the dropdown.
     pub show_dropdown: bool,
+    /// Sort the dropdown entries ascending (list rules).
+    pub sort_ascending: bool,
     /// Input help.
     pub input_help: Option<ValidationMessageData>,
     /// Error alert.
@@ -223,6 +225,8 @@ pub fn from_api(
         kind,
         allow_blank: v.allow_blank,
         show_dropdown: v.show_dropdown,
+        // One list type in AOO (`ValidListType`): a hidden list is not sorted.
+        sort_ascending: v.sort_ascending && v.show_dropdown,
         input_help: v.input_help.as_ref().map(msg_from_api),
         error: v.error.as_ref().map(alert_from_api),
     })
@@ -266,6 +270,7 @@ pub fn to_api(wb: &Workbook, sheet: SheetId, v: &Validation) -> ValidationDto {
         kind: kind_to_api(wb, &v.kind, v.anchor(sheet)),
         allow_blank: v.allow_blank,
         show_dropdown: v.show_dropdown,
+        sort_ascending: v.sort_ascending,
         input_help: v.input_help.as_ref().map(msg_to_api),
         error: v.error.as_ref().map(alert_to_api),
     }
@@ -326,6 +331,7 @@ pub fn from_model(
         kind,
         allow_blank: d.allow_blank,
         show_dropdown: d.show_dropdown,
+        sort_ascending: d.sort_ascending && d.show_dropdown,
         input_help: d.input_help.clone(),
         error: d.error.clone(),
     })
@@ -363,6 +369,7 @@ pub fn to_model(wb: &Workbook, sheet: SheetId, v: &Validation) -> ValidationData
         kind,
         allow_blank: v.allow_blank,
         show_dropdown: v.show_dropdown,
+        sort_ascending: v.sort_ascending,
         input_help: v.input_help.clone(),
         error: v.error.clone(),
     }
@@ -379,7 +386,7 @@ pub fn list_values(wb: &Workbook, src: &ListSrc, at: CellAddr) -> Vec<Value> {
         // `ScValidationData::IsListValid`: `IsNumberFormat` per token), so
         // `1.50` is the number 1.5 and matches a typed 1.5 (review 3, M5).
         ListSrc::Values(v) => {
-            let ctx = tally_numfmt::RecognizeContext::now(wb.settings.date_epoch);
+            let ctx = tally_numfmt::RecognizeContext::for_settings(&wb.settings);
             v.iter()
                 .map(|s| {
                     let rec = tally_numfmt::recognize_input_with(s, wb.locale, &ctx);
@@ -446,19 +453,83 @@ fn range_values(wb: &Workbook, r: &CellRange) -> Vec<Value> {
 
 /// The list items as display strings.
 pub fn list_items(wb: &Workbook, src: &ListSrc, at: CellAddr) -> Vec<String> {
+    list_entries(wb, src, at)
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect()
+}
+
+/// The list items as display strings with their values (inline items
+/// recognised like typed input).
+fn list_entries(wb: &Workbook, src: &ListSrc, at: CellAddr) -> Vec<(String, Value)> {
     match src {
-        ListSrc::Values(v) => v.clone(),
+        ListSrc::Values(v) => v.iter().cloned().zip(list_values(wb, src, at)).collect(),
         ListSrc::Expr(_) => list_values(wb, src, at)
-            .iter()
-            .map(|v| match v {
-                Value::Number(n) => tally_numfmt::general_string(*n, None, wb.locale),
-                Value::Text(t) => t.to_string(),
-                Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
-                Value::Error(e) => e.display().into_owned(),
-                _ => String::new(),
+            .into_iter()
+            .map(|v| {
+                let s = match &v {
+                    Value::Number(n) => tally_numfmt::general_string_limited(
+                        *n,
+                        None,
+                        wb.locale,
+                        wb.settings.standard_decimals,
+                    ),
+                    Value::Text(t) => t.to_string(),
+                    Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
+                    Value::Error(e) => e.display().into_owned(),
+                    _ => String::new(),
+                };
+                (s, v)
             })
             .collect(),
     }
+}
+
+/// The dropdown entries of a list rule: in source order, or with "Sort
+/// entries ascending" sorted and without duplicates.
+///
+/// AOO fills a `TypedScStrCollection` (`ScValidationData::FillSelectionList`,
+/// validat.cxx:812; the cell dropdown makes it case-sensitive, gridwin.cxx
+/// 959-963): sorted, entries go in with `Insert`, which drops an entry
+/// equal to one already there (collect.cxx `ScSortedCollection::Insert`,
+/// no duplicates); unsorted, with `AtInsert` at the end (duplicates kept).
+/// `TypedScStrCollection::Compare` (collect.cxx:380) puts values before
+/// strings, values by number and strings with the case-sensitive
+/// transliteration (`GetCaseTransliteration`: no collator, so code order,
+/// upper case before lower case).
+pub fn dropdown_items(wb: &Workbook, v: &Validation, at: CellAddr) -> Vec<String> {
+    let VKind::List(src) = &v.kind else {
+        return Vec::new();
+    };
+    if !v.sort_ascending {
+        return list_items(wb, src, at);
+    }
+    sort_entries(list_entries(wb, src, at))
+}
+
+/// Numbers (and booleans, values in AOO) first by value, then text in
+/// code-point order; equal entries are kept once (the first).
+pub fn sort_entries(entries: Vec<(String, Value)>) -> Vec<String> {
+    use std::cmp::Ordering;
+    let num = |v: &Value| match v {
+        Value::Number(n) => Some(*n),
+        Value::Bool(b) => Some(f64::from(u8::from(*b))),
+        _ => None,
+    };
+    let cmp = |a: &(String, Value), b: &(String, Value)| -> Ordering {
+        match (num(&a.1), num(&b.1)) {
+            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => a.0.cmp(&b.0),
+        }
+    };
+    // A stable sort keeps the first of equal entries in front, so the
+    // dedup keeps the one `ScSortedCollection::Insert` keeps.
+    let mut out = entries;
+    out.sort_by(cmp);
+    out.dedup_by(|b, a| cmp(a, b) == Ordering::Equal);
+    out.into_iter().map(|(s, _)| s).collect()
 }
 
 fn text_len(v: &Value) -> Option<f64> {
@@ -1054,10 +1125,7 @@ pub fn info_at(wb: &Workbook, sheet: SheetId, row: u32, col: u32) -> Option<Vali
     let addr = CellAddr::new(sheet, row, col);
     Some(ValidationInfo {
         id: v.id,
-        list_items: match &v.kind {
-            VKind::List(src) => list_items(wb, src, addr),
-            _ => Vec::new(),
-        },
+        list_items: dropdown_items(wb, v, addr),
         show_dropdown: v.has_dropdown(),
         input_help: v.input_help.as_ref().map(msg_to_api),
         error: v.error.as_ref().map(alert_to_api),

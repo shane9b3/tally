@@ -25,4 +25,12 @@ hasHeader: boolean,
 /**
  * Its standard/advanced filter.
  */
-filter: StandardFilterDto | null, };
+filter: StandardFilterDto | null, 
+/**
+ * It keeps a sort (re-applied by Data ▸ Refresh Range).
+ */
+hasSort: boolean, 
+/**
+ * It keeps subtotal rules (re-applied by Data ▸ Refresh Range).
+ */
+hasSubtotals: boolean, };

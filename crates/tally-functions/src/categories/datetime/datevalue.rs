@@ -1,7 +1,7 @@
 //! DATEVALUE.
 
 use tally_numfmt::{recognize_input_with, Locale, RecognizeContext};
-use tally_types::{DateEpoch, ErrorKind, Value};
+use tally_types::{ErrorKind, Value};
 
 use crate::coerce::locale_of;
 
@@ -17,9 +17,8 @@ pub const DATEVALUE: FunctionDef =
         .returns(ReturnKind::Number)
         .help("Date serial of a date given as text.");
 
-fn recognize(s: &str, epoch: DateEpoch, locale: &Locale) -> Option<(f64, Option<String>)> {
-    let ctx = RecognizeContext::now(epoch);
-    let rec = recognize_input_with(s, locale, &ctx);
+fn recognize(s: &str, ctx: &RecognizeContext, locale: &Locale) -> Option<(f64, Option<String>)> {
+    let rec = recognize_input_with(s, locale, ctx);
     match rec.value {
         Value::Number(n) => Some((n, rec.implied_format)),
         _ => None,
@@ -31,9 +30,9 @@ fn datevalue(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     run(|| match a.value(0) {
         Value::Error(e) => Err(e),
         Value::Text(s) => {
-            let epoch = a.ctx().settings().date_epoch;
+            let rc = RecognizeContext::for_settings(a.ctx().settings());
             let locale = locale_of(a.ctx());
-            let (n, fmt) = recognize(&s, epoch, locale).ok_or(ErrorKind::Value)?;
+            let (n, fmt) = recognize(&s, &rc, locale).ok_or(ErrorKind::Value)?;
             // Date formats contain a day or year code; time-only ("HH:MM")
             // and plain numbers do not.
             let is_date = fmt.is_some_and(|f| f.contains(['D', 'Y']));

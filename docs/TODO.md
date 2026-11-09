@@ -58,13 +58,15 @@ real-file corpus).
 - Perf (docs/perf-baseline.md hot spots 3–5): 50 MB XLSX/ODS open peaks at 0.9–1.1 GB RSS (was 1.4–1.6 GB; further cuts need a block column store and a compact formula-cell table); CSV import 1M rows in ~1.2 s (was 7.6 s); grid fling drops frames in headless Chromium — re-measure in the Tauri webview.
 - Not built yet from the plan: multithreaded recalc, auto-update (tauri-plugin-updater), opt-in crash reporting.
 - Inventory gaps found 2026-10-27 (docs/calc-features-inventory.md 1.0 status; deviation IDs in docs/parity-deviations.md). Sizes: S < 1 day, M a few days, L a week or more.
-  - Input and editing: two-digit year window option (P17, S).
-  - Sheets and view: read-only mode (done 2026-11-02, see below); zoom 20-400 % (U18, S); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, M).
-  - Fill: Ctrl-drag copies, filtered ranges copy (T16, M); Edit > Fill > Up / Left commands (S);
+  - Sheets and view: read-only mode (done 2026-11-02, see below); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, M).
+  - Fill: Ctrl-drag copies, filtered ranges copy (T16, M).
   - Formatting: Hide all / Hide when printing (G15, done 2026-11-06); `[NatNum]` / `[DBNum]` / calendar modifiers rendered (G7, L); Load Styles from another document (M).
-  - Data: validity "sort entries ascending" incl. ODS `sorted` round trip (G16, S); DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M); Data > Select Range and Refresh Range (S).
+  - Data: DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M).
   - Charts: chart data table editor for internal data (T18, M); cylinder / cone / pyramid shapes (T10, L).
-  - Tools: detective Fill Mode, Refresh Traces, AutoRefresh (T12, done 2026-11-06, see below); hyperlink as button and New Document target (M, button needs form controls T11); Function List sidebar (S); Limit decimals for General incl. ODS `table:decimal-places` (S).
+  - Tools: detective Fill Mode, Refresh Traces, AutoRefresh (T12, done 2026-11-06, see below); hyperlink as button and New Document target (M, button needs form controls T11).
+
+- Small AOO 4.1 options (2026-11-09, from the AOO41X source): two-digit year window (P17: Options ▸ Input ▸ "Year (two digits)", new and opened documents, ODS `table:null-year`), "Limit decimals for general number format" (Calculate tab, ODS `style:decimal-places` on the default cell style, also used by precision as shown) and zoom 20-400 % (U18: View ▸ Zoom dialog, pinch / ⌃-wheel, per-sheet ODS `ZoomValue` / XLSX `zoomScale`).
+- Small AOO 4.1 parity items (2026-11-09, from the AOO41X source): Validity "Sort entries ascending" with the ODS `table:display-list` round trip (G16 done); Data ▸ Select Range and Refresh Range (`RepeatDB`: database ranges now keep their sort, ODS `table:sort`; remaining differences T19); Edit ▸ Fill ▸ Up / Left.
 
 - Tools ▸ Detective at AOO 4.1 parity (2026-11-06): the AOO menu (Trace / Remove Precedents, Trace / Remove Dependents, Remove All Traces, Trace Error, Mark Invalid Data, Refresh Traces, AutoRefresh, Fill Mode); each Trace adds one level and each Remove takes the outermost away (`ScDetectiveFunc::ShowPred` / `FindPredLevel`); the operation list (`ScDetOpList`) moves with rows and columns, is replayed by Refresh Traces and by AutoRefresh after formula changes (any change with a Trace Error), and round-trips as ODS `table:detective`/`table:operation` (plus `table:highlighted-range`); arrows from / to other sheets with a sheet icon; Fill Mode clicks trace precedents until Esc. Remaining differences: T12.
 

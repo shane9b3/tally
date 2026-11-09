@@ -1,7 +1,6 @@
 //! DATE.
 
 use tally_numfmt::date::serial_from_ymd_normalized;
-use tally_numfmt::Locale;
 use tally_types::{ErrorKind, Value};
 
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
@@ -27,7 +26,8 @@ fn date(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         let m = a.int(1)?;
         let d = a.int(2)?;
         if (0..100).contains(&y) {
-            y = i64::from(Locale::en_us().expand_two_digit_year(y as i32));
+            let start = a.ctx().settings().year2000();
+            y = i64::from(tally_types::expand_two_digit_year(y as i32, start));
         }
         let epoch = a.ctx().settings().date_epoch;
         serial_from_ymd_normalized(epoch, y, m, d)

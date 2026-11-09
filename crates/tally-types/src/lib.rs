@@ -23,5 +23,8 @@ pub use addr::{
 };
 pub use error::ErrorKind;
 pub use math::{approx_equal, round_to_15_digits};
-pub use settings::{CalcSettings, CriteriaMode, DateEpoch, IterSettings, TextToNumber};
+pub use settings::{
+    expand_two_digit_year, CalcSettings, CriteriaMode, DateEpoch, IterSettings, TextToNumber,
+    DEFAULT_TWO_DIGIT_YEAR, MAX_STANDARD_DECIMALS, TWO_DIGIT_YEAR_RANGE,
+};
 pub use value::{Matrix, Value};

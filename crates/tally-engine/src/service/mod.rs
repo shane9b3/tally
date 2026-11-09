@@ -22,7 +22,7 @@ pub mod view;
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -83,6 +83,11 @@ struct Shared {
     /// Forks made so far (mixed into each fork's clipboard-token seed).
     forks: AtomicU64,
     clipboard: Mutex<Option<Arc<ClipSnapshot>>>,
+    /// The application's two-digit year window start (AOO Tools ▸ Options
+    /// ▸ General ▸ "Year (two digits)", `utl::MiscCfg::GetYear2000`), given
+    /// to every document created or opened from now on whose file does not
+    /// set it (`ScDocShell::InitOptions`).
+    two_digit_year: AtomicU16,
     /// Prepared print jobs (an LRU of [`crate::print::JOB_LRU`]).
     #[cfg_attr(not(feature = "io"), allow(dead_code))]
     print_jobs: Mutex<print::JobCache>,
@@ -94,6 +99,7 @@ impl Default for Shared {
             next_doc: AtomicU32::new(1),
             forks: AtomicU64::new(0),
             clipboard: Mutex::new(None),
+            two_digit_year: AtomicU16::new(tally_types::DEFAULT_TWO_DIGIT_YEAR),
             print_jobs: Mutex::new(print::JobCache::default()),
         }
     }
@@ -194,6 +200,27 @@ impl EngineService {
     /// Installs the ⌘K provider used by `assist_suggest`.
     pub fn set_assist_provider(&mut self, provider: AssistProvider) {
         self.assist = Some(Arc::new(provider));
+    }
+
+    /// Sets the application's two-digit year window start for documents
+    /// created or opened from now on, in this service and all its forks
+    /// (AOO: the General option is copied into a document's options when
+    /// it is created or loaded; documents already open keep theirs). A
+    /// file's own `table:null-year` wins. Out-of-range years (AOO allows
+    /// 1583–9857) are refused.
+    pub fn set_two_digit_year_default(&self, year: u16) -> Result<()> {
+        if !tally_types::TWO_DIGIT_YEAR_RANGE.contains(&year) {
+            return Err(ApiError::invalid_argument(
+                "the two-digit year start must be 1583–9857",
+            ));
+        }
+        self.shared.two_digit_year.store(year, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// The application's two-digit year window start (1930 by default).
+    pub fn two_digit_year_default(&self) -> u16 {
+        self.shared.two_digit_year.load(Ordering::Relaxed)
     }
 
     /// Opens a workbook built elsewhere (tests, the CLI).
@@ -420,6 +447,15 @@ impl EngineService {
                 .file_stem()
                 .map_or_else(|| "Sheet1".to_owned(), |s| s.to_string_lossy().into_owned());
         }
+        // Files without calculation settings (XLSX, CSV, ODS without
+        // `table:calculation-settings`) take the application's window
+        // before their text is recognised.
+        decoded
+            .data
+            .settings
+            .calc_settings
+            .two_digit_year
+            .get_or_insert(self.two_digit_year_default());
         let wb = Workbook::from_data_owned(
             decoded.data,
             decoded.recognize_text,
@@ -469,11 +505,14 @@ fn file_title(path: &Path) -> String {
 
 impl DocumentService for EngineService {
     fn new_workbook(&mut self, template: Option<&str>) -> Result<WorkbookInfo> {
-        let (wb, title) = match template {
+        let (mut wb, title) = match template {
             None => (Workbook::new(), "Untitled"),
             Some(t) => templates::build(t)
                 .ok_or_else(|| ApiError::not_found(format!("no template {t:?}")))?,
         };
+        wb.settings
+            .two_digit_year
+            .get_or_insert(self.two_digit_year_default());
         Ok(self.open_workbook(wb, title))
     }
 
@@ -780,6 +819,22 @@ impl DocumentService for EngineService {
         text: &str,
     ) -> Result<SelectionDto> {
         view::resolve_name_box_in(&self.document(doc)?.wb, sheet, text)
+    }
+
+    fn set_view_zoom(&mut self, doc: DocId, zoom: u16) -> Result<()> {
+        if !(tally_model::MIN_ZOOM..=tally_model::MAX_ZOOM).contains(&zoom) {
+            return Err(ApiError::invalid_argument("the zoom must be 20–400 %"));
+        }
+        // View state only, like the active sheet: no undo, no dirty flag.
+        let d = self
+            .docs
+            .get_mut(&doc.0)
+            .ok_or_else(|| not_found_doc(doc))?;
+        let z = tally_model::zoom_from_file(i64::from(zoom));
+        for s in &mut d.wb.sheets {
+            s.meta.zoom = z;
+        }
+        Ok(())
     }
 
     fn set_active_sheet(&mut self, doc: DocId, sheet: tally_types::SheetId) -> Result<()> {

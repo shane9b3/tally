@@ -167,6 +167,7 @@ fn sample() -> WorkbookData {
             },
             allow_blank: true,
             show_dropdown: true,
+            sort_ascending: false,
             input_help: Some(ValidationMessageData {
                 title: "Status".into(),
                 text: "Pick one".into(),
@@ -186,6 +187,7 @@ fn sample() -> WorkbookData {
             },
             allow_blank: false,
             show_dropdown: false,
+            sort_ascending: false,
             input_help: None,
             error: Some(ValidationErrorData::default()),
         },
@@ -197,6 +199,7 @@ fn sample() -> WorkbookData {
             },
             allow_blank: true,
             show_dropdown: true,
+            sort_ascending: false,
             input_help: None,
             error: None,
         },

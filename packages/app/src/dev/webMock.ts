@@ -101,8 +101,10 @@ import type {
   ValidationDto,
   ValidationInfo,
 } from "@tally/bridge";
-import { defaultPageSetup } from "../v03";
+import { defaultPageSetup, sortListEntries } from "../v03";
 import { formatNumberLite } from "../numfmtLite";
+import { dateTexts, DEFAULT_TWO_DIGIT_YEAR, limitGeneral, recognizeTwoDigitDate, type TypedDate } from "./mockSmallOptions";
+import { readLocalPrefs } from "../options/prefs";
 import { liteLocaleOf } from "../styles/numberFormat";
 import { INVALID_SCAN_CAP, invalidCells as invalidCellsOf } from "../detective/detective";
 import type { CellPos, CellsOptions, Direction, PasteOptions, PastePayload, ViewOptionsDto } from "@tally/bridge";
@@ -468,7 +470,10 @@ export class WebMockClient extends MockClient {
     if (v3 && isHiddenCell(v3, sheet, r, c)) return { input: "", hint: null, array: null, arrayRange: null };
     const block = this.ext.get(doc)?.sheets[sheet]?.arrays.find((a) => inside(a.range, r, c));
     if (block) return { input: `{${block.input}}`, hint: null, array: true, arrayRange: { ...block.range } };
-    return super.cellEditInfo(doc, sheet, r, c);
+    const info = await super.cellEditInfo(doc, sheet, r, c);
+    // A typed date edits with its four-digit year (AOO's input line).
+    const date = this.typedDate(doc, sheet, r, c, Number(info.input));
+    return date ? { ...info, input: dateTexts(date).edit } : info;
   }
 
   override async names(doc: DocId): Promise<NameInfo[]> {
@@ -557,6 +562,8 @@ export class WebMockClient extends MockClient {
 
   override async newWorkbook(template?: string | null) {
     const info = await super.newWorkbook(template);
+    // The application's two-digit year window for new documents (the desktop shell's `prefs::two_digit_year`).
+    this.docExt(info.doc).w56.calc.twoDigitYear = readLocalPrefs().twoDigitYearStart;
     this.sheetOrder.set(info.doc, info.sheets.map((s) => s.id));
     this.sheetNames.set(info.doc, new Map(info.sheets.map((s) => [s.name.toLowerCase(), s.id])));
     return info;
@@ -596,7 +603,8 @@ export class WebMockClient extends MockClient {
     await super.validationAt(doc, sheet, r, c);
     const v = validationAt(this.docExt(doc).v3, sheet, r, c);
     if (!v) return null;
-    return { id: v.id, listItems: (await this.listItemsOf(doc, v)) ?? [], showDropdown: v.showDropdown && v.kind.type === "list", inputHelp: v.inputHelp, error: v.error, kind: v.kind };
+    const items = (await this.listItemsOf(doc, v)) ?? [];
+    return { id: v.id, listItems: v.sortAscending ? sortListEntries(items) : items, showDropdown: v.showDropdown && v.kind.type === "list", inputHelp: v.inputHelp, error: v.error, kind: v.kind };
   }
 
   override async note(doc: DocId, sheet: number, r: number, c: number): Promise<NoteDto | null> {
@@ -858,8 +866,53 @@ export class WebMockClient extends MockClient {
     return deco;
   }
 
+  // -- small options: two-digit years (P17) and limited General decimals (mockSmallOptions.ts) --
+
+  /** Dates typed as `M/D/YY`, by `doc:sheet:r:c` (the mock stores their serial as the cell input). */
+  private readonly typedDates = new Map<string, TypedDate>();
+
+  /** `M/D/YY` inputs become date serials in the document's two-digit year window. */
+  private withTypedDates(doc: DocId, tx: Transaction): Transaction {
+    if (!tx.ops.some((o) => o.type === "setCellInput")) return tx;
+    const start = this.docExt(doc).w56.calc.twoDigitYear ?? DEFAULT_TWO_DIGIT_YEAR;
+    const ops = tx.ops.map((op) => {
+      if (op.type !== "setCellInput") return op;
+      const key = `${doc}:${op.sheet}:${op.r}:${op.c}`;
+      const date = recognizeTwoDigitDate(op.input, start);
+      if (!date) {
+        this.typedDates.delete(key);
+        return op;
+      }
+      this.typedDates.set(key, date);
+      return { ...op, input: String(date.serial) };
+    });
+    return { ...tx, ops };
+  }
+
+  /** A typed date still held by its cell (its input is still the serial). */
+  private typedDate(doc: DocId, sheet: number, r: number, c: number, num: number | null): TypedDate | null {
+    const t = this.typedDates.get(`${doc}:${sheet}:${r}:${c}`);
+    return t && num === t.serial ? t : null;
+  }
+
+  /** Typed dates show as `MM/DD/YY`; General numbers with the document's decimal limit. */
+  private async withSmallOptions(doc: DocId, sheet: number, blocks: CellBlock[]): Promise<CellBlock[]> {
+    const dec = this.docExt(doc).w56.calc.standardDecimals ?? null;
+    const ids = dec === null ? [] : [...new Set(blocks.flatMap((b) => b.cells.filter((v) => v.kind === "number" && v.style !== 0).map((v) => v.style)))];
+    const codes = new Map((ids.length > 0 ? await this.styles(doc, ids) : []).map((st) => [st.id, st.numberFormat]));
+    for (const b of blocks) {
+      for (const v of b.cells) {
+        if (v.kind !== "number" || v.num === null) continue;
+        const date = this.typedDate(doc, sheet, v.r, v.c, v.num);
+        if (date) v.text = dateTexts(date).cell;
+        else if (dec !== null && (v.style === 0 || /^general$/i.test((codes.get(v.style) ?? "General").trim()))) v.text = limitGeneral(v.num, dec);
+      }
+    }
+    return blocks;
+  }
+
   override async cells(doc: DocId, sheet: number, ranges: RangeDto[]): Promise<CellBlock[]> {
-    const blocks = await this.decoratedCells(doc, sheet, ranges);
+    const blocks = await this.withSmallOptions(doc, sheet, await this.decoratedCells(doc, sheet, ranges));
     const x = this.ext.get(doc)?.v3;
     if (!x || !x.protection[sheet] || (x.hiddenAll?.[sheet] ?? []).length === 0) return blocks;
     // "Hide all" on a protected sheet (the engine's `hide_protected`).
@@ -986,6 +1039,7 @@ export class WebMockClient extends MockClient {
     // A read-only document refuses before anything is recorded (as the engine).
     this.assertEditable(doc);
     this.recorded.push(...tx.ops.map((op) => structuredClone(op)));
+    tx = this.withTypedDates(doc, tx);
     const group = groupOf(tx);
     return this.detectiveAfter(doc, group ? await this.applyGroup(doc, tx, group) : await this.applyOnce(doc, tx));
   }

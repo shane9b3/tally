@@ -314,7 +314,7 @@ pub fn text_to_number_in(
             convert_string_to_value(s, settings.date_epoch).ok_or(ErrorKind::Value)
         }
         TextToNumber::ConvertLocale => {
-            let ctx = tally_numfmt::RecognizeContext::now(settings.date_epoch);
+            let ctx = tally_numfmt::RecognizeContext::for_settings(settings);
             match tally_numfmt::recognize_input_with(s, locale, &ctx).value {
                 Value::Number(n) => Ok(n),
                 Value::Bool(b) => Ok(bool_num(b)),

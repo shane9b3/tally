@@ -29,6 +29,11 @@ allowBlank: boolean,
  */
 showDropdown: boolean, 
 /**
+ * List rules: sort the dropdown entries ascending (AOO "Sort entries
+ * ascending"; numbers first, then text in code-point order).
+ */
+sortAscending: boolean, 
+/**
  * Input help.
  */
 inputHelp: ValidationMessage | null, 

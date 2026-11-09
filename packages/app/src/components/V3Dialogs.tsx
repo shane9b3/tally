@@ -176,10 +176,10 @@ function ColorField({ label, value, onChange, allowNone, testId }: { label: stri
   );
 }
 
-function Check({ label, checked, onChange, testId }: { label: string; checked: boolean; onChange: (v: boolean) => void; testId?: string }) {
+function Check({ label, checked, onChange, testId, disabled }: { label: string; checked: boolean; onChange: (v: boolean) => void; testId?: string; disabled?: boolean }) {
   return (
     <label className={styles.checkRow}>
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} data-testid={testId} />
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} data-testid={testId} />
       <span>{label}</span>
     </label>
   );
@@ -824,6 +824,8 @@ function ValidationDialog({ d }: { d: Extract<DialogState, { kind: "validation" 
                 </Field>
               )}
               <Check label={t("v3.showDropdown", "Show a dropdown in the cell")} checked={v.showDropdown} onChange={(x) => set({ showDropdown: x })} />
+              {/* AOO CB_SORTLIST: only with the list shown (validate.cxx:680). */}
+              <Check label={t("v3.sortEntries", "Sort entries ascending")} checked={v.sortAscending} disabled={!v.showDropdown} onChange={(x) => set({ sortAscending: x })} testId="validation-sort" />
             </>
           ) : null}
           {"formulas" in k ? (

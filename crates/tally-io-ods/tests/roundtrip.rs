@@ -669,6 +669,9 @@ fn empty_workbook_round_trips() {
     let mut back = read_ods(Cursor::new(buf.into_inner()), &Limits::default()).unwrap();
     assert_eq!(back.meta.generator.as_deref(), Some("Tally/0.1"));
     back.meta = DocMeta::default();
+    // The written `table:calculation-settings` pins the 1930 window.
+    assert_eq!(back.settings.calc_settings.two_digit_year, Some(1930));
+    back.settings.calc_settings.two_digit_year = None;
     assert_eq!(back, wb);
 }
 

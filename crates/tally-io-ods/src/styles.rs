@@ -100,6 +100,10 @@ pub(crate) struct StyleSheet {
     /// (family `table-cell`).
     default_font_name: Option<String>,
     default_font_family: Option<String>,
+    /// `style:decimal-places` of the default cell style: the document's
+    /// General decimals (AOO `StandardDecimals`, xmlstyle.cxx; absent =
+    /// unlimited, docsh3.cxx `InitOptions`).
+    pub default_decimals: Option<u8>,
     /// What was dropped to stay within limits.
     pub warnings: Vec<String>,
 }
@@ -558,6 +562,16 @@ impl StyleSheet {
         loop {
             match xml.next()? {
                 Ev::Start(p) => {
+                    if p.name == "style:table-cell-properties" || p.name == "style:properties" {
+                        if let Some(n) = p
+                            .attr("style:decimal-places")
+                            .and_then(|v| v.trim().parse::<i32>().ok())
+                            .filter(|n| *n >= 0)
+                        {
+                            let max = i32::from(tally_types::MAX_STANDARD_DECIMALS);
+                            self.default_decimals = Some(n.min(max) as u8);
+                        }
+                    }
                     if p.name == "style:text-properties" || p.name == "style:properties" {
                         if let Some(lang) = p.attr("fo:language").filter(|l| *l != "none") {
                             let tag = match p.attr("fo:country").filter(|c| *c != "none") {

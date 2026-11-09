@@ -11,6 +11,7 @@ fn ctx() -> RecognizeContext {
     RecognizeContext {
         epoch: DateEpoch::D1899,
         today: (2026, 10, 19),
+        year2000: 1930,
     }
 }
 

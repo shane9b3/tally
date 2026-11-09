@@ -296,6 +296,16 @@ pub async fn set_detective_auto(app: AppHandle, doc: DocId, on: bool) -> CmdResu
     .await
 }
 
+/// `set_view_zoom(doc, zoom)`: View ▸ Zoom (20–400 %, every sheet; view
+/// state saved with the document, not undoable).
+#[tauri::command]
+pub async fn set_view_zoom(app: AppHandle, doc: DocId, zoom: u16) -> CmdResult<()> {
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.set_view_zoom(doc, zoom))
+    })
+    .await
+}
+
 // ----- integration pass: queries the UI needs from the real engine ------------
 
 /// `image_data(doc, sheet, id)`: a picture's bytes, base64 (≤ 16 MiB decoded).
@@ -433,6 +443,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "detective",
     "detective_arrows",
     "set_detective_auto",
+    "set_view_zoom",
     "image_data",
     "view_options",
     "invalid_cells",

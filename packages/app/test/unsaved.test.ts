@@ -578,7 +578,7 @@ describe("uncommitted typing (in-cell editor, formula bar)", () => {
         ranges: [{ r0: 0, c0: 0, r1: 0, c1: 0 }],
         kind: { type: "list", source: { type: "values", items: ["Paid", "Due"] } },
         allowBlank: true,
-        showDropdown: true,
+        showDropdown: true, sortAscending: false,
         inputHelp: null,
         error: { style: "stop", title: "Status", text: "Choose Paid or Due." },
       },

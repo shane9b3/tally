@@ -15,11 +15,14 @@ import { DEFAULT_PRINT_OPTIONS } from "../print/printStore";
 import type { W5Shell } from "./shell";
 import { clampRatio, type SplitAxis } from "@tally/grid";
 import { useW5Store } from "./w5Store";
+import { useW56Store } from "../data/store";
 import { clientV4 } from "./shell";
 import { t } from "../i18n";
 
 /** Delay before a divider drag is persisted with `setSplit`. */
 export const SPLIT_PERSIST_MS = 300;
+/** Delay before a zoom change is sent to the engine (`set_view_zoom`; a pinch sends many). */
+export const ZOOM_PERSIST_MS = 120;
 
 /** The width/height in px (zoom 100%) of a range from the layout. */
 export function rangeSizePx(ctl: Pick<AppController, "layoutSize">, range: RangeDto): { width: number; height: number } {
@@ -39,8 +42,69 @@ export function zoomToFit(content: { width: number; height: number }, viewport: 
 
 export class ViewFeatures {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private zoomTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The zoom (percent) the document holds as far as we know (nothing to send while equal). */
+  private docZoom = 100;
 
-  constructor(private readonly ctl: AppController) {}
+  constructor(private readonly ctl: AppController) {
+    // Every zoom change (status bar, View ▸ Zoom, ⌘+/⌘−, pinch) is view
+    // state the document saves (ODS `ZoomValue`, XLSX `zoomScale`).
+    useUiStore.subscribe((s, prev) => {
+      if (s.zoom !== prev.zoom) this.scheduleZoomPersist();
+    });
+  }
+
+  private scheduleZoomPersist(): void {
+    if (this.zoomTimer) clearTimeout(this.zoomTimer);
+    this.zoomTimer = setTimeout(() => {
+      this.zoomTimer = null;
+      this.persistZoom();
+    }, ZOOM_PERSIST_MS);
+  }
+
+  /** Sends the shown zoom to the engine for every sheet (`set_view_zoom`; quietly ignored while unsupported). */
+  private persistZoom(): void {
+    const info = this.ctl.info;
+    if (!info) return;
+    const pct = Math.round(useUiStore.getState().zoom * 100);
+    if (pct === this.docZoom) return;
+    this.docZoom = pct;
+    const client = clientV4(this.ctl);
+    // Older test clients have no `setViewZoom`.
+    if (typeof (client as { setViewZoom?: unknown }).setViewZoom !== "function") return;
+    void client.setViewZoom(info.doc, pct).catch((e: unknown) => {
+      if (!isApiError(e) || (e.code !== "unsupported" && e.code !== "not_found")) this.ctl.notifyError(e);
+    });
+  }
+
+  /**
+   * Shows the zoom the document stores for the shown sheet (`view_options().zoom`, percent; `null` = 100 %),
+   * without sending it back. `undefined` (an engine that does not report it) leaves the zoom alone.
+   */
+  applyDocZoom(zoom: number | null | undefined): void {
+    if (zoom === undefined) return;
+    if (this.zoomTimer) {
+      clearTimeout(this.zoomTimer);
+      this.zoomTimer = null;
+    }
+    const pct = zoom ?? 100;
+    this.docZoom = pct;
+    const z = clampZoom(pct / 100);
+    if (Math.abs(useUiStore.getState().zoom - z) > 1e-9) {
+      useUiStore.getState().setZoom(z);
+      // The subscription scheduled a persist of the value just read.
+      if (this.zoomTimer) {
+        clearTimeout(this.zoomTimer);
+        this.zoomTimer = null;
+      }
+    }
+  }
+
+  /** View ▸ Zoom… (AOO's Zoom & View Layout dialog). */
+  openZoomDialog(): void {
+    const sel = this.ctl.selection.range;
+    useW56Store.getState().openDialog({ kind: "zoom", optimal: sel.r0 !== sel.r1 || sel.c0 !== sel.c1 });
+  }
 
   private get shell(): W5Shell {
     return this.ctl.shell as unknown as W5Shell;

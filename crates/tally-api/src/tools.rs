@@ -204,6 +204,12 @@ pub struct DatabaseRangeDto {
     pub has_header: bool,
     /// Its standard/advanced filter.
     pub filter: Option<StandardFilterDto>,
+    /// It keeps a sort (re-applied by Data ▸ Refresh Range).
+    #[serde(default)]
+    pub has_sort: bool,
+    /// It keeps subtotal rules (re-applied by Data ▸ Refresh Range).
+    #[serde(default)]
+    pub has_subtotals: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -530,6 +536,11 @@ pub struct ViewOptionsDto {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub split: Option<SplitDto>,
+    /// The sheet's view zoom in percent (20–400), when not 100 % (reported
+    /// by `view_options`; ignored by `SetViewOptions`, use `set_view_zoom`).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub zoom: Option<u16>,
     /// Show formulas instead of results.
     pub show_formulas: bool,
     /// Value highlighting.
@@ -546,6 +557,7 @@ impl Default for ViewOptionsDto {
     fn default() -> Self {
         Self {
             split: None,
+            zoom: None,
             show_formulas: false,
             value_highlighting: false,
             show_zero_values: true,

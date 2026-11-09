@@ -7,6 +7,7 @@ import { t } from "../i18n";
 import type {
   AggFn,
   CellPos,
+  DatabaseRangeDto,
   DateUnit,
   DeleteContentsFlags,
   NameLabelFlags,
@@ -209,6 +210,22 @@ export function isValidDbRangeName(name: string): boolean {
 
 export function defineDatabaseRangeOp(name: string, sheet: number, range: RangeDto, hasHeader: boolean): Op {
   return { type: "defineDatabaseRange", name, sheet, range: { ...range }, hasHeader };
+}
+
+/**
+ * The database range Data ▸ Refresh Range works on: the one on `sheet`
+ * holding the cell `at` (AOO `GetDBData(…, SC_DB_OLD)` takes the range at
+ * the cursor); the smallest when several overlap.
+ */
+export function databaseRangeAt(ranges: DatabaseRangeDto[], sheet: number, at: CellPos): DatabaseRangeDto | null {
+  const size = (r: RangeDto) => (r.r1 - r.r0 + 1) * (r.c1 - r.c0 + 1);
+  let best: DatabaseRangeDto | null = null;
+  for (const d of ranges) {
+    const r = d.range;
+    if (d.sheet !== sheet || at.r < r.r0 || at.r > r.r1 || at.c < r.c0 || at.c > r.c1) continue;
+    if (!best || size(r) < size(best.range)) best = d;
+  }
+  return best;
 }
 
 // ---------------------------------------------------------------------------

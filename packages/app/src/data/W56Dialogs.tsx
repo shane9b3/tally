@@ -3,6 +3,7 @@ import type { W56Dialog } from "./store";
 import { CustomizeToolbarsDialog } from "../chrome/ChromeUi";
 import { AutoFormatDialog, AutoFormatNameDialog, FormatCellsDialog, StyleEditorDialog } from "../styles/StylesUi";
 import { OptionsDialog } from "../options/OptionsDialog";
+import { ZoomDialog } from "../objects/ZoomDialog";
 import { DataPilotDialog } from "../pivot/DataPilotDialog";
 import {
   ConsolidateDialog,
@@ -27,6 +28,7 @@ import {
   SortOptionsDialog,
   StandardFilterDialog,
   SubtotalsDialog,
+  SelectDatabaseRangeDialog,
   TabColorDialog,
   TextToColumnsDialog,
 } from "./DataDialogs";
@@ -49,6 +51,8 @@ export function W56DialogFor({ d }: { d: W56Dialog }) {
       return <ScenariosDialog d={d} />;
     case "defineDatabaseRange":
       return <DefineDatabaseRangeDialog d={d} />;
+    case "selectDatabaseRange":
+      return <SelectDatabaseRangeDialog d={d} />;
     case "createNamesFromLabels":
       return <CreateNamesDialog d={d} />;
     case "fillSeries":
@@ -95,5 +99,7 @@ export function W56DialogFor({ d }: { d: W56Dialog }) {
       return <SelectionListPopover d={d} />;
     case "customizeToolbars":
       return <CustomizeToolbarsDialog />;
+    case "zoom":
+      return <ZoomDialog d={d} />;
   }
 }

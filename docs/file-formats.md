@@ -440,6 +440,37 @@ loses.
 - **View options**: `sheetView showGridLines/showZeros/showFormulas/
   showRowColHeaders`.
 
+## Document options in ODS (2026-11-09)
+
+- **Calculation settings** (`table:calculation-settings` in content.xml)
+  are written only when a setting differs from AOO's defaults
+  (case-sensitive, regular expressions, whole-cell criteria, precision
+  not as shown, no iterations, null date 1899-12-30, two-digit years from
+  1930), as AOO's `ScXMLExport::WriteCalculationSettings` does
+  (xmlexprt.cxx:3688-3713). Tally's own defaults (case-insensitive,
+  wildcards) differ, so most Tally files carry the element. When the
+  element is present AOO and Tally read a missing `table:null-year` as
+  1930; when it is absent, both use the reader's "Year (two digits)"
+  option. A Tally file without the element is read with AOO's defaults
+  (case-sensitive, regular expressions); other files without it keep
+  Tally's defaults (deviation F3). `table:automatic-find-labels="false"`
+  is written whenever the element is (Tally has no label lookup).
+- **General decimals** ("Limit decimals for general number format") are
+  `style:decimal-places` on the default cell style in styles.xml (AOO's
+  `StandardDecimals` property, xmlstyle.cxx:109; there is no
+  `table:decimal-places`). Written only when limited; absent means
+  unlimited (AOO docsh3.cxx:439-445, #i112123). Old OpenOffice.org files
+  (before the "unlimited" default, OOo 3.2 and earlier) carry
+  `style:decimal-places="2"` on the default style, because the option
+  then defaulted to 2 and was always exported. AOO 4.1 applies the value
+  on load like any other (no version check in xmlimprt.cxx, xmlstyli.cxx
+  or defltuno.cxx), so such files show General numbers with at most 2
+  decimals in AOO 4.1 and in Tally alike; Tools ▸ Options ▸ Calculate
+  turns the limit off. The OOo 3.x default itself is not verifiable from
+  the AOO41X tree (its history starts later).
+- **View zoom**: settings.xml `ZoomType` / `ZoomValue` /
+  `PageViewZoomValue` per sheet and for the view; read clamped to 20-400 %.
+
 ## Wave 5 formats (W5-3)
 
 Formats are sniffed by content before the extension (`codec::detect` in

@@ -71,6 +71,9 @@ pub fn run() {
             let recent = files::load_recent(app.handle());
             let state = app.state::<AppState>();
             *state::lock(&state.recent) = recent;
+            // Tools ▸ Options ▸ Input ▸ "Year (two digits)" for the
+            // documents of this session (`prefs.rs`).
+            state.set_two_digit_year_default(prefs::two_digit_year(&prefs::load(app.handle())));
             // Lock files (doclock.rs): the config dir is the user
             // installation URL; the instance lock tells whether another
             // Tally runs. The identity (`id`, `hostname`) is detected later,
@@ -168,6 +171,7 @@ pub fn run() {
             commands_v4::detective,
             commands_v4::detective_arrows,
             commands_v4::set_detective_auto,
+            commands_v4::set_view_zoom,
             commands_v4::image_data,
             commands_v4::view_options,
             commands_v4::invalid_cells,

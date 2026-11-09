@@ -1294,6 +1294,18 @@ export class MockClient implements EngineClientV4, ShellClient {
     });
   }
 
+  /** View zoom per document (percent; view state, as in the engine: no undo, not modified). */
+  private readonly zooms = new Map<DocId, number>();
+
+  setViewZoom(doc: DocId, zoom: number): Promise<void> {
+    return this.run(() => {
+      this.doc(doc);
+      if (!Number.isInteger(zoom) || zoom < 20 || zoom > 400) throw apiError("invalid_argument", "the zoom must be 20–400 %");
+      if (zoom === 100) this.zooms.delete(doc);
+      else this.zooms.set(doc, zoom);
+    });
+  }
+
   imageData(doc: DocId, sheet: SheetId, id: number): Promise<string> {
     return this.run(() => {
       this.sheet(this.doc(doc), sheet);
@@ -1304,7 +1316,7 @@ export class MockClient implements EngineClientV4, ShellClient {
   viewOptions(doc: DocId, sheet: SheetId): Promise<ViewOptionsDto> {
     return this.run(() => {
       this.sheet(this.doc(doc), sheet);
-      return { split: null, showFormulas: false, valueHighlighting: false, showZeroValues: true, showGridlines: true, showHeaders: true };
+      return { split: null, zoom: this.zooms.get(doc) ?? null, showFormulas: false, valueHighlighting: false, showZeroValues: true, showGridlines: true, showHeaders: true };
     });
   }
 

@@ -85,13 +85,14 @@ describe("uiStore", () => {
   it("toggles the sidebar and clamps zoom", () => {
     useUiStore.getState().toggleSidebar();
     expect(useUiStore.getState().sidebarOpen).toBe(false);
+    // AOO MINZOOM / MAXZOOM: 20–400 %.
     useUiStore.getState().setZoom(5);
-    expect(useUiStore.getState().zoom).toBe(2);
+    expect(useUiStore.getState().zoom).toBe(4);
     useUiStore.getState().zoomBy(-1);
-    expect(useUiStore.getState().zoom).toBe(1.75);
-    expect(clampZoom(0.1)).toBe(0.5);
+    expect(useUiStore.getState().zoom).toBe(3);
+    expect(clampZoom(0.1)).toBe(0.2);
     expect(nextZoom(1, 1)).toBe(1.1);
-    expect(nextZoom(0.5, -1)).toBe(0.5);
+    expect(nextZoom(0.2, -1)).toBe(0.2);
   });
 
   it("caps and de-duplicates toasts", () => {

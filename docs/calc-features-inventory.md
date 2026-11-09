@@ -29,7 +29,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | 512 tokens per formula, 1,024-character symbols, nesting 42 | deviation (P16) | No token count; 8,192 characters, nesting 256, tree depth 1,024, 255 arguments (`tally-formula/src/parser.rs:35-42`); tests `tally-formula/tests/errors.rs` `err_512_nesting`, `inventory_1_0.rs` `formula_limits_are_larger_than_aoo` |
 | CHOOSE 30 values | done | `CHOOSE` arity 2..31 |
 | Undo steps 100, configurable 1..1000 | partial (U17) | 100 steps, fixed (`undo.rs:15`); no setting; test `undo.rs` `undo_depth_is_100` |
-| Two-digit year window 1930 | partial (P17) | Window starts at 1930 (`tally-numfmt/src/locale.rs:119`) for input and DATEVALUE; not configurable; test `inventory_1_0.rs` `two_digit_year_window_is_1930` |
+| Two-digit year window 1930 | done | Options > Input > "Year (two digits)" (prefs `twoDigitYearStart`, 1583-9857) for documents created or opened afterwards; the document's window (ODS `table:null-year`) drives input, DATEVALUE, DATE, CSV import and Text to Columns (P17); tests `crates/tally-engine/tests/options_small.rs` |
 | Null date 1899-12-30 (also 1900, 1904) | done | `DateEpoch`, Options > Calculate > Date |
 | Zoom 100 % default | done | |
 
@@ -99,7 +99,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Ctrl-drag copies; filtered data copies | missing (T16) | The fill handle always sends mode `auto` (`fill.ts:31`); `fill.rs` ignores filtered rows |
 | Fill Series dialog | done | `edit.fillSeries` |
 | Fill Down / Right | done | `⌘D`, `⌘R`: a copy with relative references adjusted (AOO `FillSimple`), not AutoFill (fill mode `copy`) |
-| Fill Up / Left | partial | Fill Series dialog has Up and Left (`DataDialogs.tsx` Fill Series dialog); no Fill Up / Fill Left commands |
+| Fill Up / Left | done | Edit ▸ Fill ▸ Up / Left: the last row / column copied over the selection with relative references adjusted (AOO `FillSimple` FILL_TO_TOP / FILL_TO_LEFT); a single row / column does nothing, as in AOO; merges are not copied (AOO clears ATTR_MERGE from the filled pattern, table4.cxx:606-614); every sheet of a multi-sheet selection |
 | Fill Sheet | partial | Engine done 2026-10-28: `Op::FillSheets` with `FillSheetOptions` (text, numbers, date/time, formulas, notes, formats, operation, skip empty; AOO `ScDocument::FillTab`), own undo step (tests `group.rs`). Dialog in progress |
 | Sort lists (Options) | done | |
 
@@ -161,7 +161,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Item | Status | Note |
 |---|---|---|
 | Allow: whole, decimal, date, time, range, list, text length | done | |
-| Operators, min/max, allow empty, selection list | partial (G16) | No "sort entries ascending" option; ODS `display-list="sorted"` is read as unsorted and saved as `unsorted` (`tally-io-ods/src/v03.rs:1107,1156`) |
+| Operators, min/max, allow empty, selection list | done | "Sort entries ascending" (only with the list shown) sorts the dropdown like AOO's `TypedScStrCollection`: numbers first by value, then text case-sensitively in code order, each entry once; ODS `table:display-list` `sorted-ascending` / `unsorted` / `no` round-trip; XLSX has no sorted dropdown, so the option is dropped there |
 | Input help, error alert Stop / Warning / Information | done | |
 | Error action Macro | missing | G10 |
 | Mark Invalid Data | done | `tools.markInvalid` |
@@ -240,7 +240,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Insert Name list, Create Names from labels | done | `data.createNamesFromLabels` |
 | Label ranges | missing | P3 |
 | Database ranges (define) | done | `data.defineDatabaseRange` |
-| Select Range, Refresh Range | partial | The Navigator lists and selects database ranges; no Select Range or Refresh Range command |
+| Select Range, Refresh Range | done | Data ▸ Select Range… lists the database ranges and selects one on its sheet; Data ▸ Refresh Range repeats the sort, filter and subtotals the range at the cursor keeps (AOO `RepeatDB`); no external data sources, so no re-import; see T19 |
 | Registered data sources (F4) | missing | |
 | Sheet-local names | done | Extension |
 
@@ -338,7 +338,7 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 | Whole-cell criteria matching | done | |
 | Regular expressions in formulas | deviation (P4) | `criteria_mode` setting |
 | Find labels | missing | P3 |
-| Limit decimals for General | missing | Not in `CalcSettings`; ODS `table:decimal-places` is not read |
+| Limit decimals for General | done | Options > Calculate "Limit decimals for general number format" (0-20, `CalcSettings::standard_decimals`); ODS `style:decimal-places` on the default cell style (AOO `StandardDecimals`; there is no `table:decimal-places`); precision as shown, TEXT(x; "General"), validity list items and HTML export follow it |
 | AutoCalculate toggle | deviation (U3) | Always on |
 | Volatile functions, hard recalculation | done | `⇧⌘F9` |
 | Status-bar function choice | partial | Sum, count, average shown (U19) |
@@ -348,7 +348,7 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 | Item | Status | Note |
 |---|---|---|
 | Freeze panes, split window | done | Split is not written to XLSX (X4) |
-| Zoom presets, full screen | deviation (U18) | Range 50-200 % (`formats.ts` `MIN_ZOOM` / `MAX_ZOOM`); test `stores.test.ts` "toggles the sidebar and clamps zoom"; full screen `view.fullScreen` |
+| Zoom presets, full screen | done | Range 20-400 % with View > Zoom dialog, pinch and per-sheet `ZoomValue` / `zoomScale` (U18 for the rest); test `stores.test.ts` "toggles the sidebar and clamps zoom", `tests/e2e/options-small.spec.ts`; full screen `view.fullScreen` |
 | Grid lines, headers, zero values, formulas, value highlighting | done | Options > View |
 | Page breaks, guides, large handles, anchor, text-overflow indicator | partial | Page breaks toggle (`view.pageBreaks`, `commands.ts:264`); the others are missing |
 | Objects / charts show, hide, placeholder | missing (U18) | |
@@ -392,7 +392,7 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 | Function Wizard (`⌘F2`): Last Used, parameters, live result | done | |
 | Navigator | partial | See section 1 |
 | Data source browser, Gallery | missing | |
-| Function List sidebar | missing | The wizard lists functions |
+| Function List sidebar | done | Insert ▸ Function List docks a panel with the category box (Last Used, All, categories in AOO order), the list, syntax and help, and Insert (double-click / Enter); see U30 (parity-deviations) |
 | Special Character | missing | No command |
 | Insert image, chart | done | `insert.image`, `insert.chart` |
 | OLE objects, floating frames, form controls, drawing shapes | missing | T11 |
@@ -1264,7 +1264,7 @@ Source: `filter/source/config/fragments/filters/*.xcu`, the entries whose `Docum
 
 - **Function Wizard** (Ctrl+F2): categories, a "Last Used" list (default opcodes 224 226 222 223 6 = SUM, AVERAGE, MIN, MAX, IF), a formula structure tree, and per-argument help text from `scfuncs.src` [src].
 - **Navigator**, **Data source browser** (F4), **Gallery**.
-- **Insert > Function List** (sidebar list of functions).
+- **Insert > Function List** (sidebar list of functions): done, U30.
 - **Insert > Special Character**, **Insert > Image / Chart / Object / Floating Frame / Form controls**. Drawing objects can be anchored to the page or to a cell.
 - **Form controls** (buttons, list boxes) and **Form Design mode**, with cell links and source-range binding.
 - **Macros:** StarBasic, plus BeanShell, JavaScript and Python through the scripting framework. Macro dialog (Alt+F11). Document events.

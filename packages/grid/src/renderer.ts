@@ -13,7 +13,7 @@ import type { BorderLineDto, BordersDto, CellPos, CellView, RangeDto, StyleDto }
 import type { Theme } from "@tally/tokens";
 import { colToLetters } from "./colLetters";
 import { fitNumber, isGeneralNumberText } from "./fitNumber";
-import { snapFill, type Geometry, type Pane, type Rect } from "./geometry";
+import { headerScale, snapFill, type Geometry, type Pane, type Rect } from "./geometry";
 import { Lru } from "./lru";
 import { drawCfIcon, drawDataBar } from "./cfIcons";
 import { CELL_FLAGS, type FilterButtons, type GridDataSource, type OutlineProps, type PageBreaks, type RefHighlight, type Selection, type TraceArrow } from "./types";
@@ -1063,7 +1063,9 @@ export class Renderer {
       this.curFont = "";
     }
 
-    // Row numbers, per row span.
+    // Row numbers, per row span. Rows too low for their number (zoom far
+    // below 50 %) show every `labelStep`-th one, spaced like the font.
+    const labelStep = rowLabelStep(geo.rows.defaultSize * geo.zoom, theme.fonts.headerSizePx * headerScale(geo.zoom));
     for (const span of geo.rowSpans()) {
       ctx.save();
       ctx.beginPath();
@@ -1080,6 +1082,7 @@ export class Renderer {
         const vy0 = Math.max(y0, span.y0);
         const vy1 = Math.min(y1, span.y1);
         if (vy1 - vy0 > 6) ctx.fillText(String(row + 1), (geo.gutterW + geo.headerW) / 2, (vy0 + vy1) / 2 + 0.5);
+        else if (labelStep > 1 && (row + 1) % labelStep === 0) ctx.fillText(String(row + 1), (geo.gutterW + geo.headerW) / 2, (vy0 + vy1) / 2 + 0.5);
         this.setFill(c.gridLine);
         ctx.fillRect(geo.gutterW, snapFill(y1, dpr) - lw, geo.headerW - geo.gutterW, lw);
         if (row > 0 && geo.rows.isHidden(row - 1)) this.hiddenMarker((geo.gutterW + geo.headerW) / 2, y0, false, geo, theme, dpr);
@@ -1733,8 +1736,26 @@ export function wrapLines(text: string, max: number, measure: (s: string) => num
   return out;
 }
 
+/**
+ * Every how many rows a row number is drawn when rows of `rowPx` (the
+ * default height on screen) are too low for one (6 px or less): the
+ * smallest of 2, 5, 10, 20, 50, 100… that spaces the numbers at least
+ * 1.5 font heights apart; 1 when every row has room.
+ */
+export function rowLabelStep(rowPx: number, fontPx: number): number {
+  if (rowPx > 6) return 1;
+  if (rowPx <= 0) return 0;
+  for (let m = 1; ; m *= 10) {
+    for (const s of [2, 5, 10]) {
+      const step = s * m;
+      if (step * rowPx >= fontPx * 1.5) return step;
+    }
+    if (m > 1e6) return 1e7;
+  }
+}
+
 export function headerFont(theme: Theme, zoom: number, active: boolean): string {
-  const px = Math.round(theme.fonts.headerSizePx * zoom * 100) / 100;
+  const px = Math.round(theme.fonts.headerSizePx * headerScale(zoom) * 100) / 100;
   return `${active ? "600" : "500"} ${px}px ${theme.fonts.family}`;
 }
 

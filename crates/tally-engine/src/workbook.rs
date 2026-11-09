@@ -184,9 +184,9 @@ const BULK_RECOGNIZED_CAP: usize = 1 << 16;
 const BULK_RECOGNIZED_MAX_LEN: usize = 64;
 
 impl BulkInput {
-    pub(crate) fn new(epoch: tally_types::DateEpoch) -> Self {
+    pub(crate) fn new(settings: &tally_types::CalcSettings) -> Self {
         Self {
-            ctx: RecognizeContext::now(epoch),
+            ctx: RecognizeContext::for_settings(settings),
             formats: HashMap::new(),
             recognized: HashMap::new(),
         }
@@ -1071,7 +1071,7 @@ impl Workbook {
         let rec = recognize_input_with(
             &collapsed,
             self.locale,
-            &RecognizeContext::now(self.settings.date_epoch),
+            &RecognizeContext::for_settings(&self.settings),
         );
         if matches!(rec.value, Value::Number(_)) {
             return None;
@@ -1162,7 +1162,10 @@ impl Workbook {
             return;
         }
         let rec = match &mut bulk {
-            Some(b) if b.ctx.epoch == self.settings.date_epoch => {
+            Some(b)
+                if b.ctx.epoch == self.settings.date_epoch
+                    && b.ctx.year2000 == self.settings.year2000() =>
+            {
                 if let Some(r) = b.recognized.get(input) {
                     r.clone()
                 } else {
@@ -1182,7 +1185,7 @@ impl Workbook {
             _ => recognize_input_with(
                 input,
                 self.locale,
-                &RecognizeContext::now(self.settings.date_epoch),
+                &RecognizeContext::for_settings(&self.settings),
             ),
         };
         self.set_value(addr, rec.value);

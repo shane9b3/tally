@@ -1,6 +1,6 @@
 //! TEXT.
 
-use tally_numfmt::{format_value_in_locale, parse_format_with_locale};
+use tally_numfmt::{format_value_in_locale_std, parse_format_with_locale};
 use tally_types::{ErrorKind, Value};
 
 use crate::coerce::locale_of;
@@ -40,9 +40,12 @@ fn text(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         let ast =
             parse_format_with_locale(&code, locale).map_err(|_| ErrorKind::InvalidArgument)?;
         let epoch = a.ctx().settings().date_epoch;
+        let std_dec = a.ctx().settings().standard_decimals;
         // The document locale: a `[$-407]` in the code only sets the NatNum
-        // language in AOO (zformat.cxx), Excel ignores it for numbers.
-        let out = format_value_in_locale(&v, &ast, locale, None, epoch);
+        // language in AOO (zformat.cxx), Excel ignores it for numbers. The
+        // General keyword follows the document's General decimals (AOO's
+        // GetPreviewStringGuess uses the document formatter).
+        let out = format_value_in_locale_std(&v, &ast, locale, None, epoch, std_dec);
         Ok(Value::text(out.text))
     })
 }

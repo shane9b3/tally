@@ -59,6 +59,22 @@ export interface AppPrefs {
   chrome: ChromePrefs;
   /** The user's own AutoFormats (AOO's autotbl.fmt; at most 100). */
   autoFormats: UserAutoFormat[];
+  /**
+   * AOO Tools ▸ Options ▸ General ▸ "Year (two digits)": two-digit years are
+   * read as `start..start + 99` (1583–9857, default 1930). Documents created
+   * or opened from now on take it, unless their file sets its own
+   * (ODS `table:null-year`); the desktop shell hands it to the engine.
+   */
+  twoDigitYearStart: number;
+}
+
+/** Range of the two-digit year option (AOO's `NF_YEARVALUE` field). */
+export const TWO_DIGIT_YEAR_MIN = 1583;
+export const TWO_DIGIT_YEAR_MAX = 9857;
+
+/** `true` for a valid two-digit year window start (an integer in 1583–9857). */
+export function isTwoDigitYearStart(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v >= TWO_DIGIT_YEAR_MIN && v <= TWO_DIGIT_YEAR_MAX;
 }
 
 export const DEFAULT_AUTOCORRECT: AutoCorrectPrefs = {
@@ -86,6 +102,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   openDocumentsIn: "tabs",
   chrome: DEFAULT_CHROME,
   autoFormats: [],
+  twoDigitYearStart: 1930,
 };
 
 export const UI_LANGUAGES: readonly { id: UiLanguage; label: string; tag: string }[] = [
@@ -135,6 +152,7 @@ export function parsePrefs(raw: unknown): AppPrefs {
     openDocumentsIn: oneOf(o.openDocumentsIn, ["tabs", "windows"] as const, DEFAULT_PREFS.openDocumentsIn),
     chrome: parseChrome(o.chrome),
     autoFormats: parseUserAutoFormats(o.autoFormats),
+    twoDigitYearStart: isTwoDigitYearStart(o.twoDigitYearStart) ? o.twoDigitYearStart : DEFAULT_PREFS.twoDigitYearStart,
   };
 }
 

@@ -84,6 +84,50 @@ pub struct CalcSettings {
     pub iterations: Option<IterSettings>,
     /// Round values to their displayed precision before use (default `false`).
     pub precision_as_shown: bool,
+    /// First year of the two-digit year window: `yy` is read as a year in
+    /// `start..=start + 99` (AOO `ScDocOptions::nYear2000`, ODS
+    /// `table:null-year`, default 1930). `None` until the document sets it:
+    /// new documents and files without `table:calculation-settings` take
+    /// the application option (AOO Tools ▸ Options ▸ General ▸ "Year (two
+    /// digits)", `ScDocShell::InitOptions`); see [`Self::year2000`].
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub two_digit_year: Option<u16>,
+    /// Decimals of the General format (AOO Tools ▸ Options ▸ Calc ▸
+    /// Calculate ▸ "Limit decimals for general number format", 0..=20,
+    /// `ScDocOptions::nPrecStandardFormat`; ODS `style:decimal-places` of
+    /// the default cell style). `None` = unlimited (the default).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub standard_decimals: Option<u8>,
+}
+
+/// AOO's default two-digit year window start (`Office.Common/DateFormat/TwoDigitYear`).
+pub const DEFAULT_TWO_DIGIT_YEAR: u16 = 1930;
+/// Range of the two-digit year option (AOO's `NF_YEARVALUE` field, optgdlg.src).
+pub const TWO_DIGIT_YEAR_RANGE: std::ops::RangeInclusive<u16> = 1583..=9857;
+/// Most decimals of the General format limit (AOO's `ED_PREC` field, optdlg.src).
+pub const MAX_STANDARD_DECIMALS: u8 = 20;
+
+impl CalcSettings {
+    /// The two-digit year window start in effect (1930 when unset).
+    pub fn year2000(&self) -> u16 {
+        self.two_digit_year.unwrap_or(DEFAULT_TWO_DIGIT_YEAR)
+    }
+}
+
+/// Expands a two-digit year into the window starting at `start` (AOO
+/// `SvNumberFormatter::ExpandTwoDigitYear`, zforlist.hxx): with 1930,
+/// 30..=99 → 1930..=1999 and 0..=29 → 2000..=2029. Other years are
+/// returned unchanged.
+pub fn expand_two_digit_year(yy: i32, start: u16) -> i32 {
+    if !(0..100).contains(&yy) {
+        return yy;
+    }
+    let start = i32::from(start);
+    if yy < start % 100 {
+        yy + (start / 100 + 1) * 100
+    } else {
+        yy + (start / 100) * 100
+    }
 }
 
 impl Default for CalcSettings {
@@ -96,6 +140,8 @@ impl Default for CalcSettings {
             whole_cell_match: true,
             iterations: None,
             precision_as_shown: false,
+            two_digit_year: None,
+            standard_decimals: None,
         }
     }
 }
@@ -116,6 +162,24 @@ mod tests {
         assert!(!s.precision_as_shown);
         let it = IterSettings::default();
         assert_eq!((it.steps, it.min_change), (100, 0.001));
+        assert_eq!(s.year2000(), 1930);
+        assert_eq!(s.standard_decimals, None);
+    }
+
+    #[test]
+    fn two_digit_year_windows() {
+        // AOO ExpandTwoDigitYear: the window is start..=start + 99.
+        assert_eq!(expand_two_digit_year(45, 1930), 1945);
+        assert_eq!(expand_two_digit_year(29, 1930), 2029);
+        assert_eq!(expand_two_digit_year(30, 1930), 1930);
+        assert_eq!(expand_two_digit_year(45, 1950), 2045);
+        assert_eq!(expand_two_digit_year(50, 1950), 1950);
+        assert_eq!(expand_two_digit_year(49, 1950), 2049);
+        assert_eq!(expand_two_digit_year(0, 2000), 2000);
+        assert_eq!(expand_two_digit_year(99, 2000), 2099);
+        assert_eq!(expand_two_digit_year(5, 1583), 1605);
+        assert_eq!(expand_two_digit_year(83, 1583), 1583);
+        assert_eq!(expand_two_digit_year(1945, 1950), 1945);
     }
 
     #[cfg(feature = "serde")]

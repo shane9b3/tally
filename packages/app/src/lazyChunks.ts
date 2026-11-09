@@ -14,9 +14,10 @@ export const loadChartEditor = () => import("./charts/ChartEditorPanel");
 export const loadChartLayer = () => import("./charts/ChartLayer");
 export const loadStylesUi = () => import("./styles/StylesUi");
 export const loadNavigator = () => import("./navigator/NavigatorPanel");
+export const loadFunctionList = () => import("./functionList/FunctionListPanel");
 
 /** Most likely first; each is fetched one idle slot after the previous. */
-const PRELOAD = [loadDialogs, loadW56Dialogs, loadCommandPalette, loadStylesUi, loadPrintPreview, loadShortcutsModal, loadChartEditor, loadNavigator, loadFillSheetDialog];
+const PRELOAD = [loadDialogs, loadW56Dialogs, loadCommandPalette, loadStylesUi, loadPrintPreview, loadShortcutsModal, loadChartEditor, loadNavigator, loadFunctionList, loadFillSheetDialog];
 
 type IdleWindow = Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number };
 

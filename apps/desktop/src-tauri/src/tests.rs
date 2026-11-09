@@ -780,6 +780,7 @@ fn validation_stop_rejects_input() -> CmdResult<()> {
         },
         allow_blank: true,
         show_dropdown: false,
+        sort_ascending: false,
         input_help: None,
         error: Some(ValidationAlert {
             style: ValidationErrorStyle::Stop,
@@ -1614,6 +1615,8 @@ mod wave5 {
                     whole_cell_match: true,
                     criteria_mode: CriteriaModeDto::Wildcards,
                     text_to_number: TextToNumberDto::ConvertUnambiguous,
+                    two_digit_year: None,
+                    standard_decimals: None,
                 },
             }],
         )?;
@@ -1763,6 +1766,7 @@ mod wave5 {
                     },
                     allow_blank: true,
                     show_dropdown: true,
+                    sort_ascending: false,
                     input_help: None,
                     error: Some(ValidationAlert {
                         style: ValidationErrorStyle::Stop,
@@ -1794,6 +1798,7 @@ mod wave5 {
         );
         let opts = ViewOptionsDto {
             split: None,
+            zoom: None,
             show_formulas: true,
             value_highlighting: true,
             show_zero_values: false,

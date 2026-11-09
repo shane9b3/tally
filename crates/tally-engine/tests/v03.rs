@@ -344,6 +344,7 @@ fn list_validation(style: ValidationErrorStyle) -> ValidationDto {
         },
         allow_blank: true,
         show_dropdown: true,
+        sort_ascending: false,
         input_help: Some(ValidationMessage {
             title: "Status".into(),
             text: "Pick one".into(),
@@ -422,6 +423,7 @@ fn validation_numbers_ranges_and_custom() {
         },
         allow_blank: true,
         show_dropdown: false,
+        sort_ascending: false,
         input_help: None,
         error: Some(ValidationAlert {
             style: ValidationErrorStyle::Stop,
@@ -457,6 +459,7 @@ fn validation_numbers_ranges_and_custom() {
         },
         allow_blank: true,
         show_dropdown: true,
+        sort_ascending: false,
         input_help: None,
         error: Some(ValidationAlert {
             style: ValidationErrorStyle::Stop,
@@ -481,6 +484,7 @@ fn validation_numbers_ranges_and_custom() {
         },
         allow_blank: true,
         show_dropdown: false,
+        sort_ascending: false,
         input_help: None,
         error: Some(ValidationAlert {
             style: ValidationErrorStyle::Stop,

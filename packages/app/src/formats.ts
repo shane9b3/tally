@@ -36,9 +36,10 @@ export function presetFor(code: string | undefined): NumberFormatPreset | undefi
 /** Zoom presets of the status bar menu. */
 export const ZOOM_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 /** Steps for zoom in/out. */
-export const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2] as const;
-export const MIN_ZOOM = 0.5;
-export const MAX_ZOOM = 2;
+export const ZOOM_STEPS = [0.2, 0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4] as const;
+/** AOO's MINZOOM / MAXZOOM (sc/inc/global.hxx): 20–400 %. */
+export const MIN_ZOOM = 0.2;
+export const MAX_ZOOM = 4;
 
 export function clampZoom(z: number): number {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));

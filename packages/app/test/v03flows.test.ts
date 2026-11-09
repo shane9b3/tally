@@ -35,7 +35,7 @@ function listValidation(style: "stop" | "warning" | "info"): ValidationDto {
     ranges: [{ r0: 1, c0: 6, r1: 14, c1: 6 }],
     kind: { type: "list", source: { type: "values", items: ["Paid", "Due", "Overdue"] } },
     allowBlank: true,
-    showDropdown: true,
+    showDropdown: true, sortAscending: false,
     inputHelp: { title: "Status", text: "Pick one" },
     error: { style, title: "Status", text: "Choose Paid, Due or Overdue." },
   };

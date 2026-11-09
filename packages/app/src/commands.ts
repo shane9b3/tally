@@ -94,6 +94,7 @@ export const GROUP_DISABLED_COMMANDS: readonly string[] = [
   // Names and database ranges
   "data.defineName",
   "data.defineDatabaseRange",
+  "data.refreshRange",
   "data.createNamesFromLabels",
   // Sheets
   "sheet.insert",
@@ -173,6 +174,8 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "edit.findPrev", title: "Find previous", kind: "Edit", hidden: true, ...sc("edit.findPrev"), run: () => ctl.findStep(-1) },
     { id: "edit.fillDown", title: "Fill down", kind: "Edit", keywords: ["copy down", "series"], ...sc("edit.fillDown"), ...notEditing, run: () => ctl.fillDir("down") },
     { id: "edit.fillRight", title: "Fill right", kind: "Edit", keywords: ["copy right", "series"], ...sc("edit.fillRight"), ...notEditing, run: () => ctl.fillDir("right") },
+    { id: "edit.fillUp", title: t("cmd.edit.fillUp", "Fill up"), kind: "Edit", keywords: ["copy up"], ...notEditing, run: () => ctl.fillDir("up") },
+    { id: "edit.fillLeft", title: t("cmd.edit.fillLeft", "Fill left"), kind: "Edit", keywords: ["copy left"], ...notEditing, run: () => ctl.fillDir("left") },
     {
       id: "edit.fillSheet",
       title: "Fill sheets…",
@@ -403,6 +406,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     // agree on the ids; `enabled: false` until W5-5 / W5-6 implement them.
     // Labels go through `t()` with the `cmd.<id>` keys of tally-l10n/ui/en.json.
     { id: "insert.function", title: t("cmd.insert.function", "Function…"), kind: "Formula", keywords: ["wizard", "fx", "insert function"], ...sc("insert.function"), run: () => dialog().openDialog({ kind: "functionWizard" }) },
+    { id: "insert.functionList", title: t("cmd.insert.functionList", "Function list"), kind: "Formula", keywords: ["functions", "fx", "sidebar", "insert function"], run: () => ctl.w56.toggleFunctionList() },
     { id: "insert.image", title: t("cmd.insert.image", "Image…"), kind: "Insert", keywords: ["picture", "png", "jpeg"], ...notEditing, run: () => ctl.w5.objects.insertImage() },
     { id: "chart.edit", title: t("cmd.chart.edit", "Edit chart"), kind: "Chart", keywords: ["graph"], run: () => ctl.w5.charts.openEditor() },
     { id: "chart.delete", title: t("cmd.chart.delete", "Delete chart"), kind: "Chart", keywords: ["graph", "remove"], run: () => ctl.w5.charts.deleteSelected() },
@@ -422,6 +426,8 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "data.autoOutline", title: t("cmd.data.autoOutline", "AutoOutline"), kind: "Data", keywords: ["outline", "group"], run: () => void ctl.w56.autoOutline() },
     { id: "data.showOutlineLevel", title: t("cmd.data.showOutlineLevel", "Show outline level…"), kind: "Data", keywords: ["outline", "collapse", "expand"], run: () => ctl.w56.openShowOutlineLevel() },
     { id: "data.defineDatabaseRange", title: t("cmd.data.defineDatabaseRange", "Define database range…"), kind: "Data", keywords: ["db range", "named range"], run: () => void ctl.w56.openDefineDatabaseRange() },
+    { id: "data.selectDatabaseRange", title: t("cmd.data.selectDatabaseRange", "Select range…"), kind: "Data", keywords: ["database range", "go to", "db range"], run: () => void ctl.w56.openSelectDatabaseRange() },
+    { id: "data.refreshRange", title: t("cmd.data.refreshRange", "Refresh range"), kind: "Data", keywords: ["database range", "repeat", "sort", "filter", "subtotals"], ...notEditing, run: () => void ctl.w56.refreshDatabaseRange() },
     { id: "data.createNamesFromLabels", title: t("cmd.data.createNamesFromLabels", "Create names from labels…"), kind: "Data", keywords: ["names", "header row"], run: () => ctl.w56.openCreateNames() },
     { id: "edit.fillSeries", title: t("cmd.edit.fillSeries", "Fill series…"), kind: "Edit", keywords: ["linear", "growth", "dates"], ...notEditing, run: () => ctl.w56.openFillSeries() },
     { id: "format.cells", title: t("cmd.format.cells", "Format cells…"), kind: "Format", keywords: ["rotation", "indent", "shrink", "diagonal"], ...sc("format.cells"), run: () => void ctl.w56.openFormatCells() },
@@ -439,6 +445,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "view.zoomOptimal", title: t("cmd.view.zoomOptimal", "Optimal zoom"), kind: "View", keywords: ["zoom", "fit selection"], run: () => ctl.w5.view.zoomOptimal() },
     { id: "view.zoomPageWidth", title: t("cmd.view.zoomPageWidth", "Zoom to page width"), kind: "View", keywords: ["zoom"], run: () => ctl.w5.view.zoomToPage("width") },
     { id: "view.zoomWholePage", title: t("cmd.view.zoomWholePage", "Zoom to whole page"), kind: "View", keywords: ["zoom"], run: () => ctl.w5.view.zoomToPage("both") },
+    { id: "view.zoomDialog", title: t("cmd.view.zoomDialog", "Zoom…"), kind: "View", keywords: ["zoom", "scale", "magnify", "percent"], run: () => ctl.w5.view.openZoomDialog() },
     { id: "view.fullScreen", title: t("cmd.view.fullScreen", "Full screen"), kind: "View", keywords: ["fullscreen"], run: () => ctl.w5.view.toggleFullScreen() },
     { id: "tools.options", title: t("cmd.tools.options", "Options…"), kind: "Tools", keywords: ["preferences", "settings", "calculate", "iterations"], ...sc("tools.options"), run: () => void ctl.w56.openOptions() },
     { id: "tools.solver", title: t("cmd.tools.solver", "Solver…"), kind: "Tools", keywords: ["optimise", "linear", "constraints"], run: () => ctl.w56.openSolver() },

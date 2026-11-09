@@ -58,6 +58,10 @@ fn paint(
 pub fn normalize(wb: &WorkbookData) -> Normalized {
     let mut out = wb.clone();
     out.styles.clear();
+    // Tally always writes `table:calculation-settings`, so an unset
+    // two-digit year window reads back as the 1930 it stood for.
+    let cs = &mut out.settings.calc_settings;
+    cs.two_digit_year = Some(cs.year2000());
     let data = |i: Option<u32>| {
         i.and_then(|i| wb.styles.get(i as usize))
             .filter(|s| **s != StyleData::default())

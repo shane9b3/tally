@@ -24,7 +24,7 @@
 #![warn(missing_docs)]
 
 use tally_model::{CellContentData, CellData, CellRangeLocal, HAlign, SheetData, WorkbookData};
-use tally_numfmt::{format_value_with, locale_by_tag, parse_format, EN_US};
+use tally_numfmt::{locale_by_tag, parse_format, EN_US};
 use tally_types::{Value, MAX_COLS, MAX_ROWS};
 
 /// Largest HTML input (64 MiB).
@@ -680,6 +680,8 @@ pub fn write_html(data: &WorkbookData) -> Result<String, HtmlError> {
         .and_then(locale_by_tag)
         .unwrap_or(&EN_US);
     let epoch = data.settings.calc_settings.date_epoch;
+    // "Limit decimals for general number format", as the cells show.
+    let std_dec = data.settings.calc_settings.standard_decimals;
     let formats: Vec<Option<tally_numfmt::FormatAst>> = data
         .styles
         .iter()
@@ -766,9 +768,12 @@ pub fn write_html(data: &WorkbookData) -> Result<String, HtmlError> {
                             .and_then(|i| formats.get(i as usize))
                             .and_then(|f| f.as_ref());
                         text = match (fmt, &v) {
-                            (Some(ast), v) => format_value_with(v, ast, locale, None, epoch).text,
+                            (Some(ast), v) => {
+                                tally_numfmt::format_value_std(v, ast, locale, None, epoch, std_dec)
+                                    .text
+                            }
                             (None, Value::Number(n)) => {
-                                tally_numfmt::general_string(*n, None, locale)
+                                tally_numfmt::general_string_limited(*n, None, locale, std_dec)
                             }
                             (None, Value::Text(t)) => t.to_string(),
                             (None, Value::Bool(b)) => {

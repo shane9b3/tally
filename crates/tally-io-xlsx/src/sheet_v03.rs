@@ -519,6 +519,8 @@ pub(crate) fn parse_dv<R: BufRead>(
         allow_blank: attr_bool(e, "allowBlank", false),
         // OOXML's showDropDown="1" *hides* the in-cell dropdown.
         show_dropdown: !attr_bool(e, "showDropDown", false),
+        // Excel dropdowns are never sorted.
+        sort_ascending: false,
         input_help,
         error,
     }))

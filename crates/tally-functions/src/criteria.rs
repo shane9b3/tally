@@ -382,8 +382,8 @@ fn cmp_numbers(a: f64, b: f64) -> std::cmp::Ordering {
 /// The numeric value of a criterion operand: the locale's input recognizer
 /// first (so `"10/1/2026"`, `"1,000"`, `"50%"` and `"$5"` are numbers under
 /// en-US, as AOO's `IsNumberFormat` makes them), then the unambiguous parser.
-fn criterion_number(rest: &str, epoch: DateEpoch, locale: &Locale) -> Option<f64> {
-    recognize_number(rest, locale, &RecognizeContext::now(epoch))
+fn criterion_number(rest: &str, settings: &CalcSettings, locale: &Locale) -> Option<f64> {
+    recognize_number(rest, locale, &RecognizeContext::for_settings(settings))
 }
 
 /// Case-insensitive match of a boolean name (`TRUE`, or the locale's `WAHR`).
@@ -420,7 +420,7 @@ impl Criterion {
                         },
                         _ => Operand::Text(TextPattern::new("", settings, true)),
                     }
-                } else if let Some(n) = criterion_number(rest, epoch, locale) {
+                } else if let Some(n) = criterion_number(rest, settings, locale) {
                     Operand::Number(n)
                 } else if is_name(rest, "TRUE") || is_name(rest, locale.true_name) {
                     Operand::Bool(true)

@@ -58,7 +58,7 @@ import { mixedOf, protectionOf, selectionProtection, selectionStyles, stateFromS
 import { addAutoFormat, buildAutoFormat, deleteAutoFormat, renameAutoFormat, sampleError, sampleOffsets, userAutoFormatOps } from "../styles/userAutoFormat";
 import { selectionFont } from "../fonts/fontModel";
 import { usePeekStore } from "../chrome/chromeActions";
-import { copySheetName, deleteContentsOp, groupAxisFor, hiddenContentCount, mergedContent, maxOutlineLevel } from "./builders";
+import { copySheetName, databaseRangeAt, deleteContentsOp, groupAxisFor, hiddenContentCount, mergedContent, maxOutlineLevel } from "./builders";
 import { DEFAULT_VIEW, useW56Store, type OptionsTab, type RecoveryFile, type W56Dialog } from "./store";
 import type { PopoverItem } from "../components/Popover";
 import type { Command } from "../registry";
@@ -537,6 +537,54 @@ export class W56Features {
     }
   }
 
+  /**
+   * Data ▸ Select Range (AOO SID_SELECT_DB, cellsh2.cxx:923-996): a list of
+   * the database ranges (the `ScDBCollection` order: by name, ignoring
+   * case); choosing one selects it on its sheet (`ScDBFunc::GotoDBArea`).
+   */
+  async openSelectDatabaseRange(): Promise<void> {
+    try {
+      const ranges = await this.client.databaseRanges(this.doc);
+      ranges.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "accent" }));
+      this.store.openDialog({ kind: "selectDatabaseRange", ranges });
+    } catch (e) {
+      this.ctl.notifyError(e);
+    }
+  }
+
+  /** Selects the database range `name` (switching sheets as needed). */
+  async selectDatabaseRange(name: string): Promise<void> {
+    try {
+      const r = (await this.client.databaseRanges(this.doc)).find((x) => x.name.toLowerCase() === name.toLowerCase());
+      if (r) this.goToItem(r.sheet, r.range);
+    } catch (e) {
+      this.ctl.notifyError(e);
+    }
+  }
+
+  /**
+   * Data ▸ Refresh Range (AOO SID_REFRESH_DBAREA → `ScDBDocFunc::RepeatDB`):
+   * the database range at the cursor is sorted, filtered and subtotalled
+   * again with the parameters it keeps. Tally has no external data
+   * sources, so there is nothing to re-import.
+   */
+  async refreshDatabaseRange(): Promise<void> {
+    try {
+      const r = databaseRangeAt(await this.client.databaseRanges(this.doc), this.sheet, this.ctl.selection.active);
+      if (!r) {
+        useUiStore.getState().pushToast("info", t("msg.refreshRange.none", "The cursor is not in a database range."));
+        return;
+      }
+      if (!r.filter && !r.hasSort && !r.hasSubtotals) {
+        useUiStore.getState().pushToast("info", t("msg.refreshRange.noOps", "No operations to execute"));
+        return;
+      }
+      await this.ctl.apply(t("cmd.data.refreshRange", "Refresh range"), [{ type: "refreshDatabaseRange", name: r.name }]);
+    } catch (e) {
+      this.ctl.notifyError(e);
+    }
+  }
+
   async deleteDatabaseRange(name: string): Promise<void> {
     await this.ctl.apply(t("msg.undo.deleteDatabaseRange", "Delete database range"), [{ type: "deleteDatabaseRange", name }]);
   }
@@ -996,12 +1044,14 @@ export class W56Features {
   private applyView(v: ViewOptionsDto): void {
     const view: ViewOptionsDto = { ...DEFAULT_VIEW, ...v, split: v.split ?? null };
     if (JSON.stringify(view) !== JSON.stringify(this.store.view)) this.store.setView(view);
+    // The sheet's saved zoom (View ▸ Zoom, 20–400 %).
+    this.ctl.w5.view.applyDocZoom(v.zoom);
     useDocStore.getState().source?.setCellsOptions({ showFormulas: view.showFormulas, valueHighlighting: view.valueHighlighting, hideZeroValues: !view.showZeroValues });
   }
 
   /** The active sheet's toggles without the split (what `setViewOptions` takes). */
   private currentView(): ViewOptionsDto {
-    const { split: _split, ...toggles } = this.store.view;
+    const { split: _split, zoom: _zoom, ...toggles } = this.store.view;
     return { ...DEFAULT_VIEW, ...toggles };
   }
 
@@ -1009,12 +1059,12 @@ export class W56Features {
     await this.setViewOptions({ ...this.currentView(), [key]: value });
   }
 
-  toggleView(key: Exclude<keyof ViewOptionsDto, "split">): void {
+  toggleView(key: Exclude<keyof ViewOptionsDto, "split" | "zoom">): void {
     void this.setViewOption(key, !this.currentView()[key]);
   }
 
   async setViewOptions(v: ViewOptionsDto): Promise<void> {
-    const { split: _split, ...options } = v;
+    const { split: _split, zoom: _zoom, ...options } = v;
     const res = await this.ctl.apply(t("msg.undo.viewOptions", "View options"), [{ type: "setViewOptions", sheet: this.sheet, options: { ...DEFAULT_VIEW, ...options } }]);
     // The engine's answer is authoritative (afterResult re-reads it too; this covers results without a version bump).
     if (res && res.errors.length === 0) await this.refreshView(false);
@@ -1230,6 +1280,11 @@ export class W56Features {
 
   toggleNavigator(): void {
     this.store.togglePanel("navigator");
+  }
+
+  /** Insert ▸ Function List (the docked function list panel). */
+  toggleFunctionList(): void {
+    this.store.togglePanel("functions");
   }
 
   async navigator(): Promise<NavigatorDto> {

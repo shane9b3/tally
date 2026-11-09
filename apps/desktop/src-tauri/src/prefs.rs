@@ -153,6 +153,20 @@ pub fn open_mode(json: &str) -> OpenMode {
     }
 }
 
+/// The prefs key of Tools ▸ Options ▸ Input ▸ "Year (two digits)".
+pub const TWO_DIGIT_YEAR_KEY: &str = "twoDigitYearStart";
+
+/// The two-digit year window start stored in the prefs (AOO's default
+/// 1930 when absent or outside 1583–9857).
+pub fn two_digit_year(json: &str) -> u16 {
+    serde_json::from_str::<Value>(json)
+        .ok()
+        .and_then(|v| v.get(TWO_DIGIT_YEAR_KEY)?.as_u64())
+        .and_then(|y| u16::try_from(y).ok())
+        .filter(|y| tally_types::TWO_DIGIT_YEAR_RANGE.contains(y))
+        .unwrap_or(tally_types::DEFAULT_TWO_DIGIT_YEAR)
+}
+
 /// Replaces (or adds) a string key and returns the new document.
 pub fn with_string_key(json: &str, key: &str, value: &str) -> Result<String, ApiError> {
     let mut v: Value =
@@ -175,7 +189,12 @@ pub async fn get_prefs(app: AppHandle) -> Result<String, ApiError> {
 /// `set_prefs`: stores the prefs.json text (a JSON object ≤ 1 MiB).
 #[tauri::command]
 pub async fn set_prefs(app: AppHandle, json: String) -> Result<(), ApiError> {
-    store(&app, &json)
+    store(&app, &json)?;
+    // Documents created or opened from now on take the new window.
+    if let Some(state) = app.try_state::<crate::state::AppState>() {
+        state.set_two_digit_year_default(two_digit_year(&json));
+    }
+    Ok(())
 }
 
 /// A theme preference the UI knows (`None`: unchanged).
@@ -299,6 +318,10 @@ mod tests {
         );
         assert_eq!(open_mode(r#"{"openDocumentsIn":"popups"}"#), OpenMode::Tabs);
         assert_eq!(open_mode(r#"{"openDocumentsIn":1}"#), OpenMode::Tabs);
+        assert_eq!(two_digit_year("{}"), 1930);
+        assert_eq!(two_digit_year(r#"{"twoDigitYearStart":1950}"#), 1950);
+        assert_eq!(two_digit_year(r#"{"twoDigitYearStart":1000}"#), 1930);
+        assert_eq!(two_digit_year(r#"{"twoDigitYearStart":"1950"}"#), 1930);
         assert_eq!(open_mode("garbage"), OpenMode::Tabs);
     }
 

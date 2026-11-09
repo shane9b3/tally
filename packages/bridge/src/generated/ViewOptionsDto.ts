@@ -11,6 +11,11 @@ export type ViewOptionsDto = {
  */
 split?: SplitDto | null, 
 /**
+ * The sheet's view zoom in percent (20–400), when not 100 % (reported
+ * by `view_options`; ignored by `SetViewOptions`, use `set_view_zoom`).
+ */
+zoom?: number | null, 
+/**
  * Show formulas instead of results.
  */
 showFormulas: boolean, 

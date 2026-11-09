@@ -126,7 +126,16 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
     }
     font_face_decls(&mut s, faces);
     s.push_str("<office:styles>");
-    s.push_str(r#"<style:default-style style:family="table-cell"><style:paragraph-properties style:tab-stop-distance="1.25cm"/>"#);
+    s.push_str(r#"<style:default-style style:family="table-cell">"#);
+    // AOO writes the document's General decimals (`StandardDecimals`) on
+    // the default cell style, and nothing while they are unlimited.
+    if let Some(n) = data.settings.calc_settings.standard_decimals {
+        let _ = write!(
+            s,
+            r#"<style:table-cell-properties style:decimal-places="{n}"/>"#
+        );
+    }
+    s.push_str(r#"<style:paragraph-properties style:tab-stop-distance="1.25cm"/>"#);
     let default_font = data.settings.default_font.as_deref();
     if data.settings.locale.is_some() || default_font.is_some() {
         s.push_str("<style:text-properties");
@@ -220,6 +229,19 @@ fn config_item(s: &mut String, name: &str, ty: &str, value: &str) {
     s.push_str("</config:config-item>");
 }
 
+/// `true` when `c` is what AOO assumes without `table:calculation-settings`:
+/// case-sensitive, precision not as shown, whole-cell criteria, regular
+/// expressions, no iterations, null date 1899-12-30 and the 1930 window.
+pub(crate) fn aoo_default_calc_settings(c: &tally_types::CalcSettings) -> bool {
+    c.case_sensitive
+        && !c.precision_as_shown
+        && c.whole_cell_match
+        && c.criteria_mode == CriteriaMode::Regex
+        && c.iterations.is_none()
+        && c.date_epoch == tally_types::DateEpoch::D1899
+        && c.year2000() == tally_types::DEFAULT_TWO_DIGIT_YEAR
+}
+
 fn settings_xml(data: &WorkbookData) -> String {
     let mut s = String::new();
     s.push_str(XML_DECL);
@@ -261,6 +283,12 @@ fn settings_xml(data: &WorkbookData) -> String {
             config_item(&mut s, "PositionRight", "int", &cols.to_string());
             config_item(&mut s, "PositionBottom", "int", &rows.to_string());
         }
+        // The view zoom (AOO ScViewData::WriteUserDataSequence: type
+        // 0 = percent, `ZoomValue`, page break preview 60 %).
+        let zoom = sheet.zoom.unwrap_or(100);
+        config_item(&mut s, "ZoomType", "short", "0");
+        config_item(&mut s, "ZoomValue", "int", &zoom.to_string());
+        config_item(&mut s, "PageViewZoomValue", "int", "60");
         // Wave 5: view options and a non-frozen split (placeholder).
         crate::v04::write_view_settings(&mut s, sheet);
         s.push_str("</config:config-item-map-entry>");
@@ -268,6 +296,10 @@ fn settings_xml(data: &WorkbookData) -> String {
     s.push_str("</config:config-item-map-named>");
     if let Some(active) = data.sheets.get(data.settings.active_sheet as usize) {
         config_item(&mut s, "ActiveTable", "string", &active.name);
+        let zoom = active.zoom.unwrap_or(100);
+        config_item(&mut s, "ZoomType", "short", "0");
+        config_item(&mut s, "ZoomValue", "int", &zoom.to_string());
+        config_item(&mut s, "PageViewZoomValue", "int", "60");
     }
     s.push_str(
         "</config:config-item-map-entry></config:config-item-map-indexed></config:config-item-set>",
@@ -873,30 +905,41 @@ fn write_content<W: Write + Seek>(
     s.push('>');
 
     let c = &data.settings.calc_settings;
-    let (regex, wild) = match c.criteria_mode {
-        CriteriaMode::Wildcards => (false, true),
-        CriteriaMode::Regex => (true, false),
-        CriteriaMode::Literal => (false, false),
-    };
-    let _ = write!(
-        s,
-        r#"<table:calculation-settings table:case-sensitive="{}" table:precision-as-shown="{}" table:search-criteria-must-apply-to-whole-cell="{}" table:automatic-find-labels="false" table:use-regular-expressions="{regex}" table:use-wildcards="{wild}">"#,
-        c.case_sensitive, c.precision_as_shown, c.whole_cell_match
-    );
-    let _ = write!(
-        s,
-        r#"<table:null-date table:date-value="{}"/>"#,
-        null_date_for(c.date_epoch)
-    );
-    if let Some(it) = c.iterations {
+    // AOO ScXMLExport::WriteCalculationSettings (xmlexprt.cxx:3688-3713)
+    // writes the element only when a setting differs from its defaults, so
+    // a reader takes its own two-digit year option for an all-default file.
+    if !aoo_default_calc_settings(c) {
+        let (regex, wild) = match c.criteria_mode {
+            CriteriaMode::Wildcards => (false, true),
+            CriteriaMode::Regex => (true, false),
+            CriteriaMode::Literal => (false, false),
+        };
         let _ = write!(
             s,
-            r#"<table:iteration table:status="enable" table:steps="{}" table:minimum-difference="{}"/>"#,
-            it.steps,
-            fmt_f64(it.min_change)
+            r#"<table:calculation-settings table:case-sensitive="{}" table:precision-as-shown="{}" table:search-criteria-must-apply-to-whole-cell="{}" table:automatic-find-labels="false" table:use-regular-expressions="{regex}" table:use-wildcards="{wild}""#,
+            c.case_sensitive, c.precision_as_shown, c.whole_cell_match
         );
+        // AOO ScXMLExport::WriteCalculationSettings: `table:null-year` only
+        // when the window does not start in 1930.
+        if c.year2000() != tally_types::DEFAULT_TWO_DIGIT_YEAR {
+            let _ = write!(s, r#" table:null-year="{}""#, c.year2000());
+        }
+        s.push('>');
+        let _ = write!(
+            s,
+            r#"<table:null-date table:date-value="{}"/>"#,
+            null_date_for(c.date_epoch)
+        );
+        if let Some(it) = c.iterations {
+            let _ = write!(
+                s,
+                r#"<table:iteration table:status="enable" table:steps="{}" table:minimum-difference="{}"/>"#,
+                it.steps,
+                fmt_f64(it.min_change)
+            );
+        }
+        s.push_str("</table:calculation-settings>");
     }
-    s.push_str("</table:calculation-settings>");
     let vals: Vec<(String, &[tally_model::ValidationData])> = data
         .sheets
         .iter()

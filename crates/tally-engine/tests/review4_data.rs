@@ -363,6 +363,7 @@ fn m15_insert_cells_moves_ranges_inside_the_band() {
             },
             allow_blank: true,
             show_dropdown: false,
+            sort_ascending: false,
             input_help: None,
             error: None,
         },

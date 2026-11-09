@@ -36,7 +36,7 @@ proptest! {
     #[test]
     fn recognizer_never_panics(s in from_set(INPUT_CHARS, 20)) {
         let l = Locale::en_us();
-        let ctx = RecognizeContext { epoch: DateEpoch::D1899, today: (2026, 10, 19) };
+        let ctx = RecognizeContext { epoch: DateEpoch::D1899, today: (2026, 10, 19), year2000: 1930 };
         let _ = recognize_input_with(&s, &l, &ctx);
         let _ = parse_number_unambiguous(&s);
     }

@@ -95,9 +95,9 @@ fn timevalue(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
         let s = a.text(0)?;
-        let epoch = a.ctx().settings().date_epoch;
+        let rc = RecognizeContext::for_settings(a.ctx().settings());
         let locale = locale_of(a.ctx());
-        let rec = recognize_input_with(&s, locale, &RecognizeContext::now(epoch));
+        let rec = recognize_input_with(&s, locale, &rc);
         let n = match rec.value {
             Value::Number(n) => n,
             _ => return Err(ErrorKind::InvalidArgument),

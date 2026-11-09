@@ -481,6 +481,47 @@ export function DefineDatabaseRangeDialog({ d }: { d: D<"defineDatabaseRange"> }
   );
 }
 
+/**
+ * Data ▸ Select Range (AOO RID_SCDLG_SELECTDB "Select Database Range",
+ * list "Ranges"): choosing a range selects it, on its own sheet.
+ */
+export function SelectDatabaseRangeDialog({ d }: { d: D<"selectDatabaseRange"> }) {
+  useW56Store((s) => s.i18nRev);
+  const ctl = useController();
+  const [picked, setPicked] = useState<string | null>(d.ranges[0]?.name ?? null);
+  const go = (name: string | null) => {
+    if (name !== null) void ctl.w56.selectDatabaseRange(name);
+  };
+  return (
+    <W56Shell title={t("dd.selectDbRange", "Select Database Range")} ok={t("dialog.ok", "OK")} testId="select-db-range" valid={picked !== null} onSubmit={() => go(picked)}>
+      <div className={styles.section}>{t("dd.ranges", "Ranges")}</div>
+      {d.ranges.length === 0 ? <p className={dlg.lead}>{t("dd.noDbRanges", "No database ranges are defined.")}</p> : null}
+      <div className={styles.list} role="listbox" aria-label={t("dd.ranges", "Ranges")}>
+        {d.ranges.map((r) => {
+          const on = picked === r.name;
+          return (
+            <button
+              key={r.name}
+              type="button"
+              role="option"
+              aria-selected={on}
+              className={on ? styles.listItemOn : styles.listItem}
+              onClick={() => setPicked(r.name)}
+              onDoubleClick={() => {
+                closeW56();
+                go(r.name);
+              }}
+              data-testid={`select-db-${r.name}`}
+            >
+              {r.name}
+            </button>
+          );
+        })}
+      </div>
+    </W56Shell>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Fill series, sort options
 // ---------------------------------------------------------------------------

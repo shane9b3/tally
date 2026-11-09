@@ -188,6 +188,7 @@ pub fn apply(
             has_header,
         } => crate::tools::define_database_range(wb, name, *sheet, range, *has_header, fx),
         Op::DeleteDatabaseRange { name } => crate::tools::delete_database_range(wb, name, fx),
+        Op::RefreshDatabaseRange { name } => crate::tools::refresh_database_range(wb, name, fx),
         Op::SetViewOptions { sheet, options } => {
             crate::tools::set_view_options(wb, *sheet, options, fx)
         }

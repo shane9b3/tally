@@ -3090,7 +3090,7 @@ fn write_output(
     clear_range_content(wb, out);
     clear_range_styles(wb, out);
     let mut roles: Vec<OutCell> = Vec::with_capacity(layout.labels.len());
-    let ctx = RecognizeContext::now(wb.settings.date_epoch);
+    let ctx = RecognizeContext::for_settings(&wb.settings);
     for l in layout.labels {
         let a = CellAddr::new(sheet, tr + l.r, tc + l.c);
         // Numeric captions are entered as typed (AOO `ScDPOutput::HeaderCell`

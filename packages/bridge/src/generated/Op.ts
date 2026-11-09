@@ -1180,6 +1180,10 @@ hasHeader: boolean, } | { "type": "deleteDatabaseRange",
 /**
  * Name.
  */
+name: string, } | { "type": "refreshDatabaseRange", 
+/**
+ * Name.
+ */
 name: string, } | { "type": "setViewOptions", 
 /**
  * Sheet.

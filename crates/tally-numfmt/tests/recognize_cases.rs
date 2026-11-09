@@ -199,6 +199,7 @@ fn ctx(epoch: DateEpoch) -> RecognizeContext {
     RecognizeContext {
         epoch,
         today: (2026, 10, 19),
+        year2000: 1930,
     }
 }
 
@@ -253,6 +254,50 @@ fn recognizer_epochs() {
     // The default entry point uses today's date and the 1899 epoch.
     let r = recognize_input("2026-10-19", &l);
     assert_eq!(r.value, Value::Number(46314.0));
+}
+
+/// The two-digit year window (P17: AOO Tools ▸ Options ▸ General ▸ "Year
+/// (two digits)", the document's `table:null-year`).
+#[test]
+fn two_digit_year_window() {
+    let l = Locale::en_us();
+    let year = |input: &str, start: u16| -> i32 {
+        let c = RecognizeContext {
+            year2000: start,
+            ..ctx(DateEpoch::D1899)
+        };
+        let Value::Number(x) = recognize_input_with(input, &l, &c).value else {
+            panic!("{input} is not a date");
+        };
+        let (y, _, _) = tally_numfmt::date::ymd_from_serial(DateEpoch::D1899, x.floor()).unwrap();
+        y
+    };
+    assert_eq!(year("1/1/45", 1930), 1945);
+    assert_eq!(year("1/1/29", 1930), 2029);
+    assert_eq!(year("1/1/30", 1930), 1930);
+    assert_eq!(year("1/1/45", 1950), 2045);
+    assert_eq!(year("1/1/50", 1950), 1950);
+    assert_eq!(year("1/1/49", 1950), 2049);
+    assert_eq!(year("1/1/45", 2000), 2045);
+    assert_eq!(year("1/1/99", 2000), 2099);
+    assert_eq!(year("1/1/00", 2000), 2000);
+    // Four-digit years are never moved.
+    assert_eq!(year("1/1/1945", 1950), 1945);
+    // Month-name forms use the window too.
+    assert_eq!(year("Jan 1, 45", 1950), 2045);
+    // German order (DD.MM.YY).
+    let de = tally_numfmt::locale_by_tag("de-DE").unwrap();
+    let c = RecognizeContext {
+        year2000: 1950,
+        ..ctx(DateEpoch::D1899)
+    };
+    let Value::Number(x) = recognize_input_with("1.1.45", de, &c).value else {
+        panic!("1.1.45 is not a date in de-DE");
+    };
+    assert_eq!(
+        tally_numfmt::date::ymd_from_serial(DateEpoch::D1899, x).unwrap(),
+        (2045, 1, 1)
+    );
 }
 
 #[test]

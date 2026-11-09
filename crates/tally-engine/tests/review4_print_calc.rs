@@ -63,6 +63,8 @@ fn settings(iterations: Option<(u32, f64)>, precision: bool) -> CalcSettingsDto 
         whole_cell_match: true,
         criteria_mode: CriteriaModeDto::Wildcards,
         text_to_number: TextToNumberDto::ConvertUnambiguous,
+        two_digit_year: None,
+        standard_decimals: None,
     }
 }
 

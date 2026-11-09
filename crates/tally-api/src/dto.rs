@@ -1388,6 +1388,13 @@ pub enum Op {
         /// Name.
         name: String,
     },
+    /// Data ▸ Refresh Range (AOO `ScDBDocFunc::RepeatDB`): sorts, filters
+    /// and subtotals the database range again with the parameters it
+    /// keeps (fails with "No operations to execute" when it keeps none).
+    RefreshDatabaseRange {
+        /// Name.
+        name: String,
+    },
     /// Sets a sheet's view options (persisted, undoable).
     SetViewOptions {
         /// Sheet.
@@ -2626,6 +2633,8 @@ mod tests {
                 whole_cell_match: true,
                 criteria_mode: CriteriaModeDto::Wildcards,
                 text_to_number: TextToNumberDto::ConvertUnambiguous,
+                two_digit_year: None,
+                standard_decimals: None,
             },
         };
         assert_eq!(

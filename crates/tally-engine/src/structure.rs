@@ -387,6 +387,39 @@ impl Workbook {
                     }
                     list.retain(|v| !v.ranges.is_empty());
                 }
+                // Database ranges, the standard filter and subtotal rules
+                // with their columns (AOO `ScDBCollection::UpdateReference`).
+                crate::dbmove::adjust(
+                    &mut sheet.meta,
+                    &crate::dbmove::AreaMove {
+                        range: &|r| {
+                            if sh.rows {
+                                span(r.r0, r.r1).map(|(r0, r1)| CellRangeLocal { r0, r1, ..*r })
+                            } else {
+                                span(r.c0, r.c1).map(|(c0, c1)| CellRangeLocal { c0, c1, ..*r })
+                            }
+                        },
+                        col: &|_, c| {
+                            if sh.rows {
+                                Some(c)
+                            } else {
+                                point_after(&sh, c)
+                            }
+                        },
+                        collapse: &|r| {
+                            let band = Band {
+                                sheet: sh.sheet,
+                                rows: sh.rows,
+                                lo: 0,
+                                hi: u32::MAX,
+                                at: sh.at,
+                                count: sh.count,
+                                insert: sh.insert,
+                            };
+                            band.collapsed(r)
+                        },
+                    },
+                );
                 if !sheet.meta.notes.is_empty() {
                     crate::annotations::shift_for_structure(
                         Arc::make_mut(&mut sheet.meta.notes),
@@ -734,23 +767,20 @@ impl Band {
                     .collect();
             }
         }
-        if meta
-            .database_ranges
-            .iter()
-            .any(|d| self.range_after(&d.range) != Some(d.range))
-        {
-            let list = Arc::make_mut(&mut meta.database_ranges);
-            list.retain_mut(|d| match self.range_after(&d.range) {
-                Some(r) => {
-                    d.range = r;
-                    if let Some(f) = d.filter.as_mut() {
-                        f.range = r;
+        crate::dbmove::adjust(
+            meta,
+            &crate::dbmove::AreaMove {
+                range: &|r| self.range_after(r),
+                col: &|r, c| {
+                    if self.rows || self.range_after(r) == Some(*r) {
+                        Some(c)
+                    } else {
+                        self.cell_after(r.r0, c).map(|(_, nc)| nc)
                     }
-                    true
-                }
-                None => false,
-            });
-        }
+                },
+                collapse: &|r| self.collapsed(r),
+            },
+        );
         if let Some(af) = meta.auto_filter.as_ref() {
             match self.range_after(&af.range) {
                 Some(r) if r == af.range => {}
@@ -769,17 +799,27 @@ impl Band {
                 None => meta.auto_filter = None,
             }
         }
-        if let Some(sf) = meta.standard_filter.as_ref() {
-            match self.range_after(&sf.range) {
-                Some(r) if r == sf.range => {}
-                Some(r) => {
-                    let mut n = (**sf).clone();
-                    n.range = r;
-                    meta.standard_filter = Some(Arc::new(n));
-                }
-                None => meta.standard_filter = None,
-            }
+    }
+
+    /// A database range deleted by the shift stays as one row / column at
+    /// the deletion point (AOO `ScRefUpdate::Update`).
+    fn collapsed(&self, r: &CellRangeLocal) -> Option<CellRangeLocal> {
+        if self.insert {
+            return None;
         }
+        Some(if self.rows {
+            CellRangeLocal {
+                r0: self.at,
+                r1: self.at,
+                ..*r
+            }
+        } else {
+            CellRangeLocal {
+                c0: self.at,
+                c1: self.at,
+                ..*r
+            }
+        })
     }
 
     /// The cells that move (from `at` on inside the band).
@@ -1937,30 +1977,18 @@ impl RowMap {
                     .collect();
             }
         }
-        if !meta.database_ranges.is_empty() {
-            Arc::make_mut(&mut meta.database_ranges).retain_mut(|d| {
-                match self.range_after(&d.range) {
-                    Some(r) => {
-                        d.range = r;
-                        if let Some(f) = d.filter.as_mut() {
-                            f.range = r;
-                        }
-                        true
-                    }
-                    None => false,
-                }
-            });
-        }
+        // Rows only: columns stay; a range whose rows all go is removed.
+        crate::dbmove::adjust(
+            meta,
+            &crate::dbmove::AreaMove {
+                range: &|r| self.range_after(r),
+                col: &|_, c| Some(c),
+                collapse: &|_| None,
+            },
+        );
         if let Some(af) = meta.auto_filter.take() {
             meta.auto_filter = self.range_after(&af.range).map(|range| {
                 let mut n = Arc::unwrap_or_clone(af);
-                n.range = range;
-                Arc::new(n)
-            });
-        }
-        if let Some(sf) = meta.standard_filter.take() {
-            meta.standard_filter = self.range_after(&sf.range).map(|range| {
-                let mut n = Arc::unwrap_or_clone(sf);
                 n.range = range;
                 Arc::new(n)
             });

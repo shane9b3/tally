@@ -77,6 +77,14 @@ impl AppState {
         lock(&self.hub).fork()
     }
 
+    /// The application's two-digit year window (prefs `twoDigitYearStart`)
+    /// for documents created or opened from now on (all forks share it).
+    pub fn set_two_digit_year_default(&self, year: u16) {
+        if let Err(e) = lock(&self.hub).set_two_digit_year_default(year) {
+            eprintln!("tally: two-digit year {year}: {}", e.message);
+        }
+    }
+
     /// The service of `doc` (the registry lock is released on return).
     pub fn doc(&self, doc: DocId) -> Result<DocSlot, ApiError> {
         lock(&self.docs)

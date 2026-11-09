@@ -218,7 +218,20 @@ fn assemble(
     wb.settings.load_readonly = settings.load_readonly;
     if let Some(calc) = content.calc {
         wb.settings.calc_settings = calc;
+    } else if wb
+        .meta
+        .generator
+        .as_deref()
+        .is_some_and(|g| g.starts_with("Tally/"))
+    {
+        // Tally leaves the element out only when every setting is AOO's
+        // default (`write::aoo_default_calc_settings`); the window stays
+        // unset, as for AOO, so the reader's option applies.
+        let c = &mut wb.settings.calc_settings;
+        c.case_sensitive = true;
+        c.criteria_mode = tally_types::CriteriaMode::Regex;
     }
+    wb.settings.calc_settings.standard_decimals = styles.default_decimals;
     if let Some(active) = settings.active {
         if let Some(i) = wb.sheets.iter().position(|s| s.name == active) {
             wb.settings.active_sheet = i as u32;
@@ -234,6 +247,14 @@ fn assemble(
             for (k, v) in items {
                 crate::tools::apply_view_item(sheet, k, v);
             }
+        }
+        // AOO MINZOOM..MAXZOOM (20–400 %), clamped.
+        if let Some(&z) = settings
+            .zooms
+            .get(&sheet.name)
+            .or(settings.view_zoom.as_ref())
+        {
+            sheet.zoom = tally_model::zoom_from_file(z);
         }
         if sheet.frozen.is_none() {
             if let Some(split) = settings.splits.get(&sheet.name) {
@@ -316,6 +337,10 @@ struct Settings {
     splits: HashMap<String, tally_model::SplitData>,
     /// `ooo:configuration-settings` `LoadReadonly`.
     load_readonly: bool,
+    /// Sheet name → its `ZoomValue` (percent, as written).
+    zooms: HashMap<String, i64>,
+    /// The view's own `ZoomValue` (older files have no per-sheet one).
+    view_zoom: Option<i64>,
 }
 
 #[derive(Default)]
@@ -368,6 +393,11 @@ fn parse_settings<R: BufRead>(xml: &mut XmlReader<R>) -> Result<Settings, OdsErr
                                 "HorizontalSplitPosition" => info.h_pos = t.parse().unwrap_or(0),
                                 "VerticalSplitMode" => info.v_mode = t.parse().unwrap_or(0),
                                 "VerticalSplitPosition" => info.v_pos = t.parse().unwrap_or(0),
+                                "ZoomValue" => {
+                                    if let Ok(z) = t.parse() {
+                                        s.zooms.insert(sheet.clone(), z);
+                                    }
+                                }
                                 "ShowFormulas"
                                 | "ShowZeroValues"
                                 | "ShowGrid"
@@ -383,6 +413,8 @@ fn parse_settings<R: BufRead>(xml: &mut XmlReader<R>) -> Result<Settings, OdsErr
                         }
                     } else if name == "ActiveTable" {
                         s.active = Some(text);
+                    } else if name == "ZoomValue" {
+                        s.view_zoom = text.trim().parse().ok();
                     }
                     continue;
                 }

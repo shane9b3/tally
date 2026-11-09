@@ -18,7 +18,7 @@ import { useUiStore } from "../stores/uiStore";
 import { isTypingTarget } from "../useKeymap";
 import { ghostSuffix } from "../autocorrect/autoinput";
 import { pivotHeaderRanges } from "../pivot/pivotModel";
-import { loadNavigator, loadStylesUi, loadW56Dialogs } from "../lazyChunks";
+import { loadFunctionList, loadNavigator, loadStylesUi, loadW56Dialogs } from "../lazyChunks";
 import { LazySlot, lazyPart } from "../lazyPart";
 import { useW56Store } from "./store";
 import styles from "./W56.module.css";
@@ -27,6 +27,7 @@ import styles from "./W56.module.css";
 const W56DialogFor = lazyPart(() => loadW56Dialogs().then((m) => m.W56DialogFor));
 const StylesPanel = lazyPart(() => loadStylesUi().then((m) => m.StylesPanel));
 const NavigatorPanel = lazyPart(() => loadNavigator().then((m) => m.NavigatorPanel));
+const FunctionListPanel = lazyPart(() => loadFunctionList().then((m) => m.FunctionListPanel));
 
 /** Dialogs, ghost text, pivot bands, selection-mode badge and the key hook. */
 export function W56Chrome() {
@@ -55,6 +56,7 @@ export function W56Panels() {
   const fail = () => useW56Store.getState().setPanel(null);
   if (panel === "styles") return <LazySlot onFail={fail}><StylesPanel /></LazySlot>;
   if (panel === "navigator") return <LazySlot onFail={fail}><NavigatorPanel /></LazySlot>;
+  if (panel === "functions") return <LazySlot onFail={fail}><FunctionListPanel /></LazySlot>;
   return null;
 }
 

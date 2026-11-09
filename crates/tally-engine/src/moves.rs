@@ -92,6 +92,9 @@ pub fn move_range(
             crate::storage::MetaKind::Images,
             crate::storage::MetaKind::CondFormats,
             crate::storage::MetaKind::Validations,
+            crate::storage::MetaKind::DatabaseRanges,
+            crate::storage::MetaKind::StandardFilter,
+            crate::storage::MetaKind::Subtotals,
         ],
     )
     .ok_or_else(|| ApiError::not_found("no sheet"))?;
@@ -291,6 +294,25 @@ pub fn move_range(
             }
             list.retain(|v| !v.ranges.is_empty());
         }
+        // Database ranges (and the sheet's filter / subtotal areas) wholly
+        // inside the block move with it, their columns too (AOO
+        // `ScDBCollection::UpdateReference` with URM_MOVE).
+        let inside =
+            |r: &CellRangeLocal| lf.r0 <= r.r0 && r.r1 <= lf.r1 && lf.c0 <= r.c0 && r.c1 <= lf.c1;
+        crate::dbmove::adjust(
+            &mut sh.meta,
+            &crate::dbmove::AreaMove {
+                range: &|r| Some(if inside(r) { shifted(r, dr, dc) } else { *r }),
+                col: &|r, c| {
+                    Some(if inside(r) {
+                        (i64::from(c) + dc) as u32
+                    } else {
+                        c
+                    })
+                },
+                collapse: &|_| None,
+            },
+        );
     }
     // Charts and pictures anchored in the block, and series ranges inside
     // it (on any sheet), move with it (v0.4, W5-1).

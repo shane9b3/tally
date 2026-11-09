@@ -47,6 +47,7 @@ pub mod charts;
 pub mod clipboard;
 pub mod condfmt;
 pub mod convert;
+mod dbmove;
 pub mod deps;
 pub mod detective;
 pub mod document;

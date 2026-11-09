@@ -375,6 +375,10 @@ pub struct ValidationDto {
     pub allow_blank: bool,
     /// Show the dropdown for list rules.
     pub show_dropdown: bool,
+    /// List rules: sort the dropdown entries ascending (AOO "Sort entries
+    /// ascending"; numbers first, then text in code-point order).
+    #[serde(default)]
+    pub sort_ascending: bool,
     /// Input help.
     pub input_help: Option<ValidationMessage>,
     /// Error alert (`None`: invalid input is accepted silently).

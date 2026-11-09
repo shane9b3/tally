@@ -203,6 +203,16 @@ pub trait DocumentService {
         Err(ApiError::unsupported("set_active_sheet is not supported"))
     }
 
+    /// The view zoom in percent (20–400, AOO `MINZOOM`..`MAXZOOM`) for
+    /// every sheet (AOO's default "synchronize sheets"), saved with the
+    /// document's view settings (ODS `ZoomValue`, XLSX `zoomScale`). View
+    /// state: not undoable, does not mark the document modified.
+    /// `invalid_argument` outside 20–400.
+    fn set_view_zoom(&mut self, doc: DocId, zoom: u16) -> Result<()> {
+        let _ = (doc, zoom);
+        Err(ApiError::unsupported("set_view_zoom is not supported"))
+    }
+
     /// Every registered function.
     fn list_functions(&self) -> Vec<FunctionInfo>;
 

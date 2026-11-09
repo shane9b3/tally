@@ -36,4 +36,16 @@ criteriaMode: CriteriaModeDto,
 /**
  * Text to number conversion.
  */
-textToNumber: TextToNumberDto, };
+textToNumber: TextToNumberDto, 
+/**
+ * First year of the two-digit year window (1583–9857; ODS
+ * `table:null-year`). `None`: the document does not set it yet (the
+ * application option applies; `SetCalcSettings` then keeps the
+ * current value).
+ */
+twoDigitYear?: number | null, 
+/**
+ * "Limit decimals for general number format" (0–20); `None` =
+ * unlimited.
+ */
+standardDecimals?: number | null, };

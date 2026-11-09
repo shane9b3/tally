@@ -24,8 +24,8 @@ describe("trace arrows", () => {
 });
 
 describe("mark invalid data", () => {
-  const list: ValidationDto = { id: 1, ranges: [{ r0: 1, c0: 0, r1: 3, c1: 0 }], kind: { type: "list", source: { type: "values", items: ["Paid", "Due"] } }, allowBlank: true, showDropdown: true, inputHelp: null, error: null };
-  const whole: ValidationDto = { id: 2, ranges: [{ r0: 0, c0: 1, r1: 2, c1: 1 }], kind: { type: "whole", op: "between", formulas: ["1", "10"] }, allowBlank: false, showDropdown: false, inputHelp: null, error: null };
+  const list: ValidationDto = { id: 1, ranges: [{ r0: 1, c0: 0, r1: 3, c1: 0 }], kind: { type: "list", source: { type: "values", items: ["Paid", "Due"] } }, allowBlank: true, showDropdown: true, sortAscending: false, inputHelp: null, error: null };
+  const whole: ValidationDto = { id: 2, ranges: [{ r0: 0, c0: 1, r1: 2, c1: 1 }], kind: { type: "whole", op: "between", formulas: ["1", "10"] }, allowBlank: false, showDropdown: false, sortAscending: false, inputHelp: null, error: null };
   it("checks lists, whole numbers with bounds and blanks", () => {
     expect(cellValid(list, cell(1, 0, "Paid"))).toBe(true);
     expect(cellValid(list, cell(1, 0, "Maybe"))).toBe(false);

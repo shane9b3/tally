@@ -11,7 +11,8 @@
 //!   when a formula result is stored; `General` is not rounded, percent
 //!   formats add two decimals, scaling commas do not change the decimals
 //!   and scientific formats round to the mantissa's decimals
-//!   (`tally_numfmt::display_decimals_for`).
+//!   (`tally_numfmt::display_decimals_for`); General rounds to the
+//!   document's General decimals when they are limited.
 //! - The op is undoable through [`Change::Settings`] and followed by a hard
 //!   recalc (every formula is marked dirty).
 
@@ -52,6 +53,8 @@ pub fn to_api(s: &CalcSettings) -> CalcSettingsDto {
             TextToNumber::ConvertUnambiguous => TextToNumberDto::ConvertUnambiguous,
             TextToNumber::ConvertLocale => TextToNumberDto::ConvertLocale,
         },
+        two_digit_year: s.two_digit_year,
+        standard_decimals: s.standard_decimals,
     }
 }
 
@@ -76,6 +79,20 @@ pub fn from_api(d: &CalcSettingsDto) -> Result<CalcSettings, ApiError> {
             })
         }
     };
+    if d.two_digit_year
+        .is_some_and(|y| !tally_types::TWO_DIGIT_YEAR_RANGE.contains(&y))
+    {
+        return Err(ApiError::invalid_argument(
+            "the two-digit year start must be 1583–9857",
+        ));
+    }
+    if d.standard_decimals
+        .is_some_and(|n| n > tally_types::MAX_STANDARD_DECIMALS)
+    {
+        return Err(ApiError::invalid_argument(
+            "the General format allows at most 20 decimals",
+        ));
+    }
     Ok(CalcSettings {
         date_epoch: match d.date_epoch {
             DateEpochDto::D1899 => DateEpoch::D1899,
@@ -97,6 +114,8 @@ pub fn from_api(d: &CalcSettingsDto) -> Result<CalcSettings, ApiError> {
         whole_cell_match: d.whole_cell_match,
         iterations,
         precision_as_shown: d.precision_as_shown,
+        two_digit_year: d.two_digit_year,
+        standard_decimals: d.standard_decimals,
     })
 }
 
@@ -107,7 +126,11 @@ pub fn set_calc_settings(
     settings: &CalcSettingsDto,
     fx: &mut Effects,
 ) -> Result<Vec<Change>, ApiError> {
-    let new = from_api(settings)?;
+    let mut new = from_api(settings)?;
+    // A client that does not send the window keeps the document's.
+    if new.two_digit_year.is_none() {
+        new.two_digit_year = wb.settings.two_digit_year;
+    }
     if new == wb.settings {
         return Ok(Vec::new());
     }
@@ -122,6 +145,24 @@ pub fn set_calc_settings(
         fx.layout(s);
     }
     Ok(vec![Change::Settings(Box::new(old))])
+}
+
+/// The decimals "precision as shown" rounds `n` to in a cell formatted
+/// with `format`: the format's own ([`tally_numfmt::display_decimals_for`]),
+/// or for General the document's "Limit decimals for general number
+/// format" (AOO `ScDocument::RoundValueAsShown`, documen4.cxx:530-536:
+/// `GetStdPrecision()`, no rounding when unlimited).
+pub fn shown_decimals(
+    settings: &CalcSettings,
+    format: &tally_numfmt::FormatAst,
+    n: f64,
+) -> Option<i32> {
+    tally_numfmt::display_decimals_for(format, n).or_else(|| {
+        settings
+            .standard_decimals
+            .filter(|_| format.is_general())
+            .map(i32::from)
+    })
 }
 
 /// Rounds `x` to `decimals` places (negative: to tens, hundreds, …), as

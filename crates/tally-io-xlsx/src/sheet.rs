@@ -249,6 +249,13 @@ pub(crate) fn parse_sheet<R: BufRead>(
                     if v != tally_model::ViewOptionsData::default() {
                         st.out.view_options = Some(v);
                     }
+                    // Excel allows 10–400 %; Tally (AOO) 20–400 %.
+                    if let Some(z) = e
+                        .attr_local("zoomScale")
+                        .and_then(|z| z.trim().parse::<i64>().ok())
+                    {
+                        st.out.zoom = tally_model::zoom_from_file(z);
+                    }
                 }
                 "pane" => {
                     // TODO(W5-2): a non-frozen pane (`state` absent or

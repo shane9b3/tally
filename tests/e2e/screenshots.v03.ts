@@ -77,7 +77,7 @@ test("validation dropdown", async ({ page }) => {
   await ready(page);
   await page.evaluate(async () => {
     const ctl = window.__tally!.controller;
-    await ctl.v3.applyValidation({ id: 0, ranges: [{ r0: 1, c0: 6, r1: 14, c1: 6 }], kind: { type: "list", source: { type: "values", items: ["Paid", "Due", "Overdue", "Cancelled"] } }, allowBlank: true, showDropdown: true, inputHelp: null, error: { style: "stop", title: "Status", text: "Choose Paid, Due, Overdue or Cancelled." } }, false);
+    await ctl.v3.applyValidation({ id: 0, ranges: [{ r0: 1, c0: 6, r1: 14, c1: 6 }], kind: { type: "list", source: { type: "values", items: ["Paid", "Due", "Overdue", "Cancelled"] } }, allowBlank: true, showDropdown: true, sortAscending: false, inputHelp: null, error: { style: "stop", title: "Status", text: "Choose Paid, Due, Overdue or Cancelled." } }, false);
     await ctl.colorByValueOn({ r0: 1, c0: 6, r1: 14, c1: 6 });
   });
   await page.waitForTimeout(250);

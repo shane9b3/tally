@@ -33,7 +33,7 @@ function fake() {
 describe("EngineClientV4 over Tauri (W5-0b seams)", () => {
   it("lists every V4 method with a snake_case command", () => {
     expect(everyV4MethodListed).toBe(true);
-    expect(V4_METHODS.length).toBe(31);
+    expect(V4_METHODS.length).toBe(32);
     for (const m of V4_METHODS) {
       const cmd = COMMANDS[m];
       expect(cmd, m).toMatch(/^[a-z]+(_[a-z0-9]+)*$/);
@@ -91,6 +91,7 @@ describe("EngineClientV4 over Tauri (W5-0b seams)", () => {
     await client.detective(1, 2, 3, 4, "tracePrecedents");
     await client.detectiveArrows(1, 2);
     await client.setDetectiveAuto(1, false);
+    await client.setViewZoom(1, 20);
     await client.imageData(1, 2, 3);
     await client.viewOptions(1, 2);
     await client.invalidCells(1, 2, null);
@@ -127,6 +128,7 @@ describe("EngineClientV4 over Tauri (W5-0b seams)", () => {
       { cmd: "detective", args: { doc: 1, sheet: 2, r: 3, c: 4, action: "tracePrecedents" } },
       { cmd: "detective_arrows", args: { doc: 1, sheet: 2 } },
       { cmd: "set_detective_auto", args: { doc: 1, on: false } },
+      { cmd: "set_view_zoom", args: { doc: 1, zoom: 20 } },
       { cmd: "image_data", args: { doc: 1, sheet: 2, id: 3 } },
       { cmd: "view_options", args: { doc: 1, sheet: 2 } },
       { cmd: "invalid_cells", args: { doc: 1, sheet: 2, range: null } },

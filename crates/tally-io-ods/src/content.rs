@@ -1343,6 +1343,15 @@ fn parse_calc_settings<R: BufRead>(
         } else {
             CriteriaMode::Literal
         },
+        // AOO ScXMLCalculationSettingsContext: 1930 unless
+        // `table:null-year` says otherwise (a year outside AOO's option
+        // range 1583–9857 is ignored).
+        two_digit_year: Some(
+            e.attr("table:null-year")
+                .and_then(|v| v.trim().parse::<u16>().ok())
+                .filter(|y| tally_types::TWO_DIGIT_YEAR_RANGE.contains(y))
+                .unwrap_or(tally_types::DEFAULT_TWO_DIGIT_YEAR),
+        ),
         ..CalcSettings::default()
     };
     let d = xml.depth();
@@ -1803,6 +1812,7 @@ fn parse_database_ranges<R: BufRead>(
                 let mut tree: Option<FNode> = None;
                 let mut std_filter: Option<StandardFilterData> = None;
                 let mut subtotals: Option<SubtotalsData> = None;
+                let mut sort: Option<tally_model::DbSortData> = None;
                 let mut budget = MAX_FILTER_NODES;
                 let dd = xml.depth();
                 loop {
@@ -1820,6 +1830,20 @@ fn parse_database_ranges<R: BufRead>(
                                         )?);
                                     }
                                     _ => tree = parse_fnode(xml, &ch, &mut budget)?,
+                                }
+                            } else if ch.name == "table:sort" {
+                                // Only an in-place, top-to-bottom sort can be
+                                // repeated by Refresh Range; a left-to-right
+                                // range (`table:orientation="column"`) or a
+                                // sort copied elsewhere
+                                // (`table:target-range-address`) is not kept.
+                                let refreshable = c.attr("table:orientation") != Some("column")
+                                    && ch.attr("table:target-range-address").is_none();
+                                if let (true, Some((_, range))) = (refreshable, located) {
+                                    let so = crate::tools::parse_sort(xml, &ch, range)?;
+                                    sort = (!so.keys.is_empty()).then_some(so);
+                                } else {
+                                    xml.skip()?;
                                 }
                             } else if ch.name == "table:subtotal-rules" {
                                 if let Some((_, range)) = located {
@@ -1856,7 +1880,7 @@ fn parse_database_ranges<R: BufRead>(
                         sheet
                             .database_ranges
                             .push(crate::tools::database_range_from(
-                                &name, range, &c, std_filter, subtotals,
+                                &name, range, &c, std_filter, sort, subtotals,
                             ));
                     }
                     continue;

@@ -110,10 +110,51 @@ pub fn format_value_in_locale(
     width_chars: Option<u16>,
     epoch: DateEpoch,
 ) -> Formatted {
+    format_in_locale(value, ast, locale, width_chars, epoch, None)
+}
+
+/// [`format_value_with`] for a document that limits the decimals of the
+/// General format (`standard_decimals`, AOO Tools ▸ Options ▸ Calc ▸
+/// Calculate ▸ "Limit decimals for general number format"; `None` =
+/// unlimited). See [`general_string_limited`].
+pub fn format_value_std(
+    value: &Value,
+    ast: &FormatAst,
+    locale: &Locale,
+    width_chars: Option<u16>,
+    epoch: DateEpoch,
+    standard_decimals: Option<u8>,
+) -> Formatted {
+    let locale = format_language(ast).unwrap_or(locale);
+    format_in_locale(value, ast, locale, width_chars, epoch, standard_decimals)
+}
+
+/// [`format_value_in_locale`] with the document's General decimals
+/// (TEXT: AOO formats with the document's formatter, whose General keyword
+/// follows `GetStandardPrec`).
+pub fn format_value_in_locale_std(
+    value: &Value,
+    ast: &FormatAst,
+    locale: &Locale,
+    width_chars: Option<u16>,
+    epoch: DateEpoch,
+    standard_decimals: Option<u8>,
+) -> Formatted {
+    format_in_locale(value, ast, locale, width_chars, epoch, standard_decimals)
+}
+
+fn format_in_locale(
+    value: &Value,
+    ast: &FormatAst,
+    locale: &Locale,
+    width_chars: Option<u16>,
+    epoch: DateEpoch,
+    std_dec: Option<u8>,
+) -> Formatted {
     let width = width_chars.map(usize::from);
     match value {
         Value::Empty => Formatted::plain("", AlignHint::Left),
-        Value::Number(x) => format_number(*x, ast, locale, width, epoch),
+        Value::Number(x) => format_number(*x, ast, locale, width, epoch, std_dec),
         Value::Text(s) => format_text(s, ast, locale),
         Value::Bool(b) => Formatted::plain(
             if *b {
@@ -126,7 +167,7 @@ pub fn format_value_in_locale(
         // Excel centres errors; we do the same as a hint.
         Value::Error(e) => Formatted::plain(e.display().into_owned(), AlignHint::Center),
         Value::Array(m) => match m.data.first() {
-            Some(v) => format_value_in_locale(v, ast, locale, width_chars, epoch),
+            Some(v) => format_in_locale(v, ast, locale, width_chars, epoch, std_dec),
             None => Formatted::plain("", AlignHint::Left),
         },
     }
@@ -267,6 +308,7 @@ fn format_number(
     locale: &Locale,
     width: Option<usize>,
     epoch: DateEpoch,
+    std_dec: Option<u8>,
 ) -> Formatted {
     if !x.is_finite() {
         return Formatted::plain(ErrorKind::Num.display().into_owned(), AlignHint::Right);
@@ -274,7 +316,10 @@ fn format_number(
     let (numeric, _) = split_text_section(ast);
     let (idx, show_sign) = select_section(numeric, x);
     let Some(sec) = numeric.get(idx) else {
-        return Formatted::plain(general_string(x, width, locale), AlignHint::Right);
+        return Formatted::plain(
+            general_string_limited(x, width, locale, std_dec),
+            AlignHint::Right,
+        );
     };
     let ax = x.abs();
     let mut out = Out::new();
@@ -297,7 +342,7 @@ fn format_number(
         SectionKind::General | SectionKind::Text => {
             check_width = false;
             let v = if show_sign { x } else { ax };
-            general_section(v, &sec.tokens, locale, width, &mut out);
+            general_section(v, &sec.tokens, locale, width, std_dec, &mut out);
         }
     }
     if check_width {
@@ -743,7 +788,14 @@ fn fraction_section(
     zero
 }
 
-fn general_section(x: f64, tokens: &[Token], locale: &Locale, width: Option<usize>, out: &mut Out) {
+fn general_section(
+    x: f64,
+    tokens: &[Token],
+    locale: &Locale,
+    width: Option<usize>,
+    std_dec: Option<u8>,
+    out: &mut Out,
+) {
     let render = |out: &mut Out, w: Option<usize>| -> usize {
         let mut glen = 0;
         let mut any = false;
@@ -761,7 +813,7 @@ fn general_section(x: f64, tokens: &[Token], locale: &Locale, width: Option<usiz
                     any = true;
                 }
                 Token::General(_) | Token::At => {
-                    let g = general_string(x, w, locale);
+                    let g = general_string_limited(x, w, locale, std_dec);
                     glen += g.chars().count();
                     out.text.push_str(&g);
                     any = true;
@@ -770,7 +822,7 @@ fn general_section(x: f64, tokens: &[Token], locale: &Locale, width: Option<usiz
             }
         }
         if !any {
-            let g = general_string(x, w, locale);
+            let g = general_string_limited(x, w, locale, std_dec);
             glen += g.chars().count();
             out.text.push_str(&g);
         }
@@ -905,6 +957,62 @@ pub fn general_string(x: f64, width: Option<usize>, locale: &Locale) -> String {
     s.clear();
     s.push_str(if zero_fallback { "0" } else { OVERFLOW });
     s
+}
+
+/// The General format with at most `decimals` decimals (AOO
+/// `SvNumberformat::ImpGetOutputStandard` with a limited standard
+/// precision, zformat.cxx): numbers up to 1E15 are rounded to `decimals`
+/// places without trailing zeros (`π` → `3.14` with 2, `0.00001` → `0`,
+/// no `-0`); larger ones are scientific with `min(decimals, 14)` mantissa
+/// decimals. A result wider than `width` shrinks as [`general_string`]
+/// does. `None` is [`general_string`] itself.
+pub fn general_string_limited(
+    x: f64,
+    width: Option<usize>,
+    locale: &Locale,
+    decimals: Option<u8>,
+) -> String {
+    let Some(n) = decimals else {
+        return general_string(x, width, locale);
+    };
+    if !x.is_finite() {
+        return general_string(x, width, locale);
+    }
+    let neg = x < 0.0;
+    let mut s = String::with_capacity(24);
+    let shown: f64;
+    if x.abs() > 1e15 {
+        let k = usize::from(n.min(14));
+        let e = format!("{:.*e}", k, x.abs());
+        let (mant, exp) = e.split_once('e').unwrap_or((e.as_str(), "0"));
+        let exp: i32 = exp.parse().unwrap_or(0);
+        if neg {
+            s.push('-');
+        }
+        s.push_str(&mant.replace('.', &locale.decimal_sep.to_string()));
+        s.push('E');
+        s.push(if exp < 0 { '-' } else { '+' });
+        let a = exp.unsigned_abs();
+        if a < 10 {
+            s.push('0');
+        }
+        s.push_str(&a.to_string());
+        shown = x;
+    } else {
+        let mut d = Decimal::from_f64(x);
+        d.round_frac(i32::from(n));
+        if d.is_zero() {
+            s.push('0');
+            shown = 0.0;
+        } else {
+            push_fixed(&mut s, neg, &d, locale);
+            shown = s.replace(locale.decimal_sep, ".").parse().unwrap_or(x);
+        }
+    }
+    match width {
+        Some(w) if s.chars().count() > w => general_string(shown, Some(w), locale),
+        _ => s,
+    }
 }
 
 fn push_padded(out: &mut Out, v: u64, width: usize) {
@@ -1182,6 +1290,58 @@ mod tests {
         assert_eq!(best_rational(std::f64::consts::PI - 3.0, 999), (16, 113));
         assert_eq!(best_rational(0.0, 9), (0, 1));
         assert_eq!(best_rational(1.5, 9), (3, 2));
+    }
+
+    #[test]
+    fn general_limited_decimals() {
+        // AOO "Limit decimals for general number format" (ImpGetOutputStandard).
+        let l = Locale::en_us();
+        let g = |x: f64, n: u8| general_string_limited(x, None, &l, Some(n));
+        assert_eq!(g(std::f64::consts::PI, 2), "3.14");
+        assert_eq!(g(std::f64::consts::PI, 0), "3");
+        assert_eq!(g(1.5, 2), "1.5");
+        assert_eq!(g(2.0, 2), "2");
+        assert_eq!(g(-0.004, 2), "0");
+        assert_eq!(g(-2.346, 2), "-2.35");
+        assert_eq!(g(0.00001, 2), "0");
+        assert_eq!(g(0.00001, 5), "0.00001");
+        assert_eq!(g(1234567.891, 1), "1234567.9");
+        assert_eq!(g(1e16, 2), "1.00E+16");
+        assert_eq!(g(-2.5e20, 0), "-2E+20");
+        assert_eq!(
+            general_string_limited(1.0 / 3.0, None, &l, None),
+            "0.333333333333333"
+        );
+        // A narrow column still shrinks the rounded number.
+        assert_eq!(
+            general_string_limited(1234.5678, Some(6), &l, Some(3)),
+            "1234.6"
+        );
+        // The document decimal separator.
+        let de = crate::locale_by_tag("de-DE").unwrap();
+        assert_eq!(general_string_limited(2.346, None, de, Some(2)), "2,35");
+        // Through the formatter: General and a General with literals.
+        let ast = crate::parse_format("General").unwrap();
+        let v = Value::Number(std::f64::consts::PI);
+        assert_eq!(
+            format_value_std(&v, &ast, &l, None, DateEpoch::D1899, Some(2)).text,
+            "3.14"
+        );
+        assert_eq!(
+            format_value_with(&v, &ast, &l, None, DateEpoch::D1899).text,
+            "3.14159265358979"
+        );
+        let ast = crate::parse_format("General\" m\"").unwrap();
+        assert_eq!(
+            format_value_std(&v, &ast, &l, None, DateEpoch::D1899, Some(1)).text,
+            "3.1 m"
+        );
+        // Fixed-decimal formats are not affected.
+        let ast = crate::parse_format("0.000").unwrap();
+        assert_eq!(
+            format_value_std(&v, &ast, &l, None, DateEpoch::D1899, Some(1)).text,
+            "3.142"
+        );
     }
 
     #[test]

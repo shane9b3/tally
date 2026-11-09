@@ -272,6 +272,8 @@ export interface EngineClientV4 extends EngineClientV3 {
   detectiveArrows(doc: DocId, sheet: SheetId): Promise<DetectiveState>;
   /** Tools ▸ Detective ▸ AutoRefresh for this document (the app option mirrored into the engine). */
   setDetectiveAuto(doc: DocId, on: boolean): Promise<void>;
+  /** View ▸ Zoom: the zoom in percent (20–400) for every sheet; view state saved with the document (not undoable, not a modification). */
+  setViewZoom(doc: DocId, zoom: number): Promise<void>;
   /** A picture's bytes, base64 (pictures from files carry no `data` in `images`). */
   imageData(doc: DocId, sheet: SheetId, id: number): Promise<string>;
   /** A sheet's view options with the persisted split (`null` when not split). */

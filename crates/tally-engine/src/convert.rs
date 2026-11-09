@@ -242,7 +242,7 @@ impl Workbook {
         // instead of allocating one AST per cell. Equal ASTs mean equal
         // formulas, as for the shared formula groups below.
         let mut last_in_col: Vec<Option<Arc<Formula>>> = Vec::new();
-        let mut bulk = BulkInput::new(wb.settings.date_epoch);
+        let mut bulk = BulkInput::new(&wb.settings);
         for (tab, (sd, &sheet)) in sheet_data.iter().zip(&ids).enumerate() {
             shared.clear();
             last_in_col.clear();
@@ -481,6 +481,7 @@ impl Workbook {
                 subtotals: sheet.meta.subtotals.as_deref().cloned(),
                 view_options: sheet.meta.view_options.as_deref().cloned(),
                 split: sheet.meta.split,
+                zoom: sheet.meta.zoom,
                 detective_ops: crate::detective::ops_to_model(&sheet.meta.detective),
                 detective_arrows: sheet.meta.detective.arrows.clone(),
             };
@@ -570,6 +571,9 @@ fn load_v04(wb: &mut Workbook, sheet: tally_types::SheetId, sd: &SheetData) {
     s.meta.subtotals = sd.subtotals.clone().map(Arc::new);
     s.meta.view_options = sd.view_options.clone().map(Arc::new);
     s.meta.split = sd.split;
+    s.meta.zoom = sd
+        .zoom
+        .and_then(|z| tally_model::zoom_from_file(i64::from(z)));
     crate::outline::after_load(wb, sheet);
 }
 

@@ -59,14 +59,27 @@ pub struct RecognizeContext {
     pub epoch: DateEpoch,
     /// Today's date `(y, m, d)`, used when the year is omitted.
     pub today: (i32, u32, u32),
+    /// First year of the two-digit year window (AOO `SetYear2000`; 1930
+    /// by default, see [`tally_types::CalcSettings::year2000`]).
+    pub year2000: u16,
 }
 
 impl RecognizeContext {
-    /// A context for today's local date.
+    /// A context for today's local date and the default 1930 year window.
     pub fn now(epoch: DateEpoch) -> Self {
         RecognizeContext {
             epoch,
             today: today_ymd(),
+            year2000: tally_types::DEFAULT_TWO_DIGIT_YEAR,
+        }
+    }
+
+    /// A context for today's local date with a document's epoch and
+    /// two-digit year window.
+    pub fn for_settings(s: &tally_types::CalcSettings) -> Self {
+        RecognizeContext {
+            year2000: s.year2000(),
+            ..RecognizeContext::now(s.date_epoch)
         }
     }
 }
@@ -515,13 +528,13 @@ fn date_tokens(s: &str) -> Option<Vec<Tk<'_>>> {
     Some(out)
 }
 
-fn year_from(s: &str, locale: &Locale) -> Option<(i32, &'static str)> {
+fn year_from(s: &str, ctx: &RecognizeContext) -> Option<(i32, &'static str)> {
     if !all_digits(s) || s.len() > 4 {
         return None;
     }
     let y: i32 = s.parse().ok()?;
     if s.len() <= 2 {
-        Some((locale.expand_two_digit_year(y), "YY"))
+        Some((tally_types::expand_two_digit_year(y, ctx.year2000), "YY"))
     } else {
         Some((y, "YYYY"))
     }
@@ -559,15 +572,15 @@ fn parse_date(s: &str, locale: &Locale, ctx: &RecognizeContext) -> Option<(i32, 
         {
             let (y, m, d, yf) = match locale.date_order {
                 DateOrder::MDY => {
-                    let (y, yf) = year_from(c, locale)?;
+                    let (y, yf) = year_from(c, ctx)?;
                     (y, small(a)?, small(b)?, yf)
                 }
                 DateOrder::DMY => {
-                    let (y, yf) = year_from(c, locale)?;
+                    let (y, yf) = year_from(c, ctx)?;
                     (y, small(b)?, small(a)?, yf)
                 }
                 DateOrder::YMD => {
-                    let (y, yf) = year_from(a, locale)?;
+                    let (y, yf) = year_from(a, ctx)?;
                     (y, small(b)?, small(c)?, yf)
                 }
             };
@@ -597,9 +610,9 @@ fn parse_date(s: &str, locale: &Locale, ctx: &RecognizeContext) -> Option<(i32, 
             let mf = if long { "MMMM" } else { "MMM" };
             let (y, yf) = match rest {
                 [] => (cur_year, "YYYY"),
-                [Tk::Sep(s2), Tk::Num(y)] if s2 == s1 => year_from(y, locale)?,
+                [Tk::Sep(s2), Tk::Num(y)] if s2 == s1 => year_from(y, ctx)?,
                 // `19 févr. 2026`: the abbreviation dot ate the separator.
-                [Tk::Num(y)] => year_from(y, locale)?,
+                [Tk::Num(y)] => year_from(y, ctx)?,
                 _ => return None,
             };
             (y, m, small(d)?, format!("DD{s1}{mf}{s1}{yf}"))
@@ -617,7 +630,7 @@ fn parse_date(s: &str, locale: &Locale, ctx: &RecognizeContext) -> Option<(i32, 
             let (y, yf, sep) = match rest {
                 [] => (cur_year, "YYYY", ","),
                 [Tk::Sep(s2), Tk::Num(y)] if matches!(s2, ',' | ' ') => {
-                    let (y, yf) = year_from(y, locale)?;
+                    let (y, yf) = year_from(y, ctx)?;
                     (y, yf, if *s2 == ',' { "," } else { "" })
                 }
                 _ => return None,

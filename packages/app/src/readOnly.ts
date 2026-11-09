@@ -84,6 +84,8 @@ export const READ_ONLY_COMMANDS: ReadonlySet<string> = new Set([
   "tools.autoRefreshTraces",
   "tools.detectiveFillMode",
   "data.recalc",
+  // SelectDB is ReadOnlyDoc = TRUE in scalc.sdi (it only selects).
+  "data.selectDatabaseRange",
   "chart.copyImage",
 ]);
 

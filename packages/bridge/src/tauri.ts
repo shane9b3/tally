@@ -190,6 +190,7 @@ export const COMMANDS = {
   detective: "detective",
   detectiveArrows: "detective_arrows",
   setDetectiveAuto: "set_detective_auto",
+  setViewZoom: "set_view_zoom",
   imageData: "image_data",
   viewOptions: "view_options",
   invalidCells: "invalid_cells",
@@ -260,6 +261,7 @@ export const V4_METHODS = [
   "detective",
   "detectiveArrows",
   "setDetectiveAuto",
+  "setViewZoom",
   "imageData",
   "viewOptions",
   "invalidCells",
@@ -700,6 +702,10 @@ export class TauriClient implements EngineClientV4, ShellClient {
 
   setDetectiveAuto(doc: DocId, on: boolean): Promise<void> {
     return this.call(COMMANDS.setDetectiveAuto, { doc, on });
+  }
+
+  setViewZoom(doc: DocId, zoom: number): Promise<void> {
+    return this.call(COMMANDS.setViewZoom, { doc, zoom });
   }
 
   imageData(doc: DocId, sheet: SheetId, id: number): Promise<string> {

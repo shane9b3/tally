@@ -75,6 +75,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "detective",
     "detective_arrows",
     "set_detective_auto",
+    "set_view_zoom",
     "image_data",
     "view_options",
     "invalid_cells",

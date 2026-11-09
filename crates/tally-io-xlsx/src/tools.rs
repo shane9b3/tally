@@ -269,21 +269,27 @@ pub(crate) fn scenarios_xml(sheet: &SheetData) -> Option<String> {
 }
 
 /// Adds the view options rust_xlsxwriter cannot set (`showFormulas`,
-/// `showZeros`, `showRowColHeaders`) to the sheet views.
+/// `showZeros`, `showRowColHeaders`) and the view zoom (`zoomScale`) to
+/// the sheet views.
 pub(crate) fn view_patches(data: &WorkbookData, patches: &mut Patches) {
     for (i, sheet) in data.sheets.iter().enumerate() {
-        let Some(v) = &sheet.view_options else {
-            continue;
-        };
-        let mut attrs: Vec<&str> = Vec::new();
-        if v.show_formulas {
-            attrs.push(r#"showFormulas="1""#);
+        let mut attrs: Vec<String> = Vec::new();
+        if let Some(v) = &sheet.view_options {
+            if v.show_formulas {
+                attrs.push(r#"showFormulas="1""#.to_owned());
+            }
+            if !v.show_zero_values {
+                attrs.push(r#"showZeros="0""#.to_owned());
+            }
+            if !v.show_headers {
+                attrs.push(r#"showRowColHeaders="0""#.to_owned());
+            }
         }
-        if !v.show_zero_values {
-            attrs.push(r#"showZeros="0""#);
-        }
-        if !v.show_headers {
-            attrs.push(r#"showRowColHeaders="0""#);
+        if let Some(z) = sheet
+            .zoom
+            .and_then(|z| tally_model::zoom_from_file(i64::from(z)))
+        {
+            attrs.push(format!(r#"zoomScale="{z}" zoomScaleNormal="{z}""#));
         }
         if !attrs.is_empty() {
             patches

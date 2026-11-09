@@ -110,6 +110,11 @@ describe("op builders", () => {
     expect(fillDownRight({ r0: 3, c0: 2, r1: 3, c1: 2 }, "down")).toEqual({ source: { r0: 2, c0: 2, r1: 2, c1: 2 }, target: { r0: 2, c0: 2, r1: 3, c1: 2 } });
     expect(fillDownRight({ r0: 0, c0: 0, r1: 0, c1: 0 }, "down")).toBeNull();
     expect(fillDownRight({ r0: 0, c0: 1, r1: 0, c1: 4 }, "right")).toEqual({ source: { r0: 0, c0: 1, r1: 0, c1: 1 }, target: { r0: 0, c0: 1, r1: 0, c1: 4 } });
+    // Up / Left copy the last row / column (AOO FILL_TO_TOP / FILL_TO_LEFT); one row / column does nothing.
+    expect(fillDownRight({ r0: 1, c0: 0, r1: 5, c1: 1 }, "up")).toEqual({ source: { r0: 5, c0: 0, r1: 5, c1: 1 }, target: { r0: 1, c0: 0, r1: 5, c1: 1 } });
+    expect(fillDownRight({ r0: 2, c0: 1, r1: 3, c1: 4 }, "left")).toEqual({ source: { r0: 2, c0: 4, r1: 3, c1: 4 }, target: { r0: 2, c0: 1, r1: 3, c1: 4 } });
+    expect(fillDownRight({ r0: 3, c0: 2, r1: 3, c1: 2 }, "up")).toBeNull();
+    expect(fillDownRight({ r0: 3, c0: 2, r1: 4, c1: 2 }, "left")).toBeNull();
   });
 
   it("find steps wrap; paste options; friendly errors", () => {

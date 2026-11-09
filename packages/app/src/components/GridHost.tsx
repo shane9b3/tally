@@ -21,6 +21,7 @@ import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useUiStore } from "../stores/uiStore";
 import { useV3Store } from "../stores/v3Store";
+import { usePinchZoom } from "../objects/pinchZoom";
 import styles from "./GridHost.module.css";
 
 // The chart layer pulls in ECharts; load it only once a sheet has a chart or picture.
@@ -40,6 +41,7 @@ export function GridHost() {
   const editSheetName = useDocStore((s) => (editSheet === null ? null : (s.info?.sheets.find((x) => x.id === editSheet)?.name ?? null)));
   const sheetOrder = useDocStore((s) => s.info?.sheets);
   const zoom = useUiStore((s) => s.zoom);
+  const pinchRef = usePinchZoom();
   const resolved = useUiStore((s) => s.theme);
   // The canvas cannot use CSS variables: re-read the tokens when the theme flips.
   const theme = useMemo(() => {
@@ -128,7 +130,7 @@ export function GridHost() {
 
   if (!source) return <div className={styles.host} data-testid="grid-loading" />;
   return (
-    <div className={styles.host} data-testid="grid" data-point-mode={pointMode ? "true" : undefined} data-edit-elsewhere={elsewhere ? "true" : undefined} data-split={split ? split.axis : undefined} data-page-break-preview={pageBreakPreview ? "true" : undefined}>
+    <div ref={pinchRef} className={styles.host} data-testid="grid" data-point-mode={pointMode ? "true" : undefined} data-edit-elsewhere={elsewhere ? "true" : undefined} data-split={split ? split.axis : undefined} data-page-break-preview={pageBreakPreview ? "true" : undefined}>
       <GridComponent
         {...w5Props}
         {...splitProps}

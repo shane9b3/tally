@@ -1320,14 +1320,24 @@ fn apply_op_inner(
         } => {
             check_sheet(wb, *sheet)?;
             let range = to_range(*sheet, range)?;
-            crate::sort::sort_range_with(
+            let mut changes = crate::sort::sort_range_with(
                 wb,
                 range,
                 keys,
                 *has_header,
                 *case_sensitive,
                 options.as_ref(),
-            )
+            )?;
+            changes.extend(crate::tools::remember_sort(
+                wb,
+                range,
+                keys,
+                *has_header,
+                *case_sensitive,
+                options.as_ref(),
+                fx,
+            )?);
+            Ok(changes)
         }
         Op::ReplaceAll {
             sheet,

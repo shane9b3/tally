@@ -177,6 +177,10 @@ pub struct SheetData {
     /// Window ▸ Split position (v0.5).
     #[serde(default)]
     pub split: Option<SplitData>,
+    /// View zoom in percent, [`MIN_ZOOM`]..=[`MAX_ZOOM`] (ODS settings.xml
+    /// `ZoomValue`, XLSX `sheetView/@zoomScale`); `None` = 100 %.
+    #[serde(default)]
+    pub zoom: Option<u16>,
     /// Tools ▸ Detective operations recorded on this sheet's cells, the
     /// replay list of Refresh Traces (AOO `ScDetOpList`; ODS
     /// `table:detective`/`table:operation`).
@@ -580,6 +584,11 @@ pub struct ValidationData {
     pub allow_blank: bool,
     /// Show the list dropdown (list rules).
     pub show_dropdown: bool,
+    /// List rules: the dropdown is sorted ascending (AOO "Sort entries
+    /// ascending", `ValidListType::SORTEDASCENDING`; ODS
+    /// `table:display-list="sorted-ascending"`).
+    #[serde(default)]
+    pub sort_ascending: bool,
     /// Help shown when the cell is selected.
     pub input_help: Option<ValidationMessageData>,
     /// The alert for invalid input; `None` accepts invalid input silently.
@@ -939,6 +948,21 @@ impl PaperData {
             height_hmm: h,
         }
     }
+}
+
+/// Smallest view zoom in percent (AOO `MINZOOM`, sc/inc/global.hxx).
+pub const MIN_ZOOM: u16 = 20;
+/// Largest view zoom in percent (AOO `MAXZOOM`).
+pub const MAX_ZOOM: u16 = 400;
+
+/// A view zoom read from a file: clamped to [`MIN_ZOOM`]..=[`MAX_ZOOM`];
+/// `None` for 100 % and for values that are not a zoom (0, negative).
+pub fn zoom_from_file(percent: i64) -> Option<u16> {
+    if percent <= 0 {
+        return None;
+    }
+    let z = percent.clamp(i64::from(MIN_ZOOM), i64::from(MAX_ZOOM)) as u16;
+    (z != 100).then_some(z)
 }
 
 /// Print scaling.
@@ -1818,6 +1842,7 @@ mod tests {
                     },
                     allow_blank: true,
                     show_dropdown: true,
+                    sort_ascending: false,
                     input_help: Some(ValidationMessageData {
                         title: "Status".into(),
                         text: "Pick one".into(),
@@ -1997,6 +2022,12 @@ mod tests {
                         }],
                         ..SubtotalsData::default()
                     }),
+                    sort: Some(DbSortData {
+                        keys: vec![(1, false), (0, true)],
+                        case_sensitive: true,
+                        include_formats: true,
+                        natural: false,
+                    }),
                 }],
                 standard_filter: Some(StandardFilterData {
                     range: CellRangeLocal {
@@ -2027,6 +2058,7 @@ mod tests {
                     x_hmm: 5000,
                     y_hmm: 0,
                 }),
+                zoom: Some(150),
                 detective_ops: vec![DetectiveOpData {
                     row: 1,
                     col: 1,

@@ -144,6 +144,28 @@ pub struct DatabaseRangeData {
     /// Its subtotal rules.
     #[serde(default)]
     pub subtotals: Option<SubtotalsData>,
+    /// Its last sort (AOO keeps the `ScSortParam` on the `ScDBData`;
+    /// Data ▸ Refresh Range sorts again with it).
+    #[serde(default)]
+    pub sort: Option<DbSortData>,
+}
+
+/// The sort kept with a database range (ODS `table:sort`).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DbSortData {
+    /// Keys in priority order: the column as an offset from the range's
+    /// first column (ODS `table:field-number`, so it moves with the
+    /// range), and ascending.
+    pub keys: Vec<(u32, bool)>,
+    /// Compare text case-sensitively.
+    #[serde(default)]
+    pub case_sensitive: bool,
+    /// Cell formats move with the rows (ODS `table:bind-styles-to-content`).
+    #[serde(default)]
+    pub include_formats: bool,
+    /// Natural sort (`a2` before `a10`).
+    #[serde(default)]
+    pub natural: bool,
 }
 
 // ---------------------------------------------------------------------------

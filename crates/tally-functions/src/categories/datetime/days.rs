@@ -3,7 +3,6 @@
 use tally_numfmt::date::{
     civil_from_days, days_from_civil, serial_from_ymd, unix_days_from_serial,
 };
-use tally_numfmt::Locale;
 use tally_types::{ErrorKind, Value};
 
 use crate::registry::{Category, FunctionDef, Param, ParamKind, Registry, ReturnKind};
@@ -103,7 +102,8 @@ fn easter(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     run(|| {
         let mut y = a.int(0)?;
         if (0..100).contains(&y) {
-            y = i64::from(Locale::en_us().expand_two_digit_year(y as i32));
+            let start = a.ctx().settings().year2000();
+            y = i64::from(tally_types::expand_two_digit_year(y as i32, start));
         }
         if !(1583..=9956).contains(&y) {
             return Err(ErrorKind::InvalidArgument);

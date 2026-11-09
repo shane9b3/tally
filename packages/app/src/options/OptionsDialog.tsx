@@ -15,7 +15,7 @@ import { BUILTIN_SORT_LISTS, parseSortList } from "../data/builders";
 import { useW56Store, type OptionsTab, type W56Dialog } from "../data/store";
 import { Check, Field, Tabs, W56Shell } from "../data/W56Shell";
 import w56 from "../data/W56.module.css";
-import { UI_LANGUAGES, type AppPrefs } from "./prefs";
+import { isTwoDigitYearStart, TWO_DIGIT_YEAR_MAX, TWO_DIGIT_YEAR_MIN, UI_LANGUAGES, type AppPrefs } from "./prefs";
 
 const TABS: readonly { id: OptionsTab; key: string; label: string }[] = [
   { id: "calculate", key: "options.calculate", label: "Calculate" },
@@ -39,7 +39,14 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
   const [listIndex, setListIndex] = useState<number | null>(d.lists.length > 0 ? 0 : null);
   const [draft, setDraft] = useState<string>(d.lists[0]?.join("\n") ?? "");
   const iter = calc.iterations;
-  const calcValid = iter === null || (Number.isInteger(iter.steps) && iter.steps >= 1 && iter.steps <= 32_767 && Number.isFinite(iter.minChange) && iter.minChange >= 0);
+  const decimals = calc.standardDecimals ?? null;
+  // AOO's "Year (two digits)" field: shown as typed, kept while it is a valid year.
+  const [yearText, setYearText] = useState(String(prefs0.twoDigitYearStart));
+  const yearValid = isTwoDigitYearStart(Number(yearText));
+  const calcValid =
+    (iter === null || (Number.isInteger(iter.steps) && iter.steps >= 1 && iter.steps <= 32_767 && Number.isFinite(iter.minChange) && iter.minChange >= 0)) &&
+    (decimals === null || (Number.isInteger(decimals) && decimals >= 0 && decimals <= 20)) &&
+    yearValid;
   const submit = async () => {
     if (JSON.stringify(calc) !== JSON.stringify(d.calc)) await ctl.w56.setCalcSettings(calc);
     if (JSON.stringify(view) !== JSON.stringify(d.view)) await ctl.w56.setViewOptions(view);
@@ -92,6 +99,13 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
             <Check label={t("options.precisionAsShown", "Precision as shown")} checked={calc.precisionAsShown} onChange={(v) => setCalc({ ...calc, precisionAsShown: v })} testId="opt-precision" />
             <Check label={t("options.wholeCellMatch", "Search criteria = and <> must apply to whole cells")} checked={calc.wholeCellMatch} onChange={(v) => setCalc({ ...calc, wholeCellMatch: v })} testId="opt-whole-cell" />
           </div>
+          {/* AOO Calculate page: BTN_GENERAL_PREC / ED_PREC (0–20; off = unlimited). */}
+          <div className={w56.grid2}>
+            <Check label={t("od.limitDecimals", "Limit decimals for general number format")} checked={decimals !== null} onChange={(v) => setCalc({ ...calc, standardDecimals: v ? 0 : null })} testId="opt-limit-decimals" />
+            <Field label={t("od.decimalPlaces", "Decimal places")}>
+              <input className={dlg.input} type="number" min={0} max={20} step={1} disabled={decimals === null} value={decimals ?? 0} onChange={(e) => setCalc({ ...calc, standardDecimals: Number(e.target.value) })} data-testid="opt-decimal-places" />
+            </Field>
+          </div>
         </div>
       ) : null}
       {tab === "view" ? (
@@ -117,6 +131,30 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
           </Field>
           <Check label={t("od.deleteKeyDialog", "Delete key opens the Delete Contents dialog (⌫ always clears at once)")} checked={prefs.deleteKeyDialog} onChange={(v) => setPrefs({ ...prefs, deleteKeyDialog: v })} testId="opt-delete-dialog" />
           <Check label={t("od.pasteOverwriteWarning", "Show overwrite warning when pasting data")} checked={prefs.pasteOverwriteWarning} onChange={(v) => setPrefs({ ...prefs, pasteOverwriteWarning: v })} testId="opt-paste-warning" />
+          {/* AOO Tools ▸ Options ▸ General ▸ Year (two digits): FT_INTERPRET, NF_YEARVALUE (1583–9857), FT_TOYEAR. */}
+          <div className={w56.section}>{t("od.twoDigitYear", "Year (two digits)")}</div>
+          <div className={w56.row}>
+            <label htmlFor="opt-year-start">{t("od.yearsBetween", "Interpret as years between")}</label>
+            <input
+              id="opt-year-start"
+              className={dlg.input}
+              style={{ width: 90 }}
+              type="number"
+              min={TWO_DIGIT_YEAR_MIN}
+              max={TWO_DIGIT_YEAR_MAX}
+              step={1}
+              value={yearText}
+              aria-invalid={!yearValid}
+              onChange={(e) => {
+                setYearText(e.target.value);
+                const y = Number(e.target.value);
+                if (isTwoDigitYearStart(y)) setPrefs({ ...prefs, twoDigitYearStart: y });
+              }}
+              data-testid="opt-year-start"
+            />
+            <span data-testid="opt-year-end">{t("od.yearsAnd", "and {year}", { year: yearValid ? String(Number(yearText) + 99) : "????" })}</span>
+          </div>
+          <p className={dlg.note}>{t("od.twoDigitYearNote", "Applies to documents created or opened from now on; a document saved with its own setting keeps it.")}</p>
           <div className={w56.section}>{t("options.autoCorrect", "AutoCorrect")}</div>
           {AUTOCORRECT_OPTIONS.map((o) => (
             <Check key={o.key} label={`${t(`od.ac.${o.key}`, o.label)} (${o.example})`} checked={prefs.autoCorrect[o.key]} onChange={(v) => setPrefs({ ...prefs, autoCorrect: { ...prefs.autoCorrect, [o.key]: v } })} testId={`opt-ac-${o.key}`} />

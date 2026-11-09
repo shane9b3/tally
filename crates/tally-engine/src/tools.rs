@@ -22,7 +22,7 @@ use tally_api::{
     StdFilterOptions, SubtotalGroup, SubtotalOptions, ViewOptionsDto,
 };
 use tally_model::{
-    AggFnData, CellRangeLocal, DatabaseRangeData, StandardFilterData, StdConditionData,
+    AggFnData, CellRangeLocal, DatabaseRangeData, DbSortData, StandardFilterData, StdConditionData,
     StdConnectorData, StdFilterOpData, StdFilterOptionsData, SubtotalGroupData, SubtotalsData,
 };
 use tally_numfmt::date::{days_in_month, serial_from_ymd, weekday, ymd_from_serial};
@@ -579,7 +579,7 @@ fn prepare_tests(
     f: &StandardFilterData,
 ) -> Vec<(StdConnectorData, Test)> {
     let cs = f.options.case_sensitive;
-    let ctx = RecognizeContext::now(wb.settings.date_epoch);
+    let ctx = RecognizeContext::for_settings(&wb.settings);
     f.conditions
         .iter()
         .map(|c| {
@@ -1854,8 +1854,14 @@ pub fn split_fields(text: &str, o: &CsvImportOptionsDto) -> Vec<String> {
     out
 }
 
-/// Parses a date field in the given day/month/year order.
-fn parse_date(field: &str, order: CsvColumnType, epoch: tally_types::DateEpoch) -> Option<f64> {
+/// Parses a date field in the given day/month/year order; two-digit years
+/// fall in the document's window (AOO's import uses the number formatter,
+/// whose `ExpandTwoDigitYear` follows `SetYear2000`).
+fn parse_date(
+    field: &str,
+    order: CsvColumnType,
+    settings: &tally_types::CalcSettings,
+) -> Option<f64> {
     let parts: Vec<u32> = field
         .split(|c: char| !c.is_ascii_digit())
         .filter(|p| !p.is_empty())
@@ -1869,16 +1875,8 @@ fn parse_date(field: &str, order: CsvColumnType, epoch: tally_types::DateEpoch) 
         CsvColumnType::DateMdy => (parts[1], parts[0], parts[2]),
         _ => (parts[2], parts[1], parts[0]),
     };
-    let y = if y < 100 {
-        if y < 30 {
-            2000 + y
-        } else {
-            1900 + y
-        }
-    } else {
-        y
-    };
-    serial_from_ymd(epoch, i32::try_from(y).ok()?, m, d)
+    let y = tally_types::expand_two_digit_year(i32::try_from(y).ok()?, settings.year2000());
+    serial_from_ymd(settings.date_epoch, y, m, d)
 }
 
 /// `Op::TextToColumns`.
@@ -1944,7 +1942,7 @@ pub fn text_to_columns(
     check_edit(wb, &[target])?;
     crate::ops::check_array_blocks(wb, &[target])?;
     let inv = capture_range(wb, target, true, true);
-    let epoch = wb.settings.date_epoch;
+    let settings = wb.settings.clone();
     // Rows holding text are split again and written one at a time; only
     // the cells that exist in each row's target are cleared.
     let texts: Vec<(u32, String)> = (range.r0..=range.r1)
@@ -1971,7 +1969,7 @@ pub fn text_to_columns(
             match kind {
                 CsvColumnType::Text => wb.set_value(a, Value::text(field.as_str())),
                 CsvColumnType::DateDmy | CsvColumnType::DateMdy | CsvColumnType::DateYmd => {
-                    match parse_date(field, kind, epoch) {
+                    match parse_date(field, kind, &settings) {
                         Some(serial) => {
                             wb.set_value(a, Value::Number(serial));
                             map_styles(
@@ -2203,7 +2201,7 @@ pub fn delete_contents(
 // ---------------------------------------------------------------------------
 
 fn parse_number(wb: &Workbook, text: &str) -> Option<f64> {
-    let ctx = RecognizeContext::now(wb.settings.date_epoch);
+    let ctx = RecognizeContext::for_settings(&wb.settings);
     match tally_numfmt::recognize_input_with(text.trim(), wb.locale, &ctx).value {
         Value::Number(n) => Some(n),
         Value::Bool(b) => Some(f64::from(u8::from(b))),
@@ -2900,6 +2898,8 @@ pub fn database_range_to_api(
         range: range_dto(&d.range),
         has_header: d.has_header,
         filter: d.filter.as_ref().map(|f| std_filter_to_api(wb, f)),
+        has_sort: d.sort.as_ref().is_some_and(|so| !so.keys.is_empty()),
+        has_subtotals: d.subtotals.as_ref().is_some_and(|st| !st.groups.is_empty()),
     }
 }
 
@@ -2981,6 +2981,7 @@ pub fn define_database_range(
                     filter_buttons: false,
                     filter: None,
                     subtotals: None,
+                    sort: None,
                 });
             }
         }
@@ -3010,6 +3011,189 @@ pub fn delete_database_range(
         Arc::make_mut(&mut meta.database_ranges).retain(|d| !d.name.eq_ignore_ascii_case(name));
         Ok(())
     })
+}
+
+/// After `Op::SortRange`: a database range over exactly the sorted area
+/// keeps the sort and takes its header flag (AOO `ScDBDocFunc::Sort`,
+/// dbdocfun.cxx:577-581: `SetSortParam`, `SetHeader`). Copies,
+/// left-to-right sorts and custom orders cannot be kept in Tally's model
+/// (ODS `table:sort` of a database range); they clear the kept sort, so
+/// Refresh Range never repeats an older one.
+pub fn remember_sort(
+    wb: &mut Workbook,
+    range: CellRange,
+    keys: &[tally_api::SortKey],
+    has_header: bool,
+    case_sensitive: bool,
+    options: Option<&tally_api::SortOptions>,
+    fx: &mut Effects,
+) -> Result<Vec<Change>, ApiError> {
+    let at = local(&range);
+    let held = wb
+        .sheet(range.sheet)
+        .is_some_and(|s| s.meta.database_ranges.iter().any(|d| d.range == at));
+    if !held {
+        return Ok(Vec::new());
+    }
+    let plain =
+        options.is_none_or(|o| !o.left_to_right && o.copy_to.is_none() && o.custom_order.is_none());
+    let so = plain
+        .then(|| DbSortData {
+            keys: keys
+                .iter()
+                .filter(|k| k.col >= at.c0 && k.col <= at.c1)
+                .map(|k| (k.col - at.c0, k.ascending))
+                .collect(),
+            case_sensitive,
+            include_formats: options.is_none_or(|o| o.include_formats),
+            natural: options.is_some_and(|o| o.natural),
+        })
+        .filter(|so| !so.keys.is_empty());
+    with_meta(wb, range.sheet, fx, |_, meta| {
+        for d in Arc::make_mut(&mut meta.database_ranges) {
+            if d.range == at {
+                d.sort = so.clone();
+                if so.is_some() {
+                    d.has_header = has_header;
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+/// A named database range and its sheet (names compare ASCII
+/// case-insensitively, as everywhere else).
+fn database_range_named(wb: &Workbook, name: &str) -> Option<(SheetId, DatabaseRangeData)> {
+    wb.sheets.iter().find_map(|s| {
+        s.meta
+            .database_ranges
+            .iter()
+            .find(|d| d.name.eq_ignore_ascii_case(name))
+            .map(|d| (s.id, d.clone()))
+    })
+}
+
+/// `Op::RefreshDatabaseRange`: Data ▸ Refresh Range as AOO
+/// `ScDBDocFunc::RepeatDB` (dbdocfun.cxx:237-405): with both a sort and
+/// subtotals the subtotals are removed first; then the range is sorted,
+/// filtered and subtotalled again with its kept parameters, each over the
+/// range as it is by then ("Bereich kann sich geaendert haben"). Tally has
+/// no external data sources, so there is no import step
+/// (cellsh2.cxx:298-336 re-imports first when the range has one).
+pub fn refresh_database_range(
+    wb: &mut Workbook,
+    name: &str,
+    fx: &mut Effects,
+) -> Result<Vec<Change>, ApiError> {
+    let (sheet, d) = database_range_named(wb, name)
+        .ok_or_else(|| ApiError::not_found(format!("no database range {name:?}")))?;
+    let sort = d.sort.clone().filter(|so| !so.keys.is_empty());
+    let subtotals = d.subtotals.clone().filter(|st| !st.groups.is_empty());
+    let query = d.filter.is_some();
+    if sort.is_none() && subtotals.is_none() && !query {
+        // AOO STR_MSSG_REPEATDB_0.
+        return Err(ApiError::invalid_argument("No operations to execute"));
+    }
+    // Safety net: parameters must name columns of the range (they move
+    // with it, `crate::dbmove`); anything else would sort or total the
+    // wrong data.
+    if !crate::dbmove::params_inside(&d) {
+        return Err(ApiError::invalid_argument(
+            "the database range's sort, filter or subtotal columns are outside the range",
+        ));
+    }
+    let current = |wb: &Workbook| -> Result<DatabaseRangeData, ApiError> {
+        database_range_named(wb, name)
+            .map(|(_, d)| d)
+            .ok_or_else(|| ApiError::not_found(format!("no database range {name:?}")))
+    };
+    let mut changes = Vec::new();
+    if let (Some(_), Some(st)) = (&sort, &subtotals) {
+        // Sort without the subtotal rows.
+        changes.extend(run(
+            wb,
+            Op::RemoveSubtotals {
+                sheet,
+                range: range_dto(&st.range),
+            },
+            fx,
+        )?);
+    }
+    if let Some(so) = &sort {
+        let cur = current(wb)?;
+        let keys: Vec<tally_api::SortKey> = so
+            .keys
+            .iter()
+            .filter(|(f, _)| cur.range.c0.saturating_add(*f) <= cur.range.c1)
+            .map(|&(f, ascending)| tally_api::SortKey {
+                col: cur.range.c0 + f,
+                ascending,
+            })
+            .collect();
+        if !keys.is_empty() {
+            changes.extend(run(
+                wb,
+                Op::SortRange {
+                    sheet,
+                    range: range_dto(&cur.range),
+                    keys,
+                    has_header: cur.has_header,
+                    case_sensitive: so.case_sensitive,
+                    options: Some(tally_api::SortOptions {
+                        include_formats: so.include_formats,
+                        natural: so.natural,
+                        ..tally_api::SortOptions::default()
+                    }),
+                },
+                fx,
+            )?);
+        }
+    }
+    if query {
+        let cur = current(wb)?;
+        if let Some(mut f) = cur.filter.clone() {
+            f.range = cur.range;
+            let dest = f.options.copy_to.and_then(|(tab, r, c)| {
+                wb.sheets
+                    .get(tab as usize)
+                    .map(|s| SheetCell { sheet: s.id, r, c })
+            });
+            if let Some(dest) = dest {
+                changes.extend(copy_filtered(wb, sheet, &f, dest)?);
+            }
+            changes.extend(install_filter(wb, sheet, f, fx)?);
+        }
+    }
+    if let Some(st) = &subtotals {
+        let cur = current(wb)?;
+        let groups: Vec<SubtotalGroup> = st
+            .groups
+            .iter()
+            .map(|g| SubtotalGroup {
+                group_by: g.group_by,
+                columns: g.columns.clone(),
+                function: agg_to_api(g.function),
+            })
+            .collect();
+        changes.extend(run(
+            wb,
+            Op::Subtotals {
+                sheet,
+                range: range_dto(&cur.range),
+                groups,
+                options: SubtotalOptions {
+                    page_breaks: st.page_breaks,
+                    case_sensitive: st.case_sensitive,
+                    presort: st.presort,
+                    ascending: st.ascending,
+                    include_formats: st.include_formats,
+                },
+            },
+            fx,
+        )?);
+    }
+    Ok(changes)
 }
 
 /// The sheet and range of a named database range.
@@ -3063,6 +3247,7 @@ pub fn view_options(wb: &Workbook, sheet: SheetId) -> Option<ViewOptionsDto> {
             x_px: crate::units::hmm_to_px(sp.x_hmm),
             y_px: crate::units::hmm_to_px(sp.y_hmm),
         }),
+        zoom: s.meta.zoom,
     })
 }
 

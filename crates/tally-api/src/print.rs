@@ -258,6 +258,18 @@ pub struct CalcSettingsDto {
     pub criteria_mode: CriteriaModeDto,
     /// Text to number conversion.
     pub text_to_number: TextToNumberDto,
+    /// First year of the two-digit year window (1583–9857; ODS
+    /// `table:null-year`). `None`: the document does not set it yet (the
+    /// application option applies; `SetCalcSettings` then keeps the
+    /// current value).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub two_digit_year: Option<u16>,
+    /// "Limit decimals for general number format" (0–20); `None` =
+    /// unlimited.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub standard_decimals: Option<u8>,
 }
 
 // ---------------------------------------------------------------------------
@@ -483,11 +495,20 @@ mod tests {
             whole_cell_match: true,
             criteria_mode: CriteriaModeDto::Regex,
             text_to_number: TextToNumberDto::ConvertLocale,
+            two_digit_year: Some(1950),
+            standard_decimals: None,
         };
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["dateEpoch"], "d1904");
         assert_eq!(v["iterations"]["minChange"], 0.001);
         assert_eq!(v["textToNumber"], "convertLocale");
+        assert_eq!(v["twoDigitYear"], 1950);
+        // Older clients omit the new fields.
+        let mut old = v.clone();
+        old.as_object_mut().unwrap().remove("twoDigitYear");
+        old.as_object_mut().unwrap().remove("standardDecimals");
+        let old: CalcSettingsDto = serde_json::from_value(old).unwrap();
+        assert_eq!((old.two_digit_year, old.standard_decimals), (None, None));
         let back: CalcSettingsDto = serde_json::from_value(v).unwrap();
         assert_eq!(back, s);
         assert_eq!(

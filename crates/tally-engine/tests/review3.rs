@@ -63,6 +63,7 @@ fn validation(
         kind,
         allow_blank,
         show_dropdown: false,
+        sort_ascending: false,
         input_help: None,
         error: Some(ValidationAlert {
             style,

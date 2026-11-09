@@ -51,7 +51,14 @@ fn sheet_or_err(wb: &Workbook, sheet: SheetId) -> Result<&Sheet, ApiError> {
 
 /// Formats a value with a style (no width: the grid fits General numbers).
 pub fn format_with(wb: &Workbook, v: &Value, style: &StyleEntry) -> Formatted {
-    format_value_with(v, &style.format, wb.locale, None, wb.settings.date_epoch)
+    tally_numfmt::format_value_std(
+        v,
+        &style.format,
+        wb.locale,
+        None,
+        wb.settings.date_epoch,
+        wb.settings.standard_decimals,
+    )
 }
 
 /// The display text of a cell.
@@ -391,12 +398,13 @@ fn decorate(
                 if let Some(entry) = wb.transient.style(id) {
                     let val = wb.value(CellAddr::new(req.sheet, v.r, v.c));
                     if !val.is_empty() {
-                        let f = format_value_with(
+                        let f = tally_numfmt::format_value_std(
                             &val,
                             &entry.format,
                             wb.locale,
                             None,
                             wb.settings.date_epoch,
+                            wb.settings.standard_decimals,
                         );
                         v.text = cap_view_text(f.text);
                         v.color = f.color.map(|c| (c << 8) | 0xff);
@@ -806,7 +814,7 @@ pub(crate) fn edit_text(wb: &Workbook, v: &Value, st: &StyleEntry) -> String {
             general_string(*n, None, wb.locale)
         }
         Value::Text(s) => {
-            let ctx = RecognizeContext::now(wb.settings.date_epoch);
+            let ctx = RecognizeContext::for_settings(&wb.settings);
             let looks_like_value = s.starts_with('=')
                 || s.starts_with('\'')
                 || !matches!(

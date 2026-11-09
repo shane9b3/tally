@@ -26,6 +26,7 @@ import type {
   PivotFieldItemsDto,
   PivotHit,
   RangeDto,
+  SortKey,
   ScenarioDto,
   SheetInfo,
   StdCondition,
@@ -55,6 +56,8 @@ export interface W56Ext {
   /** User-defined cell styles (the built-in ones are generated). */
   styles: CellStyleDto[];
   dbRanges: DatabaseRangeDto[];
+  /** The sort each database range keeps (by lower-case name), re-run by Refresh Range. */
+  dbSorts?: Record<string, { keys: SortKey[]; hasHeader: boolean; caseSensitive: boolean }>;
   outline: Record<number, OutlineModel>;
   view: Record<number, ViewOptionsDto>;
   calc: CalcSettingsDto;
@@ -1015,8 +1018,26 @@ export async function applyW56Op(x: W56Ext, op: Op, ctx: W56Ctx): Promise<W56Out
       return handled(ops, op.sheet);
     }
     case "defineDatabaseRange": {
-      x.dbRanges = [...x.dbRanges.filter((d) => d.name.toLowerCase() !== op.name.toLowerCase()), { name: op.name, sheet: op.sheet, range: { ...op.range }, hasHeader: op.hasHeader, filter: null }];
+      x.dbRanges = [...x.dbRanges.filter((d) => d.name.toLowerCase() !== op.name.toLowerCase()), { name: op.name, sheet: op.sheet, range: { ...op.range }, hasHeader: op.hasHeader, filter: null, hasSort: false, hasSubtotals: false }];
       return handled([], op.sheet);
+    }
+    case "sortRange": {
+      // A database range over exactly the sorted area keeps the sort (the engine's `remember_sort`).
+      const plain = !op.options || (!op.options.leftToRight && !op.options.copyTo && !op.options.customOrder);
+      const same = (a: RangeDto, b: RangeDto) => a.r0 === b.r0 && a.c0 === b.c0 && a.r1 === b.r1 && a.c1 === b.c1;
+      for (const d of x.dbRanges) {
+        if (!plain || d.sheet !== op.sheet || !same(d.range, op.range)) continue;
+        d.hasSort = true;
+        x.dbSorts = { ...x.dbSorts, [d.name.toLowerCase()]: { keys: op.keys.map((k) => ({ ...k })), hasHeader: op.hasHeader, caseSensitive: op.caseSensitive } };
+      }
+      return { kind: "pass" };
+    }
+    case "refreshDatabaseRange": {
+      const d = x.dbRanges.find((r) => r.name.toLowerCase() === op.name.toLowerCase());
+      if (!d) return err("not_found", `no database range "${op.name}"`);
+      const so = x.dbSorts?.[d.name.toLowerCase()];
+      if (!so) return err("invalid_argument", "No operations to execute");
+      return handled([{ type: "sortRange", sheet: d.sheet, range: { ...d.range }, keys: so.keys, hasHeader: d.hasHeader, caseSensitive: so.caseSensitive, options: null }], d.sheet, [d.range]);
     }
     case "deleteDatabaseRange": {
       x.dbRanges = x.dbRanges.filter((d) => d.name.toLowerCase() !== op.name.toLowerCase());
@@ -1028,7 +1049,8 @@ export async function applyW56Op(x: W56Ext, op: Op, ctx: W56Ctx): Promise<W56Out
     }
     case "setCalcSettings": {
       if (op.settings.iterations && (op.settings.iterations.steps < 1 || op.settings.iterations.minChange < 0)) return err("invalid_argument", "iterations: steps ≥ 1 and minChange ≥ 0");
-      x.calc = structuredClone(op.settings);
+      // As the engine: a client that omits the two-digit year window keeps the document's.
+      x.calc = { ...structuredClone(op.settings), twoDigitYear: op.settings.twoDigitYear ?? x.calc.twoDigitYear ?? null };
       return handled([], null);
     }
     case "setCustomSortLists": {

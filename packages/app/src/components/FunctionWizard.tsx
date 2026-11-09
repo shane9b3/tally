@@ -12,33 +12,17 @@ import type { EngineClientV4, FunctionInfo } from "@tally/bridge";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useController } from "../context";
 import { t } from "../i18n";
-import { localizedName, useDocFormulaLang } from "../i18n/formulaNames";
+import { canonicalName, localizedName, useDocFormulaLang } from "../i18n/formulaNames";
 import { useEditStore } from "../stores/editStore";
 import { useFunctionsStore } from "../stores/functionsStore";
+import { lastUsedFunctions, noteFunctionUsed, resetLastUsed, useLastUsedStore } from "../stores/lastUsedStore";
 import { close, Shell } from "./Dialogs";
 import styles from "./Dialogs.module.css";
 import wiz from "./FunctionWizard.module.css";
 import { ArgumentEditor } from "../wizard/ArgumentEditor";
 import { parseCall } from "../wizard/wizardArgs";
 
-/** AOO's default "Last Used" list; later inserts move to the front (session only). */
-const DEFAULT_LAST_USED = ["SUM", "AVERAGE", "MIN", "MAX", "IF"];
-let lastUsed: string[] = [...DEFAULT_LAST_USED];
-
-/** The "Last Used" names, most recent first (tests). */
-export function lastUsedFunctions(): readonly string[] {
-  return lastUsed;
-}
-
-/** Records an insert (moves `name` to the front, keeps 10). */
-export function noteFunctionUsed(name: string): void {
-  lastUsed = [name, ...lastUsed.filter((n) => n !== name)].slice(0, 10);
-}
-
-/** Resets the "Last Used" list (tests). */
-export function resetLastUsed(): void {
-  lastUsed = [...DEFAULT_LAST_USED];
-}
+export { lastUsedFunctions, noteFunctionUsed, resetLastUsed };
 
 export const LAST_USED = "__last";
 export const ALL = "__all";
@@ -87,7 +71,7 @@ export function wizardCategories(functions: readonly FunctionInfo[]): string[] {
 }
 
 /** The functions shown for a category and search text (name prefix first, then substring, then description). */
-export function wizardList(functions: readonly FunctionInfo[], category: string, query: string, recent: readonly string[] = lastUsed): FunctionInfo[] {
+export function wizardList(functions: readonly FunctionInfo[], category: string, query: string, recent: readonly string[] = lastUsedFunctions()): FunctionInfo[] {
   const q = query.trim().toUpperCase();
   let list: FunctionInfo[];
   if (category === LAST_USED) {
@@ -125,11 +109,14 @@ export function FunctionWizard() {
     const e = useEditStore.getState().edit;
     return e ? parseCall(e.text) : null;
   }, []);
-  const [selected, setSelected] = useState<string | null>(existing?.name ?? lastUsed[0] ?? null);
+  const [selected, setSelected] = useState<string | null>(existing?.name ?? (lastUsedFunctions()[0] ? (formulaLang ? localizedName(formulaLang, lastUsedFunctions()[0]!) : lastUsedFunctions()[0]!) : null));
   const [call, setCall] = useState<{ text: string; complete: boolean } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const categories = useMemo(() => wizardCategories(functions), [functions]);
-  const list = useMemo(() => wizardList(functions, category, query), [functions, category, query]);
+  const lastUsedNames = useLastUsedStore((s) => s.names);
+  // "Last Used" keeps canonical names (shared with the Function List panel); the list shows the document language's.
+  const recentShown = useMemo(() => lastUsedNames.map((n) => (formulaLang ? localizedName(formulaLang, n) : n)), [lastUsedNames, formulaLang]);
+  const list = useMemo(() => wizardList(functions, category, query, recentShown), [functions, category, query, recentShown]);
   const current = list.find((f) => f.name === selected) ?? list[0] ?? null;
   const callText = call && current && call.text.startsWith(`${current.name}(`) ? call.text : null;
   const preview = usePreview(callText);
@@ -145,7 +132,7 @@ export function FunctionWizard() {
 
   const insert = () => {
     if (!current) return;
-    noteFunctionUsed(current.name);
+    noteFunctionUsed((formulaLang ? canonicalName(formulaLang, current.name) : null) ?? current.name);
     const st = useEditStore.getState();
     const full = call && call.text !== `${current.name}()` ? call.text : null;
     if (full && existing && existing.name === current.name && st.edit) {

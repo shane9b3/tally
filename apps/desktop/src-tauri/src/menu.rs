@@ -88,6 +88,7 @@ const FILE: &[Entry] = &[
 
 const INSERT: &[Entry] = &[
     Item("insert.function", "Function…", Some("CmdOrCtrl+F2")),
+    Item("insert.functionList", "Function List", None),
     Item("insert.chart", "Chart…", None),
     Item("insert.image", "Image…", None),
     Sep,
@@ -168,11 +169,14 @@ const EDIT_PASTE: &[Entry] = &[
     Item("edit.delete", "Delete", None),
 ];
 
-/// Edit ▸ Fill (AOO: Down, Right, Sheet…, Series…). Fill Sheets… is
-/// enabled in the registry only with several sheets selected.
+/// Edit ▸ Fill (AOO menubar.xml: Down, Right, Up, Left, Sheet…, Series…).
+/// Fill Sheets… is enabled in the registry only with several sheets
+/// selected.
 const FILL: &[Entry] = &[
     Item("edit.fillDown", "Fill Down", Some("CmdOrCtrl+D")),
     Item("edit.fillRight", "Fill Right", Some("CmdOrCtrl+R")),
+    Item("edit.fillUp", "Fill Up", None),
+    Item("edit.fillLeft", "Fill Left", None),
     Item("edit.fillSheet", "Fill Sheets…", None),
     Item("edit.fillSeries", "Fill Series…", None),
 ];
@@ -296,6 +300,8 @@ const DATA: &[Entry] = &[
         None,
     ),
     Item("data.defineDatabaseRange", "Define Database Range…", None),
+    Item("data.selectDatabaseRange", "Select Range…", None),
+    Item("data.refreshRange", "Refresh Range", None),
     Sep,
     Item("data.recalc", "Recalculate All", Some("Shift+CmdOrCtrl+F9")),
 ];
@@ -351,6 +357,7 @@ const VIEW: &[Entry] = &[
     Item("view.zoomIn", "Zoom In", Some("CmdOrCtrl+Equal")),
     Item("view.zoomOut", "Zoom Out", Some("CmdOrCtrl+Minus")),
     Item("view.zoomReset", "Actual Size", Some("CmdOrCtrl+0")),
+    Item("view.zoomDialog", "Zoom…", None),
     Item("view.zoomOptimal", "Optimal Zoom", None),
     Item("view.zoomPageWidth", "Zoom to Page Width", None),
     Item("view.zoomWholePage", "Zoom to Whole Page", None),
@@ -955,6 +962,7 @@ mod tests {
             "view.customizeToolbars",
             // wave 5 (W5-0b seams)
             "insert.function",
+            "insert.functionList",
             "insert.image",
             "chart.edit",
             "chart.delete",
@@ -991,6 +999,7 @@ mod tests {
             "view.zoomOptimal",
             "view.zoomPageWidth",
             "view.zoomWholePage",
+            "view.zoomDialog",
             "view.fullScreen",
             "tools.options",
             "tools.solver",

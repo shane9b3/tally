@@ -225,6 +225,7 @@ describe("commands with several sheets selected", () => {
         "data.defineDatabaseRange",
         "data.defineName",
         "data.filter",
+        "data.refreshRange",
         "data.sort",
         "data.sortAsc",
         "data.sortDesc",

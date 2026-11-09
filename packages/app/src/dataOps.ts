@@ -354,14 +354,27 @@ export function arrayFormulaOp(sheet: number, range: RangeDto, text: string): Op
 
 // -- fill ---------------------------------------------------------------------------
 
-/** ⌘D / ⌘R: the source row/column and the target for a selection (null if one row/column). */
-export function fillDownRight(sel: RangeDto, dir: "down" | "right"): { source: RangeDto; target: RangeDto } | null {
-  if (dir === "down") {
-    if (sel.r1 === sel.r0) return sel.r0 > 0 ? { source: { ...sel, r0: sel.r0 - 1, r1: sel.r0 - 1 }, target: { ...sel, r0: sel.r0 - 1 } } : null;
-    return { source: { ...sel, r1: sel.r0 }, target: { ...sel } };
+/**
+ * Edit ▸ Fill ▸ Down / Right / Up / Left (AOO `ScDocFunc::FillSimple`,
+ * docfunc.cxx:3996-4015): the source is the first row (Down), first column
+ * (Right), last row (Up) or last column (Left) of the selection, copied
+ * over the rest. ⌘D / ⌘R on a single row / column copy the one before it
+ * (Excel); Up / Left there do nothing, as in AOO (`nCount` is 0). `null`
+ * when there is nothing to fill.
+ */
+export function fillDownRight(sel: RangeDto, dir: "down" | "right" | "up" | "left"): { source: RangeDto; target: RangeDto } | null {
+  switch (dir) {
+    case "down":
+      if (sel.r1 === sel.r0) return sel.r0 > 0 ? { source: { ...sel, r0: sel.r0 - 1, r1: sel.r0 - 1 }, target: { ...sel, r0: sel.r0 - 1 } } : null;
+      return { source: { ...sel, r1: sel.r0 }, target: { ...sel } };
+    case "right":
+      if (sel.c1 === sel.c0) return sel.c0 > 0 ? { source: { ...sel, c0: sel.c0 - 1, c1: sel.c0 - 1 }, target: { ...sel, c0: sel.c0 - 1 } } : null;
+      return { source: { ...sel, c1: sel.c0 }, target: { ...sel } };
+    case "up":
+      return sel.r1 === sel.r0 ? null : { source: { ...sel, r0: sel.r1 }, target: { ...sel } };
+    case "left":
+      return sel.c1 === sel.c0 ? null : { source: { ...sel, c0: sel.c1 }, target: { ...sel } };
   }
-  if (sel.c1 === sel.c0) return sel.c0 > 0 ? { source: { ...sel, c0: sel.c0 - 1, c1: sel.c0 - 1 }, target: { ...sel, c0: sel.c0 - 1 } } : null;
-  return { source: { ...sel, c1: sel.c0 }, target: { ...sel } };
 }
 
 // -- friendly errors ------------------------------------------------------------------

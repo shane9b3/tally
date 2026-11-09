@@ -1074,6 +1074,7 @@ pub(crate) fn parse_validations<R: BufRead>(
                     kind,
                     allow_blank: e.attr("table:allow-empty-cell") != Some("false"),
                     show_dropdown: false,
+                    sort_ascending: false,
                     input_help: None,
                     error: None,
                 };
@@ -1103,8 +1104,15 @@ pub(crate) fn parse_validations<R: BufRead>(
                         _ => {}
                     }
                 }
+                // AOO xmlcvali.cxx:261-275: `no` hides the list,
+                // `unsorted` (the default) and `sorted-ascending` show it.
+                // ODF 1.2 spells the hidden value `none`; accept both.
+                let display = e.attr("table:display-list");
                 v.show_dropdown = matches!(v.kind, ValidationKindData::List { .. })
-                    && e.attr("table:display-list") != Some("no");
+                    && !matches!(display, Some("no" | "none"));
+                // ODF 1.2 and LibreOffice spell it `sort-ascending`.
+                v.sort_ascending = v.show_dropdown
+                    && matches!(display, Some("sorted-ascending" | "sort-ascending"));
                 if !name.is_empty() && out.len() < MAX_ITEMS {
                     out.insert(name, v);
                 }
@@ -1152,10 +1160,13 @@ pub(crate) fn write_validations(s: &mut String, sheets: &[(String, &[ValidationD
             }
             let _ = write!(s, r#" table:allow-empty-cell="{}""#, v.allow_blank);
             if matches!(v.kind, ValidationKindData::List { .. }) {
-                s.push_str(if v.show_dropdown {
-                    r#" table:display-list="unsorted""#
-                } else {
+                // AOO XMLStylesExportHelper.cxx:373-383.
+                s.push_str(if !v.show_dropdown {
                     r#" table:display-list="no""#
+                } else if v.sort_ascending {
+                    r#" table:display-list="sorted-ascending""#
+                } else {
+                    r#" table:display-list="unsorted""#
                 });
             }
             s.push_str(r#" table:base-cell-address=""#);
@@ -2099,6 +2110,7 @@ mod tests {
             kind,
             allow_blank: true,
             show_dropdown: true,
+            sort_ascending: false,
             input_help: None,
             error: None,
         };
