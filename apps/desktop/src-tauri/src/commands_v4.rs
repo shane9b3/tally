@@ -11,10 +11,10 @@
 
 use tally_api::{
     ApplyResult, AutocompleteDto, CalcSettingsDto, CellBlock, CellPos, CellStyleDto, CellsOptions,
-    ChartDataDto, ChartDto, ChartKind, ChartSvgDto, DatabaseRangeDto, DocId, DocumentStatsDto,
-    ImageDto, NavigatorDto, PageBreaksDto, PivotDto, PivotFieldItemsDto, PivotHit, PivotSource,
-    PrintJobInfo, PrintLayoutDto, PrintOptionsDto, RangeDto, ScenarioDto, SolverRequest,
-    SolverResult, TraceDto, UndoHistory, ViewOptionsDto,
+    ChartDataDto, ChartDataTableDto, ChartDto, ChartKind, ChartSvgDto, DatabaseRangeDto, DocId,
+    DocumentStatsDto, ImageDto, NavigatorDto, PageBreaksDto, PivotDto, PivotFieldItemsDto,
+    PivotHit, PivotSource, PrintJobInfo, PrintLayoutDto, PrintOptionsDto, RangeDto, ScenarioDto,
+    SolverRequest, SolverResult, TraceDto, UndoHistory, ViewOptionsDto,
 };
 use tally_types::SheetId;
 use tauri::AppHandle;
@@ -41,6 +41,22 @@ pub async fn chart_data(
 ) -> CmdResult<ChartDataDto> {
     blocking(app, move |_, st| {
         with_doc(st, doc, |s| s.chart_data(doc, sheet, id))
+    })
+    .await
+}
+
+/// The own data of a chart that reads no cells (Chart Data Table dialog,
+/// copying such a chart); the engine refuses tables over
+/// `MAX_DATA_TABLE_CELLS` cells.
+#[tauri::command]
+pub async fn chart_data_table(
+    app: AppHandle,
+    doc: DocId,
+    sheet: SheetId,
+    id: u32,
+) -> CmdResult<ChartDataTableDto> {
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.chart_data_table(doc, sheet, id))
     })
     .await
 }
@@ -452,6 +468,7 @@ pub async fn wb_print(
 pub const COMMAND_NAMES: &[&str] = &[
     "charts",
     "chart_data",
+    "chart_data_table",
     "suggest_chart",
     "images",
     "pivots",

@@ -476,9 +476,15 @@ loses.
   categories in `c:cat` as `c:strLit` / `c:numLit`; series names as
   `c:tx/c:v`). rust_xlsxwriter only writes references, so the series gets a
   placeholder reference (`_TallyLit[n]`) that the package patch pass
-  replaces in `xl/charts/chartN.xml`. Bubble sizes are still dropped with
-  the bubble → scatter degradation. Reading takes `numLit` / `strLit` into
-  the same literal data.
+  replaces in `xl/charts/chartN.xml` (one pass per part). Values are always
+  `c:numLit` (`CT_NumDataSource`; text values are parsed, non-numbers left
+  out). Literal text escapes control characters as `_xHHHH_` (and a literal
+  `_xHHHH_` as `_x005F_xHHHH_`), as Excel and rust_xlsxwriter do; reading
+  decodes them. A save writes at most 32 MiB of literal lists (counted per
+  series reference); past that, later categories and X values are left out
+  and values written empty, with a warning per chart. Bubble sizes are
+  still dropped with the bubble → scatter degradation. Reading takes
+  `numLit` / `strLit` into the same literal data.
 - **Scenarios**: `<scenarios current show><scenario name comment locked
   count><inputCells r val/>` (at most 32 cells per scenario, values only; a
   read scenario has one range per cell).

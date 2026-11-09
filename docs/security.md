@@ -924,6 +924,44 @@ anything changes). Every lookup during the load goes through name indexes and ea
 `files::missing_and_bogus_files_fail_cleanly`; `tally-desktop`
 `load_styles_from_a_file_and_a_builtin_template`.
 
+### Chart Data Table and chart literal budgets (review 5, 2026-11-09)
+
+A chart that reads no cells carries literal lists, and a small file can
+make their padded table huge: a 26 KB XLSX with 32,000 literal category
+slots, 254 empty series and 40 frames showing the part made `charts()`
+build 253M slots (1.27 GB of JSON per object refresh) and an XLSX save
+take 89 s for 4 charts (quadratic patching, the categories rendered once
+per series).
+
+- `charts()` never carries a data table: `ChartDto.ownData` flags the
+  chart and `chart_data_table(doc, sheet, id)` (its own Tauri command,
+  `allow-chart-data-table`) returns the table only when the Data Table
+  dialog opens or the chart is copied. The table is refused, before
+  anything is built, when rows × (1 + value columns) exceeds
+  `tally_api::MAX_DATA_TABLE_CELLS` (1,000,000, one document's literal-point
+  budget); X and size columns are sent only when the series has them.
+- The dialog renders only the rows in view plus 12 above and below (and
+  the cursor row), so at most about 60 rows × the table's columns are in
+  the DOM.
+- XLSX save: each own-data list is rendered once (a chart's categories
+  once, however many series name them); the patch pass scans each chart
+  part once and splices the list its placeholder number names; literal XML
+  is capped at 32 MiB per save, counted per reference
+  (`chart_write::MAX_LITERAL_XML_BYTES`). Past the cap later category and
+  X lists are left out and values are written as an empty `c:numLit`, with
+  one warning per chart. Values and sizes are always `c:numLit` (text is
+  parsed, non-numbers left out). Literal text escapes the characters XML
+  1.0 cannot hold as `_xHHHH_` (a literal `_xHHHH_` as `_x005F_xHHHH_`,
+  like rust_xlsxwriter); the reader decodes them.
+
+Tests: `tally-engine` `chart_data_table_limits::a_small_file_with_huge_padded_tables_stays_small`
+(the review's probe file with 3 frames: `charts()` JSON under 1 MiB, the
+table refused, the XLSX save linear), `chart_data_table::huge_padded_tables_are_refused_and_never_listed`;
+`tally-io-xlsx` `chart_data_table::large_literal_categories_save_within_the_budget`,
+`control_characters_in_literals_are_escaped`, `text_values_are_written_as_numbers`,
+`chart_write::tests`; e2e `chart-data-table.spec.ts` ("a long table renders
+only the rows in view").
+
 ### Tests
 
 - `cargo test -p tally-desktop`: menu ids; command-layer end-to-end over the real engine (templates, assist, ODS/CSV round trip, allowlist rejection, panic and poison recovery).

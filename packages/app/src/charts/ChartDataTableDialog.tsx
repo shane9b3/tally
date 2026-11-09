@@ -15,9 +15,13 @@
  * Home / End and Ctrl+Home / Ctrl+End move the cursor; Enter or F2 edits
  * the cell, typing replaces it; in a cell edit Enter commits and moves
  * down, Tab commits and moves right, Escape cancels; Delete clears.
+ *
+ * The table is read when the dialog opens (`chart_data_table`, which
+ * refuses tables over a million cells) and only the rows in view (plus a
+ * margin and the cursor row) are rendered.
  */
 import type { ChartDataTableDto, ChartDto } from "@tally/bridge";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useController } from "../context";
 import { t } from "../i18n";
 import { useW56Store } from "../data/store";
@@ -47,6 +51,8 @@ import {
   seriesEditable,
   setCell,
   setSeriesName,
+  withoutAddedColumns,
+  withRoleColumns,
   type DataColumn,
   type DataCursor,
   type DataRole,
@@ -82,19 +88,23 @@ function roleLabel(role: DataRole): string {
   }
 }
 
+/** Rows rendered above and below the visible ones. */
+const OVERSCAN = 12;
+
 export function ChartDataTableDialog() {
   useW56Store((s) => s.i18nRev);
-  const id = useChartStore((s) => s.dataTable);
-  const chart = useChartStore((s) => s.charts.find((c) => c.id === s.dataTable) ?? null);
-  if (id === null || !chart?.dataTable) return null;
-  return <DataTableEditor key={id} chart={chart} initial={chart.dataTable} />;
+  const open = useChartStore((s) => s.dataTable);
+  const chart = useChartStore((s) => (s.dataTable ? (s.charts.find((c) => c.id === s.dataTable!.id) ?? null) : null));
+  if (open === null || !chart?.ownData) return null;
+  return <DataTableEditor key={open.id} chart={chart} base={open.table} />;
 }
 
-function DataTableEditor({ chart, initial }: { chart: ChartDto; initial: ChartDataTableDto }) {
+function DataTableEditor({ chart, base }: { chart: ChartDto; base: ChartDataTableDto }) {
   const ctl = useController();
   const titleId = useTitleId();
   useReturnFocus();
   const decimalSep = decimalSepOf(useV3Store((s) => s.locale));
+  const initial = useMemo(() => withRoleColumns(chart, base), [chart, base]);
   const [table, setTable] = useState(initial);
   const [cursor, setCursor] = useState<DataCursor>({ row: 0, col: 0 });
   // A series name field has the focus (AOO: the row tools are off then).
@@ -103,6 +113,10 @@ function DataTableEditor({ chart, initial }: { chart: ChartDto; initial: ChartDa
   const [invalid, setInvalid] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLTableElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Row virtualisation: the scroll offset and view height (state, so a scroll re-renders) and a measured row height.
+  const [view, setView] = useState({ top: 0, height: 480 });
+  const [{ rowH, headH }, setMetrics] = useState({ rowH: 25, headH: 50 });
   const editRef = useRef<HTMLInputElement>(null);
   const cols = useMemo(() => dataColumns(chart, table), [chart, table]);
   const rows = rowCount(table);
@@ -111,6 +125,27 @@ function DataTableEditor({ chart, initial }: { chart: ChartDto; initial: ChartDa
   const curCol: DataColumn | undefined = cols[col];
   const curSeries = headerSeries ?? (curCol && curCol.series >= 0 ? curCol.series : null);
   const editable = seriesEditable(chart);
+
+  // The rendered rows: those in view plus OVERSCAN, always including the cursor row.
+  let first = Math.max(0, Math.floor((view.top - headH) / rowH) - OVERSCAN);
+  let last = Math.min(rows, Math.ceil((view.top - headH + view.height) / rowH) + OVERSCAN);
+  const span = Math.max(1, last - first);
+  if (row < first || row >= last) {
+    first = Math.max(0, Math.min(row - OVERSCAN, rows - span));
+    last = Math.min(rows, first + span);
+  }
+  const onScroll = (): void => {
+    const el = scrollRef.current;
+    if (el) setView({ top: el.scrollTop, height: el.clientHeight });
+  };
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el) setView({ top: el.scrollTop, height: el.clientHeight || 480 });
+    // Measured once on open (fixed-height rows); scrolling updates the view.
+    const tr = gridRef.current?.tBodies[0]?.querySelector<HTMLElement>("tr[aria-rowindex]");
+    const head = gridRef.current?.tHead?.offsetHeight ?? 0;
+    if (tr && tr.offsetHeight > 0) setMetrics({ rowH: tr.offsetHeight, headH: head });
+  }, []);
 
   // The cursor cell takes the focus when it moves (not while a name field or the toolbar has it).
   const focusCell = useRef(true);
@@ -173,7 +208,8 @@ function DataTableEditor({ chart, initial }: { chart: ChartDto; initial: ChartDa
       }
     }
     ctl.w5.charts.closeDataTable();
-    if (!sameTable(final, initial)) void ctl.w5.charts.setDataTable(chart.id, final);
+    final = withoutAddedColumns(final, base);
+    if (!sameTable(final, base)) void ctl.w5.charts.setDataTable(chart.id, final);
     ctl.focusGrid();
   };
 
@@ -215,10 +251,11 @@ function DataTableEditor({ chart, initial }: { chart: ChartDto; initial: ChartDa
   const onMoveSeriesRight = () =>
     run(() => {
       if (curSeries === null) return;
-      const next = moveSeriesRight(table, curSeries);
+      // An updater: `run` has just queued the pending cell edit, which the rendered `table` does not hold yet.
+      setTable((tb) => moveSeriesRight(tb, curSeries));
       const offset = col - firstColumnOf(cols, curSeries);
-      setTable(next);
-      const nextCols = dataColumns(chart, next);
+      // The column layout does not depend on cell values, so the rendered table gives the moved layout.
+      const nextCols = dataColumns(chart, moveSeriesRight(table, curSeries));
       setHeaderSeries(null);
       // The cursor stays in the moved series (DataBrowser::SwapColumn).
       setCursor({ row, col: firstColumnOf(nextCols, curSeries + 1) + Math.max(0, offset) });
@@ -319,7 +356,7 @@ function DataTableEditor({ chart, initial }: { chart: ChartDto; initial: ChartDa
             </button>
           ))}
         </div>
-        <div className={styles.scroll}>
+        <div ref={scrollRef} className={styles.scroll} onScroll={onScroll}>
           <table ref={gridRef} className={styles.grid} role="grid" aria-label={t("chart.dataTable.grid", "Chart data")} aria-rowcount={rows + 2} aria-colcount={cols.length + 1}>
             <thead>
               <tr aria-rowindex={1}>
@@ -358,7 +395,12 @@ function DataTableEditor({ chart, initial }: { chart: ChartDto; initial: ChartDa
               </tr>
             </thead>
             <tbody>
-              {Array.from({ length: rows }, (_, r) => (
+              {first > 0 ? (
+                <tr aria-hidden="true" className={styles.spacer}>
+                  <td colSpan={cols.length + 1} style={{ height: first * rowH }} />
+                </tr>
+              ) : null}
+              {Array.from({ length: last - first }, (_, k) => first + k).map((r) => (
                 <tr key={r} aria-rowindex={r + 3}>
                   <th role="rowheader" className={styles.rowHead}>
                     {r + 1}
@@ -410,6 +452,11 @@ function DataTableEditor({ chart, initial }: { chart: ChartDto; initial: ChartDa
                   })}
                 </tr>
               ))}
+              {last < rows ? (
+                <tr aria-hidden="true" className={styles.spacer}>
+                  <td colSpan={cols.length + 1} style={{ height: (rows - last) * rowH }} />
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>

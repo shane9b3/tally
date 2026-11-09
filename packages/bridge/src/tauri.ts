@@ -68,6 +68,7 @@ import type { AutocompleteDto } from "./generated/AutocompleteDto";
 import type { CalcSettingsDto } from "./generated/CalcSettingsDto";
 import type { CellStyleDto } from "./generated/CellStyleDto";
 import type { ChartDataDto } from "./generated/ChartDataDto";
+import type { ChartDataTableDto } from "./generated/ChartDataTableDto";
 import type { ChartDto } from "./generated/ChartDto";
 import type { ChartKind } from "./generated/ChartKind";
 import type { ChartSvgDto } from "./generated/ChartSvgDto";
@@ -169,6 +170,7 @@ export const COMMANDS = {
   // v0.4–v0.6 (wave 5): apps/desktop/src-tauri/src/commands_v4.rs
   charts: "charts",
   chartData: "chart_data",
+  chartDataTable: "chart_data_table",
   suggestChart: "suggest_chart",
   images: "images",
   pivots: "pivots",
@@ -247,6 +249,7 @@ export const COMMANDS = {
 export const V4_METHODS = [
   "charts",
   "chartData",
+  "chartDataTable",
   "suggestChart",
   "images",
   "pivots",
@@ -623,6 +626,10 @@ export class TauriClient implements EngineClientV4, ShellClient {
 
   chartData(doc: DocId, sheet: SheetId, id: number): Promise<ChartDataDto> {
     return this.call(COMMANDS.chartData, { doc, sheet, id });
+  }
+
+  chartDataTable(doc: DocId, sheet: SheetId, id: number): Promise<ChartDataTableDto> {
+    return this.call(COMMANDS.chartDataTable, { doc, sheet, id });
   }
 
   suggestChart(doc: DocId, sheet: SheetId, sel: RangeDto, kind: ChartKind): Promise<ChartDto> {

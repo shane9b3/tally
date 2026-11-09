@@ -33,7 +33,7 @@ function fake() {
 describe("EngineClientV4 over Tauri (W5-0b seams)", () => {
   it("lists every V4 method with a snake_case command", () => {
     expect(everyV4MethodListed).toBe(true);
-    expect(V4_METHODS.length).toBe(36);
+    expect(V4_METHODS.length).toBe(37);
     for (const m of V4_METHODS) {
       const cmd = COMMANDS[m];
       expect(cmd, m).toMatch(/^[a-z]+(_[a-z0-9]+)*$/);
@@ -68,6 +68,7 @@ describe("EngineClientV4 over Tauri (W5-0b seams)", () => {
     };
     await client.charts(1, 2);
     await client.chartData(1, 2, 3);
+    await client.chartDataTable(1, 2, 3);
     await client.suggestChart(1, 2, sel, "column");
     await client.images(1, 2);
     await client.pivots(1);
@@ -109,6 +110,7 @@ describe("EngineClientV4 over Tauri (W5-0b seams)", () => {
     expect(calls).toEqual([
       { cmd: "charts", args: { doc: 1, sheet: 2 } },
       { cmd: "chart_data", args: { doc: 1, sheet: 2, id: 3 } },
+      { cmd: "chart_data_table", args: { doc: 1, sheet: 2, id: 3 } },
       { cmd: "suggest_chart", args: { doc: 1, sheet: 2, sel, kind: "column" } },
       { cmd: "images", args: { doc: 1, sheet: 2 } },
       { cmd: "pivots", args: { doc: 1 } },

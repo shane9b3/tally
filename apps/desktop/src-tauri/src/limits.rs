@@ -930,6 +930,7 @@ mod tests {
             background: None,
             plot_background: None,
             include_hidden: false,
+            own_data: false,
             data_table: None,
         };
         assert!(chart("c", &chart_with(MAX_CHART_SERIES)).is_ok());

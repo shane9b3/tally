@@ -57,7 +57,7 @@ import { applyCfPatch, evaluateFormat, type CfDecoration } from "./mockCf";
 import { applyV3Op, cellKey, DEFAULT_VALIDATION_MESSAGE, emptyV3, isHiddenCell, isHidePrint, MOCK_LOCALES, passes, protectionRefusal, validationAt, type V3Ext } from "./mockV3";
 import { applyW56Op, autocompleteOf, builtinStyles, cellStylesOf, decorateSheets, emptyW56, navigatorOf, pivotFieldItemsOf, pivotHitAt, stdFilterHidden, templateCellStyles, type W56Ctx, type W56Ext } from "./mockW56";
 import { pageStyleOn, planLoadStyles } from "../styles/loadStyles";
-import { applyW5Op, BLANK_PNG, chartDataFor, chartsTouched, dependentsOf, emptyW5, pageBreaksFor, precedentsOf, printLayoutFor, refsIn, renderPagePng, suggestChartFor, type W5Ext } from "./mockW5";
+import { applyW5Op, BLANK_PNG, chartDataFor, chartsTouched, dependentsOf, emptyW5, listedChart, pageBreaksFor, precedentsOf, printLayoutFor, refsIn, renderPagePng, suggestChartFor, type W5Ext } from "./mockW5";
 import { parseAbsoluteRef } from "../dataOps";
 import { nextUnlocked as walkUnlocked } from "./nextUnlocked";
 import { mixInputs, pasteArea } from "@tally/bridge";
@@ -78,6 +78,7 @@ import type {
   WorkbookInfo,
   CellBlock,
   ChartDataDto,
+  ChartDataTableDto,
   ChartDto,
   ChartKind,
   ChartSvgDto,
@@ -1315,7 +1316,14 @@ export class WebMockClient extends MockClient {
 
   override async charts(doc: DocId, sheet: number): Promise<ChartDto[]> {
     await super.charts(doc, sheet);
-    return structuredClone(this.docExt(doc).w5.charts[sheet] ?? []);
+    return (this.docExt(doc).w5.charts[sheet] ?? []).map(listedChart);
+  }
+
+  override async chartDataTable(doc: DocId, sheet: number, id: number): Promise<ChartDataTableDto> {
+    const chart = (this.docExt(doc).w5.charts[sheet] ?? []).find((c) => c.id === id);
+    if (!chart) throw { code: "not_found", message: `chart ${id} not found` };
+    if (!chart.dataTable) throw { code: "invalid_argument", message: "the chart takes its data from cells: edit the cells instead" };
+    return structuredClone(chart.dataTable);
   }
 
   override async images(doc: DocId, sheet: number): Promise<ImageDto[]> {

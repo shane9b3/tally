@@ -68,7 +68,7 @@ fn xml_text(s: &str) -> String {
 }
 
 /// `true` if `s` starts with `_xHHHH_`.
-fn is_x_escape(s: &str) -> bool {
+pub(crate) fn is_x_escape(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() >= 7
         && b[0] == b'_'
@@ -78,7 +78,7 @@ fn is_x_escape(s: &str) -> bool {
 }
 
 /// Decodes OOXML's `_xHHHH_` escapes.
-fn decode_x_escapes(s: &str) -> String {
+pub(crate) fn decode_x_escapes(s: &str) -> String {
     if !s.contains("_x") && !s.contains("_X") {
         return s.to_string();
     }

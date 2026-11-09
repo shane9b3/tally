@@ -45,7 +45,7 @@ async function insertChart(page: Page) {
     await ctl.w5.charts.addChart({
       id: 0, name: "", anchor: { r: 1, c: 7, dxMm: 4, dyMm: 2, widthMm: 150, heightMm: 85 }, kind: "column", stacking: "none", lines: true, markers: false, smooth: false, hole: null, exploded: false, filled: false, stock: null, threeD: false,
       source: null, categories: ref("A$2", "A$15"), series: [series("D$1", ref("D$2", "D$15")), { ...series("E$1", ref("E$2", "E$15")), kind: "line", secondaryAxis: true }],
-      title: "Quantity and unit price by invoice", subtitle: null, legend: "bottom", xAxis: { ...axis, majorGrid: false }, yAxis: { ...axis, title: "Qty" }, y2Axis: { ...axis, title: "Price", majorGrid: false }, background: null, plotBackground: null, includeHidden: false,
+      title: "Quantity and unit price by invoice", subtitle: null, legend: "bottom", xAxis: { ...axis, majorGrid: false }, yAxis: { ...axis, title: "Qty" }, y2Axis: { ...axis, title: "Price", majorGrid: false }, background: null, plotBackground: null, includeHidden: false, ownData: false,
     }, "Insert chart", false);
   });
   await page.evaluate(() => window.__tally!.controller.grid!.scrollTo({ r: 0, c: 3 }));

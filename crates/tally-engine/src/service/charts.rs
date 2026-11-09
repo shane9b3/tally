@@ -144,6 +144,31 @@ impl EngineService {
             .collect())
     }
 
+    /// The own data of a chart that reads no cells (the Chart Data Table
+    /// dialog, copying a chart); refused for a chart over cells and over
+    /// [`tally_api::MAX_DATA_TABLE_CELLS`] cells.
+    pub fn chart_data_table_impl(
+        &self,
+        doc: DocId,
+        sheet: SheetId,
+        id: u32,
+    ) -> Result<tally_api::ChartDataTableDto> {
+        let d = self.document(doc)?;
+        let s = d.wb.sheet(sheet).ok_or_else(|| no_sheet(sheet))?;
+        let chart = s
+            .meta
+            .charts
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("no chart {id}")))?;
+        if !crate::charts::has_own_data(&chart.data) {
+            return Err(ApiError::invalid_argument(
+                "the chart takes its data from cells: edit the cells instead",
+            ));
+        }
+        crate::charts::data_table_of(&chart.data)
+    }
+
     /// The resolved data of a chart (cached values, no recalculation),
     /// from the cache when the document has not changed since.
     pub fn chart_data_impl(&self, doc: DocId, sheet: SheetId, id: u32) -> Result<ChartDataDto> {

@@ -121,3 +121,9 @@
   text-align: inherit;
   outline: none;
 }
+
+/* Stand-in for the rows that are not rendered (virtualised grid). */
+.spacer td {
+  padding: 0 !important;
+  border: 0 !important;
+}

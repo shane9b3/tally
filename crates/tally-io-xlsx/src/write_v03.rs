@@ -947,7 +947,7 @@ pub(crate) struct Patches {
     /// Literal chart data (`c:numLit` / `c:strLit`, which rust_xlsxwriter
     /// cannot write): `(marker, xml)`, the marker being the formula of a
     /// placeholder reference in `xl/charts/chartN.xml`.
-    pub chart_literals: Vec<(String, String)>,
+    pub chart_literals: Vec<String>,
 }
 
 impl Patches {

@@ -1264,6 +1264,15 @@ impl DocumentService for EngineService {
         self.chart_data_impl(doc, sheet, id)
     }
 
+    fn chart_data_table(
+        &self,
+        doc: DocId,
+        sheet: tally_types::SheetId,
+        id: u32,
+    ) -> Result<tally_api::ChartDataTableDto> {
+        self.chart_data_table_impl(doc, sheet, id)
+    }
+
     fn suggest_chart(
         &self,
         doc: DocId,

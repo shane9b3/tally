@@ -1204,7 +1204,10 @@ pub fn to_api(wb: &Workbook, sheet: SheetId, chart: &Chart) -> ChartDto {
         background: c.background,
         plot_background: c.plot_background,
         include_hidden: c.include_hidden,
-        data_table: has_own_data(c).then(|| data_table_of(c)),
+        own_data: has_own_data(c),
+        // Never in the list (it is refreshed often and a table can be
+        // large): the dialog and copy ask `chart_data_table`.
+        data_table: None,
     }
 }
 
@@ -1231,10 +1234,48 @@ fn literal_numbers(v: Option<&ChartValuesData>) -> Vec<Option<f64>> {
     }
 }
 
-/// The own data of a chart as the dialog's table: every column padded to
-/// the longest one (empty cells), the series' X and size columns present
-/// for XY and bubble series (or when the chart has them).
-pub fn data_table_of(c: &ChartData) -> ChartDataTableDto {
+/// The own data of a chart as the dialog's table: every present column
+/// padded to the longest one (empty cells). X and size columns are sent
+/// only when the series has them (the dialog shows empty ones for XY
+/// and bubble series itself). Refused when the padded table would exceed
+/// [`tally_api::MAX_DATA_TABLE_CELLS`] cells (rows × (1 + value
+/// columns)), counted before anything is built: a file can hold
+/// thousands of literal categories next to hundreds of empty series.
+pub fn data_table_of(c: &ChartData) -> Result<ChartDataTableDto, ApiError> {
+    let len = |v: Option<&ChartValuesData>| match v {
+        Some(ChartValuesData::Literal(v)) => v.len(),
+        Some(ChartValuesData::LiteralText(t)) => t.len(),
+        None => 0,
+    };
+    let rows = c
+        .series
+        .iter()
+        .flat_map(|s| {
+            [
+                len(s.literal_values.as_ref()),
+                len(s.literal_x.as_ref()),
+                len(s.literal_sizes.as_ref()),
+            ]
+        })
+        .chain([len(c.literal_categories.as_ref())])
+        .max()
+        .unwrap_or(0);
+    let columns = 1 + c
+        .series
+        .iter()
+        .map(|s| 1 + usize::from(s.literal_x.is_some()) + usize::from(s.literal_sizes.is_some()))
+        .sum::<usize>();
+    if rows.saturating_mul(columns) > tally_api::MAX_DATA_TABLE_CELLS {
+        return Err(ApiError::invalid_argument(format!(
+            "the chart's data table is too large to edit ({rows} rows × {columns} columns; \
+             the limit is {} cells)",
+            tally_api::MAX_DATA_TABLE_CELLS
+        )));
+    }
+    let padded = |mut v: Vec<Option<f64>>| {
+        v.resize(rows, None);
+        v
+    };
     let mut categories: Vec<String> = match &c.literal_categories {
         Some(ChartValuesData::LiteralText(t)) => t.clone(),
         Some(ChartValuesData::Literal(v)) => v
@@ -1243,49 +1284,28 @@ pub fn data_table_of(c: &ChartData) -> ChartDataTableDto {
             .collect(),
         None => Vec::new(),
     };
-    let mut series: Vec<DataTableSeriesDto> = c
+    categories.resize(rows, String::new());
+    let series = c
         .series
         .iter()
         .enumerate()
-        .map(|(i, s)| {
-            let kind = s.kind.unwrap_or(c.kind);
-            let xy = matches!(kind, ChartKindData::Scatter | ChartKindData::Bubble);
-            DataTableSeriesDto {
-                source: u32::try_from(i).ok(),
-                name: match &s.name {
-                    Some(SeriesNameData::Text(t)) => t.clone(),
-                    _ => String::new(),
-                },
-                values: literal_numbers(s.literal_values.as_ref()),
-                x: (xy || s.literal_x.is_some()).then(|| literal_numbers(s.literal_x.as_ref())),
-                sizes: (kind == ChartKindData::Bubble || s.literal_sizes.is_some())
-                    .then(|| literal_numbers(s.literal_sizes.as_ref())),
-            }
+        .map(|(i, s)| DataTableSeriesDto {
+            source: u32::try_from(i).ok(),
+            name: match &s.name {
+                Some(SeriesNameData::Text(t)) => t.clone(),
+                _ => String::new(),
+            },
+            values: padded(literal_numbers(s.literal_values.as_ref())),
+            x: s.literal_x
+                .as_ref()
+                .map(|v| padded(literal_numbers(Some(v)))),
+            sizes: s
+                .literal_sizes
+                .as_ref()
+                .map(|v| padded(literal_numbers(Some(v)))),
         })
         .collect();
-    let rows = series
-        .iter()
-        .flat_map(|s| {
-            [
-                s.values.len(),
-                s.x.as_ref().map_or(0, Vec::len),
-                s.sizes.as_ref().map_or(0, Vec::len),
-            ]
-        })
-        .chain([categories.len()])
-        .max()
-        .unwrap_or(0);
-    categories.resize(rows, String::new());
-    for s in &mut series {
-        s.values.resize(rows, None);
-        if let Some(x) = &mut s.x {
-            x.resize(rows, None);
-        }
-        if let Some(z) = &mut s.sizes {
-            z.resize(rows, None);
-        }
-    }
-    ChartDataTableDto { categories, series }
+    Ok(ChartDataTableDto { categories, series })
 }
 
 /// Replaces the own data of `data` with `t` (AOO `DataBrowserModel` edits
@@ -1347,8 +1367,15 @@ pub fn apply_data_table(data: &mut ChartData, t: &ChartDataTableDto) -> Result<(
             s.sizes = None;
             s.name = (!ts.name.is_empty()).then(|| SeriesNameData::Text(ts.name.clone()));
             s.literal_values = Some(ChartValuesData::Literal(ts.values.clone()));
-            s.literal_x = ts.x.clone().map(ChartValuesData::Literal);
-            s.literal_sizes = ts.sizes.clone().map(ChartValuesData::Literal);
+            // A column the series did not have stays absent while it is
+            // empty (X = index, no trend-line loss; no empty xVal written).
+            let keep = |col: &Option<Vec<Option<f64>>>, had: bool| {
+                col.clone()
+                    .filter(|v| had || v.iter().any(Option::is_some))
+                    .map(ChartValuesData::Literal)
+            };
+            s.literal_x = keep(&ts.x, s.literal_x.is_some());
+            s.literal_sizes = keep(&ts.sizes, s.literal_sizes.is_some());
             s
         })
         .collect();

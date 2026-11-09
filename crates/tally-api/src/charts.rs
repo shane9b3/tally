@@ -545,16 +545,28 @@ pub struct ChartDto {
     pub plot_background: Option<u32>,
     /// Plot hidden cells (AOO default `false`).
     pub include_hidden: bool,
-    /// The chart's own data (AOO's internal data provider: a chart
-    /// without any cell range, from a file whose chart carries its data
-    /// or a chart pasted from another document). Absent for charts over
-    /// cells. On add it supplies the literal data of a chart without
-    /// ranges (a pasted copy); `UpdateChart` ignores it (the Chart Data
-    /// Table dialog uses `SetChartDataTable`).
+    /// `true` when the chart reads no cell at all and holds its own data
+    /// (AOO's internal data provider: a chart from a file whose chart
+    /// carries its data, or one pasted from another document). Output
+    /// only; the data itself comes from `chart_data_table`.
+    #[serde(default)]
+    pub own_data: bool,
+    /// Input only: on `AddChart` the literal data of a chart without
+    /// ranges (a pasted copy, read with `chart_data_table` when it was
+    /// copied). `charts` never fills it (a table can be large; the
+    /// Chart Data Table dialog asks for it) and `UpdateChart` ignores it
+    /// (the dialog uses `SetChartDataTable`).
     #[serde(default)]
     #[ts(optional = nullable)]
     pub data_table: Option<ChartDataTableDto>,
 }
+
+/// Most cells (rows × (1 + value columns)) of a table `chart_data_table`
+/// hands out: one document's literal-point budget. A file can hold a
+/// chart whose padded table would be far larger (thousands of literal
+/// categories and hundreds of empty series); that table is refused rather
+/// than built and sent to the webview.
+pub const MAX_DATA_TABLE_CELLS: usize = 1_000_000;
 
 /// The internal data table of a chart (AOO 4.1 View ▸ Data Table,
 /// `chart2/source/controller/dialogs/DataBrowserModel.cxx`): one row per

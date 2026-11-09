@@ -5,7 +5,7 @@
  * from `charts()` / `images()` / `chart_data()` on sheet changes and on
  * `ApplyResult.objectsChanged` / `chartsChanged`.
  */
-import type { ChartDataDto, ChartDto, ImageDto } from "@tally/bridge";
+import type { ChartDataDto, ChartDataTableDto, ChartDto, ImageDto } from "@tally/bridge";
 import type { GridObject } from "@tally/grid";
 import { create } from "zustand";
 
@@ -37,8 +37,8 @@ export interface ChartsState {
   editorOpen: boolean;
   /** A copied chart (⌘C on a selected chart). */
   clipboard: ChartDto | null;
-  /** The chart whose Data Table dialog is open (View ▸ Data Table), or `null`. */
-  dataTable: number | null;
+  /** The chart whose Data Table dialog is open (View ▸ Data Table) with the table read for it (`chart_data_table`), or `null`. */
+  dataTable: OpenDataTable | null;
   /** Bumped on scroll/zoom so the chart layer re-culls (throttled per frame). */
   viewportTick: number;
   setObjects(sheet: number, charts: ChartDto[], images: ImageDto[]): void;
@@ -47,12 +47,18 @@ export interface ChartsState {
   select(id: string | null): void;
   setEditorOpen(open: boolean): void;
   setClipboard(chart: ChartDto | null): void;
-  setDataTable(id: number | null): void;
+  setDataTable(open: OpenDataTable | null): void;
   bumpViewport(): void;
   reset(): void;
 }
 
-const initial = { sheet: 0, charts: [] as ChartDto[], images: [] as ImageDto[], data: {} as Record<number, ChartDataDto>, imageData: {} as Record<number, string>, selected: null, editorOpen: false, viewportTick: 0, dataTable: null as number | null };
+/** An open Data Table dialog: the chart and its own data as read when it opened. */
+export interface OpenDataTable {
+  id: number;
+  table: ChartDataTableDto;
+}
+
+const initial = { sheet: 0, charts: [] as ChartDto[], images: [] as ImageDto[], data: {} as Record<number, ChartDataDto>, imageData: {} as Record<number, string>, selected: null, editorOpen: false, viewportTick: 0, dataTable: null as OpenDataTable | null };
 
 export const useChartStore = create<ChartsState>()((set) => ({
   ...initial,

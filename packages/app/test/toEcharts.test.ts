@@ -40,6 +40,7 @@ function chart(p: Partial<ChartDto> = {}): ChartDto {
     background: null,
     plotBackground: null,
     includeHidden: false,
+    ownData: false,
     ...p,
   };
 }

@@ -41,7 +41,7 @@ export function isOwnData(c: ChartDto): boolean {
   return c.series.every((s) => !s.values && !s.xValues && !s.sizes && s.name?.type !== "ref" && s.errorBars?.kind.type !== "range");
 }
 
-/** The own data the engine hands out (`data_table_of`): the stored table re-shaped to the series. */
+/** The own data the engine keeps (`data_table_of`): the stored table re-shaped to the series (X / size columns only where the series has them). */
 function ownTable(c: ChartDto, prev: ChartDataTableDto | null | undefined): ChartDataTableDto {
   const rows = prev?.categories.length ?? 0;
   const empty = (): (number | null)[] => Array.from({ length: rows }, () => null);
@@ -49,17 +49,20 @@ function ownTable(c: ChartDto, prev: ChartDataTableDto | null | undefined): Char
     categories: prev ? [...prev.categories] : [],
     series: c.series.map((s, i) => {
       const old = prev?.series[i];
-      const kind = s.kind ?? c.kind;
-      const xy = kind === "scatter" || kind === "bubble";
       return {
         source: i,
         name: s.name?.type === "text" ? s.name.text : "",
         values: old ? [...old.values] : empty(),
-        x: xy || old?.x ? (old?.x ? [...old.x] : empty()) : null,
-        sizes: kind === "bubble" || old?.sizes ? (old?.sizes ? [...old.sizes] : empty()) : null,
+        x: old?.x ? [...old.x] : null,
+        sizes: old?.sizes ? [...old.sizes] : null,
       };
     }),
   };
+}
+
+/** The list form of a stored chart (`charts`): the own-data flag, never the table. */
+export function listedChart(c: ChartDto): ChartDto {
+  return { ...structuredClone(c), ownData: isOwnData(c), dataTable: null };
 }
 
 const blankSeries = (): ChartSeriesDto => ({ name: null, values: "", xValues: null, sizes: null, kind: null, secondaryAxis: false, color: null, marker: null, labels: { value: false, percent: false, category: false, seriesName: false, position: "auto" }, trend: null, errorBars: null, meanLine: false });
@@ -67,8 +70,17 @@ const blankSeries = (): ChartSeriesDto => ({ name: null, values: "", xValues: nu
 /** `apply_data_table`: the series follow the table (formatting from `source`), the table is stored. */
 function applyTable(c: ChartDto, t: ChartDataTableDto): void {
   const old = c.series;
+  const oldTable = c.dataTable;
   c.series = t.series.map((ts) => ({ ...(ts.source != null && old[ts.source] ? structuredClone(old[ts.source]!) : blankSeries()), values: "", xValues: null, sizes: null, name: ts.name ? { type: "text", text: ts.name } : null }));
-  c.dataTable = { categories: [...t.categories], series: t.series.map((s, i) => ({ ...structuredClone(s), source: i })) };
+  // A column the series did not have stays absent while it is empty (the engine's `apply_data_table`).
+  const keep = (col: (number | null)[] | null | undefined, had: boolean) => (col && (had || col.some((v) => v !== null)) ? [...col] : null);
+  c.dataTable = {
+    categories: [...t.categories],
+    series: t.series.map((s, i) => {
+      const was = s.source != null ? oldTable?.series[s.source] : undefined;
+      return { ...structuredClone(s), source: i, x: keep(s.x, !!was?.x), sizes: keep(s.sizes, !!was?.sizes) };
+    }),
+  };
 }
 
 /** Applies a W5-5 op to the side model (async: `addChart` derives series from the cells). */
@@ -474,6 +486,7 @@ export async function suggestChartFor(sheetName: string, sel: RangeDto, kind: Ch
     background: null,
     plotBackground: null,
     includeHidden: false,
+    ownData: false,
   };
 }
 

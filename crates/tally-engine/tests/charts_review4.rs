@@ -100,6 +100,7 @@ fn line_chart(values: &str, n: usize) -> ChartDto {
         background: None,
         plot_background: None,
         include_hidden: false,
+        own_data: false,
         data_table: None,
     }
 }

@@ -401,6 +401,20 @@ pub trait DocumentService {
         Err(ApiError::unsupported("charts are not supported"))
     }
 
+    /// The own data of a chart that reads no cells, as the Chart Data
+    /// Table dialog edits it (every column padded to the longest one).
+    /// Refused for a chart over cells and for a table over
+    /// [`crate::MAX_DATA_TABLE_CELLS`] cells.
+    fn chart_data_table(
+        &self,
+        doc: DocId,
+        sheet: SheetId,
+        id: u32,
+    ) -> Result<crate::ChartDataTableDto> {
+        let _ = (doc, sheet, id);
+        Err(ApiError::unsupported("charts are not supported"))
+    }
+
     /// A chart proposal for a selection: detects the data region around
     /// it, guesses labels and series orientation and anchors the chart to
     /// the right of the region at 16 × 9 cm. Nothing is added.

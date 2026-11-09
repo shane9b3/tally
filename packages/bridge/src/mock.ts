@@ -69,6 +69,7 @@ import type { AutocompleteDto } from "./generated/AutocompleteDto";
 import type { CalcSettingsDto } from "./generated/CalcSettingsDto";
 import type { CellStyleDto } from "./generated/CellStyleDto";
 import type { ChartDataDto } from "./generated/ChartDataDto";
+import type { ChartDataTableDto } from "./generated/ChartDataTableDto";
 import type { ChartDto } from "./generated/ChartDto";
 import type { ChartKind } from "./generated/ChartKind";
 import type { ChartSvgDto } from "./generated/ChartSvgDto";
@@ -1156,6 +1157,10 @@ export class MockClient implements EngineClientV4, ShellClient {
 
   chartData(doc: DocId, sheet: SheetId, id: number): Promise<ChartDataDto> {
     return this.unsupportedV4(doc, `chart ${id} on sheet ${sheet}`);
+  }
+
+  chartDataTable(doc: DocId, sheet: SheetId, id: number): Promise<ChartDataTableDto> {
+    return this.unsupportedV4(doc, `the data table of chart ${id} on sheet ${sheet}`);
   }
 
   suggestChart(doc: DocId, sheet: SheetId, _sel: RangeDto, kind: ChartKind): Promise<ChartDto> {

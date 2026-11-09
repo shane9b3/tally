@@ -102,6 +102,7 @@ fn column_chart() -> ChartDto {
         background: None,
         plot_background: None,
         include_hidden: false,
+        own_data: false,
         data_table: None,
     }
 }

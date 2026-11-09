@@ -183,10 +183,10 @@ export function ChartEditorPanel() {
 
         <Section title={t("chart.data", "Data")} open testId="chart-section-data">
           {/* View ▸ Data Table: a chart with its own data (no cell ranges) edits it here; AOO disables it for charts over cells. */}
-          {draft.dataTable ? (
+          {draft.ownData ? (
             <>
               <div className={styles.hint}>{t("chart.dataTable.ownData", "This chart holds its own data.")}</div>
-              <button type="button" className={styles.add} data-testid="chart-data-table-open" onClick={() => ctl.w5.charts.openDataTable()}>
+              <button type="button" className={styles.add} data-testid="chart-data-table-open" onClick={() => void ctl.w5.charts.openDataTable()}>
                 {t("chart.dataTable.open", "Data Table…")}
               </button>
             </>

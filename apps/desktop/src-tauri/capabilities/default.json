@@ -59,6 +59,7 @@
     "allow-user-name",
     "allow-charts",
     "allow-chart-data",
+    "allow-chart-data-table",
     "allow-suggest-chart",
     "allow-images",
     "allow-pivots",

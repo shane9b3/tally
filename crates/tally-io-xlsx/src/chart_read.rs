@@ -295,9 +295,15 @@ fn data_ref(node: Option<&Node>, names: &[String]) -> (ChartRangeData, Option<Ch
                     while v.len() <= idx {
                         v.push(String::new());
                     }
+                    // OOXML's `_xHHHH_` escapes (control characters).
                     v[idx] = pt
                         .child("v")
-                        .map(|x| x.text.chars().take(MAX_TEXT).collect())
+                        .map(|x| {
+                            crate::autofilter::decode_x_escapes(&x.text)
+                                .chars()
+                                .take(MAX_TEXT)
+                                .collect()
+                        })
                         .unwrap_or_default();
                 }
                 return (

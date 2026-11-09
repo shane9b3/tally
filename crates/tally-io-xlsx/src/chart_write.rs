@@ -60,50 +60,116 @@ thread_local! {
     static CACHE_BUDGET: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
 }
 
-thread_local! {
-    /// The literal lists of the save in progress: `(marker, xml)`.
-    static LITERALS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+/// Most bytes of literal XML (`c:numLit` / `c:strLit`) one save writes,
+/// counted once per reference (a chart's categories are named by each of
+/// its series). Past it, later category and X lists are left out and
+/// values are written empty, with a warning per chart.
+pub(crate) const MAX_LITERAL_XML_BYTES: usize = 32 * 1024 * 1024;
+
+/// The literal lists of the save in progress (the patch pass splices
+/// `xml[n]` for the placeholder `_TallyLit[n]`) and the bytes referenced.
+#[derive(Default)]
+struct Literals {
+    xml: Vec<String>,
+    bytes: usize,
+    /// Lists left out for the budget (counted for the per-chart warning).
+    dropped: u64,
 }
 
-/// Starts the cached-cell budget of a save.
+thread_local! {
+    static LITERALS: RefCell<Literals> = RefCell::new(Literals::default());
+}
+
+/// Starts the cached-cell and literal budgets of a save.
 pub(crate) fn begin_save() {
     CACHE_BUDGET.with(|b| b.set((0, 0)));
-    LITERALS.with(|l| l.borrow_mut().clear());
+    LITERALS.with(|l| *l.borrow_mut() = Literals::default());
 }
 
-/// The literal lists the save in progress wrote (for the patch pass).
-pub(crate) fn take_literals() -> Vec<(String, String)> {
-    LITERALS.with(|l| std::mem::take(&mut *l.borrow_mut()))
+/// The literal lists the save in progress wrote (for the patch pass),
+/// indexed by placeholder number.
+pub(crate) fn take_literals() -> Vec<String> {
+    LITERALS.with(|l| std::mem::take(&mut l.borrow_mut().xml))
 }
 
+fn dropped_literals() -> u64 {
+    LITERALS.with(|l| l.borrow().dropped)
+}
+
+/// Escapes element text for XML 1.0: `& < >`, and the characters XML
+/// cannot hold (C0 controls other than tab / LF / CR, U+FFFE, U+FFFF) as
+/// OOXML's `_xHHHH_`, a literal `_xHHHH_` getting its `_` escaped as
+/// `_x005F_` (rust_xlsxwriter's `escape_xml_escapes`, as Excel writes).
 fn xml_text(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(ch) = rest.chars().next() {
+        if ch == '_' && crate::autofilter::is_x_escape(rest) {
+            out.push_str("_x005F");
+        }
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '\t' | '\n' | '\r' => out.push(ch),
+            c if (c as u32) < 0x20 || c == '\u{FFFE}' || c == '\u{FFFF}' => {
+                out.push_str(&format!("_x{:04X}_", c as u32));
+            }
+            c => out.push(c),
+        }
+        rest = &rest[ch.len_utf8()..];
+    }
+    out
+}
+
+/// How a literal list is written.
+#[derive(Clone, Copy, PartialEq)]
+enum LitKind {
+    /// `c:numLit` always (`c:val`, `c:yVal`, `c:bubbleSize` are
+    /// `CT_NumDataSource`): text is parsed, non-numbers are left out.
+    Numbers,
+    /// `c:numLit` for numbers, `c:strLit` for text (`c:cat`, `c:xVal`).
+    AsStored,
+}
+
+fn num_lit(out: &mut String, n: usize, pts: impl Iterator<Item = (usize, f64)>) {
+    use std::fmt::Write as _;
+    out.push_str("<c:numLit><c:formatCode>General</c:formatCode>");
+    let _ = write!(out, r#"<c:ptCount val="{n}"/>"#);
+    for (i, x) in pts {
+        let _ = write!(out, r#"<c:pt idx="{i}"><c:v>{x}</c:v></c:pt>"#);
+    }
+    out.push_str("</c:numLit>");
 }
 
 /// `c:numLit` / `c:strLit` of a literal list.
-fn literal_xml(v: &ChartValuesData) -> String {
+fn literal_xml(v: &ChartValuesData, kind: LitKind) -> String {
+    use std::fmt::Write as _;
     let mut out = String::new();
     match v {
-        ChartValuesData::Literal(v) => {
-            out.push_str("<c:numLit><c:formatCode>General</c:formatCode>");
-            out.push_str(&format!(r#"<c:ptCount val="{}"/>"#, v.len()));
-            for (i, x) in v.iter().enumerate() {
-                if let Some(x) = x.filter(|x| x.is_finite()) {
-                    out.push_str(&format!(r#"<c:pt idx="{i}"><c:v>{x}</c:v></c:pt>"#));
-                }
-            }
-            out.push_str("</c:numLit>");
-        }
+        ChartValuesData::Literal(v) => num_lit(
+            &mut out,
+            v.len(),
+            v.iter()
+                .enumerate()
+                .filter_map(|(i, x)| x.filter(|x| x.is_finite()).map(|x| (i, x))),
+        ),
+        ChartValuesData::LiteralText(t) if kind == LitKind::Numbers => num_lit(
+            &mut out,
+            t.len(),
+            t.iter().enumerate().filter_map(|(i, x)| {
+                x.trim()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|x| x.is_finite())
+                    .map(|x| (i, x))
+            }),
+        ),
         ChartValuesData::LiteralText(t) => {
-            out.push_str(&format!(r#"<c:strLit><c:ptCount val="{}"/>"#, t.len()));
+            let _ = write!(out, r#"<c:strLit><c:ptCount val="{}"/>"#, t.len());
             for (i, x) in t.iter().enumerate() {
                 if !x.is_empty() {
-                    out.push_str(&format!(
-                        r#"<c:pt idx="{i}"><c:v>{}</c:v></c:pt>"#,
-                        xml_text(x)
-                    ));
+                    let _ = write!(out, r#"<c:pt idx="{i}"><c:v>{}</c:v></c:pt>"#, xml_text(x));
                 }
             }
             out.push_str("</c:strLit>");
@@ -112,33 +178,99 @@ fn literal_xml(v: &ChartValuesData) -> String {
     out
 }
 
-/// A placeholder reference for a literal list (replaced by the patch pass).
-fn literal_range(v: &ChartValuesData) -> ChartRange {
-    let marker = LITERALS.with(|l| {
-        let mut l = l.borrow_mut();
-        let m = format!("_TallyLit[{}]", l.len());
-        l.push((m.clone(), literal_xml(v)));
-        m
-    });
-    // `=…[…]` is passed through as written and never cached.
-    ChartRange::new_from_string(&format!("={marker}"))
+/// A registered literal list: its placeholder number and XML size.
+#[derive(Clone, Copy)]
+struct LitRef {
+    index: usize,
+    len: usize,
 }
 
-/// Replaces the placeholder references of a chart part with their
-/// literal lists.
-pub(crate) fn patch_chart_literals(xml: &str, literals: &[(String, String)]) -> String {
-    if !xml.contains("_TallyLit[") {
+/// Renders and registers a literal list (no budget cost until it is used).
+fn register_literal(v: &ChartValuesData, kind: LitKind) -> LitRef {
+    let xml = literal_xml(v, kind);
+    LITERALS.with(|l| {
+        let mut l = l.borrow_mut();
+        let len = xml.len();
+        l.xml.push(xml);
+        LitRef {
+            index: l.xml.len() - 1,
+            len,
+        }
+    })
+}
+
+/// A placeholder reference to a registered list (replaced by the patch
+/// pass), or `None` when the save's [`MAX_LITERAL_XML_BYTES`] are spent.
+fn use_literal(r: LitRef) -> Option<ChartRange> {
+    let ok = LITERALS.with(|l| {
+        let mut l = l.borrow_mut();
+        if l.bytes.saturating_add(r.len) > MAX_LITERAL_XML_BYTES {
+            l.dropped += 1;
+            false
+        } else {
+            l.bytes += r.len;
+            true
+        }
+    });
+    // `=…[…]` is passed through as written and never cached.
+    ok.then(|| ChartRange::new_from_string(&format!("=_TallyLit[{}]", r.index)))
+}
+
+/// A literal list used once: registered and referenced, `None` over budget.
+fn literal_range(v: &ChartValuesData, kind: LitKind) -> Option<ChartRange> {
+    use_literal(register_literal(v, kind))
+}
+
+/// Values over the budget: an empty `c:numLit` (the series is kept).
+fn empty_values() -> ChartRange {
+    let xml = String::from(
+        r#"<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="0"/></c:numLit>"#,
+    );
+    let index = LITERALS.with(|l| {
+        let mut l = l.borrow_mut();
+        l.xml.push(xml);
+        l.xml.len() - 1
+    });
+    ChartRange::new_from_string(&format!("=_TallyLit[{index}]"))
+}
+
+/// Replaces the placeholder references of a chart part
+/// (`<c:numRef><c:f>_TallyLit[n]</c:f></c:numRef>`, or `c:strRef`) with
+/// their literal lists in one pass: each marker is found once and its
+/// number indexes `literals`, so the cost is the part's size plus what is
+/// spliced in, whatever the number of lists of the save.
+pub(crate) fn patch_chart_literals(xml: &str, literals: &[String]) -> String {
+    const MARK: &str = "_TallyLit[";
+    const TAGS: [(&str, &str); 2] = [
+        ("<c:numRef><c:f>", "]</c:f></c:numRef>"),
+        ("<c:strRef><c:f>", "]</c:f></c:strRef>"),
+    ];
+    if !xml.contains(MARK) {
         return xml.to_string();
     }
-    let mut out = xml.to_string();
-    for (marker, lit) in literals {
-        for tag in ["c:numRef", "c:strRef"] {
-            let placeholder = format!("<{tag}><c:f>{marker}</c:f></{tag}>");
-            if out.contains(&placeholder) {
-                out = out.replace(&placeholder, lit);
-            }
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(i) = rest.find(MARK) {
+        let head = &rest[..i];
+        let after = &rest[i + MARK.len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        let lit = after[..digits]
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| literals.get(n));
+        let tag = TAGS
+            .into_iter()
+            .find(|(open, close)| head.ends_with(open) && after[digits..].starts_with(close));
+        if let (Some(lit), Some((open, close))) = (lit, tag) {
+            out.push_str(&head[..head.len() - open.len()]);
+            out.push_str(lit);
+            rest = &after[digits + close.len()..];
+        } else {
+            out.push_str(&rest[..i + MARK.len()]);
+            rest = after;
         }
     }
+    out.push_str(rest);
     out
 }
 
@@ -426,19 +558,19 @@ fn add_series(
     c: &ChartData,
     s: &ChartSeriesData,
     kind: ChartKindData,
-    categories: Option<&ChartRange>,
+    (categories, literal_categories): (Option<&ChartRange>, Option<LitRef>),
     resolver: &XlsxResolver,
     report: &mut dyn Warn,
 ) -> bool {
     let name = c.name.as_str();
     let values = match chart_range(&s.values, resolver, name, "value", report) {
         Some(v) => v,
-        // Own data: the literal values.
-        None if s.values.is_unset() && s.literal_values.is_some() => literal_range(
-            s.literal_values
-                .as_ref()
-                .unwrap_or(&ChartValuesData::Literal(Vec::new())),
-        ),
+        // Own data: the literal values (always `c:numLit`).
+        None if s.values.is_unset() && s.literal_values.is_some() => s
+            .literal_values
+            .as_ref()
+            .and_then(|v| literal_range(v, LitKind::Numbers))
+            .unwrap_or_else(empty_values),
         None => {
             if s.values.invalid {
                 report.warn(format!(
@@ -458,17 +590,18 @@ fn add_series(
             .and_then(|r| chart_range(r, resolver, name, "X", report))
         {
             ser.set_categories(&x);
-        } else if let Some(x) = s.literal_x.as_ref().filter(|_| s.x_values.is_none()) {
-            ser.set_categories(&literal_range(x));
+        } else if let Some(x) = s
+            .literal_x
+            .as_ref()
+            .filter(|_| s.x_values.is_none())
+            .and_then(|x| literal_range(x, LitKind::AsStored))
+        {
+            ser.set_categories(&x);
         }
     } else if let Some(cat) = categories {
         ser.set_categories(cat);
-    } else if let Some(cat) = c
-        .literal_categories
-        .as_ref()
-        .filter(|_| c.categories.is_none())
-    {
-        ser.set_categories(&literal_range(cat));
+    } else if let Some(cat) = literal_categories.and_then(use_literal) {
+        ser.set_categories(&cat);
     }
     match &s.name {
         Some(SeriesNameData::Ref(r)) => {
@@ -630,6 +763,13 @@ pub(crate) fn build_chart(
         .categories
         .as_ref()
         .and_then(|r| chart_range_refs(r, resolver, name, "category", report, refs));
+    // Own categories: rendered once, named by every series.
+    let literal_categories = c
+        .literal_categories
+        .as_ref()
+        .filter(|_| c.categories.is_none())
+        .map(|v| register_literal(v, LitKind::AsStored));
+    let dropped = dropped_literals();
     // Series of the main kind go into the main chart; others into one
     // combined chart per kind (Excel supports one secondary group).
     let mut series: Vec<&ChartSeriesData> = c.series.iter().take(MAX_SERIES).collect();
@@ -672,7 +812,7 @@ pub(crate) fn build_chart(
                 c,
                 s,
                 kind,
-                categories.as_ref(),
+                (categories.as_ref(), literal_categories),
                 resolver,
                 report,
             ) {
@@ -692,10 +832,24 @@ pub(crate) fn build_chart(
                     &mut other.as_mut().map(|(_, ch)| ch).unwrap_or(&mut chart)
                 }
             };
-            if add_series(target, c, s, sk, categories.as_ref(), resolver, report) {
+            if add_series(
+                target,
+                c,
+                s,
+                sk,
+                (categories.as_ref(), literal_categories),
+                resolver,
+                report,
+            ) {
                 written += 1;
             }
         }
+    }
+    if dropped_literals() > dropped {
+        report.warn(format!(
+            "chart {name:?}: part of its own data was not written (a save writes at most {} MiB of chart data lists)",
+            MAX_LITERAL_XML_BYTES / (1024 * 1024)
+        ));
     }
     if written == 0 {
         report.warn(format!(
@@ -849,4 +1003,31 @@ pub(crate) fn write_images(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn patch_splices_by_index_in_one_pass() {
+        let lits = vec!["<A/>".to_string(), "<B/>".to_string()];
+        let xml = "<c:cat><c:strRef><c:f>_TallyLit[1]</c:f></c:strRef></c:cat>\
+                   <c:val><c:numRef><c:f>_TallyLit[0]</c:f></c:numRef></c:val>\
+                   <c:val><c:numRef><c:f>_TallyLit[1]</c:f></c:numRef></c:val>\
+                   <c:f>_TallyLit[7]</c:f><c:f>_TallyLit[x]</c:f>";
+        assert_eq!(
+            patch_chart_literals(xml, &lits),
+            "<c:cat><B/></c:cat><c:val><A/></c:val><c:val><B/></c:val>\
+             <c:f>_TallyLit[7]</c:f><c:f>_TallyLit[x]</c:f>"
+        );
+        assert_eq!(patch_chart_literals("<x/>", &lits), "<x/>");
+    }
+
+    #[test]
+    fn xml_text_escapes_what_xml_cannot_hold() {
+        assert_eq!(xml_text("a\u{1}b\u{FFFF}"), "a_x0001_b_xFFFF_");
+        assert_eq!(xml_text("_x00e9_ & _x"), "_x005F_x00e9_ &amp; _x");
+        assert_eq!(xml_text("t\tn\nr\r"), "t\tn\nr\r");
+    }
 }

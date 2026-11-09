@@ -148,6 +148,7 @@ pub fn run() {
             // Wave 5 (W5-0b): docs/api.md "v0.4–v0.6"; stubs until W5-1..3.
             commands_v4::charts,
             commands_v4::chart_data,
+            commands_v4::chart_data_table,
             commands_v4::suggest_chart,
             commands_v4::images,
             commands_v4::pivots,

@@ -1199,6 +1199,7 @@ fn dependents_setup() -> (Fixture, u32) {
         background: None,
         plot_background: None,
         include_hidden: false,
+        own_data: false,
         data_table: None,
     };
     let r = f.apply(vec![

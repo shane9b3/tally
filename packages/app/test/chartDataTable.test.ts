@@ -2,8 +2,8 @@
 import type { ChartDataTableDto, ChartDto } from "@tally/bridge";
 import { describe, expect, it } from "vitest";
 import { defaultChart } from "../src/charts/chartFeatures";
-import { cellValue, dataColumns, deleteRow, deleteSeries, formatCell, headerGroups, insertRow, insertSeries, mayDeleteRow, mayMoveRowDown, moveRowDown, moveSeriesRight, parseCell, setCell, setSeriesName, showsCategories } from "../src/charts/dataTable";
-import { applyW5Op, chartDataFor, emptyW5, isOwnData } from "../src/dev/mockW5";
+import { cellValue, dataColumns, deleteRow, deleteSeries, formatCell, headerGroups, insertRow, insertSeries, mayDeleteRow, mayMoveRowDown, moveRowDown, moveSeriesRight, parseCell, sameTable, setCell, setSeriesName, showsCategories, withoutAddedColumns, withRoleColumns } from "../src/charts/dataTable";
+import { applyW5Op, chartDataFor, emptyW5, isOwnData, listedChart } from "../src/dev/mockW5";
 
 const table = (): ChartDataTableDto => ({
   categories: ["Q1", "Q2", "Q3"],
@@ -98,6 +98,29 @@ describe("edits", () => {
   });
 });
 
+describe("role columns (review 5, L1)", () => {
+  it("shows empty X / size columns the engine leaves out and drops them again while empty", () => {
+    const base: ChartDataTableDto = { categories: ["", ""], series: [{ source: 0, name: "B", values: [1, 2], x: null, sizes: null }] };
+    const c = own("bubble", base);
+    const shown = withRoleColumns(c, base);
+    expect(shown.series[0]?.x).toEqual([null, null]);
+    expect(shown.series[0]?.sizes).toEqual([null, null]);
+    expect(dataColumns(c, shown).map((x) => x.role)).toEqual(["x", "y", "size"]);
+    // Untouched: nothing to apply.
+    expect(sameTable(withoutAddedColumns(shown, base), base)).toBe(true);
+    // A Y edit keeps X absent (index X, trend line kept); typed sizes are kept.
+    const cols = dataColumns(c, shown);
+    let edited = setCell(shown, cols[1]!, 0, 9);
+    edited = setCell(edited, cols[2]!, 1, 4);
+    const out = withoutAddedColumns(edited, base);
+    expect(out.series[0]?.x).toBeNull();
+    expect(out.series[0]?.sizes).toEqual([null, 4]);
+    // A column the series had stays, even when cleared.
+    const had: ChartDataTableDto = { categories: [""], series: [{ source: 0, name: "", values: [1], x: [5] }] };
+    expect(withoutAddedColumns(setCell(had, { series: 0, role: "x" }, 0, null), had).series[0]?.x).toEqual([null]);
+  });
+});
+
 describe("numbers", () => {
   it("parses numbers, empties and the locale's decimal separator", () => {
     expect(parseCell("12.5")).toBe(12.5);
@@ -125,6 +148,9 @@ describe("mock", () => {
     expect(added.kind).toBe("handled");
     const c = x.charts[0]![0]!;
     expect(isOwnData(c)).toBe(true);
+    // The list form flags the chart and never carries the table (review 5, HIGH-1).
+    expect(listedChart(c).ownData).toBe(true);
+    expect(listedChart(c).dataTable).toBeNull();
     const next = moveSeriesRight(insertRow(c.dataTable!, 2), 0);
     expect((await applyW5Op(x, { type: "setChartDataTable", sheet: 0, id: c.id, table: next }, cells, sheets)).kind).toBe("handled");
     const after = x.charts[0]![0]!;

@@ -51,6 +51,7 @@ import type { AutocompleteDto } from "./generated/AutocompleteDto";
 import type { CalcSettingsDto } from "./generated/CalcSettingsDto";
 import type { CellStyleDto } from "./generated/CellStyleDto";
 import type { ChartDataDto } from "./generated/ChartDataDto";
+import type { ChartDataTableDto } from "./generated/ChartDataTableDto";
 import type { ChartDto } from "./generated/ChartDto";
 import type { ChartKind } from "./generated/ChartKind";
 import type { ChartSvgDto } from "./generated/ChartSvgDto";
@@ -211,7 +212,7 @@ export interface EngineClientV3 extends EngineClientV2 {
  * calculation settings, the solver and the detective. The mutations are
  * `Op`s applied through `apply`; these are the queries. The engine's
  * defaults answer `unsupported` until each work package lands. Tauri
- * commands: `charts`, `chart_data`, `suggest_chart`, `images`, `pivots`,
+ * commands: `charts`, `chart_data`, `chart_data_table`, `suggest_chart`, `images`, `pivots`,
  * `pivot_field_items`, `pivot_at`, `autocomplete`, `cell_styles`,
  * `scenarios`, `database_ranges`, `navigator`, `document_statistics`,
  * `print_layout`, `page_breaks`, `prepare_print_job`,
@@ -223,6 +224,8 @@ export interface EngineClientV4 extends EngineClientV3 {
   charts(doc: DocId, sheet: SheetId): Promise<ChartDto[]>;
   /** The resolved data of a chart (cached values, no recalc). */
   chartData(doc: DocId, sheet: SheetId, id: number): Promise<ChartDataDto>;
+  /** The own data of a chart that reads no cells (refused for charts over cells and over-large tables). */
+  chartDataTable(doc: DocId, sheet: SheetId, id: number): Promise<ChartDataTableDto>;
   /** A chart proposal for a selection (nothing is added). */
   suggestChart(doc: DocId, sheet: SheetId, sel: RangeDto, kind: ChartKind): Promise<ChartDto>;
   /** The pictures of a sheet (without their bytes). */

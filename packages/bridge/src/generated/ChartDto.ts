@@ -115,11 +115,17 @@ plotBackground: number | null,
  */
 includeHidden: boolean, 
 /**
- * The chart's own data (AOO's internal data provider: a chart
- * without any cell range, from a file whose chart carries its data
- * or a chart pasted from another document). Absent for charts over
- * cells. On add it supplies the literal data of a chart without
- * ranges (a pasted copy); `UpdateChart` ignores it (the Chart Data
- * Table dialog uses `SetChartDataTable`).
+ * `true` when the chart reads no cell at all and holds its own data
+ * (AOO's internal data provider: a chart from a file whose chart
+ * carries its data, or one pasted from another document). Output
+ * only; the data itself comes from `chart_data_table`.
+ */
+ownData: boolean, 
+/**
+ * Input only: on `AddChart` the literal data of a chart without
+ * ranges (a pasted copy, read with `chart_data_table` when it was
+ * copied). `charts` never fills it (a table can be large; the
+ * Chart Data Table dialog asks for it) and `UpdateChart` ignores it
+ * (the dialog uses `SetChartDataTable`).
  */
 dataTable?: ChartDataTableDto | null, };

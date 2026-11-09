@@ -50,6 +50,7 @@ export function defaultChart(sheetName: string, range: RangeDto, kind: ChartKind
     background: null,
     plotBackground: null,
     includeHidden: false,
+    ownData: false,
   };
 }
 
@@ -131,21 +132,30 @@ export class ChartFeatures {
    * `hasInternalDataProvider`). Charts over cells edit their cells.
    */
   canEditDataTable(): boolean {
-    return !!this.selected?.dataTable;
+    return !!this.selected?.ownData;
   }
 
-  /** Opens the Chart Data Table dialog for the selected chart. */
-  openDataTable(): void {
+  /**
+   * Opens the Chart Data Table dialog for the selected chart. The table is
+   * read now (`chart_data_table`; never part of the chart list, which is
+   * refreshed often); the engine refuses one too large to edit.
+   */
+  async openDataTable(): Promise<void> {
     const c = this.selected;
     if (!c) {
       this.toast("info", t("chart.selectFirst", "Select a chart first (click it)."));
       return;
     }
-    if (!c.dataTable) {
+    if (!c.ownData) {
       this.toast("info", t("chart.dataTable.fromCells", "This chart takes its data from cells: edit the cells instead."));
       return;
     }
-    useChartStore.getState().setDataTable(c.id);
+    try {
+      const table = await clientV4(this.ctl).chartDataTable(this.ctl.requireDoc(), this.ctl.sheet, c.id);
+      useChartStore.getState().setDataTable({ id: c.id, table });
+    } catch (e) {
+      this.ctl.notifyError(e);
+    }
   }
 
   closeDataTable(): void {
@@ -178,7 +188,16 @@ export class ChartFeatures {
   async copySelected(): Promise<boolean> {
     const c = this.selected;
     if (!c) return false;
-    useChartStore.getState().setClipboard(structuredClone(c));
+    const copy = structuredClone(c);
+    if (c.ownData) {
+      // The copy carries the chart's own data (read now; the list never holds it).
+      try {
+        copy.dataTable = await clientV4(this.ctl).chartDataTable(this.ctl.requireDoc(), this.ctl.sheet, c.id);
+      } catch (e) {
+        this.ctl.notifyError(e);
+      }
+    }
+    useChartStore.getState().setClipboard(copy);
     await this.copyAsImage(false);
     return true;
   }

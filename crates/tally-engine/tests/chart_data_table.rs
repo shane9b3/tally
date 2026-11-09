@@ -1,7 +1,8 @@
 //! The Chart Data Table (T18; AOO 4.1 View ▸ Data Table,
 //! `chart2/source/controller/dialogs/DataBrowserModel.cxx`): charts that
-//! read no cells carry their own data, `charts()` hands it out as
-//! `data_table`, `SetChartDataTable` replaces it as one undo step (rows
+//! read no cells carry their own data, `charts()` flags them (`own_data`)
+//! and `chart_data_table` hands the table out (capped),
+//! `SetChartDataTable` replaces it as one undo step (rows
 //! and series inserted, deleted and moved, formatting following its
 //! series), charts over cells refuse it, and the edited data survive an
 //! ODS save.
@@ -94,6 +95,7 @@ fn chart(
         background: None,
         plot_background: None,
         include_hidden: false,
+        own_data: false,
         data_table: table,
     }
 }
@@ -145,6 +147,10 @@ fn dto(f: &Fixture, id: u32) -> ChartDto {
         .unwrap()
 }
 
+fn own_table(f: &Fixture, id: u32) -> ChartDataTableDto {
+    f.svc.chart_data_table(f.doc, f.sheet, id).unwrap()
+}
+
 fn set(f: &mut Fixture, id: u32, t: ChartDataTableDto) -> tally_api::ApplyResult {
     let s = f.sheet;
     f.apply(vec![Op::SetChartDataTable {
@@ -159,9 +165,10 @@ fn own_data_is_handed_out_and_drawn() {
     let mut f = Fixture::new();
     let id = own_chart(&mut f);
     let c = dto(&f, id);
-    let t = c
-        .data_table
-        .expect("a chart without ranges has its own data");
+    // The list flags the chart; the table is a separate query.
+    assert!(c.own_data);
+    assert!(c.data_table.is_none());
+    let t = own_table(&f, id);
     assert_eq!(t.categories, ["Q1", "Q2", "Q3"]);
     assert_eq!(t.series[0].name, "North");
     assert_eq!(t.series[1].source, Some(1));
@@ -200,7 +207,7 @@ fn rows_and_series_are_edited_in_one_undo_step() {
         [Some(4.0), Some(4.5), Some(5.0), Some(60.0)]
     );
     let after = dto(&f, id);
-    assert_eq!(after.data_table.as_ref().unwrap().categories, t.categories);
+    assert_eq!(own_table(&f, id).categories, t.categories);
     // The new series has default formatting; South kept its own.
     assert_eq!(after.series[0].color, None);
     assert_eq!(after.series[1].color, None);
@@ -226,7 +233,7 @@ fn moving_a_series_takes_its_formatting_along() {
     assert!(set(&mut f, id, t).errors.is_empty());
     let c = dto(&f, id);
     assert_eq!(c.series[1].color, Some(0xff0000ff));
-    assert_eq!(c.data_table.unwrap().series[1].name, "North");
+    assert_eq!(own_table(&f, id).series[1].name, "North");
     // Move Row Down: Q1 after Q2.
     let t = table(
         &["Q2", "Q1", "Q3"],
@@ -271,7 +278,12 @@ fn bad_tables_and_charts_over_cells_are_refused() {
         ),
     }]);
     let cell_chart = res.created.unwrap()[0].id;
-    assert!(dto(&f, cell_chart).data_table.is_none());
+    assert!(!dto(&f, cell_chart).own_data);
+    let err = f
+        .svc
+        .chart_data_table(f.doc, f.sheet, cell_chart)
+        .unwrap_err();
+    assert_eq!(err.code, "invalid_argument");
     let res = set(
         &mut f,
         cell_chart,
@@ -293,7 +305,7 @@ fn scatter_x_values_and_a_name_ref_free_chart() {
     assert!(res.errors.is_empty(), "{:?}", res.errors);
     let id = res.created.unwrap()[0].id;
     let c = dto(&f, id);
-    let got = c.data_table.unwrap();
+    let got = own_table(&f, id);
     assert_eq!(got.series[0].x, Some(vec![Some(1.0), Some(2.0)]));
     // All-empty categories are not kept.
     assert_eq!(got.categories, ["", ""]);
@@ -341,11 +353,77 @@ fn edited_own_data_survive_an_ods_save() {
     let wb = tally_engine::Workbook::from_data(&back);
     let sheet = wb.sheets[0].id;
     let chart = wb.sheets[0].meta.charts[0].clone();
-    let got = tally_engine::charts::to_api(&wb, sheet, &chart)
-        .data_table
-        .unwrap();
+    assert!(tally_engine::charts::to_api(&wb, sheet, &chart).own_data);
+    let got = tally_engine::charts::data_table_of(&chart.data).unwrap();
     assert_eq!(got.categories, t.categories);
     assert_eq!(got.series[0].values, t.series[0].values);
     assert_eq!(got.series[1].name, "South");
     assert_eq!(chart.data.series[0].color, Some(0xff0000ff));
+}
+
+/// Review 5 (HIGH-1): a file can hold thousands of literal categories next
+/// to hundreds of empty series. The list never carries a table, and the
+/// padded table is refused above `MAX_DATA_TABLE_CELLS` instead of built.
+#[test]
+fn huge_padded_tables_are_refused_and_never_listed() {
+    use tally_model::{ChartData, ChartSeriesData, ChartValuesData};
+    let mut c = ChartData {
+        literal_categories: Some(ChartValuesData::LiteralText(vec!["c".into(); 32_000])),
+        series: (0..255)
+            .map(|_| ChartSeriesData {
+                literal_values: Some(ChartValuesData::Literal(Vec::new())),
+                ..ChartSeriesData::default()
+            })
+            .collect(),
+        ..ChartData::default()
+    };
+    assert!(c.has_own_data());
+    let err = tally_engine::charts::data_table_of(&c).unwrap_err();
+    assert_eq!(err.code, "invalid_argument");
+    assert!(err.message.contains("too large"), "{}", err.message);
+    // Under the cap it is handed out, padded; absent X / size columns are not.
+    c.series.truncate(20);
+    let t = tally_engine::charts::data_table_of(&c).unwrap();
+    assert_eq!(t.series.len(), 20);
+    assert!(t
+        .series
+        .iter()
+        .all(|s| s.values.len() == 32_000 && s.x.is_none() && s.sizes.is_none()));
+}
+
+/// Review 5 (L1): an XY series without X values keeps none after an edit
+/// (X stays the index, the trend line stays), unless X values are typed.
+#[test]
+fn absent_x_values_stay_absent_after_an_edit() {
+    let mut f = Fixture::new();
+    let t = table(&["", ""], vec![col(Some(0), "Y", &[Some(2.0), Some(4.0)])]);
+    let s = f.sheet;
+    let mut sc = series("", None);
+    sc.trend = Some(tally_api::TrendLineDto {
+        kind: tally_api::TrendKind::Linear,
+        show_equation: false,
+        show_r2: false,
+        name: None,
+    });
+    let res = f.apply(vec![Op::AddChart {
+        sheet: s,
+        chart: chart(ChartKind::Scatter, vec![sc], Some(t)),
+    }]);
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let id = res.created.unwrap()[0].id;
+    assert_eq!(own_table(&f, id).series[0].x, None);
+    // The dialog shows an empty X column and sends it back unchanged.
+    let mut t = own_table(&f, id);
+    t.series[0].values[1] = Some(5.0);
+    t.series[0].x = Some(vec![None, None]);
+    assert!(set(&mut f, id, t).errors.is_empty());
+    assert_eq!(own_table(&f, id).series[0].x, None);
+    let d = f.svc.chart_data(f.doc, f.sheet, id).unwrap();
+    assert_eq!(d.series[0].x, None);
+    assert!(d.series[0].trend.is_some(), "the trend line is kept");
+    // Typed X values are kept.
+    let mut t = own_table(&f, id);
+    t.series[0].x = Some(vec![Some(1.0), None]);
+    assert!(set(&mut f, id, t).errors.is_empty());
+    assert_eq!(own_table(&f, id).series[0].x, Some(vec![Some(1.0), None]));
 }

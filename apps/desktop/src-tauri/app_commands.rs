@@ -52,6 +52,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "user_name",
     "charts",
     "chart_data",
+    "chart_data_table",
     "suggest_chart",
     "images",
     "pivots",

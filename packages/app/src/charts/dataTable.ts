@@ -228,6 +228,39 @@ export function headerGroups(cols: readonly DataColumn[]): { series: number; sta
   return out;
 }
 
+/**
+ * The table as the dialog shows it: the engine sends X and size columns
+ * only where a series has them; AOO shows them for every XY / bubble
+ * series, so empty ones are added here.
+ */
+export function withRoleColumns(chart: Pick<ChartDto, "kind" | "series">, t: ChartDataTableDto): ChartDataTableDto {
+  const rows = rowCount(t);
+  const empty = (): (number | null)[] => Array.from({ length: rows }, () => null);
+  return {
+    categories: t.categories,
+    series: t.series.map((s) => {
+      const kind = (s.source != null ? chart.series[s.source]?.kind : null) ?? chart.kind;
+      return { ...s, x: s.x ?? (isXy(kind) ? empty() : null), sizes: s.sizes ?? (kind === "bubble" ? empty() : null) };
+    }),
+  };
+}
+
+/**
+ * Undoes [`withRoleColumns`] for the result: an X or size column that the
+ * series (by `source`) did not have in `base` and that is still empty is
+ * left out again, so the chart keeps index X values (and its trend line).
+ */
+export function withoutAddedColumns(t: ChartDataTableDto, base: ChartDataTableDto): ChartDataTableDto {
+  const blank = (v: (number | null)[] | null | undefined): boolean => !!v && v.every((x) => x === null);
+  return {
+    categories: t.categories,
+    series: t.series.map((s) => {
+      const was = s.source != null ? base.series[s.source] : undefined;
+      return { ...s, x: !was?.x && blank(s.x) ? null : s.x, sizes: !was?.sizes && blank(s.sizes) ? null : s.sizes };
+    }),
+  };
+}
+
 /** Whether two tables hold the same data. */
 export function sameTable(a: ChartDataTableDto, b: ChartDataTableDto): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
