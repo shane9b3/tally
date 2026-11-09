@@ -88,6 +88,33 @@ fn unpaid_total(view: &[CellView]) -> f64 {
 }
 
 #[test]
+fn undo_depth_applies_to_every_open_document() -> CmdResult<()> {
+    let st = state();
+    let a = new_workbook(&st, None)?;
+    let b = new_workbook(&st, None)?;
+    for i in 0..6 {
+        set(&st, &a, 0, 0, &i.to_string())?;
+        set(&st, &b, 0, 0, &i.to_string())?;
+    }
+    st.set_undo_depth(4)?;
+    for info in [&a, &b] {
+        let h = with_doc(&st, info.doc, |s| s.undo_history(info.doc))?;
+        assert_eq!(h.undo.len(), 4);
+    }
+    // Documents created later take it too.
+    let c = new_workbook(&st, None)?;
+    for i in 0..6 {
+        set(&st, &c, 0, 0, &i.to_string())?;
+    }
+    let h = with_doc(&st, c.doc, |s| s.undo_history(c.doc))?;
+    assert_eq!(h.undo, vec!["Typing"; 4]);
+    let r = with_doc(&st, c.doc, |s| s.undo_steps(c.doc, 3))?;
+    assert_eq!(r.undo.redo_label.as_deref(), Some("Typing"));
+    assert!(st.set_undo_depth(0).is_err());
+    Ok(())
+}
+
+#[test]
 fn templates_are_listed_by_engine_id() -> CmdResult<()> {
     let list = files::list_templates();
     let ids: Vec<(&str, &str)> = list

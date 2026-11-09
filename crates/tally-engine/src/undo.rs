@@ -11,8 +11,12 @@ use tally_types::{CellAddr, CellRange, SheetId, MAX_ROWS};
 use crate::storage::{CellContent, ColumnStore, DimRuns, MetaKind, MetaPart, Sheet, StyleId};
 use crate::workbook::{SnapContent, Workbook};
 
-/// Undo stack depth (the OOo default).
+/// Default undo depth (AOO Tools ▸ Options ▸ OpenOffice ▸ Memory ▸ Undo
+/// "Number of steps", `ED_UNDO` in `cui/source/options/optmemory.src`).
 pub const UNDO_DEPTH: usize = 100;
+
+/// Range of the undo depth setting (`ED_UNDO`: 1–1000).
+pub const UNDO_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 1..=1000;
 
 /// Style runs `(first row, last row, style)` of one column.
 pub type ColumnRuns = (u32, Vec<(u32, u32, StyleId)>);
@@ -222,21 +226,68 @@ pub struct UndoRecord {
     pub changes: Vec<Change>,
 }
 
-/// Undo and redo stacks.
-#[derive(Clone, Debug, Default)]
+/// Undo and redo stacks, holding at most `depth` steps together (AOO keeps
+/// undo and redo actions in one array of `nMaxUndoActions`,
+/// `svl/source/undo/undo.cxx`).
+#[derive(Clone, Debug)]
 pub struct UndoStack {
     undo: Vec<UndoRecord>,
     redo: Vec<UndoRecord>,
+    depth: usize,
+}
+
+impl Default for UndoStack {
+    fn default() -> Self {
+        Self {
+            undo: Vec::new(),
+            redo: Vec::new(),
+            depth: UNDO_DEPTH,
+        }
+    }
 }
 
 impl UndoStack {
-    /// Pushes a new step and clears redo.
+    /// Pushes a new step and clears redo; the oldest steps beyond the
+    /// depth are dropped (`SfxUndoManager::ImplAddUndoAction_NoNotify`).
     pub fn push(&mut self, rec: UndoRecord) {
-        self.undo.push(rec);
-        if self.undo.len() > UNDO_DEPTH {
-            self.undo.remove(0);
-        }
         self.redo.clear();
+        self.undo.push(rec);
+        self.trim_oldest();
+    }
+
+    fn trim_oldest(&mut self) {
+        let over = (self.undo.len() + self.redo.len()).saturating_sub(self.depth);
+        let over = over.min(self.undo.len());
+        if over > 0 {
+            self.undo.drain(..over);
+        }
+    }
+
+    /// The depth (1–1000).
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// Sets the depth (clamped to [`UNDO_DEPTH_RANGE`]). When the stacks
+    /// hold more steps, AOO's `SfxUndoManager::SetMaxUndoActionCount`
+    /// removes alternately the redo step farthest from the current state
+    /// and the oldest undo step until they fit.
+    pub fn set_depth(&mut self, depth: usize) {
+        let depth = depth.clamp(*UNDO_DEPTH_RANGE.start(), *UNDO_DEPTH_RANGE.end());
+        self.depth = depth;
+        let mut over = (self.undo.len() + self.redo.len()).saturating_sub(depth);
+        while over > 0 {
+            if !self.redo.is_empty() {
+                // The redo stack pops its next step from the end: the
+                // farthest one is first.
+                self.redo.remove(0);
+                over -= 1;
+            }
+            if over > 0 && !self.undo.is_empty() {
+                self.undo.remove(0);
+                over -= 1;
+            }
+        }
     }
 
     /// Pops the next undo step.
@@ -252,9 +303,7 @@ impl UndoStack {
     /// Pushes onto undo without clearing redo (after a redo).
     pub fn push_undo_keep_redo(&mut self, rec: UndoRecord) {
         self.undo.push(rec);
-        if self.undo.len() > UNDO_DEPTH {
-            self.undo.remove(0);
-        }
+        self.trim_oldest();
     }
 
     /// Pushes onto redo (after an undo).
@@ -272,9 +321,32 @@ impl UndoStack {
         }
     }
 
+    /// The labels of the undo and redo steps, next one first (AOO's
+    /// `SID_GETUNDOSTRINGS` / `SID_GETREDOSTRINGS`, `ScTabViewShell::
+    /// GetUndoState`); a step without a label gets an empty string. At
+    /// most `limit` of each.
+    pub fn history(&self, limit: usize) -> tally_api::UndoHistory {
+        let labels = |v: &[UndoRecord]| {
+            v.iter()
+                .rev()
+                .take(limit)
+                .map(|r| r.label.clone().unwrap_or_default())
+                .collect()
+        };
+        tally_api::UndoHistory {
+            undo: labels(&self.undo),
+            redo: labels(&self.redo),
+        }
+    }
+
     /// Number of undo steps.
     pub fn undo_len(&self) -> usize {
         self.undo.len()
+    }
+
+    /// Number of redo steps.
+    pub fn redo_len(&self) -> usize {
+        self.redo.len()
     }
 
     /// The undo records, oldest first (tests inspect what they hold).

@@ -1,0 +1,83 @@
+/* The Undo / Redo split buttons' arrow and their history list. */
+
+.arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 30px;
+  padding: 0;
+  margin-left: -4px;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-pill);
+  background: var(--tally-bg);
+  color: var(--tally-gray-500);
+  cursor: default;
+  box-shadow: var(--tally-shadow-pill);
+}
+
+.arrow:hover:not([aria-disabled="true"]) {
+  background: var(--tally-hover);
+  border-color: var(--tally-border);
+  color: var(--tally-text);
+}
+
+.arrow:focus-visible {
+  outline: 2px solid var(--tally-accent);
+  outline-offset: 1px;
+}
+
+.arrow[aria-disabled="true"] {
+  color: var(--tally-text-disabled);
+  opacity: 0.7;
+}
+
+.popup {
+  position: fixed;
+  z-index: 50;
+  width: 260px;
+  padding: 4px;
+  background: var(--tally-bg);
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: var(--tally-radius-card);
+  box-shadow: var(--tally-shadow-pop);
+  display: flex;
+  flex-direction: column;
+}
+
+.list {
+  max-height: 320px;
+  overflow-y: auto;
+  border-radius: 6px;
+  outline: none;
+}
+
+.list:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--tally-accent);
+}
+
+.option {
+  height: 26px;
+  padding: 0 8px;
+  line-height: 26px;
+  border-radius: 4px;
+  color: var(--tally-text);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+.marked {
+  background: var(--tally-accent-subtle);
+}
+
+.footer {
+  margin-top: 4px;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--tally-border-subtle);
+  color: var(--tally-text-muted);
+  font-size: 12px;
+  text-align: center;
+}

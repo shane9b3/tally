@@ -355,6 +355,10 @@ registered command. The shell-only `wb_export_pdf` and `wb_print` take a job id.
 | `detective` | `doc, sheet, r, c, action` | `DetectiveState` | `detective(doc, sheet, r, c, action)` | `detective(doc, sheet, r, c, action)` |
 | `detective_arrows` | `doc, sheet` | `DetectiveState` | `detective_arrows(doc, sheet)` | `detectiveArrows(doc, sheet)` |
 | `set_detective_auto` | `doc, on` | `()` | `set_detective_auto(doc, on)` | `setDetectiveAuto(doc, on)` |
+| `undo_steps` | `doc, count` | `ApplyResult` (the toolbar Undo list: `count` steps undone as one user action, one recalc; fewer when there are fewer, 0 is a no-op; AOO `SID_UNDO` with a count) | `undo_steps(doc, count)` | `undoSteps(doc, count)` |
+| `redo_steps` | `doc, count` | `ApplyResult` (the toolbar Redo list) | `redo_steps(doc, count)` | `redoSteps(doc, count)` |
+| `undo_history` | `doc` | `UndoHistory` (`{ undo, redo }`: the step labels, next one first; `""` for a step without a label) | `undo_history(doc)` | `undoHistory(doc)` |
+| `set_undo_depth` | `depth` | `()` (Tools ▸ Options ▸ Memory ▸ Undo "Number of steps", 1–1000, default 100; an app setting applied to every open document at once, a lower depth drops alternately the farthest redo and the oldest undo step as AOO's `SetMaxUndoActionCount`; `invalid_argument` outside 1–1000) | `EngineService::set_undo_depth(depth)` (shell: `AppState::set_undo_depth`) | `setUndoDepth(depth)` |
 | `view_options` | `doc, sheet` | `ViewOptionsDto` (toggles plus the persisted `split`, `null` when not split) | `view_options(doc, sheet)` | `viewOptions(doc, sheet)` |
 | `invalid_cells` | `doc, sheet, range?: RangeDto` | `CellPos[]` (Mark Invalid Data; ≤ 10,000 cells, row-major, the validation work budget applies; nothing changes) | `invalid_cells(doc, sheet, range)` | `invalidCells(doc, sheet, range)` |
 | `image_data` | `doc, sheet, id` | `string` (base64; pictures from files come without `data` in `images`) | `image_data(doc, sheet, id)` | `imageData(doc, sheet, id)` |

@@ -466,50 +466,66 @@ impl Document {
 
     /// Undoes the last step (a no-op result when there is none).
     pub fn undo(&mut self) -> ApplyResult {
-        let mut fx = Effects::default();
-        let Some(rec) = self.undo.pop_undo() else {
-            let report = recalc(&mut self.wb);
-            return self.result(report, fx, Vec::new(), None);
-        };
-        let mut redo = Vec::with_capacity(rec.changes.len());
-        for ch in rec.changes.into_iter().rev() {
-            if let Some(inv) = apply_change(&mut self.wb, ch, &mut fx) {
-                redo.push(inv);
-            }
-        }
-        let report = self.recalc_and_filter(&mut fx);
-        let selection = rec.selection_before.clone();
-        self.undo.push_redo(UndoRecord {
-            label: rec.label,
-            selection_before: rec.selection_before,
-            selection_after: rec.selection_after,
-            changes: redo,
-        });
-        self.dirty = true;
-        self.result(report, fx, Vec::new(), selection)
+        self.undo_steps(1)
     }
 
     /// Redoes the last undone step.
     pub fn redo(&mut self) -> ApplyResult {
+        self.redo_steps(1)
+    }
+
+    /// Undoes the last `count` steps as one user action: one recalc and one
+    /// result, whose selection is the one before the oldest step undone
+    /// (AOO `ScTabViewShell::ExecuteUndo` loops `Undo()` under one paint
+    /// lock). Stops early when the stack runs out; a no-op result when
+    /// nothing is undone.
+    pub fn undo_steps(&mut self, count: u32) -> ApplyResult {
+        self.step(count, true)
+    }
+
+    /// Redoes the next `count` undone steps as one user action (the
+    /// selection is the one after the last step redone).
+    pub fn redo_steps(&mut self, count: u32) -> ApplyResult {
+        self.step(count, false)
+    }
+
+    fn step(&mut self, count: u32, undo: bool) -> ApplyResult {
         let mut fx = Effects::default();
-        let Some(rec) = self.undo.pop_redo() else {
+        let mut selection = None;
+        let mut done = 0u32;
+        while done < count {
+            let rec = if undo {
+                self.undo.pop_undo()
+            } else {
+                self.undo.pop_redo()
+            };
+            let Some(rec) = rec else { break };
+            let mut inverse = Vec::with_capacity(rec.changes.len());
+            for ch in rec.changes.into_iter().rev() {
+                if let Some(inv) = apply_change(&mut self.wb, ch, &mut fx) {
+                    inverse.push(inv);
+                }
+            }
+            let back = UndoRecord {
+                label: rec.label,
+                selection_before: rec.selection_before,
+                selection_after: rec.selection_after,
+                changes: inverse,
+            };
+            if undo {
+                selection = back.selection_before.clone();
+                self.undo.push_redo(back);
+            } else {
+                selection = back.selection_after.clone();
+                self.undo.push_undo_keep_redo(back);
+            }
+            done += 1;
+        }
+        if done == 0 {
             let report = recalc(&mut self.wb);
             return self.result(report, fx, Vec::new(), None);
-        };
-        let mut undo = Vec::with_capacity(rec.changes.len());
-        for ch in rec.changes.into_iter().rev() {
-            if let Some(inv) = apply_change(&mut self.wb, ch, &mut fx) {
-                undo.push(inv);
-            }
         }
         let report = self.recalc_and_filter(&mut fx);
-        let selection = rec.selection_after.clone();
-        self.undo.push_undo_keep_redo(UndoRecord {
-            label: rec.label,
-            selection_before: rec.selection_before,
-            selection_after: rec.selection_after,
-            changes: undo,
-        });
         self.dirty = true;
         self.result(report, fx, Vec::new(), selection)
     }

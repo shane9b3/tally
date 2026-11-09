@@ -30,6 +30,7 @@ real-file corpus).
 
 - Read-only mode and AOO lock files (2026-11-02): `.~lock.<name>#` read and written in AOO 4.1's format (`apps/desktop/src-tauri/src/doclock.rs`), "Document in Use" prompts, File ▸ Open Read-Only…, unwritable / Finder-locked files and ODS `LoadReadonly` open read-only, Edit ▸ Edit Mode (⇧⌘M), info bar, " (read-only)" title, engine-level `read_only` refusal. Owner's native checks: docs/qa/read-only-manual.md.
 - Chart axes at AOO 4.1 parity (2026-11-06, T18): date axis (Scale ▸ Type Automatic / Text / Date, resolution, major / minor interval; AOO's automatic date axis over date categories, gaps for missing dates, labels in the cells' format) and Positioning (cross other axis at Start / End / Value / Category, label and mark placement), ODS and XLSX round trip.
+- Undo depth and history lists (2026-11-09, U17): Tools ▸ Options ▸ Memory ▸ Undo "Number of steps" (1–1000, default 100; app pref `undoSteps`, `set_undo_depth` applies it to every open document, trimming like AOO's `SetMaxUndoActionCount`); toolbar Undo / Redo split buttons with history lists (`undo_history`, `undo_steps` / `redo_steps`: n steps as one action, one recalc). Pivot undo byte budget still open.
 
 ## Known gaps / follow-ups
 - Read-only mode: needs the owner's side-by-side check with OpenOffice (docs/qa/read-only-manual.md); Windows/Linux lock behaviour untested; no Properties ▸ Security tab to set `LoadReadonly`; Save As onto our own lock held elsewhere is refused (AOO offers Retry / Save); see docs/parity-deviations.md U28, X25.
@@ -58,7 +59,7 @@ real-file corpus).
 - Perf (docs/perf-baseline.md hot spots 3–5): 50 MB XLSX/ODS open peaks at 0.9–1.1 GB RSS (was 1.4–1.6 GB; further cuts need a block column store and a compact formula-cell table); CSV import 1M rows in ~1.2 s (was 7.6 s); grid fling drops frames in headless Chromium — re-measure in the Tauri webview.
 - Not built yet from the plan: multithreaded recalc, auto-update (tauri-plugin-updater), opt-in crash reporting.
 - Inventory gaps found 2026-10-27 (docs/calc-features-inventory.md 1.0 status; deviation IDs in docs/parity-deviations.md). Sizes: S < 1 day, M a few days, L a week or more.
-  - Sheets and view: read-only mode (done 2026-11-02, see below); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, M).
+  - Sheets and view: read-only mode (done 2026-11-02, see below); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, done 2026-11-09, see below).
   - Fill: Ctrl-drag copies, filtered ranges copy (T16, done 2026-11-09, see below).
   - Formatting: Hide all / Hide when printing (G15, done 2026-11-06); `[NatNum]` / `[DBNum]` / calendar modifiers rendered (G7, L); Load Styles from another document (M).
   - Data: DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M).

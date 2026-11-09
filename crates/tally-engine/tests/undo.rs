@@ -253,9 +253,24 @@ fn undo_restores_selection_and_labels() {
     assert!(r2.version > u.version);
 }
 
+/// Applies `input` with an undo label.
+fn labelled(f: &mut Fixture, cell: &str, text: &str, label: &str) {
+    let s = f.sheet;
+    let tx = tally_api::Transaction {
+        ops: vec![input(s, cell, text)],
+        label: Some(label.into()),
+        selection_before: Some(sel(s, cell)),
+        selection_after: Some(sel(s, cell)),
+        group: None,
+    };
+    let r = f.svc.apply(f.doc, tx).unwrap();
+    assert!(r.errors.is_empty());
+}
+
 #[test]
-fn undo_depth_is_100() {
+fn undo_depth_defaults_to_100() {
     let mut f = Fixture::new();
+    assert_eq!(f.svc.undo_depth(), 100);
     for i in 0..120 {
         f.set("A1", &i.to_string());
     }
@@ -266,6 +281,150 @@ fn undo_depth_is_100() {
     }
     assert_eq!(n, 100);
     assert_eq!(f.value("A1"), Value::Number(19.0));
+}
+
+#[test]
+fn undo_depth_setting_limits_new_steps() {
+    let mut f = Fixture::new();
+    f.svc.set_undo_depth(5).unwrap();
+    for i in 0..9 {
+        f.set("A1", &i.to_string());
+    }
+    let h = f.svc.undo_history(f.doc).unwrap();
+    assert_eq!(h.undo.len(), 5);
+    let r = f.svc.undo_steps(f.doc, 1000).unwrap();
+    assert!(!r.undo.can_undo);
+    assert_eq!(f.value("A1"), Value::Number(3.0));
+    // Undo + redo together stay within the depth: a new step after undoing
+    // drops the redo steps first.
+    assert_eq!(f.svc.undo_history(f.doc).unwrap().redo.len(), 5);
+    assert_eq!(
+        f.svc.set_undo_depth(0).unwrap_err().code,
+        "invalid_argument"
+    );
+    assert_eq!(
+        f.svc.set_undo_depth(1001).unwrap_err().code,
+        "invalid_argument"
+    );
+    f.svc.set_undo_depth(1000).unwrap();
+    for i in 0..1100 {
+        f.set("B1", &i.to_string());
+    }
+    assert_eq!(f.svc.undo_history(f.doc).unwrap().undo.len(), 1000);
+}
+
+#[test]
+fn lowering_undo_depth_trims_like_aoo() {
+    // `SfxUndoManager::SetMaxUndoActionCount`: alternately the farthest
+    // redo step and the oldest undo step go until both fit.
+    let mut f = Fixture::new();
+    for i in 0..10 {
+        labelled(&mut f, "A1", &i.to_string(), &format!("step {i}"));
+    }
+    f.svc.undo_steps(f.doc, 3).unwrap();
+    // Undo: step 6 .. step 0; redo: step 7, 8, 9.
+    f.svc.set_undo_depth(6).unwrap();
+    let h = f.svc.undo_history(f.doc).unwrap();
+    // Four removed: redo 9, undo 0, redo 8, undo 1.
+    assert_eq!(
+        h.undo,
+        vec!["step 6", "step 5", "step 4", "step 3", "step 2"]
+    );
+    assert_eq!(h.redo, vec!["step 7"]);
+    // Only undo steps left: the oldest go.
+    f.svc.redo(f.doc).unwrap();
+    f.svc.set_undo_depth(2).unwrap();
+    let h = f.svc.undo_history(f.doc).unwrap();
+    assert_eq!(h.undo, vec!["step 7", "step 6"]);
+    assert!(h.redo.is_empty());
+    assert_eq!(f.value("A1"), Value::Number(7.0));
+    // Only redo steps left: the farthest go.
+    f.svc.undo_steps(f.doc, 2).unwrap();
+    f.svc.set_undo_depth(1).unwrap();
+    let h = f.svc.undo_history(f.doc).unwrap();
+    assert!(h.undo.is_empty());
+    assert_eq!(h.redo, vec!["step 6"]);
+    f.svc.redo(f.doc).unwrap();
+    assert_eq!(f.value("A1"), Value::Number(6.0));
+}
+
+#[test]
+fn undo_depth_reaches_documents_of_other_forks() {
+    let mut f = Fixture::new();
+    for i in 0..8 {
+        f.set("A1", &i.to_string());
+    }
+    let mut other = f.svc.fork();
+    other.set_undo_depth(3).unwrap();
+    // New documents of any fork take the depth.
+    let d2 = f.svc.new_workbook(None).unwrap().doc;
+    assert_eq!(f.svc.document(d2).unwrap().undo.depth(), 3);
+    // An open document takes it on its next edit.
+    f.set("A1", "99");
+    assert_eq!(f.svc.undo_history(f.doc).unwrap().undo.len(), 3);
+}
+
+#[test]
+fn undo_history_lists_labels_next_first() {
+    let mut f = Fixture::new();
+    labelled(&mut f, "A1", "1", "Typing: 1");
+    labelled(&mut f, "A2", "2", "Typing: 2");
+    labelled(&mut f, "A3", "3", "Typing: 3");
+    let unlabelled = tally_api::Transaction {
+        ops: vec![input(f.sheet, "A4", "4")],
+        label: None,
+        selection_before: None,
+        selection_after: None,
+        group: None,
+    };
+    f.svc.apply(f.doc, unlabelled).unwrap();
+    let h = f.svc.undo_history(f.doc).unwrap();
+    assert_eq!(h.undo, vec!["", "Typing: 3", "Typing: 2", "Typing: 1"]);
+    assert!(h.redo.is_empty());
+    f.svc.undo_steps(f.doc, 2).unwrap();
+    let h = f.svc.undo_history(f.doc).unwrap();
+    assert_eq!(h.undo, vec!["Typing: 2", "Typing: 1"]);
+    assert_eq!(h.redo, vec!["Typing: 3", ""]);
+}
+
+#[test]
+fn undo_steps_is_one_action() {
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    for (i, cell) in ["A1", "B2", "C3", "D4"].iter().enumerate() {
+        let tx = tally_api::Transaction {
+            ops: vec![input(s, cell, &i.to_string())],
+            label: Some(format!("t{i}")),
+            selection_before: Some(sel(s, &format!("E{}", i + 1))),
+            selection_after: Some(sel(s, &format!("F{}", i + 1))),
+            group: None,
+        };
+        f.svc.apply(f.doc, tx).unwrap();
+    }
+    let v0 = f.svc.document(f.doc).unwrap().version;
+    let u = f.svc.undo_steps(f.doc, 3).unwrap();
+    // One result: the selection before the oldest step undone, one version
+    // bump, every changed cell reported.
+    assert_eq!(u.selection, Some(sel(s, "E2")));
+    assert_eq!(u.version, v0 + 1);
+    assert!(!u.changed.is_empty());
+    assert_eq!(u.undo.undo_label.as_deref(), Some("t0"));
+    assert_eq!(u.undo.redo_label.as_deref(), Some("t1"));
+    assert_eq!(f.value("A1"), Value::Number(0.0));
+    assert_eq!(f.value("B2"), Value::Empty);
+    assert_eq!(f.value("D4"), Value::Empty);
+    let r = f.svc.redo_steps(f.doc, 2).unwrap();
+    assert_eq!(r.selection, Some(sel(s, "F3")));
+    assert_eq!(f.value("C3"), Value::Number(2.0));
+    assert_eq!(f.value("D4"), Value::Empty);
+    assert_eq!(r.undo.redo_label.as_deref(), Some("t3"));
+    // Zero steps and more steps than there are: no-op and clamp.
+    let z = f.svc.undo_steps(f.doc, 0).unwrap();
+    assert_eq!(z.selection, None);
+    assert_eq!(f.value("C3"), Value::Number(2.0));
+    f.svc.redo_steps(f.doc, 50).unwrap();
+    assert_eq!(f.value("D4"), Value::Number(3.0));
+    assert!(!f.svc.document(f.doc).unwrap().undo.state().can_redo);
 }
 
 #[derive(Clone, Debug)]
@@ -433,5 +592,29 @@ proptest! {
             f.svc.redo(f.doc).unwrap();
         }
         prop_assert_eq!(&f.data(), &fin);
+    }
+
+    #[test]
+    fn undo_steps_matches_single_undos(ops in proptest::collection::vec(gen_op(), 2..16), back in 1usize..16) {
+        let mut a = seeded();
+        a.apply(vec![Op::AddSheet { name: Some("Sheet2".into()), index: None }]);
+        for g in &ops {
+            let op = to_op(&a, g);
+            a.apply(vec![op]);
+        }
+        let n = back.min(a.svc.document(a.doc).unwrap().undo.undo_len());
+        let fin = a.data();
+        for _ in 0..n {
+            a.svc.undo(a.doc).unwrap();
+        }
+        let single = a.data();
+        for _ in 0..n {
+            a.svc.redo(a.doc).unwrap();
+        }
+        prop_assert_eq!(&a.data(), &fin);
+        a.svc.undo_steps(a.doc, n as u32).unwrap();
+        prop_assert_eq!(&a.data(), &single);
+        a.svc.redo_steps(a.doc, n as u32).unwrap();
+        prop_assert_eq!(&a.data(), &fin);
     }
 }

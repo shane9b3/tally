@@ -1909,6 +1909,19 @@ pub struct UndoState {
     pub redo_label: Option<String>,
 }
 
+/// The undo and redo lists of the toolbar drop-downs (AOO's Undo / Redo
+/// toolbox list boxes, `svx/source/tbxctrls/lboxctrl.cxx`).
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UndoHistory {
+    /// Labels of the undo steps, the next one to undo first (empty for a
+    /// step without a label).
+    pub undo: Vec<String>,
+    /// Labels of the redo steps, the next one to redo first.
+    pub redo: Vec<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Selection, editing and assistance
 // ---------------------------------------------------------------------------

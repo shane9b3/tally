@@ -10,11 +10,11 @@
 //! is complete so the UI packages can be wired against it now.
 
 use tally_api::{
-    AutocompleteDto, CalcSettingsDto, CellBlock, CellPos, CellStyleDto, CellsOptions, ChartDataDto,
-    ChartDto, ChartKind, ChartSvgDto, DatabaseRangeDto, DocId, DocumentStatsDto, ImageDto,
-    NavigatorDto, PageBreaksDto, PivotDto, PivotFieldItemsDto, PivotHit, PivotSource, PrintJobInfo,
-    PrintLayoutDto, PrintOptionsDto, RangeDto, ScenarioDto, SolverRequest, SolverResult, TraceDto,
-    ViewOptionsDto,
+    ApplyResult, AutocompleteDto, CalcSettingsDto, CellBlock, CellPos, CellStyleDto, CellsOptions,
+    ChartDataDto, ChartDto, ChartKind, ChartSvgDto, DatabaseRangeDto, DocId, DocumentStatsDto,
+    ImageDto, NavigatorDto, PageBreaksDto, PivotDto, PivotFieldItemsDto, PivotHit, PivotSource,
+    PrintJobInfo, PrintLayoutDto, PrintOptionsDto, RangeDto, ScenarioDto, SolverRequest,
+    SolverResult, TraceDto, UndoHistory, ViewOptionsDto,
 };
 use tally_types::SheetId;
 use tauri::AppHandle;
@@ -306,6 +306,38 @@ pub async fn set_view_zoom(app: AppHandle, doc: DocId, zoom: u16) -> CmdResult<(
     .await
 }
 
+/// `undo_steps(doc, count)`: the toolbar Undo list: undoes `count` steps
+/// as one user action (AOO `SID_UNDO` with a count).
+#[tauri::command]
+pub async fn undo_steps(app: AppHandle, doc: DocId, count: u32) -> CmdResult<ApplyResult> {
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.undo_steps(doc, count))
+    })
+    .await
+}
+
+/// `redo_steps(doc, count)`: the toolbar Redo list.
+#[tauri::command]
+pub async fn redo_steps(app: AppHandle, doc: DocId, count: u32) -> CmdResult<ApplyResult> {
+    blocking(app, move |_, st| {
+        with_doc(st, doc, |s| s.redo_steps(doc, count))
+    })
+    .await
+}
+
+/// `undo_history(doc)`: the labels of the undo and redo steps, next first.
+#[tauri::command]
+pub async fn undo_history(app: AppHandle, doc: DocId) -> CmdResult<UndoHistory> {
+    blocking(app, move |_, st| with_doc(st, doc, |s| s.undo_history(doc))).await
+}
+
+/// `set_undo_depth(depth)`: Tools ▸ Options ▸ Memory ▸ Undo "Number of
+/// steps" (1–1000; an app setting, applied to every open document).
+#[tauri::command]
+pub async fn set_undo_depth(app: AppHandle, depth: u32) -> CmdResult<()> {
+    blocking(app, move |_, st| st.set_undo_depth(depth)).await
+}
+
 // ----- integration pass: queries the UI needs from the real engine ------------
 
 /// `image_data(doc, sheet, id)`: a picture's bytes, base64 (≤ 16 MiB decoded).
@@ -444,6 +476,10 @@ pub const COMMAND_NAMES: &[&str] = &[
     "detective_arrows",
     "set_detective_auto",
     "set_view_zoom",
+    "undo_steps",
+    "redo_steps",
+    "undo_history",
+    "set_undo_depth",
     "image_data",
     "view_options",
     "invalid_cells",

@@ -85,6 +85,20 @@ impl AppState {
         }
     }
 
+    /// Tools ▸ Options ▸ Memory ▸ Undo "Number of steps" (1–1000): the
+    /// depth of every document from now on, and of every open one at once
+    /// (AOO `SfxApplication::SetOptions_Impl` sets it on every shell's
+    /// undo manager; a lower depth drops the farthest steps). The slots
+    /// are collected first and locked one at a time (lock order, above).
+    pub fn set_undo_depth(&self, depth: u32) -> Result<(), ApiError> {
+        lock(&self.hub).set_undo_depth(depth)?;
+        let slots: Vec<DocSlot> = lock(&self.docs).values().cloned().collect();
+        for slot in slots {
+            lock(&slot).set_undo_depth(depth)?;
+        }
+        Ok(())
+    }
+
     /// The service of `doc` (the registry lock is released on return).
     pub fn doc(&self, doc: DocId) -> Result<DocSlot, ApiError> {
         lock(&self.docs)

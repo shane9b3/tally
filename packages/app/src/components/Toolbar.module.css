@@ -189,3 +189,10 @@
     display: none;
   }
 }
+
+/* Undo / Redo with their history arrow (UndoHistory.tsx). */
+.split {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}

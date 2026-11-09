@@ -13,6 +13,7 @@ import { useEditStore } from "../stores/editStore";
 import { useUiStore } from "../stores/uiStore";
 import { ChartIcon, FilterIcon, GlanceIcon, MoonIcon, RedoIcon, SaveIcon, SidebarIcon, SortIcon, UndoIcon } from "./icons";
 import { Popover } from "./Popover";
+import { UndoHistoryArrow, undoTooltip } from "./UndoHistory";
 import { t } from "../i18n";
 import { useW56Store } from "../data/store";
 import styles from "./Toolbar.module.css";
@@ -65,6 +66,7 @@ function Pill({ command, label, icon, children, active, iconOnly, tooltip }: Pil
 export function Toolbar({ inset }: { inset: boolean }) {
   const ctl = useController();
   const info = useDocStore((s) => s.info);
+  const undoState = useDocStore((s) => s.undo);
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const glanceOpen = useUiStore((s) => s.glanceOpen);
   const themePref = useUiStore((s) => s.themePref);
@@ -81,8 +83,19 @@ export function Toolbar({ inset }: { inset: boolean }) {
 
   const items: Record<string, ReactNode> = {
     save: <Pill command="file.save" label={t("cmd.file.save", "Save")} icon={<SaveIcon />} />,
-    undo: <Pill command="edit.undo" label={t("cmd.edit.undo", "Undo")} icon={<UndoIcon />} />,
-    redo: <Pill command="edit.redo" label={t("cmd.edit.redo", "Redo")} icon={<RedoIcon />} iconOnly />,
+    // Split buttons: the arrow opens the history list (AOO's Undo / Redo drop-downs).
+    undo: (
+      <span className={styles.split}>
+        <Pill command="edit.undo" label={t("cmd.edit.undo", "Undo")} icon={<UndoIcon />} tooltip={undoTooltip("undo", undoState.undoLabel)} />
+        <UndoHistoryArrow kind="undo" />
+      </span>
+    ),
+    redo: (
+      <span className={styles.split}>
+        <Pill command="edit.redo" label={t("cmd.edit.redo", "Redo")} icon={<RedoIcon />} iconOnly tooltip={undoTooltip("redo", undoState.redoLabel)} />
+        <UndoHistoryArrow kind="redo" />
+      </span>
+    ),
     sort: (
       <button
         type="button"

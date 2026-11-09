@@ -66,6 +66,21 @@ export interface AppPrefs {
    * (ODS `table:null-year`); the desktop shell hands it to the engine.
    */
   twoDigitYearStart: number;
+  /**
+   * AOO Tools ▸ Options ▸ OpenOffice ▸ Memory ▸ Undo "Number of steps"
+   * (1–1000, default 100): an app setting handed to the engine
+   * (`setUndoDepth`), applied to every open document.
+   */
+  undoSteps: number;
+}
+
+/** Range of the undo steps option (AOO's `ED_UNDO` field). */
+export const UNDO_STEPS_MIN = 1;
+export const UNDO_STEPS_MAX = 1000;
+
+/** `true` for a valid number of undo steps (an integer in 1–1000). */
+export function isUndoSteps(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v >= UNDO_STEPS_MIN && v <= UNDO_STEPS_MAX;
 }
 
 /** Range of the two-digit year option (AOO's `NF_YEARVALUE` field). */
@@ -103,6 +118,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   chrome: DEFAULT_CHROME,
   autoFormats: [],
   twoDigitYearStart: 1930,
+  undoSteps: 100,
 };
 
 export const UI_LANGUAGES: readonly { id: UiLanguage; label: string; tag: string }[] = [
@@ -153,6 +169,7 @@ export function parsePrefs(raw: unknown): AppPrefs {
     chrome: parseChrome(o.chrome),
     autoFormats: parseUserAutoFormats(o.autoFormats),
     twoDigitYearStart: isTwoDigitYearStart(o.twoDigitYearStart) ? o.twoDigitYearStart : DEFAULT_PREFS.twoDigitYearStart,
+    undoSteps: isUndoSteps(o.undoSteps) ? o.undoSteps : DEFAULT_PREFS.undoSteps,
   };
 }
 

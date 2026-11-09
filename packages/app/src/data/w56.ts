@@ -1097,6 +1097,7 @@ export class W56Features {
     this.store.setPrefs(prefs);
     if (prefs.uiLanguage !== "en") await this.applyUiLanguage(prefs.uiLanguage, false);
     this.restartAutosave();
+    this.applyUndoSteps(prefs.undoSteps);
   }
 
   /**
@@ -1125,6 +1126,7 @@ export class W56Features {
     }
     if (prefs.uiLanguage !== prev.uiLanguage) await this.applyUiLanguage(prefs.uiLanguage, true);
     if (prefs.autosaveMinutes !== prev.autosaveMinutes) this.restartAutosave();
+    if (prefs.undoSteps !== prev.undoSteps) this.applyUndoSteps(prefs.undoSteps);
     // The other document windows re-read the prefs (`prefs-changed`).
     this.ctl.broadcastPrefs(null);
     return true;
@@ -1148,6 +1150,15 @@ export class W56Features {
     writeLocalPrefs(prefs);
     if (prefs.uiLanguage !== prev.uiLanguage) await this.applyUiLanguage(prefs.uiLanguage, false);
     if (prefs.autosaveMinutes !== prev.autosaveMinutes) this.restartAutosave();
+    if (prefs.undoSteps !== prev.undoSteps) this.applyUndoSteps(prefs.undoSteps);
+  }
+
+  /** Hands Tools ▸ Options ▸ Memory ▸ Undo "Number of steps" to the engine (every open document). */
+  private applyUndoSteps(n: number): void {
+    const client = this.ctl.client as Partial<Pick<EngineClientV4, "setUndoDepth">>;
+    // Older test clients have no `setUndoDepth`.
+    if (typeof client.setUndoDepth !== "function") return;
+    void client.setUndoDepth(n).catch((e: unknown) => this.ctl.notifyError(e));
   }
 
   /** Installs a UI language: the `t()` table, the command titles and the native menu. */

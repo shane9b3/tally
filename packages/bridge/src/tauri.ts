@@ -90,6 +90,7 @@ import type { TraceDto } from "./generated/TraceDto";
 import type { DetectiveAction } from "./generated/DetectiveAction";
 import type { DetectiveState } from "./generated/DetectiveState";
 import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
+import type { UndoHistory } from "./generated/UndoHistory";
 import type { CellsOptions } from "./generated/CellsOptions";
 import { isApiError, type EngineClientV4, type SheetId, type Unsubscribe } from "./client";
 import type { EditModeOption, EditModeResult, FontFamilyInfo, OpenMode, ShellClient, TemplateInfo } from "./shell";
@@ -191,6 +192,10 @@ export const COMMANDS = {
   detectiveArrows: "detective_arrows",
   setDetectiveAuto: "set_detective_auto",
   setViewZoom: "set_view_zoom",
+  undoSteps: "undo_steps",
+  redoSteps: "redo_steps",
+  undoHistory: "undo_history",
+  setUndoDepth: "set_undo_depth",
   imageData: "image_data",
   viewOptions: "view_options",
   invalidCells: "invalid_cells",
@@ -262,6 +267,10 @@ export const V4_METHODS = [
   "detectiveArrows",
   "setDetectiveAuto",
   "setViewZoom",
+  "undoSteps",
+  "redoSteps",
+  "undoHistory",
+  "setUndoDepth",
   "imageData",
   "viewOptions",
   "invalidCells",
@@ -706,6 +715,22 @@ export class TauriClient implements EngineClientV4, ShellClient {
 
   setViewZoom(doc: DocId, zoom: number): Promise<void> {
     return this.call(COMMANDS.setViewZoom, { doc, zoom });
+  }
+
+  undoSteps(doc: DocId, count: number): Promise<ApplyResult> {
+    return this.call(COMMANDS.undoSteps, { doc, count });
+  }
+
+  redoSteps(doc: DocId, count: number): Promise<ApplyResult> {
+    return this.call(COMMANDS.redoSteps, { doc, count });
+  }
+
+  undoHistory(doc: DocId): Promise<UndoHistory> {
+    return this.call(COMMANDS.undoHistory, { doc });
+  }
+
+  setUndoDepth(depth: number): Promise<void> {
+    return this.call(COMMANDS.setUndoDepth, { depth });
   }
 
   imageData(doc: DocId, sheet: SheetId, id: number): Promise<string> {

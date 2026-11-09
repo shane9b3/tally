@@ -63,7 +63,7 @@ export type W56Dialog =
   | { kind: "saveAsTemplate"; name: string }
   | { kind: "selectionList"; cell: CellPos; items: string[]; rect: { left: number; top: number; bottom: number } };
 
-export type OptionsTab = "calculate" | "view" | "input" | "formula" | "sortLists" | "loadSave" | "language";
+export type OptionsTab = "calculate" | "view" | "input" | "formula" | "sortLists" | "loadSave" | "memory" | "language";
 
 /** A crash-recovery snapshot offered on launch (`list_recovery`). */
 export interface RecoveryFile {

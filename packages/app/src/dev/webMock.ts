@@ -1460,9 +1460,22 @@ export class WebMockClient extends MockClient {
   private pushUndo(doc: DocId, snapshot: string): void {
     const stack = this.extUndo.get(doc) ?? [];
     stack.push(snapshot);
-    if (stack.length > 100) stack.shift();
+    if (stack.length > this.undoDepth) stack.splice(0, stack.length - this.undoDepth);
     this.extUndo.set(doc, stack);
     this.extRedo.set(doc, []);
+  }
+
+  /** Trims the side model's undo / redo snapshots like the mock's own steps (farthest first). */
+  override async setUndoDepth(depth: number): Promise<void> {
+    await super.setUndoDepth(depth);
+    for (const doc of new Set([...this.extUndo.keys(), ...this.extRedo.keys()])) {
+      const h = await this.undoHistory(doc).catch(() => null);
+      if (!h) continue;
+      const undo = this.extUndo.get(doc);
+      if (undo && undo.length > h.undo.length) undo.splice(0, undo.length - h.undo.length);
+      const redo = this.extRedo.get(doc);
+      if (redo && redo.length > h.redo.length) redo.splice(0, redo.length - h.redo.length);
+    }
   }
 
   /**

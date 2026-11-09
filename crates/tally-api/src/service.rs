@@ -14,7 +14,7 @@ use crate::dto::{
     ApiError, ApplyResult, AutoFilterInfo, CellBlock, CellEditInfo, CellPos, ClipboardOut,
     Direction, DocId, FileFormat, FindQuery, FindResult, FunctionInfo, NameInfo, PasteOptions,
     PastePayload, RangeDto, SelectionDto, SelectionStats, SheetLayout, StyleDto, Suggestion,
-    Transaction, WorkbookInfo,
+    Transaction, UndoHistory, WorkbookInfo,
 };
 use crate::features::{
     ConditionalFormatDto, DocPropertiesDto, GoalSeekRequest, GoalSeekResult, LocaleInfo, NoteDto,
@@ -137,6 +137,27 @@ pub trait DocumentService {
 
     /// Redoes the last undone transaction.
     fn redo(&mut self, doc: DocId) -> Result<ApplyResult>;
+
+    /// Undoes the last `count` transactions as one user action (AOO's
+    /// toolbar Undo list: `SID_UNDO` with a count, run by
+    /// `ScTabViewShell::ExecuteUndo`). Fewer when the stack holds fewer;
+    /// 0 is a no-op.
+    fn undo_steps(&mut self, doc: DocId, count: u32) -> Result<ApplyResult> {
+        let _ = (doc, count);
+        Err(ApiError::unsupported("undo_steps is not supported"))
+    }
+
+    /// Redoes the next `count` undone transactions as one user action.
+    fn redo_steps(&mut self, doc: DocId, count: u32) -> Result<ApplyResult> {
+        let _ = (doc, count);
+        Err(ApiError::unsupported("redo_steps is not supported"))
+    }
+
+    /// The labels of the undo and redo steps, next one first.
+    fn undo_history(&self, doc: DocId) -> Result<UndoHistory> {
+        let _ = doc;
+        Err(ApiError::unsupported("undo_history is not supported"))
+    }
 
     /// Sum/count/average for the status bar.
     fn selection_stats(&self, doc: DocId, sel: &SelectionDto) -> Result<SelectionStats>;

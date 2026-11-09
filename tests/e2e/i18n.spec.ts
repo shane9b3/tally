@@ -20,7 +20,7 @@ test("language switch to German shows Datei / Bearbeiten", async ({ page }) => {
   await dlg.getByTestId("tab-language").click();
   await dlg.getByTestId("opt-ui-language").selectOption("de");
   await dlg.getByTestId("dialog-ok").click();
-  await expect(page.getByRole("button", { name: "Rückgängig" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Rückgängig", exact: true })).toBeVisible();
   await page.keyboard.press("Meta+k");
   await page.getByTestId("palette-input").fill("Speichern");
   const palette = page.locator('[cmdk-list]');
@@ -36,7 +36,7 @@ test("language switch to German shows Datei / Bearbeiten", async ({ page }) => {
   await dlg.getByTestId("tab-language").click();
   await dlg.getByTestId("opt-ui-language").selectOption("en");
   await dlg.getByTestId("dialog-ok").click();
-  await expect(page.getByRole("button", { name: "Undo" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeVisible();
 });
 
 test("German document locale shows SUMME in the editor and commits SUM", async ({ page }) => {

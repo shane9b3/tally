@@ -73,6 +73,7 @@ import type { TraceDto } from "./generated/TraceDto";
 import type { DetectiveAction } from "./generated/DetectiveAction";
 import type { DetectiveState } from "./generated/DetectiveState";
 import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
+import type { UndoHistory } from "./generated/UndoHistory";
 import type { CellsOptions } from "./generated/CellsOptions";
 
 /** Sheet ids are stable numbers, independent of tab order. */
@@ -274,6 +275,14 @@ export interface EngineClientV4 extends EngineClientV3 {
   setDetectiveAuto(doc: DocId, on: boolean): Promise<void>;
   /** View ▸ Zoom: the zoom in percent (20–400) for every sheet; view state saved with the document (not undoable, not a modification). */
   setViewZoom(doc: DocId, zoom: number): Promise<void>;
+  /** Toolbar Undo list: undoes `count` steps as one user action (fewer when there are fewer; AOO `SID_UNDO` with a count). */
+  undoSteps(doc: DocId, count: number): Promise<ApplyResult>;
+  /** Toolbar Redo list: redoes `count` steps as one user action. */
+  redoSteps(doc: DocId, count: number): Promise<ApplyResult>;
+  /** The labels of the undo and redo steps, next one first. */
+  undoHistory(doc: DocId): Promise<UndoHistory>;
+  /** Tools ▸ Options ▸ Memory ▸ Undo "Number of steps" (1–1000): an app setting applied to every open document (a lower number drops the farthest steps). */
+  setUndoDepth(depth: number): Promise<void>;
   /** A picture's bytes, base64 (pictures from files carry no `data` in `images`). */
   imageData(doc: DocId, sheet: SheetId, id: number): Promise<string>;
   /** A sheet's view options with the persisted split (`null` when not split). */

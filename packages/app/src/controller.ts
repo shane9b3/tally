@@ -16,6 +16,7 @@ import {
   type Direction,
   type DocId,
   type EngineClientV3,
+  type EngineClientV4,
   type FileFormat,
   type FillMode,
   type FilterOp,
@@ -29,6 +30,7 @@ import {
   type StyleDto,
   type StylePatch,
   type Transaction,
+  type UndoHistory,
   type WorkbookInfo,
 } from "@tally/bridge";
 import {
@@ -514,6 +516,29 @@ export class AppController {
     } catch (e) {
       this.notifyError(e);
     }
+  };
+
+  /** The toolbar Undo / Redo lists: `count` steps as one user action (AOO `SID_UNDO` with a count). */
+  undoRedoSteps = async (undo: boolean, count: number): Promise<void> => {
+    const c = this.client as EngineClientV3 & Partial<Pick<EngineClientV4, "undoSteps" | "redoSteps">>;
+    const steps = undo ? c.undoSteps : c.redoSteps;
+    if (count <= 1 || typeof steps !== "function") {
+      for (let i = 0; i < Math.max(1, count); i++) await (undo ? this.undo() : this.redo());
+      return;
+    }
+    try {
+      this.handleResult(await steps.call(c, this.requireDoc(), count));
+    } catch (e) {
+      this.notifyError(e);
+    }
+  };
+
+  /** The labels of the undo and redo steps, next first (empty lists when the client has none). */
+  undoHistory = async (): Promise<UndoHistory> => {
+    const c = this.client as Partial<Pick<EngineClientV4, "undoHistory">>;
+    const doc = this.info?.doc;
+    if (doc === undefined || typeof c.undoHistory !== "function") return { undo: [], redo: [] };
+    return c.undoHistory(doc);
   };
 
   // -- formatting -------------------------------------------------------------

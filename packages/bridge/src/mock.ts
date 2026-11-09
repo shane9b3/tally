@@ -91,6 +91,7 @@ import type { TraceDto } from "./generated/TraceDto";
 import type { DetectiveAction } from "./generated/DetectiveAction";
 import type { DetectiveState } from "./generated/DetectiveState";
 import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
+import type { UndoHistory } from "./generated/UndoHistory";
 import type { CellsOptions } from "./generated/CellsOptions";
 import type { EngineClientV4, SheetId, Unsubscribe } from "./client";
 import type { FillSheetOptions } from "./generated/FillSheetOptions";
@@ -105,8 +106,9 @@ export const MAX_COLS = 16_384;
 export const DEFAULT_COL_WIDTH_PX = 100;
 /** Default row height in CSS pixels. */
 export const DEFAULT_ROW_HEIGHT_PX = 24;
-/** Undo depth, as in the engine. */
+/** Default undo depth and its range (AOO Tools ▸ Options ▸ Memory ▸ Undo, 1–1000), as in the engine. */
 const UNDO_DEPTH = 100;
+const UNDO_DEPTH_MAX = 1000;
 /** Refuse ops touching more cells than this (the mock stores cells densely). */
 const MAX_CELLS_PER_OP = 100_000;
 
@@ -578,6 +580,38 @@ function hintFor(input: string): string | null {
 /** In-memory {@link EngineClient}. Each instance is an isolated "engine". */
 /** Currency format the mock applies to template money columns. */
 const MOCK_CURRENCY = "[$$-409]#,##0.00;[RED]-[$$-409]#,##0.00";
+
+/**
+ * Several apply results as one: the last one's version, undo state, selection
+ * and info, with the changed ranges, layouts and sheet changes of all of them.
+ */
+export function mergeResults(results: readonly ApplyResult[]): ApplyResult {
+  const last = results[results.length - 1];
+  if (!last) throw apiError("internal", "no results to merge");
+  const seen = new Set<string>();
+  const changed: ApplyResult["changed"] = [];
+  for (const r of results) {
+    for (const c of r.changed) {
+      const key = JSON.stringify(c);
+      if (!seen.has(key)) {
+        seen.add(key);
+        changed.push(c);
+      }
+    }
+  }
+  return {
+    ...last,
+    changed,
+    layoutChanged: [...new Set(results.flatMap((r) => r.layoutChanged))],
+    sheetsChanged: results.some((r) => r.sheetsChanged),
+    errors: results.flatMap((r) => r.errors),
+    info: [...results].reverse().find((r) => r.info !== null)?.info ?? null,
+    ...(results.some((r) => r.chartsChanged) ? { chartsChanged: results.flatMap((r) => r.chartsChanged ?? []) } : {}),
+    ...(results.some((r) => r.objectsChanged) ? { objectsChanged: [...new Set(results.flatMap((r) => r.objectsChanged ?? []))] } : {}),
+    ...(results.some((r) => r.pivotsChanged) ? { pivotsChanged: true } : {}),
+    ...(results.some((r) => r.detectiveChanged) ? { detectiveChanged: true } : {}),
+  };
+}
 
 export class MockClient implements EngineClientV4, ShellClient {
   private readonly docs = new Map<DocId, MockDoc>();
@@ -1457,8 +1491,8 @@ export class MockClient implements EngineClientV4, ShellClient {
           selectionBefore: tx.selectionBefore,
           selectionAfter: tx.selectionAfter,
         });
-        if (d.undo.length > UNDO_DEPTH) d.undo.shift();
         d.redo = [];
+        if (d.undo.length > this.undoDepth) d.undo.splice(0, d.undo.length - this.undoDepth);
         d.dirty = true;
         d.version++;
       }
@@ -1485,6 +1519,57 @@ export class MockClient implements EngineClientV4, ShellClient {
       if (!entry) throw apiError("invalid_argument", "nothing to redo");
       d.undo.push({ ...entry, state: d.state });
       return this.restore(d, entry.state, entry.selectionAfter);
+    });
+  }
+
+  /** The app's undo depth (`setUndoDepth`), shared by every document of this client. */
+  protected undoDepth = UNDO_DEPTH;
+
+  async undoSteps(doc: DocId, count: number): Promise<ApplyResult> {
+    return this.steps(doc, count, true);
+  }
+
+  async redoSteps(doc: DocId, count: number): Promise<ApplyResult> {
+    return this.steps(doc, count, false);
+  }
+
+  /** `count` single undos (or redos) folded into one result, as the engine's one action. */
+  private async steps(doc: DocId, count: number, undo: boolean): Promise<ApplyResult> {
+    const d = this.doc(doc);
+    this.assertEditable(doc);
+    const n = Math.min(Math.max(0, Math.floor(count)), undo ? d.undo.length : d.redo.length);
+    const results: ApplyResult[] = [];
+    for (let i = 0; i < n; i++) results.push(await (undo ? this.undo(doc) : this.redo(doc)));
+    if (results.length === 0) return this.result(d, new Touched(), [], null);
+    return mergeResults(results);
+  }
+
+  undoHistory(doc: DocId): Promise<UndoHistory> {
+    return this.run(() => {
+      const d = this.doc(doc);
+      const labels = (stack: UndoEntry[]) => stack.map((e) => e.label ?? "").reverse();
+      return { undo: labels(d.undo), redo: labels(d.redo) };
+    });
+  }
+
+  setUndoDepth(depth: number): Promise<void> {
+    return this.run(() => {
+      if (!Number.isInteger(depth) || depth < 1 || depth > UNDO_DEPTH_MAX) throw apiError("invalid_argument", "the number of undo steps must be 1–1000");
+      this.undoDepth = depth;
+      for (const d of this.docs.values()) {
+        // AOO `SetMaxUndoActionCount`: alternately the farthest redo step and the oldest undo step go.
+        let over = d.undo.length + d.redo.length - depth;
+        while (over > 0) {
+          if (d.redo.length > 0) {
+            d.redo.shift();
+            over--;
+          }
+          if (over > 0 && d.undo.length > 0) {
+            d.undo.shift();
+            over--;
+          }
+        }
+      }
     });
   }
 

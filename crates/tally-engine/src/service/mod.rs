@@ -88,6 +88,10 @@ struct Shared {
     /// to every document created or opened from now on whose file does not
     /// set it (`ScDocShell::InitOptions`).
     two_digit_year: AtomicU16,
+    /// The application's undo depth (AOO Tools ▸ Options ▸ OpenOffice ▸
+    /// Memory ▸ Undo "Number of steps", `SvtUndoOptions::GetUndoCount`),
+    /// given to every document (`SfxShell::SetUndoManager`).
+    undo_depth: AtomicU32,
     /// Prepared print jobs (an LRU of [`crate::print::JOB_LRU`]).
     #[cfg_attr(not(feature = "io"), allow(dead_code))]
     print_jobs: Mutex<print::JobCache>,
@@ -100,6 +104,7 @@ impl Default for Shared {
             forks: AtomicU64::new(0),
             clipboard: Mutex::new(None),
             two_digit_year: AtomicU16::new(tally_types::DEFAULT_TWO_DIGIT_YEAR),
+            undo_depth: AtomicU32::new(crate::undo::UNDO_DEPTH as u32),
             print_jobs: Mutex::new(print::JobCache::default()),
         }
     }
@@ -223,12 +228,45 @@ impl EngineService {
         self.shared.two_digit_year.load(Ordering::Relaxed)
     }
 
+    /// Sets the application's undo depth (AOO Tools ▸ Options ▸ OpenOffice
+    /// ▸ Memory ▸ Undo "Number of steps", 1–1000) for this service and all
+    /// its forks, and applies it to this service's open documents at once:
+    /// a lower depth drops the steps farthest from the current state
+    /// (`SfxApplication::SetOptions_Impl` calls `SetMaxUndoActionCount` on
+    /// every shell's undo manager). Documents of other forks take it on
+    /// their next edit or undo, or when the caller sets it on their fork
+    /// too (the desktop shell does). Out-of-range depths are refused.
+    pub fn set_undo_depth(&mut self, depth: u32) -> Result<()> {
+        if !crate::undo::UNDO_DEPTH_RANGE.contains(&(depth as usize)) {
+            return Err(ApiError::invalid_argument(
+                "the number of undo steps must be 1–1000",
+            ));
+        }
+        self.shared.undo_depth.store(depth, Ordering::Relaxed);
+        for d in self.docs.values_mut() {
+            d.undo.set_depth(depth as usize);
+        }
+        Ok(())
+    }
+
+    /// The application's undo depth (100 by default).
+    pub fn undo_depth(&self) -> u32 {
+        self.shared.undo_depth.load(Ordering::Relaxed)
+    }
+
+    /// Files a document opened or created on this service, with the
+    /// application's undo depth.
+    fn insert_document(&mut self, mut doc: Document) {
+        doc.undo.set_depth(self.undo_depth() as usize);
+        self.docs.insert(doc.id.0, doc);
+    }
+
     /// Opens a workbook built elsewhere (tests, the CLI).
     pub fn open_workbook(&mut self, wb: Workbook, title: &str) -> WorkbookInfo {
         let id = self.next_doc_id();
         let doc = Document::new(id, wb, title);
         let info = doc.info();
-        self.docs.insert(id.0, doc);
+        self.insert_document(doc);
         info
     }
 
@@ -474,9 +512,14 @@ impl EngineService {
     /// The document, if it may be edited; [`ApiError::READ_ONLY`] if it is
     /// read-only.
     fn editable(&mut self, doc: DocId) -> Result<&mut Document> {
+        let depth = self.undo_depth() as usize;
         let d = self.document_mut(doc)?;
         if d.read_only {
             return Err(read_only_error());
+        }
+        // A depth changed on another fork reaches this document here.
+        if d.undo.depth() != depth {
+            d.undo.set_depth(depth);
         }
         Ok(d)
     }
@@ -526,7 +569,7 @@ impl DocumentService for EngineService {
         // Warnings are delivered once, with the open result.
         doc.warnings.clear();
         doc.has_macros = false;
-        self.docs.insert(id.0, doc);
+        self.insert_document(doc);
         Ok(info)
     }
 
@@ -618,7 +661,7 @@ impl DocumentService for EngineService {
         if let Ok(cache) = self.chart_cache.get_mut() {
             cache.forget(doc.0);
         }
-        self.docs.insert(doc.0, fresh);
+        self.insert_document(fresh);
         Ok(info)
     }
 
@@ -708,6 +751,21 @@ impl DocumentService for EngineService {
 
     fn redo(&mut self, doc: DocId) -> Result<ApplyResult> {
         Ok(self.editable(doc)?.redo())
+    }
+
+    fn undo_steps(&mut self, doc: DocId, count: u32) -> Result<ApplyResult> {
+        Ok(self.editable(doc)?.undo_steps(count))
+    }
+
+    fn redo_steps(&mut self, doc: DocId, count: u32) -> Result<ApplyResult> {
+        Ok(self.editable(doc)?.redo_steps(count))
+    }
+
+    fn undo_history(&self, doc: DocId) -> Result<tally_api::UndoHistory> {
+        Ok(self
+            .document(doc)?
+            .undo
+            .history(*crate::undo::UNDO_DEPTH_RANGE.end()))
     }
 
     fn selection_stats(&self, doc: DocId, sel: &SelectionDto) -> Result<SelectionStats> {

@@ -66,6 +66,7 @@ export type { StylePatch } from "./generated/StylePatch";
 export type { Suggestion } from "./generated/Suggestion";
 export type { Transaction } from "./generated/Transaction";
 export type { UndoState } from "./generated/UndoState";
+export type { UndoHistory } from "./generated/UndoHistory";
 export type { VAlign } from "./generated/VAlign";
 export type { ValueKind } from "./generated/ValueKind";
 export type { WorkbookInfo } from "./generated/WorkbookInfo";
@@ -221,6 +222,6 @@ export type { CellsOptions } from "./generated/CellsOptions";
 
 export { isApiError } from "./client";
 export type { EngineClient, EngineClientV2, EngineClientV3, EngineClientV4, SheetId, Unsubscribe } from "./client";
-export { MockClient, DEFAULT_COL_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX, mixInputs } from "./mock";
+export { MockClient, DEFAULT_COL_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX, mergeResults, mixInputs } from "./mock";
 export { BUILTIN_TEMPLATES, CANCELLED, CSV_OPTIONS, FALLBACK_FONTS, LOCKED, NOT_WRITABLE, READ_ONLY } from "./shell";
 export type { EditModeOption, EditModeResult, FontFaceInfo, FontFamilyInfo, LockInfo, OpenMode, ShellClient, TemplateInfo } from "./shell";

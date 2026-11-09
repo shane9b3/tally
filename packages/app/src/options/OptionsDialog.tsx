@@ -15,7 +15,7 @@ import { BUILTIN_SORT_LISTS, parseSortList } from "../data/builders";
 import { useW56Store, type OptionsTab, type W56Dialog } from "../data/store";
 import { Check, Field, Tabs, W56Shell } from "../data/W56Shell";
 import w56 from "../data/W56.module.css";
-import { isTwoDigitYearStart, TWO_DIGIT_YEAR_MAX, TWO_DIGIT_YEAR_MIN, UI_LANGUAGES, type AppPrefs } from "./prefs";
+import { isTwoDigitYearStart, isUndoSteps, TWO_DIGIT_YEAR_MAX, TWO_DIGIT_YEAR_MIN, UI_LANGUAGES, UNDO_STEPS_MAX, UNDO_STEPS_MIN, type AppPrefs } from "./prefs";
 
 const TABS: readonly { id: OptionsTab; key: string; label: string }[] = [
   { id: "calculate", key: "options.calculate", label: "Calculate" },
@@ -24,6 +24,7 @@ const TABS: readonly { id: OptionsTab; key: string; label: string }[] = [
   { id: "formula", key: "options.formulaSyntax", label: "Formula syntax" },
   { id: "sortLists", key: "od.tabSortLists", label: "Sort lists" },
   { id: "loadSave", key: "od.tabLoadSave", label: "Load / Save" },
+  { id: "memory", key: "od.tabMemory", label: "Memory" },
   { id: "language", key: "options.language", label: "Language" },
 ];
 
@@ -43,10 +44,14 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
   // AOO's "Year (two digits)" field: shown as typed, kept while it is a valid year.
   const [yearText, setYearText] = useState(String(prefs0.twoDigitYearStart));
   const yearValid = isTwoDigitYearStart(Number(yearText));
+  // AOO Memory ▸ Undo "Number of steps" (ED_UNDO, 1–1000): shown as typed, kept while valid.
+  const [undoText, setUndoText] = useState(String(prefs0.undoSteps));
+  const undoValid = isUndoSteps(Number(undoText));
   const calcValid =
     (iter === null || (Number.isInteger(iter.steps) && iter.steps >= 1 && iter.steps <= 32_767 && Number.isFinite(iter.minChange) && iter.minChange >= 0)) &&
     (decimals === null || (Number.isInteger(decimals) && decimals >= 0 && decimals <= 20)) &&
-    yearValid;
+    yearValid &&
+    undoValid;
   const submit = async () => {
     if (JSON.stringify(calc) !== JSON.stringify(d.calc)) await ctl.w56.setCalcSettings(calc);
     if (JSON.stringify(view) !== JSON.stringify(d.view)) await ctl.w56.setViewOptions(view);
@@ -222,6 +227,33 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
           <p className={dlg.note} style={{ gridColumn: "1 / -1" }}>
             {t("options.openDocumentsInNote", "Applies to documents opened from now on; Window ▸ Merge All Windows combines open windows.")}
           </p>
+        </div>
+      ) : null}
+      {tab === "memory" ? (
+        <div>
+          {/* AOO Tools ▸ Options ▸ OpenOffice ▸ Memory: GB_UNDO / FT_UNDO / ED_UNDO (cui/source/options/optmemory.src). */}
+          <div className={w56.section}>{t("od.undo", "Undo")}</div>
+          <div className={w56.row}>
+            <label htmlFor="opt-undo-steps">{t("od.undoSteps", "Number of steps")}</label>
+            <input
+              id="opt-undo-steps"
+              className={dlg.input}
+              style={{ width: 90 }}
+              type="number"
+              min={UNDO_STEPS_MIN}
+              max={UNDO_STEPS_MAX}
+              step={1}
+              value={undoText}
+              aria-invalid={!undoValid}
+              onChange={(e) => {
+                setUndoText(e.target.value);
+                const n = Number(e.target.value);
+                if (isUndoSteps(n)) setPrefs({ ...prefs, undoSteps: n });
+              }}
+              data-testid="opt-undo-steps"
+            />
+          </div>
+          <p className={dlg.note}>{t("od.undoStepsNote", "Applies to every open document at once; a lower number drops the oldest steps.")}</p>
         </div>
       ) : null}
       {tab === "language" ? (
