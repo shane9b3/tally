@@ -28,6 +28,18 @@
 //!   numbers and numbered text (AOO's `FILL_SIMPLE`); plain text is
 //!   copied and formulas are relative, so their references follow the
 //!   new position.
+//!
+//! The copy modifier and filtered data (AOO `ScTable::FillAnalyse` /
+//! `FillAuto`, `nScFillModeMouseModifier & KEY_MOD1` and i89232's
+//! `IsDataFiltered`): a fill-handle drag with ⌘ (`AutoCopy`) copies the
+//! source for every content type, single numbers and dates included. On
+//! a sheet whose data is filtered, `Auto` and `AutoCopy` both copy and
+//! skip the filtered rows: nothing is written to them and the source
+//! pattern advances only over the rows that are written (filling right
+//! or left, a filtered row's lane is left alone). ⌘D / ⌘R (`Copy`, AOO
+//! `FillSeries` with `FILL_SIMPLE`) and the linear, growth and date
+//! Fill Series types ignore the filter and write every target cell (the
+//! Series AutoFill type is `Auto`, as AOO routes it to `FillAuto`).
 
 use std::sync::Arc;
 
@@ -297,7 +309,7 @@ fn plan_lane(
         .collect();
     let all_dates = all_numbers.is_some() && seq.iter().all(|s| s.is_date);
     match mode {
-        FillMode::Copy => return Plan::Copy,
+        FillMode::Copy | FillMode::AutoCopy => return Plan::Copy,
         FillMode::LinearSeries => {
             return match &all_numbers {
                 Some(xs) if n >= 2 => Plan::Linear(xs[n - 1] - xs[n - 2]),
@@ -486,6 +498,19 @@ fn direction(source: &CellRange, target: &CellRange) -> Result<Option<Dir>, ApiE
     Ok(Some(dir))
 }
 
+/// AOO `ScTable::IsDataFiltered`: the sheet's filter has a criterion (an
+/// AutoFilter with a filtered column, or a standard / advanced filter).
+/// Sheet-wide, like AOO: the fill need not touch the filtered area.
+fn data_filtered(wb: &Workbook, sheet: tally_types::SheetId) -> bool {
+    wb.sheet(sheet).is_some_and(|s| {
+        s.meta
+            .auto_filter
+            .as_ref()
+            .is_some_and(|af| !af.columns.is_empty())
+            || s.meta.standard_filter.is_some()
+    })
+}
+
 /// Fills `target` (which contains `source`) from `source`.
 pub fn fill_range(
     wb: &mut Workbook,
@@ -509,6 +534,18 @@ pub fn fill_range(
     if !wb.array_blocks_in(&area).is_empty() || !wb.array_blocks_in(&source).is_empty() {
         return Err(array_block_error());
     }
+    // Filtered data: AutoFill copies and leaves filtered rows alone.
+    let skip = if matches!(mode, FillMode::Auto | FillMode::AutoCopy) && data_filtered(wb, sheet) {
+        wb.sheet(sheet).map(|s| s.filtered_rows.clone())
+    } else {
+        None
+    };
+    let mode = if skip.is_some() || mode == FillMode::AutoCopy {
+        FillMode::Copy
+    } else {
+        mode
+    };
+    let filtered = |row: u32| skip.as_ref().is_some_and(|f| f.contains(row));
     let epoch = wb.settings.date_epoch;
     let lists = fill_lists(wb);
     let inv = capture_range(wb, area, true, true);
@@ -519,6 +556,9 @@ pub fn fill_range(
         source.r0..=source.r1
     };
     for lane in lanes {
+        if !vertical && filtered(lane) {
+            continue;
+        }
         // Source cells ordered away from the edge being extended.
         let mut idx: Vec<u32> = if vertical {
             (source.r0..=source.r1).collect()
@@ -564,7 +604,10 @@ pub fn fill_range(
             Dir::Right => (source.c1 + 1..=target.c1).collect(),
             Dir::Left => (target.c0..source.c0).rev().collect(),
         };
-        for (k, p) in positions.into_iter().enumerate() {
+        let positions = positions
+            .into_iter()
+            .filter(|&p| !(vertical && filtered(p)));
+        for (k, p) in positions.enumerate() {
             let a = at(p);
             let content = produce(&plan, &seq, k, epoch);
             wb.restore_content(

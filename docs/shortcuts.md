@@ -129,6 +129,7 @@ Desktop app. Tools ▸ Options ▸ Load / Save ▸ "Open documents in" chooses t
 | ⇧⌘V | Paste values only |
 | ⌥⌘V | Paste special… |
 | ⌘D / ⌘R | Fill down / right |
+| ⌘ + drag the fill handle | Copy instead of continuing a series |
 | ⌘X then ⌘V | Move cells (references follow) |
 | Delete | Delete Contents dialog (⌫ clears at once; Tools ▸ Options ▸ Input turns the dialog off) |
 | ⌥↩ | Not typing in a cell: fill the selection with the entered text |

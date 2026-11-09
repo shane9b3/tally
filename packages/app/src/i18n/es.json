@@ -1431,6 +1431,7 @@
   "shell.gk.cancelEdit": "Cancelar la edición",
   "shell.gk.copyCutPaste": "Copiar / cortar / pegar",
   "shell.gk.fill": "Rellenar hacia abajo / la derecha",
+  "shell.gk.fillCopy": "Copiar en lugar de continuar una serie",
   "shell.gk.moveCells": "Mover celdas (las referencias las siguen)",
   "shell.gk.arrayEnter": "Introducir como fórmula matricial en la selección",
   "shell.gk.find": "Buscar / Buscar y reemplazar",

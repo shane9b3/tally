@@ -209,9 +209,11 @@ export interface GridEvents {
   /**
    * The fill handle was dragged. `source` is the selection range; `target`
    * is the whole filled range INCLUDING `source` (it extends `source` down,
-   * up, right or left). The grid selects `target` afterwards.
+   * up, right or left). The grid selects `target` afterwards. `copy`: the
+   * copy modifier (⌘, or Ctrl) was held when the button was released
+   * (AOO's Ctrl-drag: copy instead of continuing a series).
    */
-  onFill(source: RangeDto, target: RangeDto): void;
+  onFill(source: RangeDto, target: RangeDto, copy: boolean): void;
   /** Double-click on the fill handle (fill down to the adjacent data's end). */
   onFillHandleDoubleClick(source: RangeDto): void;
   /**

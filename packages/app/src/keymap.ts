@@ -64,6 +64,7 @@ export const GRID_KEYS: readonly { keys: string; action: string; group: string }
   { group: "Edit", keys: "⇧⌘V", action: "Paste values only" },
   { group: "Edit", keys: "⌥⌘V", action: "Paste special…" },
   { group: "Edit", keys: "⌘D / ⌘R", action: "Fill down / right" },
+  { group: "Edit", keys: "⌘ + drag the fill handle", action: "Copy instead of continuing a series" },
   { group: "Edit", keys: "⌘X then ⌘V", action: "Move cells (references follow)" },
   { group: "Formulas", keys: "⌃⇧↩", action: "Enter as an array formula over the selection" },
   { group: "Find", keys: "⌘F / ⌥⌘F", action: "Find / Find & replace" },

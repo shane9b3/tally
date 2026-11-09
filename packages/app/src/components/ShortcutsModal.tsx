@@ -27,6 +27,7 @@ const GRID_ACTION_KEYS: Readonly<Record<string, string>> = {
   "Cancel editing": "shell.gk.cancelEdit",
   "Copy / cut / paste": "shell.gk.copyCutPaste",
   "Fill down / right": "shell.gk.fill",
+  "Copy instead of continuing a series": "shell.gk.fillCopy",
   "Move cells (references follow)": "shell.gk.moveCells",
   "Enter as an array formula over the selection": "shell.gk.arrayEnter",
   "Find / Find & replace": "shell.gk.find",

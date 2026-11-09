@@ -1611,10 +1611,18 @@ pub enum PasteOperation {
 #[ts(export)]
 pub enum FillMode {
     /// Detect: numbers, dates, day/month names and numbered text form
-    /// series; other text and formulas are copied.
+    /// series; other text and formulas are copied. On a sheet whose data
+    /// is filtered (an AutoFilter with criteria, or a standard filter) it
+    /// copies instead and leaves filtered rows alone (AOO
+    /// `ScTable::FillAuto`, i89232).
     Auto,
-    /// Repeat the source.
+    /// Repeat the source (⌘D / ⌘R, AOO `FillSimple`): every target cell
+    /// is written, filtered rows included.
     Copy,
+    /// The fill handle dragged with the copy modifier (⌘ on macOS, Ctrl
+    /// elsewhere; AOO `KEY_MOD1`): repeats the source like `Copy`, and
+    /// like `Auto` leaves filtered rows alone on a filtered sheet.
+    AutoCopy,
     /// Linear series (step from the source, or 1).
     LinearSeries,
     /// Growth series (ratio from the source, or 1).

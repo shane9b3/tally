@@ -139,8 +139,17 @@ describe("Grid pointer interactions", () => {
     pointer(scroller, "pointerdown", { clientX: 163, clientY: 47 });
     pointer(scroller, "pointermove", at(4, 0));
     pointer(scroller, "pointerup", at(4, 0));
-    expect(onFill).toHaveBeenCalledWith({ r0: 0, c0: 0, r1: 0, c1: 0 }, { r0: 0, c0: 0, r1: 4, c1: 0 });
+    expect(onFill).toHaveBeenCalledWith({ r0: 0, c0: 0, r1: 0, c1: 0 }, { r0: 0, c0: 0, r1: 4, c1: 0 }, false);
     expect(grid.getSelection().range).toEqual({ r0: 0, c0: 0, r1: 4, c1: 0 });
+  });
+
+  it.each([{ metaKey: true }, { ctrlKey: true }])("the copy modifier held on release is passed to onFill (AOO KEY_MOD1): %o", (mod) => {
+    const onFill = vi.fn();
+    const { scroller } = make({ onFill });
+    pointer(scroller, "pointerdown", { clientX: 163, clientY: 47 });
+    pointer(scroller, "pointermove", at(4, 0));
+    pointer(scroller, "pointerup", at(4, 0), mod);
+    expect(onFill).toHaveBeenCalledWith({ r0: 0, c0: 0, r1: 0, c1: 0 }, { r0: 0, c0: 0, r1: 4, c1: 0 }, true);
   });
 
   it("double-clicking the fill handle asks the app to fill down", () => {

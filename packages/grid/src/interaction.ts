@@ -531,7 +531,9 @@ export class Interaction {
       if (drag.target) {
         const target = drag.target;
         host.select({ range: { ...target }, active: host.selection().active, anchor: { r: target.r0, c: target.c0 } }, { emit: true });
-        host.events().onFill?.({ ...drag.source }, { ...target });
+        // AOO reads the modifier when the button is released (gridwin.cxx
+        // MouseButtonUp: nScFillModeMouseModifier, KEY_MOD1 = ⌘ / Ctrl).
+        host.events().onFill?.({ ...drag.source }, { ...target }, e.metaKey || e.ctrlKey);
       }
     } else if (drag?.kind === "point" && this.pointSel) {
       host.pointRange({ ...this.pointSel.range }, "end");

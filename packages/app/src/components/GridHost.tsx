@@ -15,6 +15,7 @@ import { filterButtonsFor } from "../dataOps";
 import { useDataStore } from "../stores/dataStore";
 import { useController } from "../context";
 import { t } from "../i18n";
+import { fillHandleMode } from "../fill";
 import { formulaHighlights, isPointMode } from "../formulaEdit";
 import { useDocStore } from "../stores/docStore";
 import { useEditStore } from "../stores/editStore";
@@ -168,7 +169,7 @@ export function GridHost() {
         onCancelEdit={ctl.cancelEdit}
         onResize={ctl.resize}
         onAutoFit={(axis, start, end) => void ctl.autoFit(axis, start, end)}
-        onFill={(src, target) => void ctl.onFill(src, target)}
+        onFill={(src, target, copy) => void ctl.onFill(src, target, fillHandleMode(copy))}
         onFillHandleDoubleClick={(src) => void ctl.onFillHandleDoubleClick(src)}
         onPointRange={ctl.onPointRange}
         onEditorKeyDown={ctl.handleEditorKey}

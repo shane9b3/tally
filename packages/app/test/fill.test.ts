@@ -1,7 +1,7 @@
 import type { CellView } from "@tally/bridge";
 import { describe, expect, it } from "vitest";
 import { pasteBlocks, planSeries, toSourceValue, type SourceValue } from "../src/dev/mockFill";
-import { extensionOf, fillDownEnd, fillRange } from "../src/fill";
+import { extensionOf, fillDownEnd, fillHandleMode, fillRange } from "../src/fill";
 
 const num = (n: number, date = false): SourceValue => ({ kind: "number", num: n, date });
 const txt = (t: string): SourceValue => ({ kind: "text", text: t });
@@ -123,5 +123,17 @@ describe("fillRange (engine op)", () => {
     // ⌘D / ⌘R copy (AOO FillSimple).
     expect(fillRange({ sheet: 3 }, source, target, "copy")).toEqual([{ type: "fillRange", sheet: 3, source, target, mode: "copy" }]);
     expect(fillRange({ sheet: 3 }, source, source)).toEqual([]);
+  });
+});
+
+describe("fill-handle copy modifier (T16)", () => {
+  it("⌘ / Ctrl on release sends autoCopy, otherwise auto", () => {
+    expect(fillHandleMode(false)).toBe("auto");
+    expect(fillHandleMode(true)).toBe("autoCopy");
+    const src = { r0: 0, c0: 0, r1: 0, c1: 0 };
+    const tgt = { r0: 0, c0: 0, r1: 3, c1: 0 };
+    expect(fillRange({ sheet: 0 }, src, tgt, fillHandleMode(true))).toEqual([
+      { type: "fillRange", sheet: 0, source: src, target: tgt, mode: "autoCopy" },
+    ]);
   });
 });

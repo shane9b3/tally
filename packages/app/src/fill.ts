@@ -27,6 +27,15 @@ export function extensionOf(source: RangeDto, target: RangeDto, dir: FillDir): R
   }
 }
 
+/**
+ * The mode of a fill-handle drag: AutoFill, or with the copy modifier
+ * (⌘ / Ctrl held on release; AOO `KEY_MOD1`) a copy that, like AutoFill,
+ * leaves filtered rows alone.
+ */
+export function fillHandleMode(copy: boolean): FillMode {
+  return copy ? "autoCopy" : "auto";
+}
+
 /** The op that fills `target` (which contains `source` and extends it along one axis). */
 export function fillRange(ctx: FillContext, source: RangeDto, target: RangeDto, mode: FillMode = "auto"): Op[] {
   if (source.r0 === target.r0 && source.c0 === target.c0 && source.r1 === target.r1 && source.c1 === target.c1) return [];

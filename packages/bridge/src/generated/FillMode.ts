@@ -3,4 +3,4 @@
 /**
  * Series type of [`Op::FillRange`].
  */
-export type FillMode = "auto" | "copy" | "linearSeries" | "growthSeries" | "date";
+export type FillMode = "auto" | "copy" | "autoCopy" | "linearSeries" | "growthSeries" | "date";

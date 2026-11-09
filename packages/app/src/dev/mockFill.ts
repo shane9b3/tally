@@ -59,8 +59,10 @@ export async function emulateFill(ctx: FillContext, source: RangeDto, target: Ra
     ops.push({ type: "paste", sheet, target: ext, payload: { type: "internal", token: await tokenFor(source) } });
   }
 
-  // 2. Continue recognised series line by line (mode `copy`, ⌘D / ⌘R: the copies stay).
-  if (mode === "copy") return ops;
+  // 2. Continue recognised series line by line (mode `copy`, ⌘D / ⌘R, and
+  // `autoCopy`, a ⌘-drag of the fill handle: the copies stay). The demo
+  // engine does not skip filtered rows (the real engine does).
+  if (mode === "copy" || mode === "autoCopy") return ops;
   const [block] = await client.cells(doc, sheet, [source]);
   const byPos = new Map<string, CellView>();
   for (const c of block?.cells ?? []) byPos.set(`${c.r},${c.c}`, c);

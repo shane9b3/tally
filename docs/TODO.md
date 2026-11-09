@@ -59,7 +59,7 @@ real-file corpus).
 - Not built yet from the plan: multithreaded recalc, auto-update (tauri-plugin-updater), opt-in crash reporting.
 - Inventory gaps found 2026-10-27 (docs/calc-features-inventory.md 1.0 status; deviation IDs in docs/parity-deviations.md). Sizes: S < 1 day, M a few days, L a week or more.
   - Sheets and view: read-only mode (done 2026-11-02, see below); object display modes, guides, scroll-bar and outline-symbol toggles (U18, M); undo depth setting and undo / redo history lists (U17, M).
-  - Fill: Ctrl-drag copies, filtered ranges copy (T16, M).
+  - Fill: Ctrl-drag copies, filtered ranges copy (T16, done 2026-11-09, see below).
   - Formatting: Hide all / Hide when printing (G15, done 2026-11-06); `[NatNum]` / `[DBNum]` / calendar modifiers rendered (G7, L); Load Styles from another document (M).
   - Data: DataPilot filter button opens a filter dialog (T17, M); name options print range / filter / repeat incl. ODS `range-usable-as` (M).
   - Charts: chart data table editor for internal data (T18, M); cylinder / cone / pyramid shapes (T10, L).
@@ -67,6 +67,7 @@ real-file corpus).
 
 - Small AOO 4.1 options (2026-11-09, from the AOO41X source): two-digit year window (P17: Options ▸ Input ▸ "Year (two digits)", new and opened documents, ODS `table:null-year`), "Limit decimals for general number format" (Calculate tab, ODS `style:decimal-places` on the default cell style, also used by precision as shown) and zoom 20-400 % (U18: View ▸ Zoom dialog, pinch / ⌃-wheel, per-sheet ODS `ZoomValue` / XLSX `zoomScale`).
 - Small AOO 4.1 parity items (2026-11-09, from the AOO41X source): Validity "Sort entries ascending" with the ODS `table:display-list` round trip (G16 done); Data ▸ Select Range and Refresh Range (`RepeatDB`: database ranges now keep their sort, ODS `table:sort`; remaining differences T19); Edit ▸ Fill ▸ Up / Left.
+- Fill handle copy modifier and filtered sheets (T16, 2026-11-09, AOO `ScTable::FillAnalyse` / `FillAuto`, gridwin.cxx `nScFillModeMouseModifier`): ⌘ (Ctrl elsewhere) held when the fill-handle drag is released copies the source for every content type (new `FillMode::AutoCopy`); on a sheet with an active AutoFilter or standard filter, AutoFill copies and writes only the rows that are not filtered (the pattern advances over written rows only; filling right / left leaves filtered rows alone). ⌘D / ⌘R and the Fill Series linear, growth and date types still write every target cell, as in AOO (Series ▸ AutoFill behaves like the fill handle).
 
 - Tools ▸ Detective at AOO 4.1 parity (2026-11-06): the AOO menu (Trace / Remove Precedents, Trace / Remove Dependents, Remove All Traces, Trace Error, Mark Invalid Data, Refresh Traces, AutoRefresh, Fill Mode); each Trace adds one level and each Remove takes the outermost away (`ScDetectiveFunc::ShowPred` / `FindPredLevel`); the operation list (`ScDetOpList`) moves with rows and columns, is replayed by Refresh Traces and by AutoRefresh after formula changes (any change with a Trace Error), and round-trips as ODS `table:detective`/`table:operation` (plus `table:highlighted-range`); arrows from / to other sheets with a sheet icon; Fill Mode clicks trace precedents until Esc. Remaining differences: T12.
 

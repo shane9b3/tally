@@ -91,6 +91,27 @@ test("fill handle continues a numeric series", async ({ page }) => {
   await expect(page.getByTestId("name-box")).toHaveValue("A1:A5");
 });
 
+test("fill handle with ⌘ held on release copies instead of continuing (T16)", async ({ page }) => {
+  await ready(page);
+  await typeInto(page, 0, 0, "1");
+  await typeInto(page, 1, 0, "2");
+  await clickCell(page, 0, 0);
+  await page.keyboard.press("Shift+ArrowDown");
+  await expect(page.getByTestId("name-box")).toHaveValue("A1:A2");
+  const b = await gridBox(page);
+  const hx = b.x + b.headerW + COL_W - 1;
+  const hy = b.y + HEADER_H + 2 * ROW_H - 1;
+  await page.mouse.move(hx, hy);
+  await page.mouse.down();
+  const to = await cellXY(page, 4, 0);
+  await page.mouse.move(to.x, to.y, { steps: 6 });
+  await page.keyboard.down("Meta");
+  await page.mouse.up();
+  await page.keyboard.up("Meta");
+  await expect.poll(() => texts(page, 0, 0, 4, 0)).toEqual(["1", "2", "1", "2", "1"]);
+  await expect(page.getByTestId("name-box")).toHaveValue("A1:A5");
+});
+
 test("multi-range selection: stats cover every range", async ({ page }) => {
   await ready(page);
   await typeInto(page, 0, 0, "1");
