@@ -78,6 +78,9 @@ export function StylesPanel() {
             {t("dialog.delete", "Delete")}
           </button>
         ) : null}
+        <button type="button" className={w56.iconBtn} onClick={() => ctl.w56.openLoadStyles()} data-testid="styles-load">
+          {t("cmd.format.loadStyles", "Load Styles…")}
+        </button>
       </div>
       <div className={w56.panelBody} role="listbox" aria-label={t("styles.cellStyles", "Cell styles")} onKeyDown={(e) => void arrowNav(e, { select: false })}>
         {styles.map((s) => (

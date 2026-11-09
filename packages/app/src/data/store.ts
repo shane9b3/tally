@@ -63,6 +63,8 @@ export type W56Dialog =
   | { kind: "documentStats"; stats: DocumentStatsDto }
   | { kind: "recovery"; files: RecoveryFile[] }
   | { kind: "saveAsTemplate"; name: string }
+  /** Format ▸ Load Styles… (a template or a file; cell styles, page styles, overwrite). */
+  | { kind: "loadStyles" }
   | { kind: "selectionList"; cell: CellPos; items: string[]; rect: { left: number; top: number; bottom: number } };
 
 export type OptionsTab = "calculate" | "view" | "input" | "formula" | "sortLists" | "loadSave" | "memory" | "language";

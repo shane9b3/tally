@@ -434,6 +434,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "edit.fillSeries", title: t("cmd.edit.fillSeries", "Fill series…"), kind: "Edit", keywords: ["linear", "growth", "dates"], ...notEditing, run: () => ctl.w56.openFillSeries() },
     { id: "format.cells", title: t("cmd.format.cells", "Format cells…"), kind: "Format", keywords: ["rotation", "indent", "shrink", "diagonal"], ...sc("format.cells"), run: () => void ctl.w56.openFormatCells() },
     { id: "format.autoFormat", title: t("cmd.format.autoFormat", "AutoFormat…"), kind: "Format", keywords: ["table style", "preset"], run: () => void ctl.w56.openAutoFormat() },
+    { id: "format.loadStyles", title: t("cmd.format.loadStyles", "Load Styles…"), kind: "Format", keywords: ["styles", "template", "import styles"], run: () => ctl.w56.openLoadStyles() },
     { id: "view.stylesPanel", title: t("cmd.view.stylesPanel", "Styles panel"), kind: "View", keywords: ["cell styles", "heading", "result"], ...sc("view.stylesPanel"), run: () => ctl.w56.toggleStylesPanel() },
     { id: "view.pageBreakPreview", title: t("cmd.view.pageBreakPreview", "Page break preview"), kind: "View", keywords: ["print", "pages"], run: () => ctl.w5.view.togglePageBreakPreview() },
     { id: "view.split", title: t("cmd.view.split", "Split window"), kind: "View", keywords: ["panes", "divider"], run: () => ctl.w5.view.toggleSplit() },

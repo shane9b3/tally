@@ -144,7 +144,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Cell styles Default, Result, Result2, Heading, Heading1, parents | done | Styles panel `⌘F11` |
 | Create from selection, update, paint can | done | |
 | Page styles (Default, Report) | missing | Page setup is per sheet (G8) |
-| Load styles from another document | missing | No command |
+| Load styles from another document | done | Format ▸ Load Styles…, Styles panel: templates or a file; cell styles, page format (per sheet, G18), Overwrite |
 | STYLE() | partial | Returns 0, applies nothing |
 | Conditional formats apply cell styles | deviation (G9) | |
 

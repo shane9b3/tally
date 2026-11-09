@@ -13,7 +13,7 @@ use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
-use tally_api::{ApiError, DocId, FileFormat, WorkbookInfo};
+use tally_api::{ApiError, ApplyResult, DocId, FileFormat, LoadStylesOptions, WorkbookInfo};
 use tauri::{AppHandle, Manager, Runtime};
 use zip::write::SimpleFileOptions;
 
@@ -242,6 +242,57 @@ pub async fn new_from_user_template(app: AppHandle, id: String) -> CmdResult<Wor
     blocking(app, move |app, st| {
         let path = path_of(app, &id)?;
         open_as_untitled(st, &path)
+    })
+    .await
+}
+
+/// Load Styles from the file at `path` (any format Open reads, with the
+/// engine's open limits: the file is untrusted input).
+pub fn load_styles_file(
+    st: &AppState,
+    doc: DocId,
+    path: &Path,
+    opts: LoadStylesOptions,
+    label: Option<&str>,
+) -> CmdResult<ApplyResult> {
+    with_doc(st, doc, |s| s.load_styles(doc, path, &opts, label))
+}
+
+/// Load Styles from a template: a built-in id (`invoices`) or a user
+/// template (`user:<stem>`, resolved inside the templates folder).
+pub fn load_styles_template<R: Runtime>(
+    app: &AppHandle<R>,
+    st: &AppState,
+    doc: DocId,
+    id: &str,
+    opts: LoadStylesOptions,
+    label: Option<&str>,
+) -> CmdResult<ApplyResult> {
+    if id.starts_with(PREFIX) {
+        let path = path_of(app, id)?;
+        return load_styles_file(st, doc, &path, opts, label);
+    }
+    with_doc(st, doc, |s| {
+        s.load_styles_from_template(doc, id, &opts, label)
+    })
+}
+
+/// `load_styles_from_template(doc, id, opts, label)`: Format ▸ Load
+/// Styles… with a template chosen in the dialog's list.
+#[tauri::command]
+pub async fn load_styles_from_template(
+    app: AppHandle,
+    doc: DocId,
+    id: String,
+    opts: LoadStylesOptions,
+    label: Option<String>,
+) -> CmdResult<ApplyResult> {
+    crate::limits::text_max("the template id", &id, crate::limits::MAX_PATH)?;
+    if let Some(l) = &label {
+        crate::limits::chars_max("the undo label", l, crate::limits::MAX_NAME_CHARS)?;
+    }
+    blocking(app, move |app, st| {
+        load_styles_template(app, st, doc, &id, opts, label.as_deref())
     })
     .await
 }

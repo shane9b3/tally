@@ -55,7 +55,8 @@ import { MockDetective, type DetSnapshot } from "./mockDetective";
 import { signedFormulaInput } from "./mockSignedInput";
 import { applyCfPatch, evaluateFormat, type CfDecoration } from "./mockCf";
 import { applyV3Op, cellKey, DEFAULT_VALIDATION_MESSAGE, emptyV3, isHiddenCell, isHidePrint, MOCK_LOCALES, passes, protectionRefusal, validationAt, type V3Ext } from "./mockV3";
-import { applyW56Op, autocompleteOf, cellStylesOf, decorateSheets, emptyW56, navigatorOf, pivotFieldItemsOf, pivotHitAt, stdFilterHidden, type W56Ctx, type W56Ext } from "./mockW56";
+import { applyW56Op, autocompleteOf, builtinStyles, cellStylesOf, decorateSheets, emptyW56, navigatorOf, pivotFieldItemsOf, pivotHitAt, stdFilterHidden, templateCellStyles, type W56Ctx, type W56Ext } from "./mockW56";
+import { pageStyleOn, planLoadStyles } from "../styles/loadStyles";
 import { applyW5Op, BLANK_PNG, chartDataFor, chartsTouched, dependentsOf, emptyW5, pageBreaksFor, precedentsOf, printLayoutFor, refsIn, renderPagePng, suggestChartFor, type W5Ext } from "./mockW5";
 import { parseAbsoluteRef } from "../dataOps";
 import { nextUnlocked as walkUnlocked } from "./nextUnlocked";
@@ -107,7 +108,8 @@ import { dateTexts, DEFAULT_TWO_DIGIT_YEAR, limitGeneral, recognizeTwoDigitDate,
 import { readLocalPrefs } from "../options/prefs";
 import { liteLocaleOf } from "../styles/numberFormat";
 import { INVALID_SCAN_CAP, invalidCells as invalidCellsOf } from "../detective/detective";
-import type { CellPos, CellsOptions, Direction, PasteOptions, PastePayload, ViewOptionsDto } from "@tally/bridge";
+import type { CellPos, CellsOptions, Direction, LoadStylesOptions, PasteOptions, PastePayload, ViewOptionsDto } from "@tally/bridge";
+import { BUILTIN_TEMPLATES } from "@tally/bridge";
 
 /** Synthesized conditional-format style ids start here (as in the engine). */
 export const CF_STYLE_BASE = 0x4000_0000;
@@ -812,9 +814,37 @@ export class WebMockClient extends MockClient {
   async saveAsTemplate(doc: DocId, name: string): Promise<void> {
     this.recordedCalls.push({ type: "saveAsTemplate", doc, name });
     this.userTemplates.push({ id: `user:${name}`, title: name, description: "User template (browser demo)" });
+    // What Load Styles copies from it later: the named styles and the first sheet's page setup.
+    this.templateStyles.set(`user:${name}`, { styles: await this.cellStyles(doc), page: await this.pageSetup(doc, this.firstSheet(doc)) });
   }
 
   private readonly userTemplates: { id: string; title: string; description: string }[] = [];
+  private readonly templateStyles = new Map<string, { styles: CellStyleDto[]; page: PageSetupDto }>();
+
+  /**
+   * Load Styles from a template (`load_styles_from_template`; the engine's
+   * `loadstyles.rs`), emulated with `defineCellStyle` / `setPageSetup` ops
+   * through `apply` so it is one undo step. The browser build has no
+   * "From File…" (no `loadStylesFromFile`).
+   */
+  async loadStylesFromTemplate(doc: DocId, id: string, opts: LoadStylesOptions, label: string | null): Promise<ApplyResult> {
+    this.recordedCalls.push({ type: "loadStylesFromTemplate", doc, id, opts });
+    const builtin = BUILTIN_TEMPLATES.some((x) => x.id === id) ? { styles: [...builtinStyles(), ...templateCellStyles()], page: defaultPageSetup() } : undefined;
+    const src = this.templateStyles.get(id) ?? builtin;
+    if (!src) throw { code: "not_found", message: `no template "${id}"` };
+    const ops: Op[] = [];
+    if (opts.cellStyles) {
+      for (const style of planLoadStyles(await this.cellStyles(doc), src.styles, opts.overwrite)) ops.push({ type: "defineCellStyle", style });
+    }
+    if (opts.pageStyles && opts.overwrite) {
+      for (const sheet of this.sheetOrder.get(doc) ?? [this.firstSheet(doc)]) {
+        const cur = await this.pageSetup(doc, sheet);
+        const setup = pageStyleOn(src.page, cur);
+        if (JSON.stringify(setup) !== JSON.stringify(cur)) ops.push({ type: "setPageSetup", sheet, setup });
+      }
+    }
+    return this.apply(doc, { ops, label, selectionBefore: null, selectionAfter: null });
+  }
 
   async listUserTemplates(): Promise<{ id: string; title: string; description: string }[]> {
     return [...this.userTemplates];

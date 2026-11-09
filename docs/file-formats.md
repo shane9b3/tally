@@ -396,8 +396,9 @@ loses.
   `style:display-name`; names are escaped `_20_`-style). Cell automatic
   styles name their base style as parent. Attributes are stored resolved,
   so a redefined parent in another application does not change Tally's
-  children (and vice versa). The number format of a named style is not
-  written (the cells carry theirs).
+  children (and vice versa). The number format of a named style is written
+  as a common data style `NS<i>` in office:styles (since 2026-11-09, for
+  Load Styles; before, only the cells carried it) and read back.
 - **Format extras**: `style:rotation-angle`, `style:direction="ttb"`
   (stacked), `style:shrink-to-fit`, `style:diagonal-tl-br` /
   `style:diagonal-bl-tr`, `style:text-underline-style` / `-type` / `-width`

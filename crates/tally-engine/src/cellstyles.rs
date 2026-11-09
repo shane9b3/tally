@@ -40,7 +40,7 @@ pub fn is_builtin(name: &str) -> bool {
 }
 
 /// The resolved attributes of the built-in styles (AOO 4.1 `sc` defaults).
-fn builtin_data(name: &str) -> Option<CellStyleData> {
+pub(crate) fn builtin_data(name: &str) -> Option<CellStyleData> {
     let mut s = StyleData::default();
     let parent = match name {
         "Default" => None,
@@ -85,14 +85,19 @@ fn builtin_data(name: &str) -> Option<CellStyleData> {
 /// The style table with the built-ins first (the stored table may hold
 /// only user styles, or redefined built-ins).
 pub fn table(wb: &Workbook) -> Vec<CellStyleData> {
-    let mut out: Vec<CellStyleData> = Vec::with_capacity(wb.cell_styles.len() + 5);
+    table_of(&wb.cell_styles)
+}
+
+/// [`table`] of a stored style list (another document's, for Load Styles).
+pub fn table_of(stored: &[CellStyleData]) -> Vec<CellStyleData> {
+    let mut out: Vec<CellStyleData> = Vec::with_capacity(stored.len() + 5);
     for b in BUILTIN {
-        match wb.cell_styles.iter().find(|s| s.name == b) {
+        match stored.iter().find(|s| s.name == b) {
             Some(s) => out.push(s.clone()),
             None => out.extend(builtin_data(b)),
         }
     }
-    for s in &wb.cell_styles {
+    for s in stored {
         if !is_builtin(&s.name) && !out.iter().any(|x| x.name == s.name) {
             out.push(s.clone());
         }
@@ -303,7 +308,7 @@ pub fn after_table_change(wb: &mut Workbook, old: &[CellStyleData]) {
     });
 }
 
-fn check_name(name: &str) -> Result<(), ApiError> {
+pub(crate) fn check_name(name: &str) -> Result<(), ApiError> {
     let n = name.trim();
     if n.is_empty() || n.chars().count() > 255 || n.contains(['\u{0}', '\n', '\r']) {
         return Err(ApiError::invalid_argument("bad style name"));

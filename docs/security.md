@@ -901,6 +901,28 @@ Residual risk: `recent.json` lives in the user's config directory, so
 anything that can write there can add entries; that attacker already has
 the user's file access.
 
+### Load Styles (2026-11-09)
+
+Format ▸ Load Styles… reads another document, which is as untrusted as any
+file opened. JS never names that file: `load_styles_dialog` shows the
+native Open panel and reads only the path picked there, and
+`load_styles_from_template` takes a built-in template **id** (built in code)
+or a `user:<stem>` id that `templates::path_of` checks like New from Template
+(`check_name`, canonicalized inside the templates folder). The file goes
+through the same reader as Open (`EngineService::decode_file`: the 512 MiB
+file cap, the codecs' zip / XML / cell budgets, at most `MAX_SHEETS`
+sheets); only its named cell styles and its first sheet's page setup are
+used, and the decoded workbook is dropped before the styles are applied (no
+formulas are evaluated, no recalc budget is spent on it). The imported
+table is checked like a defined style: names that `check_name` refuses are
+skipped, parent chains are followed at most 64 deep and a chain that would
+loop is cut at `Default`, and the document keeps at most 10,000 named
+styles (`MAX_CELL_STYLES`; an import that would exceed it fails before
+anything changes). The undo label is capped at 256 characters
+(`limits::chars_max`). Tests: `tally-engine` `loadstyles::hostile_sources_are_contained`,
+`files::missing_and_bogus_files_fail_cleanly`; `tally-desktop`
+`load_styles_from_a_file_and_a_builtin_template`.
+
 ### Tests
 
 - `cargo test -p tally-desktop`: menu ids; command-layer end-to-end over the real engine (templates, assist, ODS/CSV round trip, allowlist rejection, panic and poison recovery).

@@ -491,6 +491,8 @@ stand-ins).
 | `save_as_template` | `doc, name` | `void` | Saves a copy (`save_copy`) as `<app data>/templates/<name>.ots` (the ODS zip re-packed with the `…spreadsheet-template` mimetype). Names: 1–80 characters, no `/ \ : * ? " < > \|`. |
 | `list_user_templates` | — | `TemplateInfo[]` (`id: "user:<name>"`) | The templates folder. |
 | `new_from_user_template` | `id` | `WorkbookInfo` | Opens a user template as an untitled workbook (no path, so Save asks). |
+| `load_styles_from_template` | `doc, id, opts, label` | `ApplyResult` | Load Styles from a built-in template id or a `user:<name>` template: `opts` is `LoadStylesOptions` (`{ cellStyles, pageStyles, overwrite }`), one undo step labelled `label` (`DocumentService::load_styles_from_template` / `load_styles`). |
+| `load_styles_dialog` | `doc, opts, label` | `ApplyResult \| null` | Load Styles ▸ From File…: the native Open panel, then `DocumentService::load_styles` on the picked file (Open's readers and limits); `null` when cancelled. |
 | `set_ui_language` | `lang` | `void` | Stores `uiLanguage` in `prefs.json` and rebuilds the native menu with `tally_l10n::t()` labels (`cmd.<id>`, `menu.*`). |
 | `ui_strings` | `lang` | `{ key: text }` | The flat UI table of a locale (the app ships copies under `packages/app/src/i18n/`). |
 | `localized_function_names` | `lang` | `[canonical, localized][]` | The function-name table of a locale (the app ships a generated copy, `functionNames.json`). |

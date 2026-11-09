@@ -440,39 +440,7 @@ pub fn write_atomically(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
 impl EngineService {
     /// Reads and decodes `path` into a document with id `id` (not filed).
     fn load_file(&self, id: DocId, path: &Path) -> Result<Document> {
-        let meta =
-            std::fs::metadata(path).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
-        if meta.len() > MAX_FILE_BYTES {
-            return Err(ApiError::new(
-                ApiError::BAD_FILE,
-                format!(
-                    "limit exceeded: the file is too large or complex to open safely \
-                     (file size over {} MiB)",
-                    MAX_FILE_BYTES / (1024 * 1024)
-                ),
-            ));
-        }
-        let ext = path
-            .extension()
-            .map(|e| e.to_string_lossy().to_ascii_lowercase())
-            .unwrap_or_default();
-        // The file bytes are dropped as soon as they are decoded and the
-        // decoded cells while they are loaded, so neither adds to the peak
-        // memory of an open.
-        let mut decoded = {
-            let bytes =
-                std::fs::read(path).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
-            self.codec.read(&bytes, &ext)?
-        };
-        if decoded.data.sheets.len() > crate::workbook::MAX_SHEETS {
-            return Err(ApiError::new(
-                ApiError::BAD_FILE,
-                format!(
-                    "the file has more than {} sheets",
-                    crate::workbook::MAX_SHEETS
-                ),
-            ));
-        }
+        let mut decoded = self.decode_file(path)?;
         // Only the first unnamed sheet (a CSV's only sheet) takes the file
         // name; other unnamed sheets get `SheetN` from `from_data`.
         if let Some(s) = decoded
@@ -507,6 +475,46 @@ impl EngineService {
         }
         doc.has_macros = decoded.has_macros;
         Ok(doc)
+    }
+
+    /// Reads and decodes `path` with the limits of an open (file size,
+    /// the codec's own budgets, sheet count). Also Load Styles' reader:
+    /// the other file is as untrusted as any file opened.
+    fn decode_file(&self, path: &Path) -> Result<Decoded> {
+        let meta =
+            std::fs::metadata(path).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+        if meta.len() > MAX_FILE_BYTES {
+            return Err(ApiError::new(
+                ApiError::BAD_FILE,
+                format!(
+                    "limit exceeded: the file is too large or complex to open safely \
+                     (file size over {} MiB)",
+                    MAX_FILE_BYTES / (1024 * 1024)
+                ),
+            ));
+        }
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        // The file bytes are dropped as soon as they are decoded and the
+        // decoded cells while they are loaded, so neither adds to the peak
+        // memory of an open.
+        let decoded = {
+            let bytes =
+                std::fs::read(path).map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+            self.codec.read(&bytes, &ext)?
+        };
+        if decoded.data.sheets.len() > crate::workbook::MAX_SHEETS {
+            return Err(ApiError::new(
+                ApiError::BAD_FILE,
+                format!(
+                    "the file has more than {} sheets",
+                    crate::workbook::MAX_SHEETS
+                ),
+            ));
+        }
+        Ok(decoded)
     }
 
     /// The document, if it may be edited; [`ApiError::READ_ONLY`] if it is
@@ -755,6 +763,35 @@ impl DocumentService for EngineService {
 
     fn undo_steps(&mut self, doc: DocId, count: u32) -> Result<ApplyResult> {
         Ok(self.editable(doc)?.undo_steps(count))
+    }
+
+    fn load_styles(
+        &mut self,
+        doc: DocId,
+        path: &Path,
+        opts: &tally_api::LoadStylesOptions,
+        label: Option<&str>,
+    ) -> Result<ApplyResult> {
+        // Refuse a read-only document before reading the other file.
+        self.editable(doc)?;
+        let decoded = self.decode_file(path)?;
+        let source = crate::loadstyles::StyleSource::from_data(&decoded.data);
+        drop(decoded);
+        self.editable(doc)?.load_styles(&source, opts, label)
+    }
+
+    fn load_styles_from_template(
+        &mut self,
+        doc: DocId,
+        template: &str,
+        opts: &tally_api::LoadStylesOptions,
+        label: Option<&str>,
+    ) -> Result<ApplyResult> {
+        self.editable(doc)?;
+        let (wb, _) = templates::build(template)
+            .ok_or_else(|| ApiError::not_found(format!("no template {template:?}")))?;
+        let source = crate::loadstyles::StyleSource::from_workbook(&wb);
+        self.editable(doc)?.load_styles(&source, opts, label)
     }
 
     fn redo_steps(&mut self, doc: DocId, count: u32) -> Result<ApplyResult> {

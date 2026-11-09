@@ -1932,6 +1932,24 @@ pub struct UndoHistory {
     pub redo: Vec<String>,
 }
 
+/// Load Styles: which style families to copy from another document and
+/// whether styles of the same name are replaced (AOO's
+/// `XStyleLoader::loadStylesFromURL` options `LoadCellStyles`,
+/// `LoadPageStyles`, `OverwriteStyles`; `ScDocShell::LoadStylesArgs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LoadStylesOptions {
+    /// Copy the cell styles.
+    pub cell_styles: bool,
+    /// Copy the page style (Tally: the source's first sheet's page
+    /// format, applied to every sheet; needs `overwrite`).
+    pub page_styles: bool,
+    /// Replace styles that exist here under the same name (else only new
+    /// names are added).
+    pub overwrite: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Selection, editing and assistance
 // ---------------------------------------------------------------------------

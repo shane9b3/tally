@@ -62,6 +62,7 @@ pub mod formula_cells;
 pub mod goalseek;
 pub mod group;
 pub mod images;
+pub mod loadstyles;
 pub mod lookup_cache;
 pub mod moves;
 pub mod names;

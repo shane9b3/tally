@@ -235,6 +235,43 @@ pub async fn wb_open_dialog(
     pick_and_open(app, read_only.unwrap_or(false)).await
 }
 
+/// `load_styles_dialog(doc, opts, label)`: Load Styles ▸ From File…: the
+/// Open panel ([`OPEN_FILTERS`]), then the chosen file's styles are loaded
+/// into `doc` (`templates::load_styles_file`, the engine's open limits).
+/// `null` when the user cancels.
+#[tauri::command]
+pub async fn load_styles_dialog(
+    app: AppHandle,
+    doc: DocId,
+    opts: tally_api::LoadStylesOptions,
+    label: Option<String>,
+) -> CmdResult<Option<tally_api::ApplyResult>> {
+    if let Some(l) = &label {
+        crate::limits::chars_max("the undo label", l, crate::limits::MAX_NAME_CHARS)?;
+    }
+    let handle = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        let dialog = handle.dialog().file().set_title("Load Styles");
+        let dialog = open_dialog_filters()
+            .iter()
+            .fold(dialog, |d, (label, exts)| d.add_filter(*label, exts));
+        dialog.blocking_pick_file()
+    })
+    .await
+    .map_err(join_err)?;
+    let Some(file) = picked else {
+        return Ok(None);
+    };
+    let path = file
+        .into_path()
+        .map_err(|e| ApiError::invalid_argument(format!("unsupported location: {e}")))?;
+    blocking(app, move |_, st| {
+        crate::templates::load_styles_file(st, doc, &path, opts, label.as_deref())
+    })
+    .await
+    .map(Some)
+}
+
 /// File ▸ Open… with no document window (macOS): the dialog, then a window
 /// for the file. Errors are logged (there is no webview to show them). A
 /// file someone else has locked opens read-only: with no window to ask in,

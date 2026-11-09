@@ -91,6 +91,7 @@ import type { DetectiveAction } from "./generated/DetectiveAction";
 import type { DetectiveState } from "./generated/DetectiveState";
 import type { ViewOptionsDto } from "./generated/ViewOptionsDto";
 import type { UndoHistory } from "./generated/UndoHistory";
+import type { LoadStylesOptions } from "./generated/LoadStylesOptions";
 import type { CellsOptions } from "./generated/CellsOptions";
 import { isApiError, type EngineClientV4, type SheetId, type Unsubscribe } from "./client";
 import type { EditModeOption, EditModeResult, FontFamilyInfo, OpenMode, ShellClient, TemplateInfo } from "./shell";
@@ -214,6 +215,9 @@ export const COMMANDS = {
   saveAsTemplate: "save_as_template",
   listUserTemplates: "list_user_templates",
   newFromUserTemplate: "new_from_user_template",
+  // Load Styles (templates.rs, dialogs.rs)
+  loadStylesFromTemplate: "load_styles_from_template",
+  loadStylesFromFile: "load_styles_dialog",
   setUiLanguage: "set_ui_language",
   clearRecent: "clear_recent",
   // Unsaved-changes guard: apps/desktop/src-tauri/src/closing.rs
@@ -284,6 +288,9 @@ export const W56_SHELL_COMMANDS = ["getPrefs", "setPrefs", "autosave", "listReco
 
 /** The read-only mode's shell commands; `readOnly.test.ts` covers them. */
 export const READ_ONLY_SHELL_COMMANDS = ["setReadOnly"] as const satisfies readonly (keyof typeof COMMANDS)[];
+
+/** Load Styles (templates.rs, dialogs.rs); `loadStyles.test.ts` covers them. */
+export const LOAD_STYLES_SHELL_COMMANDS = ["loadStylesFromTemplate", "loadStylesFromFile"] as const satisfies readonly (keyof typeof COMMANDS)[];
 
 /** The unsaved-changes guard's shell commands (closing.rs); `unsaved.test.ts` covers them. */
 export const CLOSE_SHELL_COMMANDS = ["setDocumentEdited", "confirmClose", "cancelQuit"] as const satisfies readonly (keyof typeof COMMANDS)[];
@@ -812,6 +819,16 @@ export class TauriClient implements EngineClientV4, ShellClient {
   /** `new_from_user_template`: opens a user template as an untitled workbook. */
   newFromUserTemplate(id: string): Promise<WorkbookInfo> {
     return this.call(COMMANDS.newFromUserTemplate, { id });
+  }
+
+  /** `load_styles_from_template`: Load Styles from a built-in (`invoices`) or user (`user:<stem>`) template. */
+  loadStylesFromTemplate(doc: DocId, id: string, opts: LoadStylesOptions, label: string | null): Promise<ApplyResult> {
+    return this.call(COMMANDS.loadStylesFromTemplate, { doc, id, opts, label });
+  }
+
+  /** `load_styles_dialog`: Load Styles ▸ From File… (native Open panel); `null` when cancelled. */
+  loadStylesFromFile(doc: DocId, opts: LoadStylesOptions, label: string | null): Promise<ApplyResult | null> {
+    return this.call(COMMANDS.loadStylesFromFile, { doc, opts, label });
   }
 
   /** `set_ui_language`: stores the language and rebuilds the native menu. */

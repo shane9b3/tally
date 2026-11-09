@@ -161,6 +161,23 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
     }
     s.push_str("</style:default-style>");
     s.push_str(r#"<style:style style:name="Default" style:family="table-cell"/>"#);
+    // The named styles' number formats (common data styles `NS<i>`, as
+    // AOO writes a style's `style:data-style-name` into office:styles).
+    let mut named_data: HashMap<&str, String> = HashMap::new();
+    for (i, st) in data.cell_styles.iter().enumerate() {
+        let Some(code) = st.style.number_format.as_deref() else {
+            continue;
+        };
+        if code.is_empty() || code.eq_ignore_ascii_case("General") {
+            continue;
+        }
+        let name = format!("NS{i}");
+        let mut xml = String::new();
+        if code_to_xml(code, &name, &mut xml).is_ok() {
+            s.push_str(&xml);
+            named_data.insert(st.name.as_str(), name);
+        }
+    }
     // Wave 5: named cell styles with their parent chains.
     crate::tools::write_named_styles(&mut s, data, &|out, name, st| {
         let parent = st
@@ -170,7 +187,8 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
             .unwrap_or_else(|| "Default".into());
         let mut display = String::new();
         escape_attr(&st.name, &mut display);
-        cell_style_xml_with(out, name, &parent, Some(&display), &st.style, None);
+        let ds = named_data.get(st.name.as_str()).map(String::as_str);
+        cell_style_xml_with(out, name, &parent, Some(&display), &st.style, ds);
     });
     s.push_str(&plan.cf_data_xml);
     for (st, name, ds) in &plan.cf_styles {

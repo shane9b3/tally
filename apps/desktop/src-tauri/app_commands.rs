@@ -99,6 +99,8 @@ pub const APP_COMMANDS: &[&str] = &[
     "save_as_template",
     "list_user_templates",
     "new_from_user_template",
+    "load_styles_from_template",
+    "load_styles_dialog",
     "set_ui_language",
     "ui_strings",
     "localized_function_names",

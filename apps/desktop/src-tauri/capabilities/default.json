@@ -106,6 +106,8 @@
     "allow-save-as-template",
     "allow-list-user-templates",
     "allow-new-from-user-template",
+    "allow-load-styles-from-template",
+    "allow-load-styles-dialog",
     "allow-set-ui-language",
     "allow-ui-strings",
     "allow-localized-function-names",

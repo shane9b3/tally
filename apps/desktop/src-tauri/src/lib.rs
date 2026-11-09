@@ -197,6 +197,8 @@ pub fn run() {
             templates::save_as_template,
             templates::list_user_templates,
             templates::new_from_user_template,
+            templates::load_styles_from_template,
+            dialogs::load_styles_dialog,
             l10n::set_ui_language,
             l10n::ui_strings,
             l10n::localized_function_names,

@@ -555,6 +555,15 @@ export function builtinStyles(): CellStyleDto[] {
   ];
 }
 
+/** The named styles of the built-in templates (`tally_engine::service::templates::named_styles`). */
+export function templateCellStyles(): CellStyleDto[] {
+  return [
+    { name: "Table Header", parent: "Default", builtin: false, style: { ...BASE_STYLE, bold: true, fill: 0xdde4eeff } },
+    { name: "Amount", parent: "Default", builtin: false, style: { ...BASE_STYLE, numberFormat: "#,##0.00" } },
+    { name: "Remark", parent: "Default", builtin: false, style: { ...BASE_STYLE, italic: true, color: 0x666666ff } },
+  ];
+}
+
 export function cellStylesOf(x: W56Ext): CellStyleDto[] {
   const custom = x.styles.filter((s) => !builtinStyles().some((b) => b.name === s.name));
   const overridden = builtinStyles().map((b) => x.styles.find((s) => s.name === b.name) ?? b);

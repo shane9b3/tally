@@ -21,6 +21,7 @@ import {
   type DeleteContentsFlags,
   type EngineClientV4,
   type FunctionInfo,
+  type LoadStylesOptions,
   type NavigatorDto,
   type Op,
   type PivotDto,
@@ -78,6 +79,8 @@ export interface W56Shell {
   saveAsTemplate?(doc: number, name: string): Promise<void>;
   listUserTemplates?(): Promise<{ id: string; title: string; description: string }[]>;
   newFromUserTemplate?(id: string): Promise<WorkbookInfo>;
+  loadStylesFromTemplate?(doc: number, id: string, opts: LoadStylesOptions, label: string | null): Promise<ApplyResult>;
+  loadStylesFromFile?(doc: number, opts: LoadStylesOptions, label: string | null): Promise<ApplyResult | null>;
   setUiLanguage?(lang: string): Promise<void>;
 }
 
@@ -213,6 +216,8 @@ export class W56Features {
   afterResult(res: ApplyResult, ops: readonly Op[] | null): void {
     if (res.pivotsChanged || ops?.some((o) => o.type === "createPivot" || o.type === "updatePivot" || o.type === "deletePivot" || o.type === "refreshPivot" || o.type === "pivotDrillDown")) void this.refreshPivots();
     if (ops?.some((o) => o.type === "defineCellStyle" || o.type === "deleteCellStyle")) void this.refreshCellStyles();
+    // Undo / redo (and Load Styles) may change the style table.
+    else if (ops === null && this.store.panel === "styles") void this.refreshCellStyles();
     if (ops?.some((o) => o.type === "createScenario" || o.type === "deleteScenario" || o.type === "updateScenario")) void this.refreshNavigatorPanel();
     // Undo/redo (ops === null), view-option edits and layout changes: the engine's view options are re-read.
     if (ops === null || ops.some((o) => o.type === "setViewOptions") || res.layoutChanged.includes(this.sheet)) void this.refreshView(false);
@@ -956,6 +961,41 @@ export class W56Features {
     const res = await this.ctl.apply(t("msg.undo.cellStyle", "Cell style"), [{ type: "defineCellStyle", style: s }]);
     await this.refreshCellStyles();
     return res !== null && res.errors.length === 0;
+  }
+
+  /** Load Styles… (Styles panel, Format menu): the template / file dialog. */
+  openLoadStyles(): void {
+    if (!this.shell.loadStylesFromTemplate && !this.shell.loadStylesFromFile) {
+      this.toast("info", t("loadStyles.unsupported", "Loading styles needs the desktop app."));
+      return;
+    }
+    this.store.openDialog({ kind: "loadStyles" });
+  }
+
+  /** "From File…" is offered (the desktop shell's Open panel). */
+  canLoadStylesFromFile(): boolean {
+    return typeof this.shell.loadStylesFromFile === "function";
+  }
+
+  /**
+   * Copies the cell styles and / or the page format of a template or a
+   * file into this document as one undo step (AOO `ScDocShell::LoadStylesArgs`).
+   * `false` when nothing was loaded (cancelled, unsupported or an error).
+   */
+  async loadStyles(source: { template: string } | { file: true }, opts: LoadStylesOptions): Promise<boolean> {
+    const label = t("msg.undo.loadStyles", "Load Styles");
+    try {
+      const doc = this.doc;
+      const res = "template" in source ? await this.shell.loadStylesFromTemplate?.(doc, source.template, opts, label) : await this.shell.loadStylesFromFile?.(doc, opts, label);
+      if (!res) return false;
+      this.ctl.handleResult(res);
+      await this.refreshCellStyles();
+      return true;
+    } catch (e) {
+      if (isApiError(e) && e.code === "cancelled") return false;
+      this.ctl.notifyError(e);
+      return false;
+    }
   }
 
   async deleteCellStyle(name: string): Promise<void> {

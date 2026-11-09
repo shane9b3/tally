@@ -84,12 +84,42 @@ fn bold() -> StylePatch {
 
 /// Builds a template workbook, or `None` for an unknown id.
 pub fn build(id: &str) -> Option<(Workbook, &'static str)> {
-    match id.to_ascii_lowercase().as_str() {
-        "invoices" => Some((invoices(), "Invoices")),
-        "budget" => Some((budget(), "Budget")),
-        "stock" => Some((stock(), "Stock")),
-        _ => None,
-    }
+    let (mut wb, title) = match id.to_ascii_lowercase().as_str() {
+        "invoices" => (invoices(), "Invoices"),
+        "budget" => (budget(), "Budget"),
+        "stock" => (stock(), "Stock"),
+        _ => return None,
+    };
+    wb.cell_styles = named_styles();
+    Some((wb, title))
+}
+
+/// The cell styles every template carries (what Load Styles copies from
+/// a built-in template; the web mock's `TEMPLATE_CELL_STYLES` match).
+pub fn named_styles() -> Vec<tally_model::CellStyleData> {
+    let style = |name: &str, f: &dyn Fn(&mut tally_model::StyleData)| {
+        let mut s = tally_model::StyleData::default();
+        f(&mut s);
+        s.style_name = Some(name.to_string());
+        tally_model::CellStyleData {
+            name: name.to_string(),
+            parent: Some("Default".into()),
+            style: s,
+        }
+    };
+    vec![
+        style("Table Header", &|s| {
+            s.font.bold = true;
+            s.fill = Some(0xDDE4_EEFF);
+        }),
+        style("Amount", &|s| {
+            s.number_format = Some("#,##0.00".into());
+        }),
+        style("Remark", &|s| {
+            s.font.italic = true;
+            s.font.color = Some(0x6666_66FF);
+        }),
+    ]
 }
 
 fn invoices() -> Workbook {

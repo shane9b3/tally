@@ -438,6 +438,40 @@ impl Document {
         self.result(report, fx, errors, tx.selection_after)
     }
 
+    /// Load Styles ([`crate::loadstyles`]) as one undo step labelled
+    /// `label`; protected sheets that were skipped come back in
+    /// `ApplyResult::warnings`.
+    pub fn load_styles(
+        &mut self,
+        source: &crate::loadstyles::StyleSource,
+        opts: &tally_api::LoadStylesOptions,
+        label: Option<&str>,
+    ) -> Result<ApplyResult, tally_api::ApiError> {
+        let mut fx = Effects::default();
+        let changes = crate::loadstyles::load(&mut self.wb, source, opts, &mut fx)?;
+        let notices: Vec<OpError> = fx
+            .warnings
+            .drain(..)
+            .map(|w| OpError {
+                op_index: 0,
+                code: w.code,
+                message: w.message,
+            })
+            .collect();
+        fx.notice_errors.extend(notices);
+        let report = self.recalc_and_filter(&mut fx);
+        if !changes.is_empty() {
+            self.undo.push(UndoRecord {
+                label: label.map(str::to_string),
+                selection_before: None,
+                selection_after: None,
+                changes,
+            });
+            self.dirty = true;
+        }
+        Ok(self.result(report, fx, Vec::new(), None))
+    }
+
     /// Sets the locale (not undoable; the document becomes dirty). Every
     /// sheet's used area is reported as changed.
     pub fn set_locale(&mut self, tag: &str) -> Result<ApplyResult, tally_api::ApiError> {

@@ -115,6 +115,62 @@ fn undo_depth_applies_to_every_open_document() -> CmdResult<()> {
 }
 
 #[test]
+fn load_styles_from_a_file_and_a_builtin_template() -> CmdResult<()> {
+    let st = state();
+    let opts = tally_api::LoadStylesOptions {
+        cell_styles: true,
+        page_styles: false,
+        overwrite: false,
+    };
+    // A source document with a style of its own, saved as ODS.
+    let src = new_workbook(&st, None)?;
+    let mut style = with_doc(&st, src.doc, |s| s.cell_styles(src.doc))?[0]
+        .style
+        .clone();
+    style.italic = true;
+    let tx = Transaction {
+        ops: vec![Op::DefineCellStyle {
+            style: tally_api::CellStyleDto {
+                name: "From File".into(),
+                parent: Some("Default".into()),
+                builtin: false,
+                style,
+            },
+        }],
+        label: None,
+        selection_before: None,
+        selection_after: None,
+        group: None,
+    };
+    with_doc(&st, src.doc, |s| s.apply(src.doc, tx))?;
+    let path = temp_path("styles.ods");
+    with_doc(&st, src.doc, |s| {
+        s.save_copy(src.doc, &path, FileFormat::Ods)
+    })?;
+
+    let dst = new_workbook(&st, None)?;
+    let r = crate::templates::load_styles_file(&st, dst.doc, &path, opts, Some("Load Styles"))?;
+    assert_eq!(r.undo.undo_label.as_deref(), Some("Load Styles"));
+    let r2 = with_doc(&st, dst.doc, |s| {
+        s.load_styles_from_template(dst.doc, "budget", &opts, None)
+    })?;
+    assert!(r2.errors.is_empty());
+    let names: Vec<String> = with_doc(&st, dst.doc, |s| s.cell_styles(dst.doc))?
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert!(names.contains(&"From File".to_string()), "{names:?}");
+    assert!(names.contains(&"Table Header".to_string()), "{names:?}");
+    // A file that is not a spreadsheet is refused like Open refuses it.
+    let junk = temp_path("junk.ods");
+    std::fs::write(&junk, b"not a zip").map_err(|e| ApiError::new(ApiError::IO, e.to_string()))?;
+    assert!(crate::templates::load_styles_file(&st, dst.doc, &junk, opts, None).is_err());
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&junk);
+    Ok(())
+}
+
+#[test]
 fn templates_are_listed_by_engine_id() -> CmdResult<()> {
     let list = files::list_templates();
     let ids: Vec<(&str, &str)> = list

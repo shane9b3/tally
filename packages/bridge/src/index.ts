@@ -68,6 +68,7 @@ export type { Suggestion } from "./generated/Suggestion";
 export type { Transaction } from "./generated/Transaction";
 export type { UndoState } from "./generated/UndoState";
 export type { UndoHistory } from "./generated/UndoHistory";
+export type { LoadStylesOptions } from "./generated/LoadStylesOptions";
 export type { VAlign } from "./generated/VAlign";
 export type { ValueKind } from "./generated/ValueKind";
 export type { WorkbookInfo } from "./generated/WorkbookInfo";

@@ -227,6 +227,7 @@ const FORMAT: &[Entry] = &[
     Item("format.cells", "Cells…", Some("CmdOrCtrl+1")),
     Item("view.stylesPanel", "Styles", Some("CmdOrCtrl+F11")),
     Item("format.autoFormat", "AutoFormat…", None),
+    Item("format.loadStyles", "Load Styles…", None),
     Sep,
     Item("format.bold", "Bold", Some("CmdOrCtrl+B")),
     Item("format.italic", "Italic", Some("CmdOrCtrl+I")),

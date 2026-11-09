@@ -12,9 +12,9 @@ use tally_types::SheetId;
 use crate::charts::{ChartDataDto, ChartDto, ChartKind, ImageDto};
 use crate::dto::{
     ApiError, ApplyResult, AutoFilterInfo, CellBlock, CellEditInfo, CellPos, ClipboardOut,
-    Direction, DocId, FileFormat, FindQuery, FindResult, FunctionInfo, NameInfo, PasteOptions,
-    PastePayload, RangeDto, SelectionDto, SelectionStats, SheetLayout, StyleDto, Suggestion,
-    Transaction, UndoHistory, WorkbookInfo,
+    Direction, DocId, FileFormat, FindQuery, FindResult, FunctionInfo, LoadStylesOptions, NameInfo,
+    PasteOptions, PastePayload, RangeDto, SelectionDto, SelectionStats, SheetLayout, StyleDto,
+    Suggestion, Transaction, UndoHistory, WorkbookInfo,
 };
 use crate::features::{
     ConditionalFormatDto, DocPropertiesDto, GoalSeekRequest, GoalSeekResult, LocaleInfo, NoteDto,
@@ -157,6 +157,34 @@ pub trait DocumentService {
     fn undo_history(&self, doc: DocId) -> Result<UndoHistory> {
         let _ = doc;
         Err(ApiError::unsupported("undo_history is not supported"))
+    }
+
+    /// Load Styles from the file at `path` (any format `open` reads, with
+    /// the same limits): cell styles and / or the page format are copied
+    /// into `doc` as one undo step labelled `label`
+    /// (`ScDocShell::LoadStylesArgs`).
+    fn load_styles(
+        &mut self,
+        doc: DocId,
+        path: &Path,
+        opts: &LoadStylesOptions,
+        label: Option<&str>,
+    ) -> Result<ApplyResult> {
+        let _ = (doc, path, opts, label);
+        Err(ApiError::unsupported("load_styles is not supported"))
+    }
+
+    /// [`DocumentService::load_styles`] from a built-in template
+    /// (`new_workbook`'s ids).
+    fn load_styles_from_template(
+        &mut self,
+        doc: DocId,
+        template: &str,
+        opts: &LoadStylesOptions,
+        label: Option<&str>,
+    ) -> Result<ApplyResult> {
+        let _ = (doc, template, opts, label);
+        Err(ApiError::unsupported("load_styles is not supported"))
     }
 
     /// Sum/count/average for the status bar.

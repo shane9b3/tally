@@ -2,6 +2,7 @@
 import type { W56Dialog } from "./store";
 import { CustomizeToolbarsDialog } from "../chrome/ChromeUi";
 import { AutoFormatDialog, AutoFormatNameDialog, FormatCellsDialog, StyleEditorDialog } from "../styles/StylesUi";
+import { LoadStylesDialog } from "../styles/LoadStylesDialog";
 import { OptionsDialog } from "../options/OptionsDialog";
 import { ZoomDialog } from "../objects/ZoomDialog";
 import { DataPilotDialog } from "../pivot/DataPilotDialog";
@@ -98,6 +99,8 @@ export function W56DialogFor({ d }: { d: W56Dialog }) {
       return <RecoveryDialog d={d} />;
     case "saveAsTemplate":
       return <SaveAsTemplateDialog d={d} />;
+    case "loadStyles":
+      return <LoadStylesDialog />;
     case "selectionList":
       return <SelectionListPopover d={d} />;
     case "customizeToolbars":
