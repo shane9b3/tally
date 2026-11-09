@@ -27,6 +27,9 @@ pub fn apply(
     Some(match op {
         Op::AddChart { sheet, chart } => add_chart(wb, *sheet, chart, fx),
         Op::UpdateChart { sheet, id, chart } => update_chart(wb, *sheet, *id, chart, fx),
+        Op::SetChartDataTable { sheet, id, table } => {
+            set_chart_data_table(wb, *sheet, *id, table, fx)
+        }
         Op::MoveResizeChart { sheet, id, anchor } => move_resize_chart(wb, *sheet, *id, anchor, fx),
         Op::DeleteChart { sheet, id } => delete_chart(wb, *sheet, *id, fx),
         Op::MoveChartToSheet { sheet, id, to } => move_chart_to_sheet(wb, *sheet, *id, *to, fx),
@@ -61,11 +64,20 @@ fn add_chart(
                 "a document may hold at most {MAX_CHARTS} charts"
             )));
         }
-        let data = charts::from_api(wb, sheet, dto)?;
+        let mut data = charts::from_api(wb, sheet, dto)?;
+        // A pasted chart with its own data brings the data along.
+        if let Some(t) = dto
+            .data_table
+            .as_ref()
+            .filter(|_| charts::has_own_data(&data))
+        {
+            charts::apply_data_table(&mut data, t)?;
+            let here: usize = meta.charts.iter().map(|c| c.data.literal_points()).sum();
+            charts::check_literal_budget(charts::literal_count(wb) + here, data.literal_points())?;
+        }
         let here: usize = meta.charts.iter().map(|c| c.data.series.len()).sum();
         charts::check_series_budget(charts::series_count(wb) + here, data.series.len())?;
         let id = meta.alloc_id();
-        let mut data = data;
         if data.name.is_empty() {
             data.name = format!("Object {id}");
         }
@@ -113,6 +125,56 @@ fn update_chart(
             if n.values.is_unset() && n.literal_values.is_none() {
                 n.literal_values.clone_from(&o.literal_values);
             }
+            if n.x_values.is_none() && n.literal_x.is_none() {
+                n.literal_x.clone_from(&o.literal_x);
+            }
+            if n.sizes.is_none() && n.literal_sizes.is_none() {
+                n.literal_sizes.clone_from(&o.literal_sizes);
+            }
+        }
+        Arc::make_mut(&mut meta.charts)[i] = Arc::new(Chart { id, data });
+        Ok(())
+    })?;
+    fx.objects(sheet);
+    Ok(changes)
+}
+
+/// View > Data Table (AOO `ChartController::executeDispatch_EditData`, one
+/// "Edit chart data" undo action): replaces the own data of a chart that
+/// reads no cells.
+fn set_chart_data_table(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    id: u32,
+    table: &tally_api::ChartDataTableDto,
+    fx: &mut Effects,
+) -> Result<Vec<Change>, ApiError> {
+    protected(wb, sheet)?;
+    let changes = with_meta(wb, sheet, fx, |wb, meta| {
+        let i = meta
+            .charts
+            .iter()
+            .position(|c| c.id == id)
+            .ok_or_else(|| not_found("chart", id))?;
+        let mut data = meta.charts[i].data.clone();
+        if !charts::has_own_data(&data) {
+            return Err(ApiError::invalid_argument(
+                "the chart takes its data from cells: edit the cells instead",
+            ));
+        }
+        charts::apply_data_table(&mut data, table)?;
+        let here: usize = meta.charts.iter().map(|c| c.data.series.len()).sum();
+        charts::check_series_budget(
+            charts::series_count(wb) + here - meta.charts[i].data.series.len(),
+            data.series.len(),
+        )?;
+        let here: usize = meta.charts.iter().map(|c| c.data.literal_points()).sum();
+        charts::check_literal_budget(
+            charts::literal_count(wb) + here - meta.charts[i].data.literal_points(),
+            data.literal_points(),
+        )?;
+        if data == meta.charts[i].data {
+            return Ok(());
         }
         Arc::make_mut(&mut meta.charts)[i] = Arc::new(Chart { id, data });
         Ok(())

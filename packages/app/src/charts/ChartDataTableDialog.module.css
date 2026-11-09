@@ -1,0 +1,123 @@
+.card {
+  width: min(760px, calc(100vw - 32px));
+  max-height: 72vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.tool {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.tool:disabled {
+  opacity: 0.45;
+}
+
+.sep {
+  margin-left: 10px;
+}
+
+.scroll {
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow: auto;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 8px;
+}
+
+.grid {
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.grid th,
+.grid td {
+  border: 1px solid var(--tally-grid-line, var(--tally-border-subtle));
+  height: 24px;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.corner,
+.rowHead {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 36px;
+  background: var(--tally-bg-subtle, var(--tally-bg));
+  color: var(--tally-text-muted);
+  font-weight: 500;
+  text-align: center;
+}
+
+.nameCell {
+  padding: 2px !important;
+  background: var(--tally-bg-subtle, var(--tally-bg));
+}
+
+.name {
+  width: 100%;
+  min-width: 90px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--tally-border);
+  border-radius: 5px;
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font: inherit;
+  outline: none;
+}
+
+.name:focus {
+  border-color: var(--tally-accent);
+  box-shadow: 0 0 0 2px var(--tally-accent-subtle);
+}
+
+.role {
+  background: var(--tally-bg-subtle, var(--tally-bg));
+  color: var(--tally-text-muted);
+  font-weight: 500;
+  text-align: center;
+}
+
+.cell {
+  min-width: 90px;
+  color: var(--tally-text);
+  cursor: cell;
+  outline: none;
+}
+
+.num {
+  text-align: right;
+}
+
+.at {
+  box-shadow: inset 0 0 0 2px var(--tally-accent);
+}
+
+.cell:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--tally-accent);
+  background: var(--tally-accent-subtle);
+}
+
+.edit {
+  width: 100%;
+  height: 22px;
+  border: 0;
+  background: var(--tally-bg);
+  color: var(--tally-text);
+  font: inherit;
+  text-align: inherit;
+  outline: none;
+}

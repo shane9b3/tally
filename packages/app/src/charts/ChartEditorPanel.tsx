@@ -182,6 +182,15 @@ export function ChartEditorPanel() {
         </Section>
 
         <Section title={t("chart.data", "Data")} open testId="chart-section-data">
+          {/* View ▸ Data Table: a chart with its own data (no cell ranges) edits it here; AOO disables it for charts over cells. */}
+          {draft.dataTable ? (
+            <>
+              <div className={styles.hint}>{t("chart.dataTable.ownData", "This chart holds its own data.")}</div>
+              <button type="button" className={styles.add} data-testid="chart-data-table-open" onClick={() => ctl.w5.charts.openDataTable()}>
+                {t("chart.dataTable.open", "Data Table…")}
+              </button>
+            </>
+          ) : null}
           <div className={styles.rowWide}>
             {t("chart.dataRange", "Data range")}
             <RefInput value={draft.source?.range ?? ""} testId="chart-source" onCommit={(range) => patch({ source: range === "" ? null : { range, seriesInRows: draft.source?.seriesInRows ?? false, firstRowLabel: draft.source?.firstRowLabel ?? true, firstColLabel: draft.source?.firstColLabel ?? true }, series: [] })} onPick={() => pick((ref) => patch({ source: { range: ref, seriesInRows: false, firstRowLabel: true, firstColLabel: true }, series: [] }))} />

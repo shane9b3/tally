@@ -623,6 +623,30 @@ impl ChartData {
                 .sum::<usize>()
     }
 
+    /// `true` when the chart reads no cell at all: no data range,
+    /// category, value, X, size, name or error-bar range, not even an
+    /// invalid one. Its data are the literal lists (AOO's internal data
+    /// provider, `XChartDocument::hasInternalDataProvider`).
+    pub fn has_own_data(&self) -> bool {
+        let set = |r: &ChartRangeData| !r.is_unset();
+        if self.source.as_ref().is_some_and(|s| set(&s.range))
+            || self.categories.as_ref().is_some_and(set)
+        {
+            return false;
+        }
+        !self.series.iter().any(|s| {
+            set(&s.values)
+                || s.x_values.as_ref().is_some_and(set)
+                || s.sizes.as_ref().is_some_and(set)
+                || matches!(&s.name, Some(SeriesNameData::Ref(r)) if set(r))
+                || matches!(
+                    &s.error_bars,
+                    Some(ErrorBarsData { kind: ErrorBarKindData::Range { plus, minus }, .. })
+                        if set(plus) || set(minus)
+                )
+        })
+    }
+
     /// Drops every literal value list (the ranges are kept).
     pub fn drop_literals(&mut self) {
         self.literal_categories = None;

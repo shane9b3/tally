@@ -37,6 +37,8 @@ export interface ChartsState {
   editorOpen: boolean;
   /** A copied chart (⌘C on a selected chart). */
   clipboard: ChartDto | null;
+  /** The chart whose Data Table dialog is open (View ▸ Data Table), or `null`. */
+  dataTable: number | null;
   /** Bumped on scroll/zoom so the chart layer re-culls (throttled per frame). */
   viewportTick: number;
   setObjects(sheet: number, charts: ChartDto[], images: ImageDto[]): void;
@@ -45,11 +47,12 @@ export interface ChartsState {
   select(id: string | null): void;
   setEditorOpen(open: boolean): void;
   setClipboard(chart: ChartDto | null): void;
+  setDataTable(id: number | null): void;
   bumpViewport(): void;
   reset(): void;
 }
 
-const initial = { sheet: 0, charts: [] as ChartDto[], images: [] as ImageDto[], data: {} as Record<number, ChartDataDto>, imageData: {} as Record<number, string>, selected: null, editorOpen: false, viewportTick: 0 };
+const initial = { sheet: 0, charts: [] as ChartDto[], images: [] as ImageDto[], data: {} as Record<number, ChartDataDto>, imageData: {} as Record<number, string>, selected: null, editorOpen: false, viewportTick: 0, dataTable: null as number | null };
 
 export const useChartStore = create<ChartsState>()((set) => ({
   ...initial,
@@ -67,6 +70,7 @@ export const useChartStore = create<ChartsState>()((set) => ({
   select: (selected) => set((s) => ({ selected, editorOpen: selected === null ? false : s.editorOpen })),
   setEditorOpen: (editorOpen) => set({ editorOpen }),
   setClipboard: (clipboard) => set({ clipboard }),
+  setDataTable: (dataTable) => set({ dataTable }),
   bumpViewport: () => set((s) => ({ viewportTick: s.viewportTick + 1 })),
   reset: () => set({ ...initial }),
 }));

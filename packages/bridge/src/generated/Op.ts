@@ -7,6 +7,7 @@ import type { CellPos } from "./CellPos";
 import type { CellStyleDto } from "./CellStyleDto";
 import type { CfRuleDto } from "./CfRuleDto";
 import type { ChartAnchor } from "./ChartAnchor";
+import type { ChartDataTableDto } from "./ChartDataTableDto";
 import type { ChartDto } from "./ChartDto";
 import type { ClearWhat } from "./ClearWhat";
 import type { ColumnFilter } from "./ColumnFilter";
@@ -677,7 +678,19 @@ id: number,
 /**
  * The new definition.
  */
-chart: ChartDto, } | { "type": "moveResizeChart", 
+chart: ChartDto, } | { "type": "setChartDataTable", 
+/**
+ * Sheet.
+ */
+sheet: number, 
+/**
+ * Id from `charts`.
+ */
+id: number, 
+/**
+ * The new table.
+ */
+table: ChartDataTableDto, } | { "type": "moveResizeChart", 
 /**
  * Sheet.
  */

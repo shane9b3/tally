@@ -8,7 +8,7 @@
  * formulas. Pure functions over plain JSON (snapshotted for undo/redo by
  * the mock's `DocExt` mechanism); nothing here ships in the desktop bundle.
  */
-import type { CellView, ChartDataDto, ChartDto, ChartKind, ChartSeriesDto, ChartSvgDto, ImageDto, Op, PageBreaksDto, PageSetupDto, PrintLayoutDto, PrintOptionsDto, PrintPageDto, RangeDto, SeriesDataDto, SheetLayout, SplitDto, TraceDto, TrendDataDto } from "@tally/bridge";
+import type { CellView, ChartDataDto, ChartDataTableDto, ChartDto, ChartKind, ChartSeriesDto, ChartSvgDto, ImageDto, Op, PageBreaksDto, PageSetupDto, PrintLayoutDto, PrintOptionsDto, PrintPageDto, RangeDto, SeriesDataDto, SheetLayout, SplitDto, TraceDto, TrendDataDto } from "@tally/bridge";
 import { absoluteRef, parseAbsoluteRef } from "../dataOps";
 import { currentRegion } from "../glance";
 import { autoPageBreaks, defaultPageSetup, paperMm } from "../v03";
@@ -35,6 +35,42 @@ export type SheetResolver = (name: string) => number | undefined;
 
 export type W5Outcome = { kind: "pass" } | { kind: "handled"; sheet: number; created: number | null; objects: boolean; chartsChanged: number[] } | { kind: "error"; code: string; message: string };
 
+/** Whether a chart reads no cells (the engine's `has_own_data`: no range anywhere). */
+export function isOwnData(c: ChartDto): boolean {
+  if (c.source?.range || c.categories) return false;
+  return c.series.every((s) => !s.values && !s.xValues && !s.sizes && s.name?.type !== "ref" && s.errorBars?.kind.type !== "range");
+}
+
+/** The own data the engine hands out (`data_table_of`): the stored table re-shaped to the series. */
+function ownTable(c: ChartDto, prev: ChartDataTableDto | null | undefined): ChartDataTableDto {
+  const rows = prev?.categories.length ?? 0;
+  const empty = (): (number | null)[] => Array.from({ length: rows }, () => null);
+  return {
+    categories: prev ? [...prev.categories] : [],
+    series: c.series.map((s, i) => {
+      const old = prev?.series[i];
+      const kind = s.kind ?? c.kind;
+      const xy = kind === "scatter" || kind === "bubble";
+      return {
+        source: i,
+        name: s.name?.type === "text" ? s.name.text : "",
+        values: old ? [...old.values] : empty(),
+        x: xy || old?.x ? (old?.x ? [...old.x] : empty()) : null,
+        sizes: kind === "bubble" || old?.sizes ? (old?.sizes ? [...old.sizes] : empty()) : null,
+      };
+    }),
+  };
+}
+
+const blankSeries = (): ChartSeriesDto => ({ name: null, values: "", xValues: null, sizes: null, kind: null, secondaryAxis: false, color: null, marker: null, labels: { value: false, percent: false, category: false, seriesName: false, position: "auto" }, trend: null, errorBars: null, meanLine: false });
+
+/** `apply_data_table`: the series follow the table (formatting from `source`), the table is stored. */
+function applyTable(c: ChartDto, t: ChartDataTableDto): void {
+  const old = c.series;
+  c.series = t.series.map((ts) => ({ ...(ts.source != null && old[ts.source] ? structuredClone(old[ts.source]!) : blankSeries()), values: "", xValues: null, sizes: null, name: ts.name ? { type: "text", text: ts.name } : null }));
+  c.dataTable = { categories: [...t.categories], series: t.series.map((s, i) => ({ ...structuredClone(s), source: i })) };
+}
+
 /** Applies a W5-5 op to the side model (async: `addChart` derives series from the cells). */
 export async function applyW5Op(x: W5Ext, op: Op, cells: CellLookup, sheets: SheetResolver): Promise<W5Outcome> {
   const err = (code: string, message: string): W5Outcome => ({ kind: "error", code, message });
@@ -50,6 +86,10 @@ export async function applyW5Op(x: W5Ext, op: Op, cells: CellLookup, sheets: She
         chart.series = derived.series;
         if (chart.categories === null) chart.categories = derived.categories;
       }
+      if (isOwnData(chart)) {
+        if (op.chart.dataTable) applyTable(chart, op.chart.dataTable);
+        else chart.dataTable = ownTable(chart, null);
+      } else chart.dataTable = null;
       list.push(chart);
       x.charts[op.sheet] = list;
       return { kind: "handled", sheet: op.sheet, created: id, objects: true, chartsChanged: [] };
@@ -66,7 +106,19 @@ export async function applyW5Op(x: W5Ext, op: Op, cells: CellLookup, sheets: She
           if (chart.categories === null) chart.categories = derived.categories;
         }
       }
+      // The own data survives an edit (the editor never sends it).
+      chart.dataTable = isOwnData(chart) ? ownTable(chart, list[i]?.dataTable) : null;
       list[i] = chart;
+      return { kind: "handled", sheet: op.sheet, created: null, objects: true, chartsChanged: [op.id] };
+    }
+    case "setChartDataTable": {
+      const c = (x.charts[op.sheet] ?? []).find((ch) => ch.id === op.id);
+      if (!c) return err("not_found", `chart ${op.id} not found`);
+      if (!isOwnData(c)) return err("invalid_argument", "the chart takes its data from cells: edit the cells instead");
+      const rows = op.table.categories.length;
+      const cols = op.table.series.flatMap((s) => [s.values, ...(s.x ? [s.x] : []), ...(s.sizes ? [s.sizes] : [])]);
+      if (cols.some((v) => v.length !== rows)) return err("invalid_argument", "every column of the chart data table needs one cell per row");
+      applyTable(c, op.table);
       return { kind: "handled", sheet: op.sheet, created: null, objects: true, chartsChanged: [op.id] };
     }
     case "moveResizeChart": {
@@ -297,6 +349,24 @@ export async function dateAxisFor(chart: ChartDto, catCells: CellView[] | null, 
 
 export async function chartDataFor(sheet: number, chart: ChartDto, version: number, cells: CellLookup, sheets: SheetResolver, formatOf: (style: number) => Promise<string | null> = async () => null): Promise<ChartDataDto> {
   const problems: string[] = [];
+  const own = chart.dataTable;
+  if (own) {
+    // Own data: the table is the data.
+    const cats = own.categories.some((c) => c.trim() !== "") ? [...own.categories] : own.categories.map((_, j) => String(j + 1));
+    const series: SeriesDataDto[] = own.series.map((s, i) => ({
+      name: s.name || `Series ${i + 1}`,
+      color: chart.series[i]?.color ?? (((AOO_PALETTE[i % AOO_PALETTE.length] ?? 0) << 8) | 0xff) >>> 0,
+      values: [...s.values],
+      x: s.x ? [...s.x] : null,
+      sizes: s.sizes ? [...s.sizes] : null,
+      labels: s.values.map((v) => (v === null ? "" : String(v))),
+      numberFormat: null,
+      trend: null,
+      errors: null,
+      mean: null,
+    }));
+    return { chart: { sheet, id: chart.id }, version, categories: cats, dateAxis: null, series, truncated: false, problems };
+  }
   const catCells = await readRef(chart.categories, cells, sheets, problems);
   let categories = (catCells ?? []).map((c) => c.text);
   const series: SeriesDataDto[] = [];

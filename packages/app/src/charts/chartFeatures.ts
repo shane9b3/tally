@@ -5,7 +5,7 @@
  * object layer's events (selection, drag, delete) are in
  * `objects/objectFeatures.ts`.
  */
-import type { ApplyResult, ChartDataDto, ChartDto, ChartKind, ChartSvgDto, RangeDto } from "@tally/bridge";
+import type { ApplyResult, ChartDataDto, ChartDataTableDto, ChartDto, ChartKind, ChartSvgDto, RangeDto } from "@tally/bridge";
 import type { AppController } from "../controller";
 import { absoluteRef } from "../dataOps";
 import { useUiStore } from "../stores/uiStore";
@@ -123,6 +123,40 @@ export class ChartFeatures {
       return;
     }
     useChartStore.getState().setEditorOpen(true);
+  }
+
+  /**
+   * View ▸ Data Table (AOO `.uno:DiagramData`): enabled for a selected chart
+   * with its own data (no cell ranges; `ControllerCommandDispatch` checks
+   * `hasInternalDataProvider`). Charts over cells edit their cells.
+   */
+  canEditDataTable(): boolean {
+    return !!this.selected?.dataTable;
+  }
+
+  /** Opens the Chart Data Table dialog for the selected chart. */
+  openDataTable(): void {
+    const c = this.selected;
+    if (!c) {
+      this.toast("info", t("chart.selectFirst", "Select a chart first (click it)."));
+      return;
+    }
+    if (!c.dataTable) {
+      this.toast("info", t("chart.dataTable.fromCells", "This chart takes its data from cells: edit the cells instead."));
+      return;
+    }
+    useChartStore.getState().setDataTable(c.id);
+  }
+
+  closeDataTable(): void {
+    useChartStore.getState().setDataTable(null);
+  }
+
+  /** The dialog's result: one "Edit chart data" step (`STR_ACTION_EDIT_CHART_DATA`). */
+  async setDataTable(id: number, table: ChartDataTableDto): Promise<ApplyResult | null> {
+    const res = await this.ctl.apply(t("chart.editData", "Edit chart data"), [{ type: "setChartDataTable", sheet: this.ctl.sheet, id, table }]);
+    if (res) useChartStore.getState().select(objectId("chart", id));
+    return res;
   }
 
   closeEditor(): void {

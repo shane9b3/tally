@@ -17,10 +17,10 @@ use std::sync::Arc;
 
 use tally_api::{
     ApiError, AxisCross, AxisLabelPos, AxisMarkPos, AxisType, ChartAnchor, ChartAxisDto,
-    ChartDataDto, ChartDto, ChartKind, ChartRef, ChartSeriesDto, ChartSourceDto, DataLabelsDto,
-    DateAxisDto, ErrorBarDir, ErrorBarKind, ErrorBarsDto, LabelPos, LegendPos, MarkerShape,
-    RangeDto, SeriesDataDto, SeriesName, Stacking, StockVariant, TimeIntervalDto, TimeUnit,
-    TrendDataDto, TrendKind, TrendLineDto,
+    ChartDataDto, ChartDataTableDto, ChartDto, ChartKind, ChartRef, ChartSeriesDto, ChartSourceDto,
+    DataLabelsDto, DataTableSeriesDto, DateAxisDto, ErrorBarDir, ErrorBarKind, ErrorBarsDto,
+    LabelPos, LegendPos, MarkerShape, RangeDto, SeriesDataDto, SeriesName, Stacking, StockVariant,
+    TimeIntervalDto, TimeUnit, TrendDataDto, TrendKind, TrendLineDto,
 };
 use tally_formula::{
     print_expr, BinOp, CellRefExpr, Expr, RefCoord, RefExpr, ResolvedRef, SheetRef,
@@ -1204,7 +1204,194 @@ pub fn to_api(wb: &Workbook, sheet: SheetId, chart: &Chart) -> ChartDto {
         background: c.background,
         plot_background: c.plot_background,
         include_hidden: c.include_hidden,
+        data_table: has_own_data(c).then(|| data_table_of(c)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Own data (AOO's internal data provider, View > Data Table)
+// ---------------------------------------------------------------------------
+
+/// `true` when the chart reads no cell at all: no data range, category,
+/// value, X, size, name or error-bar range, not even an invalid one (AOO's
+/// `XChartDocument::hasInternalDataProvider`, which enables View > Data
+/// Table in `ControllerCommandDispatch`). Its data are the literal lists.
+pub fn has_own_data(c: &ChartData) -> bool {
+    c.has_own_data()
+}
+
+fn literal_numbers(v: Option<&ChartValuesData>) -> Vec<Option<f64>> {
+    match v {
+        Some(ChartValuesData::Literal(v)) => v.clone(),
+        Some(ChartValuesData::LiteralText(t)) => t
+            .iter()
+            .map(|x| x.trim().parse::<f64>().ok().filter(|n| n.is_finite()))
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// The own data of a chart as the dialog's table: every column padded to
+/// the longest one (empty cells), the series' X and size columns present
+/// for XY and bubble series (or when the chart has them).
+pub fn data_table_of(c: &ChartData) -> ChartDataTableDto {
+    let mut categories: Vec<String> = match &c.literal_categories {
+        Some(ChartValuesData::LiteralText(t)) => t.clone(),
+        Some(ChartValuesData::Literal(v)) => v
+            .iter()
+            .map(|x| x.map(|n| format!("{n}")).unwrap_or_default())
+            .collect(),
+        None => Vec::new(),
+    };
+    let mut series: Vec<DataTableSeriesDto> = c
+        .series
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let kind = s.kind.unwrap_or(c.kind);
+            let xy = matches!(kind, ChartKindData::Scatter | ChartKindData::Bubble);
+            DataTableSeriesDto {
+                source: u32::try_from(i).ok(),
+                name: match &s.name {
+                    Some(SeriesNameData::Text(t)) => t.clone(),
+                    _ => String::new(),
+                },
+                values: literal_numbers(s.literal_values.as_ref()),
+                x: (xy || s.literal_x.is_some()).then(|| literal_numbers(s.literal_x.as_ref())),
+                sizes: (kind == ChartKindData::Bubble || s.literal_sizes.is_some())
+                    .then(|| literal_numbers(s.literal_sizes.as_ref())),
+            }
+        })
+        .collect();
+    let rows = series
+        .iter()
+        .flat_map(|s| {
+            [
+                s.values.len(),
+                s.x.as_ref().map_or(0, Vec::len),
+                s.sizes.as_ref().map_or(0, Vec::len),
+            ]
+        })
+        .chain([categories.len()])
+        .max()
+        .unwrap_or(0);
+    categories.resize(rows, String::new());
+    for s in &mut series {
+        s.values.resize(rows, None);
+        if let Some(x) = &mut s.x {
+            x.resize(rows, None);
+        }
+        if let Some(z) = &mut s.sizes {
+            z.resize(rows, None);
+        }
+    }
+    ChartDataTableDto { categories, series }
+}
+
+/// Replaces the own data of `data` with `t` (AOO `DataBrowserModel` edits
+/// applied through `InternalDataProvider`). Each table series continues
+/// the chart series named by its `source` (formatting kept; moved and
+/// deleted series take theirs along) or is a new series with default
+/// formatting. Categories that were numbers (dates) stay numbers when
+/// every text still is one; all-empty categories are dropped.
+pub fn apply_data_table(data: &mut ChartData, t: &ChartDataTableDto) -> Result<(), ApiError> {
+    let rows = t.categories.len();
+    if rows > MAX_POINTS {
+        return Err(ApiError::invalid_argument(format!(
+            "a chart data table may have at most {MAX_POINTS} rows"
+        )));
+    }
+    if t.series.len() > MAX_SERIES {
+        return Err(ApiError::invalid_argument(format!(
+            "a chart may have at most {MAX_SERIES} series"
+        )));
+    }
+    let column = |v: &[Option<f64>]| -> Result<(), ApiError> {
+        if v.len() != rows {
+            return Err(ApiError::invalid_argument(
+                "every column of the chart data table needs one cell per row",
+            ));
+        }
+        if v.iter().flatten().any(|x| !x.is_finite()) {
+            return Err(ApiError::invalid_argument(
+                "a chart data table value is not a number",
+            ));
+        }
+        Ok(())
+    };
+    for s in &t.series {
+        column(&s.values)?;
+        if let Some(x) = &s.x {
+            column(x)?;
+        }
+        if let Some(z) = &s.sizes {
+            column(z)?;
+        }
+        text_opt(&Some(s.name.clone()), "series name")?;
+    }
+    for c in &t.categories {
+        text_opt(&Some(c.clone()), "category")?;
+    }
+    let old = std::mem::take(&mut data.series);
+    data.series = t
+        .series
+        .iter()
+        .map(|ts| {
+            let mut s = ts
+                .source
+                .and_then(|i| old.get(i as usize))
+                .cloned()
+                .unwrap_or_default();
+            s.values = ChartRangeData::default();
+            s.x_values = None;
+            s.sizes = None;
+            s.name = (!ts.name.is_empty()).then(|| SeriesNameData::Text(ts.name.clone()));
+            s.literal_values = Some(ChartValuesData::Literal(ts.values.clone()));
+            s.literal_x = ts.x.clone().map(ChartValuesData::Literal);
+            s.literal_sizes = ts.sizes.clone().map(ChartValuesData::Literal);
+            s
+        })
+        .collect();
+    data.categories = None;
+    let numeric_before = matches!(data.literal_categories, Some(ChartValuesData::Literal(_)));
+    data.literal_categories = if t.categories.iter().all(|c| c.trim().is_empty()) {
+        None
+    } else if numeric_before
+        && t.categories
+            .iter()
+            .all(|c| c.trim().is_empty() || c.trim().parse::<f64>().is_ok_and(f64::is_finite))
+    {
+        Some(ChartValuesData::Literal(
+            t.categories
+                .iter()
+                .map(|c| c.trim().parse::<f64>().ok())
+                .collect(),
+        ))
+    } else {
+        Some(ChartValuesData::LiteralText(t.categories.clone()))
+    };
+    Ok(())
+}
+
+/// Literal points held by every chart of the document.
+pub fn literal_count(wb: &Workbook) -> usize {
+    wb.sheets
+        .iter()
+        .flat_map(|s| s.meta.charts.iter())
+        .map(|c| c.data.literal_points())
+        .sum()
+}
+
+/// Refuses literal data that would take the document past
+/// [`tally_model::MAX_LITERAL_POINTS`] (`others`: every other chart's).
+pub fn check_literal_budget(others: usize, new: usize) -> Result<(), ApiError> {
+    if others.saturating_add(new) > tally_model::MAX_LITERAL_POINTS {
+        return Err(ApiError::invalid_argument(format!(
+            "a document may hold at most {} chart data table values",
+            tally_model::MAX_LITERAL_POINTS
+        )));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

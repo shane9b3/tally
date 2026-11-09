@@ -282,6 +282,44 @@ pub fn chart(what: &str, chart: &ChartDto) -> CmdResult<()> {
     for s in &chart.series {
         text(what, &s.values)?;
     }
+    if let Some(t) = &chart.data_table {
+        data_table(what, t)?;
+    }
+    Ok(())
+}
+
+/// Most rows of a chart data table (the engine's points per series).
+pub const MAX_DATA_TABLE_ROWS: usize = 32_000;
+
+/// A chart data table (`setChartDataTable`, a pasted chart's own data): at
+/// most [`MAX_CHART_SERIES`] series and [`MAX_DATA_TABLE_ROWS`] rows, every
+/// text at most [`MAX_TEXT`] bytes (the engine checks the column lengths,
+/// the numbers and the document's literal-point budget).
+pub fn data_table(what: &str, t: &tally_api::ChartDataTableDto) -> CmdResult<()> {
+    if t.series.len() > MAX_CHART_SERIES {
+        return Err(bad(format!(
+            "{what}: too many series ({}; the limit is {MAX_CHART_SERIES})",
+            t.series.len()
+        )));
+    }
+    let too_long = |n: usize| n > MAX_DATA_TABLE_ROWS;
+    if too_long(t.categories.len())
+        || t.series.iter().any(|s| {
+            too_long(s.values.len())
+                || s.x.as_ref().is_some_and(|v| too_long(v.len()))
+                || s.sizes.as_ref().is_some_and(|v| too_long(v.len()))
+        })
+    {
+        return Err(bad(format!(
+            "{what}: too many rows (the limit is {MAX_DATA_TABLE_ROWS})"
+        )));
+    }
+    for c in &t.categories {
+        text(what, c)?;
+    }
+    for s in &t.series {
+        text(what, &s.name)?;
+    }
     Ok(())
 }
 
@@ -602,6 +640,7 @@ fn typed_op(op: &Op) -> CmdResult<()> {
         Op::AddChart { chart: ch, .. } | Op::UpdateChart { chart: ch, .. } => {
             chart("the chart", ch)
         }
+        Op::SetChartDataTable { table, .. } => data_table("the chart data table", table),
         Op::MoveResizeChart { anchor: a, .. } | Op::MoveResizeImage { anchor: a, .. } => {
             anchor("the object", a)
         }
@@ -891,6 +930,7 @@ mod tests {
             background: None,
             plot_background: None,
             include_hidden: false,
+            data_table: None,
         };
         assert!(chart("c", &chart_with(MAX_CHART_SERIES)).is_ok());
         assert!(chart("c", &chart_with(MAX_CHART_SERIES + 1)).is_err());

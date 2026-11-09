@@ -849,6 +849,7 @@ pub(crate) fn write(
     let bytes = wb.save_to_buffer()?;
     let mut patches = crate::write_v03::patches(data, &mut report);
     patches.date1904 = epoch == DateEpoch::D1904;
+    patches.chart_literals = crate::chart_write::take_literals();
     // Wave 5 parts added through the patches pass (placeholders).
     crate::write_v04::scenario_patches(data, &mut patches, &mut report);
     crate::autofilter::autofilter_patches(data, &mut patches, &mut report);

@@ -545,6 +545,54 @@ pub struct ChartDto {
     pub plot_background: Option<u32>,
     /// Plot hidden cells (AOO default `false`).
     pub include_hidden: bool,
+    /// The chart's own data (AOO's internal data provider: a chart
+    /// without any cell range, from a file whose chart carries its data
+    /// or a chart pasted from another document). Absent for charts over
+    /// cells. On add it supplies the literal data of a chart without
+    /// ranges (a pasted copy); `UpdateChart` ignores it (the Chart Data
+    /// Table dialog uses `SetChartDataTable`).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub data_table: Option<ChartDataTableDto>,
+}
+
+/// The internal data table of a chart (AOO 4.1 View ▸ Data Table,
+/// `chart2/source/controller/dialogs/DataBrowserModel.cxx`): one row per
+/// data point, a text category column and per series its value columns.
+/// Every column has one entry per row.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ChartDataTableDto {
+    /// Category texts, one per row (empty texts allowed).
+    pub categories: Vec<String>,
+    /// The series, in chart order.
+    pub series: Vec<DataTableSeriesDto>,
+}
+
+/// One series of a [`ChartDataTableDto`].
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DataTableSeriesDto {
+    /// Index of the chart's series this column group continues (it keeps
+    /// that series' colour, labels, trend line …); `None` for a series
+    /// inserted in the dialog (default formatting).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub source: Option<u32>,
+    /// Series name (empty: none).
+    pub name: String,
+    /// Y values (`None` = empty cell).
+    pub values: Vec<Option<f64>>,
+    /// X values (scatter, bubble).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub x: Option<Vec<Option<f64>>>,
+    /// Bubble sizes.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub sizes: Option<Vec<Option<f64>>>,
 }
 
 /// Resolved data of one series, for rendering.

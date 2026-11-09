@@ -410,6 +410,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "insert.functionList", title: t("cmd.insert.functionList", "Function list"), kind: "Formula", keywords: ["functions", "fx", "sidebar", "insert function"], run: () => ctl.w56.toggleFunctionList() },
     { id: "insert.image", title: t("cmd.insert.image", "Image…"), kind: "Insert", keywords: ["picture", "png", "jpeg"], ...notEditing, run: () => ctl.w5.objects.insertImage() },
     { id: "chart.edit", title: t("cmd.chart.edit", "Edit chart"), kind: "Chart", keywords: ["graph"], run: () => ctl.w5.charts.openEditor() },
+    { id: "chart.dataTable", title: t("cmd.chart.dataTable", "Chart data table…"), kind: "Chart", keywords: ["data", "values", "internal"], enabled: () => ctl.w5.charts.canEditDataTable(), run: () => ctl.w5.charts.openDataTable() },
     { id: "chart.delete", title: t("cmd.chart.delete", "Delete chart"), kind: "Chart", keywords: ["graph", "remove"], run: () => ctl.w5.charts.deleteSelected() },
     { id: "chart.copyImage", title: t("cmd.chart.copyImage", "Copy chart as image"), kind: "Chart", keywords: ["png", "clipboard"], run: () => ctl.w5.charts.copyAsImage() },
     { id: "data.dataPilot", title: t("cmd.data.dataPilot", "DataPilot…"), kind: "Data", keywords: ["pivot table", "summarise", "crosstab"], run: () => void ctl.w56.openDataPilot() },

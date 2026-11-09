@@ -248,6 +248,7 @@ const FORMAT: &[Entry] = &[
         "Chart",
         &[
             Item("chart.edit", "Edit Chart…", None),
+            Item("chart.dataTable", "Data Table…", None),
             Item("chart.delete", "Delete Chart", None),
         ],
     ),
@@ -966,6 +967,7 @@ mod tests {
             "insert.functionList",
             "insert.image",
             "chart.edit",
+            "chart.dataTable",
             "chart.delete",
             "data.dataPilot",
             "data.standardFilter",

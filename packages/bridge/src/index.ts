@@ -130,6 +130,8 @@ export type { DateAxisDto } from "./generated/DateAxisDto";
 export type { TimeIntervalDto } from "./generated/TimeIntervalDto";
 export type { TimeUnit } from "./generated/TimeUnit";
 export type { ChartDataDto } from "./generated/ChartDataDto";
+export type { ChartDataTableDto } from "./generated/ChartDataTableDto";
+export type { DataTableSeriesDto } from "./generated/DataTableSeriesDto";
 export type { ChartDto } from "./generated/ChartDto";
 export type { ChartKind } from "./generated/ChartKind";
 export type { ChartRef } from "./generated/ChartRef";

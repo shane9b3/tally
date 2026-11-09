@@ -185,7 +185,7 @@ export class ObjectFeatures {
   /** After an engine result: re-read objects or data as the result says. */
   afterResult(res: ApplyResult, ops: readonly Op[] | null): void {
     const sheet = this.ctl.sheet;
-    const objectOps: Op["type"][] = ["addChart", "updateChart", "moveResizeChart", "deleteChart", "moveChartToSheet", "addImage", "deleteImage", "moveResizeImage"];
+    const objectOps: Op["type"][] = ["addChart", "updateChart", "setChartDataTable", "moveResizeChart", "deleteChart", "moveChartToSheet", "addImage", "deleteImage", "moveResizeImage"];
     // Undo/redo and `doc-changed` carry no ops: re-read the lists (cheap) in case an object op was undone.
     const touched = ops === null ? true : ops.some((o) => objectOps.includes(o.type));
     if (touched || (res.objectsChanged ?? []).includes(sheet)) {

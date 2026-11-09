@@ -1199,6 +1199,7 @@ fn dependents_setup() -> (Fixture, u32) {
         background: None,
         plot_background: None,
         include_hidden: false,
+        data_table: None,
     };
     let r = f.apply(vec![
         Op::AddChart { sheet: s, chart },

@@ -671,6 +671,41 @@ fn local_cell(s: &mut String, v: &Value) {
     }
 }
 
+/// The trend line, error bars and mean value line of a series.
+fn write_series_extras(
+    body: &mut String,
+    st: &mut Styles,
+    sv: &ChartSeriesData,
+    sheets: &[SheetData],
+) {
+    if let Some(t) = &sv.trend {
+        let mut p = String::new();
+        attr(&mut p, "chart:regression-type", regression_type(t.kind));
+        if let Some(n) = &t.name {
+            attr(&mut p, "tally:regression-name", n);
+        }
+        let rs = st.add(&p, "", "");
+        let _ = write!(body, r#"<chart:regression-curve chart:style-name="{rs}">"#);
+        let _ = write!(
+            body,
+            r#"<chart:equation chart:display-equation="{}" chart:display-r-square="{}"/>"#,
+            t.show_equation, t.show_r2
+        );
+        body.push_str("</chart:regression-curve>");
+    }
+    if let Some(e) = &sv.error_bars {
+        let es = error_bar_style(st, e, sheets);
+        let _ = write!(
+            body,
+            r#"<chart:error-indicator chart:dimension="y" chart:style-name="{es}"/>"#
+        );
+    }
+    if sv.mean_line {
+        let ms = st.add("", r##" svg:stroke-color="#b3b3b3""##, "");
+        let _ = write!(body, r#"<chart:mean-value chart:style-name="{ms}"/>"#);
+    }
+}
+
 /// The `local-table` of cached values (header row: series names; first
 /// column: categories). Skipped for very large charts.
 fn write_local_table(
@@ -768,6 +803,130 @@ fn write_local_table(
     s.push_str("</table:table-rows></table:table>");
 }
 
+/// The local-table layout of a chart with its own data (AOO's internal
+/// data provider, data in columns): column A the categories, then per
+/// series its X column (when it has X values), its value column and its
+/// bubble-size column (when it has sizes); row 1 the labels (the series
+/// name above its value column).
+struct OwnTable {
+    rows: usize,
+    /// Per series: (x column, value column, size column).
+    cols: Vec<(Option<u32>, u32, Option<u32>)>,
+    last_col: u32,
+}
+
+impl OwnTable {
+    fn of(c: &ChartData) -> Self {
+        let len = |v: &Option<ChartValuesData>| v.as_ref().map_or(0, ChartValuesData::len);
+        let mut next = 1u32;
+        let mut take = || {
+            let n = next;
+            next += 1;
+            n
+        };
+        let mut rows = len(&c.literal_categories);
+        let mut cols = Vec::new();
+        for s in c.series.iter().take(MAX_SERIES) {
+            let x = s.literal_x.is_some().then(&mut take);
+            let v = take();
+            let z = s.literal_sizes.is_some().then(&mut take);
+            cols.push((x, v, z));
+            rows = rows
+                .max(len(&s.literal_values))
+                .max(len(&s.literal_x))
+                .max(len(&s.literal_sizes));
+        }
+        Self {
+            rows: rows.min(MAX_LOCAL_ROWS),
+            cols,
+            last_col: next - 1,
+        }
+    }
+
+    /// `local-table.$B$2:.$B$9` for the data rows of column `col`.
+    fn column(&self, col: u32) -> Option<String> {
+        (self.rows > 0).then(|| {
+            let l = col_to_letters(col);
+            format!("{LOCAL_TABLE}.${l}$2:.${l}${}", self.rows + 1)
+        })
+    }
+
+    fn label(col: u32) -> String {
+        format!("{LOCAL_TABLE}.${}$1", col_to_letters(col))
+    }
+
+    fn whole(&self) -> String {
+        format!(
+            "{LOCAL_TABLE}.$A$1:.${}${}",
+            col_to_letters(self.last_col.max(1)),
+            self.rows + 1
+        )
+    }
+}
+
+fn literal_value(v: Option<&ChartValuesData>, i: usize) -> Value {
+    match v {
+        Some(ChartValuesData::Literal(v)) => v
+            .get(i)
+            .copied()
+            .flatten()
+            .map_or(Value::Empty, Value::Number),
+        Some(ChartValuesData::LiteralText(t)) => t
+            .get(i)
+            .filter(|x| !x.is_empty())
+            .map_or(Value::Empty, |x| Value::text(x.as_str())),
+        None => Value::Empty,
+    }
+}
+
+/// The `local-table` of a chart with its own data, in the [`OwnTable`]
+/// layout.
+fn write_own_table(s: &mut String, c: &ChartData, t: &OwnTable) {
+    let width = t.last_col as usize + 1;
+    let mut header = vec![String::new(); width];
+    for (sv, &(_, v, _)) in c.series.iter().zip(&t.cols) {
+        if let Some(SeriesNameData::Text(n)) = &sv.name {
+            header[v as usize].clone_from(n);
+        }
+    }
+    s.push_str(r#"<table:table table:name="local-table"><table:table-header-columns><table:table-column/></table:table-header-columns><table:table-columns>"#);
+    let _ = write!(
+        s,
+        r#"<table:table-column table:number-columns-repeated="{}"/>"#,
+        (width - 1).max(1)
+    );
+    s.push_str("</table:table-columns><table:table-header-rows><table:table-row>");
+    for h in &header {
+        if h.is_empty() {
+            s.push_str("<table:table-cell/>");
+        } else {
+            s.push_str(r#"<table:table-cell office:value-type="string"><text:p>"#);
+            escape_text(h, s);
+            s.push_str("</text:p></table:table-cell>");
+        }
+    }
+    s.push_str("</table:table-row></table:table-header-rows><table:table-rows>");
+    let mut row = vec![Value::Empty; width];
+    for i in 0..t.rows {
+        row[0] = literal_value(c.literal_categories.as_ref(), i);
+        for (sv, &(x, v, z)) in c.series.iter().zip(&t.cols) {
+            if let Some(x) = x {
+                row[x as usize] = literal_value(sv.literal_x.as_ref(), i);
+            }
+            row[v as usize] = literal_value(sv.literal_values.as_ref(), i);
+            if let Some(z) = z {
+                row[z as usize] = literal_value(sv.literal_sizes.as_ref(), i);
+            }
+        }
+        s.push_str("<table:table-row>");
+        for v in &row {
+            local_cell(s, v);
+        }
+        s.push_str("</table:table-row>");
+    }
+    s.push_str("</table:table-rows></table:table>");
+}
+
 /// Writes `Object N/content.xml` for a chart.
 pub(crate) fn content_xml(
     c: &ChartData,
@@ -776,6 +935,9 @@ pub(crate) fn content_xml(
 ) -> String {
     let mut st = Styles::default();
     let mut body = String::new();
+    // A chart that reads no cells carries its data (AOO: `xlink:href="."`
+    // and series addresses into the local table).
+    let own = c.has_own_data().then(|| OwnTable::of(c));
 
     // Chart element.
     let mut g = String::new();
@@ -797,7 +959,11 @@ pub(crate) fn content_xml(
         class_name(c.kind, c.hole.is_some(), c.filled),
     );
     attr(&mut body, "chart:style-name", &chart_style);
-    attr(&mut body, "xlink:href", "..");
+    attr(
+        &mut body,
+        "xlink:href",
+        if own.is_some() { "." } else { ".." },
+    );
     attr(&mut body, "xlink:type", "simple");
     if let Some(h) = c.hole {
         attr(&mut body, "tally:hole", &fmt_f64(f64::from(h)));
@@ -890,7 +1056,10 @@ pub(crate) fn content_xml(
     let plot_style = st.add(&p, &g, "");
     body.push_str("<chart:plot-area");
     attr(&mut body, "chart:style-name", &plot_style);
-    if let Some(src) = &c.source {
+    if let Some(t) = &own {
+        attr(&mut body, "table:cell-range-address", &t.whole());
+        attr(&mut body, "chart:data-source-has-labels", "both");
+    } else if let Some(src) = &c.source {
         if let Some(a) = range_address(&src.range, sheets) {
             attr(&mut body, "table:cell-range-address", &a);
         }
@@ -906,7 +1075,11 @@ pub(crate) fn content_xml(
     body.push('>');
 
     let categories = c.categories.as_ref().filter(|r| !r.is_unset());
-    let cat_addr = categories.and_then(|r| range_address(r, sheets));
+    let cat_addr = match &own {
+        Some(t) if c.literal_categories.is_some() => t.column(0),
+        Some(_) => None,
+        None => categories.and_then(|r| range_address(r, sheets)),
+    };
     write_axis(
         &mut body,
         &mut st,
@@ -921,11 +1094,49 @@ pub(crate) fn content_xml(
         write_axis(&mut body, &mut st, "y", "secondary-y", y2, None, false);
     }
 
-    for sv in c.series.iter().take(MAX_SERIES) {
+    for (i, sv) in c.series.iter().take(MAX_SERIES).enumerate() {
         let ss = series_style(&mut st, c, sv);
         body.push_str("<chart:series");
         attr(&mut body, "chart:style-name", &ss);
         let kind = sv.kind.unwrap_or(c.kind);
+        if let Some((x, v, z)) = own
+            .as_ref()
+            .and_then(|t| t.cols.get(i).map(|&p| (t, p)))
+            .map(|(t, (x, v, z))| {
+                (
+                    x.and_then(|x| t.column(x)),
+                    (v, t.column(v)),
+                    z.and_then(|z| t.column(z)),
+                )
+            })
+        {
+            // Bubble: the series values are the sizes, domain[0] the Y
+            // values and domain[1] the X values (as for cell ranges).
+            let (values, y_domain) = if kind == ChartKindData::Bubble && z.is_some() {
+                (z, v.1.clone())
+            } else {
+                (v.1.clone(), None)
+            };
+            if let Some(a) = &values {
+                attr(&mut body, "chart:values-cell-range-address", a);
+            }
+            attr(&mut body, "chart:label-cell-address", &OwnTable::label(v.0));
+            if let Some(k) = sv.kind {
+                attr(&mut body, "chart:class", class_name(k, false, false));
+            }
+            if sv.secondary_axis {
+                attr(&mut body, "chart:attached-axis", "secondary-y");
+            }
+            body.push('>');
+            for d in [y_domain, x].into_iter().flatten() {
+                body.push_str("<chart:domain");
+                attr(&mut body, "table:cell-range-address", &d);
+                body.push_str("/>");
+            }
+            write_series_extras(&mut body, &mut st, sv, sheets);
+            body.push_str("</chart:series>");
+            continue;
+        }
         // Bubble: the series values are the sizes (LibreOffice convention).
         let values = if kind == ChartKindData::Bubble {
             sv.sizes.as_ref().unwrap_or(&sv.values)
@@ -965,32 +1176,7 @@ pub(crate) fn content_xml(
             attr(&mut body, "table:cell-range-address", &a);
             body.push_str("/>");
         }
-        if let Some(t) = &sv.trend {
-            let mut p = String::new();
-            attr(&mut p, "chart:regression-type", regression_type(t.kind));
-            if let Some(n) = &t.name {
-                attr(&mut p, "tally:regression-name", n);
-            }
-            let rs = st.add(&p, "", "");
-            let _ = write!(body, r#"<chart:regression-curve chart:style-name="{rs}">"#);
-            let _ = write!(
-                body,
-                r#"<chart:equation chart:display-equation="{}" chart:display-r-square="{}"/>"#,
-                t.show_equation, t.show_r2
-            );
-            body.push_str("</chart:regression-curve>");
-        }
-        if let Some(e) = &sv.error_bars {
-            let es = error_bar_style(&mut st, e, sheets);
-            let _ = write!(
-                body,
-                r#"<chart:error-indicator chart:dimension="y" chart:style-name="{es}"/>"#
-            );
-        }
-        if sv.mean_line {
-            let ms = st.add("", r##" svg:stroke-color="#b3b3b3""##, "");
-            let _ = write!(body, r#"<chart:mean-value chart:style-name="{ms}"/>"#);
-        }
+        write_series_extras(&mut body, &mut st, sv, sheets);
         body.push_str("</chart:series>");
     }
     if c.kind == ChartKindData::Stock {
@@ -1000,16 +1186,20 @@ pub(crate) fn content_xml(
     }
     body.push_str("<chart:wall/><chart:floor/></chart:plot-area>");
 
-    // Bubble sizes live in `values`; the local table writes series values.
-    let mut sized = c.clone();
-    if c.kind == ChartKindData::Bubble {
-        for s in &mut sized.series {
-            if let Some(z) = s.sizes.take() {
-                s.values = z;
+    if let Some(t) = &own {
+        write_own_table(&mut body, c, t);
+    } else {
+        // Bubble sizes live in `values`; the local table writes series values.
+        let mut sized = c.clone();
+        if c.kind == ChartKindData::Bubble {
+            for s in &mut sized.series {
+                if let Some(z) = s.sizes.take() {
+                    s.values = z;
+                }
             }
         }
+        write_local_table(&mut body, &sized, cells, categories);
     }
-    write_local_table(&mut body, &sized, cells, categories);
     body.push_str("</chart:chart>");
 
     let mut out = String::with_capacity(body.len() + st.out.len() + 1024);
@@ -1256,6 +1446,80 @@ struct LocalTable {
     rows: Vec<Vec<Value>>,
 }
 
+/// The sheet name AOO gives a chart's own data table in range addresses
+/// (`InternalDataProvider::convertRangeToXML`: `local-table.$B$2:.$B$5`).
+const LOCAL_TABLE: &str = "local-table";
+
+/// Whether `addr` points into the chart's own `local-table` (its sheet
+/// part is `local-table` and the document has no sheet of that name).
+fn is_local_address(addr: &str, look: &SheetLookup<'_>) -> bool {
+    let first = addr.split_whitespace().next().unwrap_or("");
+    let start = split_unquoted(first, ':')[0].trim();
+    match split_sheet_cell(start).0 {
+        Some(sh) => sheet_key(sh).eq_ignore_ascii_case(LOCAL_TABLE) && look.index(sh).is_none(),
+        None => false,
+    }
+}
+
+impl LocalTable {
+    /// One cell (row 0 is the header row).
+    fn cell(&self, r: u32, c: u32) -> Value {
+        if r == 0 {
+            return self
+                .header
+                .get(c as usize)
+                .filter(|t| !t.is_empty())
+                .map_or(Value::Empty, |t| Value::text(t.as_str()));
+        }
+        self.rows
+            .get(r as usize - 1)
+            .and_then(|row| row.get(c as usize))
+            .cloned()
+            .unwrap_or(Value::Empty)
+    }
+
+    /// The cells of a `local-table` address in reading order (at most
+    /// [`MAX_LOCAL_ROWS`]).
+    fn cells(&self, addr: &str) -> Vec<Value> {
+        let mut out = Vec::new();
+        for part in addr.split_whitespace().take(64) {
+            let ends = split_unquoted(part, ':');
+            let Some(a) = parse_cell(split_sheet_cell(ends[0].trim()).1) else {
+                continue;
+            };
+            let b = ends
+                .get(1)
+                .and_then(|e| parse_cell(split_sheet_cell(e.trim()).1))
+                .unwrap_or(a);
+            // Rows past the table read nothing (trailing empty rows are not
+            // kept: an address over a million rows allocates no padding).
+            let top = a.0.min(b.0);
+            let bottom =
+                a.0.max(b.0)
+                    .min(u32::try_from(self.rows.len()).unwrap_or(u32::MAX));
+            for r in top..=bottom.max(top) {
+                for c in a.1.min(b.1)..=a.1.max(b.1) {
+                    if out.len() >= MAX_LOCAL_ROWS {
+                        return out;
+                    }
+                    out.push(self.cell(r, c));
+                }
+            }
+        }
+        out
+    }
+
+    fn numbers(&self, addr: &str) -> Vec<Option<f64>> {
+        self.cells(addr)
+            .into_iter()
+            .map(|v| match v {
+                Value::Number(n) => Some(n),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 fn parse_local_cell<R: BufRead>(xml: &mut XmlReader<R>, e: &Elem) -> Result<Value, OdsError> {
     let text = xml.text_content(MAX_TEXT)?;
     Ok(match e.attr("office:value-type") {
@@ -1289,7 +1553,7 @@ fn parse_local_table<R: BufRead>(xml: &mut XmlReader<R>) -> Result<LocalTable, O
                 "table:table-cell" => {
                     let v = parse_local_cell(xml, &e)?;
                     if let Some(r) = row.as_mut() {
-                        if r.len() < MAX_SERIES + 1 {
+                        if r.len() < 3 * MAX_SERIES + 1 {
                             r.push(v);
                         }
                     }
@@ -1433,7 +1697,10 @@ pub(crate) fn parse_content_xml<R: BufRead>(
                 }
                 "chart:plot-area" => {
                     plot_style = e.attr("chart:style-name").map(str::to_string);
-                    if let Some(a) = e.attr("table:cell-range-address") {
+                    if let Some(a) = e
+                        .attr("table:cell-range-address")
+                        .filter(|a| !is_local_address(a, look))
+                    {
                         let range = parse_range_address(a, look);
                         let labels = e.attr("chart:data-source-has-labels").unwrap_or("none");
                         c.source = Some(ChartSourceData {
@@ -1654,6 +1921,7 @@ pub(crate) fn parse_content_xml<R: BufRead>(
     }
     // Axes.
     let mut categories: Option<ChartRangeData> = None;
+    let mut local_categories: Option<String> = None;
     for ax in axes {
         let st = ax.style.as_ref().and_then(|n| styles.get(n));
         let mut a = axis_of(st, ax.grids, ax.title);
@@ -1661,7 +1929,11 @@ pub(crate) fn parse_content_xml<R: BufRead>(
             apply_axis_type(&mut a, ax.axis_type.as_deref(), ax.date_scale.as_deref());
         }
         if let Some(addr) = ax.categories {
-            categories = Some(parse_range_address(&addr, look));
+            if is_local_address(&addr, look) {
+                local_categories = Some(addr);
+            } else {
+                categories = Some(parse_range_address(&addr, look));
+            }
         }
         match (ax.dim.as_str(), ax.name.as_str()) {
             ("x", _) => c.x_axis = a,
@@ -1675,31 +1947,48 @@ pub(crate) fn parse_content_xml<R: BufRead>(
     let local = local.unwrap_or_default();
     let mut literal_dropped = false;
     let mut first_bar_volume = false;
+    // Own data (`xlink:href="."`, AOO's internal data provider): the
+    // addresses point into the local table.
+    let mut take_literal = |v: Vec<Option<f64>>| -> Option<ChartValuesData> {
+        if v.len() > *literal_budget {
+            literal_dropped = true;
+            None
+        } else {
+            *literal_budget -= v.len();
+            Some(ChartValuesData::Literal(v))
+        }
+    };
     for (i, raw) in series.into_iter().enumerate() {
         let st = raw.style.as_ref().and_then(|n| styles.get(n));
         let mut sv = ChartSeriesData::default();
-        if let Some(a) = &raw.values {
+        let local_values = raw
+            .values
+            .as_deref()
+            .is_some_and(|a| is_local_address(a, look));
+        if let Some(a) = raw.values.as_deref().filter(|_| !local_values) {
             sv.values = parse_range_address(a, look);
         }
-        if sv.values.is_unset() {
+        if let Some(a) = raw.values.as_deref().filter(|_| local_values) {
+            sv.literal_values = take_literal(local.numbers(a));
+        } else if sv.values.is_unset() && !local.rows.is_empty() {
             // Cached values from the local table (column i + 1), one per
             // row up to the last non-empty row.
-            let len = local.rows.len();
-            if len > *literal_budget {
-                literal_dropped = true;
-            } else if len > 0 {
-                *literal_budget -= len;
-                let col: Vec<Option<f64>> = local.rows[..len]
-                    .iter()
-                    .map(|r| match r.get(i + 1) {
-                        Some(Value::Number(n)) => Some(*n),
-                        _ => None,
-                    })
-                    .collect();
-                sv.literal_values = Some(ChartValuesData::Literal(col));
-            }
+            let col: Vec<Option<f64>> = local
+                .rows
+                .iter()
+                .map(|r| match r.get(i + 1) {
+                    Some(Value::Number(n)) => Some(*n),
+                    _ => None,
+                })
+                .collect();
+            sv.literal_values = take_literal(col);
         }
-        if let Some(a) = &raw.label {
+        if let Some(a) = raw.label.as_deref().filter(|a| is_local_address(a, look)) {
+            let name = local.cells(a).first().map(value_text).unwrap_or_default();
+            if !name.is_empty() {
+                sv.name = Some(SeriesNameData::Text(name.chars().take(MAX_TEXT).collect()));
+            }
+        } else if let Some(a) = &raw.label {
             sv.name = Some(SeriesNameData::Ref(parse_range_address(a, look)));
         } else if let Some(t) = st.and_then(|s| s.chart_attr("tally:label-text")) {
             sv.name = Some(SeriesNameData::Text(t.chars().take(MAX_TEXT).collect()));
@@ -1724,18 +2013,34 @@ pub(crate) fn parse_content_xml<R: BufRead>(
         sv.secondary_axis = raw.attached.as_deref() == Some("secondary-y");
         // Domains.
         let kind = sv.kind.unwrap_or(c.kind);
+        let local_domain = |d: &str| is_local_address(d, look);
         if kind == ChartKindData::Bubble {
             // LibreOffice: values = sizes, domain[0] = y, domain[1] = x.
             let sizes = std::mem::take(&mut sv.values);
             sv.sizes = Some(sizes).filter(|r| !r.is_unset());
+            if local_values {
+                sv.literal_sizes = sv.literal_values.take();
+            }
             if let Some(y) = raw.domains.first() {
-                sv.values = parse_range_address(y, look);
+                if local_domain(y) {
+                    sv.literal_values = take_literal(local.numbers(y));
+                } else {
+                    sv.values = parse_range_address(y, look);
+                }
             }
             if let Some(x) = raw.domains.get(1) {
-                sv.x_values = Some(parse_range_address(x, look));
+                if local_domain(x) {
+                    sv.literal_x = take_literal(local.numbers(x));
+                } else {
+                    sv.x_values = Some(parse_range_address(x, look));
+                }
             }
         } else if let Some(x) = raw.domains.first() {
-            sv.x_values = Some(parse_range_address(x, look));
+            if local_domain(x) {
+                sv.literal_x = take_literal(local.numbers(x));
+            } else {
+                sv.x_values = Some(parse_range_address(x, look));
+            }
         }
         if let Some(s) = st {
             sv.color = s
@@ -1846,7 +2151,36 @@ pub(crate) fn parse_content_xml<R: BufRead>(
             (false, false) => StockVariantData::Hlc,
         });
     }
-    if c.categories.is_none()
+    if let Some(addr) = local_categories.filter(|_| c.categories.is_none()) {
+        // Own data: the categories column of the local table (numbers,
+        // e.g. dates, stay numbers).
+        let cells = local.cells(&addr);
+        if cells.iter().all(|v| matches!(v, Value::Empty)) {
+            // Nothing to keep.
+        } else if cells.len() > *literal_budget {
+            literal_dropped = true;
+        } else {
+            *literal_budget -= cells.len();
+            c.literal_categories = Some(
+                if cells
+                    .iter()
+                    .all(|v| matches!(v, Value::Number(_) | Value::Empty))
+                {
+                    ChartValuesData::Literal(
+                        cells
+                            .iter()
+                            .map(|v| match v {
+                                Value::Number(n) => Some(*n),
+                                _ => None,
+                            })
+                            .collect(),
+                    )
+                } else {
+                    ChartValuesData::LiteralText(cells.iter().map(value_text).collect())
+                },
+            );
+        }
+    } else if c.categories.is_none()
         && !local.rows.is_empty()
         && c.series.iter().any(|s| s.literal_values.is_some())
     {

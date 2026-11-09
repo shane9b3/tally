@@ -11,6 +11,7 @@ export const loadCommandPalette = () => import("./components/CommandPalette");
 export const loadShortcutsModal = () => import("./components/ShortcutsModal");
 export const loadPrintPreview = () => import("./print/PrintPreview");
 export const loadChartEditor = () => import("./charts/ChartEditorPanel");
+export const loadChartDataTable = () => import("./charts/ChartDataTableDialog");
 export const loadChartLayer = () => import("./charts/ChartLayer");
 export const loadStylesUi = () => import("./styles/StylesUi");
 export const loadNavigator = () => import("./navigator/NavigatorPanel");

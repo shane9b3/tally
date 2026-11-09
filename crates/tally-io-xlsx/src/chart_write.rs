@@ -14,11 +14,17 @@
 //! which the library leaves uncached); Excel and Tally recompute the
 //! values from the cells on open.
 //!
+//! Literal data (a chart with its own data, AOO's internal data
+//! provider): rust_xlsxwriter only writes references, so each literal
+//! list is written as a placeholder reference (`_TallyLit[n]`) that the
+//! patch pass replaces with `c:numLit` / `c:strLit` (see
+//! [`patch_chart_literals`]).
+//!
 //! The library keys objects by anchor cell and offset, so two charts (or
 //! pictures) at the same spot would overwrite each other: later ones are
 //! nudged by one pixel per collision.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
 use rust_xlsxwriter::{
@@ -30,9 +36,9 @@ use rust_xlsxwriter::{
 use tally_formula::Resolver;
 use tally_model::{
     AxisCrossData, AxisLabelPosData, AxisTypeData, ChartAxisData, ChartData, ChartKindData,
-    ChartRangeData, ChartSeriesData, ErrorBarDirData, ErrorBarKindData, LabelPosData,
-    LegendPosData, MarkerShapeData, SeriesNameData, SheetData, StackingData, StockVariantData,
-    TimeIntervalData, TimeUnitData, TrendKindData,
+    ChartRangeData, ChartSeriesData, ChartValuesData, ErrorBarDirData, ErrorBarKindData,
+    LabelPosData, LegendPosData, MarkerShapeData, SeriesNameData, SheetData, StackingData,
+    StockVariantData, TimeIntervalData, TimeUnitData, TrendKindData,
 };
 
 use crate::colors::model_to_rgb;
@@ -54,9 +60,86 @@ thread_local! {
     static CACHE_BUDGET: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
 }
 
+thread_local! {
+    /// The literal lists of the save in progress: `(marker, xml)`.
+    static LITERALS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+}
+
 /// Starts the cached-cell budget of a save.
 pub(crate) fn begin_save() {
     CACHE_BUDGET.with(|b| b.set((0, 0)));
+    LITERALS.with(|l| l.borrow_mut().clear());
+}
+
+/// The literal lists the save in progress wrote (for the patch pass).
+pub(crate) fn take_literals() -> Vec<(String, String)> {
+    LITERALS.with(|l| std::mem::take(&mut *l.borrow_mut()))
+}
+
+fn xml_text(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// `c:numLit` / `c:strLit` of a literal list.
+fn literal_xml(v: &ChartValuesData) -> String {
+    let mut out = String::new();
+    match v {
+        ChartValuesData::Literal(v) => {
+            out.push_str("<c:numLit><c:formatCode>General</c:formatCode>");
+            out.push_str(&format!(r#"<c:ptCount val="{}"/>"#, v.len()));
+            for (i, x) in v.iter().enumerate() {
+                if let Some(x) = x.filter(|x| x.is_finite()) {
+                    out.push_str(&format!(r#"<c:pt idx="{i}"><c:v>{x}</c:v></c:pt>"#));
+                }
+            }
+            out.push_str("</c:numLit>");
+        }
+        ChartValuesData::LiteralText(t) => {
+            out.push_str(&format!(r#"<c:strLit><c:ptCount val="{}"/>"#, t.len()));
+            for (i, x) in t.iter().enumerate() {
+                if !x.is_empty() {
+                    out.push_str(&format!(
+                        r#"<c:pt idx="{i}"><c:v>{}</c:v></c:pt>"#,
+                        xml_text(x)
+                    ));
+                }
+            }
+            out.push_str("</c:strLit>");
+        }
+    }
+    out
+}
+
+/// A placeholder reference for a literal list (replaced by the patch pass).
+fn literal_range(v: &ChartValuesData) -> ChartRange {
+    let marker = LITERALS.with(|l| {
+        let mut l = l.borrow_mut();
+        let m = format!("_TallyLit[{}]", l.len());
+        l.push((m.clone(), literal_xml(v)));
+        m
+    });
+    // `=…[…]` is passed through as written and never cached.
+    ChartRange::new_from_string(&format!("={marker}"))
+}
+
+/// Replaces the placeholder references of a chart part with their
+/// literal lists.
+pub(crate) fn patch_chart_literals(xml: &str, literals: &[(String, String)]) -> String {
+    if !xml.contains("_TallyLit[") {
+        return xml.to_string();
+    }
+    let mut out = xml.to_string();
+    for (marker, lit) in literals {
+        for tag in ["c:numRef", "c:strRef"] {
+            let placeholder = format!("<{tag}><c:f>{marker}</c:f></{tag}>");
+            if out.contains(&placeholder) {
+                out = out.replace(&placeholder, lit);
+            }
+        }
+    }
+    out
 }
 
 /// Number of ranges the save in progress wrote without cached values.
@@ -348,13 +431,22 @@ fn add_series(
     report: &mut dyn Warn,
 ) -> bool {
     let name = c.name.as_str();
-    let Some(values) = chart_range(&s.values, resolver, name, "value", report) else {
-        if s.values.invalid {
-            report.warn(format!(
-                "chart {name:?}: a series with a #REF! range was dropped"
-            ));
+    let values = match chart_range(&s.values, resolver, name, "value", report) {
+        Some(v) => v,
+        // Own data: the literal values.
+        None if s.values.is_unset() && s.literal_values.is_some() => literal_range(
+            s.literal_values
+                .as_ref()
+                .unwrap_or(&ChartValuesData::Literal(Vec::new())),
+        ),
+        None => {
+            if s.values.invalid {
+                report.warn(format!(
+                    "chart {name:?}: a series with a #REF! range was dropped"
+                ));
+            }
+            return false;
         }
-        return false;
     };
     let ser = chart.add_series();
     ser.set_values(&values);
@@ -366,9 +458,17 @@ fn add_series(
             .and_then(|r| chart_range(r, resolver, name, "X", report))
         {
             ser.set_categories(&x);
+        } else if let Some(x) = s.literal_x.as_ref().filter(|_| s.x_values.is_none()) {
+            ser.set_categories(&literal_range(x));
         }
     } else if let Some(cat) = categories {
         ser.set_categories(cat);
+    } else if let Some(cat) = c
+        .literal_categories
+        .as_ref()
+        .filter(|_| c.categories.is_none())
+    {
+        ser.set_categories(&literal_range(cat));
     }
     match &s.name {
         Some(SeriesNameData::Ref(r)) => {

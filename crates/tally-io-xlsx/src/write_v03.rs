@@ -944,6 +944,10 @@ pub(crate) struct Patches {
     pub sheet_view_attrs: Vec<(String, String)>,
     /// `workbookView showSheetTabs="0"` (Tools ▸ Options ▸ View ▸ Sheet tabs off).
     pub hide_sheet_tabs: bool,
+    /// Literal chart data (`c:numLit` / `c:strLit`, which rust_xlsxwriter
+    /// cannot write): `(marker, xml)`, the marker being the formula of a
+    /// placeholder reference in `xl/charts/chartN.xml`.
+    pub chart_literals: Vec<(String, String)>,
 }
 
 impl Patches {
@@ -961,6 +965,7 @@ impl Patches {
             && self.style_names.is_empty()
             && self.sheet_view_attrs.is_empty()
             && !self.hide_sheet_tabs
+            && self.chart_literals.is_empty()
     }
 }
 
@@ -1135,6 +1140,7 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             .collect();
         let is_ct = name == "[Content_Types].xml" && !p.content_types.is_empty();
         let is_styles = name == "xl/styles.xml" && !p.style_names.is_empty();
+        let is_chart = name.starts_with("xl/charts/chart") && !p.chart_literals.is_empty();
         if !rel_adds.is_empty() {
             handled_rels.push(name.clone());
         }
@@ -1146,6 +1152,7 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             || !rel_adds.is_empty()
             || is_ct
             || is_styles
+            || is_chart
         {
             let mut xml = String::new();
             file.read_to_string(&mut xml)?;
@@ -1258,6 +1265,9 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             }
             if is_styles {
                 patched = crate::tools::patch_styles_xml(&patched, &p.style_names);
+            }
+            if is_chart {
+                patched = crate::chart_write::patch_chart_literals(&patched, &p.chart_literals);
             }
             let opts = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated);

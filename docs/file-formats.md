@@ -427,6 +427,21 @@ loses.
 - **Chart frames**: `draw:object` carries `draw:notify-on-update-of-ranges`
   with the plotted category and value ranges (`Sheet1.A2:Sheet1.A6 …`, at
   most 64 areas), as AOO writes it.
+- **Charts with their own data** (T18, AOO's internal data provider: a chart
+  that reads no cells): written as AOO's SchXMLExport does, `chart:chart
+  xlink:href="."`, the plot area `table:cell-range-address=
+  "local-table.$A$1:.$D$5"`, each series' `chart:values-cell-range-address`,
+  `chart:label-cell-address` and `chart:domain` pointing into the object's
+  `local-table` (`InternalDataProvider::convertRangeToXML`: column A the
+  categories, then per series its X column, value column and bubble-size
+  column; row 1 the names), the x axis `chart:categories` likewise. On read
+  an address whose sheet is `local-table` (and no sheet of the document has
+  that name) takes its cells from the local table: values, X values, bubble
+  sizes (a bubble series' values are its sizes, domain 1 the Y values,
+  domain 2 the X values), the series name and the categories (numbers stay
+  numbers, e.g. dates). Reads stop at the table's last row and count against
+  the document's literal-point budget. Files without addresses keep the
+  older rule (series *i* reads column *i* + 1).
 - **Names** (review 3, H3/H4): `table:base-cell-address` is read into
   `NameData::base_cell` and relative references are parsed against it, so
   "the cell to the left" names from AOO/LibreOffice evaluate where they
@@ -454,6 +469,14 @@ loses.
   when the run is hidden or the next row carries `collapsed`. Adjacent
   groups of the same level cannot be written (rust_xlsxwriter refuses them;
   reported and skipped).
+- **Charts with their own data** (T18): a series without a cell range
+  writes its literal values as `c:numLit` (and X values in `c:xVal`,
+  categories in `c:cat` as `c:strLit` / `c:numLit`; series names as
+  `c:tx/c:v`). rust_xlsxwriter only writes references, so the series gets a
+  placeholder reference (`_TallyLit[n]`) that the package patch pass
+  replaces in `xl/charts/chartN.xml`. Bubble sizes are still dropped with
+  the bubble → scatter degradation. Reading takes `numLit` / `strLit` into
+  the same literal data.
 - **Scenarios**: `<scenarios current show><scenario name comment locked
   count><inputCells r val/>` (at most 32 cells per scenario, values only; a
   read scenario has one range per cell).

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tally_types::SheetId;
 use ts_rs::TS;
 
-use crate::charts::{ChartAnchor, ChartDto, ChartRef, ImageDto};
+use crate::charts::{ChartAnchor, ChartDataTableDto, ChartDto, ChartRef, ImageDto};
 use crate::features::{
     BreakAxis, CfRuleDto, DataBarView, DocPropertiesDto, IconView, NoteDto, PageSetupDto,
     ProtectionOptions, ValidationDto,
@@ -978,6 +978,17 @@ pub enum Op {
         id: u32,
         /// The new definition.
         chart: ChartDto,
+    },
+    /// Replaces the internal data of a chart without cell ranges (AOO
+    /// View ▸ Data Table; one "Edit chart data" undo step). Refused for a
+    /// chart over cells, whose data is edited in the cells.
+    SetChartDataTable {
+        /// Sheet.
+        sheet: SheetId,
+        /// Id from `charts`.
+        id: u32,
+        /// The new table.
+        table: ChartDataTableDto,
     },
     /// Moves and/or resizes a chart.
     MoveResizeChart {

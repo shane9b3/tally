@@ -56,6 +56,7 @@ const Dialogs = lazyPart(() => chunks.loadDialogs().then((m) => m.Dialogs));
 const ShortcutsModal = lazyPart(() => chunks.loadShortcutsModal().then((m) => m.ShortcutsModal));
 const PrintPreview = lazyPart(() => chunks.loadPrintPreview().then((m) => m.PrintPreview));
 const ChartEditorPanel = lazyPart(() => chunks.loadChartEditor().then((m) => m.ChartEditorPanel));
+const ChartDataTableDialog = lazyPart(() => chunks.loadChartDataTable().then((m) => m.ChartDataTableDialog));
 
 export interface Platform {
   /** macOS overlay title bar: leave room for the traffic lights. */
@@ -86,6 +87,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const glanceOpen = useUiStore((s) => s.glanceOpen);
   const chartEditorOpen = useChartStore((s) => s.editorOpen);
+  const chartDataTable = useChartStore((s) => s.dataTable);
   const dialogOpen = useUiStore((s) => s.dialog !== null);
   const paletteOpen = useUiStore((s) => s.paletteOpen);
   const shortcutsOpen = useUiStore((s) => s.shortcutsOpen);
@@ -149,6 +151,11 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
             {chartEditorOpen ? (
               <LazySlot onFail={() => ctl.w5.charts.closeEditor()}>
                 <ChartEditorPanel />
+              </LazySlot>
+            ) : null}
+            {chartDataTable !== null ? (
+              <LazySlot onFail={() => ctl.w5.charts.closeDataTable()}>
+                <ChartDataTableDialog />
               </LazySlot>
             ) : null}
             <W56Panels />

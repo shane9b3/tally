@@ -322,6 +322,7 @@ fn chart(r: u32) -> ChartDto {
         background: None,
         plot_background: None,
         include_hidden: false,
+        data_table: None,
     }
 }
 
