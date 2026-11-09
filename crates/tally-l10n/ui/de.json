@@ -2142,5 +2142,13 @@
   "cp.atLabels": "An Beschriftungen",
   "cp.atAxis": "An Achse",
   "cp.atAxisAndLabels": "An Achse und Beschriftungen",
-  "cp.minBelowMax": "Das Minimum muss kleiner als das Maximum sein. Überprüfen Sie Ihre Eingabe."
+  "cp.minBelowMax": "Das Minimum muss kleiner als das Maximum sein. Überprüfen Sie Ihre Eingabe.",
+  "pivot.filterTitle": "Filter",
+  "pivot.filterLead": "Filtert die Quellzeilen von {name} ({source}); die Datenpilot-Tabelle wird aktualisiert.",
+  "pivot.filterCriteria": "Filterkriterien",
+  "pivot.filterMenu": "Filter…",
+  "cmd.data.pivotFilter": "Datenpilot-Filter…",
+  "msg.undo.pivotFilter": "Datenpilot-Filter",
+  "msg.reason.pivotFilterButton": "Cursor in eine Datenpilot-Tabelle mit Filter-Schaltfläche setzen",
+  "grid.cellButton": ", Schaltfläche, Alt+Pfeil nach unten (⌥↓) betätigt sie"
 }

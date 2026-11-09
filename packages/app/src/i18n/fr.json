@@ -2142,5 +2142,13 @@
   "cp.atLabels": "Aux étiquettes",
   "cp.atAxis": "À l'axe",
   "cp.atAxisAndLabels": "À l'axe et aux étiquettes",
-  "cp.minBelowMax": "Le minimum doit être inférieur au maximum. Vérifiez votre saisie."
+  "cp.minBelowMax": "Le minimum doit être inférieur au maximum. Vérifiez votre saisie.",
+  "pivot.filterTitle": "Filtre",
+  "pivot.filterLead": "Filtre les lignes source de {name} ({source}) ; la table du pilote est mise à jour.",
+  "pivot.filterCriteria": "Critères de filtre",
+  "pivot.filterMenu": "Filtre…",
+  "cmd.data.pivotFilter": "Filtre du pilote de données…",
+  "msg.undo.pivotFilter": "Filtre du pilote de données",
+  "msg.reason.pivotFilterButton": "Placez le curseur dans une table du pilote avec un bouton Filtre",
+  "grid.cellButton": ", bouton, Alt+Bas (⌥↓) l’active"
 }

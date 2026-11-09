@@ -4,6 +4,7 @@ import type { DataLayout } from "./DataLayout";
 import type { PivotDataFieldDto } from "./PivotDataFieldDto";
 import type { PivotFieldDto } from "./PivotFieldDto";
 import type { PivotSource } from "./PivotSource";
+import type { PivotSourceFilterDto } from "./PivotSourceFilterDto";
 import type { RangeDto } from "./RangeDto";
 
 /**
@@ -77,4 +78,9 @@ showFilterButton: boolean,
 /**
  * Drill down on double-click.
  */
-drillDown: boolean, };
+drillDown: boolean, 
+/**
+ * The filter on the source rows (the "Filter" button above the
+ * table); absent or `null` for none.
+ */
+sourceFilter?: PivotSourceFilterDto | null, };

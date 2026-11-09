@@ -146,6 +146,7 @@ export class Grid {
     });
     this.editor.mount(root);
     this.aria = new AriaMirror(doc, root, this.editor.el, { rows: this.rowsCount, cols: this.colsCount });
+    this.aria.isButton = (r, c) => this.isPushButton({ r, c });
     this.aria.onStrings = (S) => {
       this.editor.el.setAttribute("aria-label", S.cellEditor);
       this.objects.setLabel(S.objects);
@@ -212,6 +213,7 @@ export class Grid {
       invalidateOverlay: () => self.invalidate("overlay"),
       filterButtonAt: (x, y) => self.filterButtonAt(x, y),
       cellButtonAt: (x, y) => self.cellButtonAt(x, y),
+      pushButtonAt: (cell) => self.pushButtonAt(cell),
       linkAt: (r, c) => {
         const v = self.props.source.getCell(r, c);
         return v && v.flags & CELL_FLAGS.link && v.link ? v.link : null;
@@ -304,6 +306,10 @@ export class Grid {
     if ("arrayRange" in partial && partial.arrayRange !== prev.arrayRange) this.invalidate("overlay");
     if ("clipRange" in partial && partial.clipRange !== prev.clipRange) this.invalidate("overlay");
     if ("filterButtons" in partial && partial.filterButtons !== prev.filterButtons) this.invalidate("main");
+    if ("pushButtons" in partial && partial.pushButtons !== prev.pushButtons) {
+      this.invalidate("main");
+      this.mirrorSelection(false);
+    }
     if ("pageBreaks" in partial && partial.pageBreaks !== prev.pageBreaks) this.invalidate("main");
     if ("printRange" in partial && partial.printRange !== prev.printRange) this.invalidate("main");
     if ("editHighlights" in partial && partial.editHighlights !== prev.editHighlights) {
@@ -854,6 +860,9 @@ export class Grid {
     if (x < geo.headerW || y < geo.headerH) return null;
     const r = geo.rowAt(y);
     const c = geo.colAt(x);
+    // A push-button cell is a button over its whole area.
+    const push = this.pushButtonAt({ r, c });
+    if (push) return push;
     const v = this.props.source.getCell(r, c);
     if (!v || (v.flags & (CELL_FLAGS.dropdown | CELL_FLAGS.link)) === 0) return null;
     const fb = this.props.filterButtons;
@@ -874,6 +883,18 @@ export class Grid {
       if (within(b)) return { kind: "link", cell: { r, c }, rect: client(b) };
     }
     return null;
+  }
+
+  /** Whether `cell` is a push-button cell (`pushButtons`). */
+  isPushButton(cell: CellPos): boolean {
+    return (this.props.pushButtons ?? []).some((b) => b.r === cell.r && b.c === cell.c);
+  }
+
+  /** The push-button cell `cell` with its client rect, or `null`. */
+  private pushButtonAt(cell: CellPos): { kind: CellButtonKind; cell: CellPos; rect: ClientRect } | null {
+    if (!this.isPushButton(cell)) return null;
+    const rect = this.cellClientRect(cell);
+    return rect ? { kind: "button", cell: { r: cell.r, c: cell.c }, rect } : null;
   }
 
   /** Tracks the note cell under the pointer and reports changes (`onNoteHover`). */
@@ -1007,6 +1028,7 @@ export class Grid {
       this.lastStats = this.renderer.drawMain({
         ...base,
         filterButtons: this.props.filterButtons ?? null,
+        pushButtons: this.props.pushButtons ?? null,
         pageBreaks: this.props.pageBreaks ?? null,
         printRange: this.props.printRange ?? null,
         outline: this.props.outline ?? null,

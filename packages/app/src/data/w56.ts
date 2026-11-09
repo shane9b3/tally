@@ -24,6 +24,7 @@ import {
   type NavigatorDto,
   type Op,
   type PivotDto,
+  type PivotSourceFilterDto,
   type PivotFieldItemsDto,
   type PivotSource,
   type RangeDto,
@@ -54,6 +55,7 @@ import { formulaLangOf, localizeFunctions, toCanonicalFormula, toDisplayFormula,
 import { setUiLanguage as installUiLanguage } from "../i18n/locales";
 import { DEFAULT_PREFS, MAX_PREFS_BYTES, parsePrefs, readLocalPrefs, serializePrefs, writeLocalPrefs, type AppPrefs, type UiLanguage } from "../options/prefs";
 import { emptyLayout, fromPivotDto, layoutError, pivotAtCell, toPivotDto, type PivotLayoutState } from "../pivot/pivotModel";
+import { pivotWithButtonAt, withSourceFilter } from "../pivot/pivotFilter";
 import { mixedOf, protectionOf, selectionProtection, selectionStyles, stateFromStyle, type TriProtection } from "../styles/formatCells";
 import { addAutoFormat, buildAutoFormat, deleteAutoFormat, renameAutoFormat, sampleError, sampleOffsets, userAutoFormatOps } from "../styles/userAutoFormat";
 import { selectionFont } from "../fonts/fontModel";
@@ -371,7 +373,9 @@ export class W56Features {
       targetSheet = added.id;
       layout = { ...layout, targetSheet, target: { r: 0, c: 0 } };
     }
-    const dto = toPivotDto(layout, targetSheet, existing?.id ?? 0, existing?.name ?? "");
+    // The source filter (the Filter button) stays with an edited layout of the same source.
+    const keepFilter = existing?.sourceFilter && JSON.stringify(existing.source) === JSON.stringify(layout.source);
+    const dto = { ...toPivotDto(layout, targetSheet, existing?.id ?? 0, existing?.name ?? ""), sourceFilter: keepFilter ? existing.sourceFilter : null };
     ops.push(existing ? { type: "updatePivot", id: existing.id, pivot: dto, overwrite } : { type: "createPivot", pivot: dto, overwrite });
     const res = await this.ctl.apply(existing ? t("msg.undo.updatePivotTable", "Update pivot table") : t("msg.undo.createPivotTable", "Create pivot table"), ops);
     if (!res) return false;
@@ -409,6 +413,52 @@ export class W56Features {
         onConfirm: () => void this.refreshPivot(p, true),
       });
     }
+  }
+
+  /**
+   * The "Filter" button of a pivot (AOO `ScGridWindow::DoPushButton`):
+   * the source filter dialog over the source's column names.
+   */
+  async openPivotFilter(p: PivotDto | null = this.activePivot()): Promise<void> {
+    if (!p) {
+      this.toast("info", t("msg.reason.pivotFilterButton", "Put the cursor inside a pivot table with a Filter button"));
+      return;
+    }
+    try {
+      const fields = await this.client.pivotFieldItems(this.doc, p.source);
+      const source = p.source.type === "range" ? `${this.ctl.info?.sheets.find((s) => s.id === (p.source as { sheet: number }).sheet)?.name ?? ""}.${a1(p.source.range)}` : p.source.name;
+      this.store.openDialog({ kind: "pivotFilter", pivot: p, labels: fields.map((f) => f.name), source });
+    } catch (e) {
+      this.ctl.notifyError(e);
+    }
+  }
+
+  /** Whether `cell` is a DataPilot Filter button on the shown sheet. */
+  isPivotFilterButton(cell: CellPos): boolean {
+    return pivotWithButtonAt(this.store.pivots, this.sheet, cell) !== null;
+  }
+
+  /** The filter button cell `cell` was clicked (or activated from the keyboard). */
+  onPivotFilterButton(cell: CellPos): void {
+    const p = pivotWithButtonAt(this.store.pivots, this.sheet, cell);
+    if (p) void this.openPivotFilter(p);
+  }
+
+  /** OK in the filter dialog: sets the source filter and updates the pivot (one undo step). */
+  async applyPivotFilter(p: PivotDto, filter: PivotSourceFilterDto | null, overwrite = false): Promise<void> {
+    const res = await this.ctl.apply(t("msg.undo.pivotFilter", "DataPilot filter"), [{ type: "updatePivot", id: p.id, pivot: withSourceFilter(p, filter), overwrite }]);
+    if (res?.errors.some((e) => e.code === "target_not_empty")) {
+      useUiStore.getState().openDialog({
+        kind: "confirm",
+        title: t("pivot.title", "DataPilot"),
+        message: t("pivot.refreshOverwrite", "The pivot table output will overwrite existing cells. Continue?"),
+        ok: t("dialog.yes", "Yes"),
+        danger: true,
+        onConfirm: () => void this.applyPivotFilter(p, filter, true),
+      });
+      return;
+    }
+    await this.refreshPivots();
   }
 
   async deletePivot(p: PivotDto | null = this.activePivot(), clearOutput = true): Promise<void> {
@@ -856,6 +906,7 @@ export class W56Features {
       out.push(
         { id: "pivotRefresh", label: t("pivot.refresh", "Refresh"), separator: true, onSelect: () => void this.refreshPivot(p) },
         { id: "pivotEdit", label: `${t("pivot.layout", "Layout")}…`, onSelect: () => void this.openDataPilot(p) },
+        ...(p.showFilterButton ? [{ id: "pivotFilter", label: t("pivot.filterMenu", "Filter…"), onSelect: () => void this.openPivotFilter(p) }] : []),
         { id: "pivotDelete", label: t("pivot.deleteTable", "Delete pivot table"), danger: true, onSelect: () => void this.deletePivot(p) },
       );
     }

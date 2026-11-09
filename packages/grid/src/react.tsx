@@ -31,6 +31,7 @@ const PROP_KEYS = [
   "arrayRange",
   "clipRange",
   "filterButtons",
+  "pushButtons",
   "pageBreaks",
   "printRange",
   "protectedNav",

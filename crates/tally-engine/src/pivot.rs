@@ -38,12 +38,13 @@ use std::sync::Arc;
 use tally_api::{
     ApiError, AutoShow, BaseItem, DataLayout, DatePart, PivotCellRole, PivotDataFieldDto, PivotDto,
     PivotFieldDto, PivotFieldItemsDto, PivotGroupDto, PivotHit, PivotItemDto, PivotLayout,
-    PivotSort, PivotSource, PivotSubtotals, RangeDto, ShowAs, ShowAsKind,
+    PivotSort, PivotSource, PivotSourceFilterDto, PivotSubtotals, RangeDto, ShowAs, ShowAsKind,
 };
 use tally_model::{
     AggFnData, AutoShowData, BaseItemData, CellRangeLocal, DataLayoutData, DatePartData, PivotData,
     PivotDataFieldData, PivotFieldData, PivotGroupData, PivotLayoutData, PivotSortData,
-    PivotSourceData, PivotSubtotalsData, ShowAsData, ShowAsKindData,
+    PivotSourceData, PivotSourceFilterData, PivotSubtotalsData, ShowAsData, ShowAsKindData,
+    StandardFilterData, StdConditionData, StdFilterOptionsData,
 };
 use tally_numfmt::date::ymd_from_serial;
 use tally_numfmt::{recognize_input_with, Locale, RecognizeContext};
@@ -246,6 +247,15 @@ pub fn from_data(wb: &mut Workbook, sheet: SheetId, pivots: &[PivotData]) {
         }
         if let PivotSourceData::Range { sheet, .. } = &mut data.source {
             *sheet = ids.get(*sheet as usize).copied().unwrap_or(u32::MAX);
+        }
+        // The source filter within the API's limits (so the pivot can be
+        // edited and sent back).
+        if let Some(f) = &mut data.source_filter {
+            f.conditions.retain(|c| c.value.len() <= 4096);
+            f.conditions.truncate(MAX_SOURCE_FILTER_CONDITIONS);
+            if f.conditions.is_empty() {
+                data.source_filter = None;
+            }
         }
         Arc::make_mut(&mut s.meta.pivots).push(Arc::new(PivotTable::new(id, data)));
     }
@@ -590,7 +600,59 @@ pub fn from_api(wb: &Workbook, dto: &PivotDto) -> Result<PivotData, ApiError> {
         identify_categories: dto.identify_categories,
         show_filter_button: dto.show_filter_button,
         drill_down: dto.drill_down,
+        source_filter: source_filter_from_api(wb, &dto.source, dto.source_filter.as_ref())?,
     })
+}
+
+/// Most conditions of a source filter (AOO's dialog has 3; files may
+/// hold a few more).
+pub const MAX_SOURCE_FILTER_CONDITIONS: usize = 8;
+
+fn source_filter_from_api(
+    wb: &Workbook,
+    source: &PivotSource,
+    f: Option<&PivotSourceFilterDto>,
+) -> Result<Option<PivotSourceFilterData>, ApiError> {
+    let Some(f) = f else { return Ok(None) };
+    if f.conditions.is_empty() {
+        return Ok(None);
+    }
+    if f.conditions.len() > MAX_SOURCE_FILTER_CONDITIONS {
+        return Err(ApiError::invalid_argument(format!(
+            "at most {MAX_SOURCE_FILTER_CONDITIONS} filter conditions"
+        )));
+    }
+    let src = api_source_range(wb, source)?;
+    if f.conditions
+        .iter()
+        .any(|c| c.col >= src.cols() || c.value.len() > 4096)
+    {
+        return Err(ApiError::invalid_argument(
+            "a filter condition column is outside the source or its value is too long",
+        ));
+    }
+    let model = crate::tools::std_filter_to_model(
+        CellRangeLocal::default(),
+        &f.conditions,
+        &tally_api::StdFilterOptions::default(),
+        None,
+        None,
+    );
+    Ok(Some(PivotSourceFilterData {
+        conditions: model.conditions,
+        case_sensitive: f.case_sensitive,
+        regex: f.regex,
+        no_duplicates: f.no_duplicates,
+    }))
+}
+
+fn source_filter_to_api(f: &PivotSourceFilterData) -> PivotSourceFilterDto {
+    PivotSourceFilterDto {
+        conditions: crate::tools::std_conditions_to_api(&f.conditions),
+        case_sensitive: f.case_sensitive,
+        regex: f.regex,
+        no_duplicates: f.no_duplicates,
+    }
 }
 
 /// Model → API definition.
@@ -628,6 +690,11 @@ pub fn to_api(sheet: SheetId, p: &PivotTable) -> PivotDto {
         identify_categories: d.identify_categories,
         show_filter_button: d.show_filter_button,
         drill_down: d.drill_down,
+        source_filter: d
+            .source_filter
+            .as_ref()
+            .filter(|f| !f.conditions.is_empty())
+            .map(source_filter_to_api),
     }
 }
 
@@ -954,6 +1021,19 @@ pub fn read_source(
     need_items: &[bool],
     need_values: &[bool],
 ) -> Result<Cache, ApiError> {
+    read_source_rows(wb, src, ignore_empty, need_items, need_values, None)
+}
+
+/// [`read_source`] over the data rows in `keep` only (the source filter;
+/// `None` reads every row).
+fn read_source_rows(
+    wb: &Workbook,
+    src: &CellRange,
+    ignore_empty: bool,
+    need_items: &[bool],
+    need_values: &[bool],
+    keep: Option<&HashSet<u32>>,
+) -> Result<Cache, ApiError> {
     if src.cell_count() > MAX_SOURCE_CELLS {
         return Err(ApiError::unsupported(format!(
             "the pivot source has more than {MAX_SOURCE_CELLS} cells"
@@ -986,6 +1066,9 @@ pub fn read_source(
     let mut row: Vec<Value> = Vec::with_capacity(ncols);
     let mut total_items = 0usize;
     for r in src.r0 + 1..=src.r1 {
+        if keep.is_some_and(|k| !k.contains(&r)) {
+            continue;
+        }
         row.clear();
         let mut all_empty = true;
         for (fi, c) in (src.c0..=src.c1).enumerate() {
@@ -1055,8 +1138,53 @@ fn needs(p: &PivotData, ncols: usize) -> (Vec<bool>, Vec<bool>) {
 fn read_for(wb: &Workbook, p: &PivotData) -> Result<(CellRange, Cache), ApiError> {
     let src = source_range(wb, &p.source)?;
     let (items, values) = needs(p, src.cols() as usize);
-    let cache = read_source(wb, &src, p.ignore_empty_rows, &items, &values)?;
+    let keep = p
+        .source_filter
+        .as_ref()
+        .filter(|f| !f.conditions.is_empty())
+        .map(|f| filtered_rows(wb, &src, f));
+    let cache = read_source_rows(
+        wb,
+        &src,
+        p.ignore_empty_rows,
+        &items,
+        &values,
+        keep.as_ref(),
+    )?;
     Ok((src, cache))
+}
+
+/// The source data rows the source filter keeps, as AOO's
+/// `ScDPTableDataCache::ValidQuery` (`dptablecache.cxx:634`): the
+/// standard filter's tests, AND binding tighter than OR; "No
+/// duplications" is not applied (AOO's DataPilot ignores `bDuplicate`).
+fn filtered_rows(wb: &Workbook, src: &CellRange, f: &PivotSourceFilterData) -> HashSet<u32> {
+    let data = StandardFilterData {
+        range: CellRangeLocal {
+            r0: src.r0,
+            c0: src.c0,
+            r1: src.r1,
+            c1: src.c1,
+        },
+        conditions: f
+            .conditions
+            .iter()
+            .map(|c| StdConditionData {
+                col: src.c0.saturating_add(c.col).min(src.c1),
+                ..c.clone()
+            })
+            .collect(),
+        options: StdFilterOptionsData {
+            case_sensitive: f.case_sensitive,
+            regex: f.regex,
+            has_header: true,
+            ..StdFilterOptionsData::default()
+        },
+        criteria: None,
+    };
+    crate::tools::visible_rows(wb, src.sheet, &data)
+        .into_iter()
+        .collect()
 }
 
 /// `pivot_field_items`.
@@ -2330,12 +2458,15 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
     // Filter button and page fields.
     let mut had_top = false;
     if p.show_filter_button {
+        // AOO `lcl_DoFilterButton` (`dpoutput.cxx:692`): the `Filter`
+        // caption with the button flag; the grid draws it as a push
+        // button that opens the source filter (`ScGridWindow::DoPushButton`).
         push(
             &mut cells,
             r,
             0,
             "Filter",
-            PivotCellRole::Header,
+            PivotCellRole::FilterButton,
             None,
             None,
         );

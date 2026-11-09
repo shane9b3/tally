@@ -422,24 +422,28 @@ pub fn std_filter_to_model(
     }
 }
 
+/// Model conditions → API.
+pub fn std_conditions_to_api(conditions: &[StdConditionData]) -> Vec<StdCondition> {
+    conditions
+        .iter()
+        .map(|c| StdCondition {
+            connector: match c.connector {
+                StdConnectorData::And => StdConnector::And,
+                StdConnectorData::Or => StdConnector::Or,
+            },
+            col: c.col,
+            op: std_op_to_api(c.op),
+            value: c.value.clone(),
+        })
+        .collect()
+}
+
 /// Model filter → API.
 pub fn std_filter_to_api(wb: &Workbook, f: &StandardFilterData) -> StandardFilterDto {
     let sheet_of = |tab: u32| wb.sheets.get(tab as usize).map(|s| s.id);
     StandardFilterDto {
         range: range_dto(&f.range),
-        conditions: f
-            .conditions
-            .iter()
-            .map(|c| StdCondition {
-                connector: match c.connector {
-                    StdConnectorData::And => StdConnector::And,
-                    StdConnectorData::Or => StdConnector::Or,
-                },
-                col: c.col,
-                op: std_op_to_api(c.op),
-                value: c.value.clone(),
-            })
-            .collect(),
+        conditions: std_conditions_to_api(&f.conditions),
         options: StdFilterOptions {
             case_sensitive: f.options.case_sensitive,
             regex: f.options.regex,
@@ -721,7 +725,7 @@ fn test_passes(t: &Test, v: &Value, input: &str, cs: bool) -> bool {
 }
 
 /// The data rows of a filter that stay visible.
-fn visible_rows(wb: &Workbook, sheet: SheetId, f: &StandardFilterData) -> Vec<u32> {
+pub(crate) fn visible_rows(wb: &Workbook, sheet: SheetId, f: &StandardFilterData) -> Vec<u32> {
     let r0 = f.range.r0 + u32::from(f.options.has_header);
     if r0 > f.range.r1 {
         return Vec::new();

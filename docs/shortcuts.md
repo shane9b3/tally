@@ -156,6 +156,7 @@ Desktop app. Tools ▸ Options ▸ Load / Save ▸ "Open documents in" chooses t
 |---|---|
 | ⌘ + click a link | Open the link (a plain click selects) |
 | Click ▾ in a cell | Choose from the validation list |
+| Click or ⌥↓ on a DataPilot Filter button | Filter the pivot table's source rows |
 | ⌥ + arrows | Change the row height / column width (⇧ sets the optimal size) |
 | ⌃⌘+ / ⌃⌘− | Insert / delete cells… |
 

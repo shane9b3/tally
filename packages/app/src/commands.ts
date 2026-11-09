@@ -75,6 +75,7 @@ export const GROUP_DISABLED_COMMANDS: readonly string[] = [
   // Data tools
   "data.subtotals",
   "data.dataPilot",
+  "data.pivotFilter",
   "data.consolidate",
   "data.textToColumns",
   "data.removeDuplicates",
@@ -412,6 +413,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "chart.delete", title: t("cmd.chart.delete", "Delete chart"), kind: "Chart", keywords: ["graph", "remove"], run: () => ctl.w5.charts.deleteSelected() },
     { id: "chart.copyImage", title: t("cmd.chart.copyImage", "Copy chart as image"), kind: "Chart", keywords: ["png", "clipboard"], run: () => ctl.w5.charts.copyAsImage() },
     { id: "data.dataPilot", title: t("cmd.data.dataPilot", "DataPilot…"), kind: "Data", keywords: ["pivot table", "summarise", "crosstab"], run: () => void ctl.w56.openDataPilot() },
+    { id: "data.pivotFilter", title: t("cmd.data.pivotFilter", "DataPilot filter…"), kind: "Data", keywords: ["pivot", "datapilot", "filter button", "source"], enabled: () => useW56Store.getState().pivots.some((p) => p.id === useW56Store.getState().activePivot && p.showFilterButton), reason: t("msg.reason.pivotFilterButton", "Put the cursor inside a pivot table with a Filter button"), run: () => void ctl.w56.openPivotFilter() },
     { id: "data.refreshPivot", title: t("cmd.data.refreshPivot", "Refresh pivot table"), kind: "Data", keywords: ["pivot", "datapilot"], enabled: () => useW56Store.getState().activePivot !== null, reason: t("msg.reason.cursorInPivot", "Put the cursor inside a pivot table"), run: () => void ctl.w56.refreshPivot() },
     { id: "data.standardFilter", title: t("cmd.data.standardFilter", "Standard filter…"), kind: "Filter", keywords: ["conditions", "and", "or", "regex"], run: () => void ctl.w56.openStandardFilter(false) },
     { id: "data.advancedFilter", title: t("cmd.data.advancedFilter", "Advanced filter…"), kind: "Filter", keywords: ["criteria range"], run: () => void ctl.w56.openStandardFilter(true) },

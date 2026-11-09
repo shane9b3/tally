@@ -462,6 +462,17 @@ pub(crate) fn pivot_patches(data: &WorkbookData, patches: &mut Patches, report: 
             if p.data_fields.is_empty() || src.r0 >= src.r1 {
                 continue;
             }
+            if p.source_filter
+                .as_ref()
+                .is_some_and(|f| !f.conditions.is_empty())
+            {
+                // An OOXML pivot cache has no source query (the filter of
+                // the DataPilot "Filter" button).
+                report.warn(format!(
+                    "pivot table {:?}: its source filter is not saved in XLSX",
+                    p.name
+                ));
+            }
             n += 1;
             let names: Vec<String> = (src.c0..=src.c1)
                 .map(|c| {

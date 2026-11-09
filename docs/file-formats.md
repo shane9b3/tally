@@ -354,6 +354,18 @@ loses.
   `table:application-data`. Field names are resolved against the source's
   header row on read. The output cells are plain values in the target sheet;
   Tally recomputes on `RefreshPivot`, never on load (as AOO).
+  The source filter set with the "Filter" button (T17) is a `table:filter`
+  inside `table:source-cell-range`, as AOO writes it
+  (`ScXMLExportDataPilot::WriteDPFilter`): `table:field-number` is the sheet
+  column (not the column inside the source; AOO #i115431),
+  `table:condition-source-range-address` is the source range,
+  `table:display-duplicates="false"` for No duplications, `=` / `!=` become
+  `match` / `nomatch` with Regular expressions, `table:case-sensitive` on
+  every condition, AND runs inside `table:filter-or`. On read a field number
+  outside the source but below its width is taken as a source column, `empty`
+  / `noempty` read as `=` / `<>` "" and at most 8 conditions are kept. A
+  pivot over a named database range (`table:database-source-table`) has no
+  place for the filter in ODF; it is not written there.
 - **Outline**: `table:table-row-group` / `table:table-column-group`
   (nested, `table:display="false"` for collapsed). The rows/columns of a
   collapsed group are written `table:visibility="collapse"` as AOO does;
@@ -453,7 +465,8 @@ loses.
   the relationships and content types. Best effort: Excel rebuilds the
   table on load. Read: the definition only (fields, functions, layout,
   totals, location); show-as, grouping, sorting and hidden items are not
-  translated.
+  translated. A DataPilot source filter (the "Filter" button) has no OOXML
+  equivalent: it is dropped with a warning.
 - **Named cell styles**: `cellStyles`/`cellStyleXfs` (the `Normal` style is
   `Default`; `xfId` gives a cell's base style). Tally writes the names with
   default-looking `cellStyleXfs` entries; the attributes stay on the cells.

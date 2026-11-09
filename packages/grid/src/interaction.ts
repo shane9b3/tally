@@ -84,8 +84,10 @@ export interface InteractionHost {
   filterButtonAt(x: number, y: number): { col: number; rect: { left: number; top: number; right: number; bottom: number } } | null;
   /** Called when the editor opens/closes/grows. */
   editorChanged(): void;
-  /** The validation ▾ / link ↗ under a canvas point. */
+  /** The validation ▾ / link ↗ / push-button cell under a canvas point. */
   cellButtonAt(x: number, y: number): { kind: CellButtonKind; cell: CellPos; rect: ClientRect } | null;
+  /** The push-button cell `cell` with its client rect, or `null` when it is none. */
+  pushButtonAt(cell: CellPos): { kind: CellButtonKind; cell: CellPos; rect: ClientRect } | null;
   /** The link of a cell (flag 32), or `null`. */
   linkAt(r: number, c: number): string | null;
   /** The cell under the pointer (note hover), or `null`. */
@@ -770,6 +772,15 @@ export class Interaction {
     }
     const sel = host.selection();
     const lim = host.limits();
+    // ⌥↓ / Alt+↓ on a push-button cell presses it (the keyboard route to the DataPilot Filter button).
+    if (e.key === "ArrowDown" && mods.alt && !mods.mod && !mods.shift && !host.rangePick()) {
+      const b = host.pushButtonAt(sel.active);
+      if (b) {
+        e.preventDefault();
+        host.events().onCellButton?.(b.kind, b.cell, b.rect);
+        return;
+      }
+    }
     // Range-pick mode (no edit): arrows move/extend the pick, Enter settles it, Escape cancels.
     if (host.rangePick()) {
       if (e.key === "Enter") {

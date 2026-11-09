@@ -317,6 +317,29 @@ pub struct PivotData {
     /// Drill down on double-click.
     #[serde(default)]
     pub drill_down: bool,
+    /// The source filter set with the filter button (AOO
+    /// `ScSheetSourceDesc::aQueryParam`).
+    #[serde(default)]
+    pub source_filter: Option<PivotSourceFilterData>,
+}
+
+/// The filter on a pivot's source rows (the DataPilot "Filter" button;
+/// AOO `ScPivotFilterDlg`: up to 3 conditions).
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct PivotSourceFilterData {
+    /// Conditions in order; `col` is the column inside the source
+    /// (0 = its first column).
+    #[serde(default)]
+    pub conditions: Vec<crate::StdConditionData>,
+    /// Case-sensitive.
+    #[serde(default)]
+    pub case_sensitive: bool,
+    /// `=` / `<>` operands are regular expressions.
+    #[serde(default)]
+    pub regex: bool,
+    /// "No duplications" (stored; AOO's DataPilot ignores it too).
+    #[serde(default)]
+    pub no_duplicates: bool,
 }
 
 impl Default for PivotData {
@@ -337,6 +360,7 @@ impl Default for PivotData {
             identify_categories: false,
             show_filter_button: true,
             drill_down: true,
+            source_filter: None,
         }
     }
 }

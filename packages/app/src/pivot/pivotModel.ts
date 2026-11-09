@@ -228,8 +228,9 @@ export function pivotHeaderRanges(p: PivotDto): RangeDto[] {
   const o = p.output;
   if (!o) return [];
   const out: RangeDto[] = [];
-  const pageRows = p.pageFields.length > 0 ? p.pageFields.length + 1 : 0;
-  const top = o.r0 + pageRows + (p.showFilterButton ? 1 : 0);
+  // The filter button, the page fields and a blank row (AOO `ScDPOutput::CalcSizes`).
+  const pageRows = p.showFilterButton || p.pageFields.length > 0 ? p.pageFields.length + 1 + (p.showFilterButton ? 1 : 0) : 0;
+  const top = o.r0 + pageRows;
   if (top <= o.r1) out.push({ r0: top, c0: o.c0, r1: Math.min(o.r1, top + (p.colFields.length > 0 ? 1 : 0)), c1: o.c1 });
   const left = { r0: top, c0: o.c0, r1: o.r1, c1: Math.min(o.c1, o.c0 + Math.max(0, p.rowFields.length - 1)) };
   if (left.r0 <= left.r1) out.push(left);

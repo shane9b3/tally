@@ -689,6 +689,16 @@ still recomputes all dependents of the variables in a full workbook copy
 
 ### DataPilot (pivot tables)
 
+The source filter of the "Filter" button (T17, 2026-11-09) is read from
+ODS `table:filter` inside `table:source-cell-range` with the database-range
+filter parser (at most 64 conditions read, 8 kept; conditions whose column
+is outside the source dropped). It is evaluated once per refresh with the
+standard filter's tests (`tools::visible_rows`): one pass over the source
+rows, regular expressions built with the same size limits as Data ▸
+Standard Filter; through the API a filter has at most 8 conditions of at
+most 4,096 bytes, each on a column inside the source
+(`pivot::pivot_source_filter_and_or_regex_case`).
+
 Before = HEAD 8bc43f7 and after = the fix, both built in release (thin
 LTO off) and run with the review's `probe5` (`scratchpad/sec4/probe5`,
 pointed at each tree) under `run.py` with a 60–90 s / 2.5 GB watchdog on

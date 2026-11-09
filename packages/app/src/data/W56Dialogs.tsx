@@ -17,6 +17,7 @@ import {
   InsertCellsDialog,
   MergePromptDialog,
   MultipleOperationsDialog,
+  PivotFilterDialog,
   RecoveryDialog,
   RemoveDuplicatesDialog,
   SaveAsTemplateDialog,
@@ -39,6 +40,8 @@ export function W56DialogFor({ d }: { d: W56Dialog }) {
       return <DataPilotDialog d={d} />;
     case "standardFilter":
       return <StandardFilterDialog d={d} />;
+    case "pivotFilter":
+      return <PivotFilterDialog d={d} />;
     case "subtotals":
       return <SubtotalsDialog d={d} />;
     case "consolidate":

@@ -141,8 +141,11 @@ export interface GridGeometryInfo {
   height: number;
 }
 
-/** A clickable decoration inside a cell: the validation ▾ or the link ↗. */
-export type CellButtonKind = "dropdown" | "link";
+/**
+ * A clickable decoration inside a cell: the validation ▾, the link ↗, or a
+ * push-button cell (`GridProps.pushButtons`: the DataPilot "Filter" button).
+ */
+export type CellButtonKind = "dropdown" | "link" | "button";
 
 /** Client rect (px) of something the grid drew, to anchor a popover. */
 export interface ClientRect {
@@ -259,8 +262,9 @@ export interface GridEvents {
    */
   onFilterButton(col: number, rect: { left: number; top: number; right: number; bottom: number }): void;
   /**
-   * The validation ▾ of a list cell (flag 16) or the link ↗ of the active
-   * link cell (flag 32) was clicked. The cell is already selected.
+   * The validation ▾ of a list cell (flag 16), the link ↗ of the active
+   * link cell (flag 32) or a push-button cell (`pushButtons`) was clicked.
+   * The cell is already selected.
    */
   onCellButton(kind: CellButtonKind, cell: CellPos, rect: ClientRect): void;
   /** ⌘/Ctrl-click on a cell with a link (flag 32): open it (instead of adding a range). */
@@ -334,6 +338,12 @@ export interface GridProps extends Partial<GridEvents> {
   clipRange?: RangeDto | null;
   /** AutoFilter header buttons, or `null` without an AutoFilter. */
   filterButtons?: FilterButtons | null;
+  /**
+   * Cells drawn as push buttons (AOO `SC_MF_BUTTON`: the DataPilot
+   * "Filter" button). A click on one, or ⌥↓ / Alt+↓ while it is the active
+   * cell, emits `onCellButton("button", cell, rect)`.
+   */
+  pushButtons?: readonly CellPos[] | null;
   /** Page-break lines to draw, or `null` (the "Page breaks" view is off). */
   pageBreaks?: PageBreaks | null;
   /** The print range, outlined (with the page breaks). */

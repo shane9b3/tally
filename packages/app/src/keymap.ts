@@ -73,6 +73,7 @@ export const GRID_KEYS: readonly { keys: string; action: string; group: string }
   { group: "Formulas", keys: "Tab / Enter", action: "Accept a function suggestion" },
   { group: "Cells", keys: "⌘ + click a link", action: "Open the link (a plain click selects)" },
   { group: "Cells", keys: "Click ▾ in a cell", action: "Choose from the validation list" },
+  { group: "Cells", keys: "Click or ⌥↓ on a DataPilot Filter button", action: "Filter the pivot table's source rows" },
 ];
 
 export const BINDINGS: readonly Binding[] = [

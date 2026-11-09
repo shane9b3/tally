@@ -316,9 +316,55 @@ async function readSource(p: PivotDto, ctx: W56Ctx, dbRanges: readonly DatabaseR
       if (v.kind !== "empty" && v.text !== "") any = true;
       row.push(v);
     }
-    if (any || !p.ignoreEmptyRows) rows.push(row);
+    if ((any || !p.ignoreEmptyRows) && passesSourceFilter(p.sourceFilter, row)) rows.push(row);
   }
   return { sheet, range, cache: { header, rows } };
+}
+
+/** The DataPilot source filter (T17) on one source row: AND binds tighter than OR. */
+export function passesSourceFilter(f: PivotDto["sourceFilter"], row: readonly CellView[]): boolean {
+  if (!f || f.conditions.length === 0) return true;
+  const test = (c: (typeof f.conditions)[number]): boolean => {
+    const text = row[c.col]?.text ?? "";
+    if (f.regex && (c.op === "eq" || c.op === "ne")) {
+      let hit = false;
+      try {
+        hit = new RegExp(`^(?:${c.value})$`, f.caseSensitive ? "" : "i").test(text);
+      } catch {
+        hit = false;
+      }
+      return c.op === "eq" ? hit : !hit;
+    }
+    const a = numberOf(text);
+    const b = numberOf(c.value);
+    const fold = (s: string) => (f.caseSensitive ? s : s.toLowerCase());
+    const cmp = a !== null && b !== null ? a - b : fold(text) < fold(c.value) ? -1 : fold(text) > fold(c.value) ? 1 : 0;
+    switch (c.op) {
+      case "eq":
+        return cmp === 0;
+      case "ne":
+        return cmp !== 0;
+      case "lt":
+        return cmp < 0;
+      case "gt":
+        return cmp > 0;
+      case "le":
+        return cmp <= 0;
+      case "ge":
+        return cmp >= 0;
+      default:
+        return true;
+    }
+  };
+  let any = false;
+  let group = true;
+  f.conditions.forEach((c, i) => {
+    if (i > 0 && c.connector === "or") {
+      any ||= group;
+      group = test(c);
+    } else group &&= test(c);
+  });
+  return any || group;
 }
 
 function sortItems(items: string[]): string[] {
@@ -371,7 +417,8 @@ export function computePivot(p: PivotDto, cache: PivotCache): string[][] {
   const out: string[][] = [];
   if (p.showFilterButton) out.push(["Filter"]);
   for (const pf of p.pageFields) out.push([cache.header[pf.sourceCol] ?? "", pf.pageItem ?? "- all -"]);
-  if (p.pageFields.length > 0) out.push([]);
+  // A blank row after the filter button / page fields (AOO `ScDPOutput::CalcSizes`).
+  if (p.showFilterButton || p.pageFields.length > 0) out.push([]);
   const nRowCols = Math.max(1, rf.length);
   // Header rows.
   if (cf.length > 0) {
@@ -437,7 +484,7 @@ async function pivotOps(x: W56Ext, p: PivotDto, ctx: W56Ctx, overwrite: boolean,
   const ops: Op[] = [];
   if (previous) ops.push({ type: "clear", sheet: p.targetSheet, ranges: [{ ...previous }], what: "all" });
   ops.push({ type: "setRangeInputs", sheet: p.targetSheet, r: output.r0, c: output.c0, rows });
-  const headerRows = (p.showFilterButton ? 1 : 0) + (p.pageFields.length > 0 ? p.pageFields.length + 1 : 0);
+  const headerRows = pageBand(p);
   const bold: StylePatch = { bold: true, italic: null, underline: null, strike: null, fontFamily: null, fontSizePt: null, color: null, fill: null, hAlign: null, vAlign: null, wrap: null, numberFormat: null };
   const hdr = { r0: output.r0 + headerRows, c0: output.c0, r1: Math.min(output.r1, output.r0 + headerRows + (p.colFields.length > 0 ? 1 : 0)), c1: output.c1 };
   ops.push({ type: "applyStyle", sheet: p.targetSheet, ranges: [hdr], patch: bold });
@@ -445,13 +492,19 @@ async function pivotOps(x: W56Ext, p: PivotDto, ctx: W56Ctx, overwrite: boolean,
   return { ops, output };
 }
 
+/** Rows above the table: the filter button, the page fields and a blank row. */
+function pageBand(p: PivotDto): number {
+  return p.showFilterButton || p.pageFields.length > 0 ? (p.showFilterButton ? 1 : 0) + p.pageFields.length + 1 : 0;
+}
+
 /** `pivot_at`. */
 export function pivotHitAt(x: W56Ext, sheet: number, r: number, c: number): PivotHit | null {
   for (const p of x.pivots) {
     const o = p.output;
     if (p.targetSheet !== sheet || !o || !inside(o, r, c)) continue;
-    const headerRows = (p.showFilterButton ? 1 : 0) + (p.pageFields.length > 0 ? p.pageFields.length + 1 : 0);
+    const headerRows = pageBand(p);
     const top = o.r0 + headerRows + (p.colFields.length > 0 ? 1 : 0);
+    if (p.showFilterButton && r === o.r0 && c === o.c0) return { pivot: p.id, role: "filterButton", field: null, item: null };
     if (r < o.r0 + headerRows) return { pivot: p.id, role: "pageField", field: null, item: null };
     if (r <= top) return { pivot: p.id, role: "header", field: null, item: null };
     if (p.rowTotals && r === o.r1) return { pivot: p.id, role: "total", field: null, item: null };

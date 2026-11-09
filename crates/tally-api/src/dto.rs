@@ -2556,6 +2556,7 @@ mod tests {
         crate::charts::ImageDto::export_all(&cfg).unwrap();
         crate::pivot::PivotFieldItemsDto::export_all(&cfg).unwrap();
         crate::pivot::PivotHit::export_all(&cfg).unwrap();
+        crate::pivot::PivotSourceFilterDto::export_all(&cfg).unwrap();
         crate::print::PrintOptionsDto::export_all(&cfg).unwrap();
         crate::print::ChartSvgDto::export_all(&cfg).unwrap();
         crate::print::PrintJobInfo::export_all(&cfg).unwrap();

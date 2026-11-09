@@ -56,6 +56,7 @@ import {
 } from "./builders";
 import { COLUMN_TYPES, DEFAULT_SEPARATORS, guessSeparator, previewColumns, previewSplit, toCsvOptions, type SeparatorState } from "./textToColumns";
 import { useW56Store, type W56Dialog } from "./store";
+import { PIVOT_FILTER_OPS, pivotFilterDto, pivotFilterError, pivotFilterOptions, pivotFilterRows, type PivotFilterOptions } from "../pivot/pivotFilter";
 import { Check, Field, RangeField, Segmented, Tabs, W56Shell, closeW56, parseRangeText } from "./W56Shell";
 import styles from "./W56.module.css";
 
@@ -74,6 +75,55 @@ function solverSummary(objective: string, iterations: number) {
 }
 
 const colLetter = (c: number): string => a1({ r0: 0, c0: c, r1: 0, c1: c }).replace(/\d+$/, "");
+
+/**
+ * The condition rows of the Standard Filter (and of the DataPilot source
+ * filter, AOO `ScPivotFilterDlg`): operator, field, condition, value; a
+ * row is available once the one above names a field.
+ */
+export function FilterConditionRows({ rows, setRow, cols, ops = STD_FILTER_OPS }: { rows: readonly FilterRow[]; setRow: (i: number, p: Partial<FilterRow>) => void; cols: readonly { col: number; label: string }[]; ops?: readonly { op: FilterRow["op"]; label: string }[] }) {
+  return (
+    <div className={dlg.gap}>
+      <div className={styles.condRow}>
+        <span className={styles.rowLabel}>{t("dd.operator", "Operator")}</span>
+        <span className={styles.rowLabel}>{t("dd.fieldName", "Field name")}</span>
+        <span className={styles.rowLabel}>{t("dd.condition", "Condition")}</span>
+        <span className={styles.rowLabel}>{t("dialog.value", "Value")}</span>
+      </div>
+      {rows.map((r, i) => {
+        const disabled = i > 0 && rows[i - 1]?.col === null;
+        return (
+          <div key={i} className={styles.condRow}>
+            {i === 0 ? (
+              <span />
+            ) : (
+              <select className={dlg.selectSmall} aria-label={t("dd.operatorN", "Operator {n}", { n: i })} value={r.connector} disabled={disabled} onChange={(e) => setRow(i, { connector: e.target.value as "and" | "or" })} data-testid={`filter-conn-${i}`}>
+                <option value="and">{t("dd.opAnd", "AND")}</option>
+                <option value="or">{t("dd.opOr", "OR")}</option>
+              </select>
+            )}
+            <select className={dlg.selectSmall} aria-label={t("dd.fieldN", "Field {n}", { n: i + 1 })} value={r.col === null ? "" : String(r.col)} disabled={disabled} onChange={(e) => setRow(i, { col: e.target.value === "" ? null : Number(e.target.value) })} data-testid={`filter-field-${i}`}>
+              <option value="">{t("dd.none", "- none -")}</option>
+              {cols.map((c) => (
+                <option key={c.col} value={String(c.col)}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <select className={dlg.selectSmall} aria-label={t("dd.conditionN", "Condition {n}", { n: i + 1 })} value={r.op} disabled={disabled || r.col === null} onChange={(e) => setRow(i, { op: e.target.value as FilterRow["op"] })} data-testid={`filter-op-${i}`}>
+              {ops.map((o) => (
+                <option key={o.op} value={o.op}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <input className={cx(dlg.input, styles.small)} style={{ width: "100%", height: 26 }} aria-label={t("dd.valueN", "Value {n}", { n: i + 1 })} value={r.value} disabled={disabled || r.col === null} onChange={(e) => setRow(i, { value: e.target.value })} data-testid={`filter-value-${i}`} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Standard / Advanced filter
@@ -124,45 +174,7 @@ export function StandardFilterDialog({ d }: { d: D<"standardFilter"> }) {
           <p className={styles.muted}>{t("dd.criteriaHelp", "The first row of the criteria range holds column labels; each further row is one alternative (OR), the cells of a row combine with AND.")}</p>
         </div>
       ) : (
-        <div className={dlg.gap}>
-          <div className={styles.condRow}>
-            <span className={styles.rowLabel}>{t("dd.operator", "Operator")}</span>
-            <span className={styles.rowLabel}>{t("dd.fieldName", "Field name")}</span>
-            <span className={styles.rowLabel}>{t("dd.condition", "Condition")}</span>
-            <span className={styles.rowLabel}>{t("dialog.value", "Value")}</span>
-          </div>
-          {rows.map((r, i) => {
-            const disabled = i > 0 && rows[i - 1]?.col === null;
-            return (
-              <div key={i} className={styles.condRow}>
-                {i === 0 ? (
-                  <span />
-                ) : (
-                  <select className={dlg.selectSmall} aria-label={t("dd.operatorN", "Operator {n}", { n: i })} value={r.connector} disabled={disabled} onChange={(e) => setRow(i, { connector: e.target.value as "and" | "or" })} data-testid={`filter-conn-${i}`}>
-                    <option value="and">{t("dd.opAnd", "AND")}</option>
-                    <option value="or">{t("dd.opOr", "OR")}</option>
-                  </select>
-                )}
-                <select className={dlg.selectSmall} aria-label={t("dd.fieldN", "Field {n}", { n: i + 1 })} value={r.col === null ? "" : String(r.col)} disabled={disabled} onChange={(e) => setRow(i, { col: e.target.value === "" ? null : Number(e.target.value) })} data-testid={`filter-field-${i}`}>
-                  <option value="">{t("dd.none", "- none -")}</option>
-                  {cols.map((c) => (
-                    <option key={c.col} value={String(c.col)}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-                <select className={dlg.selectSmall} aria-label={t("dd.conditionN", "Condition {n}", { n: i + 1 })} value={r.op} disabled={disabled || r.col === null} onChange={(e) => setRow(i, { op: e.target.value as FilterRow["op"] })} data-testid={`filter-op-${i}`}>
-                  {STD_FILTER_OPS.map((o) => (
-                    <option key={o.op} value={o.op}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-                <input className={cx(dlg.input, styles.small)} style={{ width: "100%", height: 26 }} aria-label={t("dd.valueN", "Value {n}", { n: i + 1 })} value={r.value} disabled={disabled || r.col === null} onChange={(e) => setRow(i, { value: e.target.value })} data-testid={`filter-value-${i}`} />
-              </div>
-            );
-          })}
-        </div>
+        <FilterConditionRows rows={rows} setRow={setRow} cols={cols} />
       )}
       <div className={styles.section}>{t("dialog.options", "Options")}</div>
       <div className={dlg.optionGrid}>
@@ -177,6 +189,43 @@ export function StandardFilterDialog({ d }: { d: D<"standardFilter"> }) {
       </div>
       {error ? <p className={dlg.error}>{error}</p> : null}
       {copyError ? <p className={dlg.error}>{copyError}</p> : null}
+    </W56Shell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DataPilot source filter (the "Filter" button; AOO ScPivotFilterDlg)
+// ---------------------------------------------------------------------------
+
+export function PivotFilterDialog({ d }: { d: D<"pivotFilter"> }) {
+  useW56Store((s) => s.i18nRev);
+  const ctl = useController();
+  const [rows, setRows] = useState<FilterRow[]>(() => pivotFilterRows(d.pivot.sourceFilter));
+  const [options, setOptions] = useState<PivotFilterOptions>(() => pivotFilterOptions(d.pivot.sourceFilter));
+  const cols = useMemo(() => d.labels.map((label, i) => ({ col: i, label })), [d]);
+  const setRow = (i: number, p: Partial<FilterRow>) =>
+    setRows((rs) =>
+      rs.map((r, j) => {
+        if (j === i) return { ...r, ...p };
+        // "- none -" clears the rows below it (AOO LbSelectHdl).
+        if (j > i && p.col === null) return { connector: "and", col: null, op: "eq", value: "" };
+        return r;
+      }),
+    );
+  const filter = pivotFilterDto(rows, options);
+  const error = pivotFilterError(filter);
+  return (
+    <W56Shell title={t("pivot.filterTitle", "Filter")} ok={t("dialog.ok", "OK")} size="xwide" testId="pivot-filter" valid={error === null} onSubmit={() => ctl.w56.applyPivotFilter(d.pivot, filter)}>
+      <p className={dlg.lead}>{t("pivot.filterLead", "Filters the source rows of {name} ({source}); the pivot table is updated.", { name: d.pivot.name, source: d.source })}</p>
+      <div className={styles.section}>{t("pivot.filterCriteria", "Filter criteria")}</div>
+      <FilterConditionRows rows={rows} setRow={setRow} cols={cols} ops={PIVOT_FILTER_OPS} />
+      <div className={styles.section}>{t("dialog.options", "Options")}</div>
+      <div className={dlg.optionGrid}>
+        <Check label={t("sort.caseSensitive", "Case sensitive")} checked={options.caseSensitive} onChange={(v) => setOptions({ ...options, caseSensitive: v })} testId="pivot-filter-case" />
+        <Check label={t("find.regex", "Regular expressions")} checked={options.regex} onChange={(v) => setOptions({ ...options, regex: v })} testId="pivot-filter-regex" />
+        <Check label={t("dd.noDuplicates", "No duplications")} checked={options.noDuplicates} onChange={(v) => setOptions({ ...options, noDuplicates: v })} testId="pivot-filter-nodup" />
+      </div>
+      {error ? <p className={dlg.error}>{error}</p> : null}
     </W56Shell>
   );
 }

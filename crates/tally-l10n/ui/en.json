@@ -2142,5 +2142,13 @@
   "cp.atLabels": "At labels",
   "cp.atAxis": "At axis",
   "cp.atAxisAndLabels": "At axis and labels",
-  "cp.minBelowMax": "The minimum must be lower than the maximum. Check your input."
+  "cp.minBelowMax": "The minimum must be lower than the maximum. Check your input.",
+  "pivot.filterTitle": "Filter",
+  "pivot.filterLead": "Filters the source rows of {name} ({source}); the pivot table is updated.",
+  "pivot.filterCriteria": "Filter criteria",
+  "pivot.filterMenu": "Filter…",
+  "cmd.data.pivotFilter": "DataPilot filter…",
+  "msg.undo.pivotFilter": "DataPilot filter",
+  "msg.reason.pivotFilterButton": "Put the cursor inside a pivot table with a Filter button",
+  "grid.cellButton": ", button, Alt+Down (⌥↓) presses it"
 }

@@ -191,6 +191,8 @@ export function useW56Keys(): void {
       const arrows: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
       const delta = arrows[e.key];
       if (delta && e.altKey && !mod) {
+        // ⌥↓ on a DataPilot Filter button presses it (the grid handles it); elsewhere ⌥↑↓←→ resize.
+        if (e.key === "ArrowDown" && !e.shiftKey && ctl.w56.isPivotFilterButton(useSelectionStore.getState().selection.active)) return;
         consume();
         const [dr, dc] = delta;
         if (dr !== 0) ctl.w56.resizeByKey("row", dr * 4, e.shiftKey);

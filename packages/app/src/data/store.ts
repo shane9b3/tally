@@ -28,6 +28,8 @@ import { DEFAULT_PREFS } from "../options/prefs";
 export type W56Dialog =
   | { kind: "dataPilot"; layout: PivotLayoutState; fields: PivotFieldItemsDto[]; existing: PivotDto | null }
   | { kind: "standardFilter"; range: RangeDto; labels: string[]; hasHeader: boolean; advanced: boolean }
+  /** The DataPilot "Filter" button (T17): `labels` are the source column names, `source` its range text. */
+  | { kind: "pivotFilter"; pivot: PivotDto; labels: string[]; source: string }
   | { kind: "subtotals"; range: RangeDto; labels: string[] }
   | { kind: "consolidate" }
   | { kind: "textToColumns"; range: RangeDto; texts: string[] }

@@ -91,13 +91,55 @@ test("DataPilot layout dialog records createPivot and writes the output", async 
   expect(create!.pivot.rowFields).toHaveLength(1);
   expect(create!.pivot.dataFields[0]?.function).toBe("sum");
   expect(create!.pivot.target).toEqual({ r: 1, c: 9 });
-  // Row 1 is the Filter button row, row 2 the header.
+  // Row 1 is the Filter button row, row 2 blank (AOO `ScDPOutput::CalcSizes`), row 3 the header.
   await expect.poll(() => cellText(page, 1, 9)).toBe("Filter");
-  await expect.poll(() => cellText(page, 2, 9)).toBe("Status");
+  await expect.poll(() => cellText(page, 3, 9)).toBe("Status");
   await expect(page.getByTestId("pivot-band").first()).toBeVisible();
   // Refresh is enabled while the cursor is inside the output (column K may be off-screen: select programmatically).
   await page.evaluate(() => window.__tally!.controller.onSelectionChange({ range: { r0: 3, c0: 9, r1: 3, c1: 9 }, active: { r: 3, c: 9 }, anchor: { r: 3, c: 9 } }));
   await expect.poll(() => page.evaluate(() => window.__tally!.controller.registry.isEnabled("data.refreshPivot"))).toBe(true);
+});
+
+test("the DataPilot Filter button opens the source filter dialog (click and ⌥↓)", async ({ page }) => {
+  await ready(page);
+  await clickCell(page, 2, 1);
+  await run(page, "data.dataPilot");
+  const dp = page.getByTestId("datapilot-dialog");
+  await dp.getByTestId("pivot-add-row-Status").click();
+  await dp.getByTestId("pivot-add-data-Total").click();
+  await dp.getByTestId("pivot-more").click();
+  await dp.getByTestId("pivot-target-sheet").selectOption("new");
+  await dp.getByTestId("dialog-ok").click();
+  await expect(dp).toBeHidden();
+  await expect.poll(() => cellText(page, 0, 0)).toBe("Filter");
+  const rowsBefore = await page.evaluate(async () => (await window.__tally!.client.pivots(window.__tally!.controller.info!.doc))[0]?.output?.r1 ?? -1);
+  // A click on the button cell opens the dialog over the source's columns.
+  await clickCell(page, 0, 0);
+  const dlg = page.getByTestId("pivot-filter");
+  await expect(dlg).toBeVisible();
+  await expect(dlg).toHaveAttribute("role", "dialog");
+  await expect(dlg.getByTestId("filter-op-0").locator("option")).toHaveCount(6);
+  await dlg.getByTestId("filter-field-0").selectOption({ label: "Status" });
+  await dlg.getByTestId("filter-op-0").selectOption("eq");
+  await dlg.getByTestId("filter-value-0").fill("Paid");
+  await dlg.getByTestId("dialog-ok").click();
+  await expect(dlg).toBeHidden();
+  const ops = await recorded(page);
+  const upd = ops.at(-1) as Rec & { pivot: { sourceFilter: { conditions: { col: number; op: string; value: string }[] } } };
+  expect(upd.type).toBe("updatePivot");
+  expect(upd.pivot.sourceFilter.conditions).toEqual([{ connector: "and", col: 6, op: "eq", value: "Paid" }]);
+  // One status left: a shorter table.
+  await expect.poll(() => page.evaluate(async () => (await window.__tally!.client.pivots(window.__tally!.controller.info!.doc))[0]?.output?.r1 ?? -1)).toBeLessThan(rowsBefore);
+  await expect.poll(() => cellText(page, 3, 0)).toBe("Paid");
+  // Keyboard: ⌥↓ on the button cell opens the dialog again with the filter set.
+  await clickCell(page, 2, 0);
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect(dlg).toBeVisible();
+  await expect(dlg.getByTestId("filter-value-0")).toHaveValue("Paid");
+  await page.keyboard.press("Escape");
+  await expect(dlg).toBeHidden();
 });
 
 test("standard filter dialog hides 3 of the rows", async ({ page }) => {

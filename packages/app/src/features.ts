@@ -347,6 +347,7 @@ export class V3Features {
   /** A cell's ▾ (validation list) or ↗ (link) was clicked. */
   onCellButton = (kind: CellButtonKind, cell: CellPos, rect: ClientRect): void => {
     if (kind === "dropdown") void this.openList(cell, rect);
+    else if (kind === "button") this.ctl.w56.onPivotFilterButton(cell);
     else {
       const url = useDocStore.getState().source?.getCell(cell.r, cell.c)?.link;
       if (url) void this.openLink(url);

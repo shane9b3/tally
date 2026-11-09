@@ -2142,5 +2142,13 @@
   "cp.atLabels": "En las etiquetas",
   "cp.atAxis": "En el eje",
   "cp.atAxisAndLabels": "En el eje y las etiquetas",
-  "cp.minBelowMax": "El mínimo debe ser menor que el máximo. Compruebe la entrada."
+  "cp.minBelowMax": "El mínimo debe ser menor que el máximo. Compruebe la entrada.",
+  "pivot.filterTitle": "Filtro",
+  "pivot.filterLead": "Filtra las filas de origen de {name} ({source}); la tabla dinámica se actualiza.",
+  "pivot.filterCriteria": "Criterios de filtro",
+  "pivot.filterMenu": "Filtro…",
+  "cmd.data.pivotFilter": "Filtro del piloto de datos…",
+  "msg.undo.pivotFilter": "Filtro del piloto de datos",
+  "msg.reason.pivotFilterButton": "Coloque el cursor en una tabla dinámica con botón Filtro",
+  "grid.cellButton": ", botón, Alt+Abajo (⌥↓) lo pulsa"
 }

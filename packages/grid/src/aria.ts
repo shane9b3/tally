@@ -47,6 +47,8 @@ export interface GridStrings {
   cellEditor: string;
   /** `aria-label` of the drawing-object layer. */
   objects: string;
+  /** Appended for a push-button cell (the DataPilot Filter button). */
+  cellButton: string;
 }
 
 export const DEFAULT_GRID_STRINGS: GridStrings = {
@@ -59,6 +61,7 @@ export const DEFAULT_GRID_STRINGS: GridStrings = {
   plusRanges: ", plus {count} more ranges",
   cellEditor: "Cell editor",
   objects: "Objects",
+  cellButton: ", button, Alt+Down presses it",
 };
 
 /** Fills `{name}` placeholders. */
@@ -106,11 +109,12 @@ export function describeCell(
   text: string | undefined,
   formula: string | null | undefined,
   strings: Partial<GridStrings> = DEFAULT_GRID_STRINGS,
+  button = false,
 ): string {
   const S = gridStrings(strings);
   const value = text === undefined || text === "" ? S.empty : text;
   const f = formula && formula.startsWith("=") ? fill(S.formula, { formula }) : "";
-  return `${address}: ${value}${f}`;
+  return `${address}: ${value}${f}${button ? S.cellButton : ""}`;
 }
 
 /** The announcement for a selection: the active cell, then the range when it spans more than one cell. */
@@ -119,10 +123,11 @@ export function describeSelection(
   text: string | undefined,
   formula: string | null | undefined,
   strings: Partial<GridStrings> = DEFAULT_GRID_STRINGS,
+  button = false,
 ): string {
   const S = gridStrings(strings);
   const { range: r, active } = sel;
-  let s = describeCell(cellAddress(active.r, active.c), text, formula, S);
+  let s = describeCell(cellAddress(active.r, active.c), text, formula, S, button);
   const rows = r.r1 - r.r0 + 1;
   const cols = r.c1 - r.c0 + 1;
   if (rows > 1 || cols > 1) {
@@ -149,6 +154,8 @@ export class AriaMirror {
   private last: { sel: Selection; view: CellView | undefined } | null = null;
   /** Called with the merged strings whenever props change (the grid relabels the editor and object layer). */
   onStrings?: (strings: GridStrings) => void;
+  /** Whether a cell is a push button (described as one). */
+  isButton?: (r: number, c: number) => boolean;
 
   constructor(
     doc: Document,
@@ -203,8 +210,9 @@ export class AriaMirror {
     if (stringsChanged && this.last) {
       const { sel, view } = this.last;
       const formula = props.activeFormula ?? null;
-      this.cell.textContent = describeCell(cellAddress(sel.active.r, sel.active.c), view?.text, formula, props.strings);
-      const text = describeSelection(sel, view?.text, formula, props.strings);
+      const button = this.isButton?.(sel.active.r, sel.active.c) ?? false;
+      this.cell.textContent = describeCell(cellAddress(sel.active.r, sel.active.c), view?.text, formula, props.strings, button);
+      const text = describeSelection(sel, view?.text, formula, props.strings, button);
       if (this.live.textContent !== "") this.live.textContent = text;
       this.lastAnnounced = text;
     }
@@ -224,8 +232,9 @@ export class AriaMirror {
     this.cell.setAttribute("aria-colindex", String(active.c + 1));
     this.cell.setAttribute("aria-rowindex", String(active.r + 1));
     this.cell.dataset.address = address;
-    this.cell.textContent = describeCell(address, view?.text, formula, this.props.strings);
-    const text = describeSelection(sel, view?.text, formula, this.props.strings);
+    const button = this.isButton?.(active.r, active.c) ?? false;
+    this.cell.textContent = describeCell(address, view?.text, formula, this.props.strings, button);
+    const text = describeSelection(sel, view?.text, formula, this.props.strings, button);
     if (!force && text === this.lastAnnounced) return;
     this.lastAnnounced = text;
     if (this.props.silent) return;

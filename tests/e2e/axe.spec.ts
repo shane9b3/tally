@@ -104,6 +104,22 @@ for (const d of DIALOG_COMMANDS) {
   });
 }
 
+test("axe: DataPilot filter dialog (the Filter button)", async ({ page }) => {
+  await ready(page);
+  await run(page, "data.dataPilot");
+  const dp = page.getByTestId("datapilot-dialog");
+  await dp.getByTestId("pivot-add-row-Status").click();
+  await dp.getByTestId("pivot-add-data-Total").click();
+  await dp.getByTestId("pivot-more").click();
+  await dp.getByTestId("pivot-target-sheet").selectOption("new");
+  await dp.getByTestId("dialog-ok").click();
+  await expect(dp).toBeHidden();
+  await expect.poll(() => page.evaluate(() => window.__tally!.controller.registry.isEnabled("data.pivotFilter"))).toBe(true);
+  await run(page, "data.pivotFilter");
+  await expect(page.getByTestId("pivot-filter")).toBeVisible();
+  expect(await violations(page, "[role=dialog][aria-modal=true]")).toEqual([]);
+});
+
 test("axe: print preview and the chart editor", async ({ page }) => {
   await ready(page);
   await run(page, "file.printPreview");

@@ -11,9 +11,9 @@ use tally_model::{
     AggFnData, AutoShowData, BaseItemData, CellRangeLocal, CellStyleData, DataLayoutData,
     DatabaseRangeData, DatePartData, DbSortData, OutlineGroupData, PivotData, PivotDataFieldData,
     PivotFieldData, PivotGroupData, PivotLayoutData, PivotSortData, PivotSourceData,
-    PivotSubtotalsData, ScenarioData, SheetData, ShowAsData, ShowAsKindData, StandardFilterData,
-    StdConditionData, StdConnectorData, StdFilterOpData, StdFilterOptionsData, SubtotalGroupData,
-    SubtotalsData, WorkbookData,
+    PivotSourceFilterData, PivotSubtotalsData, ScenarioData, SheetData, ShowAsData, ShowAsKindData,
+    StandardFilterData, StdConditionData, StdConnectorData, StdFilterOpData, StdFilterOptionsData,
+    SubtotalGroupData, SubtotalsData, WorkbookData,
 };
 use tally_types::{DateEpoch, MAX_COLS, MAX_ROWS};
 
@@ -307,6 +307,11 @@ fn std_op_parse(op: &str) -> Option<StdFilterOpData> {
         "does-not-begin-with" => StdFilterOpData::NotBeginsWith,
         "ends-with" | "ends" => StdFilterOpData::EndsWith,
         "does-not-end-with" => StdFilterOpData::NotEndsWith,
+        // Regular expressions (the `match` operators set the filter's
+        // regex option) and AOO's empty / not-empty value queries
+        // (`XMLExportDataPilot.cxx:76-126`), compared with "".
+        "match" | "empty" => StdFilterOpData::Eq,
+        "nomatch" | "noempty" => StdFilterOpData::Ne,
         _ => return None,
     })
 }
@@ -344,9 +349,29 @@ pub(crate) fn write_standard_filter(s: &mut String, f: &StandardFilterData, data
         s.push_str(r#" table:display-duplicates="false""#);
     }
     s.push('>');
-    // AND binds tighter than OR: OR groups of AND runs.
+    write_filter_conditions(
+        s,
+        &f.conditions,
+        |c| c.col.saturating_sub(f.range.c0),
+        f.options.case_sensitive,
+        false,
+    );
+    s.push_str("</table:filter>");
+}
+
+/// The conditions of a `table:filter`: OR groups of AND runs (AND binds
+/// tighter than OR). `field` gives a condition's `table:field-number`;
+/// with `regex`, `=` / `<>` are written as `match` / `nomatch` (AOO
+/// `ScXMLExportDataPilot::getDPOperatorXML`).
+fn write_filter_conditions(
+    s: &mut String,
+    conditions: &[StdConditionData],
+    field: impl Fn(&StdConditionData) -> u32,
+    case_sensitive: bool,
+    regex: bool,
+) {
     let mut groups: Vec<Vec<&StdConditionData>> = Vec::new();
-    for (i, c) in f.conditions.iter().enumerate() {
+    for (i, c) in conditions.iter().enumerate() {
         if i == 0 || c.connector == StdConnectorData::Or || groups.is_empty() {
             groups.push(vec![c]);
         } else if let Some(g) = groups.last_mut() {
@@ -354,17 +379,25 @@ pub(crate) fn write_standard_filter(s: &mut String, f: &StandardFilterData, data
         }
     }
     let write_cond = |s: &mut String, c: &StdConditionData| {
-        let field = c.col.saturating_sub(f.range.c0);
         let ty = if c.value.trim().parse::<f64>().is_ok() {
             "number"
         } else {
             "text"
         };
-        let _ = write!(s, r#"<table:filter-condition table:field-number="{field}""#);
+        let _ = write!(
+            s,
+            r#"<table:filter-condition table:field-number="{}""#,
+            field(c)
+        );
         attr(s, "table:value", &c.value);
-        attr(s, "table:operator", std_op_name(c.op));
+        let op = match c.op {
+            StdFilterOpData::Eq if regex => "match",
+            StdFilterOpData::Ne if regex => "nomatch",
+            op => std_op_name(op),
+        };
+        attr(s, "table:operator", op);
         let _ = write!(s, r#" table:data-type="{ty}""#);
-        if f.options.case_sensitive {
+        if case_sensitive {
             s.push_str(r#" table:case-sensitive="true""#);
         }
         s.push_str("/>");
@@ -389,7 +422,82 @@ pub(crate) fn write_standard_filter(s: &mut String, f: &StandardFilterData, data
         }
         s.push_str("</table:filter-or>");
     }
+}
+
+/// Writes the source filter of a DataPilot inside its
+/// `table:source-cell-range` (AOO `ScXMLExportDataPilot::WriteDPFilter`):
+/// field numbers are sheet columns, the condition source range is the
+/// source range.
+fn write_pivot_filter(
+    s: &mut String,
+    f: &PivotSourceFilterData,
+    range: &CellRangeLocal,
+    sheet: &str,
+) {
+    if f.conditions.is_empty() {
+        return;
+    }
+    s.push_str("<table:filter");
+    attr(
+        s,
+        "table:condition-source-range-address",
+        &range_list(sheet, std::slice::from_ref(range)),
+    );
+    if f.no_duplicates {
+        s.push_str(r#" table:display-duplicates="false""#);
+    }
+    s.push('>');
+    write_filter_conditions(
+        s,
+        &f.conditions,
+        |c| range.c0.saturating_add(c.col),
+        f.case_sensitive,
+        f.regex,
+    );
     s.push_str("</table:filter>");
+}
+
+/// Reads the `table:filter` of a DataPilot source (`source` is the
+/// source range): sheet-column field numbers (AOO `xmldpimp.cxx`,
+/// `dptablecache.cxx:659` #i115431) become source columns; a number
+/// outside the source but below its width is taken as a source column.
+fn parse_pivot_filter<R: BufRead>(
+    xml: &mut XmlReader<R>,
+    e: &Elem,
+    source: CellRangeLocal,
+) -> Result<Option<PivotSourceFilterData>, OdsError> {
+    let raw = CellRangeLocal {
+        r0: 0,
+        c0: 0,
+        r1: 0,
+        c1: MAX_COLS - 1,
+    };
+    let f = parse_standard_filter(xml, e, raw, &|_| None)?;
+    let width = source.c1 - source.c0 + 1;
+    let conditions: Vec<StdConditionData> = f
+        .conditions
+        .into_iter()
+        .filter_map(|mut c| {
+            c.col = if (source.c0..=source.c1).contains(&c.col) {
+                c.col - source.c0
+            } else if c.col < width {
+                c.col
+            } else {
+                return None;
+            };
+            Some(c)
+        })
+        .take(8)
+        .collect();
+    if conditions.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(PivotSourceFilterData {
+        conditions,
+        case_sensitive: f.options.case_sensitive,
+        regex: f.options.regex,
+        no_duplicates: f.options.no_duplicates,
+    }))
 }
 
 /// Parses a `table:filter` element into a standard/advanced filter
@@ -426,6 +534,7 @@ pub(crate) fn parse_standard_filter<R: BufRead>(
     // Conditions: a flat list; `filter-or` children start OR groups,
     // `filter-and` children are AND runs.
     let mut case_sensitive = false;
+    let mut regex = false;
     let d = xml.depth();
     let mut stack: Vec<bool> = Vec::new(); // true = inside an OR
     let mut first_in_group = true;
@@ -448,8 +557,9 @@ pub(crate) fn parse_standard_filter<R: BufRead>(
                         .attr("table:field-number")
                         .and_then(|v| v.trim().parse::<u32>().ok())
                         .unwrap_or(0);
-                    let op = std_op_parse(c.attr("table:operator").unwrap_or("="))
-                        .unwrap_or(StdFilterOpData::Eq);
+                    let op_name = c.attr("table:operator").unwrap_or("=");
+                    regex |= matches!(op_name, "match" | "nomatch");
+                    let op = std_op_parse(op_name).unwrap_or(StdFilterOpData::Eq);
                     case_sensitive |= c.attr("table:case-sensitive") == Some("true");
                     let in_or = stack.last().copied().unwrap_or(false)
                         || (stack.len() >= 2 && stack[stack.len() - 2] && first_in_group);
@@ -483,6 +593,7 @@ pub(crate) fn parse_standard_filter<R: BufRead>(
         }
     }
     f.options.case_sensitive = case_sensitive;
+    f.options.regex = regex;
     Ok(f)
 }
 
@@ -1160,13 +1271,25 @@ fn write_pivot(s: &mut String, p: &PivotData, tab: usize, sheet: &SheetData, dat
             s.push_str("/>");
         }
         (PivotSourceData::Range { .. }, Some(sh), Some(r)) => {
+            let sname = odf_sheet_name(&sh.name);
             s.push_str("<table:source-cell-range");
             attr(
                 s,
                 "table:cell-range-address",
-                &range_list(&odf_sheet_name(&sh.name), std::slice::from_ref(&r)),
+                &range_list(&sname, std::slice::from_ref(&r)),
             );
-            s.push_str("/>");
+            match p
+                .source_filter
+                .as_ref()
+                .filter(|f| !f.conditions.is_empty())
+            {
+                Some(f) => {
+                    s.push('>');
+                    write_pivot_filter(s, f, &r, &sname);
+                    s.push_str("</table:source-cell-range>");
+                }
+                None => s.push_str("/>"),
+            }
         }
         _ => {}
     }
@@ -1346,7 +1469,27 @@ fn parse_pivot<R: BufRead>(
                             range: r,
                         };
                     }
-                    xml.skip()?;
+                    // The source filter (`table:filter`, AOO
+                    // `ScXMLDPFilterContext`).
+                    let source = match &p.source {
+                        PivotSourceData::Range { range, .. } => Some(*range),
+                        PivotSourceData::DatabaseRange { .. } => None,
+                    };
+                    let sd = xml.depth();
+                    loop {
+                        match xml.next()? {
+                            Ev::Start(ch) if ch.name == "table:filter" => match source {
+                                Some(r) if p.source_filter.is_none() => {
+                                    p.source_filter = parse_pivot_filter(xml, &ch, r)?;
+                                }
+                                _ => xml.skip()?,
+                            },
+                            Ev::Start(_) => xml.skip()?,
+                            Ev::End if xml.depth() < sd => break,
+                            Ev::Eof => break,
+                            _ => {}
+                        }
+                    }
                 }
                 "table:database-source-table" => {
                     let name = c.attr("table:table-name").unwrap_or_default().to_string();
@@ -2118,6 +2261,106 @@ mod tests {
             p.row_fields[1].group,
             sheets[1].pivots[0].row_fields[1].group
         );
+    }
+
+    /// T17: an AOO-shaped DataPilot source filter (`ScXMLExportDataPilot::
+    /// WriteDPFilter`): sheet-column field numbers, `match` for a regex,
+    /// an OR of an AND run, `display-duplicates="false"`.
+    #[test]
+    fn pivot_source_filter_reads_aoo_shape() {
+        let xml = r#"<table:data-pilot-tables><table:data-pilot-table table:name="DataPilot1" table:target-range-address="Pivot.A1:Pivot.C9"><table:source-cell-range table:cell-range-address="Data.B1:Data.C5"><table:filter table:condition-source-range-address="Data.B1:Data.C5" table:display-duplicates="false"><table:filter-or><table:filter-and><table:filter-condition table:field-number="1" table:case-sensitive="true" table:value="^E" table:operator="match"/><table:filter-condition table:field-number="2" table:case-sensitive="true" table:data-type="number" table:value="10" table:operator="&gt;="/></table:filter-and><table:filter-condition table:field-number="1" table:case-sensitive="true" table:value="West" table:operator="!="/></table:filter-or></table:filter></table:source-cell-range><table:data-pilot-field table:source-field-name="Amount" table:orientation="data" table:function="sum"/></table:data-pilot-table></table:data-pilot-tables>"#;
+        let mut sheets = pivot_sheets();
+        parse_pivots_xml(xml, &mut sheets);
+        let f = sheets[1].pivots[0].source_filter.clone().unwrap();
+        assert!(f.case_sensitive && f.regex && f.no_duplicates);
+        let got: Vec<(StdConnectorData, u32, StdFilterOpData, &str)> = f
+            .conditions
+            .iter()
+            .map(|c| (c.connector, c.col, c.op, c.value.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (StdConnectorData::And, 0, StdFilterOpData::Eq, "^E"),
+                (StdConnectorData::And, 1, StdFilterOpData::Ge, "10"),
+                (StdConnectorData::Or, 0, StdFilterOpData::Ne, "West"),
+            ]
+        );
+    }
+
+    #[test]
+    fn pivot_source_filter_round_trip() {
+        let mut sheets = pivot_sheets();
+        let filter = PivotSourceFilterData {
+            conditions: vec![
+                StdConditionData {
+                    connector: StdConnectorData::And,
+                    col: 0,
+                    op: StdFilterOpData::Eq,
+                    value: "East".into(),
+                },
+                StdConditionData {
+                    connector: StdConnectorData::Or,
+                    col: 1,
+                    op: StdFilterOpData::Lt,
+                    value: "5".into(),
+                },
+            ],
+            case_sensitive: false,
+            regex: true,
+            no_duplicates: false,
+        };
+        sheets[1].pivots.push(PivotData {
+            name: "P".into(),
+            source: PivotSourceData::Range {
+                sheet: 0,
+                range: CellRangeLocal {
+                    r0: 0,
+                    c0: 2,
+                    r1: 4,
+                    c1: 3,
+                },
+            },
+            data_fields: vec![PivotDataFieldData {
+                source_col: 1,
+                function: AggFnData::Sum,
+                caption: None,
+                show_as: None,
+            }],
+            source_filter: Some(filter.clone()),
+            ..PivotData::default()
+        });
+        let data = WorkbookData {
+            sheets: sheets.clone(),
+            ..WorkbookData::default()
+        };
+        let mut out = String::new();
+        write_pivots(&mut out, &data);
+        assert!(
+            out.contains(r#"<table:source-cell-range table:cell-range-address="Data.C1:Data.D5"><table:filter table:condition-source-range-address="Data.C1:Data.D5">"#),
+            "{out}"
+        );
+        // Sheet columns, `match` for the regex `=`.
+        assert!(
+            out.contains(r#"table:field-number="2" table:value="East" table:operator="match""#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"table:field-number="3" table:value="5" table:operator="&lt;" table:data-type="number""#),
+            "{out}"
+        );
+        let mut back = pivot_sheets();
+        parse_pivots_xml(&out, &mut back);
+        assert_eq!(back[1].pivots[0].source_filter, Some(filter));
+        // No filter: the element stays empty.
+        sheets[1].pivots[0].source_filter = None;
+        let data = WorkbookData {
+            sheets,
+            ..WorkbookData::default()
+        };
+        let mut out = String::new();
+        write_pivots(&mut out, &data);
+        assert!(!out.contains("table:filter"), "{out}");
     }
 
     #[test]

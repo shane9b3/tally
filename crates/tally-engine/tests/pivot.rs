@@ -79,6 +79,7 @@ fn pivot(f: &Fixture) -> PivotDto {
         identify_categories: false,
         show_filter_button: false,
         drill_down: true,
+        source_filter: None,
     }
 }
 
@@ -1185,4 +1186,199 @@ fn pivot_large_options_and_getpivotdata_are_not_quadratic() {
         Value::Error(tally_types::ErrorKind::Ref)
     ));
     assert!(t.elapsed().as_secs() < 30, "{:?}", t.elapsed());
+}
+
+// ---------------------------------------------------------------------------
+// T17: the "Filter" button and the source filter (AOO `ScPivotFilterDlg`)
+// ---------------------------------------------------------------------------
+
+fn cond(
+    connector: tally_api::StdConnector,
+    col: u32,
+    op: tally_api::StdFilterOp,
+    value: &str,
+) -> tally_api::StdCondition {
+    tally_api::StdCondition {
+        connector,
+        col,
+        op,
+        value: value.into(),
+    }
+}
+
+fn by_region(f: &Fixture) -> PivotDto {
+    let mut p = pivot(f);
+    p.col_fields.clear();
+    p.show_filter_button = true;
+    p
+}
+
+#[test]
+fn pivot_filter_button_cell_and_source_filter() {
+    use tally_api::{PivotSourceFilterDto, StdConnector, StdFilterOp};
+    let mut f = fixture();
+    let p = by_region(&f);
+    let id = create(&mut f, p);
+    // The button above the table, a blank row, then the table.
+    assert_eq!(f.value("H1"), Value::text("Filter"));
+    assert_eq!(f.value("H2"), Value::Empty);
+    assert_eq!(f.value("H4"), Value::text("East"));
+    assert_eq!(f.value("H5"), Value::text("West"));
+    assert_eq!(f.value("I6"), Value::Number(2315.0));
+    let hit = f.svc.pivot_at(f.doc, f.sheet, 0, 7).unwrap().unwrap();
+    assert_eq!(hit.role, PivotCellRole::FilterButton);
+    assert!(f.svc.pivots(f.doc).unwrap()[0].source_filter.is_none());
+
+    // Region = east (not case-sensitive): only the East rows are read.
+    let mut p = f.svc.pivots(f.doc).unwrap()[0].clone();
+    p.source_filter = Some(PivotSourceFilterDto {
+        conditions: vec![cond(StdConnector::And, 0, StdFilterOp::Eq, "east")],
+        ..PivotSourceFilterDto::default()
+    });
+    let r = f.apply(vec![Op::UpdatePivot {
+        id,
+        pivot: p.clone(),
+        overwrite: false,
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(f.value("H4"), Value::text("East"));
+    assert_eq!(f.value("I4"), Value::Number(850.0));
+    assert_eq!(f.value("H5"), Value::text("Total Result"));
+    assert_eq!(f.value("I5"), Value::Number(850.0));
+    assert_eq!(f.value("H6"), Value::Empty);
+    let back = f.svc.pivots(f.doc).unwrap()[0].source_filter.clone();
+    assert_eq!(back, p.source_filter);
+    // GETPIVOTDATA sees the filtered result.
+    f.set("A30", "=GETPIVOTDATA(\"Revenue\",H3)");
+    assert_eq!(f.value("A30"), Value::Number(850.0));
+
+    // Undo puts the unfiltered table back; redo filters again.
+    f.svc.undo(f.doc).unwrap(); // A30
+    f.svc.undo(f.doc).unwrap();
+    assert_eq!(f.value("H5"), Value::text("West"));
+    assert!(f.svc.pivots(f.doc).unwrap()[0].source_filter.is_none());
+    f.svc.redo(f.doc).unwrap();
+    assert_eq!(f.value("H5"), Value::text("Total Result"));
+
+    // Refresh re-applies the filter to the changed source.
+    f.set("F2", "1000");
+    let r = f.apply(vec![Op::RefreshPivot {
+        id,
+        overwrite: false,
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(f.value("I4"), Value::Number(1750.0));
+    f.set("A2", "West");
+    f.apply(vec![Op::RefreshPivot {
+        id,
+        overwrite: false,
+    }]);
+    assert_eq!(f.value("I4"), Value::Number(750.0));
+}
+
+#[test]
+fn pivot_source_filter_and_or_regex_case() {
+    use tally_api::{PivotSourceFilterDto, StdConnector, StdFilterOp};
+    let mut f = fixture();
+    let mut p = by_region(&f);
+    // Region = West AND Quarter = Q1.
+    p.source_filter = Some(PivotSourceFilterDto {
+        conditions: vec![
+            cond(StdConnector::And, 0, StdFilterOp::Eq, "West"),
+            cond(StdConnector::And, 3, StdFilterOp::Eq, "Q1"),
+        ],
+        ..PivotSourceFilterDto::default()
+    });
+    let id = create(&mut f, p.clone());
+    let rows = sales_rows();
+    let sum = |keep: &dyn Fn(&[String]) -> bool| -> f64 {
+        rows[1..]
+            .iter()
+            .filter(|r| keep(r))
+            .map(|r| r[5].parse::<f64>().unwrap())
+            .sum()
+    };
+    let west_q1 = sum(&|r| r[0] == "West" && r[3] == "Q1");
+    assert_eq!(f.value("H4"), Value::text("West"));
+    assert_eq!(f.value("I4"), Value::Number(west_q1));
+    // AND binds tighter than OR: East OR (West AND Revenue > 200).
+    p.source_filter = Some(PivotSourceFilterDto {
+        conditions: vec![
+            cond(StdConnector::And, 0, StdFilterOp::Eq, "East"),
+            cond(StdConnector::Or, 0, StdFilterOp::Eq, "West"),
+            cond(StdConnector::And, 5, StdFilterOp::Gt, "200"),
+        ],
+        ..PivotSourceFilterDto::default()
+    });
+    f.apply(vec![Op::UpdatePivot {
+        id,
+        pivot: p.clone(),
+        overwrite: false,
+    }]);
+    let west_big = sum(&|r| r[0] == "West" && r[5].parse::<f64>().unwrap() > 200.0);
+    assert_eq!(f.value("I4"), Value::Number(850.0));
+    assert_eq!(f.value("I5"), Value::Number(west_big));
+    // A case-sensitive regular expression keeps East only.
+    p.source_filter = Some(PivotSourceFilterDto {
+        conditions: vec![cond(StdConnector::And, 0, StdFilterOp::Eq, "^[E].*")],
+        case_sensitive: true,
+        regex: true,
+        no_duplicates: true,
+    });
+    let r = f.apply(vec![Op::UpdatePivot {
+        id,
+        pivot: p.clone(),
+        overwrite: false,
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(f.value("H4"), Value::text("East"));
+    assert_eq!(f.value("H5"), Value::text("Total Result"));
+    // "No duplications" is kept but not applied (AOO): all East rows count.
+    assert_eq!(f.value("I4"), Value::Number(850.0));
+    assert!(
+        f.svc.pivots(f.doc).unwrap()[0]
+            .source_filter
+            .as_ref()
+            .unwrap()
+            .no_duplicates
+    );
+    // A condition outside the source is refused.
+    p.source_filter = Some(PivotSourceFilterDto {
+        conditions: vec![cond(StdConnector::And, 6, StdFilterOp::Eq, "x")],
+        ..PivotSourceFilterDto::default()
+    });
+    let r = f.apply(vec![Op::UpdatePivot {
+        id,
+        pivot: p,
+        overwrite: false,
+    }]);
+    assert_eq!(r.errors.len(), 1);
+}
+
+/// A source filter read from a file is cut to the API's limits (8
+/// conditions, 4,096-byte values) so the pivot can be edited and sent back.
+#[test]
+fn pivot_source_filter_from_file_is_bounded() {
+    let f = fixture();
+    let mut data = f.svc.document(f.doc).unwrap().wb.to_data();
+    let cond = |value: String| tally_model::StdConditionData {
+        value,
+        ..tally_model::StdConditionData::default()
+    };
+    let mut conditions = vec![cond("x".repeat(5000))];
+    conditions.extend((0..20).map(|i| cond(format!("v{i}"))));
+    data.sheets[0].pivots.push(tally_model::PivotData {
+        name: "Filtered".into(),
+        data_fields: vec![tally_model::PivotDataFieldData::default()],
+        source_filter: Some(tally_model::PivotSourceFilterData {
+            conditions,
+            ..tally_model::PivotSourceFilterData::default()
+        }),
+        ..tally_model::PivotData::default()
+    });
+    let wb = tally_engine::Workbook::from_data(&data);
+    let p = &wb.sheets[0].meta.pivots[0];
+    let f = p.data.source_filter.as_ref().unwrap();
+    assert_eq!(f.conditions.len(), 8);
+    assert_eq!(f.conditions[0].value, "v0");
 }

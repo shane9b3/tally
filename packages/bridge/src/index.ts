@@ -171,6 +171,7 @@ export type { PivotFieldDto } from "./generated/PivotFieldDto";
 export type { PivotFieldItemsDto } from "./generated/PivotFieldItemsDto";
 export type { PivotGroupDto } from "./generated/PivotGroupDto";
 export type { PivotHit } from "./generated/PivotHit";
+export type { PivotSourceFilterDto } from "./generated/PivotSourceFilterDto";
 export type { PivotItemDto } from "./generated/PivotItemDto";
 export type { PivotLayout } from "./generated/PivotLayout";
 export type { PivotSort } from "./generated/PivotSort";

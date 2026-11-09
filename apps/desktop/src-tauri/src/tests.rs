@@ -1216,6 +1216,7 @@ mod wave5 {
             identify_categories: false,
             show_filter_button: false,
             drill_down: true,
+            source_filter: None,
         }
     }
 

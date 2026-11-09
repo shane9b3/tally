@@ -343,6 +343,28 @@ pub struct PivotDto {
     pub show_filter_button: bool,
     /// Drill down on double-click.
     pub drill_down: bool,
+    /// The filter on the source rows (the "Filter" button above the
+    /// table); absent or `null` for none.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub source_filter: Option<PivotSourceFilterDto>,
+}
+
+/// The filter on a pivot's source rows (AOO `ScPivotFilterDlg`: up to 3
+/// conditions; only `=`, `<`, `>`, `<=`, `>=`, `<>`).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PivotSourceFilterDto {
+    /// Conditions in order; `col` is the column inside the source (0 =
+    /// its first column).
+    pub conditions: Vec<crate::tools::StdCondition>,
+    /// Case-sensitive.
+    pub case_sensitive: bool,
+    /// `=` / `<>` operands are regular expressions.
+    pub regex: bool,
+    /// "No duplications" (kept and saved; AOO's DataPilot ignores it).
+    pub no_duplicates: bool,
 }
 
 /// One distinct item of a source field.
@@ -391,6 +413,8 @@ pub enum PivotCellRole {
     Data,
     /// A subtotal or grand total.
     Total,
+    /// The "Filter" button above the table.
+    FilterButton,
 }
 
 /// Result of `pivot_at`.

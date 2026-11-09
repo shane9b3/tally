@@ -3,4 +3,4 @@
 /**
  * What part of a pivot's output a cell belongs to.
  */
-export type PivotCellRole = "header" | "rowItem" | "colItem" | "pageField" | "data" | "total";
+export type PivotCellRole = "header" | "rowItem" | "colItem" | "pageField" | "data" | "total" | "filterButton";

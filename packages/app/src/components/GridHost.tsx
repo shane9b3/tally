@@ -12,6 +12,7 @@ import { LazySlot, lazyPart } from "../lazyPart";
 import { toGridBreaks, useW5Store } from "../objects/w5Store";
 import { useW56Store } from "../data/store";
 import { filterButtonsFor } from "../dataOps";
+import { pivotFilterButtons } from "../pivot/pivotFilter";
 import { useDataStore } from "../stores/dataStore";
 import { useController } from "../context";
 import { t } from "../i18n";
@@ -74,6 +75,12 @@ export function GridHost() {
   const arrayRange = active && active.sheet === sheet && active.cell.r === cell.r && active.cell.c === cell.c ? (active.arrayRange ?? null) : null;
   const filter = useDataStore((s) => s.filter);
   const filterButtons = useMemo(() => filterButtonsFor(filter), [filter]);
+  // The DataPilot "Filter" buttons on this sheet (T17).
+  const pivots = useW56Store((s) => s.pivots);
+  const pushButtons = useMemo(() => {
+    const cells = pivotFilterButtons(pivots, sheet);
+    return cells.length > 0 ? cells : null;
+  }, [pivots, sheet]);
   const clip = useDataStore((s) => s.clip);
   const clipRange = clip && clip.sheet === sheet ? clip.range : null;
   const pageBreaksOn = useV3Store((s) => s.pageBreaksOn);
@@ -100,6 +107,7 @@ export function GridHost() {
         plusRanges: t("grid.plusRanges", ", plus {count} more ranges"),
         cellEditor: t("grid.cellEditor", "Cell editor"),
         objects: t("grid.objects", "Objects"),
+        cellButton: t("grid.cellButton", ", button, Alt+Down (⌥↓) presses it"),
       },
     }),
     [sheetName, activeInput, i18nRev],
@@ -174,6 +182,7 @@ export function GridHost() {
         arrayRange={arrayRange}
         clipRange={clipRange}
         filterButtons={filterButtons}
+        pushButtons={pushButtons}
         onFilterButton={ctl.onFilterButton}
         aria={aria}
         outline={outline}

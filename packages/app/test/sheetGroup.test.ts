@@ -222,6 +222,7 @@ describe("commands with several sheets selected", () => {
         "tools.goalSeek",
         "tools.solver",
         "data.dataPilot",
+        "data.pivotFilter",
         "data.defineDatabaseRange",
         "data.defineName",
         "data.filter",

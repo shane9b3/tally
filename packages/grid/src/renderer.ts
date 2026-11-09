@@ -225,6 +225,8 @@ export interface MainFrame {
   dpr: number;
   /** AutoFilter header buttons to draw. */
   filterButtons?: FilterButtons | null;
+  /** Push-button cells (the DataPilot "Filter" button). */
+  pushButtons?: readonly CellPos[] | null;
   /** Page-break lines ("View ▸ Page breaks"). */
   pageBreaks?: PageBreaks | null;
   /** The print range outline. */
@@ -611,6 +613,13 @@ export class Renderer {
       }
     }
 
+    // 5b. Push-button cells (AOO `SC_MF_BUTTON`, the DataPilot "Filter" button).
+    for (const b of f.pushButtons ?? []) {
+      if (b.r < vis.r0 || b.r > vis.r1 || b.c < vis.c0 || b.c > vis.c1) continue;
+      if (geo.rowH(b.r) <= 0 || geo.colW(b.c) <= 0) continue;
+      this.drawPushButton(geo, b.r, b.c, theme, dpr);
+    }
+
     ctx.restore();
     this.curFill = "";
     this.curFont = "";
@@ -689,6 +698,40 @@ export class Renderer {
     ctx.closePath();
     ctx.fillStyle = active ? "#ffffff" : theme.colors.headerText;
     ctx.fill();
+    ctx.restore();
+    this.curFill = "";
+  }
+
+  /**
+   * A push-button cell: a raised frame over the whole cell (the caption is
+   * the cell's own text, drawn already), lit at the top, shaded below.
+   */
+  private drawPushButton(geo: Geometry, r: number, c: number, theme: Theme, dpr: number): void {
+    const ctx = this.main;
+    const lw = 1 / dpr;
+    const x = geo.colX(c) + 1.5 * lw;
+    const y = geo.rowY(r) + 1.5 * lw;
+    const w = geo.colW(c) - 3 * lw;
+    const h = geo.rowH(r) - 3 * lw;
+    if (w <= 4 || h <= 4) return;
+    ctx.save();
+    ctx.beginPath();
+    roundRect(ctx, x, y, w, h, 3 * geo.zoom);
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = theme.colors.headerBg;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = lw;
+    ctx.strokeStyle = theme.colors.headerLine;
+    ctx.stroke();
+    // The bevel: a darker line along the bottom edge.
+    ctx.beginPath();
+    ctx.moveTo(x + 2 * geo.zoom, y + h - lw);
+    ctx.lineTo(x + w - 2 * geo.zoom, y + h - lw);
+    ctx.lineWidth = Math.max(lw, geo.zoom);
+    ctx.strokeStyle = theme.colors.headerText;
+    ctx.globalAlpha = 0.25;
+    ctx.stroke();
     ctx.restore();
     this.curFill = "";
   }

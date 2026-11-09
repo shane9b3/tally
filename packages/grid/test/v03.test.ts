@@ -221,6 +221,28 @@ describe("cell buttons, links and notes", () => {
     expect(onCellButton).toHaveBeenCalledWith("link", { r: 6, c: 1 }, expect.anything());
   });
 
+  it("a push-button cell (DataPilot Filter) is pressed by a click or ⌥↓, and described as a button", () => {
+    const onCellButton = vi.fn();
+    const onSelectionChange = vi.fn();
+    const { scroller, root, grid } = make({ onCellButton, onSelectionChange, pushButtons: [{ r: 0, c: 1 }] });
+    // Drawn as a framed button.
+    expect(calls.some((c) => c.name === "stroke" && c.strokeStyle === DEFAULT_THEME.colors.headerLine)).toBe(true);
+    // Anywhere on the cell.
+    pointer(scroller, "pointerdown", cellX(20), rowY(0));
+    expect(onCellButton).toHaveBeenCalledWith("button", { r: 0, c: 1 }, expect.objectContaining({ left: expect.any(Number) }));
+    expect(grid.getSelection().active).toEqual({ r: 0, c: 1 });
+    expect(grid.ariaMirror.cell.textContent).toContain(", button");
+    // ⌥↓ on the active button cell presses it; elsewhere it moves as usual.
+    onCellButton.mockClear();
+    const ta = root.querySelector("textarea") as HTMLTextAreaElement;
+    ta.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true, cancelable: true }));
+    expect(onCellButton).toHaveBeenCalledWith("button", { r: 0, c: 1 }, expect.anything());
+    grid.setSelection(cellSelection({ r: 2, c: 1 }));
+    onCellButton.mockClear();
+    ta.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true, cancelable: true }));
+    expect(onCellButton).not.toHaveBeenCalled();
+  });
+
   it("hovering a note cell reports it, leaving reports null", () => {
     const onNoteHover = vi.fn();
     const { scroller } = make({ onNoteHover });
