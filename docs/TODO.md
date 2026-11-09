@@ -70,6 +70,8 @@ real-file corpus).
 
 - Tools ▸ Detective at AOO 4.1 parity (2026-11-06): the AOO menu (Trace / Remove Precedents, Trace / Remove Dependents, Remove All Traces, Trace Error, Mark Invalid Data, Refresh Traces, AutoRefresh, Fill Mode); each Trace adds one level and each Remove takes the outermost away (`ScDetectiveFunc::ShowPred` / `FindPredLevel`); the operation list (`ScDetOpList`) moves with rows and columns, is replayed by Refresh Traces and by AutoRefresh after formula changes (any change with a Trace Error), and round-trips as ODS `table:detective`/`table:operation` (plus `table:highlighted-range`); arrows from / to other sheets with a sheet icon; Fill Mode clicks trace precedents until Esc. Remaining differences: T12.
 
+- e2e: `numbers-tab.spec.ts` "a cell with a date format opens on Date…" failed once in a full run (passes alone); the full suite also fails wholesale on a cold Vite start right after long cargo builds. Add a warm-up / optimizeDeps include and harden that spec.
+
 ## Remaining for 1.0 (docs/wave5-plan.md §5)
 1. Functions: keep 408/408; DDE and macro calls marked unsupported (done).
 2. Conformance ≥ 99 % against the AOO oracle (`xtask aoo-oracle --setup/--run`, isolated profile) — owner runs it locally; record deviations in `docs/functions/deviations.md`.
