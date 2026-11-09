@@ -14,7 +14,7 @@
 import type { CellPos, CellView, RangeDto, SheetLayout, StyleDto } from "@tally/bridge";
 import { AriaMirror } from "./aria";
 import { CellEditor } from "./editor";
-import { ObjectLayer, type AnchorAxes } from "./objectLayer";
+import { DEFAULT_OBJECT_LAYER_OPTIONS, ObjectLayer, type AnchorAxes } from "./objectLayer";
 import { OUTLINE_LEVEL_PX, outlineHit, outlineLevels } from "./outline";
 import { Geometry, HEADER_HEIGHT, MIN_ROW_HEADER_WIDTH, NO_FROZEN, headerScale, type Frozen } from "./geometry";
 import { Interaction, type InteractionHost, type ResizeGuide } from "./interaction";
@@ -151,6 +151,7 @@ export class Grid {
       this.objects.setLabel(S.objects);
     };
     this.aria.setProps(props.aria ?? {});
+    if (props.objectOptions) this.objects.setOptions(props.objectOptions);
     if (props.objects) this.objects.setObjects(props.objects);
     container.appendChild(root);
     // The object layer sits next to the root (see ObjectLayer.mount).
@@ -235,6 +236,7 @@ export class Grid {
       this.resizeObserver = new win.ResizeObserver(() => this.measure());
       this.resizeObserver.observe(root);
     }
+    this.applyScrollbars();
     this.measure();
     if (props.edit) this.editor.sync(props.edit, null);
     this.waitForFonts(doc);
@@ -321,6 +323,13 @@ export class Grid {
     if ("invalidCells" in partial && partial.invalidCells !== prev.invalidCells) this.invalidate("overlay");
     if ("showGridlines" in partial && partial.showGridlines !== prev.showGridlines) this.invalidate("main");
     if ("decimalSep" in partial && partial.decimalSep !== prev.decimalSep) this.invalidate("main");
+    if ("objectOptions" in partial && partial.objectOptions !== prev.objectOptions) this.objects.setOptions(this.props.objectOptions ?? DEFAULT_OBJECT_LAYER_OPTIONS);
+    if ("showNotes" in partial && partial.showNotes !== prev.showNotes) this.invalidate("main");
+    if ("clipMarks" in partial && partial.clipMarks !== prev.clipMarks) this.invalidate("main");
+    if (("showHScroll" in partial && partial.showHScroll !== prev.showHScroll) || ("showVScroll" in partial && partial.showVScroll !== prev.showVScroll)) {
+      this.applyScrollbars();
+      this.measure();
+    }
     if ("showHeaders" in partial && partial.showHeaders !== prev.showHeaders) this.relayout();
     if ("objects" in partial && partial.objects !== prev.objects) {
       this.objects.setObjects(this.props.objects ?? []);
@@ -928,8 +937,24 @@ export class Grid {
    * When an axis is scaled, wheel deltas are applied in content px (so the
    * wheel speed stays 1:1); otherwise the browser scrolls natively.
    */
+  /**
+   * Tools ▸ Options ▸ View ▸ Horizontal / Vertical scroll bar: a hidden bar
+   * is an `overflow: hidden` axis (the wheel and keyboard still scroll it,
+   * as in AOO).
+   */
+  private applyScrollbars(): void {
+    const s = this.scroller.style;
+    const h = this.props.showHScroll !== false ? "auto" : "hidden";
+    const v = this.props.showVScroll !== false ? "auto" : "hidden";
+    if (s.overflowX !== h) s.overflowX = h;
+    if (s.overflowY !== v) s.overflowY = v;
+    if (h === "auto" && v === "auto") delete this.root.dataset.scrollbars;
+    else this.root.dataset.scrollbars = `${h === "auto" ? "h" : ""}${v === "auto" ? "v" : ""}` || "none";
+  }
+
   private readonly onWheel = (e: WheelEvent): void => {
-    if (!this.mapX.scaled && !this.mapY.scaled) return;
+    const hidden = this.props.showHScroll === false || this.props.showVScroll === false;
+    if (!hidden && !this.mapX.scaled && !this.mapY.scaled) return;
     if (e.ctrlKey) return; // pinch-zoom gesture: leave to the app
     e.preventDefault();
     const line = this.rows.defaultSize * this.zoom;
@@ -989,6 +1014,8 @@ export class Grid {
         showGridlines: this.props.showGridlines !== false,
         showHeaders: this.headersShown,
         decimalSep: this.props.decimalSep ?? ".",
+        showNotes: this.props.showNotes !== false,
+        clipMarks: this.props.clipMarks !== false,
       });
 
       const panes = this.geo.panes();

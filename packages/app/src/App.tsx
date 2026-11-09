@@ -92,6 +92,8 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
   const printOpen = usePrintStore((s) => s.open || s.rangeDialog !== null);
   // View ▸ Toolbars (app prefs).
   const bars = useW56Store((s) => s.prefs.chrome.bars);
+  // Tools ▸ Options ▸ View ▸ Sheet tabs (saved with the document, AOO `HasSheetTabs`).
+  const sheetTabs = useW56Store((s) => s.view.showSheetTabs !== false);
   const peekFormulaBar = usePeekStore((s) => s.formulaBar);
 
   // "Match system": follow prefers-color-scheme changes.
@@ -152,7 +154,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
             <W56Panels />
           </div>
           <footer className={styles.footer}>
-            <SheetTabs renaming={renaming} setRenaming={setRenaming} />
+            {sheetTabs ? <SheetTabs renaming={renaming} setRenaming={setRenaming} /> : null}
             {bars.statusBar ? <StatusBar /> : null}
           </footer>
         </main>

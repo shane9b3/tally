@@ -166,6 +166,34 @@ describe("conditional formatting on the canvas", () => {
   });
 });
 
+describe("Tools ▸ Options ▸ View on the canvas", () => {
+  const noteFill = () => calls.some((c) => c.name === "fill" && c.fillStyle === DEFAULT_THEME.colors.noteMarker);
+  const clipMarks = () => calls.filter((c) => c.name === "fill" && c.fillStyle === "#ff0000").length;
+
+  it("Comment indicator off hides the note markers", () => {
+    // Only the note cell (the traffic-light icon shares the marker's red).
+    const { grid } = make({ showNotes: false, source: new FixedSource([view(4, 1, "Paid", { flags: 8 })], styles) });
+    expect(noteFill()).toBe(false);
+    calls.length = 0;
+    grid.update({ showNotes: true });
+    grid.flush();
+    expect(noteFill()).toBe(true);
+    grid.destroy();
+  });
+
+  it("Text overflow marks text cut off by a filled neighbour, and only then", () => {
+    const source = new FixedSource([view(8, 1, "A very long text that is cut"), view(8, 2, "x"), view(9, 1, "A very long text that overflows")], styles);
+    const { grid } = make({ source });
+    // Row 8 is cut at its right edge; row 9 overflows into empty cells.
+    expect(clipMarks()).toBe(1);
+    calls.length = 0;
+    grid.update({ clipMarks: false });
+    grid.flush();
+    expect(clipMarks()).toBe(0);
+    grid.destroy();
+  });
+});
+
 describe("cell buttons, links and notes", () => {
   it("a click on a list cell's ▾ reports the dropdown", () => {
     const onCellButton = vi.fn();

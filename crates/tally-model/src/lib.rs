@@ -1579,6 +1579,9 @@ pub struct DocSettings {
     /// Security "Open file read-only"). Kept for the round trip.
     #[serde(default)]
     pub load_readonly: bool,
+    /// Document-wide view options (Tools ▸ Options ▸ View).
+    #[serde(default)]
+    pub view: DocViewData,
 }
 
 /// Document metadata. Timestamps are ISO 8601 strings as stored in the file.
@@ -2098,6 +2101,10 @@ mod tests {
                 custom_sort_lists: vec![vec!["Q1".into(), "Q2".into()]],
                 default_font: Some("Arial".into()),
                 load_readonly: true,
+                view: DocViewData {
+                    sheet_tabs: false,
+                    ..DocViewData::default()
+                },
             },
             meta: DocMeta {
                 title: Some("Sample".into()),

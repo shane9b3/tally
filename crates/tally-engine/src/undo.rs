@@ -119,6 +119,8 @@ pub enum Change {
     CellStyles(Vec<tally_model::CellStyleData>),
     /// Restore the custom sort lists (v0.5).
     CustomSortLists(Vec<Vec<String>>),
+    /// Restore the document-wide view options (`SetViewOptions`).
+    DocView(Box<tally_model::DocViewData>),
     /// Several changes applied in order (their inverses come back in the
     /// opposite order).
     Batch(Vec<Change>),
@@ -646,6 +648,10 @@ pub fn apply_change(wb: &mut Workbook, change: Change, fx: &mut Effects) -> Opti
         Change::CustomSortLists(lists) => {
             let old = std::mem::replace(&mut wb.custom_sort_lists, lists);
             Some(Change::CustomSortLists(old))
+        }
+        Change::DocView(v) => {
+            let old = std::mem::replace(&mut wb.doc_view, *v);
+            Some(Change::DocView(Box::new(old)))
         }
         Change::SheetProps {
             id,

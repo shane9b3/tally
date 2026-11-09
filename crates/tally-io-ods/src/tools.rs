@@ -1852,11 +1852,12 @@ pub(crate) fn write_named_styles(
     }
 }
 
-/// Writes the per-sheet view options into the settings table entry.
+/// Writes the per-sheet view options into the settings table entry (for
+/// every sheet: the view-level items would otherwise apply to a sheet
+/// without its own on reading).
 pub(crate) fn write_view_settings(s: &mut String, sheet: &SheetData) {
-    let Some(v) = &sheet.view_options else {
-        return;
-    };
+    let dflt = tally_model::ViewOptionsData::default();
+    let v = sheet.view_options.as_ref().unwrap_or(&dflt);
     let item = |s: &mut String, name: &str, b: bool| {
         let _ = write!(
             s,
@@ -1868,6 +1869,78 @@ pub(crate) fn write_view_settings(s: &mut String, sheet: &SheetData) {
     item(s, "ShowGrid", v.show_gridlines);
     item(s, "HasColumnRowHeaders", v.show_headers);
     item(s, "IsValueHighlightingEnabled", v.value_highlighting);
+}
+
+/// The view-level items of `settings.xml`, directly in the view entry as
+/// AOO `ScViewData::WriteUserDataSequence` writes them (AOO reads only
+/// these, not the per-table copies): the active sheet's zero values, grid
+/// and headers, and the document-wide options.
+pub(crate) fn write_doc_view_settings(
+    s: &mut String,
+    active: Option<&SheetData>,
+    d: &tally_model::DocViewData,
+) {
+    let dflt = tally_model::ViewOptionsData::default();
+    let v = active
+        .and_then(|a| a.view_options.as_ref())
+        .unwrap_or(&dflt);
+    let item = |s: &mut String, name: &str, b: bool| {
+        let _ = write!(
+            s,
+            r#"<config:config-item config:name="{name}" config:type="boolean">{b}</config:config-item>"#
+        );
+    };
+    item(s, "ShowZeroValues", v.show_zero_values);
+    item(s, "ShowNotes", d.show_notes);
+    item(s, "ShowGrid", v.show_gridlines);
+    let color = d.grid_color.unwrap_or(tally_model::STD_GRID_COLOR) & 0x00FF_FFFF;
+    let _ = write!(
+        s,
+        r#"<config:config-item config:name="GridColor" config:type="long">{color}</config:config-item>"#
+    );
+    item(s, "ShowPageBreaks", d.show_page_breaks);
+    item(s, "HasColumnRowHeaders", v.show_headers);
+    item(s, "HasSheetTabs", d.sheet_tabs);
+    item(s, "IsOutlineSymbolsSet", d.outline_symbols);
+}
+
+/// Whether `name` is a view-level `settings.xml` view option Tally reads
+/// (the per-sheet ones become every sheet's default, the others go to
+/// [`tally_model::DocViewData`]).
+pub(crate) fn is_view_level_item(name: &str) -> bool {
+    matches!(
+        name,
+        "ShowZeroValues"
+            | "ShowNotes"
+            | "ShowGrid"
+            | "GridColor"
+            | "ShowPageBreaks"
+            | "HasColumnRowHeaders"
+            | "HasSheetTabs"
+            | "IsOutlineSymbolsSet"
+    )
+}
+
+/// A document-wide view item of `settings.xml`; other names are ignored.
+pub(crate) fn apply_doc_view_item(d: &mut tally_model::DocViewData, name: &str, value: &str) {
+    let t = value.trim();
+    let b = t == "true";
+    match name {
+        "ShowNotes" => d.show_notes = b,
+        "ShowPageBreaks" => d.show_page_breaks = b,
+        "HasSheetTabs" => d.sheet_tabs = b,
+        "IsOutlineSymbolsSet" => d.outline_symbols = b,
+        "GridColor" => {
+            // A 64-bit integer in AOO; COL_AUTO (0xFFFFFFFF) and
+            // SC_STD_GRIDCOLOR both mean the automatic colour (#i47435#).
+            if let Ok(n) = t.parse::<i64>() {
+                let rgb = (n & 0x00FF_FFFF) as u32;
+                d.grid_color = (n >= 0 && n != 0xFFFF_FFFF && rgb != tally_model::STD_GRID_COLOR)
+                    .then_some(rgb);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A Window ▸ Split position in 1/100 mm as AOO's `settings.xml` pixels

@@ -190,6 +190,8 @@ pub(crate) struct WorkbookInfo {
     pub names: Vec<DefinedName>,
     pub date1904: bool,
     pub active_tab: u32,
+    /// `workbookView showSheetTabs="0"`.
+    pub hide_sheet_tabs: bool,
     /// `calcPr iterate="1"`: (count, delta).
     pub iterate: Option<(u32, f64)>,
     /// `workbookProtection` with `lockStructure`.
@@ -232,6 +234,11 @@ pub(crate) fn parse_workbook<R: BufRead>(
                         .and_then(|v| v.trim().parse().ok())
                     {
                         wb.active_tab = t;
+                    }
+                    if e.attr_local("showSheetTabs")
+                        .is_some_and(|v| !parse_bool(v))
+                    {
+                        wb.hide_sheet_tabs = true;
                     }
                     xr.skip()?;
                 }

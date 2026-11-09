@@ -318,6 +318,48 @@ impl Default for ViewOptionsData {
     }
 }
 
+/// Document-wide view options that AOO keeps per view and saves in
+/// `settings.xml` (Tools ▸ Options ▸ OpenOffice Calc ▸ View; AOO
+/// `ScViewData::WriteUserDataSequence`): the comment indicator, the grid
+/// colour, page breaks, sheet tabs and outline symbols. XLSX keeps the sheet
+/// tabs (`workbookView showSheetTabs`) and outline symbols (`sheetView
+/// showOutlineSymbols`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocViewData {
+    /// Comment indicator (AOO `ShowNotes`, `VOPT_NOTES`).
+    #[serde(default = "yes")]
+    pub show_notes: bool,
+    /// Grid line colour as `0xRRGGBB`; `None` for the automatic colour
+    /// (AOO `GridColor`; its default `SC_STD_GRIDCOLOR` is read as `None`).
+    #[serde(default)]
+    pub grid_color: Option<u32>,
+    /// Page breaks (AOO `ShowPageBreaks`, `VOPT_PAGEBREAKS`). Kept for the
+    /// round trip; Tally shows the lines with View ▸ Page breaks.
+    #[serde(default = "yes")]
+    pub show_page_breaks: bool,
+    /// Sheet tabs (AOO `HasSheetTabs`, `VOPT_TABCONTROLS`).
+    #[serde(default = "yes")]
+    pub sheet_tabs: bool,
+    /// Outline symbols (AOO `IsOutlineSymbolsSet`, `VOPT_OUTLINER`).
+    #[serde(default = "yes")]
+    pub outline_symbols: bool,
+}
+
+impl Default for DocViewData {
+    fn default() -> Self {
+        Self {
+            show_notes: true,
+            grid_color: None,
+            show_page_breaks: true,
+            sheet_tabs: true,
+            outline_symbols: true,
+        }
+    }
+}
+
+/// AOO's automatic grid colour (`SC_STD_GRIDCOLOR`, `COL_LIGHTGRAY`).
+pub const STD_GRID_COLOR: u32 = 0x00C0_C0C0;
+
 /// Window ▸ Split position (independent of frozen panes). `0` = no split
 /// on that axis. ODS `HorizontalSplitMode`/`Position`, XLSX `pane` (not
 /// frozen).

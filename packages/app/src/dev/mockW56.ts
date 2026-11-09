@@ -60,6 +60,8 @@ export interface W56Ext {
   dbSorts?: Record<string, { keys: SortKey[]; hasHeader: boolean; caseSensitive: boolean }>;
   outline: Record<number, OutlineModel>;
   view: Record<number, ViewOptionsDto>;
+  /** The document-wide view options (comment indicator, grid colour, sheet tabs, outline symbols), as the engine keeps them. */
+  docView?: Pick<ViewOptionsDto, "showNotes" | "gridColor" | "showSheetTabs" | "showOutlineSymbols">;
   calc: CalcSettingsDto;
   lists: string[][];
   hiddenSheets: number[];
@@ -1045,6 +1047,9 @@ export async function applyW56Op(x: W56Ext, op: Op, ctx: W56Ctx): Promise<W56Out
     }
     case "setViewOptions": {
       x.view[op.sheet] = { ...op.options };
+      // As the engine: AOO's standard grid colour is the automatic one.
+      const gridColor = op.options.gridColor === undefined || op.options.gridColor === null || op.options.gridColor === 0xc0c0c0 ? null : op.options.gridColor & 0xffffff;
+      x.docView = { showNotes: op.options.showNotes, gridColor, showSheetTabs: op.options.showSheetTabs, showOutlineSymbols: op.options.showOutlineSymbols };
       return handled([], op.sheet);
     }
     case "setCalcSettings": {

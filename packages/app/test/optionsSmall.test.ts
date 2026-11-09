@@ -7,7 +7,9 @@
 import { MockClient } from "@tally/bridge";
 import { describe, expect, it } from "vitest";
 import { clampZoom, MAX_ZOOM, MIN_ZOOM, nextZoom } from "../src/formats";
-import { DEFAULT_PREFS, isTwoDigitYearStart, parsePrefs, serializePrefs } from "../src/options/prefs";
+import { DEFAULT_PREFS, DEFAULT_VIEW_PREFS, isTwoDigitYearStart, parsePrefs, parseViewPrefs, serializePrefs } from "../src/options/prefs";
+import { rgbHex } from "../src/components/GridHost";
+import { GRID_COLORS } from "../src/options/ViewTab";
 import { dateTexts, expandTwoDigitYear, limitGeneral, recognizeTwoDigitDate, serialOf } from "../src/dev/mockSmallOptions";
 import { wheelZoom } from "../src/objects/pinchZoom";
 import { variableZoom } from "../src/objects/ZoomDialog";
@@ -100,5 +102,22 @@ describe("zoom 20–400 %", () => {
     await expect(client.setViewZoom(info.doc, 401)).rejects.toMatchObject({ code: "invalid_argument" });
     await client.setViewZoom(info.doc, 100);
     expect((await client.viewOptions(info.doc, sheet)).zoom).toBeNull();
+  });
+});
+
+describe("Tools > Options > View prefs (U18)", () => {
+  it("defaults to AOO's view options and keeps only valid values", () => {
+    expect(DEFAULT_VIEW_PREFS).toEqual({ hScroll: true, vScroll: true, helpLines: false, simpleHandles: false, bigHandles: true, anchor: true, clipMarks: true, rangeFinder: true, objects: "show", charts: "show", drawings: "show" });
+    expect(parsePrefs({}).view).toEqual(DEFAULT_VIEW_PREFS);
+    const v = parseViewPrefs({ hScroll: false, helpLines: true, charts: "hide", objects: "placeholder", drawings: 2, bigHandles: "no" });
+    expect(v).toMatchObject({ hScroll: false, helpLines: true, charts: "hide", objects: "show", drawings: "show", bigHandles: true });
+    const back = parsePrefs(JSON.parse(serializePrefs({ ...DEFAULT_PREFS, view: { ...DEFAULT_VIEW_PREFS, vScroll: false, objects: "hide" } })));
+    expect(back.view).toMatchObject({ vScroll: false, objects: "hide" });
+  });
+
+  it("grid colours are hex for the canvas", () => {
+    expect(rgbHex(0xff)).toBe("#0000ff");
+    expect(rgbHex(0x12c0c0c0)).toBe("#c0c0c0");
+    expect(GRID_COLORS.every((c) => c.rgb !== 0xc0c0c0)).toBe(true);
   });
 });

@@ -942,6 +942,8 @@ pub(crate) struct Patches {
     /// `xl/worksheets/sheetN.xml` → attributes to add to `<sheetView`
     /// (view options rust_xlsxwriter has no setter for).
     pub sheet_view_attrs: Vec<(String, String)>,
+    /// `workbookView showSheetTabs="0"` (Tools ▸ Options ▸ View ▸ Sheet tabs off).
+    pub hide_sheet_tabs: bool,
 }
 
 impl Patches {
@@ -958,6 +960,7 @@ impl Patches {
             && self.sheet_inserts.is_empty()
             && self.style_names.is_empty()
             && self.sheet_view_attrs.is_empty()
+            && !self.hide_sheet_tabs
     }
 }
 
@@ -1108,6 +1111,7 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             .collect();
         let is_wb = name == "xl/workbook.xml"
             && (p.date1904
+                || p.hide_sheet_tabs
                 || p.workbook_protection.is_some()
                 || !p.workbook_inserts.is_empty()
                 || !p.defined_names.is_empty());
@@ -1169,6 +1173,10 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
                 };
             }
             if is_wb {
+                if p.hide_sheet_tabs && !patched.contains("showSheetTabs") {
+                    patched =
+                        patched.replacen("<workbookView", "<workbookView showSheetTabs=\"0\"", 1);
+                }
                 if p.date1904 && !patched.contains("date1904") {
                     patched = if patched.contains("<workbookPr") {
                         patched.replacen("<workbookPr", "<workbookPr date1904=\"1\"", 1)

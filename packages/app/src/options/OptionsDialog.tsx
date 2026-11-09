@@ -16,6 +16,8 @@ import { useW56Store, type OptionsTab, type W56Dialog } from "../data/store";
 import { Check, Field, Tabs, W56Shell } from "../data/W56Shell";
 import w56 from "../data/W56.module.css";
 import { isTwoDigitYearStart, isUndoSteps, TWO_DIGIT_YEAR_MAX, TWO_DIGIT_YEAR_MIN, UI_LANGUAGES, UNDO_STEPS_MAX, UNDO_STEPS_MIN, type AppPrefs } from "./prefs";
+import { useV3Store } from "../stores/v3Store";
+import { ViewTab } from "./ViewTab";
 
 const TABS: readonly { id: OptionsTab; key: string; label: string }[] = [
   { id: "calculate", key: "options.calculate", label: "Calculate" },
@@ -35,6 +37,9 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
   const [tab, setTab] = useState<OptionsTab>(d.tab);
   const [calc, setCalc] = useState<CalcSettingsDto>(d.calc);
   const [view, setView] = useState<ViewOptionsDto>(d.view);
+  // View ▸ Page breaks (a session toggle; the document keeps AOO's `ShowPageBreaks` as read).
+  const pageBreaks0 = useV3Store((s) => s.pageBreaksOn);
+  const [pageBreaks, setPageBreaks] = useState(pageBreaks0);
   const [prefs, setPrefs] = useState<AppPrefs>(prefs0);
   const [lists, setLists] = useState<string[][]>(d.lists);
   const [listIndex, setListIndex] = useState<number | null>(d.lists.length > 0 ? 0 : null);
@@ -55,6 +60,7 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
   const submit = async () => {
     if (JSON.stringify(calc) !== JSON.stringify(d.calc)) await ctl.w56.setCalcSettings(calc);
     if (JSON.stringify(view) !== JSON.stringify(d.view)) await ctl.w56.setViewOptions(view);
+    if (pageBreaks !== pageBreaks0) ctl.v3.setPageBreaksOn(pageBreaks);
     if (JSON.stringify(lists) !== JSON.stringify(d.lists)) await ctl.w56.setCustomLists(lists);
     if (JSON.stringify(prefs) !== JSON.stringify(prefs0)) await ctl.w56.savePrefs(prefs);
   };
@@ -114,14 +120,7 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
         </div>
       ) : null}
       {tab === "view" ? (
-        <div className={dlg.optionGrid}>
-          <Check label={t("cmd.view.gridLines", "Grid lines")} checked={view.showGridlines} onChange={(v) => setView({ ...view, showGridlines: v })} testId="opt-gridlines" />
-          <Check label={t("cmd.view.headers", "Column and row headers")} checked={view.showHeaders} onChange={(v) => setView({ ...view, showHeaders: v })} />
-          <Check label={t("cmd.view.zeroValues", "Zero values")} checked={view.showZeroValues} onChange={(v) => setView({ ...view, showZeroValues: v })} />
-          <Check label={t("cmd.view.showFormulas", "Show formulas")} checked={view.showFormulas} onChange={(v) => setView({ ...view, showFormulas: v })} testId="opt-show-formulas" />
-          <Check label={t("cmd.view.valueHighlighting", "Value highlighting")} checked={view.valueHighlighting} onChange={(v) => setView({ ...view, valueHighlighting: v })} />
-          <p className={dlg.note} style={{ gridColumn: "1 / -1" }}>{t("od.viewNote", "Per sheet, saved with the document. (Rendering of these toggles follows in the grid.)")}</p>
-        </div>
+        <ViewTab view={view} setView={setView} vp={prefs.view} setVp={(v) => setPrefs({ ...prefs, view: { ...prefs.view, ...v } })} pageBreaks={pageBreaks} setPageBreaks={setPageBreaks} />
       ) : null}
       {tab === "input" ? (
         <div>

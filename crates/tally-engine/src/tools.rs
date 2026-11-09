@@ -3226,11 +3226,27 @@ pub fn set_view_options(
         show_gridlines: o.show_gridlines,
         show_headers: o.show_headers,
     };
-    with_meta(wb, sheet, fx, |_, meta| {
+    let doc = tally_model::DocViewData {
+        show_notes: o.show_notes,
+        grid_color: o
+            .grid_color
+            .map(|c| c & 0x00FF_FFFF)
+            .filter(|&c| c != tally_model::STD_GRID_COLOR),
+        // Not part of the DTO (View ▸ Page breaks is a session toggle).
+        show_page_breaks: wb.doc_view.show_page_breaks,
+        sheet_tabs: o.show_sheet_tabs,
+        outline_symbols: o.show_outline_symbols,
+    };
+    let mut changes = with_meta(wb, sheet, fx, |_, meta| {
         meta.view_options =
             (data != tally_model::ViewOptionsData::default()).then(|| Arc::new(data.clone()));
         Ok(())
-    })
+    })?;
+    if doc != wb.doc_view {
+        let old = std::mem::replace(&mut wb.doc_view, doc);
+        changes.push(Change::DocView(Box::new(old)));
+    }
+    Ok(changes)
 }
 
 /// The view options of a sheet.
@@ -3243,6 +3259,10 @@ pub fn view_options(wb: &Workbook, sheet: SheetId) -> Option<ViewOptionsDto> {
         show_zero_values: d.show_zero_values,
         show_gridlines: d.show_gridlines,
         show_headers: d.show_headers,
+        show_notes: wb.doc_view.show_notes,
+        grid_color: wb.doc_view.grid_color,
+        show_sheet_tabs: wb.doc_view.sheet_tabs,
+        show_outline_symbols: wb.doc_view.outline_symbols,
         split: s.meta.split.map(|sp| SplitDto {
             x_px: crate::units::hmm_to_px(sp.x_hmm),
             y_px: crate::units::hmm_to_px(sp.y_hmm),

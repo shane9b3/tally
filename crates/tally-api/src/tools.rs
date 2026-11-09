@@ -551,6 +551,24 @@ pub struct ViewOptionsDto {
     pub show_gridlines: bool,
     /// Show row and column headers.
     pub show_headers: bool,
+    /// Comment indicator (document-wide; AOO `ShowNotes`).
+    #[serde(default = "yes")]
+    pub show_notes: bool,
+    /// Grid line colour `0xRRGGBB`, `None` = automatic (document-wide; AOO
+    /// `GridColor`).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub grid_color: Option<u32>,
+    /// Sheet tabs (document-wide; AOO `HasSheetTabs`).
+    #[serde(default = "yes")]
+    pub show_sheet_tabs: bool,
+    /// Outline symbols (document-wide; AOO `IsOutlineSymbolsSet`).
+    #[serde(default = "yes")]
+    pub show_outline_symbols: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for ViewOptionsDto {
@@ -563,6 +581,10 @@ impl Default for ViewOptionsDto {
             show_zero_values: true,
             show_gridlines: true,
             show_headers: true,
+            show_notes: true,
+            grid_color: None,
+            show_sheet_tabs: true,
+            show_outline_symbols: true,
         }
     }
 }

@@ -7,7 +7,7 @@
 import type { CellPos, CellView, RangeDto, SheetLayout, StyleDto } from "@tally/bridge";
 import type { Theme } from "@tally/tokens";
 import type { AriaProps } from "./aria";
-import type { GridObject, ObjectHandle } from "./objectLayer";
+import type { GridObject, ObjectHandle, ObjectLayerOptions } from "./objectLayer";
 
 export type { CellPos, CellView, RangeDto, SheetLayout, StyleDto };
 
@@ -375,6 +375,16 @@ export interface GridProps extends Partial<GridEvents> {
   showHeaders?: boolean;
   /** The document locale's decimal separator (default `.`), used when General numbers shrink to fit. */
   decimalSep?: string;
+  /** Tools ▸ Options ▸ View ▸ Comment indicator: the note triangles (default `true`). */
+  showNotes?: boolean;
+  /** Tools ▸ Options ▸ View ▸ Text overflow: clip marks on cut-off text (default `true`). */
+  clipMarks?: boolean;
+  /** Tools ▸ Options ▸ View ▸ Horizontal scroll bar (default `true`). */
+  showHScroll?: boolean;
+  /** Tools ▸ Options ▸ View ▸ Vertical scroll bar (default `true`). */
+  showVScroll?: boolean;
+  /** Tools ▸ Options ▸ View: handles and anchor of a selected object. */
+  objectOptions?: ObjectLayerOptions | null;
 }
 
 

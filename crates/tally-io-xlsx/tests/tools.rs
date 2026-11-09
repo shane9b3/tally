@@ -516,3 +516,28 @@ fn autofilter_values_are_capped_with_a_warning() {
         back.warnings
     );
 }
+
+/// Tools ▸ Options ▸ View: sheet tabs (`workbookView showSheetTabs`) and
+/// outline symbols (`sheetView showOutlineSymbols`) round trip.
+#[test]
+fn sheet_tabs_and_outline_symbols_round_trip() {
+    let mut wb = sample();
+    wb.settings.view.sheet_tabs = false;
+    wb.settings.view.outline_symbols = false;
+    let bytes = to_bytes(&wb);
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut read = |name: &str| {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name(name).unwrap(), &mut s).unwrap();
+        s
+    };
+    let wbx = read("xl/workbook.xml");
+    assert!(wbx.contains(r#"<workbookView showSheetTabs="0""#), "{wbx}");
+    let sx = read("xl/worksheets/sheet1.xml");
+    assert!(sx.contains(r#"showOutlineSymbols="0""#), "{sx}");
+    let back = round_trip(&wb);
+    assert!(!back.settings.view.sheet_tabs && !back.settings.view.outline_symbols);
+    // The defaults write nothing and read back as shown.
+    let back = round_trip(&sample());
+    assert!(back.settings.view.sheet_tabs && back.settings.view.outline_symbols);
+}

@@ -34,4 +34,21 @@ showGridlines: boolean,
 /**
  * Show row and column headers.
  */
-showHeaders: boolean, };
+showHeaders: boolean, 
+/**
+ * Comment indicator (document-wide; AOO `ShowNotes`).
+ */
+showNotes: boolean, 
+/**
+ * Grid line colour `0xRRGGBB`, `None` = automatic (document-wide; AOO
+ * `GridColor`).
+ */
+gridColor?: number | null, 
+/**
+ * Sheet tabs (document-wide; AOO `HasSheetTabs`).
+ */
+showSheetTabs: boolean, 
+/**
+ * Outline symbols (document-wide; AOO `IsOutlineSymbolsSet`).
+ */
+showOutlineSymbols: boolean, };

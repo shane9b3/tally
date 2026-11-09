@@ -392,8 +392,21 @@ loses.
   (double, dotted, dashed, wave, bold) and `fo:margin-left` (indent in
   10 pt steps).
 - **View options**: `ShowFormulas`, `ShowZeroValues`, `ShowGrid`,
-  `HasColumnRowHeaders`, `IsValueHighlightingEnabled` in the sheet's
-  `settings.xml` entry.
+  `HasColumnRowHeaders`, `IsValueHighlightingEnabled` in every sheet's
+  `settings.xml` table entry (Tally's per-sheet values). The view entry
+  itself carries what AOO 4.1 writes and reads there
+  (`ScViewData::WriteUserDataSequence` / `ReadUserDataSequence`, AOO
+  ignores the per-table copies): `ShowZeroValues`, `ShowGrid` and
+  `HasColumnRowHeaders` of the active sheet, and the document-wide
+  `ShowNotes` (comment indicator), `GridColor` (`long`, RGB; AOO's
+  `SC_STD_GRIDCOLOR` 12632256 = automatic, also written for it; COL_AUTO
+  reads as automatic), `ShowPageBreaks` (kept for the round trip),
+  `HasSheetTabs` and `IsOutlineSymbolsSet` (2026-11-09, U18). Reading takes
+  the view-level items (or, without them, the same names from
+  `ooo:configuration-settings`) as every sheet's defaults, then the sheet's
+  own. Not in the file, as in AOO 4.1: scroll bars, guides, handles,
+  anchor, text overflow, object Show/Hide (`ShowObjects` / `ShowCharts` /
+  `ShowDrawing` are not written by AOO 4.1 and not read) — app prefs.
 - **Window ▸ Split**: `HorizontalSplitMode`/`VerticalSplitMode` = 1 with
   `HorizontalSplitPosition`/`VerticalSplitPosition` in pixels at 100 %
   (96 dpi), converted to and from 1/100 mm. A frozen pane (mode 2, positions
@@ -438,7 +451,10 @@ loses.
   stacked), `shrinkToFit`, `indent`, `u val="double|singleAccounting|
   doubleAccounting"`, `border diagonalUp/diagonalDown` with `diagonal`.
 - **View options**: `sheetView showGridLines/showZeros/showFormulas/
-  showRowColHeaders`.
+  showRowColHeaders`. Sheet tabs: `workbookView showSheetTabs="0"`; outline
+  symbols: `sheetView showOutlineSymbols="0"` on every sheet (read: hidden
+  when any sheet view hides them; document-wide in Tally as in AOO). The
+  grid colour and comment indicator are not written to XLSX (2026-11-09).
 
 ## Document options in ODS (2026-11-09)
 

@@ -13,6 +13,7 @@ import type { AppController } from "../controller";
 import { nodeVisible } from "../charts/nodeVisible";
 import { objectId, parseObjectId, useChartStore } from "../charts/chartStore";
 import { useUiStore } from "../stores/uiStore";
+import { useW56Store } from "../data/store";
 import { anchorChanged, dragRect, nudgeAnchor, roundAnchor, type Rect } from "./objectDrag";
 import type { W5Shell } from "./shell";
 import { clientV4 } from "./shell";
@@ -264,6 +265,8 @@ export class ObjectFeatures {
     const rect = dragRect(d.start, d.part, e.clientX - d.x0, e.clientY - d.y0);
     if (Math.abs(e.clientX - d.x0) + Math.abs(e.clientY - d.y0) > 2) d.moved = true;
     Object.assign(d.node.style, { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.w}px`, height: `${rect.h}px` });
+    // Tools ▸ Options ▸ View ▸ Guides while moving: lines from the object's edges across the sheet.
+    if (d.moved && useW56Store.getState().prefs.view.helpLines) this.ctl.grid?.objectLayer.setGuides(rect);
   };
 
   private readonly onDragUp = (e: PointerEvent): void => {
@@ -280,6 +283,7 @@ export class ObjectFeatures {
       // ignore
     }
     const grid = this.ctl.grid;
+    grid?.objectLayer.setGuides(null);
     if (!grid || e.type === "pointercancel" || !d.moved) {
       Object.assign(d.node.style, { left: `${d.start.x}px`, top: `${d.start.y}px`, width: `${d.start.w}px`, height: `${d.start.h}px` });
       return;

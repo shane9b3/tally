@@ -399,7 +399,7 @@ export class WebMockClient extends MockClient {
     const x = this.docExt(doc);
     const v = x.w56.view[sheet];
     const split = x.w5.split[sheet] ?? null;
-    return { ...base, ...(v ? { ...v } : {}), split: split ? { ...split } : null };
+    return { ...base, ...(v ? { ...v } : {}), ...(x.w56.docView ?? {}), split: split ? { ...split } : null };
   }
 
   override async customSortLists(doc: DocId): Promise<string[][]> {

@@ -94,7 +94,7 @@ describe("a drag on the object layer", () => {
     Object.assign(node.style, { left: `${start.x}px`, top: `${start.y}px`, width: `${start.w}px`, height: `${start.h}px` });
     document.body.appendChild(node);
     const grid = {
-      objectLayer: { elementFor: () => node, list: () => objectsFor([chart], []), setObjects: () => undefined, select: () => undefined },
+      objectLayer: { elementFor: () => node, list: () => objectsFor([chart], []), setObjects: () => undefined, select: () => undefined, setGuides: () => undefined },
       objectRect: () => ({ x: start.x, y: start.y, w: start.w, h: start.h }),
       anchorAxes: () => axes(),
     };

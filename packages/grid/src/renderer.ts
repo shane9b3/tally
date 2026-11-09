@@ -20,6 +20,9 @@ import { CELL_FLAGS, type FilterButtons, type GridDataSource, type OutlineProps,
 
 /** Horizontal text padding inside a cell at zoom 100%. */
 export const CELL_PADDING = 6;
+/** Colour of the clip marks (AOO draws them in `COL_LIGHTRED`). */
+const CLIP_MARK_COLOR = "#ff0000";
+
 /** How far (in columns) to look outside the viewport for text overflowing into it. */
 export const OVERFLOW_SCAN = 32;
 
@@ -236,6 +239,10 @@ export interface MainFrame {
   showHeaders?: boolean;
   /** The locale's decimal separator (default `.`). */
   decimalSep?: string;
+  /** Tools ▸ Options ▸ View ▸ Comment indicator (default `true`). */
+  showNotes?: boolean;
+  /** Tools ▸ Options ▸ View ▸ Text overflow: marks where text is cut off (default `true`). */
+  clipMarks?: boolean;
 }
 
 export interface OverlayFrame extends MainFrame {
@@ -577,7 +584,7 @@ export class Renderer {
         if (cell.flags & CELL_FLAGS.dropdown && !(fb && fb.row === r && c >= fb.c0 && c <= fb.c1)) {
           this.drawDropdownButton(geo, r, c, theme, dpr);
         }
-        if (cell.flags & CELL_FLAGS.note) {
+        if (cell.flags & CELL_FLAGS.note && f.showNotes !== false) {
           const s = Math.min(7 * geo.zoom, w / 3, h / 3);
           const xr = (xs[j + 1] ?? 0) - lw;
           const yt = ys[i] ?? 0;
@@ -964,7 +971,32 @@ export class Renderer {
       this.curFill = "";
       this.curFont = "";
     }
+    // AOO's clip marks (Tools ▸ Options ▸ View ▸ Text overflow): a small
+    // arrow at the edge where text that cannot overflow is cut off.
+    if (f.clipMarks !== false && cell.kind !== "number") {
+      const eps = 0.5;
+      if (tx + width > spanR + eps) this.drawClipMark(spanR, top, h, zoom, 1);
+      if (tx < spanL - eps) this.drawClipMark(spanL, top, h, zoom, -1);
+    }
     return 1;
+  }
+
+  /** A clip mark inside `edge` (pointing right for `dir` 1, left for −1), vertically centred. */
+  private drawClipMark(edge: number, top: number, h: number, zoom: number, dir: 1 | -1): void {
+    const ctx = this.main;
+    const mw = Math.min(4 * zoom, 6);
+    const mh = Math.min(8 * zoom, h - 2);
+    if (mh <= 0) return;
+    const x0 = edge - dir * (mw + 1);
+    const cy = top + h / 2;
+    ctx.beginPath();
+    ctx.moveTo(x0, cy - mh / 2);
+    ctx.lineTo(x0 + dir * mw, cy);
+    ctx.lineTo(x0, cy + mh / 2);
+    ctx.closePath();
+    ctx.fillStyle = CLIP_MARK_COLOR;
+    ctx.fill();
+    this.curFill = "";
   }
 
   /** Word-wrapped text (style.wrap), clipped to the cell. */

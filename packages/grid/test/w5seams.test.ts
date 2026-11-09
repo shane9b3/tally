@@ -373,6 +373,54 @@ describe("view toggles (gridlines, headers)", () => {
   });
 });
 
+describe("Tools ▸ Options ▸ View: scroll bars, handles, anchor, guides", () => {
+  it("hides a scroll bar by its overflow axis and still scrolls with the wheel", () => {
+    const { grid } = make({ showHScroll: false });
+    const root = container.querySelector(".tally-grid") as HTMLElement;
+    const scroller = root.children[2] as HTMLElement;
+    expect(scroller.style.overflowX).toBe("hidden");
+    expect(scroller.style.overflowY).toBe("auto");
+    expect(root.dataset.scrollbars).toBe("v");
+    const ev = new WheelEvent("wheel", { deltaX: 0, deltaY: 120, bubbles: true, cancelable: true });
+    scroller.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    grid.update({ showHScroll: true, showVScroll: false });
+    expect(scroller.style.overflowX).toBe("auto");
+    expect(scroller.style.overflowY).toBe("hidden");
+    grid.update({ showVScroll: true });
+    expect(root.dataset.scrollbars).toBeUndefined();
+    grid.destroy();
+  });
+
+  it("sizes and shades the handles, marks the anchor cell and draws guides", () => {
+    const { grid } = make({
+      objects: [{ id: "chart-1", kind: "chart", anchor: { r: 2, c: 1, dxMm: 3, dyMm: 2, widthMm: 50, heightMm: 30 }, label: "Sales" }],
+    });
+    const layer = grid.objectLayer;
+    layer.select("chart-1");
+    const handle = () => layer.elementFor("chart-1")?.querySelector('[data-handle="nw"]') as HTMLElement;
+    // AOO defaults: large, shaded handles and the anchor shown.
+    expect(handle().style.width).toBe("9px");
+    expect(handle().dataset.handleStyle).toBe("shaded");
+    const anchor = () => container.querySelector(".tally-grid-anchor") as HTMLElement | null;
+    expect(anchor()?.dataset.anchorCell).toBe("2,1");
+    expect(anchor()?.getAttribute("aria-hidden")).toBe("true");
+    grid.update({ objectOptions: { simpleHandles: true, bigHandles: false, showAnchor: false } });
+    expect(handle().style.width).toBe("7px");
+    expect(handle().dataset.handleStyle).toBe("simple");
+    expect(anchor()).toBeNull();
+    // Guides while moving: two vertical and two horizontal lines across the pane.
+    layer.setGuides({ x: 120, y: 60, w: 200, h: 100 });
+    const guides = container.querySelectorAll(".tally-grid-guide");
+    expect(guides.length).toBe(4);
+    expect((guides[0] as HTMLElement).style.height).toBe("100%");
+    expect((guides[2] as HTMLElement).style.width).toBe("100%");
+    layer.setGuides(null);
+    expect(container.querySelectorAll(".tally-grid-guide").length).toBe(0);
+    grid.destroy();
+  });
+});
+
 describe("selected objects are visible and hide the cell cursor", () => {
   it("draws a frame and handles, and the overlay skips the cell selection", () => {
     const { grid } = make({

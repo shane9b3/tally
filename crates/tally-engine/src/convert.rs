@@ -221,6 +221,7 @@ impl Workbook {
         }
         wb.cell_styles = data.cell_styles.clone();
         wb.custom_sort_lists = data.settings.custom_sort_lists.clone();
+        wb.doc_view = data.settings.view.clone();
         wb.default_font = data
             .settings
             .default_font
@@ -529,6 +530,7 @@ impl Workbook {
                 custom_sort_lists: self.custom_sort_lists.clone(),
                 default_font: self.default_font.clone(),
                 load_readonly: self.load_readonly,
+                view: self.doc_view.clone(),
             },
             meta: self.meta.clone(),
             warnings: Vec::new(),

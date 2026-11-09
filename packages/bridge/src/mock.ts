@@ -1350,7 +1350,7 @@ export class MockClient implements EngineClientV4, ShellClient {
   viewOptions(doc: DocId, sheet: SheetId): Promise<ViewOptionsDto> {
     return this.run(() => {
       this.sheet(this.doc(doc), sheet);
-      return { split: null, zoom: this.zooms.get(doc) ?? null, showFormulas: false, valueHighlighting: false, showZeroValues: true, showGridlines: true, showHeaders: true };
+      return { split: null, zoom: this.zooms.get(doc) ?? null, showFormulas: false, valueHighlighting: false, showZeroValues: true, showGridlines: true, showHeaders: true, showNotes: true, gridColor: null, showSheetTabs: true, showOutlineSymbols: true };
     });
   }
 

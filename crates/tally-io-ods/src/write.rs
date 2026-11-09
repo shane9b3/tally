@@ -301,6 +301,11 @@ fn settings_xml(data: &WorkbookData) -> String {
         config_item(&mut s, "ZoomValue", "int", &zoom.to_string());
         config_item(&mut s, "PageViewZoomValue", "int", "60");
     }
+    crate::tools::write_doc_view_settings(
+        &mut s,
+        data.sheets.get(data.settings.active_sheet as usize),
+        &data.settings.view,
+    );
     s.push_str(
         "</config:config-item-map-entry></config:config-item-map-indexed></config:config-item-set>",
     );

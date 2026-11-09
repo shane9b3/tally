@@ -1831,6 +1831,7 @@ mod wave5 {
             show_zero_values: false,
             show_gridlines: false,
             show_headers: true,
+            ..ViewOptionsDto::default()
         };
         apply_ok(
             &st,

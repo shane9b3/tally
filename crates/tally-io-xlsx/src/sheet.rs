@@ -125,6 +125,8 @@ pub(crate) struct SheetExtras {
     pub page: crate::sheet_v03::PageParts,
     /// The `<drawing r:id>` of the sheet (charts, pictures; W5-1).
     pub drawing_rid: Option<String>,
+    /// `sheetView showOutlineSymbols="0"`.
+    pub hide_outline_symbols: bool,
 }
 
 /// Per-sheet parse state.
@@ -248,6 +250,9 @@ pub(crate) fn parse_sheet<R: BufRead>(
                     };
                     if v != tally_model::ViewOptionsData::default() {
                         st.out.view_options = Some(v);
+                    }
+                    if !flag("showOutlineSymbols", true) {
+                        st.extras.hide_outline_symbols = true;
                     }
                     // Excel allows 10–400 %; Tally (AOO) 20–400 %.
                     if let Some(z) = e

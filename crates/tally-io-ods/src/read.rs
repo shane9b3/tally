@@ -232,6 +232,9 @@ fn assemble(
         c.criteria_mode = tally_types::CriteriaMode::Regex;
     }
     wb.settings.calc_settings.standard_decimals = styles.default_decimals;
+    for (k, v) in settings.config_items.iter().chain(&settings.view_items) {
+        crate::tools::apply_doc_view_item(&mut wb.settings.view, k, v);
+    }
     if let Some(active) = settings.active {
         if let Some(i) = wb.sheets.iter().position(|s| s.name == active) {
             wb.settings.active_sheet = i as u32;
@@ -242,6 +245,16 @@ fn assemble(
             if rows > 0 || cols > 0 {
                 sheet.frozen = Some((rows, cols));
             }
+        }
+        // The view's options (AOO keeps them per view, not per sheet),
+        // then the sheet's own (Tally, LibreOffice).
+        let level = if settings.view_items.is_empty() {
+            &settings.config_items
+        } else {
+            &settings.view_items
+        };
+        for (k, v) in level {
+            crate::tools::apply_view_item(sheet, k, v);
         }
         if let Some(items) = settings.views.get(&sheet.name) {
             for (k, v) in items {
@@ -341,6 +354,12 @@ struct Settings {
     zooms: HashMap<String, i64>,
     /// The view's own `ZoomValue` (older files have no per-sheet one).
     view_zoom: Option<i64>,
+    /// View-level view options (`ShowGrid`, `HasSheetTabs`, …) as AOO
+    /// writes them: the document-wide ones and every sheet's defaults.
+    view_items: Vec<(String, String)>,
+    /// The same items from `ooo:configuration-settings` (used when the
+    /// view has none).
+    config_items: Vec<(String, String)>,
 }
 
 #[derive(Default)]
@@ -380,6 +399,12 @@ fn parse_settings<R: BufRead>(xml: &mut XmlReader<R>) -> Result<Settings, OdsErr
                         if in_config && name == "LoadReadonly" {
                             s.load_readonly = text.trim() == "true";
                         }
+                        if in_config
+                            && crate::tools::is_view_level_item(&name)
+                            && s.config_items.len() < 16
+                        {
+                            s.config_items.push((name, text.trim().to_string()));
+                        }
                         continue;
                     }
                     let depth = stack.len();
@@ -410,6 +435,13 @@ fn parse_settings<R: BufRead>(xml: &mut XmlReader<R>) -> Result<Settings, OdsErr
                                 }
                                 _ => {}
                             }
+                        }
+                    } else if depth >= 2
+                        && stack[depth - 2].as_deref() == Some("Views")
+                        && crate::tools::is_view_level_item(&name)
+                    {
+                        if s.view_items.len() < 16 {
+                            s.view_items.push((name, text.trim().to_string()));
                         }
                     } else if name == "ActiveTable" {
                         s.active = Some(text);

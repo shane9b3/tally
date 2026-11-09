@@ -282,6 +282,9 @@ pub struct Workbook {
     pub cell_styles: Vec<tally_model::CellStyleData>,
     /// Custom sort lists (v0.5).
     pub custom_sort_lists: Vec<Vec<String>>,
+    /// Document-wide view options (comment indicator, grid colour, sheet
+    /// tabs, outline symbols, page breaks; `SetViewOptions`).
+    pub doc_view: tally_model::DocViewData,
     /// The document's default font family (cells whose style has no
     /// family use it); `None` for the application font (see
     /// [`crate::fonts`]).
@@ -340,6 +343,7 @@ impl Workbook {
             load_aliases: HashMap::new(),
             cell_styles: Vec::new(),
             custom_sort_lists: Vec::new(),
+            doc_view: tally_model::DocViewData::default(),
             default_font: None,
             load_readonly: false,
             external_links: Vec::new(),

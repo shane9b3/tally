@@ -112,6 +112,8 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
         ..Budget::default()
     };
     let mut sheets = Vec::with_capacity(info.sheets.len());
+    // Any sheet view without outline symbols hides them (AOO: per document).
+    let mut hide_outline_symbols = false;
     let mut objects = crate::drawing_read::ObjectBudget::default();
     // Each worksheet part may back one sheet only: otherwise a tiny package
     // could make every sheet re-inflate and re-parse one big part.
@@ -146,6 +148,7 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
         // A sheet whose part is missing (or a chartsheet) opens empty.
         let (mut sheet, extras) = parsed.unwrap_or_default();
         sheet.page_setup = extras.page.build();
+        hide_outline_symbols |= extras.hide_outline_symbols;
         // The sheet's own relationships: hyperlink targets and comments.
         let sheet_rels = match &target {
             Some(t) => pkg
@@ -359,6 +362,8 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
     if let Some((steps, min_change)) = info.iterate {
         wb.settings.calc_settings.iterations = Some(IterSettings { steps, min_change });
     }
+    wb.settings.view.sheet_tabs = !info.hide_sheet_tabs;
+    wb.settings.view.outline_symbols = !hide_outline_symbols;
     if (info.active_tab as usize) < wb.sheets.len() {
         wb.settings.active_sheet = info.active_tab;
     }

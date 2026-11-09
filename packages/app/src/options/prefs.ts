@@ -29,6 +29,53 @@ export interface AutoCorrectPrefs {
   replacementTable: boolean;
 }
 
+/** Tools ▸ Options ▸ View ▸ Objects: Show or Hide (AOO 4.1 dropped "Placeholders", #i80528#). */
+export type ObjectMode = "show" | "hide";
+
+/**
+ * The Tools ▸ Options ▸ View settings AOO keeps in its configuration
+ * (`Office.Calc/Layout`, `Display`), not in the document: AOO 4.1's
+ * `ScViewData::WriteUserDataSequence` does not save them.
+ */
+export interface ViewPrefs {
+  /** Horizontal scroll bar (`VOPT_HSCROLL`). */
+  hScroll: boolean;
+  /** Vertical scroll bar (`VOPT_VSCROLL`). */
+  vScroll: boolean;
+  /** Guides while moving (`VOPT_HELPLINES`, off by default). */
+  helpLines: boolean;
+  /** Simple handles (`!VOPT_SOLIDHANDLES`, off by default). */
+  simpleHandles: boolean;
+  /** Large handles (`VOPT_BIGHANDLES`). */
+  bigHandles: boolean;
+  /** Anchor (`VOPT_ANCHOR`). */
+  anchor: boolean;
+  /** Text overflow: clip marks (`VOPT_CLIPMARKS`). */
+  clipMarks: boolean;
+  /** Show references in color (AOO Input option `RangeFinder`). */
+  rangeFinder: boolean;
+  /** Objects/Graphics (`VOBJ_TYPE_OLE`): pictures. */
+  objects: ObjectMode;
+  /** Charts (`VOBJ_TYPE_CHART`). */
+  charts: ObjectMode;
+  /** Drawing objects (`VOBJ_TYPE_DRAW`). */
+  drawings: ObjectMode;
+}
+
+export const DEFAULT_VIEW_PREFS: ViewPrefs = {
+  hScroll: true,
+  vScroll: true,
+  helpLines: false,
+  simpleHandles: false,
+  bigHandles: true,
+  anchor: true,
+  clipMarks: true,
+  rangeFinder: true,
+  objects: "show",
+  charts: "show",
+  drawings: "show",
+};
+
 export interface AppPrefs {
   /** UI language (menus, dialogs, panels). */
   uiLanguage: UiLanguage;
@@ -72,6 +119,8 @@ export interface AppPrefs {
    * (`setUndoDepth`), applied to every open document.
    */
   undoSteps: number;
+  /** Tools ▸ Options ▸ View settings that are not saved with the document. */
+  view: ViewPrefs;
 }
 
 /** Range of the undo steps option (AOO's `ED_UNDO` field). */
@@ -119,6 +168,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   autoFormats: [],
   twoDigitYearStart: 1930,
   undoSteps: 100,
+  view: DEFAULT_VIEW_PREFS,
 };
 
 export const UI_LANGUAGES: readonly { id: UiLanguage; label: string; tag: string }[] = [
@@ -170,6 +220,27 @@ export function parsePrefs(raw: unknown): AppPrefs {
     autoFormats: parseUserAutoFormats(o.autoFormats),
     twoDigitYearStart: isTwoDigitYearStart(o.twoDigitYearStart) ? o.twoDigitYearStart : DEFAULT_PREFS.twoDigitYearStart,
     undoSteps: isUndoSteps(o.undoSteps) ? o.undoSteps : DEFAULT_PREFS.undoSteps,
+    view: parseViewPrefs(o.view),
+  };
+}
+
+/** The view prefs of an unknown JSON value (defaults for missing or malformed fields). */
+export function parseViewPrefs(raw: unknown): ViewPrefs {
+  const v = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const d = DEFAULT_VIEW_PREFS;
+  const mode = (x: unknown, dflt: ObjectMode) => oneOf(x, ["show", "hide"] as const, dflt);
+  return {
+    hScroll: bool(v.hScroll, d.hScroll),
+    vScroll: bool(v.vScroll, d.vScroll),
+    helpLines: bool(v.helpLines, d.helpLines),
+    simpleHandles: bool(v.simpleHandles, d.simpleHandles),
+    bigHandles: bool(v.bigHandles, d.bigHandles),
+    anchor: bool(v.anchor, d.anchor),
+    clipMarks: bool(v.clipMarks, d.clipMarks),
+    rangeFinder: bool(v.rangeFinder, d.rangeFinder),
+    objects: mode(v.objects, d.objects),
+    charts: mode(v.charts, d.charts),
+    drawings: mode(v.drawings, d.drawings),
   };
 }
 

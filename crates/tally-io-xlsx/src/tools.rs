@@ -272,8 +272,14 @@ pub(crate) fn scenarios_xml(sheet: &SheetData) -> Option<String> {
 /// `showZeros`, `showRowColHeaders`) and the view zoom (`zoomScale`) to
 /// the sheet views.
 pub(crate) fn view_patches(data: &WorkbookData, patches: &mut Patches) {
+    patches.hide_sheet_tabs = !data.settings.view.sheet_tabs;
     for (i, sheet) in data.sheets.iter().enumerate() {
         let mut attrs: Vec<String> = Vec::new();
+        // Tools ▸ Options ▸ View ▸ Outline symbols (document-wide in AOO,
+        // per sheet view in XLSX).
+        if !data.settings.view.outline_symbols {
+            attrs.push(r#"showOutlineSymbols="0""#.to_owned());
+        }
         if let Some(v) = &sheet.view_options {
             if v.show_formulas {
                 attrs.push(r#"showFormulas="1""#.to_owned());

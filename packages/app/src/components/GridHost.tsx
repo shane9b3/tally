@@ -16,7 +16,7 @@ import { useDataStore } from "../stores/dataStore";
 import { useController } from "../context";
 import { t } from "../i18n";
 import { fillHandleMode } from "../fill";
-import { formulaHighlights, isPointMode } from "../formulaEdit";
+import { formulaHighlights, isPointMode, type FormulaHighlights } from "../formulaEdit";
 import { useDocStore } from "../stores/docStore";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
@@ -24,6 +24,13 @@ import { useUiStore } from "../stores/uiStore";
 import { useV3Store } from "../stores/v3Store";
 import { usePinchZoom } from "../objects/pinchZoom";
 import styles from "./GridHost.module.css";
+
+const NO_HIGHLIGHTS: FormulaHighlights = { spans: [], refs: [] };
+
+/** `0xRRGGBB` as a CSS hex colour. */
+export function rgbHex(rgb: number): string {
+  return `#${(rgb & 0xffffff).toString(16).padStart(6, "0")}`;
+}
 
 // The chart layer pulls in ECharts; load it only once a sheet has a chart or picture.
 const ChartLayer = lazyPart(() => loadChartLayer().then((m) => m.ChartLayer));
@@ -44,16 +51,22 @@ export function GridHost() {
   const zoom = useUiStore((s) => s.zoom);
   const pinchRef = usePinchZoom();
   const resolved = useUiStore((s) => s.theme);
+  // Tools ▸ Options ▸ View: the document's grid colour (null = automatic) and the app's view prefs.
+  const gridColor = useW56Store((s) => s.view.gridColor ?? null);
+  const viewPrefs = useW56Store((s) => s.prefs.view);
   // The canvas cannot use CSS variables: re-read the tokens when the theme flips.
   const theme = useMemo(() => {
     void resolved;
-    return readTheme();
-  }, [resolved]);
+    const base = readTheme();
+    return gridColor === null ? base : { ...base, colors: { ...base.colors, gridLine: rgbHex(gridColor) } };
+  }, [resolved, gridColor]);
   const text = edit?.text ?? "";
-  const hl = useMemo(
+  const hl0 = useMemo(
     () => formulaHighlights(text, sheetName, resolved, { editSheet: editSheetName ?? sheetName, order: sheetOrder?.map((x) => x.name) }),
     [text, sheetName, resolved, editSheetName, sheetOrder],
   );
+  // "Show references in color" off: no coloured reference outlines or editor spans.
+  const hl = viewPrefs.rangeFinder ? hl0 : NO_HIGHLIGHTS;
   // On another sheet every click picks (a click where no reference may go does nothing, it never commits there).
   const pointMode = edit !== null && (elsewhere || isPointMode(edit.text, edit.caret, pointSpan));
   const active = useEditStore((s) => s.active);
@@ -94,7 +107,14 @@ export function GridHost() {
   // W5-5: objects (charts, pictures), detective arrows, Page Break Preview and the split window.
   const charts = useChartStore((s) => s.charts);
   const images = useChartStore((s) => s.images);
-  const objects = useMemo(() => objectsFor(charts, images), [charts, images]);
+  // Tools ▸ Options ▸ View ▸ Objects/Graphics (pictures) and Charts: Show or Hide.
+  const hideCharts = viewPrefs.charts === "hide";
+  const hideImages = viewPrefs.objects === "hide";
+  const objects = useMemo(() => objectsFor(hideCharts ? [] : charts, hideImages ? [] : images), [charts, images, hideCharts, hideImages]);
+  const objectOptions = useMemo(
+    () => ({ simpleHandles: viewPrefs.simpleHandles, bigHandles: viewPrefs.bigHandles, showAnchor: viewPrefs.anchor }),
+    [viewPrefs.simpleHandles, viewPrefs.bigHandles, viewPrefs.anchor],
+  );
   const traces = useW5Store((s) => s.traces);
   const invalidCells = useW5Store((s) => s.invalidCells);
   const detectiveFill = useW5Store((s) => s.detectiveFill);
@@ -124,8 +144,11 @@ export function GridHost() {
   // View ▸ Grid lines / Column and row headers (the engine's `view_options`).
   const showGridlines = useW56Store((s) => s.view.showGridlines);
   const showHeaders = useW56Store((s) => s.view.showHeaders);
+  const showNotes = useW56Store((s) => s.view.showNotes !== false);
+  // Tools ▸ Options ▸ View ▸ Outline symbols off: no outline gutter (the groups stay).
+  const outlineSymbols = useW56Store((s) => s.view.showOutlineSymbols !== false);
   const outlineGroups = useW56Store((s) => s.outline);
-  const outline = outlineGroups.rows.length > 0 || outlineGroups.cols.length > 0 ? outlineGroups : null;
+  const outline = outlineSymbols && (outlineGroups.rows.length > 0 || outlineGroups.cols.length > 0) ? outlineGroups : null;
   const GridComponent = split ? SplitGrid : Grid;
   const splitProps = split ? { axis: split.axis, ratio: split.ratio, onRatioChange: w5.view.onSplitRatio } : { axis: "horizontal" as const, ratio: 0.5 };
 
@@ -156,6 +179,11 @@ export function GridHost() {
         outline={outline}
         showGridlines={showGridlines}
         showHeaders={showHeaders}
+        showNotes={showNotes}
+        clipMarks={viewPrefs.clipMarks}
+        showHScroll={viewPrefs.hScroll}
+        showVScroll={viewPrefs.vScroll}
+        objectOptions={objectOptions}
         decimalSep={decimalSep}
         onOutlineToggle={ctl.w56.onOutlineToggle}
         onOutlineLevel={ctl.w56.onOutlineLevel}

@@ -77,6 +77,11 @@ const PROP_KEYS = [
   "showGridlines",
   "showHeaders",
   "decimalSep",
+  "showNotes",
+  "clipMarks",
+  "showHScroll",
+  "showVScroll",
+  "objectOptions",
 
 ] as const satisfies readonly (keyof GridProps)[];
 

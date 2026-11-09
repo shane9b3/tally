@@ -126,7 +126,7 @@ export interface W56State {
   reset(): void;
 }
 
-export const DEFAULT_VIEW: ViewOptionsDto = { showFormulas: false, valueHighlighting: false, showZeroValues: true, showGridlines: true, showHeaders: true };
+export const DEFAULT_VIEW: ViewOptionsDto = { showFormulas: false, valueHighlighting: false, showZeroValues: true, showGridlines: true, showHeaders: true, showNotes: true, gridColor: null, showSheetTabs: true, showOutlineSymbols: true };
 const EMPTY_OUTLINE: OutlineState = { rows: [], cols: [] };
 
 export const useW56Store = create<W56State>()((set, get) => ({

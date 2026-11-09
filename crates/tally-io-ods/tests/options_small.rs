@@ -265,3 +265,91 @@ fn calculation_settings_are_left_out_when_all_are_aoo_defaults() {
     let content = part(&write(&book()), "content.xml");
     assert!(content.contains("table:calculation-settings"), "{content}");
 }
+
+/// A settings.xml view entry as AOO 4.1 writes it: the view options sit
+/// directly in the view (ScViewData::WriteUserDataSequence), not per table.
+fn aoo_view_settings(items: &str) -> String {
+    format!(
+        r#"<config:config-item-set config:name="ooo:view-settings"><config:config-item-map-indexed config:name="Views"><config:config-item-map-entry><config:config-item config:name="ViewId" config:type="string">view1</config:config-item><config:config-item-map-named config:name="Tables"><config:config-item-map-entry config:name="Sheet1"><config:config-item config:name="ZoomValue" config:type="int">100</config:config-item></config:config-item-map-entry></config:config-item-map-named><config:config-item config:name="ActiveTable" config:type="string">Sheet1</config:config-item>{items}</config:config-item-map-entry></config:config-item-map-indexed></config:config-item-set>"#
+    )
+}
+
+#[test]
+fn aoo_view_level_options_are_read() {
+    let b = |n: &str, v: bool| {
+        format!(
+            r#"<config:config-item config:name="{n}" config:type="boolean">{v}</config:config-item>"#
+        )
+    };
+    let items = [
+        b("ShowZeroValues", false),
+        b("ShowNotes", false),
+        b("ShowGrid", false),
+        r#"<config:config-item config:name="GridColor" config:type="long">255</config:config-item>"#
+            .to_string(),
+        b("ShowPageBreaks", false),
+        b("HasColumnRowHeaders", true),
+        b("HasSheetTabs", false),
+        b("IsOutlineSymbolsSet", false),
+    ]
+    .concat();
+    let wb = read(ods("", "", Some(&aoo_view_settings(&items))));
+    let v = &wb.settings.view;
+    assert!(!v.show_notes && !v.show_page_breaks && !v.sheet_tabs && !v.outline_symbols);
+    assert_eq!(v.grid_color, Some(0x0000_00FF));
+    // Grid and zero values apply to every sheet (AOO has one set per view).
+    for s in &wb.sheets {
+        let o = s.view_options.as_ref().unwrap();
+        assert!(!o.show_gridlines && !o.show_zero_values && o.show_headers);
+    }
+    // AOO's standard grid colour and COL_AUTO are the automatic colour.
+    for c in ["12632256", "4294967295"] {
+        let item = format!(
+            r#"<config:config-item config:name="GridColor" config:type="long">{c}</config:config-item>"#
+        );
+        let wb = read(ods("", "", Some(&aoo_view_settings(&item))));
+        assert_eq!(wb.settings.view, tally_model::DocViewData::default(), "{c}");
+    }
+}
+
+#[test]
+fn view_options_round_trip_and_are_written_for_aoo() {
+    let mut wb = book();
+    wb.settings.view = tally_model::DocViewData {
+        show_notes: false,
+        grid_color: Some(0x00FF_0000),
+        show_page_breaks: false,
+        sheet_tabs: false,
+        outline_symbols: false,
+    };
+    // Sheet1 (active) hides its grid; Sheet2 keeps the defaults.
+    wb.sheets[0].view_options = Some(tally_model::ViewOptionsData {
+        show_gridlines: false,
+        ..tally_model::ViewOptionsData::default()
+    });
+    let bytes = write(&wb);
+    let s = part(&bytes, "settings.xml");
+    // The view-level items AOO reads.
+    for item in [
+        r#"<config:config-item config:name="ShowNotes" config:type="boolean">false</config:config-item>"#,
+        r#"<config:config-item config:name="GridColor" config:type="long">16711680</config:config-item>"#,
+        r#"<config:config-item config:name="HasSheetTabs" config:type="boolean">false</config:config-item>"#,
+        r#"<config:config-item config:name="IsOutlineSymbolsSet" config:type="boolean">false</config:config-item>"#,
+        r#"<config:config-item config:name="ShowPageBreaks" config:type="boolean">false</config:config-item>"#,
+    ] {
+        assert!(s.contains(item), "{item} in {s}");
+    }
+    let back = read(bytes);
+    assert_eq!(back.settings.view, wb.settings.view);
+    assert_eq!(back.sheets[0].view_options, wb.sheets[0].view_options);
+    // The view-level ShowGrid=false does not leak into Sheet2.
+    assert_eq!(back.sheets[1].view_options, None);
+    // Defaults: AOO's standard grid colour is written and read back as automatic.
+    let bytes = write(&book());
+    assert!(part(&bytes, "settings.xml")
+        .contains(r#"config:name="GridColor" config:type="long">12632256<"#));
+    assert_eq!(
+        read(bytes).settings.view,
+        tally_model::DocViewData::default()
+    );
+}

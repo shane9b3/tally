@@ -109,7 +109,28 @@ export interface ObjectLayerEvents {
   onObjectKey?(id: string, key: string, e: KeyboardEvent): void;
 }
 
-const HANDLE_SIZE = 8;
+/**
+ * Tools ▸ Options ▸ View: how selected objects are marked (AOO "Simple
+ * handles", "Large handles", "Anchor").
+ */
+export interface ObjectLayerOptions {
+  /** Flat handles (AOO "Simple handles"); off = shaded ones. Default `false`. */
+  simpleHandles: boolean;
+  /** 9 px handles (AOO "Large handles", on by default); off = 7 px. */
+  bigHandles: boolean;
+  /** Mark the anchor cell of the selected object (AOO "Anchor", on by default). */
+  showAnchor: boolean;
+}
+
+export const DEFAULT_OBJECT_LAYER_OPTIONS: ObjectLayerOptions = { simpleHandles: false, bigHandles: true, showAnchor: true };
+
+/** Handle edge in px for AOO's large / normal handles. */
+export const BIG_HANDLE_SIZE = 9;
+export const SMALL_HANDLE_SIZE = 7;
+
+/** The anchor marker (an anchor glyph, 12 × 12). Static markup, no input. */
+const ANCHOR_SVG =
+  '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="6" cy="2.2" r="1.3"/><path d="M6 3.5v7.3M3.6 5.4h4.8M1.6 7.4c.6 2 2.3 3.4 4.4 3.4s3.8-1.4 4.4-3.4"/></g></svg>';
 
 export class ObjectLayer {
   /** The clipped layer (sized to the scrolling pane). */
@@ -121,6 +142,108 @@ export class ObjectLayer {
   private selectedId: string | null = null;
   private axes: AnchorAxes | null = null;
   private events: ObjectLayerEvents;
+  private options: ObjectLayerOptions = DEFAULT_OBJECT_LAYER_OPTIONS;
+  /** The anchor marker of the selected object (when shown). */
+  private anchorEl: HTMLDivElement | null = null;
+  /** Guide lines while an object is dragged (Tools ▸ Options ▸ View ▸ Guides while moving). */
+  private guideEls: HTMLDivElement[] = [];
+  private guideRect: Rect | null = null;
+  /** The content translation of `inner` (px). */
+  private tx = 0;
+  private ty = 0;
+
+  /** Sets how selected objects are marked (re-marks the selection). */
+  setOptions(options: ObjectLayerOptions): void {
+    const o = this.options;
+    if (o.simpleHandles === options.simpleHandles && o.bigHandles === options.bigHandles && o.showAnchor === options.showAnchor) return;
+    this.options = { ...options };
+    const id = this.selectedId;
+    const node = id === null ? undefined : this.nodes.get(id);
+    if (node && id !== null) {
+      node.querySelectorAll("[data-handle]").forEach((h) => h.remove());
+      this.addHandles(node, id);
+    }
+    this.placeAnchor();
+  }
+
+  /**
+   * Shows guide lines along the edges of `rect` (content px, as the object
+   * nodes are placed) across the whole pane, or hides them (`null`).
+   */
+  setGuides(rect: Rect | null): void {
+    this.guideRect = rect;
+    if (!rect) {
+      for (const g of this.guideEls) g.remove();
+      this.guideEls = [];
+      return;
+    }
+    const doc = this.el.ownerDocument;
+    while (this.guideEls.length < 4) {
+      const g = doc.createElement("div");
+      g.className = "tally-grid-guide";
+      g.dataset.guide = String(this.guideEls.length);
+      g.setAttribute("aria-hidden", "true");
+      Object.assign(g.style, { position: "absolute", pointerEvents: "none", zIndex: "2" } satisfies Partial<CSSStyleDeclaration>);
+      this.el.appendChild(g);
+      this.guideEls.push(g);
+    }
+    this.placeGuides();
+  }
+
+  private placeGuides(): void {
+    const r = this.guideRect;
+    if (!r) return;
+    const line = "1px dashed var(--tally-selection-border, #2563eb)";
+    this.guideEls.forEach((g, i) => {
+      const s = g.style;
+      const vertical = i < 2;
+      if (vertical) {
+        s.left = `${(i === 0 ? r.x : r.x + r.w) + this.tx}px`;
+        s.top = "0";
+        s.width = "0";
+        s.height = "100%";
+        s.borderLeft = line;
+        s.borderTop = "";
+      } else {
+        s.top = `${(i === 2 ? r.y : r.y + r.h) + this.ty}px`;
+        s.left = "0";
+        s.height = "0";
+        s.width = "100%";
+        s.borderTop = line;
+        s.borderLeft = "";
+      }
+    });
+  }
+
+  /** Places (or removes) the anchor marker of the selected object. */
+  private placeAnchor(): void {
+    const o = this.selectedId === null ? undefined : this.objects.find((x) => x.id === this.selectedId);
+    const axes = this.axes;
+    if (!o || !axes || !this.options.showAnchor) {
+      this.anchorEl?.remove();
+      this.anchorEl = null;
+      return;
+    }
+    if (!this.anchorEl) {
+      const a = this.el.ownerDocument.createElement("div");
+      a.className = "tally-grid-anchor";
+      a.setAttribute("aria-hidden", "true");
+      a.innerHTML = ANCHOR_SVG;
+      Object.assign(a.style, {
+        position: "absolute",
+        width: "12px",
+        height: "12px",
+        pointerEvents: "none",
+        color: "var(--tally-selection-border, #2563eb)",
+        zIndex: "2",
+      } satisfies Partial<CSSStyleDeclaration>);
+      this.inner.appendChild(a);
+      this.anchorEl = a;
+    }
+    this.anchorEl.dataset.anchorCell = `${o.anchor.r},${o.anchor.c}`;
+    this.anchorEl.style.left = `${axes.cols.indexToPx(o.anchor.c) * axes.zoom}px`;
+    this.anchorEl.style.top = `${axes.rows.indexToPx(o.anchor.r) * axes.zoom}px`;
+  }
 
   /** Relabels the group (translated `aria-label`). */
   setLabel(label: string): void {
@@ -224,6 +347,7 @@ export class ObjectLayer {
       this.addHandles(node, id as string);
       node.focus({ preventScroll: true });
     }
+    this.placeAnchor();
     if (emit) this.events.onObjectSelect?.(id);
   }
 
@@ -237,8 +361,11 @@ export class ObjectLayer {
     s.top = `${top}px`;
     s.width = `${Math.max(0, geo.width - left)}px`;
     s.height = `${Math.max(0, geo.height - top)}px`;
-    this.inner.style.transform = `translate(${-(geo.frozenW + geo.scrollX)}px, ${-(geo.frozenH + geo.scrollY)}px)`;
+    this.tx = -(geo.frozenW + geo.scrollX);
+    this.ty = -(geo.frozenH + geo.scrollY);
+    this.inner.style.transform = `translate(${this.tx}px, ${this.ty}px)`;
     this.place();
+    this.placeGuides();
   }
 
   /** The object under a canvas point (CSS px from the grid's top-left), topmost first. */
@@ -280,6 +407,7 @@ export class ObjectLayer {
       s.width = `${r.w}px`;
       s.height = `${r.h}px`;
     }
+    this.placeAnchor();
   }
 
   private makeNode(id: string): HTMLDivElement {
@@ -316,24 +444,29 @@ export class ObjectLayer {
 
   private addHandles(node: HTMLDivElement, id: string): void {
     const doc = node.ownerDocument;
+    const { simpleHandles, bigHandles } = this.options;
+    const size = bigHandles ? BIG_HANDLE_SIZE : SMALL_HANDLE_SIZE;
     for (const h of OBJECT_HANDLES) {
       const el = doc.createElement("div");
       el.dataset.handle = h;
       el.dataset.objectId = id;
+      el.dataset.handleStyle = simpleHandles ? "simple" : "shaded";
       el.setAttribute("aria-hidden", "true");
       const s = el.style;
       s.position = "absolute";
-      s.width = `${HANDLE_SIZE}px`;
-      s.height = `${HANDLE_SIZE}px`;
+      s.width = `${size}px`;
+      s.height = `${size}px`;
       s.boxSizing = "border-box";
       s.pointerEvents = "auto";
       s.cursor = `${h}-resize`;
-      // Square handles: white fill, accent border, above the chart canvas.
-      s.background = "var(--tally-bg, #ffffff)";
+      // Square handles above the chart canvas: flat (AOO "Simple handles")
+      // or shaded with a light rim.
+      s.background = simpleHandles ? "var(--tally-bg, #ffffff)" : "linear-gradient(135deg, #ffffff, #dbe4f3)";
       s.border = "1.5px solid var(--tally-selection-border, #2563eb)";
-      s.borderRadius = "1px";
+      s.borderRadius = simpleHandles ? "0" : "2px";
+      s.boxShadow = simpleHandles ? "none" : "0 1px 2px rgba(0, 0, 0, 0.35)";
       s.zIndex = "1";
-      const half = -HANDLE_SIZE / 2;
+      const half = -size / 2;
       if (h.includes("n")) s.top = `${half}px`;
       if (h.includes("s")) s.bottom = `${half}px`;
       if (h.includes("w")) s.left = `${half}px`;

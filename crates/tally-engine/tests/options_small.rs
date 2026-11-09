@@ -333,3 +333,65 @@ fn view_zoom_is_view_state_saved_with_the_file() {
     svc.set_view_zoom(doc, 100).unwrap();
     assert_eq!(svc.view_options(doc, s).unwrap().zoom, None);
 }
+
+/// Tools ▸ Options ▸ View: the document-wide options (comment indicator,
+/// grid colour, sheet tabs, outline symbols) go through `SetViewOptions`
+/// (undoable) and are saved with the file (ODS view settings; XLSX keeps
+/// the sheet tabs and outline symbols).
+#[test]
+fn document_view_options_are_undoable_and_saved() {
+    let mut svc = EngineService::with_default_codec();
+    let (doc, s) = new_doc(&mut svc);
+    let before = svc.view_options(doc, s).unwrap();
+    assert!(before.show_notes && before.show_sheet_tabs && before.show_outline_symbols);
+    assert_eq!(before.grid_color, None);
+    let opts = tally_api::ViewOptionsDto {
+        show_notes: false,
+        grid_color: Some(0x0000_80FF),
+        show_sheet_tabs: false,
+        show_outline_symbols: false,
+        ..before.clone()
+    };
+    let res = svc
+        .apply(
+            doc,
+            tx(vec![Op::SetViewOptions {
+                sheet: s,
+                options: opts.clone(),
+            }]),
+        )
+        .unwrap();
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(svc.view_options(doc, s).unwrap(), opts);
+    // AOO's standard grid colour is the automatic one.
+    let std_color = tally_api::ViewOptionsDto {
+        grid_color: Some(0x00C0_C0C0),
+        ..opts.clone()
+    };
+    svc.apply(
+        doc,
+        tx(vec![Op::SetViewOptions {
+            sheet: s,
+            options: std_color,
+        }]),
+    )
+    .unwrap();
+    assert_eq!(svc.view_options(doc, s).unwrap().grid_color, None);
+    svc.undo(doc).unwrap();
+    assert_eq!(svc.view_options(doc, s).unwrap(), opts);
+    for (format, file, all) in [
+        (FileFormat::Ods, "view.ods", true),
+        (FileFormat::Xlsx, "view.xlsx", false),
+    ] {
+        let p = tmp(file);
+        svc.save(doc, Some(&p), format).unwrap();
+        let back = svc.open(&p).unwrap();
+        let v = svc.view_options(back.doc, back.sheets[0].id).unwrap();
+        assert!(!v.show_sheet_tabs && !v.show_outline_symbols, "{file}");
+        if all {
+            assert_eq!(v, opts, "{file}");
+        }
+    }
+    svc.undo(doc).unwrap();
+    assert_eq!(svc.view_options(doc, s).unwrap(), before);
+}
