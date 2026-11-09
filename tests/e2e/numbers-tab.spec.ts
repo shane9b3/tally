@@ -50,6 +50,22 @@ const shown = (page: Page, r: number, c: number): Promise<{ text: string; color:
     [r, c] as const,
   );
 
+/**
+ * The number format of the style the grid's cached view holds for a cell. Format Cells
+ * (`controller.activeStyle`) takes the style id from that cache, which only follows the
+ * engine once the apply result has been merged into the grid source.
+ */
+const cachedFormat = (page: Page, r: number, c: number): Promise<string | undefined> =>
+  page.evaluate(
+    async ([r, c]) => {
+      const t = window.__tally!;
+      const g = t.controller.grid as unknown as { props: { source: { getCell(r: number, c: number): { style?: number } | undefined } } };
+      const [style] = await t.client.styles(t.controller.info!.doc, [g.props.source.getCell(r, c)?.style ?? 0]);
+      return style?.numberFormat;
+    },
+    [r, c] as const,
+  );
+
 async function typeInto(page: Page, r: number, c: number, text: string) {
   await clickCell(page, r, c);
   await page.keyboard.type(text);
@@ -110,6 +126,8 @@ test("a cell with a date format opens on Date with its entry selected; Language 
   await clickCell(page, 3, 7);
   await run(page, "format.number.date");
   await expect.poll(() => shown(page, 3, 7).then((s) => s.text)).toBe("10/19/2026");
+  // Wait for the grid's cached view (what Format Cells reads), not only the engine.
+  await expect.poll(() => cachedFormat(page, 3, 7)).toBe("MM/DD/YYYY");
   const before = (await recorded(page)).length;
   await page.keyboard.press("Meta+1");
   const dlg = page.getByTestId("format-cells");

@@ -3,11 +3,35 @@ import { defineConfig } from "vite";
 
 // `pnpm --filter tally-desktop dev:web` serves the UI at :5173 (Tauri's devUrl).
 // In a plain browser it runs against MockClient.
+// TALLY_E2E_PORT lets concurrent e2e runs use their own dev server (default 5173 = Tauri devUrl).
+const port = Number(process.env.TALLY_E2E_PORT ?? 5173);
+
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
-  server: { port: 5173, strictPort: true, host: "localhost" },
-  preview: { port: 5173, strictPort: true },
+  // Pre-bundle the deps that only lazy chunks import (charts, command palette, Tauri window API).
+  // Otherwise Vite discovers them on first use, re-optimizes and reloads the page mid-session,
+  // which wipes state in a running e2e test (and flashes a dev reload in `dev:web`).
+  optimizeDeps: {
+    include: [
+      "@tally/app > echarts/core",
+      "@tally/app > echarts/charts",
+      "@tally/app > echarts/components",
+      "@tally/app > echarts/renderers",
+      "@tally/app > cmdk",
+      "@tally/app > zustand",
+      "@tauri-apps/api/core",
+      "@tauri-apps/api/webviewWindow",
+    ],
+  },
+  server: {
+    port,
+    strictPort: true,
+    host: "localhost",
+    // Transform the lazy chunks' module graph at server start instead of on first dialog open.
+    warmup: { clientFiles: ["../../packages/app/src/lazyChunks.ts", "./src/main.tsx"] },
+  },
+  preview: { port, strictPort: true },
   envPrefix: ["VITE_", "TAURI_ENV_"],
   build: {
     outDir: "dist",

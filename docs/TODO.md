@@ -70,7 +70,7 @@ real-file corpus).
 
 - Tools ▸ Detective at AOO 4.1 parity (2026-11-06): the AOO menu (Trace / Remove Precedents, Trace / Remove Dependents, Remove All Traces, Trace Error, Mark Invalid Data, Refresh Traces, AutoRefresh, Fill Mode); each Trace adds one level and each Remove takes the outermost away (`ScDetectiveFunc::ShowPred` / `FindPredLevel`); the operation list (`ScDetOpList`) moves with rows and columns, is replayed by Refresh Traces and by AutoRefresh after formula changes (any change with a Trace Error), and round-trips as ODS `table:detective`/`table:operation` (plus `table:highlighted-range`); arrows from / to other sheets with a sheet icon; Fill Mode clicks trace precedents until Esc. Remaining differences: T12.
 
-- e2e: `numbers-tab.spec.ts` "a cell with a date format opens on Date…" failed once in a full run (passes alone); the full suite also fails wholesale on a cold Vite start right after long cargo builds. Add a warm-up / optimizeDeps include and harden that spec.
+- e2e hardening (2026-11-09): Vite pre-bundles the lazy-chunk deps (`optimizeDeps.include`, `server.warmup`) and `tests/e2e/global-setup.ts` loads the app and opens the lazy chunks until no reload happens, so a cold Vite cache no longer reloads the page mid-test (the wholesale failure was seen only right after long cargo builds under load and could not be forced on an idle machine). The numbers-tab date spec raced the grid cache: Format Cells takes the cell's style id from the grid's cached view, so the spec now waits for that cache, not only the engine.
 
 ## Remaining for 1.0 (docs/wave5-plan.md §5)
 1. Functions: keep 408/408; DDE and macro calls marked unsupported (done).
@@ -83,6 +83,6 @@ real-file corpus).
 8. Owner-only: Developer ID + notarization, Windows signing, updater key and hosting, CI secrets/runners (incl. x86_64 macOS), App Store decision, AOO GUI fixtures (charts, pivots, scenarios, encrypted file), Inter TTFs, AOO l10n checkout, corpus.
 
 ## How to run
-- `pnpm install`, `cargo test --workspace --features tally-engine/io`, `pnpm -r test`, `pnpm e2e`
+- `pnpm install`, `cargo test --workspace --features tally-engine/io`, `pnpm -r test`, `pnpm e2e` (concurrent agents: `TALLY_E2E_PORT=5201 pnpm e2e`, default 5173; the env var moves the Vite dev server and the Playwright baseURL)
 - `pnpm tauri dev` (desktop) or `pnpm --filter tally-desktop dev:web` (browser with mock engine, `?template=invoices`)
 - Release: `pnpm --filter tally-desktop tauri build`
