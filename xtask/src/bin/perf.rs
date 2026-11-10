@@ -640,6 +640,8 @@ fn bench_chart(o: &Opts, scale: u32) -> Res<()> {
         filled: false,
         stock: None,
         three_d: false,
+        own_data: false,
+        data_table: None,
         source: None,
         categories: Some(format!("$Sheet1.$A$2:$A${last}")),
         series: vec![ChartSeriesDto {
@@ -831,6 +833,7 @@ fn bench_pivot(o: &Opts, scale: u32) -> Res<()> {
                 c1: 4,
             },
         },
+        source_filter: None,
         target_sheet: t,
         target: CellPos { r: 0, c: 0 },
         output: None,
