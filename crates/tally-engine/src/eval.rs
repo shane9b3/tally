@@ -381,6 +381,11 @@ pub fn eval_at_depth<'e>(
                 args,
                 array,
             } => {
+                if ctx.abandoned() {
+                    // The parallel pre-pass discards this result: do not
+                    // run the call (security review 7, M1).
+                    return EvalValue::error(ErrorKind::Circular);
+                }
                 let n_pre = args
                     .iter()
                     .enumerate()
@@ -583,6 +588,9 @@ impl EvalContext for ArrayCtx<'_> {
     }
     fn locale_tag(&self) -> &str {
         self.inner.locale_tag()
+    }
+    fn abandoned(&self) -> bool {
+        self.inner.abandoned()
     }
     fn cell_value(&mut self, addr: CellAddr) -> Value {
         self.inner.cell_value(addr)

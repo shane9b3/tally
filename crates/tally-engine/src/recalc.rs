@@ -73,6 +73,12 @@ pub struct RecalcReport {
     /// Of `evaluated`, the formulas whose results came from the parallel
     /// pre-pass ([`crate::parallel`]; 0 when it did not run).
     pub precomputed: usize,
+    /// Pre-pass evaluations repeated after waiting for a precedent found
+    /// during evaluation (at most one per dirty formula in all).
+    pub prepass_retries: usize,
+    /// Work units ([`crate::eval::MAX_FORMULA_WORK`]) the pre-pass spent on
+    /// evaluations it discarded (each stops at its first bail).
+    pub prepass_wasted_work: u64,
 }
 
 /// Most formula evaluations one recalc spends iterating cyclic components
@@ -224,12 +230,16 @@ fn recalc_pass(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
     });
 
     let parallel = crate::parallel::wanted(wb, dirty.len(), budget);
-    let (order, preds) = topo_order(wb, &dirty, parallel);
+    // The pre-pass needs every dirty precedent edge; past the cap (wide
+    // ranges over many formulas) it is not worth the memory and the recalc
+    // stays single-threaded (security review 7, H2).
+    let cap = parallel.then(|| crate::parallel::edge_cap(dirty.len()));
+    let (order, preds) = topo_order(wb, &dirty, cap);
     let mut report = RecalcReport::default();
     let now = now_serial(wb.settings.date_epoch);
     // The parallel pre-pass (docs/recalc-parallel.md): results the loop
     // below takes instead of evaluating.
-    let mut pre = if parallel {
+    let mut pre = if let Some(preds) = preds {
         let mut at: SecondaryMap<FormulaCellId, u32> = SecondaryMap::new();
         for (k, scc) in order.iter().enumerate() {
             for id in &scc.members {
@@ -241,11 +251,14 @@ fn recalc_pass(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
             .map(|id| at.get(*id).copied().unwrap_or(u32::MAX))
             .collect();
         drop(at);
-        crate::parallel::prepass(wb, &dirty, &preds, pos, now, budget)
+        crate::parallel::prepass(wb, &dirty, preds, pos, now, budget)
     } else {
         None
     };
-    drop(preds);
+    if let Some(p) = &pre {
+        report.prepass_retries = p.stats.retries;
+        report.prepass_wasted_work = p.stats.wasted_work;
+    }
     let mut recalculated: Vec<CellAddr> = Vec::with_capacity(dirty.len());
     let mut recalculated_blocks: Vec<CellRange> = Vec::new();
     for scc in order {
@@ -284,9 +297,17 @@ fn recalc_pass(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
             }
         }
         for id in scc.members {
-            let Some(f) = wb.formulas.get(id) else {
+            let Some(f) = wb.formulas.get_mut(id) else {
                 continue;
             };
+            if report.incomplete {
+                // The deadline passed inside this component.
+                if f.state == CellState::Dirty {
+                    f.state = CellState::Clean;
+                    report.skipped += 1;
+                }
+                continue;
+            }
             // Duplicates (strict members, cells evaluated on demand) are
             // removed by `coalesce`.
             match f.array_range() {
@@ -303,9 +324,17 @@ fn recalc_pass(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
                 continue;
             }
             let mut ctx = CalcCtx::new(wb, now);
+            ctx.deadline = budget.deadline;
             ctx.evaluate(id);
             report.circular += ctx.circular;
-            report.evaluated += 1;
+            if ctx.timed_out {
+                // Abandoned inside its deferred-evaluation work stack: it
+                // and the cells it was waiting for keep their old values.
+                report.incomplete = true;
+                report.skipped += ctx.skipped;
+            } else {
+                report.evaluated += 1;
+            }
         }
     }
     let mut cells = pending.cells;
@@ -595,17 +624,22 @@ fn dirty_successors(
 /// of strict precedents (references whose values are always read); the
 /// other members of a cyclic component are evaluated, and a cycle that is
 /// actually followed is caught when a cell re-enters evaluation.
-/// With `keep`, also each dirty formula's dirty precedents (indices into
-/// `dirty`, sorted, itself included on a self-reference) for the parallel
-/// pre-pass; otherwise an empty list.
-fn topo_order(wb: &Workbook, dirty: &[FormulaCellId], keep: bool) -> (Vec<Scc>, Vec<Vec<usize>>) {
+/// With `keep` (a cap on the edges kept), also each dirty formula's dirty
+/// precedents (indices into `dirty`, sorted, itself included on a
+/// self-reference) for the parallel pre-pass; `None` without `keep` or when
+/// there are more edges than the cap.
+fn topo_order(
+    wb: &Workbook,
+    dirty: &[FormulaCellId],
+    keep: Option<usize>,
+) -> (Vec<Scc>, Option<Vec<Vec<usize>>>) {
     let mut local: SecondaryMap<FormulaCellId, usize> = SecondaryMap::new();
     for (i, id) in dirty.iter().enumerate() {
         local.insert(*id, i);
     }
     let mut scratch: Vec<FormulaCellId> = Vec::new();
     let by_col = DirtyByCol::new(wb, dirty);
-    let (sccs, succ) = tarjan(dirty.len(), keep, |v| {
+    let (sccs, succ, kept) = tarjan(dirty.len(), keep, |v| {
         let Some(f) = wb.formulas.get(dirty[v]) else {
             return Vec::new();
         };
@@ -630,11 +664,7 @@ fn topo_order(wb: &Workbook, dirty: &[FormulaCellId], keep: bool) -> (Vec<Scc>, 
             cyclic,
         });
     }
-    let preds = if keep {
-        succ.into_iter().map(Option::unwrap_or_default).collect()
-    } else {
-        Vec::new()
-    };
+    let preds = kept.then(|| succ.into_iter().map(Option::unwrap_or_default).collect());
     (out, preds)
 }
 
@@ -650,7 +680,7 @@ fn strict_cycle_members(
     }
     let mut out = Vec::new();
     let by_col = DirtyByCol::new(wb, scc);
-    for (members, cyclic) in tarjan(scc.len(), false, |v| {
+    for (members, cyclic) in tarjan(scc.len(), None, |v| {
         let Some(f) = wb.formulas.get(scc[v]) else {
             return Vec::new();
         };
@@ -675,15 +705,25 @@ fn strict_cycle_members(
 
 /// Iterative Tarjan over nodes `0..n`; components come out successors
 /// first, each with whether it is cyclic (several members or a self-edge).
-/// With `keep`, each node's successor list is returned too (indexed by
-/// node); otherwise the lists are freed as nodes finish and all `None`.
+/// With `keep` (a cap on the edges kept), each node's successor list is
+/// returned too (indexed by node) and the last value is `true`; otherwise,
+/// or once more than the cap of edges would be kept, the lists are freed as
+/// nodes finish (only the DFS path holds any) and the last value is
+/// `false`.
 #[allow(clippy::type_complexity)]
 fn tarjan(
     n: usize,
-    keep: bool,
+    keep: Option<usize>,
     mut edges: impl FnMut(usize) -> Vec<usize>,
-) -> (Vec<(SmallVec<[usize; 1]>, bool)>, Vec<Option<Vec<usize>>>) {
+) -> (
+    Vec<(SmallVec<[usize; 1]>, bool)>,
+    Vec<Option<Vec<usize>>>,
+    bool,
+) {
     const UNSEEN: usize = usize::MAX;
+    let cap = keep.unwrap_or(0);
+    let mut keep = keep.is_some();
+    let mut kept = 0usize;
     let mut index = vec![UNSEEN; n];
     let mut low = vec![0usize; n];
     let mut on_stack = vec![false; n];
@@ -742,6 +782,24 @@ fn tarjan(
                         .is_some_and(|s| s.binary_search(&v).is_ok());
                 out.push((members, cyclic));
             }
+            if keep {
+                kept = kept.saturating_add(succ[v].as_ref().map_or(0, Vec::len));
+                if kept > cap {
+                    // Too many edges to keep: free the finished nodes'
+                    // lists (those on the DFS path are still needed) and
+                    // go on as without `keep`.
+                    keep = false;
+                    let mut active = vec![false; n];
+                    for &(u, _) in &call {
+                        active[u] = true;
+                    }
+                    for (u, s) in succ.iter_mut().enumerate() {
+                        if !active[u] {
+                            *s = None;
+                        }
+                    }
+                }
+            }
             // `v` is finished: its successors are never read again (a node
             // is entered once), so free them now rather than holding one
             // list per formula until the end.
@@ -750,7 +808,7 @@ fn tarjan(
             }
         }
     }
-    (out, succ)
+    (out, succ, keep)
 }
 
 /// How a [`CalcCtx`] holds the workbook: mutably (recalc, which caches
@@ -774,6 +832,13 @@ impl std::ops::Deref for WbAccess<'_> {
         }
     }
 }
+
+/// A set of formula ids that is free to create (no random hasher seed:
+/// one is made per formula evaluated; ids are not attacker-chosen).
+type IdSet = HashSet<
+    FormulaCellId,
+    std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>,
+>;
 
 /// A cell being evaluated by a [`CalcCtx`].
 #[derive(Copy, Clone, Debug)]
@@ -803,6 +868,26 @@ pub struct CalcCtx<'w> {
     eval_stack: Vec<Frame>,
     /// Dirty precedents deferred in the current attempt (too deep to nest).
     deferred: Vec<FormulaCellId>,
+    /// The members of `deferred` (constant-time duplicate test).
+    deferred_seen: IdSet,
+    /// Cells whose evaluation in the current attempt was left incomplete
+    /// (a precedent was deferred). Read again in the same attempt, such a
+    /// cell is deferred too rather than evaluated again: re-entering it
+    /// would redo its whole on-demand subtree down to the deferral, once
+    /// per reader, which grows exponentially with the nesting depth.
+    incomplete: IdSet,
+    /// Formulas this context finished (stored a result or Err:522): tells
+    /// an attempt that made progress from one that cannot.
+    finished: u64,
+    /// The recalc's deadline, checked between attempts of the
+    /// deferred-evaluation work stack ([`Self::evaluate`]).
+    deadline: Option<Instant>,
+    /// The deadline passed inside [`Self::evaluate`]: the cells still on its
+    /// work stack were left with their old values (`skipped` of them).
+    timed_out: bool,
+    skipped: usize,
+    /// Parallel pre-pass: work units of the last [`Self::eval_par`].
+    par_work: u64,
     /// Cells given Err:522 because a cycle through them was followed.
     pub circular: usize,
     /// The members of the cyclic component being iterated (iterations on):
@@ -845,6 +930,13 @@ impl<'w> CalcCtx<'w> {
             local_rng: None,
             eval_stack: Vec::new(),
             deferred: Vec::new(),
+            deferred_seen: IdSet::default(),
+            incomplete: IdSet::default(),
+            finished: 0,
+            deadline: None,
+            timed_out: false,
+            skipped: 0,
+            par_work: 0,
             circular: 0,
             iter_set: None,
             precision,
@@ -880,6 +972,13 @@ impl<'w> CalcCtx<'w> {
             local_rng: Some(crate::workbook::Rng::from_time()),
             eval_stack: Vec::new(),
             deferred: Vec::new(),
+            deferred_seen: IdSet::default(),
+            incomplete: IdSet::default(),
+            finished: 0,
+            deadline: None,
+            timed_out: false,
+            skipped: 0,
+            par_work: 0,
             circular: 0,
             iter_set: None,
             local_table_ops: 0,
@@ -908,6 +1007,13 @@ impl<'w> CalcCtx<'w> {
             local_rng: None,
             eval_stack: Vec::new(),
             deferred: Vec::new(),
+            deferred_seen: IdSet::default(),
+            incomplete: IdSet::default(),
+            finished: 0,
+            deadline: None,
+            timed_out: false,
+            skipped: 0,
+            par_work: 0,
             circular: 0,
             iter_set: None,
             local_table_ops: 0,
@@ -979,6 +1085,12 @@ impl<'w> CalcCtx<'w> {
         self.bail_final = true;
     }
 
+    /// Parallel pre-pass: work units the last [`Self::eval_par`] spent.
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+    pub(crate) fn par_work(&self) -> u64 {
+        self.par_work
+    }
+
     /// Parallel pre-pass, after a bailed [`Self::eval_par`]: the node to
     /// wait for before retrying, or `None` if retrying cannot help.
     #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
@@ -1020,61 +1132,129 @@ impl<'w> CalcCtx<'w> {
     /// Dirty precedents met on the way are evaluated on demand, nested at
     /// most [`MAX_ON_DEMAND_DEPTH`] deep. A precedent past that depth is
     /// deferred: the attempt is discarded (every cell on the evaluation
-    /// stack stays dirty), the deferred cell is evaluated first, and the
+    /// stack stays dirty), the deferred cells are evaluated first, and the
     /// attempt is repeated. This explicit work stack keeps the Rust stack
     /// bounded however long the chain (AOO's recursion helper does the
-    /// same). A deferred cell that is already on the work stack is a cycle.
+    /// same).
+    ///
+    /// Every entry of the work stack records the entry that deferred it
+    /// (its parent). All cells one attempt deferred are pushed at once, so
+    /// the attempt is repeated once after all of them, not once per cell
+    /// (security review 7, H1: one at a time made this cubic). A deferred
+    /// cell that is an ancestor of the attempt (the cells *waiting*: those
+    /// whose deferred cells are still being evaluated) is a cycle; a sibling
+    /// further down the stack is not, and is pushed again.
     pub fn evaluate(&mut self, id: FormulaCellId) {
         if self.wb_mut().is_none() {
             return;
         }
-        let mut work: Vec<FormulaCellId> = vec![id];
-        while let Some(&top) = work.last() {
+        // The usual case: nothing deferred, no work stack needed.
+        if !self.is_dirty(id) {
+            return;
+        }
+        self.deferred.clear();
+        self.deferred_seen.clear();
+        self.incomplete.clear();
+        let before = self.finished;
+        self.evaluate_once(id);
+        if !self.is_dirty(id) {
+            return;
+        }
+        self.evaluate_deferred(id, before);
+    }
+
+    /// [`Self::evaluate`] once the first attempt of `id` deferred cells
+    /// (they are in `self.deferred`; `before` is `self.finished` before
+    /// that attempt).
+    fn evaluate_deferred(&mut self, id: FormulaCellId, before: u64) {
+        const ROOT: usize = usize::MAX;
+        // (cell, index of its parent entry)
+        let mut work: Vec<(FormulaCellId, usize)> = vec![(id, ROOT)];
+        // The cells whose deferred cells are on the stack above them:
+        // exactly the ancestors of the top entry.
+        let mut waiting = IdSet::default();
+        let mut attempts = 0u32;
+        // The first attempt of `id` was made by `evaluate`.
+        let mut first = Some(before);
+        while let Some(&(top, _)) = work.last() {
             if !self.is_dirty(top) {
                 work.pop();
                 continue;
             }
-            self.deferred.clear();
-            self.evaluate_once(top);
-            let deferred = std::mem::take(&mut self.deferred);
-            if !self.is_dirty(top) {
-                work.pop();
-                continue;
-            }
-            let mut pushed = false;
-            for d in deferred {
-                if !self.is_dirty(d) {
-                    continue;
-                }
-                if let Some(p) = work.iter().position(|x| *x == d) {
-                    // The deferred cell is waiting for this one: a cycle
-                    // among the cells still waiting. Entries that finished
-                    // meanwhile (evaluated on demand by a nested attempt)
-                    // keep their results: they are not on the cycle, and
-                    // overwriting a finished result would make other
-                    // cells' values depend on when they read it.
-                    let cycle: Vec<FormulaCellId> = work.drain(p..).collect();
-                    for c in cycle {
-                        if self.is_dirty(c) {
-                            self.set_circular(c);
+            attempts += 1;
+            if attempts > 1 && self.deadline.is_some_and(|d| Instant::now() >= d) {
+                // The recalc watchdog: the cells still waiting keep their
+                // old values, as the formulas the budget skips do.
+                self.timed_out = true;
+                for (c, _) in work.drain(..) {
+                    if let Some(f) = self.wb_mut().and_then(|wb| wb.formulas.get_mut(c)) {
+                        if f.state == CellState::Dirty {
+                            f.state = CellState::Clean;
+                            self.skipped += 1;
                         }
                     }
-                    pushed = true;
-                    break;
                 }
-                // One at a time, so that every entry of `work` waits for
-                // the one above it (the cycle test above relies on it;
-                // pushing two siblings made the second "wait" for the first
-                // and reported a cycle when it read it). The others are
-                // deferred again when `top` is retried.
-                work.push(d);
-                pushed = true;
-                break;
+                return;
             }
-            if !pushed {
+            waiting.remove(&top);
+            let before = match first.take() {
+                Some(b) => b,
+                None => {
+                    self.deferred.clear();
+                    self.deferred_seen.clear();
+                    self.incomplete.clear();
+                    let b = self.finished;
+                    self.evaluate_once(top);
+                    b
+                }
+            };
+            let deferred = std::mem::take(&mut self.deferred);
+            self.deferred_seen.clear();
+            if !self.is_dirty(top) {
+                work.pop();
+                continue;
+            }
+            let t = work.len() - 1;
+            let deferred: Vec<FormulaCellId> =
+                deferred.into_iter().filter(|d| self.is_dirty(*d)).collect();
+            if let Some(&d) = deferred.iter().find(|d| **d == top || waiting.contains(*d)) {
+                // The deferred cell is waiting for this one: a cycle along
+                // the parent chain from it to `top`. Only those entries get
+                // Err:522; siblings on the stack are not on the cycle, and
+                // entries that finished meanwhile (evaluated on demand by a
+                // nested attempt) keep their results (overwriting one would
+                // make other cells' values depend on when they read it).
+                let mut i = t;
+                loop {
+                    let (c, parent) = work[i];
+                    waiting.remove(&c);
+                    if self.is_dirty(c) {
+                        self.set_circular(c);
+                    }
+                    if c == d || parent == ROOT {
+                        break;
+                    }
+                    i = parent;
+                }
+                continue;
+            }
+            if deferred.is_empty() {
+                if self.finished != before {
+                    // Every deferred cell was finished later in the same
+                    // attempt (on demand, at a shallower depth): the attempt
+                    // made progress, repeat it (correctness review 7,
+                    // finding 3).
+                    continue;
+                }
                 // No progress is possible (should not happen): give up on it.
                 self.set_circular(top);
                 work.pop();
+                continue;
+            }
+            waiting.insert(top);
+            // The first deferred cell ends on top: evaluated first.
+            for d in deferred.into_iter().rev() {
+                work.push((d, t));
             }
         }
     }
@@ -1091,6 +1271,7 @@ impl<'w> CalcCtx<'w> {
             f.cached = Value::Error(ErrorKind::Circular);
             f.state = CellState::Clean;
             self.circular += 1;
+            self.finished += 1;
         }
     }
 
@@ -1136,6 +1317,9 @@ impl<'w> CalcCtx<'w> {
             self.circular += 1;
         }
         let precision = self.precision;
+        if !incomplete {
+            self.finished += 1;
+        }
         let Some(wb) = self.wb_mut() else {
             return;
         };
@@ -1145,6 +1329,7 @@ impl<'w> CalcCtx<'w> {
         if incomplete {
             // A precedent was deferred: the result is not final.
             f.state = CellState::Dirty;
+            self.incomplete.insert(id);
             return;
         }
         let value = if precision {
@@ -1217,6 +1402,7 @@ impl<'w> CalcCtx<'w> {
             deferred: false,
         });
         let (value, matrix) = self.compute(&formula.expr, is_array, &env);
+        self.par_work = env.work();
         let frame = self.eval_stack.pop();
         if self.bailed || frame.is_none_or(|f| f.circular || f.deferred) {
             return None;
@@ -1294,6 +1480,17 @@ pub(crate) struct ParShared {
     pub(crate) slots: Vec<std::sync::OnceLock<Done>>,
     /// The recalc's lookup cache during the pre-pass.
     pub(crate) cache: std::sync::Mutex<ParCache>,
+    /// What the pre-pass spent on discarded work (set when it ends).
+    pub(crate) stats: PrepassStats,
+}
+
+/// What the parallel pre-pass spent on work it discarded.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PrepassStats {
+    /// Evaluations repeated after waiting for a precedent.
+    pub(crate) retries: usize,
+    /// Work units of discarded (bailed) evaluations.
+    pub(crate) wasted_work: u64,
 }
 
 /// A parallel read of a dirty formula.
@@ -1332,15 +1529,8 @@ impl ParShared {
     /// `me`, so the sequential pass has stored it when it reaches `me`
     /// (a later one is reached only through a dynamic reference found now;
     /// reading it would change where the sequential pass evaluates it).
-    fn done_before(&self, id: FormulaCellId, me: u32) -> Option<&Done> {
-        match self.read(id, me) {
-            SlotRead::Done(d) => Some(d),
-            _ => None,
-        }
-    }
-
-    /// [`Self::done_before`], telling a result that is still to come
-    /// (worth waiting for) from one that will never be final for `me`.
+    /// Otherwise whether it is still to come (worth waiting for) or will
+    /// never be final for `me`.
     fn read(&self, id: FormulaCellId, me: u32) -> SlotRead<'_> {
         let Some(&i) = self.local.get(id) else {
             return SlotRead::Never;
@@ -1385,14 +1575,15 @@ impl<'w> CalcCtx<'w> {
                 Value::Error(ErrorKind::Circular)
             }
             CellState::Dirty => {
-                if self.depth >= MAX_ON_DEMAND_DEPTH {
+                let again = self.incomplete.contains(&id) && !self.in_iteration(id);
+                if again || self.depth >= MAX_ON_DEMAND_DEPTH {
                     if self.in_iteration(id) {
                         // Too deep to nest inside the iterated component:
                         // this round reads the previous value.
                         return self.iterated_value(id);
                     }
                     // Too deep to nest: defer it; this attempt is discarded.
-                    if !self.deferred.contains(&id) {
+                    if self.deferred_seen.insert(id) {
                         self.deferred.push(id);
                     }
                     for fr in &mut self.eval_stack {
@@ -1433,6 +1624,11 @@ impl<'w> CalcCtx<'w> {
         sh: &'w ParShared,
         line: &CellRange,
     ) -> Option<Arc<LookupIndex>> {
+        if self.bailed {
+            // The result is discarded anyway: neither build nor count a
+            // failure against the line (security review 7, M2).
+            return None;
+        }
         let bounds = self.used_bounds(line)?;
         let cells = bounds.cell_count();
         if cells < LookupIndex::MIN_CELLS {
@@ -1456,10 +1652,18 @@ impl<'w> CalcCtx<'w> {
                 Request::Build => {}
             }
         }
+        // A failure here is about this reader's position in the order, not
+        // about the line: the line goes back to how it was, uncounted
+        // (security review 7, M2), so the sequential pass (or a later
+        // reader) can still index it.
+        let release = |sh: &ParShared| {
+            if let Some(c) = sh.cache().cache.as_mut() {
+                c.release(line);
+            }
+        };
         let mut found = Vec::new();
         formulas_in(&self.wb, &bounds, &mut found);
         let mut latest: Option<u32> = None;
-        let mut all_final = true;
         for id in &found {
             if self
                 .wb
@@ -1469,22 +1673,17 @@ impl<'w> CalcCtx<'w> {
             {
                 continue;
             }
-            match sh.local.get(*id).copied() {
-                Some(i) if sh.done_before(*id, me).is_some() => {
-                    let p = sh.pos.get(i).copied().unwrap_or(0);
-                    latest = Some(latest.map_or(p, |l| l.max(p)));
-                }
-                _ => {
-                    all_final = false;
-                    break;
-                }
+            // The sequential pass evaluates the line's dirty formulas
+            // before building (`ensure_clean`): one not final for this
+            // reader means it must wait, or run sequentially.
+            if self.par_done(sh, *id).is_none() {
+                release(sh);
+                return None;
             }
-        }
-        if !all_final {
-            if let Some(c) = sh.cache().cache.as_mut() {
-                c.not_clean(line);
+            if let Some(&i) = sh.local.get(*id) {
+                let p = sh.pos.get(i).copied().unwrap_or(0);
+                latest = Some(latest.map_or(p, |l| l.max(p)));
             }
-            return None;
         }
         let mut items = Vec::new();
         let (r0, c0) = (line.r0, line.c0);
@@ -1493,9 +1692,7 @@ impl<'w> CalcCtx<'w> {
             ControlFlow::Continue(())
         });
         if self.bailed {
-            if let Some(c) = sh.cache().cache.as_mut() {
-                c.not_clean(line);
-            }
+            release(sh);
             return None;
         }
         let ix = Arc::new(LookupIndex::build(items, self.wb.settings.case_sensitive));
@@ -1510,8 +1707,8 @@ impl<'w> CalcCtx<'w> {
     }
 
     fn ensure_clean(&mut self, range: &CellRange) {
-        if self.par_state().is_some() {
-            // Nothing is evaluated on demand: reads bail instead.
+        if let Some(sh) = self.par_state() {
+            self.par_ensure_final(sh, range);
             return;
         }
         let mut ids = Vec::new();
@@ -1534,6 +1731,36 @@ impl<'w> CalcCtx<'w> {
                 .collect();
             for id in on_stack {
                 self.cycle_followed(id);
+            }
+        }
+    }
+
+    /// [`Self::ensure_clean`] in the parallel pre-pass. Nothing is evaluated
+    /// on demand; instead the evaluation bails wherever the sequential pass
+    /// would have done more than read final values: a dirty formula of the
+    /// range that is not pre-computed and ordered earlier (the sequential
+    /// pass evaluates it on demand here, even if the reader then stops
+    /// reading at an earlier error), or the reader itself inside the range
+    /// (a cycle, Err:522). Correctness review 7, finding 2.
+    fn par_ensure_final(&mut self, sh: &'w ParShared, range: &CellRange) {
+        if self.bailed {
+            return;
+        }
+        let inside = self.eval_stack.iter().any(|fr| {
+            self.wb
+                .formulas
+                .get(fr.id)
+                .is_some_and(|f| f.extent().intersects(range))
+        });
+        if inside {
+            self.bail_for_good();
+            return;
+        }
+        let mut ids = Vec::new();
+        dirty_formulas_in(&self.wb, range, &mut ids);
+        for id in ids {
+            if self.par_done(sh, id).is_none() {
+                return;
             }
         }
     }
@@ -1644,6 +1871,10 @@ impl EvalContext for CalcCtx<'_> {
     }
 
     fn cell_value(&mut self, addr: CellAddr) -> Value {
+        if self.bailed {
+            // Parallel pre-pass: the result is discarded; stop reading.
+            return Value::Error(ErrorKind::Circular);
+        }
         if !addr.is_valid() {
             return Value::Error(ErrorKind::Ref);
         }
@@ -1715,6 +1946,10 @@ impl EvalContext for CalcCtx<'_> {
             return;
         }
         self.ensure_clean(range);
+        if self.bailed {
+            // Parallel pre-pass: the result is discarded; stop reading.
+            return;
+        }
         let iter_set = self.iter_set.clone();
         let precision = self.precision;
         let par = self.par_state();
@@ -1902,6 +2137,10 @@ impl EvalContext for CalcCtx<'_> {
 
     fn now_serial(&self) -> f64 {
         self.now
+    }
+
+    fn abandoned(&self) -> bool {
+        self.bailed
     }
 
     fn rand(&mut self) -> f64 {
@@ -2657,5 +2896,190 @@ mod tests {
         wb.set_input(a("A1"), "=A1+1");
         recalc(&mut wb);
         assert_eq!(num(&wb, "A1"), Value::Error(ErrorKind::Circular));
+    }
+
+    /// `A1..A15` nest on demand down to `A16`, which reads `k` dirty
+    /// formulas at depth 16 (all deferred).
+    fn deferral_book(k: u32) -> Workbook {
+        let mut wb = Workbook::new();
+        wb.threading = crate::parallel::Threading::Sequential;
+        for i in 1..16 {
+            wb.set_input(a(&format!("A{i}")), &format!("=INDIRECT(\"A{}\")", i + 1));
+        }
+        wb.set_input(a("A16"), &format!("=SUM(INDIRECT(\"B1:B{k}\"))"));
+        for r in 1..=k {
+            wb.set_input(a(&format!("B{r}")), "=1");
+        }
+        wb
+    }
+
+    /// Security review 7, H1: the formula that deferred `k` cells is
+    /// attempted twice in all (it was attempted k + 1 times, each attempt
+    /// re-walking the chain).
+    #[test]
+    fn deferred_siblings_retry_their_reader_once() {
+        let k = 500;
+        let mut wb = deferral_book(k);
+        test_hook::set(Some((a("A16"), CellRange::from_a1(1, "Z999").unwrap())));
+        let rep = recalc(&mut wb);
+        let count = test_hook::count();
+        test_hook::set(None);
+        assert_eq!(num(&wb, "A1"), Value::Number(f64::from(k)));
+        assert_eq!(rep.circular, 0);
+        assert!(count <= 3, "A16 evaluated {count} times");
+    }
+
+    /// Security review 7, H1: the watchdog deadline is checked inside the
+    /// deferred-evaluation work stack; what is left keeps its old value.
+    #[test]
+    fn the_deadline_stops_the_deferred_work_stack() {
+        let k = 200;
+        let mut wb = deferral_book(k);
+        let ids: Vec<FormulaCellId> = wb.formulas.keys().collect();
+        for id in &ids {
+            if let Some(f) = wb.formulas.get_mut(*id) {
+                f.state = CellState::Dirty;
+            }
+        }
+        let (a1, _) = wb.formula_at(a("A1")).unwrap();
+        let mut ctx = CalcCtx::new(&mut wb, 0.0);
+        ctx.deadline = Some(Instant::now());
+        ctx.evaluate(a1);
+        assert!(ctx.timed_out);
+        // A1 and the k deferred cells.
+        assert_eq!(ctx.skipped, k as usize + 1);
+        assert!(wb
+            .formulas
+            .values()
+            .all(|f| f.state != CellState::Evaluating));
+        assert_eq!(wb.formulas.get(a1).unwrap().state, CellState::Clean);
+        // Through the recalc: incomplete, nothing left dirty.
+        let mut wb = deferral_book(k);
+        let rep = recalc_with(
+            &mut wb,
+            &RecalcBudget {
+                max_cells_evaluated: u64::MAX,
+                deadline: Some(Instant::now() + Duration::from_secs(3600)),
+            },
+        );
+        assert!(!rep.incomplete);
+        assert_eq!(num(&wb, "A1"), Value::Number(f64::from(k)));
+    }
+
+    /// Security review 7, H2: past the edge cap no precedent lists are kept.
+    #[test]
+    fn topo_order_drops_the_edges_past_the_cap() {
+        let mut wb = Workbook::new();
+        for r in 1..=40u32 {
+            wb.set_input(a(&format!("A{r}")), &format!("={r}"));
+            wb.set_input(a(&format!("B{r}")), "=SUM($A$1:$A$40)");
+        }
+        let dirty: Vec<FormulaCellId> = wb.formulas.keys().collect();
+        // 40 × 40 edges.
+        let (order, preds) = topo_order(&wb, &dirty, Some(1600));
+        let preds = preds.expect("within the cap");
+        assert_eq!(preds.iter().map(Vec::len).sum::<usize>(), 1600);
+        let (order2, none) = topo_order(&wb, &dirty, Some(1599));
+        assert!(none.is_none());
+        assert_eq!(order.len(), order2.len());
+        assert_eq!(topo_order(&wb, &dirty, None).1, None);
+    }
+
+    /// A parallel context over `wb` whose dirty set is `dirty` (all at
+    /// position 0) and a reader at position 1.
+    #[cfg(feature = "parallel")]
+    fn par_shared(dirty: &[FormulaCellId]) -> ParShared {
+        let mut local = SecondaryMap::new();
+        for (i, id) in dirty.iter().enumerate() {
+            local.insert(*id, i);
+        }
+        let mut slots = Vec::new();
+        slots.resize_with(dirty.len(), std::sync::OnceLock::new);
+        ParShared {
+            local,
+            pos: vec![0; dirty.len()],
+            slots,
+            cache: std::sync::Mutex::new(ParCache {
+                cache: Some(LookupCache::default()),
+                with_dirty: HashMap::new(),
+            }),
+            stats: PrepassStats::default(),
+        }
+    }
+
+    /// Security review 7, M2 and correctness review 7, finding 4: a
+    /// pre-pass reader that already bailed, or that is ordered before a
+    /// formula of the line, does not count a failed build; the line is
+    /// indexed once it can be.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn prepass_lookup_failures_do_not_skip_the_line() {
+        let mut wb = Workbook::new();
+        for r in 1..=200u32 {
+            wb.set_input(a(&format!("A{r}")), &r.to_string());
+        }
+        wb.set_input(a("A201"), "=1+1");
+        let (f, _) = wb.formula_at(a("A201")).unwrap();
+        let line = CellRange::from_a1(1, "A1:A201").unwrap();
+        let mut sh = par_shared(&[f]);
+        let reader = |sh: &ParShared, bail: bool| {
+            let mut ctx = CalcCtx::par(&wb, sh, 0.0);
+            ctx.par_pos = 1;
+            if bail {
+                ctx.bail_for_good();
+            }
+            let ix = ctx.lookup_index(&line);
+            (ix.is_some(), ctx.bailed, ctx.retry_after())
+        };
+        // Already bailed (RAND): nothing is requested.
+        for _ in 0..5 {
+            assert_eq!(reader(&sh, true), (false, true, None));
+        }
+        // A201 is not computed yet: wait for it, uncounted.
+        assert_eq!(reader(&sh, false), (false, false, None), "first request");
+        for _ in 0..5 {
+            assert_eq!(reader(&sh, false), (false, true, Some(0)));
+        }
+        // Computed: the next reader builds the index.
+        let done = Done {
+            value: Value::Number(2.0),
+            matrix: None,
+            dynamic: Vec::new(),
+            dynamic_spans: Vec::new(),
+        };
+        assert!(sh.slots[0].set(done).is_ok());
+        assert_eq!(reader(&sh, false), (true, false, None));
+        let _ = sh.take(f);
+    }
+
+    /// Correctness review 7, finding 2: a pre-pass reader of a range that
+    /// holds a dirty formula not final for it bails, even if the function
+    /// stops reading before that cell; and one inside the range bails for
+    /// good.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn prepass_range_reads_check_the_whole_range() {
+        let mut wb = Workbook::new();
+        wb.set_input(a("B1"), "#DIV/0!");
+        wb.set_input(a("B5"), "=1+1");
+        let (f, _) = wb.formula_at(a("B5")).unwrap();
+        let sh = par_shared(&[f]);
+        let range = CellRange::from_a1(1, "B1:B10").unwrap();
+        let mut ctx = CalcCtx::par(&wb, &sh, 0.0);
+        ctx.par_pos = 1;
+        let mut seen = 0;
+        ctx.for_each_in_range(&range, true, &mut |_, _| {
+            seen += 1;
+            ControlFlow::Break(())
+        });
+        assert_eq!(seen, 0);
+        assert!(ctx.bailed);
+        assert_eq!(ctx.retry_after(), Some(0));
+        // Later in the order than the reader: never final for it.
+        let mut ctx = CalcCtx::par(&wb, &sh, 0.0);
+        ctx.par_pos = 0;
+        ctx.for_each_in_range(&range, true, &mut |_, _| ControlFlow::Break(()));
+        assert!(ctx.bailed);
+        assert_eq!(ctx.retry_after(), None);
     }
 }

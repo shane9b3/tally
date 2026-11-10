@@ -66,6 +66,14 @@ were running, so +-15 %.
 | Same edit through `DocumentService::apply` | 2.3 ms | 1.3 ms | 1.8x |
 | Incremental, 1 edit -> 100 dependents (below the 4,096 threshold) | < 0.05 ms | < 0.05 ms | unchanged (pre-pass skipped) |
 
+Re-checked 2026-11-10 after the review 7 fixes (same machine, `--only
+recalc,incremental,deep,threads --runs 5..7`, release builds of 6fe72d5
+and of the fixes run back to back): single-threaded numbers unchanged
+within noise (chains first 29.7 - 29.8 ms vs 29.9 - 30.2 ms, SUM/VLOOKUP
+mix first 229 - 236 ms vs 227 - 237 ms, hard 171 - 172 ms vs 171 - 174 ms,
+incremental 2.3 ms vs 2.3 ms, one chain 34 ms vs 35 - 36 ms); 12 threads
+also unchanged (chains 18.8 ms, mix first 162 ms, hard 104 ms).
+
 The speed-ups are well below 12x because only formula evaluation is
 parallel: dirty propagation, the Tarjan ordering (which now also keeps the
 precedent lists), building the dependents index and storing the results in

@@ -329,6 +329,13 @@ pub trait EvalContext {
     /// fixed for the duration of one recalc.
     fn now_serial(&self) -> f64;
 
+    /// `true` once the host will discard this evaluation's result (the
+    /// engine's parallel pre-pass read something not final): the evaluator
+    /// stops at the next function call instead of finishing the work.
+    fn abandoned(&self) -> bool {
+        false
+    }
+
     /// A uniform random number in `[0, 1)`.
     fn rand(&mut self) -> f64;
 

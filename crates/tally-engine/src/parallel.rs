@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use crate::formula_cells::FormulaCellId;
 use crate::recalc::RecalcBudget;
 #[cfg(feature = "parallel")]
-use crate::recalc::{CalcCtx, ParCache, ParShared};
+use crate::recalc::{CalcCtx, ParCache, ParShared, PrepassStats};
 use crate::workbook::Workbook;
 #[cfg(feature = "parallel")]
 use std::collections::HashMap;
@@ -36,6 +36,21 @@ pub const MAX_THREADS: usize = 16;
 /// Stack size of the recalc pool's threads (formula nesting and name
 /// expansion recurse).
 pub const THREAD_STACK: usize = 8 << 20;
+
+/// Most dirty precedent edges the pre-pass keeps whatever the recalc's
+/// size (each costs about 12 bytes while the pre-pass runs: 50 MB here).
+pub const MAX_EDGES: usize = 4 << 20;
+
+/// Edges per dirty formula the pre-pass keeps beyond [`MAX_EDGES`].
+pub const EDGES_PER_FORMULA: usize = 16;
+
+/// The most dirty precedent edges a pre-pass over `dirty` formulas keeps;
+/// with more (wide ranges over many formulas: N formulas summing a range
+/// of N formulas are N² edges) the recalc runs single-threaded (security
+/// review 7, H2).
+pub(crate) fn edge_cap(dirty: usize) -> usize {
+    MAX_EDGES.max(dirty.saturating_mul(EDGES_PER_FORMULA))
+}
 
 /// How one workbook recalculates. Not saved in files.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -131,6 +146,26 @@ fn pool() -> Option<&'static rayon::ThreadPool> {
     .as_ref()
 }
 
+/// Held while a pre-pass uses the pool: one document's pre-pass at a time.
+/// Rayon runs an injected job only when its threads have nothing else to
+/// do, so a second document would otherwise wait for the whole pre-pass of
+/// the first; with [`Threading::Auto`] it recalculates single-threaded
+/// instead (security review 7, L1).
+#[cfg(feature = "parallel")]
+static POOL_IN_USE: Mutex<()> = Mutex::new(());
+
+/// Whether `wb` asks for the pre-pass whatever the size and the pool's use
+/// ([`Threading::Parallel`], or `TALLY_CALC_THREADING=force`): it then
+/// waits for the pool instead of recalculating single-threaded.
+#[cfg(feature = "parallel")]
+fn forced(wb: &Workbook) -> bool {
+    match wb.threading {
+        Threading::Parallel => true,
+        Threading::Sequential => false,
+        Threading::Auto => env_mode() == 3,
+    }
+}
+
 // Workers share `&Workbook`.
 #[cfg(feature = "parallel")]
 const _: fn() = || {
@@ -174,17 +209,19 @@ pub(crate) fn wanted(wb: &Workbook, dirty: usize, budget: &RecalcBudget) -> bool
 
 /// Runs the parallel pre-pass over `dirty` (the recalc's dirty formulas,
 /// `preds[i]` the dirty precedents of `dirty[i]` as indices). Returns the
-/// pre-computed results; `None` if the pool is not available.
+/// pre-computed results; `None` if the pool is not available (not built,
+/// or busy with another document's pre-pass), or if a worker panicked (the
+/// sequential pass then runs alone, exactly as without the pre-pass).
 #[cfg(feature = "parallel")]
 pub(crate) fn prepass(
     wb: &mut Workbook,
     dirty: &[FormulaCellId],
-    preds: &[Vec<usize>],
+    preds: Vec<Vec<usize>>,
     pos: Vec<u32>,
     now: f64,
     budget: &RecalcBudget,
 ) -> Option<ParShared> {
-    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize};
     use std::sync::OnceLock;
 
     use rayon::prelude::*;
@@ -192,12 +229,27 @@ pub(crate) fn prepass(
 
     let pool = pool()?;
     let n = dirty.len();
-    if preds.len() != n || pos.len() != n {
+    if preds.len() != n || pos.len() != n || u32::try_from(n).is_err() {
         return None;
     }
+    let _in_use = if forced(wb) {
+        POOL_IN_USE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    } else {
+        match POOL_IN_USE.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        }
+    };
     // Dependents as compressed rows: `rev[off[u]..off[u + 1]]` read `u`.
+    let edges: usize = preds.iter().map(Vec::len).sum();
+    if u32::try_from(edges).is_err() {
+        return None;
+    }
     let mut off = vec![0u32; n + 1];
-    for p in preds {
+    for p in &preds {
         for &u in p {
             off[u + 1] += 1;
         }
@@ -206,7 +258,7 @@ pub(crate) fn prepass(
         off[i + 1] += off[i];
     }
     let mut fill: Vec<u32> = off[..n].to_vec();
-    let mut rev = vec![0u32; off[n] as usize];
+    let mut rev = vec![0u32; edges];
     for (v, p) in preds.iter().enumerate() {
         for &u in p {
             rev[fill[u] as usize] = v as u32;
@@ -221,6 +273,7 @@ pub(crate) fn prepass(
     let roots: Vec<u32> = (0..n as u32)
         .filter(|v| preds[*v as usize].is_empty())
         .collect();
+    drop(preds);
     let mut local: SecondaryMap<FormulaCellId, usize> = SecondaryMap::new();
     for (i, id) in dirty.iter().enumerate() {
         local.insert(*id, i);
@@ -235,8 +288,9 @@ pub(crate) fn prepass(
             cache: wb.lookup_cache.take(),
             with_dirty: HashMap::new(),
         }),
+        stats: PrepassStats::default(),
     };
-    {
+    let (finished, stats) = {
         let run = Run {
             wb,
             sh: &shared,
@@ -252,19 +306,35 @@ pub(crate) fn prepass(
             retries: (0..n)
                 .map(|_| std::sync::atomic::AtomicU8::new(0))
                 .collect(),
+            retry_budget: AtomicUsize::new(n),
+            retried: AtomicUsize::new(0),
+            wasted: AtomicU64::new(0),
         };
         let run = &run;
-        pool.install(|| {
-            rayon::scope(|s| {
-                roots.par_iter().for_each(|&v| process(s, v, run));
+        // A panicking worker (a bug) must not lose the whole recalc: the
+        // sequential pass then runs alone and meets the same formula in
+        // its own order, as a single-threaded recalc would (correctness
+        // review 7, finding 5).
+        let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pool.install(|| {
+                rayon::scope(|s| {
+                    roots.par_iter().for_each(|&v| process(s, v, run));
+                });
             });
-        });
-    }
+        }))
+        .is_ok();
+        let stats = PrepassStats {
+            retries: run.retried.load(Ordering::Relaxed),
+            wasted_work: run.wasted.load(Ordering::Relaxed),
+        };
+        (finished, stats)
+    };
     let ParShared {
         local,
         pos,
         slots,
         cache,
+        ..
     } = shared;
     let ParCache {
         mut cache,
@@ -272,6 +342,11 @@ pub(crate) fn prepass(
     } = cache
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !finished {
+        // Whatever state the lines were left in, a fresh cache is correct.
+        wb.lookup_cache = cache.map(|_| crate::lookup_cache::LookupCache::default());
+        return None;
+    }
     // Indexes over pre-computed formulas stay out of the sequential pass:
     // a sequential lookup into such a line evaluates the line's formulas
     // first (on demand), which an index would skip.
@@ -286,6 +361,7 @@ pub(crate) fn prepass(
         pos,
         slots,
         cache: Mutex::new(ParCache::default()),
+        stats,
     })
 }
 
@@ -294,7 +370,7 @@ pub(crate) fn prepass(
 pub(crate) fn prepass(
     _wb: &mut Workbook,
     _dirty: &[crate::formula_cells::FormulaCellId],
-    _preds: &[Vec<usize>],
+    _preds: Vec<Vec<usize>>,
     _pos: Vec<u32>,
     _now: f64,
     _budget: &RecalcBudget,
@@ -321,12 +397,38 @@ struct Run<'a> {
     has_waiters: AtomicBool,
     /// Retries per node (at most [`MAX_RETRIES`]).
     retries: Vec<std::sync::atomic::AtomicU8>,
+    /// Retries left for the whole pre-pass (one per dirty formula), so
+    /// discarded attempts stay within a small multiple of the recalc.
+    retry_budget: std::sync::atomic::AtomicUsize,
+    /// Retries made.
+    retried: std::sync::atomic::AtomicUsize,
+    /// Work units of discarded attempts.
+    wasted: std::sync::atomic::AtomicU64,
 }
 
 /// Most times one formula is retried after waiting for a precedent found
 /// during its evaluation.
 #[cfg(feature = "parallel")]
 const MAX_RETRIES: u8 = 8;
+
+#[cfg(feature = "parallel")]
+impl Run<'_> {
+    /// Takes one retry for node `v` from its own and the pre-pass's budget.
+    fn may_retry(&self, v: usize) -> bool {
+        if self.retries[v].load(Ordering::Relaxed) >= MAX_RETRIES {
+            return false;
+        }
+        let took = self
+            .retry_budget
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |b| b.checked_sub(1))
+            .is_ok();
+        if took {
+            self.retries[v].fetch_add(1, Ordering::Relaxed);
+            self.retried.fetch_add(1, Ordering::Relaxed);
+        }
+        took
+    }
+}
 
 #[cfg(feature = "parallel")]
 impl<'a> Run<'a> {
@@ -381,15 +483,19 @@ fn process<'a>(s: &rayon::Scope<'a>, v: u32, run: &'a Run<'a>) {
             run.stop.store(true, Ordering::Relaxed);
             return;
         }
+        #[cfg(test)]
+        tests::maybe_panic(run.wb, run.dirty[v]);
         let mut ctx = CalcCtx::par(run.wb, run.sh, run.now);
         let Some(done) = ctx.eval_par(run.dirty[v]) else {
-            // Bailed. If it read a formula of the dirty set that is still
-            // to come (a precedent found only now, through INDIRECT or
-            // OFFSET), it waits for that one and is retried; otherwise it
-            // and everything downstream stay for the sequential pass
-            // (their counters never reach zero).
+            run.wasted.fetch_add(ctx.par_work(), Ordering::Relaxed);
+            // Bailed (the evaluation stopped there). If it read a formula
+            // of the dirty set that is still to come (a precedent found
+            // only now, through INDIRECT or OFFSET), it waits for that one
+            // and is retried, within the retry budgets; otherwise it and
+            // everything downstream stay for the sequential pass (their
+            // counters never reach zero).
             match ctx.retry_after() {
-                Some(x) if run.retries[v].fetch_add(1, Ordering::Relaxed) < MAX_RETRIES => {
+                Some(x) if run.may_retry(v) => {
                     if run.park(v as u32, x) {
                         return;
                     }
@@ -416,5 +522,88 @@ fn process<'a>(s: &rayon::Scope<'a>, v: u32, run: &'a Run<'a>) {
             Some(w) => v = w,
             None => return,
         }
+    }
+}
+
+#[cfg(all(test, feature = "parallel"))]
+mod tests {
+    use super::*;
+    use crate::recalc::recalc;
+    use tally_types::{CellAddr, Value};
+
+    /// Formulas on a sheet of this name panic in the pre-pass (tests).
+    const PANIC_SHEET: &str = "PanicInPrepass";
+
+    pub(super) fn maybe_panic(wb: &Workbook, id: FormulaCellId) {
+        let Some(f) = wb.formulas.get(id) else {
+            return;
+        };
+        if f.addr.row == 100
+            && wb
+                .sheet(f.addr.sheet)
+                .is_some_and(|s| &*s.name == PANIC_SHEET)
+        {
+            panic!("test panic in a pre-pass worker");
+        }
+    }
+
+    fn chains(wb: &mut Workbook, sheet: tally_types::SheetId) {
+        for r in 0..5000u32 {
+            wb.set_input(CellAddr::new(sheet, r, 0), &format!("={}", r));
+            wb.set_input(CellAddr::new(sheet, r, 1), &format!("=A{}*2", r + 1));
+        }
+    }
+
+    /// Correctness review 7, finding 5: a worker panic loses nothing; the
+    /// sequential pass computes every formula.
+    #[test]
+    fn a_worker_panic_falls_back_to_the_sequential_pass() {
+        let mut wb = Workbook::new();
+        let s = wb.add_sheet(Some(PANIC_SHEET), None);
+        chains(&mut wb, s);
+        wb.threading = Threading::Parallel;
+        let rep = recalc(&mut wb);
+        assert_eq!(rep.precomputed, 0);
+        assert_eq!(rep.evaluated, 10_000);
+        assert_eq!(wb.value(CellAddr::new(s, 100, 1)), Value::Number(200.0));
+        assert_eq!(wb.value(CellAddr::new(s, 4999, 1)), Value::Number(9998.0));
+        assert!(wb.lookup_cache.is_none());
+        // The pool still works.
+        let mut ok = Workbook::new();
+        let t = ok.sheets[0].id;
+        chains(&mut ok, t);
+        ok.threading = Threading::Parallel;
+        assert_eq!(recalc(&mut ok).precomputed, 10_000);
+    }
+
+    /// Security review 7, L1: while another document's pre-pass holds the
+    /// pool, an automatic recalc runs single-threaded instead of waiting.
+    #[test]
+    fn a_busy_pool_means_sequential_for_auto() {
+        if env_mode() == 3 {
+            // Forced: Auto waits for the pool too (it would wait for us).
+            return;
+        }
+        let mut wb = Workbook::new();
+        let s = wb.sheets[0].id;
+        chains(&mut wb, s);
+        wb.threading = Threading::Auto;
+        let mut forced = wb.clone();
+        forced.threading = Threading::Parallel;
+        let guard = POOL_IN_USE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let rep = recalc(&mut wb);
+        assert_eq!(rep.precomputed, 0);
+        assert_eq!(wb.value(CellAddr::new(s, 4999, 1)), Value::Number(9998.0));
+        drop(guard);
+        // Threading::Parallel waits for the pool instead.
+        assert_eq!(recalc(&mut forced).precomputed, 10_000);
+    }
+
+    #[test]
+    fn edge_cap_grows_with_the_recalc() {
+        assert_eq!(edge_cap(0), MAX_EDGES);
+        assert_eq!(edge_cap(1 << 20), 16 << 20);
     }
 }

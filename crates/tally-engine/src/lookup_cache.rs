@@ -34,8 +34,11 @@
 //! into a `Mutex` for its duration: a line handed out for building is
 //! `Building` until the builder reports back, so other threads scan rather
 //! than build it twice, and a pre-pass build uses only final values (clean
-//! or pre-computed formulas). The indexes are `Arc`s of immutable data and
-//! are `Send + Sync`.
+//! or pre-computed formulas). A pre-pass reader that cannot build because
+//! of its own position in the order (or that has already bailed) releases
+//! the line without counting a failure, so it never turns a line into
+//! `Skip` for the sequential pass. The indexes are `Arc`s of immutable
+//! data and are `Send + Sync`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -145,6 +148,17 @@ impl LookupCache {
                 }
                 _ => Slot::Skip,
             };
+        }
+    }
+
+    /// A build handed out by [`Self::request`] was abandoned for a reason
+    /// that is not the line's (a reader of the parallel pre-pass ordered
+    /// before some of its formulas): back to `Seen`, the failures uncounted.
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+    pub(crate) fn release(&mut self, line: &CellRange) {
+        if let Some(Slot::Building { failed }) = self.lines.get(line) {
+            let failed = *failed;
+            self.lines.insert(*line, Slot::Seen { failed });
         }
     }
 

@@ -34,6 +34,9 @@ results.
    branch) is evaluated on demand (nested up to 16 deep, deeper ones
    deferred to an explicit work stack). Reading a cell that is being
    evaluated is a followed cycle: Err:522 for the cells on it.
+   Before reading a range, every dirty formula in it is evaluated on demand
+   (`ensure_clean`), even if the function then stops reading at the first
+   error.
 
 Shared mutable state touched while evaluating: the formula cells
 (`state`, `cached`, `array_result`, `dynamic_deps`), the dependency index
@@ -42,7 +45,8 @@ evaluation order), the `MULTIPLE.OPERATIONS` counters (`table_op_calls`,
 `table_op_work`, capped per recalc, so which call hits the cap depends on
 order), and the per-recalc lookup index cache (`lookup_cache.rs`).
 `RecalcBudget` (the watchdog: 50M formulas or 20 s on open) is checked
-between components.
+between components and, for a formula whose on-demand chain was deferred,
+between the attempts of its work stack.
 
 ## Scheme: a parallel pre-pass, then the unchanged sequential pass
 
@@ -53,7 +57,12 @@ pre-computed result instead of evaluating whenever it reaches a formula
 that has one.
 
 1. Steps 1–3 as above. Tarjan keeps each node's dirty precedents (it
-   computes them anyway; normally they are freed as nodes finish).
+   computes them anyway; normally they are freed as nodes finish), at most
+   `max(MAX_EDGES, 16 × dirty formulas)` edges (`MAX_EDGES` = 4 Mi, about
+   12 bytes each). A range precedent is one edge per dirty formula in the
+   range, so N formulas summing a range of N formulas are N² edges; past
+   the cap the lists are freed and the recalc runs single-threaded (security
+   review 7, H2: 16,000 such formulas held 3.2 GB).
 2. **Dataflow scheduling.** Every dirty formula gets a counter of its dirty
    precedents (including itself on a self-reference). Formulas with no
    dirty precedent are the roots. On the thread pool (`rayon::scope`, the
@@ -76,8 +85,9 @@ that has one.
      precedent found only now, through INDIRECT, OFFSET or a reference
      into an array block): the formula *waits* for it (it is parked under
      that formula's node and re-run when its slot is set, at most 8
-     times), so a new INDIRECT target delays a formula instead of sending
-     it and its dependents to the sequential pass;
+     times per formula and as many retries in all as there are dirty
+     formulas), so a new INDIRECT target delays a formula instead of
+     sending it and its dependents to the sequential pass;
    - a dirty formula ordered at or after *p* (only reachable through a
      dynamic reference found now: known edges always point backwards), or
      outside the dirty set: the sequential pass would evaluate it on demand
@@ -86,7 +96,21 @@ that has one.
    - RAND / RANDBETWEEN (`rand()`): the random stream must be consumed in
      the sequential order;
    - `MULTIPLE.OPERATIONS` (`table_op`): its per-recalc caps are
-     order-dependent and its sandbox walks the dependency index.
+     order-dependent and its sandbox walks the dependency index;
+   - a range read: before it, the sequential pass evaluates every dirty
+     formula of the range on demand and finds the reader itself inside it
+     (a cycle). So the pre-pass checks *every* dirty formula of the range
+     with the two rules above before reading (not only the cells the
+     function visits: SUM stops at the first error value), and bails for
+     good if the formula being evaluated lies in the range (correctness
+     review 7, finding 2). A lookup index build checks its line the same
+     way.
+
+   A bail stops the evaluation: from then on cell and range reads return
+   at once and the evaluator runs no further function call
+   (`EvalContext::abandoned`), so a discarded attempt costs only the work
+   up to its first bail, not a whole (possibly different, since it read
+   Err:522 in place of a value) evaluation (security review 7, M1).
 
    A formula that bails for good never decrements its dependents, so
    everything downstream of it (and every member of a cyclic component,
@@ -122,18 +146,28 @@ that has one.
   cell that is being evaluated: it is never on a followed cycle, and
   Err:522/523 are decided by the unchanged sequential code for exactly the
   same cells.
-- *Two sequential fixes this needed* (`CalcCtx::evaluate`, the explicit
-  work stack for on-demand chains deeper than 16): when a deferred cell
-  was found already on the work stack, every entry above it was set to
+- *Sequential fixes this needed* (`CalcCtx::evaluate`, the explicit work
+  stack for on-demand chains deeper than 16): when a deferred cell was
+  found already on the work stack, every entry above it was set to
   Err:522, including entries that had meanwhile finished with a proper
   result (so a cell that other cells had already read changed value
-  afterwards); and several deferred siblings were pushed at once, so the
-  second "waited for" the first and reading it was reported as a cycle
-  (a false Err:522). Now one deferred cell is pushed at a time (so every
-  entry waits for the one above it, which the cycle test assumes) and
-  only entries still dirty are set to Err:522. Both cases need dynamic
+  afterwards), and including siblings that were merely waiting their turn
+  (a false Err:522). Each work-stack entry now records the entry that
+  deferred it; all cells one attempt deferred are pushed at once and the
+  attempt is repeated once after all of them. A deferred cell is a cycle
+  only if it is an ancestor of the attempt (one of the cells *waiting* for
+  their deferred cells), and only the entries on that parent chain that
+  are still dirty get Err:522. An attempt whose deferred cells were all
+  finished later in the same attempt (on demand, at a shallower depth)
+  made progress and is repeated rather than given Err:522. A cell left
+  incomplete by a deferral and read again in the same attempt is deferred
+  too instead of being re-entered (re-entering redid its whole on-demand
+  subtree once per reader). (The first
+  version of this fix pushed one deferred cell at a time, which made one
+  `evaluate` cubic in the number of deferred siblings: security review 7,
+  H1; correctness review 7, findings 1 and 3.) These cases need dynamic
   references or lazy branches nested more than 16 deep and were found by
-  the differential tests.
+  the differential tests and the reviews.
 - *Order-dependent state stays sequential.* RAND and `MULTIPLE.OPERATIONS`
   formulas (and their readers) always bail, so the random stream and the
   table-op caps are consumed by the sequential pass in its usual order. A
@@ -154,6 +188,11 @@ that has one.
   flag, and the lookup cache (moved out of the workbook into a `Mutex`
   for the pre-pass and moved back after it). `Workbook: Sync` is checked
   at compile time.
+- *Panics.* A panic in a worker (a bug) is caught around the pool: the
+  pre-pass is dropped (results and lookup cache) and the sequential pass
+  runs alone, so it stores everything before the panicking formula and
+  then panics on it in its own order, exactly like a single-threaded
+  recalc.
 
 ### Shared caches
 
@@ -164,7 +203,12 @@ pre-pass it sits behind a `Mutex`; a request that wants to build marks the
 line `Building` so concurrent requests scan instead of building twice; the
 index is built outside the lock, only when every formula in the line is
 final for the builder (clean, or pre-computed and ordered before it),
-from those final values. A line holding pre-computed formulas remembers
+from those final values. A builder that finds a formula not final for it
+waits or bails as for any read, and hands the line back uncounted
+(`LookupCache::release`): the failure is about the reader's position, not
+the line, so it must not turn the line into a scan for the rest of the
+recalc. An evaluation that has already bailed (RAND) does not ask for an
+index at all (security review 7, M2). A line holding pre-computed formulas remembers
 the latest position among them; a formula ordered before that position
 gets no index (it scans, and bails on the formula it may not read yet).
 After the pre-pass such indexes are dropped (a sequential lookup into a
@@ -185,8 +229,13 @@ every round.
 - Thread pool: a dedicated rayon pool (not the global one), built on the
   first parallel recalc, `min(available_parallelism, 16)` threads, 8 MiB
   stacks (formula nesting and name expansion recurse; the sequential path
-  runs on the caller's thread). `TALLY_CALC_THREADS=N` caps the pool
-  (`1` disables the pre-pass).
+  runs on the caller's thread). `TALLY_CALC_THREADS=N` sets the pool size
+  instead (1 to 16, so it can also be larger than the available
+  parallelism; `1` disables the pre-pass).
+- One pre-pass uses the pool at a time. With `Threading::Auto`, a recalc
+  that finds the pool busy (another document's pre-pass) runs
+  single-threaded instead of waiting behind it; `Threading::Parallel` and
+  `TALLY_CALC_THREADING=force` wait.
 - `tally_engine::parallel::set_enabled(bool)`: the app preference Tools ▸
   Options ▸ Calculate ▸ "Enable multi-threaded calculation"
   (`calcMultithreading` in `prefs.json`, default on), read by the shell at
@@ -200,9 +249,15 @@ every round.
   and marks the rest clean with their cached values, as before. Which
   formulas are left unevaluated when the deadline hits can differ (it did
   already between runs, since it is time-based).
-- The pool size is capped and the work is the same work the sequential
-  path would do, so a hostile file gains nothing over the single-threaded
-  limits (formula count, time, per-formula work budgets).
+- The pool size is capped and the pre-pass work is bounded by a small
+  multiple of the sequential work: every dirty formula is attempted once,
+  plus at most one retry per dirty formula in all, each attempt under the
+  per-formula work budget and stopped at its first bail; the sequential
+  pass then evaluates whatever bailed. Kept edges are capped (above). So
+  a hostile file gains at most that constant factor over the
+  single-threaded limits (formula count, time, per-formula work budgets).
+  `RecalcReport::prepass_retries` and `prepass_wasted_work` report the
+  discarded work.
 
 ### WASM and builds without threads
 
@@ -222,7 +277,18 @@ installed, no wasm crate in the workspace); `cargo check -p tally-engine
   (values bit for bit, errors, array results, dynamic precedents) and report by
   report; then the same after random edits. Plus targeted cases (cycles
   with and without iterations, INDIRECT discovering a new precedent,
-  RAND order, 3-D spans, arrays, MULTIPLE.OPERATIONS, budget).
+  RAND order, 3-D spans, arrays, MULTIPLE.OPERATIONS, budget, and the
+  review 7 cases: range reads that stop at an error, a lookup line with a
+  later formula, the edge cap, a bailed evaluation's wasted work, the
+  retry budget, RAND readers and the lookup index). The random workbooks
+  include error constants and INDIRECT/OFFSET ranges.
+- Unit tests (`recalc::tests`, `parallel::tests`): the work stack retries
+  a reader once after all its deferred cells and stops at the deadline,
+  the edge cap, lookup lines released uncounted, whole-range checks, a
+  worker panic falling back to the sequential pass, a busy pool.
+- `tests/recalc.rs`: deferred siblings (30,000) and 600 dynamic 24-long
+  chains in linear time, a deferred cell finished later in the same
+  attempt, a real cycle through deferred cells.
   `TALLY_PAR_STRESS=N` multiplies the case count for race hunting;
   `SEED=n ... debug_seed -- --ignored --nocapture` prints one workbook
   cell by cell with the differences marked. (The random workbooks run on
@@ -252,8 +318,16 @@ See `docs/perf-baseline.md` (section "Multithreaded recalc").
   evaluation per member per step) or a deadline, which formulas are left
   with their cached values can differ from a single-threaded run. That was
   already true for the deadline, which is time-based.
-- The pre-pass keeps each dirty formula's dirty precedents (one small list
-  per formula) and a few counters; for 200k formulas that is a few MB for
-  the duration of the recalc.
+- The pre-pass keeps each dirty formula's dirty precedents (about 12 bytes
+  per edge, at most `max(4 Mi, 16 × dirty)` edges, otherwise the recalc is
+  single-threaded) and a few counters per formula; for 200k formulas with
+  a few precedents each that is a few MB for the duration of the recalc.
+  Pre-computed results (text up to 4 MiB, array matrices) are held next to
+  the cells' old values until the sequential pass stores them, so peak
+  result memory can be about twice a single-threaded recalc's; results of
+  formulas the deadline skips are dropped unused (security review 7, L2:
+  accepted).
+- Wide ranges over many dirty formulas (past the edge cap) are
+  single-threaded.
 - A long single chain has no parallelism (it runs as one task).
 - Iterative calculation is sequential.

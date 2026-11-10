@@ -261,3 +261,102 @@ fn three_d_references_track_tab_order() {
         "B1 no longer reads S2"
     );
 }
+
+// ---- Review 7: the deferred-evaluation work stack ----
+
+/// `A1..A15 =INDIRECT("A<n+1>")` nest 16 deep on demand; `A16` then reads
+/// `k` dirty formulas through INDIRECT, all deferred in one attempt
+/// (security review 7, H1; correctness review 7, finding 1). Before the
+/// fix the deferring formula was retried once per sibling, each retry
+/// re-walking the chain: k = 8,000 took 24 s in release, growing as k³.
+#[test]
+fn deferred_siblings_recalculate_in_linear_time() {
+    let k = 30_000u32;
+    let mut wb = Workbook::new();
+    wb.threading = tally_engine::parallel::Threading::Sequential;
+    for i in 1..16 {
+        wb.set_input(a(&format!("A{i}")), &format!("=INDIRECT(\"A{}\")", i + 1));
+    }
+    wb.set_input(a("A16"), &format!("=SUM(INDIRECT(\"B1:B{k}\"))"));
+    for r in 1..=k {
+        wb.set_input(a(&format!("B{r}")), "=1");
+    }
+    let t = std::time::Instant::now();
+    let rep = recalc(&mut wb);
+    // Generous for an unoptimized build under load; the old code needed
+    // hours here.
+    assert!(t.elapsed().as_secs() < 60, "took {:?}", t.elapsed());
+    assert_eq!(wb.value(a("A1")), Value::Number(f64::from(k)));
+    assert_eq!(rep.circular, 0);
+}
+
+/// Each row has a 24-long chain of dynamic references; the first formula
+/// sums the rows through INDIRECT (correctness review 7, finding 1).
+#[test]
+fn many_deferred_dynamic_chains_stay_linear() {
+    let n = 600u32;
+    let mut wb = Workbook::new();
+    wb.threading = tally_engine::parallel::Threading::Sequential;
+    let s = wb.sheets[0].id;
+    wb.set_input(a("A1"), &format!("=SUM(INDIRECT(\"B1:B{n}\"))"));
+    for r in 1..=n {
+        for c in 1..=24u32 {
+            // Column c (B = 1) reads column c + 1 of the same row.
+            wb.set_input(
+                CellAddr::new(s, r - 1, c),
+                &format!("=INDIRECT(ADDRESS({r};{}))", c + 2),
+            );
+        }
+        wb.set_input(CellAddr::new(s, r - 1, 25), "=1");
+    }
+    let t = std::time::Instant::now();
+    let rep = recalc(&mut wb);
+    assert!(t.elapsed().as_secs() < 60, "took {:?}", t.elapsed());
+    assert_eq!(wb.value(a("A1")), Value::Number(f64::from(n)));
+    assert_eq!(rep.circular, 0);
+}
+
+/// A cell deferred at depth 16 and then evaluated on demand at a shallower
+/// depth in the same attempt is finished, not a cycle: the attempt made
+/// progress and is repeated (correctness review 7, finding 3: A1 was
+/// Err:522 for k = 11..16).
+#[test]
+fn a_deferred_cell_finished_later_in_the_attempt_is_not_circular() {
+    for k in 2..=25u32 {
+        let mut wb = Workbook::new();
+        wb.threading = tally_engine::parallel::Threading::Sequential;
+        for i in 1..=24u32 {
+            wb.set_input(a(&format!("K{i}")), &format!("=INDIRECT(\"K{}\")", i + 1));
+        }
+        wb.set_input(a("K25"), "=7");
+        wb.set_input(a("A1"), &format!("=INDIRECT(\"K1\")+INDIRECT(\"K{k}\")"));
+        let rep = recalc(&mut wb);
+        assert_eq!(wb.value(a("A1")), Value::Number(14.0), "k = {k}");
+        assert_eq!(rep.circular, 0, "k = {k}");
+    }
+}
+
+/// A real cycle through deferred cells is still Err:522, and formulas
+/// outside it are not.
+#[test]
+fn a_cycle_through_deferred_cells_is_circular() {
+    let mut wb = Workbook::new();
+    wb.threading = tally_engine::parallel::Threading::Sequential;
+    for i in 1..=40u32 {
+        wb.set_input(a(&format!("K{i}")), &format!("=INDIRECT(\"K{}\")", i + 1));
+    }
+    wb.set_input(a("K41"), "=INDIRECT(\"K1\")+1");
+    wb.set_input(a("B1"), "=5");
+    for r in 2..=20u32 {
+        wb.set_input(a(&format!("B{r}")), &format!("=B{}+1", r - 1));
+    }
+    recalc(&mut wb);
+    for i in [1, 17, 33, 41] {
+        assert_eq!(
+            wb.value(a(&format!("K{i}"))),
+            Value::Error(ErrorKind::Circular),
+            "K{i}"
+        );
+    }
+    assert_eq!(wb.value(a("B20")), Value::Number(24.0));
+}

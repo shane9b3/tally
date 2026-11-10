@@ -102,7 +102,18 @@ impl Builder {
 
     fn formula(&mut self, sheet: usize, row: u32) -> String {
         let r = |b: &mut Self| b.cell_ref(sheet, row);
-        match self.g.below(24) {
+        match self.g.below(25) {
+            // Dynamic ranges (review 7: an aggregate that stops at an
+            // error constant must still see the formulas after it).
+            24 => match self.g.below(3) {
+                0 => format!("=SUM(INDIRECT(\"{}\"))", self.range(sheet, 1)),
+                1 => format!(
+                    "=SUMPRODUCT(OFFSET({};0;0;{};2))",
+                    r(self),
+                    2 + self.g.below(6)
+                ),
+                _ => format!("=COUNTIF(INDIRECT(\"{}\");\">5\")", self.range(sheet, 2)),
+            },
             0 | 1 => format!("={}+{}", r(self), r(self)),
             2 => format!("=SUM({})", self.range(sheet, 2)),
             3 => format!("=IF({}>50;{};{}*2)", r(self), r(self), r(self)),
@@ -160,7 +171,8 @@ impl Builder {
             0..=34 => format!("{}", self.g.below(100)),
             35..=39 => format!("{}.{}", self.g.below(100), self.g.below(1000)),
             40..=43 => format!("t{}", self.g.below(5)),
-            44..=46 => String::new(),
+            44..=45 => String::new(),
+            46 => "#DIV/0!".to_string(),
             _ => self.formula(sheet, row),
         }
     }
@@ -310,8 +322,16 @@ fn both(
     f: impl Fn(&mut Workbook) -> RecalcReport,
     what: &str,
 ) -> RecalcReport {
+    let t = std::time::Instant::now();
     let a = f(seq);
+    let ts = t.elapsed();
     let b = f(par);
+    if std::env::var("TALLY_PAR_VERBOSE").is_ok() {
+        eprintln!(
+            "  {what}: sequential {ts:?}, parallel {:?}",
+            t.elapsed() - ts
+        );
+    }
     same_report(&a, &b, what);
     compare(seq, par, what);
     b
@@ -610,7 +630,20 @@ fn auto_mode_uses_the_pool_above_the_threshold() {
         && tally_engine::parallel::enabled()
         && std::env::var("TALLY_CALC_THREADING").is_err()
     {
-        assert_eq!(b.precomputed, 10_000);
+        // An automatic recalc goes single-threaded while another test's
+        // pre-pass holds the pool: try until it is free.
+        let mut pre = b.precomputed;
+        for _ in 0..200 {
+            if pre == 10_000 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let a = hard_recalc(&mut seq);
+            let b = hard_recalc(&mut auto);
+            same_report(&a, &b, "auto again");
+            pre = b.precomputed;
+        }
+        assert_eq!(pre, 10_000);
     }
     // A small recalc stays sequential.
     auto.set_input(CellAddr::new(s, 0, 0), "=5");
@@ -618,6 +651,195 @@ fn auto_mode_uses_the_pool_above_the_threshold() {
     if std::env::var("TALLY_CALC_THREADING").is_err() {
         assert_eq!(small.precomputed, 0);
     }
+}
+
+/// Review 7 (correctness finding 2): an aggregate stops reading its range
+/// at the first error, but the sequential pass evaluates every dirty
+/// formula of a dynamic range before reading it (and finds the reader
+/// itself in it). The pre-pass must not pre-compute such a reader.
+#[test]
+fn a_range_read_that_stops_early_still_sees_later_formulas() {
+    let cases: [&[(&str, &str)]; 5] = [
+        // The range includes the reader: Err:522 in both modes.
+        &[("B1", "#DIV/0!"), ("F1", "=SUM(OFFSET(B1;0;0;1;6))")],
+        // A formula in the range reads the reader: a cycle.
+        &[
+            ("B1", "#DIV/0!"),
+            ("F1", "=SUM(INDIRECT(\"B1:B10\"))"),
+            ("B5", "=F1+1"),
+        ],
+        // A later formula in the range: evaluated inside the reader.
+        &[
+            ("B1", "#DIV/0!"),
+            ("F1", "=SUM(INDIRECT(\"B1:B10\"))"),
+            ("B5", "=U1+1"),
+        ],
+        &[
+            ("B1", "#DIV/0!"),
+            ("F1", "=SUMPRODUCT(INDIRECT(\"B1:B10\"))"),
+            ("B5", "=F1+1"),
+        ],
+        &[
+            ("B1", "#N/A"),
+            (
+                "F1",
+                "=SUMIF(INDIRECT(\"B1:B10\");\">0\")+NPV(0.1;INDIRECT(\"B1:B10\"))",
+            ),
+            ("B7", "=F1*2"),
+        ],
+    ];
+    for (i, cells) in cases.iter().enumerate() {
+        let mut wb = Workbook::new();
+        padded(&mut wb);
+        for (c, t) in *cells {
+            wb.set_input(a(c), t);
+        }
+        let (mut seq, mut par) = pair(wb);
+        let rep = both(&mut seq, &mut par, recalc, &format!("case {i}"));
+        assert!(rep.precomputed >= 3000, "case {i}");
+        // The next recalc knows the dynamic precedents.
+        seq.set_input(a("U1"), "5");
+        par.set_input(a("U1"), "5");
+        both(&mut seq, &mut par, recalc, &format!("case {i} edit"));
+        both(&mut seq, &mut par, hard_recalc, &format!("case {i} hard"));
+    }
+}
+
+/// A lookup line holding a formula ordered after the reader (found only
+/// through INDIRECT): the reader goes to the sequential pass.
+#[test]
+fn a_lookup_line_with_a_later_formula() {
+    let mut wb = Workbook::new();
+    padded(&mut wb);
+    for r in 1..=200u32 {
+        wb.set_input(a(&format!("C{r}")), &r.to_string());
+        wb.set_input(a(&format!("D{r}")), &format!("=C{r}*3"));
+    }
+    for r in 1..=50u32 {
+        wb.set_input(
+            a(&format!("E{r}")),
+            &format!("=VLOOKUP({r};INDIRECT(\"C1:D200\");2;0)+MATCH({r};INDIRECT(\"D1:D200\");0)"),
+        );
+    }
+    wb.set_input(a("D100"), "=E1+1");
+    let (mut seq, mut par) = pair(wb);
+    both(&mut seq, &mut par, recalc, "lookup line");
+    both(&mut seq, &mut par, hard_recalc, "lookup line hard");
+}
+
+/// Security review 7, H2: the pre-pass keeps every dirty precedent edge;
+/// past a cap (about 12 bytes per edge) the recalc runs single-threaded.
+/// 2,100 formulas each summing 2,100 formulas are 4.4 M edges.
+#[test]
+fn too_many_precedent_edges_fall_back_to_sequential() {
+    let n = 2100u32;
+    let mut wb = Workbook::new();
+    for r in 1..=n {
+        wb.set_input(a(&format!("A{r}")), &format!("={r}"));
+        wb.set_input(a(&format!("B{r}")), &format!("=SUM($A$1:$A${n})"));
+    }
+    let (mut seq, mut par) = pair(wb);
+    let rep = both(&mut seq, &mut par, recalc, "edges");
+    assert_eq!(rep.precomputed, 0);
+    let total = f64::from(n) * f64::from(n + 1) / 2.0;
+    assert_eq!(par.value(a("B7")), Value::Number(total));
+    // Below the cap the pre-pass runs.
+    let mut wb = Workbook::new();
+    for r in 1..=n {
+        wb.set_input(a(&format!("A{r}")), &format!("={r}"));
+        wb.set_input(a(&format!("B{r}")), "=SUM($A$1:$A$100)");
+    }
+    let (mut seq, mut par) = pair(wb);
+    let rep = both(&mut seq, &mut par, recalc, "edges below the cap");
+    assert_eq!(rep.precomputed, 2 * n as usize);
+}
+
+/// Security review 7, M1: a pre-pass evaluation stops at its first bail
+/// instead of running on (here into the expensive branch) with Err:522 in
+/// place of the value it could not read.
+#[test]
+fn a_bailed_evaluation_stops_at_once() {
+    let n = 300u32;
+    let mut wb = Workbook::new();
+    padded(&mut wb);
+    for r in 1..=n {
+        // Z<r> is ordered after C<r> and found only through INDIRECT.
+        wb.set_input(
+            a(&format!("C{r}")),
+            "=IF(ISNUMBER(INDIRECT(\"Z\"&ROW()));0;SUMPRODUCT(LEN($A$1:$A$1000000)))",
+        );
+    }
+    for r in 1..=n {
+        wb.set_input(a(&format!("Z{r}")), "=1");
+    }
+    let (mut seq, mut par) = pair(wb);
+    let rep = both(&mut seq, &mut par, hard_recalc, "branch steer");
+    assert_eq!(par.value(a("C1")), Value::Number(0.0));
+    // Before the fix each bailed attempt evaluated the 1M-cell branch.
+    assert!(
+        rep.prepass_wasted_work < 1000 * u64::from(n),
+        "wasted {}",
+        rep.prepass_wasted_work
+    );
+}
+
+/// Security review 7, M1: retries of formulas that wait for a precedent
+/// found through INDIRECT are bounded by the number of dirty formulas.
+#[test]
+fn prepass_retries_are_bounded() {
+    let mut wb = Workbook::new();
+    padded(&mut wb);
+    // Each X reads several later-computed V cells through INDIRECT.
+    for r in 1..=1000u32 {
+        wb.set_input(
+            a(&format!("X{r}")),
+            &format!(
+                "=INDIRECT(\"V{}\")+INDIRECT(\"V{}\")+INDIRECT(\"V{}\")+INDIRECT(\"V{}\")",
+                r + 1,
+                r + 500,
+                r + 1000,
+                r + 1500
+            ),
+        );
+    }
+    let (mut seq, mut par) = pair(wb);
+    let rep = both(&mut seq, &mut par, recalc, "retries");
+    let dirty = rep.evaluated;
+    assert!(
+        rep.prepass_retries <= dirty,
+        "{} retries",
+        rep.prepass_retries
+    );
+}
+
+/// Security review 7, M2: an evaluation that already bailed (RAND) must not
+/// count as a failed index build, or three of them turn every later
+/// lookup into the line into a scan (quadratic).
+#[test]
+fn a_bailed_reader_does_not_spoil_the_lookup_index() {
+    let r = 3000u32;
+    let mut wb = Workbook::new();
+    for i in 1..=r {
+        wb.set_input(a(&format!("A{i}")), &i.to_string());
+        wb.set_input(a(&format!("B{i}")), &(i * 2).to_string());
+    }
+    for i in 1..=200u32 {
+        wb.set_input(
+            a(&format!("E{i}")),
+            &format!("=RAND()+VLOOKUP({i};$A$1:$B${r};2;0)"),
+        );
+    }
+    for i in 1..=r {
+        wb.set_input(
+            a(&format!("F{i}")),
+            &format!("=VLOOKUP(ROW();$A$1:$B${r};2;0)"),
+        );
+    }
+    wb.rng = Rng::new(7);
+    let (mut seq, mut par) = pair(wb);
+    let rep = both(&mut seq, &mut par, hard_recalc, "rand lookups");
+    assert!(rep.precomputed >= r as usize);
+    assert_eq!(par.value(a("F10")), Value::Number(20.0));
 }
 
 /// `SEED=n cargo test --test recalc_parallel debug_seed -- --ignored
