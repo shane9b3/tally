@@ -703,22 +703,70 @@ fn strict_cycle_members(
     out
 }
 
+/// Most successor entries the frames on the DFS path of [`tarjan`] hold
+/// together (8 bytes each), beyond one per node; past it the shallowest
+/// frames drop theirs and recompute them when the DFS returns to them.
+pub(crate) const TARJAN_PATH_ENTRIES: usize = 1 << 20;
+
 /// Iterative Tarjan over nodes `0..n`; components come out successors
 /// first, each with whether it is cyclic (several members or a self-edge).
+/// `edges(v)` lists `v`'s successors, sorted and without duplicates; they
+/// are explored in that order.
+///
 /// With `keep` (a cap on the edges kept), each node's successor list is
-/// returned too (indexed by node) and the last value is `true`; otherwise,
-/// or once more than the cap of edges would be kept, the lists are freed as
-/// nodes finish (only the DFS path holds any) and the last value is
-/// `false`.
+/// returned too (indexed by node) and the last value is `true`; once more
+/// than the cap would be kept (counted when a node is entered), all lists
+/// are freed, the rest of the run is as without `keep`, and the last value
+/// is `false`.
+///
+/// Live memory is O(nodes + [`TARJAN_PATH_ENTRIES`]) besides the kept
+/// lists, however long the DFS path and however wide the ranges (review 7
+/// verification, F5: a path of 16,000 nodes each holding a 16,000-entry
+/// list took 2.1 GB, single-threaded too). A frame holds only its
+/// successors that were unvisited when it last looked: an already visited
+/// one only lowers the frame's low-link if it is on the Tarjan stack, and it
+/// stays there at least until the frame finishes (its component's root is
+/// the frame or an ancestor), so that update is applied at once. Past the
+/// budget the shallowest frames drop even those and recompute them (from
+/// `edges`, after the last successor taken) when the DFS returns to them.
+/// The visit order, and so the output, is exactly the plain algorithm's.
 #[allow(clippy::type_complexity)]
 fn tarjan(
     n: usize,
     keep: Option<usize>,
+    edges: impl FnMut(usize) -> Vec<usize>,
+) -> (
+    Vec<(SmallVec<[usize; 1]>, bool)>,
+    Vec<Option<Vec<usize>>>,
+    bool,
+) {
+    let r = tarjan_with(n, keep, TARJAN_PATH_ENTRIES.max(n), edges);
+    (r.0, r.1, r.2)
+}
+
+/// A frame of [`tarjan_with`]'s DFS path.
+struct TarjanFrame {
+    v: usize,
+    /// The last successor taken (successors come in increasing order).
+    last: Option<usize>,
+    /// The successors after `last` that were unvisited, the next one at
+    /// the end; `None` once dropped for the budget.
+    rest: Option<Vec<usize>>,
+}
+
+/// [`tarjan`] with the path budget given; the last value is the most
+/// successor entries the path held at once.
+#[allow(clippy::type_complexity)]
+fn tarjan_with(
+    n: usize,
+    keep: Option<usize>,
+    budget: usize,
     mut edges: impl FnMut(usize) -> Vec<usize>,
 ) -> (
     Vec<(SmallVec<[usize; 1]>, bool)>,
     Vec<Option<Vec<usize>>>,
     bool,
+    usize,
 ) {
     const UNSEEN: usize = usize::MAX;
     let cap = keep.unwrap_or(0);
@@ -727,45 +775,110 @@ fn tarjan(
     let mut index = vec![UNSEEN; n];
     let mut low = vec![0usize; n];
     let mut on_stack = vec![false; n];
+    let mut self_edge = vec![false; n];
     let mut succ: Vec<Option<Vec<usize>>> = vec![None; n];
     let mut stack: Vec<usize> = Vec::new();
     let mut out: Vec<(SmallVec<[usize; 1]>, bool)> = Vec::new();
     let mut counter = 0usize;
+    let mut held = 0usize;
+    let mut peak = 0usize;
+
+    // `v`'s successors after `after`: the unvisited ones (returned, next
+    // at the end); the visited ones on the stack lower `low[v]` now.
+    let scan = |v: usize,
+                after: Option<usize>,
+                list: &[usize],
+                index: &[usize],
+                low: &mut [usize],
+                on_stack: &[bool]|
+     -> Vec<usize> {
+        let mut rest = Vec::new();
+        for &w in list.iter().rev() {
+            if after.is_some_and(|a| w <= a) {
+                break;
+            }
+            if index[w] == UNSEEN {
+                rest.push(w);
+            } else if on_stack[w] {
+                low[v] = low[v].min(index[w]);
+            }
+        }
+        rest
+    };
 
     for start in 0..n {
         if index[start] != UNSEEN {
             continue;
         }
-        let mut call: Vec<(usize, usize)> = Vec::new();
-        index[start] = counter;
-        low[start] = counter;
-        counter += 1;
-        stack.push(start);
-        on_stack[start] = true;
-        succ[start] = Some(edges(start));
-        call.push((start, 0));
-        while let Some(&(v, pos)) = call.last() {
-            let next = succ[v].as_ref().and_then(|s| s.get(pos).copied());
-            if let Some(w) = next {
-                if let Some(top) = call.last_mut() {
-                    top.1 += 1;
+        let mut call: Vec<TarjanFrame> = Vec::new();
+        // Frames below this one hold no `rest`.
+        let mut low_mark = 0usize;
+        let mut enter = Some(start);
+        loop {
+            if let Some(w) = enter.take() {
+                index[w] = counter;
+                low[w] = counter;
+                counter += 1;
+                stack.push(w);
+                on_stack[w] = true;
+                let list = edges(w);
+                self_edge[w] = list.binary_search(&w).is_ok();
+                let rest = scan(w, None, &list, &index, &mut low, &on_stack);
+                if keep {
+                    kept = kept.saturating_add(list.len());
+                    if kept > cap {
+                        // Too many edges to keep: go on as without `keep`.
+                        keep = false;
+                        succ.iter_mut().for_each(|s| *s = None);
+                    } else {
+                        succ[w] = Some(list);
+                    }
                 }
+                held += rest.len();
+                call.push(TarjanFrame {
+                    v: w,
+                    last: None,
+                    rest: Some(rest),
+                });
+                // Over budget: the shallowest frames (never the top one)
+                // drop their successors.
+                while held > budget && low_mark + 1 < call.len() {
+                    if let Some(r) = call[low_mark].rest.take() {
+                        held -= r.len();
+                    }
+                    low_mark += 1;
+                }
+                peak = peak.max(held);
+            }
+            let top_i = call.len().saturating_sub(1);
+            let Some(top) = call.last_mut() else {
+                break;
+            };
+            let v = top.v;
+            if top.rest.is_none() {
+                // Dropped for the budget: recompute what is left.
+                let list = edges(v);
+                let rest = scan(v, top.last, &list, &index, &mut low, &on_stack);
+                held += rest.len();
+                peak = peak.max(held);
+                top.rest = Some(rest);
+                low_mark = low_mark.min(top_i);
+            }
+            let next = top.rest.as_mut().and_then(Vec::pop);
+            if let Some(w) = next {
+                held -= 1;
+                top.last = Some(w);
                 if index[w] == UNSEEN {
-                    index[w] = counter;
-                    low[w] = counter;
-                    counter += 1;
-                    stack.push(w);
-                    on_stack[w] = true;
-                    succ[w] = Some(edges(w));
-                    call.push((w, 0));
+                    enter = Some(w);
                 } else if on_stack[w] {
                     low[v] = low[v].min(index[w]);
                 }
                 continue;
             }
             call.pop();
-            if let Some(&(u, _)) = call.last() {
-                low[u] = low[u].min(low[v]);
+            low_mark = low_mark.min(call.len());
+            if let Some(u) = call.last() {
+                low[u.v] = low[u.v].min(low[v]);
             }
             if low[v] == index[v] {
                 let mut members = SmallVec::new();
@@ -776,39 +889,12 @@ fn tarjan(
                         break;
                     }
                 }
-                let cyclic = members.len() > 1
-                    || succ[v]
-                        .as_ref()
-                        .is_some_and(|s| s.binary_search(&v).is_ok());
+                let cyclic = members.len() > 1 || self_edge[v];
                 out.push((members, cyclic));
-            }
-            if keep {
-                kept = kept.saturating_add(succ[v].as_ref().map_or(0, Vec::len));
-                if kept > cap {
-                    // Too many edges to keep: free the finished nodes'
-                    // lists (those on the DFS path are still needed) and
-                    // go on as without `keep`.
-                    keep = false;
-                    let mut active = vec![false; n];
-                    for &(u, _) in &call {
-                        active[u] = true;
-                    }
-                    for (u, s) in succ.iter_mut().enumerate() {
-                        if !active[u] {
-                            *s = None;
-                        }
-                    }
-                }
-            }
-            // `v` is finished: its successors are never read again (a node
-            // is entered once), so free them now rather than holding one
-            // list per formula until the end.
-            if !keep {
-                succ[v] = None;
             }
         }
     }
-    (out, succ, keep)
+    (out, succ, keep, peak)
 }
 
 /// How a [`CalcCtx`] holds the workbook: mutably (recalc, which caches
@@ -839,6 +925,21 @@ type IdSet = HashSet<
     FormulaCellId,
     std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>,
 >;
+
+/// Empties `set` in time proportional to what it holds: `clear` costs the
+/// whole capacity, so a set that once grew large and now holds little is
+/// replaced instead (the work stack empties these sets on every attempt;
+/// review 7 verification, F4).
+fn reset_set(set: &mut IdSet) {
+    if set.is_empty() {
+        return;
+    }
+    if set.capacity() > 64 && set.capacity() / 4 > set.len() {
+        *set = IdSet::default();
+    } else {
+        set.clear();
+    }
+}
 
 /// A cell being evaluated by a [`CalcCtx`].
 #[derive(Copy, Clone, Debug)]
@@ -1153,8 +1254,8 @@ impl<'w> CalcCtx<'w> {
             return;
         }
         self.deferred.clear();
-        self.deferred_seen.clear();
-        self.incomplete.clear();
+        reset_set(&mut self.deferred_seen);
+        reset_set(&mut self.incomplete);
         let before = self.finished;
         self.evaluate_once(id);
         if !self.is_dirty(id) {
@@ -1201,15 +1302,15 @@ impl<'w> CalcCtx<'w> {
                 Some(b) => b,
                 None => {
                     self.deferred.clear();
-                    self.deferred_seen.clear();
-                    self.incomplete.clear();
+                    reset_set(&mut self.deferred_seen);
+                    reset_set(&mut self.incomplete);
                     let b = self.finished;
                     self.evaluate_once(top);
                     b
                 }
             };
             let deferred = std::mem::take(&mut self.deferred);
-            self.deferred_seen.clear();
+            reset_set(&mut self.deferred_seen);
             if !self.is_dirty(top) {
                 work.pop();
                 continue;
@@ -2929,6 +3030,201 @@ mod tests {
         assert!(count <= 3, "A16 evaluated {count} times");
     }
 
+    /// Correctness review 7, finding 1: `A1` sums `n` rows through
+    /// INDIRECT; each row is a 24-long chain of dynamic references, so `A1`
+    /// defers one cell per row. It is attempted twice in all (it was
+    /// attempted once per row, each attempt re-walking the remaining rows).
+    #[test]
+    fn deferred_rows_of_chains_retry_their_reader_once() {
+        let n = 200u32;
+        let mut wb = Workbook::new();
+        wb.threading = crate::parallel::Threading::Sequential;
+        let s = wb.sheets[0].id;
+        wb.set_input(a("A1"), &format!("=SUM(INDIRECT(\"B1:B{n}\"))"));
+        for r in 1..=n {
+            for c in 1..=24u32 {
+                wb.set_input(
+                    CellAddr::new(s, r - 1, c),
+                    &format!("=INDIRECT(ADDRESS({r};{}))", c + 2),
+                );
+            }
+            wb.set_input(CellAddr::new(s, r - 1, 25), "=1");
+        }
+        test_hook::set(Some((a("A1"), CellRange::from_a1(1, "ZZ999").unwrap())));
+        let rep = recalc(&mut wb);
+        let count = test_hook::count();
+        test_hook::set(None);
+        assert_eq!(num(&wb, "A1"), Value::Number(f64::from(n)));
+        assert_eq!(rep.circular, 0);
+        assert!(count <= 3, "A1 evaluated {count} times");
+    }
+
+    /// A cell left incomplete by a deferral and read again in the same
+    /// attempt is deferred, not evaluated again. Here every cell of a layer
+    /// reads both cells of the next layer: re-entering incomplete cells
+    /// evaluated a layer-k cell 2^k times per attempt (a 3-wide lattice of
+    /// 40 layers did not finish in minutes).
+    #[test]
+    fn incomplete_cells_are_not_reentered_in_one_attempt() {
+        let layers = 24u32;
+        let mut wb = Workbook::new();
+        wb.threading = crate::parallel::Threading::Sequential;
+        let s = wb.sheets[0].id;
+        for layer in 0..layers {
+            for c in 0..2u32 {
+                let text = if layer + 1 == layers {
+                    "=1".to_string()
+                } else {
+                    format!(
+                        "=INDIRECT(ADDRESS({r};2))+INDIRECT(ADDRESS({r};3))",
+                        r = layer + 3
+                    )
+                };
+                wb.set_input(CellAddr::new(s, layer + 1, c + 1), &text);
+            }
+        }
+        wb.set_input(a("A1"), "=INDIRECT(\"B2\")");
+        // A layer-10 cell (row 12).
+        test_hook::set(Some((a("B12"), CellRange::from_a1(1, "ZZ999").unwrap())));
+        recalc(&mut wb);
+        let count = test_hook::count();
+        test_hook::set(None);
+        assert_eq!(num(&wb, "A1"), Value::Number(2f64.powi(23)));
+        assert!(count <= 4, "B12 evaluated {count} times");
+    }
+
+    /// Random graphs (sorted, deduplicated successor lists): the bounded
+    /// Tarjan gives exactly the plain algorithm's components, order,
+    /// cyclic flags and kept lists, whatever the path budget.
+    #[test]
+    fn bounded_tarjan_matches_the_plain_algorithm() {
+        let mut x = 0x2545_F491_4F6C_DD1Du64;
+        let mut rnd = move |m: usize| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x % m.max(1) as u64) as usize
+        };
+        for case in 0..400 {
+            let n = 1 + rnd(60);
+            let deg = rnd(8);
+            let graph: Vec<Vec<usize>> = (0..n)
+                .map(|_| {
+                    let mut l: Vec<usize> = (0..rnd(deg + 1)).map(|_| rnd(n)).collect();
+                    l.sort_unstable();
+                    l.dedup();
+                    l
+                })
+                .collect();
+            let keep = match case % 3 {
+                0 => None,
+                1 => Some(usize::MAX),
+                _ => Some(rnd(n * 3)),
+            };
+            let want = tarjan_reference(n, keep, |v| graph[v].clone());
+            for budget in [0, 1, 3, 1000] {
+                let got = tarjan_with(n, keep, budget, |v| graph[v].clone());
+                assert_eq!(got.0, want.0, "case {case} budget {budget}: components");
+                assert_eq!(got.2, want.2, "case {case} budget {budget}: kept");
+                if got.2 {
+                    assert_eq!(got.1, want.1, "case {case} budget {budget}: lists");
+                }
+            }
+        }
+    }
+
+    /// Review 7 verification, F5: a DFS path of `n` nodes that each read a
+    /// range of `n` nodes (`B<i> = SUM(A:A) + B<i+1>`) held n² successor
+    /// entries. Both orders of the two groups.
+    #[test]
+    fn tarjan_path_memory_is_bounded() {
+        let n = 3000;
+        // B-group first: node i < n reads i + 1 and all of n..2n.
+        let b_first = |v: usize| -> Vec<usize> {
+            if v + 1 < n {
+                std::iter::once(v + 1).chain(n..2 * n).collect()
+            } else if v < n {
+                (n..2 * n).collect()
+            } else {
+                Vec::new()
+            }
+        };
+        // A-group first: node n + i reads all of 0..n and n + i + 1.
+        let a_first = |v: usize| -> Vec<usize> {
+            if v < n {
+                Vec::new()
+            } else if v + 1 < 2 * n {
+                (0..n).chain(std::iter::once(v + 1)).collect()
+            } else {
+                (0..n).collect()
+            }
+        };
+        let budget = 100_000;
+        for (name, g) in [
+            ("b first", &b_first as &dyn Fn(usize) -> Vec<usize>),
+            ("a first", &a_first),
+        ] {
+            let want = tarjan_reference(2 * n, None, g);
+            let got = tarjan_with(2 * n, None, budget, g);
+            assert_eq!(got.0, want.0, "{name}");
+            // The plain algorithm held about n² = 9 M entries on the path.
+            assert!(got.3 <= budget + n + 1, "{name}: peak {}", got.3);
+        }
+        // Keeping the lists counts the ones on the path too.
+        let got = tarjan_with(2 * n, Some(1_000_000), budget, b_first);
+        assert!(!got.2);
+        assert!(got.1.iter().all(Option::is_none));
+    }
+
+    /// Review 7 verification, F4: emptying a set that once grew large does
+    /// not keep (and clear) its whole capacity every time.
+    #[test]
+    fn reset_set_drops_a_large_capacity() {
+        let mut wb = Workbook::new();
+        let ids: Vec<FormulaCellId> = (0..10_000u32)
+            .map(|r| {
+                wb.set_input(CellAddr::new(1, r, 0), "=1");
+                wb.formula_at(CellAddr::new(1, r, 0)).unwrap().0
+            })
+            .collect();
+        let mut set = IdSet::default();
+        set.extend(ids.iter().copied());
+        reset_set(&mut set);
+        assert!(set.is_empty());
+        let big = set.capacity();
+        assert!(big >= 10_000, "a full set is cleared in place");
+        set.insert(ids[0]);
+        reset_set(&mut set);
+        assert!(set.is_empty());
+        assert!(set.capacity() < 64, "capacity {}", set.capacity());
+    }
+
+    /// Security review 7, M1: once a pre-pass evaluation has bailed, cell
+    /// and range reads return at once without reading anything.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn bailed_prepass_reads_return_at_once() {
+        let mut wb = Workbook::new();
+        for r in 1..=100u32 {
+            wb.set_input(a(&format!("A{r}")), &r.to_string());
+        }
+        let sh = par_shared(&[]);
+        let mut ctx = CalcCtx::par(&wb, &sh, 0.0);
+        assert_eq!(ctx.cell_value(a("A5")), Value::Number(5.0));
+        ctx.bail_for_good();
+        assert_eq!(ctx.cell_value(a("A5")), Value::Error(ErrorKind::Circular));
+        let mut seen = 0;
+        ctx.for_each_in_range(
+            &CellRange::from_a1(1, "A1:A100").unwrap(),
+            false,
+            &mut |_, _| {
+                seen += 1;
+                ControlFlow::Continue(())
+            },
+        );
+        assert_eq!(seen, 0);
+    }
+
     /// Security review 7, H1: the watchdog deadline is checked inside the
     /// deferred-evaluation work stack; what is left keeps its old value.
     #[test]
@@ -3081,5 +3377,115 @@ mod tests {
         ctx.for_each_in_range(&range, true, &mut |_, _| ControlFlow::Break(()));
         assert!(ctx.bailed);
         assert_eq!(ctx.retry_after(), None);
+    }
+    /// The previous [`tarjan`] (every DFS-path node holds its whole successor
+    /// list): the reference the bounded one must agree with exactly.
+    ///
+    /// Iterative Tarjan over nodes `0..n`; components come out successors
+    /// first, each with whether it is cyclic (several members or a self-edge).
+    /// With `keep` (a cap on the edges kept), each node's successor list is
+    /// returned too (indexed by node) and the last value is `true`; otherwise,
+    /// or once more than the cap of edges would be kept, the lists are freed as
+    /// nodes finish (only the DFS path holds any) and the last value is
+    /// `false`.
+    #[allow(clippy::type_complexity)]
+    fn tarjan_reference(
+        n: usize,
+        keep: Option<usize>,
+        mut edges: impl FnMut(usize) -> Vec<usize>,
+    ) -> (
+        Vec<(SmallVec<[usize; 1]>, bool)>,
+        Vec<Option<Vec<usize>>>,
+        bool,
+    ) {
+        const UNSEEN: usize = usize::MAX;
+        let cap = keep.unwrap_or(0);
+        let mut keep = keep.is_some();
+        let mut kept = 0usize;
+        let mut index = vec![UNSEEN; n];
+        let mut low = vec![0usize; n];
+        let mut on_stack = vec![false; n];
+        let mut succ: Vec<Option<Vec<usize>>> = vec![None; n];
+        let mut stack: Vec<usize> = Vec::new();
+        let mut out: Vec<(SmallVec<[usize; 1]>, bool)> = Vec::new();
+        let mut counter = 0usize;
+
+        for start in 0..n {
+            if index[start] != UNSEEN {
+                continue;
+            }
+            let mut call: Vec<(usize, usize)> = Vec::new();
+            index[start] = counter;
+            low[start] = counter;
+            counter += 1;
+            stack.push(start);
+            on_stack[start] = true;
+            succ[start] = Some(edges(start));
+            call.push((start, 0));
+            while let Some(&(v, pos)) = call.last() {
+                let next = succ[v].as_ref().and_then(|s| s.get(pos).copied());
+                if let Some(w) = next {
+                    if let Some(top) = call.last_mut() {
+                        top.1 += 1;
+                    }
+                    if index[w] == UNSEEN {
+                        index[w] = counter;
+                        low[w] = counter;
+                        counter += 1;
+                        stack.push(w);
+                        on_stack[w] = true;
+                        succ[w] = Some(edges(w));
+                        call.push((w, 0));
+                    } else if on_stack[w] {
+                        low[v] = low[v].min(index[w]);
+                    }
+                    continue;
+                }
+                call.pop();
+                if let Some(&(u, _)) = call.last() {
+                    low[u] = low[u].min(low[v]);
+                }
+                if low[v] == index[v] {
+                    let mut members = SmallVec::new();
+                    while let Some(w) = stack.pop() {
+                        on_stack[w] = false;
+                        members.push(w);
+                        if w == v {
+                            break;
+                        }
+                    }
+                    let cyclic = members.len() > 1
+                        || succ[v]
+                            .as_ref()
+                            .is_some_and(|s| s.binary_search(&v).is_ok());
+                    out.push((members, cyclic));
+                }
+                if keep {
+                    kept = kept.saturating_add(succ[v].as_ref().map_or(0, Vec::len));
+                    if kept > cap {
+                        // Too many edges to keep: free the finished nodes'
+                        // lists (those on the DFS path are still needed) and
+                        // go on as without `keep`.
+                        keep = false;
+                        let mut active = vec![false; n];
+                        for &(u, _) in &call {
+                            active[u] = true;
+                        }
+                        for (u, s) in succ.iter_mut().enumerate() {
+                            if !active[u] {
+                                *s = None;
+                            }
+                        }
+                    }
+                }
+                // `v` is finished: its successors are never read again (a node
+                // is entered once), so free them now rather than holding one
+                // list per formula until the end.
+                if !keep {
+                    succ[v] = None;
+                }
+            }
+        }
+        (out, succ, keep)
     }
 }

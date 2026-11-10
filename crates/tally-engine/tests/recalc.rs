@@ -290,31 +290,9 @@ fn deferred_siblings_recalculate_in_linear_time() {
     assert_eq!(rep.circular, 0);
 }
 
-/// Each row has a 24-long chain of dynamic references; the first formula
-/// sums the rows through INDIRECT (correctness review 7, finding 1).
-#[test]
-fn many_deferred_dynamic_chains_stay_linear() {
-    let n = 600u32;
-    let mut wb = Workbook::new();
-    wb.threading = tally_engine::parallel::Threading::Sequential;
-    let s = wb.sheets[0].id;
-    wb.set_input(a("A1"), &format!("=SUM(INDIRECT(\"B1:B{n}\"))"));
-    for r in 1..=n {
-        for c in 1..=24u32 {
-            // Column c (B = 1) reads column c + 1 of the same row.
-            wb.set_input(
-                CellAddr::new(s, r - 1, c),
-                &format!("=INDIRECT(ADDRESS({r};{}))", c + 2),
-            );
-        }
-        wb.set_input(CellAddr::new(s, r - 1, 25), "=1");
-    }
-    let t = std::time::Instant::now();
-    let rep = recalc(&mut wb);
-    assert!(t.elapsed().as_secs() < 60, "took {:?}", t.elapsed());
-    assert_eq!(wb.value(a("A1")), Value::Number(f64::from(n)));
-    assert_eq!(rep.circular, 0);
-}
+// The rows-of-dynamic-chains shape (correctness review 7, finding 1) is
+// `recalc::tests::deferred_rows_of_chains_retry_their_reader_once`, which
+// counts attempts instead of timing them.
 
 /// A cell deferred at depth 16 and then evaluated on demand at a shallower
 /// depth in the same attempt is finished, not a cycle: the attempt made
@@ -325,11 +303,12 @@ fn a_deferred_cell_finished_later_in_the_attempt_is_not_circular() {
     for k in 2..=25u32 {
         let mut wb = Workbook::new();
         wb.threading = tally_engine::parallel::Threading::Sequential;
+        // A1 first, so it is ordered (and evaluated) before the chain.
+        wb.set_input(a("A1"), &format!("=INDIRECT(\"K1\")+INDIRECT(\"K{k}\")"));
         for i in 1..=24u32 {
             wb.set_input(a(&format!("K{i}")), &format!("=INDIRECT(\"K{}\")", i + 1));
         }
         wb.set_input(a("K25"), "=7");
-        wb.set_input(a("A1"), &format!("=INDIRECT(\"K1\")+INDIRECT(\"K{k}\")"));
         let rep = recalc(&mut wb);
         assert_eq!(wb.value(a("A1")), Value::Number(14.0), "k = {k}");
         assert_eq!(rep.circular, 0, "k = {k}");

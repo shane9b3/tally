@@ -172,9 +172,21 @@ impl Builder {
             35..=39 => format!("{}.{}", self.g.below(100), self.g.below(1000)),
             40..=43 => format!("t{}", self.g.below(5)),
             44..=45 => String::new(),
-            46 => "#DIV/0!".to_string(),
+            // Error constants (written as values by `put`).
+            46 if self.g.chance(50) => "#DIV/0!".to_string(),
+            46 => "#N/A".to_string(),
             _ => self.formula(sheet, row),
         }
+    }
+}
+
+/// Enters `text` at `addr`; "#DIV/0!" and "#N/A" become error *values*
+/// (typed into a cell they are text, which aggregates skip).
+fn put(wb: &mut Workbook, addr: CellAddr, text: &str) {
+    match text {
+        "#DIV/0!" => wb.set_value(addr, Value::Error(ErrorKind::Div0)),
+        "#N/A" => wb.set_value(addr, Value::Error(ErrorKind::NA)),
+        _ => wb.set_input(addr, text),
     }
 }
 
@@ -209,7 +221,7 @@ fn random_workbook(seed: u64) -> Workbook {
             for c in 0..COLS {
                 let t = b.input(si, r);
                 if !t.is_empty() {
-                    wb.set_input(CellAddr::new(b.sheets[si], r, c), &t);
+                    put(&mut wb, CellAddr::new(b.sheets[si], r, c), &t);
                 }
             }
         }
@@ -360,8 +372,8 @@ fn run_seed(seed: u64) -> usize {
                 seq.clear_content(a);
                 par.clear_content(a);
             } else {
-                seq.set_input(a, &t);
-                par.set_input(a, &t);
+                put(&mut seq, a, &t);
+                put(&mut par, a, &t);
             }
         }
         pre += both(
@@ -692,7 +704,7 @@ fn a_range_read_that_stops_early_still_sees_later_formulas() {
         let mut wb = Workbook::new();
         padded(&mut wb);
         for (c, t) in *cells {
-            wb.set_input(a(c), t);
+            put(&mut wb, a(c), t);
         }
         let (mut seq, mut par) = pair(wb);
         let rep = both(&mut seq, &mut par, recalc, &format!("case {i}"));
@@ -784,63 +796,40 @@ fn a_bailed_evaluation_stops_at_once() {
 }
 
 /// Security review 7, M1: retries of formulas that wait for a precedent
-/// found through INDIRECT are bounded by the number of dirty formulas.
+/// found through INDIRECT are bounded by the number of dirty formulas in
+/// all. Here 2,000 formulas each read ten points along a 3,000-long chain
+/// (computed one cell after another), so each could wait and retry up to
+/// 8 times (16,000 retries) without the pre-pass budget (5,000).
 #[test]
 fn prepass_retries_are_bounded() {
     let mut wb = Workbook::new();
-    padded(&mut wb);
-    // Each X reads several later-computed V cells through INDIRECT.
-    for r in 1..=1000u32 {
-        wb.set_input(
-            a(&format!("X{r}")),
-            &format!(
-                "=INDIRECT(\"V{}\")+INDIRECT(\"V{}\")+INDIRECT(\"V{}\")+INDIRECT(\"V{}\")",
-                r + 1,
-                r + 500,
-                r + 1000,
-                r + 1500
-            ),
-        );
+    wb.set_input(a("V1"), "=1");
+    for r in 2..=3000u32 {
+        wb.set_input(a(&format!("V{r}")), &format!("=V{}+1", r - 1));
+    }
+    let reads: Vec<String> = (1..=10u32)
+        .map(|k| format!("INDIRECT(\"V{}\")", k * 300))
+        .collect();
+    let text = format!("={}", reads.join("+"));
+    for r in 1..=2000u32 {
+        wb.set_input(a(&format!("X{r}")), &text);
     }
     let (mut seq, mut par) = pair(wb);
     let rep = both(&mut seq, &mut par, recalc, "retries");
-    let dirty = rep.evaluated;
+    assert_eq!(rep.evaluated, 5000);
     assert!(
-        rep.prepass_retries <= dirty,
+        rep.prepass_retries <= rep.evaluated,
         "{} retries",
         rep.prepass_retries
     );
+    assert_eq!(par.value(a("X1")), Value::Number(16_500.0));
 }
 
-/// Security review 7, M2: an evaluation that already bailed (RAND) must not
-/// count as a failed index build, or three of them turn every later
-/// lookup into the line into a scan (quadratic).
-#[test]
-fn a_bailed_reader_does_not_spoil_the_lookup_index() {
-    let r = 3000u32;
-    let mut wb = Workbook::new();
-    for i in 1..=r {
-        wb.set_input(a(&format!("A{i}")), &i.to_string());
-        wb.set_input(a(&format!("B{i}")), &(i * 2).to_string());
-    }
-    for i in 1..=200u32 {
-        wb.set_input(
-            a(&format!("E{i}")),
-            &format!("=RAND()+VLOOKUP({i};$A$1:$B${r};2;0)"),
-        );
-    }
-    for i in 1..=r {
-        wb.set_input(
-            a(&format!("F{i}")),
-            &format!("=VLOOKUP(ROW();$A$1:$B${r};2;0)"),
-        );
-    }
-    wb.rng = Rng::new(7);
-    let (mut seq, mut par) = pair(wb);
-    let rep = both(&mut seq, &mut par, hard_recalc, "rand lookups");
-    assert!(rep.precomputed >= r as usize);
-    assert_eq!(par.value(a("F10")), Value::Number(20.0));
-}
+// The M2 case (an evaluation that already bailed must not count a failed
+// index build) is covered by the unit test
+// `recalc::tests::prepass_lookup_failures_do_not_skip_the_line`, which
+// observes the lookup cache directly; a differential test only sees values,
+// which the index never changes.
 
 /// `SEED=n cargo test --test recalc_parallel debug_seed -- --ignored
 /// --nocapture`: every cell of a random workbook in both modes, `!` where

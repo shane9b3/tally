@@ -28,7 +28,16 @@ results.
    cycle of *strict* precedents get Err:522 without evaluation; with
    iterations on a cyclic component is iterated Gauss–Seidel (Err:523 when
    it does not converge, at most `MAX_ITERATION_EVALS` evaluations per
-   recalc).
+   recalc). A range precedent is one edge per dirty formula in it, so the
+   edges can be quadratic in the formulas; they are produced per node
+   (time O(edges), before the watchdog, as always) but not held: the DFS
+   path keeps only each frame's not-yet-visited successors, at most
+   `TARJAN_PATH_ENTRIES` (1 Mi) entries beyond one per node, and frames
+   past that recompute theirs when the DFS returns to them. The visit
+   order is the plain algorithm's (a randomized unit test compares them).
+   Before this (review 7 verification, F5) every node on the path held its
+   whole list: 16,000 `B<i> = SUM($A$1:$A$16000)+B<i+1>` took 2.1 GB in
+   both modes; now 37 MB.
 4. **Evaluation** in that order through `CalcCtx`. A dirty precedent met
    during evaluation (a newly discovered dynamic reference, a lazy IF
    branch) is evaluated on demand (nested up to 16 deep, deeper ones
@@ -57,7 +66,8 @@ pre-computed result instead of evaluating whenever it reaches a formula
 that has one.
 
 1. Steps 1–3 as above. Tarjan keeps each node's dirty precedents (it
-   computes them anyway; normally they are freed as nodes finish), at most
+   computes them anyway; normally they are not kept), counted when the node
+   is entered, at most
    `max(MAX_EDGES, 16 × dirty formulas)` edges (`MAX_EDGES` = 4 Mi, about
    12 bytes each). A range precedent is one edge per dirty formula in the
    range, so N formulas summing a range of N formulas are N² edges; past
@@ -161,8 +171,12 @@ that has one.
   finished later in the same attempt (on demand, at a shallower depth)
   made progress and is repeated rather than given Err:522. A cell left
   incomplete by a deferral and read again in the same attempt is deferred
-  too instead of being re-entered (re-entering redid its whole on-demand
-  subtree once per reader). (The first
+  too instead of being re-entered: re-entering redid its whole on-demand
+  subtree once per reader, exponential in the depth (layers of 3 cells
+  each reading the whole next layer, 40 deep: over 30 M evaluations
+  without finishing, against 1 ms; unit test
+  `incomplete_cells_are_not_reentered_in_one_attempt`). The sets of one
+  attempt are emptied in time proportional to their contents. (The first
   version of this fix pushed one deferred cell at a time, which made one
   `evaluate` cubic in the number of deferred siblings: security review 7,
   H1; correctness review 7, findings 1 and 3.) These cases need dynamic
@@ -280,15 +294,22 @@ installed, no wasm crate in the workspace); `cargo check -p tally-engine
   RAND order, 3-D spans, arrays, MULTIPLE.OPERATIONS, budget, and the
   review 7 cases: range reads that stop at an error, a lookup line with a
   later formula, the edge cap, a bailed evaluation's wasted work, the
-  retry budget, RAND readers and the lookup index). The random workbooks
-  include error constants and INDIRECT/OFFSET ranges.
+  retry budget (a shape that reaches it)). The random workbooks
+  include error values (`#DIV/0!`, `#N/A` written as values: typed in,
+  they would be text, which aggregates skip) and INDIRECT/OFFSET ranges.
 - Unit tests (`recalc::tests`, `parallel::tests`): the work stack retries
-  a reader once after all its deferred cells and stops at the deadline,
-  the edge cap, lookup lines released uncounted, whole-range checks, a
-  worker panic falling back to the sequential pass, a busy pool.
-- `tests/recalc.rs`: deferred siblings (30,000) and 600 dynamic 24-long
-  chains in linear time, a deferred cell finished later in the same
-  attempt, a real cycle through deferred cells.
+  a reader once after all its deferred cells (siblings and rows of dynamic
+  chains, counted with the evaluation hook), does not re-enter incomplete
+  cells, empties its sets cheaply and stops at the deadline; the bounded
+  Tarjan matches the plain one on random graphs and keeps its path within
+  the budget; the edge cap, lookup lines released uncounted (the M2 case:
+  the cache is observed directly), whole-range checks, reads of a bailed
+  evaluation returning at once, a worker panic falling back to the
+  sequential pass, a busy pool. Each of these was checked to fail with its
+  fix switched off.
+- `tests/recalc.rs`: 30,000 deferred siblings in linear time, a deferred
+  cell finished later in the same attempt (the reader entered first, so
+  it is evaluated before the chain), a real cycle through deferred cells.
   `TALLY_PAR_STRESS=N` multiplies the case count for race hunting;
   `SEED=n ... debug_seed -- --ignored --nocapture` prints one workbook
   cell by cell with the differences marked. (The random workbooks run on
