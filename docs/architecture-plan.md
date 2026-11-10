@@ -221,7 +221,7 @@ pub enum ErrorKind {
 - **Dynamic references** (INDIRECT, OFFSET, INDEX returning references) are recorded at evaluation time as dynamic dependencies, replaced on each evaluation.
 - **Modes:** AutoCalculate on/off, F9 (recalc dirty), Ctrl+Shift+F9 (hard recalc: rebuild the graph and recompute everything).
 - **On load:** use cached values from the file and offer a "Recalculation on file load: Never / Always / Prompt" setting like LibreOffice (default: recalc if the file came from a different generator, otherwise trust the cache).
-- **Threading:** single-threaded in v0.1. The engine lives behind a `Mutex` per document in the Tauri state. From v0.5, run it as an actor thread with progress and cancel for long recalcs; v0.7 adds rayon over independent dirty components.
+- **Threading:** single-threaded in v0.1. The engine lives behind a `Mutex` per document in the Tauri state. From v0.5, run it as an actor thread with progress and cancel for long recalcs; v0.7 adds rayon over independent dirty components. *Built (2026-11-10, docs/recalc-parallel.md):* a parallel pre-pass evaluates dirty formulas on a capped rayon pool in dataflow order (no level barriers; a chain runs as one task) with a read-only context that reads only final values and bails on anything else (RAND, MULTIPLE.OPERATIONS, dirty formulas not yet final); the unchanged sequential pass then takes the pre-computed results, so results, errors, cycles and reports are identical to single-threaded. Feature `parallel` (default on; off for wasm32), app pref "Enable multi-threaded calculation", `TALLY_CALC_THREADING` / `TALLY_CALC_THREADS`.
 - **Performance targets** (criterion benchmarks in `calc-engine/benches`):
   - full recalc of 100k simple formulas: under 300 ms;
   - edit with 10k dependents: under 30 ms;
@@ -577,7 +577,7 @@ Parallel tracks:
 
 ### v0.7 to v1.0: hardening and parity
 
-- Multithreaded recalc, large-file streaming (100 MB ODS), memory optimisation (block storage everywhere).
+- Multithreaded recalc (done 2026-11-10, docs/recalc-parallel.md), large-file streaming (100 MB ODS), memory optimisation (block storage everywhere).
 - Full accessibility pass, code signing and notarization, auto-update (tauri-plugin-updater), crash reporting (opt-in).
 - Solver (linear first).
 - **v1.0 exit criteria:**

@@ -29,9 +29,13 @@
 //!   never rebuilt. Overlapping ranges (`$A$1:$A$1000`, `A:A`) are separate
 //!   lines with separate indexes, within the same budget.
 //!
-//! The engine evaluates on one thread per document (the workbook is behind
-//! `&mut`), so the cache needs no locking; the indexes are `Arc`s of
-//! immutable data and are `Send + Sync`.
+//! The sequential recalc owns the cache through `&mut Workbook`. The
+//! parallel pre-pass (`crate::parallel`, docs/recalc-parallel.md) moves it
+//! into a `Mutex` for its duration: a line handed out for building is
+//! `Building` until the builder reports back, so other threads scan rather
+//! than build it twice, and a pre-pass build uses only final values (clean
+//! or pre-computed formulas). The indexes are `Arc`s of immutable data and
+//! are `Send + Sync`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -56,6 +60,11 @@ pub const MAX_ATTEMPTS: u8 = 3;
 enum Slot {
     /// Requested before; `failed` build attempts found unclean formulas.
     Seen {
+        failed: u8,
+    },
+    /// A build was handed out and has not reported back yet (another
+    /// thread of the parallel pre-pass is building it): scan meanwhile.
+    Building {
         failed: u8,
     },
     Built(Arc<LookupIndex>),
@@ -103,13 +112,15 @@ impl LookupCache {
     pub(crate) fn request(&mut self, line: &CellRange, cells: usize) -> Request {
         match self.lines.get(line) {
             Some(Slot::Built(ix)) => Request::Hit(ix.clone()),
-            Some(Slot::Skip) => Request::Scan,
-            Some(Slot::Seen { .. }) => {
+            Some(Slot::Skip | Slot::Building { .. }) => Request::Scan,
+            Some(Slot::Seen { failed }) => {
+                let failed = *failed;
                 let worst = LookupIndex::max_bytes_without_keys(cells);
                 if self.bytes.saturating_add(worst) > self.max_bytes {
                     self.lines.insert(*line, Slot::Skip);
                     Request::Scan
                 } else {
+                    self.lines.insert(*line, Slot::Building { failed });
                     Request::Build
                 }
             }
@@ -127,11 +138,22 @@ impl LookupCache {
     pub(crate) fn not_clean(&mut self, line: &CellRange) {
         if let Some(slot) = self.lines.get_mut(line) {
             *slot = match slot {
-                Slot::Seen { failed } if *failed + 1 < MAX_ATTEMPTS => Slot::Seen {
-                    failed: *failed + 1,
-                },
+                Slot::Seen { failed } | Slot::Building { failed } if *failed + 1 < MAX_ATTEMPTS => {
+                    Slot::Seen {
+                        failed: *failed + 1,
+                    }
+                }
                 _ => Slot::Skip,
             };
+        }
+    }
+
+    /// Drops everything known about `line` (its index, if built), as if
+    /// it had never been requested.
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+    pub(crate) fn forget(&mut self, line: &CellRange) {
+        if let Some(Slot::Built(ix)) = self.lines.remove(line) {
+            self.bytes = self.bytes.saturating_sub(ix.heap_bytes());
         }
     }
 
@@ -172,9 +194,18 @@ mod tests {
         CellAddr::from_a1(1, s).unwrap_or_else(|| panic!("bad cell {s}"))
     }
 
+    /// A workbook that always recalculates on this thread (these tests
+    /// count builds in thread-locals, also under
+    /// `TALLY_CALC_THREADING=force`).
+    fn sequential() -> Workbook {
+        let mut wb = Workbook::new();
+        wb.threading = crate::parallel::Threading::Sequential;
+        wb
+    }
+
     /// A1:A200 = 1..200, B1:B200 = "v1".."v200".
     fn table() -> Workbook {
-        let mut wb = Workbook::new();
+        let mut wb = sequential();
         for r in 1..=200 {
             wb.set_input(a(&format!("A{r}")), &r.to_string());
             wb.set_input(a(&format!("B{r}")), &format!("v{r}"));
@@ -278,7 +309,7 @@ mod tests {
     /// 200 long upper-case keys (their lower-cased copies push the real
     /// size past the worst-case estimate) and 100 lookups into them.
     fn long_keys() -> Workbook {
-        let mut wb = Workbook::new();
+        let mut wb = sequential();
         for r in 1..=200 {
             wb.set_input(a(&format!("A{r}")), &format!("{}{r}", "X".repeat(400)));
         }

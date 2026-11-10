@@ -73,6 +73,7 @@ pub mod ops_v04;
 pub mod ops_v05;
 pub mod outline;
 pub mod pagesetup;
+pub mod parallel;
 pub mod pivot;
 pub mod print;
 pub mod protection;

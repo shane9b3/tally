@@ -238,6 +238,8 @@
   "zoomDlg.variable": "Variable",
   "od.limitDecimals": "Limitar decimales para el formato numérico general",
   "od.decimalPlaces": "Decimales",
+  "od.cpuThreading": "Configuración de hilos de la CPU",
+  "od.multithreading": "Activar el cálculo multihilo",
   "od.twoDigitYear": "Año (dos dígitos)",
   "od.yearsBetween": "Interpretar como años entre",
   "od.yearsAnd": "y {year}",

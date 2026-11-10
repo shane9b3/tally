@@ -73,7 +73,10 @@ pub fn run() {
             *state::lock(&state.recent) = recent;
             // Tools ▸ Options ▸ Input ▸ "Year (two digits)" for the
             // documents of this session (`prefs.rs`).
-            state.set_two_digit_year_default(prefs::two_digit_year(&prefs::load(app.handle())));
+            let saved_prefs = prefs::load(app.handle());
+            state.set_two_digit_year_default(prefs::two_digit_year(&saved_prefs));
+            // Tools ▸ Options ▸ Calculate ▸ "Enable multi-threaded calculation".
+            prefs::apply_multithreading(&saved_prefs);
             // Lock files (doclock.rs): the config dir is the user
             // installation URL; the instance lock tells whether another
             // Tally runs. The identity (`id`, `hostname`) is detected later,

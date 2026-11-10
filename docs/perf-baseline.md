@@ -44,6 +44,35 @@ everything `EngineService::open` / `save` does, i.e. read, build, recalc):
 | PDF export, 20 pages (1060 rows x 6 cols) | 11 - 12 ms | `prepare_print_job` + `print_job_pdf`; gate: < 1 s |
 | DataPilot refresh, 100k source rows | 29 ms (create 29 - 33 ms) | 2 row fields (12 x 50 items), 1 column field (4), Sum + Count, `RefreshPivot` through `apply`; gate: < 500 ms |
 
+### Multithreaded recalc (2026-11-10)
+
+`docs/recalc-parallel.md`. Same machine (12 cores; the pool uses 12
+threads), release build, `cargo xtask perf --only
+recalc,incremental,deep,threads --runs 5`, medians; "1 thread" is
+`TALLY_CALC_THREADING=off` (the single-threaded path, same code as before)
+or `Threading::Sequential`, "12 threads" the default. Other agents' builds
+were running, so +-15 %.
+
+| Scenario | 1 thread | 12 threads | Speed-up |
+|---|---|---|---|
+| Full recalc, 100 chains x 1000 deep (first) | 43 ms (`threads`: 40 ms) | 27 ms (24 ms) | 1.6x |
+| Hard recalc, chains | 35 ms (33 ms) | 19 ms (23 ms) | 1.5 - 1.8x |
+| Full recalc, SUM/VLOOKUP mix, 200k formulas (first) | 327 ms (261 ms) | 187 ms (217 ms) | 1.2 - 1.75x |
+| Hard recalc, SUM/VLOOKUP mix | 206 ms (201 ms) | 132 ms (112 ms) | 1.6 - 1.8x |
+| SUM only, 100k formulas | 170 ms | 72 ms | 2.4x |
+| Flat, 200k independent formulas (new, `threads`) | 134 ms | 86 ms | 1.6x |
+| One chain 100k deep | 46 - 66 ms | 43 - 54 ms | about 1.2x (no parallelism; the pre-pass loop is cheaper than the on-demand path) |
+| Incremental, 1 edit -> 10k dependents | 2.4 ms (2.1 ms) | 1.2 - 1.3 ms | 1.7 - 1.9x |
+| Same edit through `DocumentService::apply` | 2.3 ms | 1.3 ms | 1.8x |
+| Incremental, 1 edit -> 100 dependents (below the 4,096 threshold) | < 0.05 ms | < 0.05 ms | unchanged (pre-pass skipped) |
+
+The speed-ups are well below 12x because only formula evaluation is
+parallel: dirty propagation, the Tarjan ordering (which now also keeps the
+precedent lists), building the dependents index and storing the results in
+order stay on one thread and are now the larger part of these recalcs
+(cheap formulas, about 0.4 - 1 us each). Formulas that cost more per cell
+(lookups that scan, statistics over ranges, text functions) gain more.
+
 Grid scroll (`pnpm perf:e2e`, headless Chromium 1280x820 against
 `dev:web`/MockClient, 1M cells = 50k rows x 20 cols loaded in about 2 s;
 one scroll step per animation frame; two runs agree):
@@ -66,7 +95,8 @@ real number to gate on is a run in the Tauri webview on a Mac (not measured).
 export CARGO_TARGET_DIR=$PWD/.targets/perf
 cargo xtask perf                      # everything above, release mode, ~3 min
 cargo xtask perf --quick --runs 1     # 1/10 sizes, smoke test
-cargo xtask perf --only recalc,csv    # scenarios: recalc incremental io10 io25 io50 csv rss deep chart pdf pivot
+cargo xtask perf --only recalc,csv    # scenarios: recalc incremental io10 io25 io50 csv rss deep chart pdf pivot threads
+TALLY_CALC_THREADING=off cargo xtask perf --only recalc   # single-threaded recalc (TALLY_CALC_THREADS=N caps the pool)
 cargo xtask perf --dir /path/on/big/disk
 cargo xtask perf --only io50,csv --keep --dir DIR   # files in DIR/tally-perf-<pid>, kept; DIR itself is never deleted
 .targets/perf/release/perf --mem FILE   # RSS, footprint and live malloc bytes after each open step

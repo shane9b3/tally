@@ -4,7 +4,9 @@
 //! shell stores the JSON text as given, after checking that it is a JSON
 //! object of at most [`MAX_PREFS_BYTES`] bytes, and reads the keys it needs
 //! itself: `uiLanguage` (the native menu), `openDocumentsIn` (`"tabs"`, the
-//! default, or `"windows"`: where new documents open, `windows.rs`) and
+//! default, or `"windows"`: where new documents open, `windows.rs`),
+//! `calcMultithreading` (multithreaded recalc, default on; handed to
+//! `tally_engine::parallel::set_enabled` at start-up and on every save) and
 //! `autosaveMinutes` (documentation only; the timer runs in the webview).
 //!
 //! Every document runs its own webview with its own copy of the prefs:
@@ -167,6 +169,24 @@ pub fn two_digit_year(json: &str) -> u16 {
         .unwrap_or(tally_types::DEFAULT_TWO_DIGIT_YEAR)
 }
 
+/// The prefs key of Tools ▸ Options ▸ Calculate ▸ "Enable multi-threaded
+/// calculation" (docs/recalc-parallel.md).
+pub const MULTITHREADING_KEY: &str = "calcMultithreading";
+
+/// "Enable multi-threaded calculation": on unless the prefs say `false`.
+pub fn multithreading(json: &str) -> bool {
+    serde_json::from_str::<Value>(json)
+        .ok()
+        .and_then(|v| v.get(MULTITHREADING_KEY)?.as_bool())
+        .unwrap_or(true)
+}
+
+/// Hands the threading preference to the engine (process-wide; every
+/// document's next recalc uses it).
+pub fn apply_multithreading(json: &str) {
+    tally_engine::parallel::set_enabled(multithreading(json));
+}
+
 /// Replaces (or adds) a string key and returns the new document.
 pub fn with_string_key(json: &str, key: &str, value: &str) -> Result<String, ApiError> {
     let mut v: Value =
@@ -190,6 +210,7 @@ pub async fn get_prefs(app: AppHandle) -> Result<String, ApiError> {
 #[tauri::command]
 pub async fn set_prefs(app: AppHandle, json: String) -> Result<(), ApiError> {
     store(&app, &json)?;
+    apply_multithreading(&json);
     // Documents created or opened from now on take the new window.
     if let Some(state) = app.try_state::<crate::state::AppState>() {
         state.set_two_digit_year_default(two_digit_year(&json));
@@ -306,6 +327,15 @@ mod tests {
         assert!(next.contains("\"autoInput\":false"));
         let fresh = with_string_key("garbage", "uiLanguage", "de").unwrap();
         assert_eq!(fresh, r#"{"uiLanguage":"de"}"#);
+    }
+
+    #[test]
+    fn multithreading_defaults_on() {
+        assert!(multithreading("{}"));
+        assert!(multithreading("garbage"));
+        assert!(multithreading(r#"{"calcMultithreading":"no"}"#));
+        assert!(multithreading(r#"{"calcMultithreading":true}"#));
+        assert!(!multithreading(r#"{"calcMultithreading":false}"#));
     }
 
     #[test]

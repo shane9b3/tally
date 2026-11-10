@@ -8,7 +8,10 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-default = []
+# Multithreaded recalc on a rayon pool (docs/recalc-parallel.md). Off for
+# targets without threads (wasm32): recalc is then always sequential.
+default = ["parallel"]
+parallel = ["dep:rayon"]
 # Wires the ODS and CSV readers/writers into `service::IoCodec`. Off by
 # default so the engine builds while the IO crates are in progress; the CLI
 # and the Tauri shell enable it.
@@ -48,6 +51,7 @@ slotmap.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 regex.workspace = true
+rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 tally-io-ods.workspace = true

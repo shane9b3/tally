@@ -188,17 +188,23 @@ impl FormulaCell {
     /// matrix element, a single row/column repeated, `#N/A` outside a
     /// larger matrix; a scalar result fills the block.
     pub fn array_value(&self, dr: u32, dc: u32) -> Value {
-        match &self.array_result {
-            None => self.cached.clone(),
-            Some(m) => {
-                let r = if m.rows == 1 { 0 } else { dr };
-                let c = if m.cols == 1 { 0 } else { dc };
-                match m.get(r, c) {
-                    Some(Value::Empty) => Value::Number(0.0),
-                    Some(Value::Number(n)) if !n.is_finite() => Value::Error(ErrorKind::Num),
-                    Some(v) => v.clone(),
-                    None => Value::Error(ErrorKind::NA),
-                }
+        array_value_of(&self.cached, self.array_result.as_ref(), dr, dc)
+    }
+}
+
+/// [`FormulaCell::array_value`] for a result `cached` / `matrix` that is
+/// not stored in a cell yet (the parallel recalc pre-pass).
+pub fn array_value_of(cached: &Value, matrix: Option<&Arc<Matrix>>, dr: u32, dc: u32) -> Value {
+    match matrix {
+        None => cached.clone(),
+        Some(m) => {
+            let r = if m.rows == 1 { 0 } else { dr };
+            let c = if m.cols == 1 { 0 } else { dc };
+            match m.get(r, c) {
+                Some(Value::Empty) => Value::Number(0.0),
+                Some(Value::Number(n)) if !n.is_finite() => Value::Error(ErrorKind::Num),
+                Some(v) => v.clone(),
+                None => Value::Error(ErrorKind::NA),
             }
         }
     }

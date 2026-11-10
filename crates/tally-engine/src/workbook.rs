@@ -304,6 +304,9 @@ pub struct Workbook {
     /// Lookup indexes shared by exact-match lookups; `Some` only while a
     /// recalc runs (see [`crate::lookup_cache`]).
     pub(crate) lookup_cache: Option<crate::lookup_cache::LookupCache>,
+    /// Single- or multithreaded recalculation for this workbook
+    /// ([`crate::parallel`]); `Auto` follows the app setting. Not saved.
+    pub threading: crate::parallel::Threading,
 }
 
 impl Default for Workbook {
@@ -350,6 +353,7 @@ impl Workbook {
             table_op_calls: 0,
             table_op_work: 0,
             lookup_cache: None,
+            threading: crate::parallel::Threading::Auto,
         }
     }
 

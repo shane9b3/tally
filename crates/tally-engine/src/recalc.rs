@@ -37,7 +37,8 @@ use tally_formula::{Expr, ResolvedRef};
 use tally_functions::{CellFormatInfo, EvalContext, LookupIndex};
 use tally_numfmt::date::now_serial;
 use tally_types::{
-    CalcSettings, CellAddr, CellRange, ErrorKind, IterSettings, SheetId, Value, MAX_COLS, MAX_ROWS,
+    CalcSettings, CellAddr, CellRange, ErrorKind, IterSettings, Matrix, SheetId, Value, MAX_COLS,
+    MAX_ROWS,
 };
 
 use crate::deps::{coalesce, DepIndex};
@@ -69,6 +70,9 @@ pub struct RecalcReport {
     /// Evaluations spent iterating cyclic components (bounded by
     /// [`MAX_ITERATION_EVALS`] per recalc).
     pub iteration_evaluations: u64,
+    /// Of `evaluated`, the formulas whose results came from the parallel
+    /// pre-pass ([`crate::parallel`]; 0 when it did not run).
+    pub precomputed: usize,
 }
 
 /// Most formula evaluations one recalc spends iterating cyclic components
@@ -219,9 +223,29 @@ fn recalc_pass(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
             .is_some_and(|f| f.state == CellState::Dirty)
     });
 
-    let order = topo_order(wb, &dirty);
+    let parallel = crate::parallel::wanted(wb, dirty.len(), budget);
+    let (order, preds) = topo_order(wb, &dirty, parallel);
     let mut report = RecalcReport::default();
     let now = now_serial(wb.settings.date_epoch);
+    // The parallel pre-pass (docs/recalc-parallel.md): results the loop
+    // below takes instead of evaluating.
+    let mut pre = if parallel {
+        let mut at: SecondaryMap<FormulaCellId, u32> = SecondaryMap::new();
+        for (k, scc) in order.iter().enumerate() {
+            for id in &scc.members {
+                at.insert(*id, k as u32);
+            }
+        }
+        let pos: Vec<u32> = dirty
+            .iter()
+            .map(|id| at.get(*id).copied().unwrap_or(u32::MAX))
+            .collect();
+        drop(at);
+        crate::parallel::prepass(wb, &dirty, &preds, pos, now, budget)
+    } else {
+        None
+    };
+    drop(preds);
     let mut recalculated: Vec<CellAddr> = Vec::with_capacity(dirty.len());
     let mut recalculated_blocks: Vec<CellRange> = Vec::new();
     for scc in order {
@@ -270,6 +294,12 @@ fn recalc_pass(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
                 None => recalculated.push(f.addr),
             }
             if f.state != CellState::Dirty {
+                continue;
+            }
+            if let Some(done) = pre.as_mut().and_then(|p| p.take(id)) {
+                store_result(wb, id, done);
+                report.evaluated += 1;
+                report.precomputed += 1;
                 continue;
             }
             let mut ctx = CalcCtx::new(wb, now);
@@ -565,14 +595,17 @@ fn dirty_successors(
 /// of strict precedents (references whose values are always read); the
 /// other members of a cyclic component are evaluated, and a cycle that is
 /// actually followed is caught when a cell re-enters evaluation.
-fn topo_order(wb: &Workbook, dirty: &[FormulaCellId]) -> Vec<Scc> {
+/// With `keep`, also each dirty formula's dirty precedents (indices into
+/// `dirty`, sorted, itself included on a self-reference) for the parallel
+/// pre-pass; otherwise an empty list.
+fn topo_order(wb: &Workbook, dirty: &[FormulaCellId], keep: bool) -> (Vec<Scc>, Vec<Vec<usize>>) {
     let mut local: SecondaryMap<FormulaCellId, usize> = SecondaryMap::new();
     for (i, id) in dirty.iter().enumerate() {
         local.insert(*id, i);
     }
     let mut scratch: Vec<FormulaCellId> = Vec::new();
     let by_col = DirtyByCol::new(wb, dirty);
-    let sccs = tarjan(dirty.len(), |v| {
+    let (sccs, succ) = tarjan(dirty.len(), keep, |v| {
         let Some(f) = wb.formulas.get(dirty[v]) else {
             return Vec::new();
         };
@@ -597,7 +630,12 @@ fn topo_order(wb: &Workbook, dirty: &[FormulaCellId]) -> Vec<Scc> {
             cyclic,
         });
     }
-    out
+    let preds = if keep {
+        succ.into_iter().map(Option::unwrap_or_default).collect()
+    } else {
+        Vec::new()
+    };
+    (out, preds)
 }
 
 /// The members of `scc` that lie on a cycle of strict precedents.
@@ -612,7 +650,7 @@ fn strict_cycle_members(
     }
     let mut out = Vec::new();
     let by_col = DirtyByCol::new(wb, scc);
-    for (members, cyclic) in tarjan(scc.len(), |v| {
+    for (members, cyclic) in tarjan(scc.len(), false, |v| {
         let Some(f) = wb.formulas.get(scc[v]) else {
             return Vec::new();
         };
@@ -625,7 +663,9 @@ fn strict_cycle_members(
             &local,
             scratch,
         )
-    }) {
+    })
+    .0
+    {
         if cyclic {
             out.extend(members.into_iter().map(|i| scc[i]));
         }
@@ -635,10 +675,14 @@ fn strict_cycle_members(
 
 /// Iterative Tarjan over nodes `0..n`; components come out successors
 /// first, each with whether it is cyclic (several members or a self-edge).
+/// With `keep`, each node's successor list is returned too (indexed by
+/// node); otherwise the lists are freed as nodes finish and all `None`.
+#[allow(clippy::type_complexity)]
 fn tarjan(
     n: usize,
+    keep: bool,
     mut edges: impl FnMut(usize) -> Vec<usize>,
-) -> Vec<(SmallVec<[usize; 1]>, bool)> {
+) -> (Vec<(SmallVec<[usize; 1]>, bool)>, Vec<Option<Vec<usize>>>) {
     const UNSEEN: usize = usize::MAX;
     let mut index = vec![UNSEEN; n];
     let mut low = vec![0usize; n];
@@ -701,10 +745,12 @@ fn tarjan(
             // `v` is finished: its successors are never read again (a node
             // is entered once), so free them now rather than holding one
             // list per formula until the end.
-            succ[v] = None;
+            if !keep {
+                succ[v] = None;
+            }
         }
     }
-    out
+    (out, succ)
 }
 
 /// How a [`CalcCtx`] holds the workbook: mutably (recalc, which caches
@@ -712,6 +758,10 @@ fn tarjan(
 enum WbAccess<'w> {
     Mut(&'w mut Workbook),
     Shared(&'w Workbook),
+    /// The parallel pre-pass (docs/recalc-parallel.md): read-only, reads
+    /// only final values, bails on anything else.
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+    Par(&'w Workbook, &'w ParShared),
 }
 
 impl std::ops::Deref for WbAccess<'_> {
@@ -720,7 +770,7 @@ impl std::ops::Deref for WbAccess<'_> {
     fn deref(&self) -> &Workbook {
         match self {
             WbAccess::Mut(wb) => wb,
-            WbAccess::Shared(wb) => wb,
+            WbAccess::Shared(wb) | WbAccess::Par(wb, _) => wb,
         }
     }
 }
@@ -766,6 +816,18 @@ pub struct CalcCtx<'w> {
     local_table_ops: u32,
     /// `MULTIPLE.OPERATIONS` sandbox work of a read-only context.
     local_table_work: u64,
+    /// Parallel pre-pass: the evaluation read something that is not final
+    /// (or must run sequentially); its result is discarded.
+    bailed: bool,
+    /// Parallel pre-pass: the position in the sequential order of the
+    /// formula being evaluated.
+    par_pos: u32,
+    /// Parallel pre-pass: the first not-yet-computed formula the bailed
+    /// evaluation read (node index).
+    wait_on: Option<usize>,
+    /// Parallel pre-pass: the evaluation bailed for a reason waiting does
+    /// not remove.
+    bail_final: bool,
 }
 
 impl<'w> CalcCtx<'w> {
@@ -788,6 +850,10 @@ impl<'w> CalcCtx<'w> {
             precision,
             local_table_ops: 0,
             local_table_work: 0,
+            bailed: false,
+            par_pos: 0,
+            wait_on: None,
+            bail_final: false,
         }
     }
 
@@ -818,6 +884,38 @@ impl<'w> CalcCtx<'w> {
             iter_set: None,
             local_table_ops: 0,
             local_table_work: 0,
+            bailed: false,
+            par_pos: 0,
+            wait_on: None,
+            bail_final: false,
+        }
+    }
+
+    /// A context of the parallel pre-pass over `wb` (see
+    /// docs/recalc-parallel.md): nothing is written; dirty formulas are read
+    /// from `sh` when pre-computed, otherwise the evaluation bails.
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+    pub(crate) fn par(wb: &'w Workbook, sh: &'w ParShared, now: f64) -> Self {
+        Self {
+            precision: wb.settings.precision_as_shown,
+            wb: WbAccess::Par(wb, sh),
+            origin: CellAddr::new(0, 0, 0),
+            now,
+            depth: 0,
+            dyn_deps: Vec::new(),
+            dyn_seen: None,
+            dyn_spans: Vec::new(),
+            local_rng: None,
+            eval_stack: Vec::new(),
+            deferred: Vec::new(),
+            circular: 0,
+            iter_set: None,
+            local_table_ops: 0,
+            local_table_work: 0,
+            bailed: false,
+            par_pos: 0,
+            wait_on: None,
+            bail_final: false,
         }
     }
 
@@ -840,7 +938,55 @@ impl<'w> CalcCtx<'w> {
     fn wb_mut(&mut self) -> Option<&mut Workbook> {
         match &mut self.wb {
             WbAccess::Mut(wb) => Some(wb),
-            WbAccess::Shared(_) => None,
+            WbAccess::Shared(_) | WbAccess::Par(..) => None,
+        }
+    }
+
+    /// The pre-pass state of a parallel context.
+    fn par_state(&self) -> Option<&'w ParShared> {
+        match self.wb {
+            WbAccess::Par(_, sh) => Some(sh),
+            _ => None,
+        }
+    }
+
+    /// A parallel context reading formula `id`, which is not clean: its
+    /// pre-computed result, or `None` after marking the evaluation bailed.
+    fn par_done(&mut self, sh: &'w ParShared, id: FormulaCellId) -> Option<&'w Done> {
+        match sh.read(id, self.par_pos) {
+            SlotRead::Done(d) => Some(d),
+            SlotRead::Pending(i) => {
+                self.bail_waiting(i);
+                None
+            }
+            SlotRead::Never => {
+                self.bail_for_good();
+                None
+            }
+        }
+    }
+
+    /// The evaluation bailed on a dirty formula (node `i`) not computed
+    /// yet: it can be retried once that one is.
+    fn bail_waiting(&mut self, i: usize) {
+        self.bailed = true;
+        self.wait_on.get_or_insert(i);
+    }
+
+    /// The evaluation bailed for a reason no retry removes.
+    fn bail_for_good(&mut self) {
+        self.bailed = true;
+        self.bail_final = true;
+    }
+
+    /// Parallel pre-pass, after a bailed [`Self::eval_par`]: the node to
+    /// wait for before retrying, or `None` if retrying cannot help.
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+    pub(crate) fn retry_after(&self) -> Option<usize> {
+        if self.bail_final {
+            None
+        } else {
+            self.wait_on
         }
     }
 
@@ -901,18 +1047,29 @@ impl<'w> CalcCtx<'w> {
                     continue;
                 }
                 if let Some(p) = work.iter().position(|x| *x == d) {
-                    // The deferred cell is waiting for this one: a cycle.
+                    // The deferred cell is waiting for this one: a cycle
+                    // among the cells still waiting. Entries that finished
+                    // meanwhile (evaluated on demand by a nested attempt)
+                    // keep their results: they are not on the cycle, and
+                    // overwriting a finished result would make other
+                    // cells' values depend on when they read it.
                     let cycle: Vec<FormulaCellId> = work.drain(p..).collect();
                     for c in cycle {
-                        self.set_circular(c);
+                        if self.is_dirty(c) {
+                            self.set_circular(c);
+                        }
                     }
                     pushed = true;
                     break;
                 }
-                if !work.contains(&d) {
-                    work.push(d);
-                    pushed = true;
-                }
+                // One at a time, so that every entry of `work` waits for
+                // the one above it (the cycle test above relies on it;
+                // pushing two siblings made the second "wait" for the first
+                // and reported a cycle when it read it). The others are
+                // deferred again when `top` is retried.
+                work.push(d);
+                pushed = true;
+                break;
             }
             if !pushed {
                 // No progress is possible (should not happen): give up on it.
@@ -962,22 +1119,7 @@ impl<'w> CalcCtx<'w> {
             circular: false,
             deferred: false,
         });
-        let (mut value, matrix) = if is_array {
-            let v = eval_with(&formula.expr, self, true, &env);
-            match array_result(&v, self) {
-                Value::Array(m) => {
-                    let first = m
-                        .get(0, 0)
-                        .cloned()
-                        .unwrap_or(Value::Error(ErrorKind::Value));
-                    (normalize_cell_value(first), Some(m))
-                }
-                other => (normalize_cell_value(other), None),
-            }
-        } else {
-            let v = eval_with(&formula.expr, self, false, &env);
-            (cell_result(&v, self), None)
-        };
+        let (mut value, matrix) = self.compute(&formula.expr, is_array, &env);
         #[cfg(test)]
         test_hook::on_evaluated(self, addr);
         let frame = self.eval_stack.pop();
@@ -1013,34 +1155,226 @@ impl<'w> CalcCtx<'w> {
         } else {
             value
         };
-        let Some(f) = wb.formulas.get_mut(id) else {
-            return;
-        };
-        f.cached = value;
-        if f.array.is_some() {
-            f.array_result = matrix;
-        }
-        f.state = CellState::Clean;
-        if dynamic != f.dynamic_deps || dynamic_spans != f.dynamic_spans() {
-            f.dynamic_deps = dynamic;
-            if dynamic_spans != f.dynamic_spans() {
-                f.set_dynamic_spans(dynamic_spans);
+        store_result(
+            wb,
+            id,
+            Done {
+                value,
+                matrix,
+                dynamic,
+                dynamic_spans,
+            },
+        );
+    }
+
+    /// Evaluates a formula's expression at `self.origin`: the cell value
+    /// and, for an array formula, its result matrix.
+    fn compute(
+        &mut self,
+        expr: &Expr,
+        is_array: bool,
+        env: &EvalEnv,
+    ) -> (Value, Option<Arc<Matrix>>) {
+        if is_array {
+            let v = eval_with(expr, self, true, env);
+            match array_result(&v, self) {
+                Value::Array(m) => {
+                    let first = m
+                        .get(0, 0)
+                        .cloned()
+                        .unwrap_or(Value::Error(ErrorKind::Value));
+                    (normalize_cell_value(first), Some(m))
+                }
+                other => (normalize_cell_value(other), None),
             }
-            let mut all = f.precedents.clone();
-            all.extend(f.dynamic_deps.iter().copied());
-            let spans = f.all_spans();
-            let vol = f.volatile;
-            wb.deps.remove(id);
-            wb.deps.add(id, &all);
-            wb.deps.add_spans(id, &spans);
-            wb.deps.set_volatile(id, vol);
+        } else {
+            let v = eval_with(expr, self, false, env);
+            (cell_result(&v, self), None)
         }
     }
 
+    /// Evaluates dirty formula `id` in a parallel pre-pass context: its
+    /// result as `evaluate_once` would store it, or `None` if the
+    /// evaluation bailed (see docs/recalc-parallel.md).
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+    pub(crate) fn eval_par(&mut self, id: FormulaCellId) -> Option<Done> {
+        let sh = self.par_state()?;
+        self.par_pos = *sh.pos.get(*sh.local.get(id)?)?;
+        let f = self.wb.formulas.get(id)?;
+        let formula = f.formula.clone();
+        let addr = f.addr;
+        let is_array = f.array.is_some();
+        let env = if f.has_names {
+            EvalEnv::new(crate::names::collect_names(&self.wb.names, &formula.expr, addr.sheet).0)
+        } else {
+            EvalEnv::default()
+        };
+        self.origin = addr;
+        self.depth = 1;
+        self.eval_stack.push(Frame {
+            id,
+            circular: false,
+            deferred: false,
+        });
+        let (value, matrix) = self.compute(&formula.expr, is_array, &env);
+        let frame = self.eval_stack.pop();
+        if self.bailed || frame.is_none_or(|f| f.circular || f.deferred) {
+            return None;
+        }
+        let value = match value {
+            Value::Number(n) if self.precision => Value::Number(shown_number(&self.wb, addr, n)),
+            other => other,
+        };
+        Some(Done {
+            value,
+            matrix: if is_array { matrix } else { None },
+            dynamic: std::mem::take(&mut self.dyn_deps),
+            dynamic_spans: std::mem::take(&mut self.dyn_spans),
+        })
+    }
+}
+
+/// Stores the result of formula `id` (value already rounded for "precision
+/// as shown"), marks it clean and re-registers its dynamic precedents when
+/// they changed.
+fn store_result(wb: &mut Workbook, id: FormulaCellId, done: Done) {
+    let Done {
+        value,
+        matrix,
+        dynamic,
+        dynamic_spans,
+    } = done;
+    let Some(f) = wb.formulas.get_mut(id) else {
+        return;
+    };
+    f.cached = value;
+    if f.array.is_some() {
+        f.array_result = matrix;
+    }
+    f.state = CellState::Clean;
+    if dynamic != f.dynamic_deps || dynamic_spans != f.dynamic_spans() {
+        f.dynamic_deps = dynamic;
+        if dynamic_spans != f.dynamic_spans() {
+            f.set_dynamic_spans(dynamic_spans);
+        }
+        let mut all = f.precedents.clone();
+        all.extend(f.dynamic_deps.iter().copied());
+        let spans = f.all_spans();
+        let vol = f.volatile;
+        wb.deps.remove(id);
+        wb.deps.add(id, &all);
+        wb.deps.add_spans(id, &spans);
+        wb.deps.set_volatile(id, vol);
+    }
+}
+
+/// A formula result computed by the parallel pre-pass, not stored yet.
+#[derive(Debug)]
+pub(crate) struct Done {
+    /// The cell value (rounded for "precision as shown").
+    value: Value,
+    /// The result matrix of an array formula (`None`: a scalar fills it).
+    matrix: Option<Arc<Matrix>>,
+    /// Dynamic precedents recorded by the evaluation.
+    dynamic: Vec<CellRange>,
+    /// Dynamic 3-D precedents recorded by the evaluation.
+    dynamic_spans: Vec<Span3d>,
+}
+
+/// What the workers of the parallel pre-pass share: which dirty formulas
+/// are pre-computed (`slots`, indexed like the recalc's dirty list), the
+/// position of each in the sequential order, and the lookup index cache,
+/// moved out of the workbook for the pre-pass.
+pub(crate) struct ParShared {
+    /// Dirty formula → index into `slots`.
+    pub(crate) local: SecondaryMap<FormulaCellId, usize>,
+    /// Index of each dirty formula's component in the sequential order.
+    pub(crate) pos: Vec<u32>,
+    /// Pre-computed results, set once by the formula's own task.
+    pub(crate) slots: Vec<std::sync::OnceLock<Done>>,
+    /// The recalc's lookup cache during the pre-pass.
+    pub(crate) cache: std::sync::Mutex<ParCache>,
+}
+
+/// A parallel read of a dirty formula.
+enum SlotRead<'a> {
+    /// Pre-computed and final for the reader.
+    Done(&'a Done),
+    /// Not computed yet (node index): the reader may wait for it.
+    Pending(usize),
+    /// Never final for the reader (not in the dirty set, or ordered after
+    /// it): the reader is left to the sequential pass.
+    Never,
+}
+
+/// The lookup cache during the pre-pass.
+#[derive(Default)]
+pub(crate) struct ParCache {
+    /// The recalc's cache (moved back after the pre-pass).
+    pub(crate) cache: Option<LookupCache>,
+    /// Lines whose index holds pre-computed formulas: the latest position
+    /// among them. A formula ordered before that position may not use the
+    /// index (it would read a formula the sequential pass has not reached),
+    /// and the sequential pass does not get these indexes.
+    pub(crate) with_dirty: HashMap<CellRange, u32>,
+}
+
+impl ParShared {
+    /// Takes the pre-computed result of `id` out (the sequential pass
+    /// stores it).
+    pub(crate) fn take(&mut self, id: FormulaCellId) -> Option<Done> {
+        let i = *self.local.get(id)?;
+        self.slots.get_mut(i)?.take()
+    }
+
+    /// The pre-computed result of `id` if it is final for a formula at
+    /// position `me` of the sequential order: computed, and ordered before
+    /// `me`, so the sequential pass has stored it when it reaches `me`
+    /// (a later one is reached only through a dynamic reference found now;
+    /// reading it would change where the sequential pass evaluates it).
+    fn done_before(&self, id: FormulaCellId, me: u32) -> Option<&Done> {
+        match self.read(id, me) {
+            SlotRead::Done(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// [`Self::done_before`], telling a result that is still to come
+    /// (worth waiting for) from one that will never be final for `me`.
+    fn read(&self, id: FormulaCellId, me: u32) -> SlotRead<'_> {
+        let Some(&i) = self.local.get(id) else {
+            return SlotRead::Never;
+        };
+        if self.pos.get(i).is_none_or(|p| *p >= me) {
+            return SlotRead::Never;
+        }
+        match self.slots.get(i).and_then(std::sync::OnceLock::get) {
+            Some(d) => SlotRead::Done(d),
+            None => SlotRead::Pending(i),
+        }
+    }
+
+    fn cache(&self) -> std::sync::MutexGuard<'_, ParCache> {
+        self.cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl<'w> CalcCtx<'w> {
     fn formula_value(&mut self, id: FormulaCellId) -> Value {
         let Some(f) = self.wb.formulas.get(id) else {
             return Value::Empty;
         };
+        if let Some(sh) = self.par_state() {
+            return match f.state {
+                CellState::Clean => f.cached.clone(),
+                _ => match self.par_done(sh, id) {
+                    Some(d) => d.value.clone(),
+                    None => Value::Error(ErrorKind::Circular),
+                },
+            };
+        }
         match f.state {
             CellState::Clean => f.cached.clone(),
             CellState::Evaluating => {
@@ -1090,7 +1424,96 @@ impl<'w> CalcCtx<'w> {
         }
     }
 
+    /// `lookup_index` in the parallel pre-pass: the shared cache behind its
+    /// mutex; an index is built only from final values (clean or
+    /// pre-computed formulas), so it is the index the sequential pass
+    /// would build.
+    fn par_lookup_index(
+        &mut self,
+        sh: &'w ParShared,
+        line: &CellRange,
+    ) -> Option<Arc<LookupIndex>> {
+        let bounds = self.used_bounds(line)?;
+        let cells = bounds.cell_count();
+        if cells < LookupIndex::MIN_CELLS {
+            return None;
+        }
+        let cells = usize::try_from(cells).unwrap_or(usize::MAX);
+        let me = self.par_pos;
+        {
+            let mut g = sh.cache();
+            let ParCache { cache, with_dirty } = &mut *g;
+            match cache.as_mut()?.request(line, cells) {
+                Request::Hit(ix) => {
+                    // An index over formulas this one may not read yet:
+                    // scan (and bail on them).
+                    if with_dirty.get(line).is_some_and(|p| *p >= me) {
+                        return None;
+                    }
+                    return Some(ix);
+                }
+                Request::Scan => return None,
+                Request::Build => {}
+            }
+        }
+        let mut found = Vec::new();
+        formulas_in(&self.wb, &bounds, &mut found);
+        let mut latest: Option<u32> = None;
+        let mut all_final = true;
+        for id in &found {
+            if self
+                .wb
+                .formulas
+                .get(*id)
+                .is_some_and(|f| f.state == CellState::Clean)
+            {
+                continue;
+            }
+            match sh.local.get(*id).copied() {
+                Some(i) if sh.done_before(*id, me).is_some() => {
+                    let p = sh.pos.get(i).copied().unwrap_or(0);
+                    latest = Some(latest.map_or(p, |l| l.max(p)));
+                }
+                _ => {
+                    all_final = false;
+                    break;
+                }
+            }
+        }
+        if !all_final {
+            if let Some(c) = sh.cache().cache.as_mut() {
+                c.not_clean(line);
+            }
+            return None;
+        }
+        let mut items = Vec::new();
+        let (r0, c0) = (line.r0, line.c0);
+        self.for_each_in_range(&bounds, true, &mut |a, v| {
+            items.push(((a.row - r0) + (a.col - c0), v.clone()));
+            ControlFlow::Continue(())
+        });
+        if self.bailed {
+            if let Some(c) = sh.cache().cache.as_mut() {
+                c.not_clean(line);
+            }
+            return None;
+        }
+        let ix = Arc::new(LookupIndex::build(items, self.wb.settings.case_sensitive));
+        let mut g = sh.cache();
+        if let Some(c) = g.cache.as_mut() {
+            c.insert(*line, ix.clone());
+        }
+        if let Some(l) = latest {
+            g.with_dirty.insert(*line, l);
+        }
+        Some(ix)
+    }
+
     fn ensure_clean(&mut self, range: &CellRange) {
+        if self.par_state().is_some() {
+            // Nothing is evaluated on demand: reads bail instead.
+            return;
+        }
         let mut ids = Vec::new();
         dirty_formulas_in(&self.wb, range, &mut ids);
         for id in ids {
@@ -1240,6 +1663,27 @@ impl EvalContext for CalcCtx<'_> {
             }
             Some(CellContent::ArrayPart(id)) => {
                 let id = *id;
+                if let Some(sh) = self.par_state() {
+                    let f = self.wb.formulas.get(id);
+                    return match f {
+                        None => Value::Empty,
+                        Some(f) if f.state == CellState::Clean => {
+                            f.array_value(addr.row - f.addr.row, addr.col - f.addr.col)
+                        }
+                        Some(f) => {
+                            let (r0, c0) = (f.addr.row, f.addr.col);
+                            match self.par_done(sh, id) {
+                                Some(d) => crate::formula_cells::array_value_of(
+                                    &d.value,
+                                    d.matrix.as_ref(),
+                                    addr.row - r0,
+                                    addr.col - c0,
+                                ),
+                                None => Value::Error(ErrorKind::Circular),
+                            }
+                        }
+                    };
+                }
                 match self.formula_value(id) {
                     Value::Error(ErrorKind::Circular)
                         if self
@@ -1273,6 +1717,29 @@ impl EvalContext for CalcCtx<'_> {
         self.ensure_clean(range);
         let iter_set = self.iter_set.clone();
         let precision = self.precision;
+        let par = self.par_state();
+        let my_pos = self.par_pos;
+        let bailed = std::cell::Cell::new(false);
+        let bailed_for_good = std::cell::Cell::new(false);
+        let wait = std::cell::Cell::new(None::<usize>);
+        // Parallel pre-pass: a dirty formula's final value, or bail.
+        let slot = |id: FormulaCellId| -> Option<&Done> {
+            match par.map(|sh| sh.read(id, my_pos)) {
+                Some(SlotRead::Done(d)) => Some(d),
+                Some(SlotRead::Pending(i)) => {
+                    bailed.set(true);
+                    if wait.get().is_none() {
+                        wait.set(Some(i));
+                    }
+                    None
+                }
+                _ => {
+                    bailed.set(true);
+                    bailed_for_good.set(true);
+                    None
+                }
+            }
+        };
         let wb = &*self.wb;
         let Some(sheet) = wb.sheet(range.sheet) else {
             return;
@@ -1280,13 +1747,17 @@ impl EvalContext for CalcCtx<'_> {
         let circular = Value::Error(ErrorKind::Circular);
         let empty = Value::Empty;
         let iterated = |id: FormulaCellId| iter_set.as_ref().is_some_and(|s| s.contains(&id));
-        for c in range.c0..=c1 {
+        'cols: for c in range.c0..=c1 {
             let col = sheet.column(c);
             let value_of = |content: &'_ CellContent, r: u32| -> Option<Value> {
                 match content {
                     CellContent::Value(_) => None,
                     CellContent::Formula(id) => Some(match wb.formulas.get(*id) {
                         Some(fc) if fc.state == CellState::Clean => fc.cached.clone(),
+                        Some(_) if par.is_some() => match slot(*id) {
+                            Some(d) => d.value.clone(),
+                            None => circular.clone(),
+                        },
                         Some(fc) if iterated(*id) => match &fc.cached {
                             Value::Empty => Value::Number(0.0),
                             v => v.clone(),
@@ -1300,6 +1771,15 @@ impl EvalContext for CalcCtx<'_> {
                                 r.saturating_sub(fc.addr.row),
                                 c.saturating_sub(fc.addr.col),
                             ),
+                        Some(fc) if par.is_some() => match slot(*id) {
+                            Some(d) => crate::formula_cells::array_value_of(
+                                &d.value,
+                                d.matrix.as_ref(),
+                                r.saturating_sub(fc.addr.row),
+                                c.saturating_sub(fc.addr.col),
+                            ),
+                            None => circular.clone(),
+                        },
                         Some(_) => circular.clone(),
                         None => Value::Empty,
                     }),
@@ -1336,8 +1816,8 @@ impl EvalContext for CalcCtx<'_> {
                             f(addr, &v)
                         }
                     };
-                    if flow.is_break() {
-                        return;
+                    if flow.is_break() || bailed.get() {
+                        break 'cols;
                     }
                 }
             } else {
@@ -1365,10 +1845,17 @@ impl EvalContext for CalcCtx<'_> {
                         }
                         _ => f(addr, &empty),
                     };
-                    if flow.is_break() {
-                        return;
+                    if flow.is_break() || bailed.get() {
+                        break 'cols;
                     }
                 }
+            }
+        }
+        if bailed.get() {
+            self.bailed = true;
+            self.bail_final |= bailed_for_good.get();
+            if let Some(i) = wait.get() {
+                self.wait_on.get_or_insert(i);
             }
         }
     }
@@ -1418,6 +1905,11 @@ impl EvalContext for CalcCtx<'_> {
     }
 
     fn rand(&mut self) -> f64 {
+        if self.par_state().is_some() {
+            // The random stream is consumed in the sequential order.
+            self.bail_for_good();
+            return 0.5;
+        }
         if let Some(rng) = self.local_rng.as_mut() {
             return rng.next_f64();
         }
@@ -1473,6 +1965,11 @@ impl EvalContext for CalcCtx<'_> {
     /// [`crate::tools::MAX_TABLE_OPS`] calls per recalc; past that the
     /// result is Err:512.
     fn table_op(&mut self, formula: CellAddr, subs: &[(CellAddr, Value)]) -> Option<Value> {
+        if self.par_state().is_some() {
+            // Per-recalc caps and the dependency walk are order-dependent.
+            self.bail_for_good();
+            return Some(Value::Error(ErrorKind::FormulaOverflow));
+        }
         let calls = match self.wb_mut() {
             Some(wb) => {
                 wb.table_op_calls = wb.table_op_calls.saturating_add(1);
@@ -1504,6 +2001,9 @@ impl EvalContext for CalcCtx<'_> {
     /// built on the second request, once the line's formulas are all
     /// clean; never while iterating a cyclic component or outside a recalc.
     fn lookup_index(&mut self, line: &CellRange) -> Option<Arc<LookupIndex>> {
+        if let Some(sh) = self.par_state() {
+            return self.par_lookup_index(sh, line);
+        }
         if self.iter_set.is_some() || self.wb.lookup_cache.is_none() {
             return None;
         }
@@ -1942,6 +2442,11 @@ pub(crate) mod test_hook {
     pub fn set(hook: Option<(CellAddr, CellRange)>) {
         HOOK.with(|h| *h.borrow_mut() = hook);
         COUNT.with(|c| *c.borrow_mut() = 0);
+    }
+
+    /// Whether a hook is set on this thread.
+    pub fn active() -> bool {
+        HOOK.with(|h| h.borrow().is_some())
     }
 
     /// How often the hooked cell was evaluated since [`set`].

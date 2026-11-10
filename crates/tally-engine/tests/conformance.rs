@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use tally_engine::eval::{array_result, eval_in_array_context};
+use tally_engine::parallel::Threading;
 use tally_engine::recalc::{recalc, CalcCtx};
 use tally_engine::Workbook;
 use tally_formula::{Expr, FuncRef};
@@ -171,7 +172,7 @@ fn same(actual: &Value, expect: &Value, tol: Option<f64>) -> bool {
     }
 }
 
-fn run_case(stem: &str, case: &toml::Table) -> Outcome {
+fn run_case(stem: &str, case: &toml::Table, threading: Threading) -> Outcome {
     let Some(Toml::String(formula)) = case.get("formula") else {
         return Outcome::Fail("missing formula".into());
     };
@@ -188,6 +189,7 @@ fn run_case(stem: &str, case: &toml::Table) -> Outcome {
         _ => None,
     });
     let mut wb = Workbook::new();
+    wb.threading = threading;
     if let Some(Toml::Table(s)) = case.get("settings") {
         if let Err(e) = apply_settings(&mut wb, s) {
             return Outcome::Fail(e);
@@ -257,6 +259,18 @@ fn run_case(stem: &str, case: &toml::Table) -> Outcome {
 
 #[test]
 fn conformance_vectors() {
+    run_all(Threading::Sequential);
+}
+
+/// The same vectors with the parallel recalc pre-pass forced
+/// (docs/recalc-parallel.md): every formula of every case goes through the
+/// multithreaded path, which must give the same results.
+#[test]
+fn conformance_vectors_parallel() {
+    run_all(Threading::Parallel);
+}
+
+fn run_all(threading: Threading) {
     let dir = repo_root().join("tests/conformance");
     let mut files = Vec::new();
     walk(&dir, &mut files);
@@ -302,7 +316,7 @@ fn conformance_vectors() {
                 .and_then(|n| n.as_str())
                 .map(|n| format!(" ({n})"))
                 .unwrap_or_default();
-            match run_case(&stem, case) {
+            match run_case(&stem, case, threading) {
                 Outcome::Pass => pass += 1,
                 Outcome::Skip(why) => {
                     skip += 1;
@@ -326,7 +340,7 @@ fn conformance_vectors() {
         }
     }
     println!(
-        "conformance: {} files, {pass} passed, {skip} SKIPPED, {known} KNOWN, {} failed",
+        "conformance ({threading:?}): {} files, {pass} passed, {skip} SKIPPED, {known} KNOWN, {} failed",
         files.len(),
         failures.len()
     );

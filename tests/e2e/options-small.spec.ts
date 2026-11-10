@@ -4,6 +4,7 @@
  *   for documents created from now on; `1/1/45` is 1945 with 1930–2029 and
  *   2045 with 1950–2049;
  * - Calculate ▸ "Limit decimals for general number format": π shows 3.14;
+ * - Calculate ▸ "Enable multi-threaded calculation" (an app preference);
  * - View ▸ Zoom… at 20 % and 400 % (AOO MINZOOM / MAXZOOM), and the grid renders.
  */
 import { expect, test, type Page } from "@playwright/test";
@@ -109,6 +110,32 @@ test("Limit decimals for general number format: π shows 3.14", async ({ page })
   await expect(dlg.getByTestId("opt-limit-decimals")).toBeChecked();
   await expect(dlg.getByTestId("opt-decimal-places")).toHaveValue("2");
   await dlg.getByTestId("dialog-cancel").click();
+});
+
+test("Calculate ▸ Enable multi-threaded calculation: an app preference, on by default", async ({ page }) => {
+  await ready(page);
+  await page.keyboard.press("Meta+,");
+  const dlg = page.getByTestId("options-dialog");
+  await expect(dlg).toBeVisible();
+  const box = dlg.getByTestId("opt-multithreading");
+  await expect(box).toBeChecked();
+  await box.uncheck();
+  const before = (await recorded(page)).length;
+  await dlg.getByTestId("dialog-ok").click();
+  await expect(dlg).toBeHidden();
+  // Not a document setting: no op is sent, the prefs keep it.
+  expect((await recorded(page)).slice(before).some((r) => r.type === "setCalcSettings")).toBe(false);
+  const prefs = await page.evaluate(() => JSON.parse(localStorage.getItem("tally.prefs") ?? "{}") as Record<string, unknown>);
+  expect(prefs.calcMultithreading).toBe(false);
+  await page.reload();
+  await page.waitForFunction(() => window.__tally?.controller.grid != null);
+  await page.keyboard.press("Meta+,");
+  await expect(dlg.getByTestId("opt-multithreading")).not.toBeChecked();
+  await dlg.getByTestId("opt-multithreading").check();
+  await dlg.getByTestId("dialog-ok").click();
+  await expect(dlg).toBeHidden();
+  const after = await page.evaluate(() => JSON.parse(localStorage.getItem("tally.prefs") ?? "{}") as Record<string, unknown>);
+  expect(after.calcMultithreading).toBe(true);
 });
 
 async function zoomTo(page: Page, value: string) {

@@ -117,6 +117,9 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
               <input className={dlg.input} type="number" min={0} max={20} step={1} disabled={decimals === null} value={decimals ?? 0} onChange={(e) => setCalc({ ...calc, standardDecimals: Number(e.target.value) })} data-testid="opt-decimal-places" />
             </Field>
           </div>
+          {/* An app setting, not saved with the document (LibreOffice's CPU threading settings; AOO 4.1 has none). */}
+          <div className={w56.section}>{t("od.cpuThreading", "CPU threading settings")}</div>
+          <Check label={t("od.multithreading", "Enable multi-threaded calculation")} checked={prefs.calcMultithreading} onChange={(v) => setPrefs({ ...prefs, calcMultithreading: v })} testId="opt-multithreading" />
         </div>
       ) : null}
       {tab === "view" ? (

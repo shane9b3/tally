@@ -119,6 +119,13 @@ export interface AppPrefs {
    * (`setUndoDepth`), applied to every open document.
    */
   undoSteps: number;
+  /**
+   * Tools ▸ Options ▸ Calculate ▸ "Enable multi-threaded calculation" (as in
+   * LibreOffice; AOO 4.1 calculates on one thread and has no setting).
+   * Default on; results are the same either way. The desktop shell reads it
+   * (`calcMultithreading`) and hands it to the engine for the whole app.
+   */
+  calcMultithreading: boolean;
   /** Tools ▸ Options ▸ View settings that are not saved with the document. */
   view: ViewPrefs;
 }
@@ -168,6 +175,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   autoFormats: [],
   twoDigitYearStart: 1930,
   undoSteps: 100,
+  calcMultithreading: true,
   view: DEFAULT_VIEW_PREFS,
 };
 
@@ -220,6 +228,7 @@ export function parsePrefs(raw: unknown): AppPrefs {
     autoFormats: parseUserAutoFormats(o.autoFormats),
     twoDigitYearStart: isTwoDigitYearStart(o.twoDigitYearStart) ? o.twoDigitYearStart : DEFAULT_PREFS.twoDigitYearStart,
     undoSteps: isUndoSteps(o.undoSteps) ? o.undoSteps : DEFAULT_PREFS.undoSteps,
+    calcMultithreading: bool(o.calcMultithreading, DEFAULT_PREFS.calcMultithreading),
     view: parseViewPrefs(o.view),
   };
 }

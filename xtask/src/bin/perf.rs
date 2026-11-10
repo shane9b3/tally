@@ -16,8 +16,9 @@
 //! ```
 //!
 //! Scenario names: recalc, incremental, io10, io25, io50, csv, rss, deep,
-//! chart, pdf, pivot (the last three are the 1.0 gate's `chart_data` for
-//! 10k points, a 20-page PDF export and a 100k-row DataPilot refresh).
+//! chart, pdf, pivot, threads (chart, pdf and pivot are the 1.0 gate's `chart_data` for
+//! 10k points, a 20-page PDF export and a 100k-row DataPilot refresh;
+//! threads compares single- and multithreaded recalc, docs/recalc-parallel.md).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -530,6 +531,10 @@ fn scenarios(o: &Opts, dir: &Path, scale: u32) -> Res<()> {
         bench_pivot(o, scale)?;
     }
 
+    if wants(o, "threads") {
+        bench_threads(o, scale)?;
+    }
+
     if o.deep || wants_exact(o, "deep") {
         let n = 100_000 / scale;
         let mut wb = build_deep(n);
@@ -539,6 +544,165 @@ fn scenarios(o: &Opts, dir: &Path, scale: u32) -> Res<()> {
             "Full recalc, one chain",
             ms(s),
             &format!("{} formulas, depth {n}", rep.evaluated),
+        );
+    }
+    Ok(())
+}
+
+/// `rows` x 2 constants and `rows` formulas `=A{n}*2+B{n}` per formula
+/// column, `cols` columns: wide and flat, every formula independent.
+fn build_flat(rows: u32, cols: u32) -> Workbook {
+    let mut wb = Workbook::empty();
+    let s = new_sheet(&mut wb);
+    for r in 0..rows {
+        let n = r + 1;
+        wb.set_value(addr(s, r, 0), Value::Number(f64::from(r)));
+        wb.set_value(addr(s, r, 1), Value::Number(f64::from(r % 97)));
+        for c in 0..cols {
+            wb.set_input(
+                addr(s, r, 2 + c),
+                &format!("=A{n}*{}+B{n}/{}", c + 2, c + 1),
+            );
+        }
+    }
+    wb
+}
+
+/// Single-threaded against multithreaded recalc (docs/recalc-parallel.md)
+/// on the same workbooks: `Threading::Sequential` versus the default
+/// (`Auto`: the app setting, the pool, and the 4,096-formula threshold).
+fn bench_threads(o: &Opts, scale: u32) -> Res<()> {
+    use tally_engine::parallel::{threads, Threading};
+
+    fn time<F: Fn() -> Workbook>(
+        build: &F,
+        mode: Threading,
+        runs: usize,
+        hard: bool,
+    ) -> (f64, usize, usize) {
+        let mut t = Vec::new();
+        let (mut n, mut pre) = (0, 0);
+        for _ in 0..runs {
+            let mut wb = build();
+            wb.threading = mode;
+            if hard {
+                recalc(&mut wb);
+            }
+            let s = Instant::now();
+            let rep = if hard {
+                hard_recalc(&mut wb)
+            } else {
+                recalc(&mut wb)
+            };
+            t.push(ms(s));
+            n = rep.evaluated;
+            pre = rep.precomputed;
+        }
+        (median(t), n, pre)
+    }
+
+    let runs = o.runs.max(3);
+    let pool = threads();
+    let rows = 1000 / scale.min(10);
+    let mrows = 100_000 / scale;
+    let frows = 100_000 / scale;
+    let deep = 100_000 / scale;
+    type Build = Box<dyn Fn() -> Workbook>;
+    let cases: Vec<(String, Build, bool)> = vec![
+        (
+            format!("chains 100 x {rows}, first recalc"),
+            Box::new(move || build_chains(rows, 100)),
+            false,
+        ),
+        (
+            format!("chains 100 x {rows}, hard recalc"),
+            Box::new(move || build_chains(rows, 100)),
+            true,
+        ),
+        (
+            "SUM/VLOOKUP mix, first recalc".to_owned(),
+            Box::new(move || build_mix(mrows, true)),
+            false,
+        ),
+        (
+            "SUM/VLOOKUP mix, hard recalc".to_owned(),
+            Box::new(move || build_mix(mrows, true)),
+            true,
+        ),
+        (
+            format!("flat {} independent formulas, first recalc", frows * 2),
+            Box::new(move || build_flat(frows, 2)),
+            false,
+        ),
+        (
+            format!("one chain {deep} deep, first recalc"),
+            Box::new(move || build_deep(deep)),
+            false,
+        ),
+    ];
+    for (name, build, hard) in &cases {
+        let (seq, n, _) = time(build, Threading::Sequential, runs, *hard);
+        let (par, _, pre) = time(build, Threading::Auto, runs, *hard);
+        row(
+            &format!("Threads: {name}, 1 thread"),
+            seq,
+            &format!("{n} formulas"),
+        );
+        row(
+            &format!("Threads: {name}, {pool} threads"),
+            par,
+            &format!("{pre} pre-computed; speed-up x{:.2}", seq / par.max(1e-9)),
+        );
+    }
+
+    // Incremental: one edit with 10k dependents (below and above the
+    // threshold the pre-pass is skipped or used; this one is above).
+    for mode in [Threading::Sequential, Threading::Auto] {
+        let deps = 10_000u32;
+        let mut wb = Workbook::empty();
+        wb.threading = mode;
+        let s = new_sheet(&mut wb);
+        wb.set_value(addr(s, 0, 0), Value::Number(1.0));
+        for r in 0..deps {
+            wb.set_input(addr(s, r, 1), &format!("=$A$1*{}", r + 1));
+        }
+        recalc(&mut wb);
+        let mut t = Vec::new();
+        let mut pre = 0;
+        for i in 0..runs.max(9) {
+            let st = Instant::now();
+            wb.set_input(addr(s, 0, 0), &format!("{}", i + 2));
+            let rep = recalc(&mut wb);
+            t.push(ms(st));
+            pre = rep.precomputed;
+        }
+        // One edit with 100 dependents: always below the threshold.
+        let mut small = Vec::new();
+        wb.set_input(addr(s, 0, 3), "1");
+        for r in 0..100u32 {
+            wb.set_input(addr(s, r, 4), &format!("=$D$1+{r}"));
+        }
+        recalc(&mut wb);
+        for i in 0..runs.max(9) {
+            let st = Instant::now();
+            wb.set_input(addr(s, 0, 3), &format!("{}", i + 2));
+            recalc(&mut wb);
+            small.push(ms(st));
+        }
+        let label = if mode == Threading::Sequential {
+            "1 thread".to_owned()
+        } else {
+            format!("{pool} threads")
+        };
+        row(
+            &format!("Threads: 1 edit -> 10k dependents, {label}"),
+            median(t),
+            &format!("{pre} pre-computed"),
+        );
+        row(
+            &format!("Threads: 1 edit -> 100 dependents, {label}"),
+            median(small),
+            "below the threshold: never pre-computed",
         );
     }
     Ok(())
