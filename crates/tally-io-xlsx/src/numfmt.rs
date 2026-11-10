@@ -6,8 +6,10 @@
 //!
 //! - Excel locale-only tags `[$-x-sysdate]`, `[$-F800]` (system long date)
 //!   and `[$-F400]` (system time) are mapped to OOo codes or dropped before
-//!   translation; a known language (`[$-407]`) is kept as the format's
-//!   language;
+//!   translation; a known language (`[$-407]`, `[$-ja-JP-x-gannen]`) is kept
+//!   as the format's language, and an extended id's numeral / calendar bytes
+//!   (`[$-D07041E]`) become `[NatNum1][$-41E][~buddhist]`
+//!   (`excel::from_excel_code`);
 //! - codes the OOo grammar rejects fall back to `None` (General) instead of
 //!   failing the import.
 
@@ -129,7 +131,8 @@ fn language_on_dates_only(ooo: &str) -> String {
     };
     let mut changed = false;
     for s in &mut ast.sections {
-        if matches!(s.kind, SectionKind::Date(_)) {
+        // Dates keep it for names and calendars, a NatNum for its language.
+        if matches!(s.kind, SectionKind::Date(_)) || s.natnum.is_some() {
             continue;
         }
         let before = s.tokens.len();
@@ -201,9 +204,31 @@ mod tests {
             excel_to_ooo("[$€-407]#,##0.00").as_deref(),
             Some("[$€-407]#,##0.00")
         );
+        // Gregorian / Western digits: only the language is left.
         assert_eq!(
             excel_to_ooo("[$-1010409]mmm d, yyyy").as_deref(),
-            Some("MMM D, YYYY")
+            Some("[$-409]MMM D, YYYY")
+        );
+        // Numeral shapes and calendars (G7).
+        assert_eq!(
+            excel_to_ooo("[$-D07041E]d/m/yyyy").as_deref(),
+            Some("[NatNum1][$-41E][~buddhist]D/M/YYYY")
+        );
+        assert_eq!(
+            excel_to_ooo("[$-2000401]#,##0.00").as_deref(),
+            Some("[NatNum1][$-401]#,##0.00")
+        );
+        assert_eq!(
+            excel_to_ooo("[DBNum1][$-411]General").as_deref(),
+            Some("[DBNum1][$-411]General")
+        );
+        assert_eq!(
+            excel_to_ooo("[$-ja-JP-x-gannen]ggge\"年\"m\"月\"d\"日\"").as_deref(),
+            Some("[$-ja-JP-x-gannen]GGGE\"年\"M\"月\"D\"日\"")
+        );
+        assert_eq!(
+            ooo_to_excel("[NatNum1][$-41E][~buddhist]D/M/YYYY").as_deref(),
+            Some("[$-D07041E]d/m/yyyy")
         );
         assert_eq!(
             excel_to_ooo("[$-x-sysdate]dddd, mmmm dd, yyyy").as_deref(),

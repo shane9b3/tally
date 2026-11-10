@@ -477,7 +477,7 @@ export function liteLocaleOf(code: string): LiteLocale | undefined {
 /** `v` formatted with `code` in its language, or `null` if the preview formatter cannot. */
 export function previewText(v: number, code: string, docLocale: NfLanguage): string | null {
   const l = displayLanguage(code, docLocale);
-  const loc: LiteLocale = { decimal: l.decimal, group: l.group, trueName: l.trueName, falseName: l.falseName };
+  const loc: LiteLocale = { decimal: l.decimal, group: l.group, trueName: l.trueName, falseName: l.falseName, lcid: docLocale.lcid };
   return formatNumberLite(v, code.trim() === "" ? "General" : code, loc);
 }
 

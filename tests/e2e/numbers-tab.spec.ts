@@ -120,6 +120,28 @@ test("Currency, 2 decimals, red negatives: the code, the options and the cell", 
   await expect.poll(() => shown(page, 2, 7)).toEqual({ text: "-$1,234.50", color: 0xff0000ff });
 });
 
+test("native numbers and era codes in the preview (G7)", async ({ page }) => {
+  await ready(page);
+  await typeInto(page, 2, 7, "46314");
+  await clickCell(page, 2, 7);
+  await page.keyboard.press("Meta+1");
+  const dlg = page.getByTestId("format-cells");
+  await expect(dlg).toBeVisible();
+  const code = dlg.getByTestId("cells-format-code");
+  await code.fill("[NatNum1][$-411]#,##0");
+  await expect(dlg.getByTestId("cells-preview")).toHaveText("四六、三一四");
+  await code.fill("[NatNum4][$-411]0");
+  await expect(dlg.getByTestId("cells-preview")).toHaveText("四万六千三百十四");
+  await code.fill('[$-411]GGGE"年"M"月"D"日"');
+  await expect(dlg.getByTestId("cells-preview")).toHaveText("令和8年10月19日");
+  await code.fill("[NatNum1][$-41E][~buddhist]D/M/YYYY");
+  await expect(dlg.getByTestId("cells-preview")).toHaveText("๑๙/๑๐/๒๕๖๙");
+  await dlg.getByTestId("dialog-ok").click();
+  await expect(dlg).toBeHidden();
+  const ops = await recorded(page);
+  expect(ops.at(-1)).toMatchObject({ type: "applyStyle", patch: { numberFormat: "[NatNum1][$-41E][~buddhist]D/M/YYYY" } });
+});
+
 test("a cell with a date format opens on Date with its entry selected; Language and Cancel", async ({ page }) => {
   await ready(page);
   await typeInto(page, 3, 7, "46314");

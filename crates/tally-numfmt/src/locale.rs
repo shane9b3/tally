@@ -428,7 +428,7 @@ pub fn locale_by_tag(tag: &str) -> Option<&'static Locale> {
 /// Windows locale ids (hex, as in `[$-407]`) with their ISO 639 language
 /// and ISO 3166 country, for ODF `number:language` / `number:country`.
 /// The first entry for a language/country pair is the one written back.
-pub const LCID_LANGUAGES: [(&str, &str, &str); 34] = [
+pub const LCID_LANGUAGES: [(&str, &str, &str); 48] = [
     ("409", "en", "US"),
     ("809", "en", "GB"),
     ("C09", "en", "AU"),
@@ -463,14 +463,54 @@ pub const LCID_LANGUAGES: [(&str, &str, &str); 34] = [
     ("40E", "hu", "HU"),
     ("41F", "tr", "TR"),
     ("408", "el", "GR"),
+    // Languages with native digits or calendars (NatNum, `[~calendar]`).
+    ("C04", "zh", "HK"),
+    ("1404", "zh", "MO"),
+    ("1004", "zh", "SG"),
+    ("401", "ar", "SA"),
+    ("C01", "ar", "EG"),
+    ("1401", "ar", "DZ"),
+    ("3001", "ar", "LB"),
+    ("1C01", "ar", "TN"),
+    ("2001", "ar", "OM"),
+    ("41E", "th", "TH"),
+    ("40D", "he", "IL"),
+    ("439", "hi", "IN"),
+    ("429", "fa", "IR"),
+    ("454", "lo", "LA"),
 ];
 
-/// The value of a hex locale id (`0407`, `407`, `c0a`); ids with Excel's
-/// calendar / numeral flags above the low 16 bits are `None`. No allocation:
-/// this runs for every formatted cell with a language tag.
-fn lcid_value(hex: &str) -> Option<u32> {
-    let v = u32::from_str_radix(hex.trim(), 16).ok()?;
-    (v <= 0xFFFF).then_some(v)
+/// The value of a locale id as written in `[$-407]`: hex (`0407`, `407`,
+/// `c0a`; Excel's calendar and numeral bytes above the low 16 bits are
+/// dropped, as AOO's 16-bit `LanguageType` does) or a BCP 47 tag with a
+/// language and country Tally knows (`ja-JP-x-gannen` → `411`). No
+/// allocation: this runs for every formatted cell with a language tag.
+fn lcid_value(tag: &str) -> Option<u32> {
+    let tag = tag.trim();
+    if let Ok(v) = u32::from_str_radix(tag, 16) {
+        let v = v & 0xFFFF;
+        return (v != 0).then_some(v);
+    }
+    let mut parts = tag.split(['-', '_']);
+    let lang = parts.next()?;
+    if !(2..=3).contains(&lang.len()) || !lang.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let country = parts
+        .next()
+        .filter(|c| c.len() == 2 && c.chars().all(|x| x.is_ascii_alphabetic()));
+    LCID_LANGUAGES
+        .iter()
+        .find(|(_, l, c)| {
+            l.eq_ignore_ascii_case(lang) && country.is_none_or(|k| c.eq_ignore_ascii_case(k))
+        })
+        .and_then(|(id, _, _)| u32::from_str_radix(id, 16).ok())
+}
+
+/// The language id of a `[$-…]` locale tag (hex or BCP 47); see
+/// [`crate::natnum`].
+pub fn lang_id(tag: &str) -> Option<crate::natnum::LangId> {
+    lcid_value(tag).map(|v| crate::natnum::LangId(v as u16))
 }
 
 /// The ISO language and country of a hex locale id (`407` → `("de", "DE")`).
@@ -608,6 +648,16 @@ mod tests {
         assert_eq!(locale_by_lcid("0c0a").map(|l| l.tag), Some("es-ES"));
         assert_eq!(locale_by_lcid("40a").map(|l| l.tag), Some("es-ES"));
         assert!(locale_by_lcid("807").is_none(), "de-CH is not built in");
+        // Excel's calendar / numeral bytes and BCP 47 tags.
+        assert_eq!(locale_by_lcid("1060411").map(|l| l.tag), Some("ja-JP"));
+        assert_eq!(
+            locale_by_lcid("ja-JP-x-gannen").map(|l| l.tag),
+            Some("ja-JP")
+        );
+        assert_eq!(lcid_language("D07041E"), Some(("th", "TH")));
+        assert_eq!(lang_id("de-DE"), Some(crate::LangId(0x407)));
+        assert_eq!(lang_id("x-sysdate"), None);
+        assert_eq!(lang_id("0"), None);
         assert_eq!(lcid_language("1009"), Some(("en", "CA")));
         assert_eq!(lcid_for_language("es", Some("ES")), Some("C0A"));
         assert_eq!(lcid_for_language("de", None), Some("407"));

@@ -22,6 +22,7 @@
 
 use tally_types::{round_to_15_digits, DateEpoch, ErrorKind, Value};
 
+use crate::calendar::{self, CalendarId, NumCode};
 use crate::date::{civil_from_days, iso_week_number, unix_days_from_serial, weekday_sun0};
 use crate::decimal::Decimal;
 use crate::format_ast::{
@@ -29,6 +30,7 @@ use crate::format_ast::{
     NumberLayout, Section, SectionKind, Token,
 };
 use crate::locale::Locale;
+use crate::natnum::{self, LangId, Separators};
 
 /// Horizontal alignment the grid should use when the cell has none set.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -96,7 +98,7 @@ pub fn format_value_with(
     epoch: DateEpoch,
 ) -> Formatted {
     let locale = format_language(ast).unwrap_or(locale);
-    format_value_in_locale(value, ast, locale, width_chars, epoch)
+    format_in_locale(value, ast, locale, width_chars, epoch, None, true)
 }
 
 /// [`format_value_with`] in `locale` whatever the code's `[$-LCID]` tag
@@ -110,7 +112,7 @@ pub fn format_value_in_locale(
     width_chars: Option<u16>,
     epoch: DateEpoch,
 ) -> Formatted {
-    format_in_locale(value, ast, locale, width_chars, epoch, None)
+    format_in_locale(value, ast, locale, width_chars, epoch, None, false)
 }
 
 /// [`format_value_with`] for a document that limits the decimals of the
@@ -126,7 +128,15 @@ pub fn format_value_std(
     standard_decimals: Option<u8>,
 ) -> Formatted {
     let locale = format_language(ast).unwrap_or(locale);
-    format_in_locale(value, ast, locale, width_chars, epoch, standard_decimals)
+    format_in_locale(
+        value,
+        ast,
+        locale,
+        width_chars,
+        epoch,
+        standard_decimals,
+        true,
+    )
 }
 
 /// [`format_value_in_locale`] with the document's General decimals
@@ -140,9 +150,108 @@ pub fn format_value_in_locale_std(
     epoch: DateEpoch,
     standard_decimals: Option<u8>,
 ) -> Formatted {
-    format_in_locale(value, ast, locale, width_chars, epoch, standard_decimals)
+    format_in_locale(
+        value,
+        ast,
+        locale,
+        width_chars,
+        epoch,
+        standard_decimals,
+        false,
+    )
 }
 
+/// Where the format's language comes from (see [`LangCtx::format_lang`]).
+#[derive(Copy, Clone)]
+struct LangCtx<'a> {
+    ast: &'a FormatAst,
+    /// The code's `[$-LCID]` tag is the format language (cell formats);
+    /// `false` for TEXT / FIXED, which use the document language.
+    ast_lang: bool,
+}
+
+impl LangCtx<'_> {
+    /// The format's language (AOO: the format's LanguageType): the code's
+    /// first language tag, also one Tally has no locale data for, else the
+    /// locale's.
+    fn format_lang(&self, locale: &Locale) -> LangId {
+        if self.ast_lang {
+            if let Some(l) = self
+                .ast
+                .sections
+                .iter()
+                .find_map(|s| section_lang(&s.tokens))
+            {
+                return l;
+            }
+        }
+        locale_lang(locale)
+    }
+
+    /// Whether a tag asks for Excel's gannen (first gengou year as 元).
+    fn gannen(&self) -> bool {
+        self.ast
+            .sections
+            .iter()
+            .flat_map(|s| s.tokens.iter())
+            .any(|t| {
+                matches!(t, Token::Currency { symbol, locale: Some(tag) }
+                if symbol.is_empty() && tag.to_ascii_lowercase().ends_with("-x-gannen"))
+            })
+    }
+}
+
+/// The language of a locale's data.
+fn locale_lang(locale: &Locale) -> LangId {
+    crate::locale::lang_id(locale.lcid_hex).unwrap_or(LangId::EN_US)
+}
+
+/// A section's own language tag (`[$-411]`, also without locale data).
+fn section_lang(tokens: &[Token]) -> Option<LangId> {
+    tokens.iter().find_map(|t| match t {
+        Token::Currency {
+            symbol,
+            locale: Some(tag),
+        } if symbol.is_empty() => crate::locale::lang_id(tag),
+        _ => None,
+    })
+}
+
+/// The NatNum mode and its language for a section (AOO `SvNumberNatNum`:
+/// the section's `[$-LCID]`, else the format's language), or `None`.
+fn section_natnum(
+    sec: &Section,
+    locale: &Locale,
+    ctx: LangCtx<'_>,
+    date: bool,
+) -> Option<(LangId, u8)> {
+    let nn = sec.natnum?;
+    let lang = section_lang(&sec.tokens).unwrap_or_else(|| ctx.format_lang(locale));
+    Some((lang, nn.mode(lang, date)))
+}
+
+fn separators(locale: &Locale) -> Separators {
+    Separators {
+        decimal: locale.decimal_sep,
+        group: locale.group_sep,
+    }
+}
+
+/// `ImpTransliterate` of a whole output text, keeping the fill position.
+fn transliterate_out(out: &mut Out, lang: LangId, mode: u8, locale: &Locale) {
+    let sep = separators(locale);
+    if out.fill.is_some() {
+        let (a, b) = out.text.split_at(out.fill_pos);
+        let a = natnum::transliterate(a, lang, mode, sep).into_owned();
+        let b = natnum::transliterate(b, lang, mode, sep).into_owned();
+        out.fill_pos = a.len();
+        out.text = a + &b;
+    } else if let std::borrow::Cow::Owned(t) = natnum::transliterate(&out.text, lang, mode, sep) {
+        out.text = t;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn format_in_locale(
     value: &Value,
     ast: &FormatAst,
@@ -150,11 +259,13 @@ fn format_in_locale(
     width_chars: Option<u16>,
     epoch: DateEpoch,
     std_dec: Option<u8>,
+    ast_lang: bool,
 ) -> Formatted {
     let width = width_chars.map(usize::from);
+    let ctx = LangCtx { ast, ast_lang };
     match value {
         Value::Empty => Formatted::plain("", AlignHint::Left),
-        Value::Number(x) => format_number(*x, ast, locale, width, epoch, std_dec),
+        Value::Number(x) => format_number(*x, ast, locale, width, epoch, std_dec, ctx),
         Value::Text(s) => format_text(s, ast, locale),
         Value::Bool(b) => Formatted::plain(
             if *b {
@@ -167,7 +278,7 @@ fn format_in_locale(
         // Excel centres errors; we do the same as a hint.
         Value::Error(e) => Formatted::plain(e.display().into_owned(), AlignHint::Center),
         Value::Array(m) => match m.data.first() {
-            Some(v) => format_in_locale(v, ast, locale, width_chars, epoch, std_dec),
+            Some(v) => format_in_locale(v, ast, locale, width_chars, epoch, std_dec, ast_lang),
             None => Formatted::plain("", AlignHint::Left),
         },
     }
@@ -302,6 +413,7 @@ fn select_section(numeric: &[Section], x: f64) -> (usize, bool) {
     (idx, show_sign)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_number(
     x: f64,
     ast: &FormatAst,
@@ -309,6 +421,7 @@ fn format_number(
     width: Option<usize>,
     epoch: DateEpoch,
     std_dec: Option<u8>,
+    ctx: LangCtx<'_>,
 ) -> Formatted {
     if !x.is_finite() {
         return Formatted::plain(ErrorKind::Num.display().into_owned(), AlignHint::Right);
@@ -316,10 +429,16 @@ fn format_number(
     let (numeric, _) = split_text_section(ast);
     let (idx, show_sign) = select_section(numeric, x);
     let Some(sec) = numeric.get(idx) else {
-        return Formatted::plain(
-            general_string_limited(x, width, locale, std_dec),
-            AlignHint::Right,
-        );
+        let mut text = general_string_limited(x, width, locale, std_dec);
+        // ImpGetOutputStandard transliterates with the first section's NatNum.
+        if let Some((lang, mode)) = ast
+            .sections
+            .first()
+            .and_then(|s0| section_natnum(s0, locale, ctx, false))
+        {
+            text = natnum::transliterate(&text, lang, mode, separators(locale)).into_owned();
+        }
+        return Formatted::plain(text, AlignHint::Right);
     };
     let ax = x.abs();
     let mut out = Out::new();
@@ -330,10 +449,20 @@ fn format_number(
             if show_sign && !zero {
                 out.insert_sign();
             }
+            // ImpGetNumberOutput transliterates the whole text (literals
+            // too); scientific and literal-only sections are left alone.
+            if sec.natnum.is_some()
+                && lay.exponent.is_none()
+                && sec.tokens.iter().any(|t| matches!(t, Token::Digit(_)))
+            {
+                if let Some((lang, mode)) = section_natnum(sec, locale, ctx, false) {
+                    transliterate_out(&mut out, lang, mode, locale);
+                }
+            }
         }
         SectionKind::Date(lay) => {
             let v = if idx == 0 { x } else { ax };
-            if date_section(v, lay, &sec.tokens, locale, epoch, &mut out).is_err() {
+            if date_section(v, lay, sec, locale, epoch, &mut out, ctx).is_err() {
                 out.text.clear();
                 out.text.push_str(OVERFLOW);
                 out.fill = None;
@@ -343,6 +472,11 @@ fn format_number(
             check_width = false;
             let v = if show_sign { x } else { ax };
             general_section(v, &sec.tokens, locale, width, std_dec, &mut out);
+            if matches!(sec.kind, SectionKind::General) {
+                if let Some((lang, mode)) = section_natnum(sec, locale, ctx, false) {
+                    transliterate_out(&mut out, lang, mode, locale);
+                }
+            }
         }
     }
     if check_width {
@@ -1027,11 +1161,13 @@ fn push_padded(out: &mut Out, v: u64, width: usize) {
 fn date_section(
     x: f64,
     lay: &DateLayout,
-    tokens: &[Token],
+    sec: &Section,
     locale: &Locale,
     epoch: DateEpoch,
     out: &mut Out,
+    ctx: LangCtx<'_>,
 ) -> Result<(), ()> {
+    let tokens = &sec.tokens[..];
     let mut v = x;
     let mut neg = false;
     if v < 0.0 && !lay.has_date {
@@ -1074,6 +1210,26 @@ fn date_section(
     } else {
         0
     };
+    if lay.calendar || sec.natnum.is_some() {
+        let p = DateParts {
+            secs,
+            frac,
+            fd,
+            hour,
+            minute,
+            second,
+            y,
+            m,
+            d,
+            wd,
+            unix_days,
+        };
+        date_section_cal(&p, lay, sec, locale, out, ctx);
+        if neg && (secs > 0 || frac > 0) {
+            out.insert_sign();
+        }
+        return Ok(());
+    }
     let mut frac_k = 0usize;
     let frac_str = if fd > 0 {
         let s = frac.to_string();
@@ -1187,23 +1343,8 @@ fn date_section(
             DateTimeToken::Week(_) => {
                 out.text.push_str(&iso_week_number(unix_days).to_string());
             }
-            DateTimeToken::Era(n) => {
-                let (abbr, long) = if y > 0 {
-                    (locale.era_abbrev.1, locale.era_names.1)
-                } else {
-                    (locale.era_abbrev.0, locale.era_names.0)
-                };
-                match n {
-                    1 => {
-                        if let Some(c) = abbr.chars().next() {
-                            out.text.push(c);
-                        }
-                    }
-                    2 => out.text.push_str(abbr),
-                    _ => out.text.push_str(long),
-                }
-            }
-            DateTimeToken::EraYear(n) => push_padded(out, y.max(0) as u64, usize::from(*n)),
+            // Era codes set `DateLayout::calendar` (date_section_cal).
+            DateTimeToken::Era(_) | DateTimeToken::EraYear(_) | DateTimeToken::EraAndYear(_) => {}
             DateTimeToken::Elapsed(unit, n) => {
                 let v = match unit {
                     ElapsedUnit::Hours => secs / 3600,
@@ -1218,6 +1359,342 @@ fn date_section(
         out.insert_sign();
     }
     Ok(())
+}
+
+/// The fields of a date/time value, computed once in [`date_section`].
+struct DateParts {
+    secs: u64,
+    frac: u64,
+    fd: u32,
+    hour: u64,
+    minute: u64,
+    second: u64,
+    y: i64,
+    m: u32,
+    d: u32,
+    wd: u32,
+    unix_days: i64,
+}
+
+/// `ImpIntToString`: `v` zero-padded to `min` digits, transliterated with
+/// the section's NatNum.
+fn push_int_natnum(out: &mut Out, v: u64, min: usize, nat: Option<(LangId, u8)>, sep: Separators) {
+    let s = v.to_string();
+    let mut t = String::with_capacity(min.max(s.len()));
+    for _ in s.len()..min {
+        t.push('0');
+    }
+    t.push_str(&s);
+    match nat {
+        Some((lang, mode)) => out
+            .text
+            .push_str(&natnum::transliterate(&t, lang, mode, sep)),
+        None => out.text.push_str(&t),
+    }
+}
+
+/// `(abbreviated, full)` name `i` of a calendar table, or of the locale's.
+fn name_at(
+    table: Option<&'static [(&'static str, &'static str)]>,
+    i: usize,
+    short: &[&'static str],
+    long: &[&'static str],
+) -> (&'static str, &'static str) {
+    match table {
+        Some(t) => t.get(i).copied().unwrap_or(("", "")),
+        None => (
+            short.get(i).copied().unwrap_or(""),
+            long.get(i).copied().unwrap_or(""),
+        ),
+    }
+}
+
+/// A date/time section with era codes, `[~calendar]` or a NatNum
+/// (`SvNumberformat::ImpGetDateOutput` / `ImpGetDateTimeOutput` /
+/// `ImpGetTimeOutput`): calendar fields come from
+/// `Calendar_*::getDisplayString` with the section's NatNum, time fields
+/// from `ImpIntToString`.
+fn date_section_cal(
+    p: &DateParts,
+    lay: &DateLayout,
+    sec: &Section,
+    locale: &Locale,
+    out: &mut Out,
+    ctx: LangCtx<'_>,
+) {
+    let sep = separators(locale);
+    let cal_lang = ctx.format_lang(locale);
+    let gannen = ctx.gannen();
+    let nat = section_natnum(sec, locale, ctx, lay.has_date);
+    let mode = nat.map_or(0, |(_, m)| m);
+    let int_nat = nat.filter(|&(l, m)| natnum::is_valid_natnum(l, m));
+    let tokens = &sec.tokens;
+    // ImpIsOtherCalendar: E, EE, R, RR, AAA, AAAA switch to the language's
+    // other calendar unless a [~calendar] comes first.
+    let implicit = tokens
+        .iter()
+        .find_map(|t| match t {
+            Token::Calendar(_) => Some(false),
+            Token::DateTime(
+                DateTimeToken::EraYear(_)
+                | DateTimeToken::EraAndYear(_)
+                | DateTimeToken::AaaDayName(_),
+            ) => Some(true),
+            _ => None,
+        })
+        .unwrap_or(false);
+    let at = |cal: CalendarId| calendar::fields(cal, p.y, p.m, p.d, p.unix_days, p.wd);
+    let greg = at(CalendarId::Gregorian);
+    let mut cur = CalendarId::Gregorian;
+    let mut other = false;
+    if implicit && lay.has_date {
+        if let Some(c) = calendar::other_calendar(cal_lang) {
+            cur = c;
+            other = true;
+        }
+    }
+    let mut f = if cur == CalendarId::Gregorian {
+        greg
+    } else {
+        at(cur)
+    };
+    // ImpFallBackToGregorianCalendar (a gengou date before Meiji).
+    if calendar::falls_back(cur, &f) {
+        cur = CalendarId::Gregorian;
+        other = false;
+        f = greg;
+    }
+    // The locale's Gregorian names unless the calendar language differs
+    // and has its own (zh, ko, th, ar, he).
+    let own_locale = locale_lang(locale).primary() == cal_lang.primary();
+    let frac_chars: Vec<char> = if p.fd > 0 {
+        let s = p.frac.to_string();
+        let mut t = String::with_capacity(p.fd as usize);
+        for _ in s.len()..p.fd as usize {
+            t.push('0');
+        }
+        t.push_str(&s);
+        match int_nat {
+            Some((lang, m)) => natnum::transliterate(&t, lang, m, sep).chars().collect(),
+            None => t.chars().collect(),
+        }
+    } else {
+        Vec::new()
+    };
+    let mut frac_k = 0usize;
+    let mut in_frac = false;
+    for t in tokens {
+        if in_frac {
+            if let Token::Digit(Digit::Zero) = t {
+                if let Some(c) = frac_chars.get(frac_k) {
+                    out.text.push(*c);
+                }
+                frac_k += 1;
+                continue;
+            }
+            in_frac = false;
+        }
+        let dt = match t {
+            Token::DateTime(dt) => dt,
+            Token::DecimalPoint => {
+                out.text.push(locale.decimal_sep);
+                in_frac = true;
+                frac_k = 0;
+                continue;
+            }
+            Token::Calendar(name) => {
+                if let Some(c) = CalendarId::from_name(name) {
+                    if calendar::has_calendar(cal_lang, c) {
+                        cur = c;
+                        f = at(c);
+                        if calendar::falls_back(cur, &f) {
+                            cur = CalendarId::Gregorian;
+                            f = greg;
+                        }
+                    }
+                }
+                continue;
+            }
+            _ => {
+                emit_literal(t, locale, out);
+                continue;
+            }
+        };
+        let num = |out: &mut Out, cal: CalendarId, fl: &calendar::Fields, code: NumCode| {
+            out.text.push_str(&calendar::display_number(
+                cal, cal_lang, fl, code, mode, gannen, sep,
+            ));
+        };
+        let day_name = |cal: CalendarId, wd: u32| {
+            name_at(
+                calendar::day_names(cal),
+                wd as usize,
+                &locale.short_day_names,
+                &locale.day_names,
+            )
+        };
+        let era = |cal: CalendarId, fl: &calendar::Fields| -> (&'static str, &'static str) {
+            let table = calendar::era_names(cal, cal_lang)
+                .filter(|_| !(cal == CalendarId::Gregorian && own_locale));
+            match table {
+                Some(t) => t.get(fl.era).copied().unwrap_or(("", "")),
+                None if fl.era >= 1 => (locale.era_abbrev.1, locale.era_names.1),
+                None => (locale.era_abbrev.0, locale.era_names.0),
+            }
+        };
+        match dt {
+            DateTimeToken::Day(1) => num(out, cur, &f, NumCode::ShortDay),
+            DateTimeToken::Day(_) => num(out, cur, &f, NumCode::LongDay),
+            DateTimeToken::DayName(n) => {
+                let cal = if other { CalendarId::Gregorian } else { cur };
+                let (a, l) = day_name(cal, p.wd);
+                out.text.push_str(if *n >= 4 { l } else { a });
+            }
+            DateTimeToken::AooDayName(n) => {
+                let (a, l) = day_name(cur, p.wd);
+                if *n == 2 {
+                    out.text.push_str(a);
+                } else {
+                    out.text.push_str(l);
+                    if *n >= 4 {
+                        out.text.push_str(locale.long_date_day_of_week_sep);
+                    }
+                }
+            }
+            DateTimeToken::AaaDayName(n) => {
+                let (a, l) = day_name(cur, p.wd);
+                out.text.push_str(if *n >= 4 { l } else { a });
+            }
+            DateTimeToken::Month(1) => num(out, cur, &f, NumCode::ShortMonth),
+            DateTimeToken::Month(2) => num(out, cur, &f, NumCode::LongMonth),
+            DateTimeToken::Month(n) => {
+                let (a, l) = name_at(
+                    calendar::month_names(cur),
+                    (f.month as usize).saturating_sub(1),
+                    &locale.short_month_names,
+                    &locale.month_names,
+                );
+                match n {
+                    3 => out.text.push_str(a),
+                    4 => out.text.push_str(l),
+                    _ => {
+                        if let Some(c) = l.chars().next() {
+                            out.text.push(c);
+                        }
+                    }
+                }
+            }
+            DateTimeToken::Year(n) => {
+                let cal = if other { CalendarId::Gregorian } else { cur };
+                let code = if *n <= 2 {
+                    NumCode::ShortYear
+                } else {
+                    NumCode::LongYear
+                };
+                if cal == CalendarId::Gregorian {
+                    // Tally's Gregorian years (as the plain date path).
+                    let text = if *n <= 2 {
+                        format!("{:02}", p.y.rem_euclid(100))
+                    } else {
+                        format!("{:04}", p.y.max(0))
+                    };
+                    out.text.push_str(&calendar::calendar_natnum(
+                        text, cal, cal_lang, code, p.y, mode, sep,
+                    ));
+                } else {
+                    num(out, cal, &f, code);
+                }
+            }
+            DateTimeToken::EraYear(1) => num(out, cur, &f, NumCode::ShortYear),
+            DateTimeToken::EraYear(_) | DateTimeToken::EraAndYear(1) => {
+                num(out, cur, &f, NumCode::LongYear)
+            }
+            DateTimeToken::EraAndYear(_) => {
+                let (a, l) = era(cur, &f);
+                if cur == CalendarId::Buddhist && f.era == 0 {
+                    num(out, cur, &f, NumCode::ShortYear);
+                    out.text.push_str(a);
+                } else {
+                    out.text.push_str(l);
+                    num(out, cur, &f, NumCode::LongYear);
+                }
+            }
+            DateTimeToken::Era(n) => {
+                let (a, l) = era(cur, &f);
+                match n {
+                    // ImpAppendEraG: the gengou era letter.
+                    1 if cur == CalendarId::Gengou => {
+                        out.text.push(['?', 'M', 'T', 'S', 'H', 'R'][f.era.min(5)]);
+                    }
+                    1 | 2 => out.text.push_str(a),
+                    _ => out.text.push_str(l),
+                }
+            }
+            DateTimeToken::Quarter(n) => {
+                let q = ((f.month.saturating_sub(1)) / 3).min(3) as usize;
+                let text = if *n >= 2 {
+                    locale.quarter_names[q]
+                } else {
+                    locale.quarter_abbrev[q]
+                };
+                out.text.push_str(&calendar::calendar_natnum(
+                    text.to_string(),
+                    cur,
+                    cal_lang,
+                    NumCode::Quarter,
+                    0,
+                    mode,
+                    sep,
+                ));
+            }
+            DateTimeToken::Week(_) => push_int_natnum(
+                out,
+                u64::from(iso_week_number(p.unix_days)),
+                0,
+                int_nat,
+                sep,
+            ),
+            DateTimeToken::Hour(n) => {
+                let h = if lay.twelve_hour {
+                    match p.hour % 12 {
+                        0 => 12,
+                        h => h,
+                    }
+                } else {
+                    p.hour
+                };
+                push_int_natnum(out, h, usize::from(*n), int_nat, sep);
+            }
+            DateTimeToken::Minute(n) => {
+                push_int_natnum(out, p.minute, usize::from(*n), int_nat, sep)
+            }
+            DateTimeToken::Second(n) => {
+                push_int_natnum(out, p.second, usize::from(*n), int_nat, sep)
+            }
+            DateTimeToken::AmPm(_) => out.text.push_str(if p.hour < 12 {
+                locale.am_pm.0
+            } else {
+                locale.am_pm.1
+            }),
+            DateTimeToken::AP(s) => {
+                let lower = s.starts_with('a');
+                out.text.push(match (p.hour < 12, lower) {
+                    (true, false) => 'A',
+                    (true, true) => 'a',
+                    (false, false) => 'P',
+                    (false, true) => 'p',
+                });
+            }
+            DateTimeToken::Elapsed(unit, n) => {
+                let v = match unit {
+                    ElapsedUnit::Hours => p.secs / 3600,
+                    ElapsedUnit::Minutes => p.secs / 60,
+                    ElapsedUnit::Seconds => p.secs,
+                };
+                push_int_natnum(out, v, usize::from(*n), int_nat, sep);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -22,6 +22,8 @@ pub struct Section {
     pub tokens: Vec<Token>,
     /// What the section formats and how.
     pub kind: SectionKind,
+    /// The section's `[NatNumN]` / `[DBNumN]` transliteration, if any.
+    pub natnum: Option<crate::natnum::NatNum>,
 }
 
 /// Comparison operator of a section condition.
@@ -263,8 +265,10 @@ pub enum DateTimeToken {
     Week(u8),
     /// `G` / `GG` / `GGG`: era.
     Era(u8),
-    /// `E` / `EE`: year in era.
+    /// `E` / `EE`: year in era (of the locale's other calendar).
     EraYear(u8),
+    /// `R` (1): year in era, as `EE`; `RR` (2): era and year, as `GGGEE`.
+    EraAndYear(u8),
     /// `[H]`, `[MM]`, `[SS]` … elapsed time; count of letters.
     Elapsed(ElapsedUnit, u8),
 }
@@ -317,11 +321,12 @@ pub enum Token {
         /// The hex locale id after `-`, if any.
         locale: Option<String>,
     },
-    /// `[NatNumN]`: parsed and ignored.
+    /// `[NatNumN]` (0..=19): native number transliteration.
     NatNum(u8),
-    /// `[DBNumN]`: parsed and ignored.
+    /// `[DBNumN]` (1..=9): Excel's East-Asian numerals, a NatNum per language.
     DbNum(u8),
-    /// `[~calendar]`: parsed and ignored.
+    /// `[~calendar]`: switches the calendar from here on (`gengou`, `ROC`,
+    /// `buddhist`, `hanja`, `hijri`, `jewish`, `gregorian`).
     Calendar(String),
 }
 
@@ -396,6 +401,9 @@ pub struct DateLayout {
     pub has_date: bool,
     /// Contains a time part.
     pub has_time: bool,
+    /// Needs the calendar machinery: an era code (`G`, `E`, `R`, `AAA` …),
+    /// a `[~calendar]` or a `[$-ja-JP-x-gannen]` tag.
+    pub calendar: bool,
 }
 
 /// What a section formats.

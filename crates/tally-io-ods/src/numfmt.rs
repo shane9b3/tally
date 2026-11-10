@@ -2,7 +2,7 @@
 //!
 //! Reading builds a [`DataStyle`] from the XML (in `styles.rs`) and turns it
 //! into a format code with [`DataStyle::to_code`]. Writing tokenizes a format
-//! code with [`code_to_xml`] and emits the equivalent data style elements; a
+//! code with [`code_to_xml_in`] and emits the equivalent data style elements; a
 //! code we cannot express faithfully yields `Err(reason)` so the writer can
 //! fall back to General and report a warning.
 
@@ -118,6 +118,19 @@ pub(crate) enum Part {
     Era {
         long: bool,
     },
+    /// `[~calendar]` (reading: `number:calendar` changes; writing: the
+    /// calendar of the following date elements).
+    Calendar(String),
+    /// Writing only: `AAA` / `AAAA`, a weekday in the language's other
+    /// calendar (AOO writes the calendar on that element only).
+    AaaDay {
+        long: bool,
+    },
+    /// Writing only: `R` / `RR` until the section is known to be a date
+    /// (otherwise the letters are text, as `R 0.00`).
+    EraR {
+        double: bool,
+    },
 }
 
 /// A parsed data style.
@@ -133,6 +146,8 @@ pub(crate) struct DataStyle {
     /// The style's `number:language` / `number:country` as a hex locale id:
     /// the format's language, `[$-407]` in the code.
     pub language: Option<String>,
+    /// `number:transliteration-*`: the NatNum mode and its language (hex).
+    pub natnum: Option<(u8, Option<String>)>,
 }
 
 impl DataStyle {
@@ -144,6 +159,7 @@ impl DataStyle {
             maps: Vec::new(),
             truncate: true,
             language: None,
+            natnum: None,
         }
     }
 
@@ -152,24 +168,47 @@ impl DataStyle {
     /// The format's language is the main style's `number:language` (AOO
     /// reads it there, xmlnumfi.cxx), written once as a leading `[$-407]`;
     /// the mapped styles' languages are ignored.
+    ///
+    /// A transliteration (`[NatNumN]`) in another language than the style's
+    /// (AOO `[NatNum1][$-41E]`) makes that language the code's: Tally has
+    /// one language per format.
     pub fn to_code<'a>(&'a self, lookup: impl Fn(&str) -> Option<&'a DataStyle>) -> String {
         let lang = self
-            .language
+            .natnum
             .as_ref()
+            .and_then(|(_, l)| l.as_ref())
+            .or(self.language.as_ref())
             .map_or_else(String::new, |l| format!("[$-{l}]"));
-        let main = self.section_code();
+        // The first section's [NatNumN] goes before the language tag
+        // (`[NatNum1][$-411]0`, as AOO and Excel write it).
+        let natnum_tag = |ds: &DataStyle| {
+            ds.natnum
+                .as_ref()
+                .map_or_else(String::new, |(n, _)| format!("[NatNum{n}]"))
+        };
+        let code_lang = self
+            .natnum
+            .as_ref()
+            .and_then(|(_, l)| l.clone())
+            .or_else(|| self.language.clone());
         if self.maps.is_empty() {
-            return lang + &main;
+            return natnum_tag(self) + &lang + &self.section_code(true, code_lang.as_deref());
         }
+        let mut first: Option<&DataStyle> = None;
         let mapped: Vec<(String, String)> = self
             .maps
             .iter()
             .filter_map(|(cond, name)| {
                 let c = parse_condition(cond)?;
-                Some((c, lookup(name)?.section_code()))
+                let ds = lookup(name)?;
+                let is_first = first.is_none();
+                first.get_or_insert(ds);
+                Some((c, ds.section_code(is_first, code_lang.as_deref())))
             })
             .take(3)
             .collect();
+        let first = first.unwrap_or(self);
+        let main = self.section_code(std::ptr::eq(first, self), code_lang.as_deref());
         let conds: Vec<&str> = mapped.iter().map(|(c, _)| c.as_str()).collect();
         let mut out = String::new();
         if conds == [">=0"] || conds == [">0", "<0"] {
@@ -183,15 +222,41 @@ impl DataStyle {
             }
         }
         out.push_str(&main);
-        lang + &out
+        natnum_tag(first) + &lang + &out
     }
 
-    fn section_code(&self) -> String {
+    /// One section's code; `first` leaves out the `[NatNumN]` that
+    /// [`DataStyle::to_code`] puts in front, `lang` is the code's language.
+    fn section_code(&self, first: bool, lang: Option<&str>) -> String {
         let mut out = String::new();
         if let Some(name) = self.color.and_then(color_name) {
             let _ = write!(out, "[{name}]");
         }
+        if let (false, Some((n, _))) = (first, &self.natnum) {
+            let _ = write!(out, "[NatNum{n}]");
+        }
+        // AOO writes E / EE / R / RR with the language's other calendar on
+        // every date element: that calendar is implied again by the era
+        // year (Tally's own `GGGE` round-trips without `[~gengou]`).
+        let other = lang
+            .and_then(tally_numfmt::lang_id)
+            .and_then(tally_numfmt::calendar::other_calendar);
+        let has_era_year = self
+            .parts
+            .iter()
+            .skip_while(|p| !matches!(p, Part::Era { .. }))
+            .any(|p| matches!(p, Part::Year { .. }));
+        let implicit = |c: &str| {
+            has_era_year
+                && other.is_some_and(|o| o.name().eq_ignore_ascii_case(c))
+                && self.parts.iter().all(|p| match p {
+                    Part::Calendar(x) => x.eq_ignore_ascii_case(c),
+                    _ => true,
+                })
+        };
         let mut first_hours = !self.truncate;
+        // xmlnumfi.cxx: a year after an era is the era's year (E / EE).
+        let mut seen_era = false;
         for part in &self.parts {
             match part {
                 Part::Number {
@@ -264,6 +329,7 @@ impl DataStyle {
                     out.push('*');
                     out.push(*c);
                 }
+                Part::Year { long } if seen_era => out.push_str(if *long { "EE" } else { "E" }),
                 Part::Year { long } => out.push_str(if *long { "YYYY" } else { "YY" }),
                 Part::Month { long, textual } => out.push_str(match (textual, long) {
                     (true, true) => "MMMM",
@@ -295,7 +361,16 @@ impl DataStyle {
                 Part::AmPm => out.push_str("AM/PM"),
                 Part::Quarter { long } => out.push_str(if *long { "QQ" } else { "Q" }),
                 Part::Week => out.push_str("WW"),
-                Part::Era { long } => out.push_str(if *long { "GGG" } else { "G" }),
+                Part::Era { long } => {
+                    seen_era = true;
+                    out.push_str(if *long { "GGG" } else { "G" });
+                }
+                Part::Calendar(c) if implicit(c) => {}
+                Part::Calendar(c) => {
+                    let _ = write!(out, "[~{c}]");
+                }
+                Part::AaaDay { long } => out.push_str(if *long { "AAAA" } else { "AAA" }),
+                Part::EraR { double } => out.push_str(if *double { "RR" } else { "R" }),
             }
         }
         out
@@ -417,6 +492,10 @@ struct Section {
     percent: bool,
     /// `[$-407]`: the format's language as a known hex locale id.
     language: Option<String>,
+    /// `[NatNumN]` / `[DBNumN]`: the number and whether it is a DBNum.
+    natnum: Option<(u8, bool)>,
+    /// `E`, `EE`, `R`, `RR`: date elements use the language's other calendar.
+    other_calendar: bool,
 }
 
 impl Section {
@@ -431,6 +510,8 @@ impl Section {
                     | Part::Quarter { .. }
                     | Part::Week
                     | Part::Era { .. }
+                    | Part::AaaDay { .. }
+                    | Part::EraR { .. }
             )
         });
         let time = self.parts.iter().any(|p| {
@@ -552,6 +633,7 @@ fn tokenize_section(src: &str) -> Result<Section, String> {
                     .ok_or("unterminated bracket")?;
                 let inner: String = chars[i + 1..i + end].iter().collect();
                 i += end + 1;
+                let up = inner.to_ascii_uppercase();
                 if let Some(cur) = inner.strip_prefix('$') {
                     let (sym, hex) = match cur.split_once('-') {
                         Some((sym, hex)) => (sym, Some(hex)),
@@ -559,10 +641,12 @@ fn tokenize_section(src: &str) -> Result<Section, String> {
                     };
                     // Only locale ids with an ISO language / country can be
                     // written; others are dropped (the symbol is kept).
+                    // Excel's calendar / numeral bytes and BCP 47 tags are
+                    // reduced to the language.
                     let lcid = hex
                         .filter(|h| tally_numfmt::lcid_language(h).is_some())
-                        .and_then(|h| u32::from_str_radix(h, 16).ok())
-                        .map(|v| format!("{v:X}"));
+                        .and_then(tally_numfmt::lang_id)
+                        .map(|l| l.hex());
                     if sym.is_empty() {
                         if lcid.is_some() {
                             s.language = lcid;
@@ -579,8 +663,15 @@ fn tokenize_section(src: &str) -> Result<Section, String> {
                     s.condition = Some(cond);
                 } else if let Some(col) = color_value(&inner) {
                     s.color = Some(col);
+                } else if let Some(n) = up.strip_prefix("NATNUM").and_then(|n| n.parse::<u8>().ok())
+                {
+                    s.natnum.get_or_insert((n, false));
+                } else if let Some(n) = up.strip_prefix("DBNUM").and_then(|n| n.parse::<u8>().ok())
+                {
+                    s.natnum.get_or_insert((n, true));
+                } else if let Some(c) = inner.strip_prefix('~') {
+                    s.parts.push(Part::Calendar(c.to_string()));
                 } else {
-                    let up = inner.to_ascii_uppercase();
                     match up.as_str() {
                         "H" | "HH" => {
                             s.elapsed = true;
@@ -625,6 +716,53 @@ fn tokenize_section(src: &str) -> Result<Section, String> {
             _ => {
                 push_text(&mut s.parts, &c.to_string());
                 i += 1;
+            }
+        }
+    }
+    // `R` / `RR` are era codes unless they are the only date code of a
+    // number section (`R 0.00`, as the engine's parser decides).
+    let other_dated = s.parts.iter().any(|p| {
+        !matches!(
+            p,
+            Part::EraR { .. }
+                | Part::Text(_)
+                | Part::Number { .. }
+                | Part::Scientific { .. }
+                | Part::Fraction { .. }
+                | Part::TextContent
+                | Part::Currency { .. }
+                | Part::Fill(_)
+                | Part::Boolean
+                | Part::Calendar(_)
+        )
+    });
+    let numbers = s.parts.iter().any(|p| {
+        matches!(
+            p,
+            Part::Number { .. }
+                | Part::Scientific { .. }
+                | Part::Fraction { .. }
+                | Part::TextContent
+        )
+    });
+    if !other_dated && numbers {
+        for p in &mut s.parts {
+            if let Part::EraR { double } = *p {
+                *p = Part::Text(if double { "RR" } else { "R" }.into());
+            }
+        }
+        merge_texts(&mut s.parts);
+    } else if s.parts.iter().any(|p| matches!(p, Part::EraR { .. })) {
+        s.other_calendar = true;
+        let parts = std::mem::take(&mut s.parts);
+        for p in parts {
+            match p {
+                Part::EraR { double: false } => s.parts.push(Part::Year { long: true }),
+                Part::EraR { double: true } => {
+                    s.parts.push(Part::Era { long: true });
+                    s.parts.push(Part::Year { long: true });
+                }
+                p => s.parts.push(p),
             }
         }
     }
@@ -732,7 +870,21 @@ fn scan_word(chars: &[char], start: usize, s: &mut Section) -> Result<usize, Str
         }
         'Q' => Part::Quarter { long: n >= 2 },
         'W' if n == 2 => Part::Week,
-        'G' | 'E' => Part::Era { long: n >= 3 },
+        'G' => Part::Era { long: n >= 3 },
+        // xmlnumfe.cxx: E / EE are a year in the language's other calendar.
+        'E' => {
+            s.other_calendar = true;
+            end = start + n.min(2);
+            Part::Year { long: n >= 2 }
+        }
+        'R' => {
+            end = start + n.min(2);
+            Part::EraR { double: n >= 2 }
+        }
+        'A' if n >= 3 => {
+            end = start + n.min(4);
+            Part::AaaDay { long: n >= 4 }
+        }
         _ => {
             let word: String = chars[start..end].iter().collect();
             push_text(&mut s.parts, &word);
@@ -850,7 +1002,15 @@ fn scan_number(chars: &[char], start: usize, parts: &mut Vec<Part>) -> Result<us
 /// Emits the data style(s) for `code` under style name `name` (mapped
 /// sections become `{name}P0`, `{name}P1`, …). `Err` means the code cannot be
 /// written faithfully.
-pub(crate) fn code_to_xml(code: &str, name: &str, out: &mut String) -> Result<(), String> {
+///
+/// `doc_lang` (hex) is the document language: the language of a
+/// `[NatNumN]` or an implicit calendar in a code without a tag.
+pub(crate) fn code_to_xml_in(
+    code: &str,
+    name: &str,
+    out: &mut String,
+    doc_lang: Option<&str>,
+) -> Result<(), String> {
     let mut sections = Vec::new();
     for src in split_sections(code) {
         sections.push(tokenize_section(src)?);
@@ -889,6 +1049,10 @@ pub(crate) fn code_to_xml(code: &str, name: &str, out: &mut String) -> Result<()
     for s in &mut sections {
         s.language.clone_from(&language);
     }
+    let lang = language
+        .as_deref()
+        .or(doc_lang)
+        .and_then(tally_numfmt::lang_id);
     let n = sections.len();
     let mut main = sections.pop().ok_or("empty code")?;
     if main.condition.is_some() && n == 1 {
@@ -908,15 +1072,21 @@ pub(crate) fn code_to_xml(code: &str, name: &str, out: &mut String) -> Result<()
             .or_else(|| implied.get(i).map(|c| (*c).to_string()))
             .ok_or("missing condition")?;
         let mapped = format!("{name}P{i}");
-        emit_style(s, &mapped, &[], &mut buf);
+        emit_style(s, &mapped, &[], &mut buf, lang);
         maps.push((cond, mapped));
     }
-    emit_style(&main, name, &maps, &mut buf);
+    emit_style(&main, name, &maps, &mut buf, lang);
     out.push_str(&buf);
     Ok(())
 }
 
-fn emit_style(s: &Section, name: &str, maps: &[(String, String)], out: &mut String) {
+fn emit_style(
+    s: &Section,
+    name: &str,
+    maps: &[(String, String)],
+    out: &mut String,
+    lang: Option<tally_numfmt::LangId>,
+) {
     let kind = s.kind();
     let _ = write!(out, "<{} style:name=\"", kind.element());
     escape_attr(name, out);
@@ -924,8 +1094,29 @@ fn emit_style(s: &Section, name: &str, maps: &[(String, String)], out: &mut Stri
     if s.elapsed {
         out.push_str(" number:truncate-on-overflow=\"false\"");
     }
-    if let Some(lang) = &s.language {
-        push_language(lang, out);
+    if let Some(l) = &s.language {
+        push_language(l, out);
+    }
+    // xmlnumfe.cxx: number:transliteration-* from GetNatNumXml. A NatNum
+    // that does nothing in its language is not written.
+    // Without a language (no tag, no document locale) only the
+    // language-independent NatNums are written, without a language.
+    if let Some((n, db)) = s.natnum {
+        let l = lang.unwrap_or(tally_numfmt::LangId::EN_US);
+        let mode = tally_numfmt::NatNum { num: n, dbnum: db }.mode(l, kind == Kind::Date);
+        if mode > 0 && tally_numfmt::natnum::is_valid_natnum(l, mode) {
+            let (format, style) = tally_numfmt::natnum::to_xml_attributes(l, mode);
+            out.push_str(" number:transliteration-format=\"");
+            escape_attr(&format.to_string(), out);
+            out.push('"');
+            if let Some((tl, tc)) = lang.and_then(|l| tally_numfmt::lcid_language(&l.hex())) {
+                let _ = write!(
+                    out,
+                    " number:transliteration-language=\"{tl}\" number:transliteration-country=\"{tc}\""
+                );
+            }
+            let _ = write!(out, " number:transliteration-style=\"{style}\"");
+        }
     }
     out.push('>');
     if let Some(c) = s.color {
@@ -935,8 +1126,27 @@ fn emit_style(s: &Section, name: &str, maps: &[(String, String)], out: &mut Stri
             crate::units::color_hex(c)
         );
     }
+    // number:calendar: a [~calendar] from its position on, E / EE / R / RR
+    // the language's other calendar for every element (xmlnumfe.cxx
+    // lcl_GetDefaultCalendar), AAA / AAAA only for their element.
+    let other = lang
+        .and_then(tally_numfmt::calendar::other_calendar)
+        .map(|c| c.name().to_string());
+    let mut calendar = if s.other_calendar {
+        other.clone()
+    } else {
+        None
+    };
     for part in &s.parts {
-        emit_part(part, out);
+        match part {
+            Part::Calendar(c) => calendar = Some(c.clone()),
+            Part::AaaDay { long } => emit_dated(
+                &Part::DayOfWeek { long: *long },
+                calendar.as_deref().or(other.as_deref()),
+                out,
+            ),
+            _ => emit_dated(part, calendar.as_deref(), out),
+        }
     }
     for (cond, target) in maps {
         out.push_str("<style:map style:condition=\"");
@@ -968,6 +1178,36 @@ fn style_attr(long: bool) -> &'static str {
         " number:style=\"long\""
     } else {
         ""
+    }
+}
+
+/// A part with `number:calendar` on date elements.
+fn emit_dated(part: &Part, calendar: Option<&str>, out: &mut String) {
+    let dated = matches!(
+        part,
+        Part::Year { .. }
+            | Part::Month { .. }
+            | Part::Day { .. }
+            | Part::DayOfWeek { .. }
+            | Part::Quarter { .. }
+            | Part::Week
+            | Part::Era { .. }
+    );
+    match calendar {
+        Some(c) if dated => {
+            let mut el = String::new();
+            emit_part(part, &mut el);
+            // `<number:year number:style="long"/>` → insert before `/>`.
+            if let Some(stem) = el.strip_suffix("/>") {
+                out.push_str(stem);
+                out.push_str(" number:calendar=\"");
+                escape_attr(c, out);
+                out.push_str("\"/>");
+            } else {
+                out.push_str(&el);
+            }
+        }
+        _ => emit_part(part, out),
     }
 }
 
@@ -1091,6 +1331,8 @@ fn emit_part(part: &Part, out: &mut String) {
         Part::Era { long } => {
             let _ = write!(out, "<number:era{}/>", style_attr(*long));
         }
+        // Handled by emit_style / tokenize_section.
+        Part::Calendar(_) | Part::AaaDay { .. } | Part::EraR { .. } => {}
     }
 }
 

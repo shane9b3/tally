@@ -197,11 +197,24 @@ fn build_section(part: &[char], i: usize, total: usize) -> Result<Section, Forma
         Token::Color(c) => Some(*c),
         _ => None,
     });
+    // The first modifier counts (AOO rejects a second one).
+    let natnum = tokens.iter().find_map(|t| match t {
+        Token::NatNum(n) => Some(crate::natnum::NatNum {
+            num: *n,
+            dbnum: false,
+        }),
+        Token::DbNum(n) => Some(crate::natnum::NatNum {
+            num: *n,
+            dbnum: true,
+        }),
+        _ => None,
+    });
     Ok(Section {
         condition,
         color,
         tokens,
         kind,
+        natnum,
     })
 }
 
@@ -411,6 +424,7 @@ fn keyword(s: &[char], i: usize) -> (Token, usize) {
         'W' if n >= 2 => DateTimeToken::Week(k),
         'G' => DateTimeToken::Era(k.min(3)),
         'E' => DateTimeToken::EraYear(k.min(2)),
+        'R' => DateTimeToken::EraAndYear(k.min(2)),
         _ => return (Token::Literal(s[i]), 1),
     };
     // Tokens with a capped count consume only what they print back as.
@@ -419,7 +433,8 @@ fn keyword(s: &[char], i: usize) -> (Token, usize) {
         | DateTimeToken::AaaDayName(k)
         | DateTimeToken::Quarter(k)
         | DateTimeToken::Era(k)
-        | DateTimeToken::EraYear(k) => usize::from(*k),
+        | DateTimeToken::EraYear(k)
+        | DateTimeToken::EraAndYear(k) => usize::from(*k),
         _ => n,
     };
     (Token::DateTime(dt), consumed)
@@ -431,6 +446,15 @@ fn parse_bracket(content: &str) -> Result<Token, FormatError> {
     match first {
         '$' => {
             let body = &content[1..];
+            // `[$-ja-JP-x-gannen]`: a BCP 47 language tag (Excel).
+            if let Some(tag) = body.strip_prefix('-') {
+                if tag.contains('-') && crate::locale::lang_id(tag).is_some() {
+                    return Ok(Token::Currency {
+                        symbol: String::new(),
+                        locale: Some(tag.to_string()),
+                    });
+                }
+            }
             if let Some(pos) = body.rfind('-') {
                 let loc = &body[pos + 1..];
                 if !loc.is_empty() && loc.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -449,11 +473,18 @@ fn parse_bracket(content: &str) -> Result<Token, FormatError> {
         '<' | '>' | '=' => parse_condition(content),
         _ => {
             let upper = content.to_ascii_uppercase();
+            // zformat.cxx accepts NatNum0..19 and DBNum1..9.
             if let Some(n) = upper.strip_prefix("NATNUM") {
-                return n.parse::<u8>().map(Token::NatNum).map_err(|_| unknown());
+                return match n.parse::<u8>() {
+                    Ok(v) if v <= 19 => Ok(Token::NatNum(v)),
+                    _ => Err(unknown()),
+                };
             }
             if let Some(n) = upper.strip_prefix("DBNUM") {
-                return n.parse::<u8>().map(Token::DbNum).map_err(|_| unknown());
+                return match n.parse::<u8>() {
+                    Ok(v) if (1..=9).contains(&v) => Ok(Token::DbNum(v)),
+                    _ => Err(unknown()),
+                };
             }
             if let Some(n) = upper.strip_prefix("COLOR") {
                 let n: u32 = n.parse().map_err(|_| unknown())?;
@@ -524,8 +555,31 @@ fn is_seconds(t: &Token) -> bool {
 }
 
 /// Classifies a section and normalises token roles in place.
-fn analyze(tokens: &mut [Token], index: usize) -> Result<SectionKind, FormatError> {
-    let has_dt = tokens.iter().any(|t| matches!(t, Token::DateTime(_)));
+fn analyze(tokens: &mut Vec<Token>, index: usize) -> Result<SectionKind, FormatError> {
+    let mut has_dt = tokens.iter().any(|t| matches!(t, Token::DateTime(_)));
+    let only_r = has_dt
+        && tokens.iter().all(|t| {
+            !matches!(t, Token::DateTime(_))
+                || matches!(t, Token::DateTime(DateTimeToken::EraAndYear(_)))
+        });
+    if only_r
+        && tokens
+            .iter()
+            .any(|t| matches!(t, Token::Digit(_) | Token::General(_) | Token::At))
+    {
+        // `R 0.00` (rand): the era code R only counts in a date section.
+        let mut i = 0;
+        while i < tokens.len() {
+            if let Token::DateTime(DateTimeToken::EraAndYear(n)) = tokens[i] {
+                let n = usize::from(n);
+                tokens.splice(i..=i, std::iter::repeat_n(Token::Literal('R'), n));
+                i += n;
+            } else {
+                i += 1;
+            }
+        }
+        has_dt = false;
+    }
     let has_general = tokens.iter().any(|t| matches!(t, Token::General(_)));
     let has_at = tokens.iter().any(|t| matches!(t, Token::At));
     let digits = tokens
@@ -631,8 +685,23 @@ fn analyze_date(tokens: &mut [Token]) -> DateLayout {
                 DateTimeToken::Hour(_) | DateTimeToken::Minute(_) | DateTimeToken::Second(_) => {
                     lay.has_time = true
                 }
+                DateTimeToken::Era(_)
+                | DateTimeToken::EraYear(_)
+                | DateTimeToken::EraAndYear(_)
+                | DateTimeToken::AaaDayName(_) => {
+                    lay.has_date = true;
+                    lay.calendar = true;
+                }
                 _ => lay.has_date = true,
             }
+        }
+        match t {
+            Token::Calendar(_) => lay.calendar = true,
+            Token::Currency {
+                symbol,
+                locale: Some(tag),
+            } if symbol.is_empty() && tag.contains('-') => lay.calendar = true,
+            _ => {}
         }
     }
     lay
@@ -889,6 +958,7 @@ fn print_dt(dt: &DateTimeToken, out: &mut String) {
         DateTimeToken::Week(n) => repeat(out, 'W', *n),
         DateTimeToken::Era(n) => repeat(out, 'G', *n),
         DateTimeToken::EraYear(n) => repeat(out, 'E', *n),
+        DateTimeToken::EraAndYear(n) => repeat(out, 'R', *n),
         DateTimeToken::Elapsed(u, n) => {
             out.push('[');
             let c = match u {

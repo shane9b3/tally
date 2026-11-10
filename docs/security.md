@@ -924,6 +924,24 @@ anything changes). Every lookup during the load goes through name indexes and ea
 `files::missing_and_bogus_files_fail_cleanly`; `tally-desktop`
 `load_styles_from_a_file_and_a_builtin_template`.
 
+### Native numbers and calendars in number formats (G7, 2026-11-09)
+
+Format codes come from files (ODS data styles, XLSX `numFmts`) and are
+already capped at `MAX_NUMBER_FORMAT_LEN`. The new inputs are bounded:
+`[NatNumN]` accepts 0..19 and `[DBNumN]` 1..9 (a parse error otherwise, as
+AOO); a `[~name]` that is not one of the seven calendars, or not one of the
+format language's, is ignored; ODS `number:calendar` values longer than 32
+bytes are dropped and only the first character of
+`number:transliteration-format` is used (an unknown one gives NatNum0).
+Transliteration works on the already formatted text (linear in its length;
+the spelled-number recursion is bounded by the 6- or 7-entry multiplier
+tables) and the Hebrew numbering refuses more than 19 digits as AOO does.
+The calendar computations are closed-form except the Hijri new-moon search
+(capped at 64 steps) and the Hebrew year / month search (bounded by the
+supported date range, years 1..9999). Excel extended ids `[$-NNCCLLLL]` are
+parsed as hex `u32`. Tests: `tally-numfmt` `natnum_cases::modifier_limits`,
+`calendar::tests`.
+
 ### Chart Data Table and chart literal budgets (review 5, 2026-11-09)
 
 A chart that reads no cells carries literal lists, and a small file can

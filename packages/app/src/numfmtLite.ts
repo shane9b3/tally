@@ -8,10 +8,14 @@
  * Returns `null` for codes it does not understand.
  */
 
+import { formatDateNative, isNativeDate, needsNative, transliterateNumber, type NativeLocale } from "./numfmtNative";
+
 /** Separators and boolean names of the format's language (default en-US). */
 export interface LiteLocale {
   decimal: string;
   group: string;
+  /** The document language (hex LCID) for `[NatNumN]` / calendars without a tag. */
+  lcid?: string;
   trueName?: string;
   falseName?: string;
 }
@@ -250,6 +254,20 @@ export function formatNumberLite(v: number, code: string, loc: LiteLocale = EN_U
     explicitNeg = true;
   } else if (v === 0 && sections.length >= 3) section = sections[2] ?? section;
   if (section.trim() === "@") return generalText(v);
+  if (needsNative(trimmed)) {
+    const nloc: NativeLocale = { decimal: loc.decimal, group: loc.group, lcid: loc.lcid ?? "409" };
+    try {
+      if (isNativeDate(section)) return formatDateNative(value, section, trimmed, nloc);
+      const lit = literals(section).replace(/""/g, "").trim();
+      let out = /^general$/i.test(lit) ? general(value) : formatNumberSection(value, section, loc);
+      if (out === null) return null;
+      if (value < 0 && !explicitNeg) out = `-${out}`;
+      // AOO leaves scientific output alone.
+      return /E[+-]/i.test(literals(section).replace(/"[^"]*"/g, "")) ? out : transliterateNumber(out, section, trimmed, nloc);
+    } catch {
+      return null;
+    }
+  }
   if (/BOOLEAN/i.test(literals(section).replace(/"[^"]*"/g, ""))) return v !== 0 ? (loc.trueName ?? "TRUE") : (loc.falseName ?? "FALSE");
   if (/^general$/i.test(literals(section).replace(/""/g, "").trim())) return general(value);
   try {

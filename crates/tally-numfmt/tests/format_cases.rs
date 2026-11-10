@@ -223,10 +223,16 @@ const NUM: &[(f64, &str, &str)] = &[
     (D, "Q", "Q4"),
     (D, "QQ", "4th quarter"),
     (D, "WW", "43"),
-    (D, "G", "A"),
+    // AOO ImpAppendEraG: G is the short era name outside gengou; E is
+    // SHORT_YEAR (two digits from 100 on), EE / R LONG_YEAR, RR GGGEE
+    // (calendar_gregorian.cxx getDisplayString). en-US has no other calendar.
+    (D, "G", "AD"),
     (D, "GG", "AD"),
     (D, "GGG", "Anno Domini"),
-    (D, "E", "2026"),
+    (D, "E", "26"),
+    (D, "EE", "2026"),
+    (D, "R", "2026"),
+    (D, "RR", "Anno Domini2026"),
     (D, "AAAA", "Monday"),
     (D, "yyyy-mm-dd", "2026-10-19"),
     (D, "dd.mm.yyyy", "19.10.2026"),

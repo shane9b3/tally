@@ -16,7 +16,7 @@ use tally_types::{col_to_letters, CriteriaMode, Value, MAX_COLS, MAX_ROWS};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::numfmt::code_to_xml;
+use crate::numfmt::code_to_xml_in;
 use crate::units::{
     border_to_string, color_hex, fmt_f64, general_display, hmm_to_cm, null_date_for,
 };
@@ -164,6 +164,7 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
     // The named styles' number formats (common data styles `NS<i>`, as
     // AOO writes a style's `style:data-style-name` into office:styles).
     let mut named_data: HashMap<&str, String> = HashMap::new();
+    let doc_lang = doc_lang_of(data);
     for (i, st) in data.cell_styles.iter().enumerate() {
         let Some(code) = st.style.number_format.as_deref() else {
             continue;
@@ -173,7 +174,7 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
         }
         let name = format!("NS{i}");
         let mut xml = String::new();
-        if code_to_xml(code, &name, &mut xml).is_ok() {
+        if code_to_xml_in(code, &name, &mut xml, doc_lang.as_deref()).is_ok() {
             s.push_str(&xml);
             named_data.insert(st.name.as_str(), name);
         }
@@ -374,6 +375,17 @@ pub(crate) struct StylePlan {
     pages: Vec<(tally_model::PageSetupData, String)>,
     /// (tab, row, col) → derived cell style with `style:map`s.
     derived: HashMap<(usize, u32, u32), String>,
+    /// The document language as a hex locale id (NatNum / calendar
+    /// language of codes without a `[$-LCID]`).
+    doc_lang: Option<String>,
+}
+
+/// The document language as a hex locale id.
+fn doc_lang_of(data: &WorkbookData) -> Option<String> {
+    let tag = data.settings.locale.as_deref()?;
+    let mut parts = tag.split(['-', '_']);
+    let lang = parts.next()?;
+    tally_numfmt::lcid_for_language(lang, parts.next()).map(str::to_string)
 }
 
 impl StylePlan {
@@ -389,7 +401,9 @@ impl StylePlan {
             cf_data_xml: String::new(),
             pages: vec![(tally_model::PageSetupData::default(), "Default".into())],
             derived: HashMap::new(),
+            doc_lang: doc_lang_of(data),
         };
+        let doc_lang = plan.doc_lang.clone();
         let mut codes: HashMap<&str, Option<String>> = HashMap::new();
         let mut warned_display = false;
         let mut warned_indent = false;
@@ -405,7 +419,7 @@ impl StylePlan {
                         .or_insert_with(|| {
                             let name = format!("N{next}");
                             let mut xml = String::new();
-                            match code_to_xml(code, &name, &mut xml) {
+                            match code_to_xml_in(code, &name, &mut xml, doc_lang.as_deref()) {
                                 Ok(()) => {
                                     plan.data_xml.push_str(&xml);
                                     Some(name)
@@ -533,7 +547,7 @@ impl StylePlan {
         let ds = st.number_format.as_deref().and_then(|code| {
             let dn = format!("NCF{i}");
             let mut xml = String::new();
-            match code_to_xml(code, &dn, &mut xml) {
+            match code_to_xml_in(code, &dn, &mut xml, self.doc_lang.as_deref()) {
                 Ok(()) => {
                     self.cf_data_xml.push_str(&xml);
                     Some(dn)

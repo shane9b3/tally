@@ -441,7 +441,9 @@ fn unsupported_things_are_reported() {
     let mut buf = Cursor::new(Vec::new());
     let report = write_ods_with_report(&wb, &mut buf).unwrap();
     let w = report.warnings.join("\n");
-    assert!(w.contains("[NatNum1]0"), "{w}");
+    // NatNum is written as number:transliteration-* (G7); one that does
+    // nothing in its language (NatNum1 without a language) is dropped.
+    assert!(!w.contains("[NatNum1]0"), "{w}");
     assert!(w.contains("fourth"), "{w}");
     assert!(!w.contains("named expressions"), "{w}");
     assert!(!w.contains("merged"), "{w}");
@@ -862,5 +864,84 @@ fn named_range_usable_as_round_trips() {
             print_range: true,
             ..NameUsage::default()
         }
+    );
+}
+
+/// `[NatNumN]` ↔ `number:transliteration-*`, `[~calendar]` ↔
+/// `number:calendar`, era years (xmlnumfe.cxx / xmlnumfi.cxx, G7).
+#[test]
+fn natnum_and_calendars_round_trip() {
+    let same = [
+        "[NatNum1][$-411]0",
+        "[NatNum4][$-411]#,##0;[NatNum4]-#,##0",
+        "[NatNum1][$-41E]0.00",
+        "[NatNum1][$-401]#,##0.00",
+        "[NatNum2][$-40D]0",
+        "[NatNum9][$-412]0",
+        "[NatNum3]0",
+        "[NatNum1][$-411]YYYY/MM/DD",
+        "[$-411]GGGE\"年\"M\"月\"D\"日\"",
+        "[$-411]GE.MM.DD",
+        "[NatNum1][$-41E][~buddhist]D/M/YYYY",
+        "[$-401][~hijri]D MMMM YYYY",
+        "[$-40D][~jewish]D MMMM YYYY",
+    ];
+    for code in same {
+        let bytes = write_to_vec(&one_cell(code));
+        let back = read_ods(Cursor::new(bytes.clone()), &Limits::default()).unwrap();
+        assert_eq!(
+            back.styles[0].number_format.as_deref(),
+            Some(code),
+            "{}",
+            entry(&bytes, "content.xml")
+        );
+    }
+    // The XML AOO writes.
+    let xml = entry(&write_to_vec(&one_cell("[NatNum1][$-411]0")), "content.xml");
+    assert!(
+        xml.contains(r#"number:transliteration-format="一" number:transliteration-language="ja" number:transliteration-country="JP" number:transliteration-style="short""#),
+        "{xml}"
+    );
+    let xml = entry(&write_to_vec(&one_cell("[$-411]GGGE")), "content.xml");
+    assert!(
+        xml.contains(r#"<number:era number:style="long" number:calendar="gengou"/><number:year number:calendar="gengou"/>"#),
+        "{xml}"
+    );
+    // Codes that read back in AOO's equivalent spelling.
+    for (code, back_code) in [
+        // DBNum is stored as its NatNum (zformat.cxx GetNatNumXml).
+        ("[DBNum1][$-411]0", "[NatNum1][$-411]0"),
+        ("[DBNum2][$-411]0", "[NatNum4][$-411]0"),
+        // E / EE / R / RR: year elements in the other calendar.
+        ("[$-411]RR", "[$-411]GGGEE"),
+        ("[$-404][~ROC]GGGE\"年\"", "[$-404]GGGE\"年\""),
+        // AAAA: a weekday element in the other calendar.
+        ("[$-411]AAAA", "[$-411][~gengou]NNN"),
+        // R in a number section is text (letters are quoted on reading).
+        ("R #,##0.00", "\"R \"#,##0.00"),
+    ] {
+        let back = read_ods(
+            Cursor::new(write_to_vec(&one_cell(code))),
+            &Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            back.styles[0].number_format.as_deref(),
+            Some(back_code),
+            "{code}"
+        );
+    }
+    // AOO files: a transliteration in another language than the style's.
+    let bytes = write_to_vec(&one_cell("[$-409]0"));
+    let th = with_content(&bytes, |x| {
+        x.replace(
+            "number:language=\"en\" number:country=\"US\">",
+            "number:language=\"en\" number:country=\"US\" number:transliteration-format=\"๑\" number:transliteration-language=\"th\" number:transliteration-country=\"TH\" number:transliteration-style=\"short\">",
+        )
+    });
+    let back = read_ods(Cursor::new(th), &Limits::default()).unwrap();
+    assert_eq!(
+        back.styles[0].number_format.as_deref(),
+        Some("[NatNum1][$-41E]0")
     );
 }

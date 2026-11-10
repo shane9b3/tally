@@ -868,10 +868,43 @@ pub(crate) fn parse_data_style<R: BufRead>(
     let mut ds = DataStyle::new(kind);
     ds.truncate = e.attr("number:truncate-on-overflow") != Some("false");
     ds.language = crate::numfmt::language_lcid(e.attr("number:language"), e.attr("number:country"));
+    // xmlnumfi.cxx: number:transliteration-* → [NatNumN] (+ its language).
+    if let Some(format) = e.attr("number:transliteration-format") {
+        let style = e.attr("number:transliteration-style").unwrap_or("short");
+        if let Some(n) = tally_numfmt::natnum::from_xml_attributes(format, style) {
+            let lcid = crate::numfmt::language_lcid(
+                e.attr("number:transliteration-language"),
+                e.attr("number:transliteration-country"),
+            )
+            .filter(|l| Some(l) != ds.language.as_ref());
+            ds.natnum = Some((n, lcid));
+        }
+    }
+    // SvXMLNumFormatContext::UpdateCalendar: a changed number:calendar
+    // inserts [~calendar] before the element.
+    let mut calendar = String::new();
     let d = xml.depth();
     loop {
         match xml.next()? {
             Ev::Start(p) => {
+                if matches!(
+                    p.name.as_str(),
+                    "number:year"
+                        | "number:month"
+                        | "number:day"
+                        | "number:day-of-week"
+                        | "number:quarter"
+                        | "number:week-of-year"
+                        | "number:era"
+                ) {
+                    let c = p.attr("number:calendar").unwrap_or("");
+                    if c != calendar {
+                        calendar = c.to_string();
+                        if !calendar.is_empty() && calendar.len() <= 32 {
+                            ds.parts.push(Part::Calendar(calendar.clone()));
+                        }
+                    }
+                }
                 let part = match p.name.as_str() {
                     "number:number" => {
                         let factor = p
