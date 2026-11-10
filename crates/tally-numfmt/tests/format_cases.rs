@@ -225,15 +225,22 @@ const NUM: &[(f64, &str, &str)] = &[
     (D, "WW", "43"),
     // AOO ImpAppendEraG: G is the short era name outside gengou; E is
     // SHORT_YEAR (two digits from 100 on), EE / R LONG_YEAR, RR GGGEE
-    // (calendar_gregorian.cxx getDisplayString). en-US has no other calendar.
+    // (calendar_gregorian.cxx getDisplayString). en-US's other calendar is
+    // the Jewish one (en_US.xml): E / EE / R / RR / AAA switch to it, with
+    // ASCII digits (NatNum2 is not valid for English) and SHORT_YEAR = year
+    // % 1000. 2026-10-19 is 8 Heshvan 5787.
     (D, "G", "AD"),
     (D, "GG", "AD"),
-    (D, "GGG", "Anno Domini"),
-    (D, "E", "26"),
-    (D, "EE", "2026"),
-    (D, "R", "2026"),
-    (D, "RR", "Anno Domini2026"),
+    (D, "GGG", "AD"),
+    (D, "E", "787"),
+    (D, "EE", "5787"),
+    (D, "R", "5787"),
+    (D, "RR", "CE5787"),
+    (D, "G E", "CE 787"),
+    (D, "D MMMM EE", "8 Heshvan 5787"),
     (D, "AAAA", "Monday"),
+    (D + 5.0, "AAAA", "Shabbat"),
+    (D + 5.0, "AAA", "Sat"),
     (D, "yyyy-mm-dd", "2026-10-19"),
     (D, "dd.mm.yyyy", "19.10.2026"),
     (D + 0.5, "MM/DD/YYYY HH:MM", "10/19/2026 12:00"),

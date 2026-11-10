@@ -119,13 +119,13 @@ shows 元 only with NatNum1/2). ODS has no place for it: it is written as
 
 | Calendar | Locale (AOO localedata) | Years | Eras |
 |---|---|---|---|
-| gregorian | all | proleptic Gregorian (Tally has no Julian switch) | locale's (`BC`/`AD`, 紀元前/西暦 …) |
+| gregorian | all | proleptic Gregorian (Tally has no Julian switch) | localedata `<Eras>`: en `BC`/`AD` (short and long), de `v. Chr.`/`n. Chr.` (long `vor Christus`/`nach Christus`), fr `av. J.-C.`/`apr. J.-C.` (long `ap. J.-C.`), es `a.C.`/`d.C.`, ja 紀元前/西暦 |
 | gengou | ja | era year, eras from 1868-01-01, 1912-07-30, 1926-12-25, 1989-01-08, **2019-05-01** | 明治 大正 昭和 平成 **令和** (G: M T S H **R**) |
 | ROC | zh-TW | 1912 = 1, before: 民國前 n | 中華民國 / 民國 |
 | buddhist | th | Gregorian + 543 | พุทธศักราช / พ.ศ. |
 | hanja | ko | Gregorian | 西曆紀元 / 西紀 |
 | hijri | ar (not ar-OM) | AOO's astronomical new-moon computation (`NewMoon`, reference 1 Muharram 1422 = 2001-03-26) | هجري |
-| jewish | he | Dershowitz–Reingold; numbers always Hebrew (NatNum2) | לסה"נ |
+| jewish | he; en (en_US.xml, en_GB refers to it) | Dershowitz–Reingold; numbers always NatNum2 (Hebrew in he, ASCII in en where NatNum2 is not valid); `E` = year % 1000 | he לסה"נ; en `BCE` / `CE` (months Nissan … Adar B, Saturday `Shabbat`) |
 
 - `E`, `EE`, `R`, `RR`, `AAA`, `AAAA` switch the whole section to the
   language's other calendar (`ImpIsOtherCalendar`) unless a `[~calendar]`
@@ -135,13 +135,31 @@ shows 元 only with NatNum1/2). ODS has no place for it: it is written as
   so `[~buddhist]` in en-US does nothing). A gengou date before Meiji
   falls back to Gregorian (`ImpFallBackToGregorianCalendar`).
 - Field text (`getDisplayString`): `E` short year — all digits in era
-  calendars, else two digits from 100 on (en-US `E` = `26`); `EE` / `R`
+  calendars, the last three digits in the Jewish calendar, else two digits
+  from 100 on (de-DE `E` = `26`; en-US `E` is Jewish: `787` for
+  2026-10-19 = 8 Heshvan 5787, `G E` = `CE 787`); `EE` / `R`
   long year (gengou two digits `08`); `RR` long era + long year (Buddhist
   era 0: short year + short era); `G` the gengou letter or the short era;
   `GG` short, `GGG` long era. Year 1 of an era is 元 with NatNum1/2.
 - Names: the calendar's own day and month names (gengou and hanja weekdays
-  日 … 土曜日, ROC Chinese, Buddhist Thai, Hijri and Hebrew month names);
-  Gregorian names and the gengou months come from the Tally locale.
+  日 … 土曜日, ROC Chinese, Buddhist Thai, Hijri and Hebrew month names,
+  the English Jewish names of en_US.xml); Gregorian names and the gengou
+  months come from the Tally locale. The Hanja calendar shows AM/PM as
+  午前 / 午後 (`Calendar_hanja::getDisplayName` uses the ja locale).
+- NatNum on numbers (`zformat.cxx`): a number section is transliterated
+  as a whole (literals and sign too, `ImpGetNumberOutput`); a fraction only
+  in its integer, numerator and denominator (`ImpTransliterate` /
+  `ImpIntToString`; the sign and literals stay); General text with the
+  first section's NatNum whichever section shows it
+  (`ImpGetOutputStdToPrecision`), except the E notation of |x| > 1e15
+  (`ImpGetOutputStandard`), and then the whole section text with the
+  section's own NatNum. Scientific sections are not transliterated.
+- Range: dates outside 0001-01-01 … 9999-12-31 (serials −693593 …
+  2958465 in the 1899 epoch) show `###` in every calendar; the Format
+  Cells preview checks the same range before any calendar arithmetic.
+  The Jewish year search starts from (days since the epoch) / 366 instead
+  of AOO's `(d + HebrewEpoch) / 366` (about 7,500 years low): same
+  results over the whole range, about 100× faster.
 
 ### Deliberate differences from AOO 4.1
 
@@ -157,6 +175,8 @@ shows 元 only with NatNum1/2). ODS has no place for it: it is written as
 - The Thai `t` modifier of Thai-locale codes (`NF_KEY_THAI_T`) is not
   recognised (only typed in a Thai document or imported from Thai Excel).
 - Excel `B1` / `B2` year codes are not translated.
+- A fraction's integer part is transliterated with its group separators
+  and leading-zero padding (AOO inserts those after transliterating).
 
 ## Files
 

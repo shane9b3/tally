@@ -8,7 +8,8 @@
  * Returns `null` for codes it does not understand.
  */
 
-import { formatDateNative, isNativeDate, needsNative, transliterateNumber, type NativeLocale } from "./numfmtNative";
+import { transliterate } from "./natnum";
+import { formatDateNative, isNativeDate, needsNative, sectionNatNum, transliterateNumber, type NativeLocale } from "./numfmtNative";
 
 /** Separators and boolean names of the format's language (default en-US). */
 export interface LiteLocale {
@@ -89,21 +90,25 @@ function bestRational(x: number, maxDen: number): [number, number] {
   return best;
 }
 
-/** `# ?/?`, `# ??/16`, `?/?`: a whole part (when `intPh`) and a fraction. */
-function formatFraction(v: number, intPh: string | undefined, denPh: string): string {
+/**
+ * `# ?/?`, `# ??/16`, `?/?`: a whole part (when `intPh`) and a fraction;
+ * `t` maps each of the three numbers (NatNum transliteration).
+ */
+function formatFraction(v: number, intPh: string | undefined, denPh: string, t: (s: string) => string = (s) => s): string {
   const ax = Math.abs(v);
   const fixed = /^\d+$/.test(denPh) ? Number(denPh) : null;
   const maxDen = 10 ** denPh.length - 1;
   let whole = intPh !== undefined ? Math.floor(ax) : 0;
   const frac = ax - whole;
   let [n, d] = fixed ? [Math.round(frac * fixed), fixed] : bestRational(frac, maxDen);
-  if (intPh === undefined) return `${n + whole * d}/${d}`;
+  const f = (x: number): string => t(String(x));
+  if (intPh === undefined) return `${f(n + whole * d)}/${f(d)}`;
   if (n === d) {
     whole += 1;
     n = 0;
   }
-  if (n === 0) return String(whole);
-  return whole === 0 && !intPh.includes("0") ? `${n}/${d}` : `${whole} ${n}/${d}`;
+  if (n === 0) return f(whole);
+  return whole === 0 && !intPh.includes("0") ? `${f(n)}/${f(d)}` : `${f(whole)} ${f(n)}/${f(d)}`;
 }
 
 function formatDate(serial: number, section: string): string {
@@ -183,13 +188,24 @@ function formatDate(serial: number, section: string): string {
   return out;
 }
 
-function formatNumberSection(v: number, section: string, loc: LiteLocale): string | null {
+const FRACTION = /(?:([0#?]+)\s+)?[0#?]+\/([0-9#?]+)/;
+
+/** Whether a number section is a fraction (`# ?/?`). */
+function isFraction(section: string): boolean {
+  return FRACTION.test(literals(section).replace(/"[^"]*"/g, (x) => "\u0000".repeat(x.length)));
+}
+
+/**
+ * Formats a number section. `fracDigits` transliterates the digits of a
+ * fraction (integer, numerator, denominator) but not its literals.
+ */
+function formatNumberSection(v: number, section: string, loc: LiteLocale, fracDigits?: (s: string) => string): string | null {
   const src = literals(section);
   const unquoted = src.replace(/"[^"]*"/g, (x) => "\u0000".repeat(x.length));
-  const frac = /(?:([0#?]+)\s+)?[0#?]+\/([0-9#?]+)/.exec(unquoted);
+  const frac = FRACTION.exec(unquoted);
   if (frac) {
     const unq = (t: string): string => t.replace(/"([^"]*)"/g, "$1").replace(/\\(.)/g, "$1");
-    return unq(src.slice(0, frac.index)) + formatFraction(v, frac[1], frac[2] ?? "?") + unq(src.slice(frac.index + frac[0].length));
+    return unq(src.slice(0, frac.index)) + formatFraction(v, frac[1], frac[2] ?? "?", fracDigits) + unq(src.slice(frac.index + frac[0].length));
   }
   const m = /[0#?][0#?,]*(\.[0#?]*)?(E[+-]0+)?|\.[0#?]+(E[+-]0+)?/i.exec(unquoted);
   const unquote = (t: string): string => t.replace(/"([^"]*)"/g, "$1").replace(/\\(.)/g, "$1");
@@ -259,11 +275,23 @@ export function formatNumberLite(v: number, code: string, loc: LiteLocale = EN_U
     try {
       if (isNativeDate(section)) return formatDateNative(value, section, trimmed, nloc);
       const lit = literals(section).replace(/""/g, "").trim();
-      let out = /^general$/i.test(lit) ? general(value) : formatNumberSection(value, section, loc);
+      if (/^general$/i.test(lit)) {
+        // ImpGetOutputStdToPrecision: the first section's NatNum, not for
+        // E notation; then the section's own (ImpGetNumberOutput). The
+        // sign is already in general(value).
+        let g = general(value);
+        const nat0 = sectionNatNum(sections[0] ?? "", trimmed, nloc, false);
+        if (nat0 && !g.includes("E")) g = transliterate(g, nat0[0], nat0[1], nloc);
+        return transliterateNumber(g, section, trimmed, nloc);
+      }
+      // Fractions: only the digit groups are transliterated, the sign and
+      // literals stay (zformat.cxx NUMBERFORMAT_FRACTION).
+      const fraction = isFraction(section);
+      let out = formatNumberSection(value, section, loc, fraction ? (b) => transliterateNumber(b, section, trimmed, nloc) : undefined);
       if (out === null) return null;
       if (value < 0 && !explicitNeg) out = `-${out}`;
       // AOO leaves scientific output alone.
-      return /E[+-]/i.test(literals(section).replace(/"[^"]*"/g, "")) ? out : transliterateNumber(out, section, trimmed, nloc);
+      return fraction || /E[+-]/i.test(literals(section).replace(/"[^"]*"/g, "")) ? out : transliterateNumber(out, section, trimmed, nloc);
     } catch {
       return null;
     }

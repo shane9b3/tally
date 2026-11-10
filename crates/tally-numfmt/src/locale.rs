@@ -61,9 +61,10 @@ pub struct Locale {
     pub quarter_abbrev: [&'static str; 4],
     /// Long quarter names for the `QQ` keyword.
     pub quarter_names: [&'static str; 4],
-    /// Short era names (before, after the epoch of the Gregorian calendar).
+    /// Short era names (before, after the epoch of the Gregorian calendar),
+    /// from AOO's localedata `<Eras>` (`DefaultAbbrvName`).
     pub era_abbrev: (&'static str, &'static str),
-    /// Full era names.
+    /// Full era names (`DefaultFullName`).
     pub era_names: (&'static str, &'static str),
     /// The currency symbol follows the amount (`12,50 €`).
     pub currency_after: bool,
@@ -123,7 +124,7 @@ pub const EN_US: Locale = Locale {
     quarter_abbrev: ["Q1", "Q2", "Q3", "Q4"],
     quarter_names: ["1st quarter", "2nd quarter", "3rd quarter", "4th quarter"],
     era_abbrev: ("BC", "AD"),
-    era_names: ("Before Christ", "Anno Domini"),
+    era_names: ("BC", "AD"),
     currency_after: false,
     short_date: "MM/DD/YYYY",
     format_letters: &[],
@@ -181,7 +182,7 @@ pub const EN_GB: Locale = Locale {
     quarter_abbrev: ["Q1", "Q2", "Q3", "Q4"],
     quarter_names: ["1st quarter", "2nd quarter", "3rd quarter", "4th quarter"],
     era_abbrev: ("BC", "AD"),
-    era_names: ("Before Christ", "Anno Domini"),
+    era_names: ("BC", "AD"),
     currency_after: false,
     short_date: "DD/MM/YYYY",
     format_letters: &[],
@@ -286,8 +287,8 @@ pub const FR_FR: Locale = Locale {
         "3e trimestre",
         "4e trimestre",
     ],
-    era_abbrev: ("av. J.-C.", "ap. J.-C."),
-    era_names: ("avant Jésus-Christ", "après Jésus-Christ"),
+    era_abbrev: ("av. J.-C.", "apr. J.-C."),
+    era_names: ("av. J.-C.", "ap. J.-C."),
     currency_after: true,
     short_date: "DD/MM/YYYY",
     format_letters: &[('J', 'D'), ('A', 'Y')],
@@ -344,8 +345,8 @@ pub const ES_ES: Locale = Locale {
         "3.er trimestre",
         "4.º trimestre",
     ],
-    era_abbrev: ("a. C.", "d. C."),
-    era_names: ("antes de Cristo", "después de Cristo"),
+    era_abbrev: ("a.C.", "d.C."),
+    era_names: ("a.C.", "d.C."),
     currency_after: true,
     short_date: "DD/MM/YYYY",
     format_letters: &[('A', 'Y')],

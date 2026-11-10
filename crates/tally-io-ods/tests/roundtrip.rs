@@ -885,6 +885,8 @@ fn natnum_and_calendars_round_trip() {
         "[NatNum1][$-41E][~buddhist]D/M/YYYY",
         "[$-401][~hijri]D MMMM YYYY",
         "[$-40D][~jewish]D MMMM YYYY",
+        "[$-409][~jewish]D MMMM YYYY",
+        "[$-409]G E",
     ];
     for code in same {
         let bytes = write_to_vec(&one_cell(code));
@@ -905,6 +907,13 @@ fn natnum_and_calendars_round_trip() {
     let xml = entry(&write_to_vec(&one_cell("[$-411]GGGE")), "content.xml");
     assert!(
         xml.contains(r#"<number:era number:style="long" number:calendar="gengou"/><number:year number:calendar="gengou"/>"#),
+        "{xml}"
+    );
+    // en-US's other calendar is the Jewish one (en_US.xml), so AOO's
+    // lcl_GetDefaultCalendar writes it for E / EE / R / RR.
+    let xml = entry(&write_to_vec(&one_cell("[$-409]G E")), "content.xml");
+    assert!(
+        xml.contains(r#"<number:era number:calendar="jewish"/><number:text> </number:text><number:year number:calendar="jewish"/>"#),
         "{xml}"
     );
     // Codes that read back in AOO's equivalent spelling.

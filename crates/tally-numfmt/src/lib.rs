@@ -46,6 +46,11 @@ pub use locale::{
 };
 pub use natnum::{LangId, NatNum};
 pub use parse_format::{parse_format, parse_format_with_locale, print_format, FormatError};
+
+/// Longest format code a formula may pass (`TEXT`), in characters: the
+/// same cap as `tally_model::MAX_NUMBER_FORMAT_LEN` for stored codes
+/// (tally-engine asserts they are equal).
+pub const MAX_CODE_LEN: usize = 4096;
 pub use precision::{display_decimals, display_decimals_for, display_decimals_of};
 pub use recognize::{
     parse_number_unambiguous, parse_number_unambiguous_with, recognize_input, recognize_input_with,

@@ -184,11 +184,11 @@ fn canonicalize(s: &[char], locale: &Locale, separators: bool) -> Vec<char> {
 
 /// Tokenizes and classifies section `i` of `total`.
 fn build_section(part: &[char], i: usize, total: usize) -> Result<Section, FormatError> {
-    let mut tokens = tokenize(part)?;
+    let (mut tokens, r_src) = tokenize(part)?;
     if total == 1 && tokens.is_empty() {
         tokens.push(Token::General(GeneralKeyword::General));
     }
-    let kind = analyze(&mut tokens, i)?;
+    let kind = analyze(&mut tokens, i, &r_src)?;
     let condition = tokens.iter().find_map(|t| match t {
         Token::Condition(c) => Some(*c),
         _ => None,
@@ -277,9 +277,13 @@ fn starts_with_ci(s: &[char], at: usize, kw: &str) -> bool {
     true
 }
 
+/// The length of the run of `letter` at `at`, at most 255 (what a count
+/// keeps): run-capped keywords rescan the run on every call, so a long run
+/// would cost O(n²).
 fn run_len(s: &[char], at: usize, letter: char) -> usize {
     s[at..]
         .iter()
+        .take(255)
         .take_while(|c| c.eq_ignore_ascii_case(&letter))
         .count()
 }
@@ -289,8 +293,11 @@ fn count_u8(n: usize) -> u8 {
 }
 
 /// Tokenizes one section (already split, so brackets and quotes are closed).
-fn tokenize(s: &[char]) -> Result<Vec<Token>, FormatError> {
+/// Also returns the source characters of the `R` / `RR` tokens, in order,
+/// for [`analyze`] to turn them back into literals as typed.
+fn tokenize(s: &[char]) -> Result<(Vec<Token>, Vec<char>), FormatError> {
     let mut out = Vec::new();
+    let mut r_src = Vec::new();
     let mut i = 0;
     while i < s.len() {
         let c = s[i];
@@ -372,6 +379,9 @@ fn tokenize(s: &[char]) -> Result<Vec<Token>, FormatError> {
             }
             _ if c.is_ascii_alphabetic() => {
                 let (tok, n) = keyword(s, i);
+                if matches!(tok, Token::DateTime(DateTimeToken::EraAndYear(_))) {
+                    r_src.extend_from_slice(&s[i..i + n]);
+                }
                 out.push(tok);
                 i += n;
             }
@@ -381,7 +391,7 @@ fn tokenize(s: &[char]) -> Result<Vec<Token>, FormatError> {
             }
         }
     }
-    Ok(out)
+    Ok((out, r_src))
 }
 
 /// Recognises a keyword at `s[i]` (an ASCII letter). Returns the token and
@@ -555,7 +565,11 @@ fn is_seconds(t: &Token) -> bool {
 }
 
 /// Classifies a section and normalises token roles in place.
-fn analyze(tokens: &mut Vec<Token>, index: usize) -> Result<SectionKind, FormatError> {
+fn analyze(
+    tokens: &mut Vec<Token>,
+    index: usize,
+    r_src: &[char],
+) -> Result<SectionKind, FormatError> {
     let mut has_dt = tokens.iter().any(|t| matches!(t, Token::DateTime(_)));
     let only_r = has_dt
         && tokens.iter().all(|t| {
@@ -568,14 +582,17 @@ fn analyze(tokens: &mut Vec<Token>, index: usize) -> Result<SectionKind, FormatE
             .any(|t| matches!(t, Token::Digit(_) | Token::General(_) | Token::At))
     {
         // `R 0.00` (rand): the era code R only counts in a date section.
-        let mut i = 0;
-        while i < tokens.len() {
-            if let Token::DateTime(DateTimeToken::EraAndYear(n)) = tokens[i] {
-                let n = usize::from(n);
-                tokens.splice(i..=i, std::iter::repeat_n(Token::Literal('R'), n));
-                i += n;
+        // Rebuilt in one pass, each R as typed (`r0` stays `r0`).
+        let mut src = r_src.iter().copied();
+        let old = std::mem::take(tokens);
+        tokens.reserve(old.len() + r_src.len());
+        for t in old {
+            if let Token::DateTime(DateTimeToken::EraAndYear(n)) = t {
+                for _ in 0..n {
+                    tokens.push(Token::Literal(src.next().unwrap_or('R')));
+                }
             } else {
-                i += 1;
+                tokens.push(t);
             }
         }
         has_dt = false;

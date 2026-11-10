@@ -64,7 +64,7 @@ const EN: Names = {
   days: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map((d) => [d.slice(0, 3), d]),
   quarters: [["Q1", "1st quarter"], ["Q2", "2nd quarter"], ["Q3", "3rd quarter"], ["Q4", "4th quarter"]],
   ampm: ["AM", "PM"],
-  eras: [["BC", "Before Christ"], ["AD", "Anno Domini"]],
+  eras: [["BC", "BC"], ["AD", "AD"]],
   daySep: ", ",
 };
 const JA: Names = {
@@ -212,6 +212,13 @@ function tokenize(section: string): Tok[] {
 
 const DAY_MS = 86_400_000;
 
+/** The engine's text for a date it cannot show (format.rs `OVERFLOW`). */
+export const OVERFLOW = "###";
+/** The engine's text for a non-finite number (`ErrorKind::Num`). */
+const NUM_ERROR = "#NUM!";
+/** The 1899 serial of 1970-01-01. */
+const UNIX_1899 = 25569;
+
 /** A date / time section in the engine's calendar path. */
 export function formatDateNative(serial: number, section: string, code: string, loc: NativeLocale): string | null {
   const toks = tokenize(section);
@@ -224,6 +231,7 @@ export function formatDateNative(serial: number, section: string, code: string, 
     neg = true;
     v = -v;
   }
+  if (!Number.isFinite(v)) return NUM_ERROR;
   const scale = 10 ** fd;
   const perDay = 86_400 * scale;
   let days = Math.floor(v);
@@ -232,14 +240,23 @@ export function formatDateNative(serial: number, section: string, code: string, 
     days += 1;
     ticks -= perDay;
   }
+  // The engine's range (date_section / unix_days_from_serial): checked
+  // before any calendar arithmetic, which would loop on huge values.
+  const totalTicks = Math.round(v * perDay);
+  if (!Number.isFinite(totalTicks) || Math.abs(totalTicks) > 9e15) return OVERFLOW;
+  if (hasDate) {
+    if (Math.abs(days) > 1e8) return OVERFLOW;
+    const year = new Date((days - UNIX_1899) * DAY_MS).getUTCFullYear();
+    if (!(year >= 1 && year <= 9999)) return OVERFLOW;
+  }
   const elapsed = toks.some((x) => x.t === "elapsed");
-  const t = elapsed ? Math.round(v * perDay) : ticks;
+  const t = elapsed ? totalTicks : ticks;
   const secs = Math.floor(t / scale);
   const frac = t % scale;
   const hour = Math.floor(secs / 3600) % 24;
   const minute = Math.floor(secs / 60) % 60;
   const second = secs % 60;
-  const unix = days - 25569;
+  const unix = days - UNIX_1899;
   const dt = new Date(unix * DAY_MS);
   const y = hasDate ? dt.getUTCFullYear() : 1899;
   const m = hasDate ? dt.getUTCMonth() + 1 : 12;
@@ -253,7 +270,6 @@ export function formatDateNative(serial: number, section: string, code: string, 
   const tag = tagLang(code);
   const dataLang = tag !== null && [0x09, 0x11, 0x07, 0x0c, 0x0a].includes(tag & 0x3ff) ? tag : docLang;
   const names = namesOf(dataLang);
-  const ownLocale = (dataLang & 0x3ff) === (calLang & 0x3ff);
   const gannen = /\[\$-[^\]]*-x-gannen\]/i.test(code);
   const nat = sectionNatNum(section, code, loc, hasDate);
   const mode = nat ? nat[1] : 0;
@@ -282,10 +298,10 @@ export function formatDateNative(serial: number, section: string, code: string, 
     return intNat ? transliterate(s, intNat[0], intNat[1], sep) : s;
   };
   const num = (cal: CalendarId, fl: Fields, c: NumCode): string => displayNumber(cal, calLang, fl, c, mode, gannen, sep);
-  const dayName = (cal: CalendarId): [string, string] => (dayNames(cal) ?? names.days)[wd]!;
+  const dayName = (cal: CalendarId): [string, string] => (dayNames(cal, calLang) ?? names.days)[wd]!;
   const era = (cal: CalendarId, fl: Fields): [string, string] => {
-    const table = cal === "gregorian" && ownLocale ? null : eraNames(cal, calLang);
-    return (table ?? names.eras)[fl.era] ?? ["", ""];
+    // gregorianEras has the en / ja / de / fr / es locale data too.
+    return (eraNames(cal, calLang) ?? names.eras)[fl.era] ?? ["", ""];
   };
   let fracChars: string[] = [];
   if (fd > 0) {
@@ -313,9 +329,12 @@ export function formatDateNative(serial: number, section: string, code: string, 
         }
         break;
       }
-      case "ampm":
-        out += hour < 12 ? names.ampm[0] : names.ampm[1];
+      case "ampm": {
+        // Calendar_hanja::getDisplayName: the ja locale's AM / PM.
+        const ampm = cur === "hanja" ? JA.ampm : names.ampm;
+        out += hour < 12 ? ampm[0] : ampm[1];
         break;
+      }
       case "ap":
         out += (hour < 12 ? "A" : "P")[x.lower ? "toLowerCase" : "toUpperCase"]();
         break;
@@ -344,7 +363,7 @@ export function formatDateNative(serial: number, section: string, code: string, 
           case "M":
             if (n <= 2) out += num(cur, f, n === 1 ? "shortMonth" : "longMonth");
             else {
-              const [a, l] = (monthNames(cur) ?? names.months)[f.month - 1] ?? ["", ""];
+              const [a, l] = (monthNames(cur, calLang) ?? names.months)[f.month - 1] ?? ["", ""];
               out += n === 3 ? a : n === 4 ? l : l.charAt(0);
             }
             break;

@@ -388,7 +388,10 @@ export function otherCalendar(lang: LangId): CalendarId | null {
     case 0x12: return "hanja";
     case 0x1e: return "buddhist";
     case 0x01: return lang === 0x2001 ? null : "hijri";
-    case 0x0d: return "jewish";
+    // en_US.xml (en_GB refers to it) has a Jewish calendar.
+    case 0x0d:
+    case 0x09:
+      return "jewish";
     default: return null;
   }
 }
@@ -464,10 +467,12 @@ function hebAbs(m: number, d: number, y: number): number {
   return doy + hebElapsed(y) - 1373429;
 }
 function hebrewDate(abs: number): [number, number, number] {
-  let year = Math.trunc((abs - 1373429) / 366);
-  while (abs >= hebAbs(7, 1, year + 1)) year++;
+  // Days since the epoch / 366 is at most ~30 years low in the engine's
+  // range (callers check the range first); the guards bound bad input.
+  let year = Math.trunc((abs + 1373429) / 366);
+  for (let guard = 0; guard < 128 && abs >= hebAbs(7, 1, year + 1); guard++) year++;
   let month = abs < hebAbs(1, 1, year) ? 7 : 1;
-  while (abs > hebAbs(month, hebMonthLen(month, year), year)) month++;
+  while (month < 13 && abs > hebAbs(month, hebMonthLen(month, year), year)) month++;
   return [year, month, abs - hebAbs(month, 1, year) + 1];
 }
 
@@ -502,6 +507,11 @@ const AR_DAYS: Names = [["ح", "الأحد"], ["ن", "الاثنين"], ["ث", "
 const HIJRI_MONTHS: Names = ["محرم", "صفر", "ربيع الأول", "ربيع الآخر", "جمادى الأولى", "جمادى الآخرة", "رجب", "شعبان", "رمضان", "شوال", "ذو القعدة", "ذو الحجة"].map((x) => [x, x]);
 const HE_DAYS: Names = [["א", "ראשון"], ["ב", "שני"], ["ג", "שלישי"], ["ד", "רביעי"], ["ה", "חמישי"], ["ו", "שישי"], ["ש", "שבת"]];
 const JEWISH_MONTHS: Names = ["ניסן", "אייר", "סיון", "תמוז", "אב", "אלול", "תשרי", "חשון", "כסליו", "טבת", "שבט", "אדר", "אדר-ב"].map((x) => [x, x]);
+// en_US.xml <Calendar unoid="jewish">.
+const EN_JEWISH_DAYS: Names = [["Sun", "Sunday"], ["Mon", "Monday"], ["Tue", "Tuesday"], ["Wed", "Wednesday"], ["Thu", "Thursday"], ["Fri", "Friday"], ["Sat", "Shabbat"]];
+const EN_JEWISH_MONTHS: Names = ["Nissan", "Iyar", "Sivan", "Tammuz", "Av", "Elul", "Tishri", "Heshvan", "Kislev", "Tevet", "Shevat", "Adar", "Adar B"].map((x) => [x, x]);
+const EN_JEWISH_ERAS: Names = [["BCE", "BCE"], ["CE", "CE"]];
+const isEn = (lang: LangId): boolean => primary(lang) === 0x09;
 
 const ERA_NAMES: Partial<Record<CalendarId, Names>> = {
   gengou: [["?.", "元号のサポート範囲外"], ["明", "明治"], ["大", "大正"], ["昭", "昭和"], ["平", "平成"], ["令", "令和"]],
@@ -512,10 +522,10 @@ const ERA_NAMES: Partial<Record<CalendarId, Names>> = {
   jewish: [['לפנה"ס', 'לפנה"ס'], ['לסה"נ', 'לסה"נ']],
 };
 
-/** Gregorian era names by primary language (Tally locale data and AOO localedata). */
+/** Gregorian era names by primary language (AOO localedata `<Eras>`). */
 export function gregorianEras(lang: LangId): Names | null {
   switch (primary(lang)) {
-    case 0x09: return [["BC", "Before Christ"], ["AD", "Anno Domini"]];
+    case 0x09: return [["BC", "BC"], ["AD", "AD"]];
     case 0x11: return [["紀元前", "紀元前"], ["西暦", "西暦"]];
     case 0x04: return lang === 0x404 ? [["西元前", "西元前"], ["", "西元"]] : [["前", "公元前"], ["", "公元"]];
     case 0x12: return [["기원전", "서력기원전"], ["서기", "서력기원"]];
@@ -523,19 +533,22 @@ export function gregorianEras(lang: LangId): Names | null {
     case 0x01: return [["ق.م", "قبل الميلاد"], ["م", "ميلادي"]];
     case 0x0d: return [['לפנה"ס', 'לפנה"ס'], ['לסה"נ', 'לסה"נ']];
     case 0x07: return [["v. Chr.", "vor Christus"], ["n. Chr.", "nach Christus"]];
-    case 0x0c: return [["av. J.-C.", "avant Jésus-Christ"], ["ap. J.-C.", "après Jésus-Christ"]];
-    case 0x0a: return [["a. C.", "antes de Cristo"], ["d. C.", "después de Cristo"]];
+    case 0x0c: return [["av. J.-C.", "av. J.-C."], ["apr. J.-C.", "ap. J.-C."]];
+    case 0x0a: return [["a.C.", "a.C."], ["d.C.", "d.C."]];
     default: return null;
   }
 }
 
-export const eraNames = (cal: CalendarId, lang: LangId): Names | null => (cal === "gregorian" ? gregorianEras(lang) : ERA_NAMES[cal] ?? null);
+export const eraNames = (cal: CalendarId, lang: LangId): Names | null =>
+  cal === "gregorian" ? gregorianEras(lang) : cal === "jewish" && isEn(lang) ? EN_JEWISH_ERAS : ERA_NAMES[cal] ?? null;
 
-export function dayNames(cal: CalendarId): Names | null {
+export function dayNames(cal: CalendarId, lang: LangId): Names | null {
+  if (cal === "jewish" && isEn(lang)) return EN_JEWISH_DAYS;
   return cal === "gengou" || cal === "hanja" ? JA_DAYS : cal === "ROC" ? ZH_DAYS : cal === "buddhist" ? TH_DAYS : cal === "hijri" ? AR_DAYS : cal === "jewish" ? HE_DAYS : null;
 }
 
-export function monthNames(cal: CalendarId): Names | null {
+export function monthNames(cal: CalendarId, lang: LangId): Names | null {
+  if (cal === "jewish" && isEn(lang)) return EN_JEWISH_MONTHS;
   return cal === "ROC" ? ZH_MONTHS : cal === "hanja" ? HANJA_MONTHS : cal === "buddhist" ? TH_MONTHS : cal === "hijri" ? HIJRI_MONTHS : cal === "jewish" ? JEWISH_MONTHS : null;
 }
 

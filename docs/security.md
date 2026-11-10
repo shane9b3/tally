@@ -942,6 +942,43 @@ supported date range, years 1..9999). Excel extended ids `[$-NNCCLLLL]` are
 parsed as hex `u32`. Tests: `tally-numfmt` `natnum_cases::modifier_limits`,
 `calendar::tests`.
 
+Review 6 (2026-11-10):
+
+- H1, the Format Cells / chart-axis / glance preview (`numfmtNative.ts`)
+  had no date range and its Hebrew year search looped forever above about
+  1e13 (the WebView froze on a chart over a `1E+20` cell styled
+  `[$-40D]EE`). It now returns the engine's `###` outside serials
+  −693593 … 2958465 (years 1..9999, |serial| ≤ 1e8) and `#NUM!` for
+  non-finite values before any calendar arithmetic; the year search starts
+  at (days since the epoch) / 366 and both loops have iteration guards.
+  Test: `packages/app/test/natnum.test.ts` (1e15, 1e20, ±1e308, ±Infinity,
+  NaN for every calendar in < 1 s together).
+- H2, the Jewish calendar cost ~50 µs per cell (its year search started
+  ~7,500 years low; AOO's `(d + HebrewEpoch) / 366`) and a 4,096-character
+  code of 450 `[~jewish]` tags 22 ms per cell. The search now starts at
+  `(d - HEBREW_EPOCH) / 366` (identical results over Gregorian years
+  1..9999: every 7th day round-trips and a sample equals AOO's search; the
+  reviewer compared every day) with a 128-step guard; calendar fields are
+  computed once per calendar per cell, a repeated tag is skipped and
+  calendar names are matched by length first. Release: 20,000 cells of
+  `[$-40D][~jewish]D`, `[$-40D]EE`, `G E`, 450 × `[~jewish]` or 194 ×
+  `[~jewish][~gregorian]` each render in < 100 ms; 408 × `[~jewish]D`
+  (408 Hebrew-numeral fields per cell) in < 1 s. Tests: `tally-numfmt`
+  `budgets::jewish_calendar_renders_fast` (release:
+  `jewish_calendar_renders_100ms_release`),
+  `calendar::tests::jewish_year_search_matches_aoo`.
+- H3, `TEXT()` parsed a formula's format code with no length cap (only the
+  4 MiB text limit) and the `RR` → literal rewrite was O(n²) (`splice` per
+  token), as were capped keyword runs (`run_len` rescanned the whole run):
+  `=TEXT(1;REPT("RR ";1398101)&"0")` hung recalculation for about 24
+  minutes. `TEXT` now gives Err:502 for codes over
+  `tally_numfmt::MAX_CODE_LEN` (4,096 characters, asserted equal to
+  `MAX_NUMBER_FORMAT_LEN`; AOO has no cap), the rewrite is one pass and
+  `run_len` looks at most 255 characters ahead. Tests:
+  `tally-functions` `text_fn::tests::long_codes_are_refused_quickly`,
+  `tally-numfmt` `budgets::long_r_codes_parse_linearly` (release: 262,144
+  characters of `RR `, `R` or `E` runs in < 200 ms).
+
 ### Chart Data Table and chart literal budgets (review 5, 2026-11-09)
 
 A chart that reads no cells carries literal lists, and a small file can

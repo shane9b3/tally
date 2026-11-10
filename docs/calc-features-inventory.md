@@ -132,8 +132,8 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Digits, thousands, scaling, scientific, fractions | done | |
 | Date and time codes, elapsed `[h]`, AM/PM, Q, WW | done | |
 | `[$sym-LCID]` currency / locale | done | |
-| `[NatNum]`, `[DBNum]` | deviation (G7) | Parsed and ignored: `TEXT(123;"[NatNum1][$-411]0")` gives `123` |
-| Calendar modifiers (`[~buddhist]` ...), era codes (E, G, R) | deviation (G7) | Modifiers ignored (`[~buddhist]YYYY` gives 2023); G / GG / GGG and E / EE give Gregorian eras (`AD`, `Anno Domini`); `R` is a literal |
+| `[NatNum]`, `[DBNum]` | done (G7, 2026-11-09) | Transliteration per language as AOO (`TEXT(123;"[NatNum1][$-411]0")` gives `一二三`); remaining differences in docs/parity-deviations.md G7 |
+| Calendar modifiers (`[~buddhist]` ...), era codes (E, G, R) | done (G7, 2026-11-09) | gengou, ROC, Buddhist, Hanja, Hijri, Jewish; era codes switch to the language's other calendar (en-US: Jewish, `G E` gives `CE 787`); see docs/numfmt-natnum.md |
 | Format categories and dialog options | done (deviation G14) | Format Cells ▸ Numbers as AOO: Category, Format (AOO locale-data lists per language), Language (`[$-LCID]`, ODS `number:language` / `number:country`), currency list, Options regenerating the code as `GenerateFormat` and read back from it (`NumbersTab.tsx`, `numberFormat.ts`); no Add / Delete / Edit comment |
 | ODS fourth (text) section | missing | X15 |
 

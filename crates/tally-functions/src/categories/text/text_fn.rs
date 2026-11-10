@@ -25,7 +25,8 @@ pub const TEXT: FunctionDef = FunctionDef::new("TEXT", Category::Text, TEXT_PARA
 /// ([`parse_format_with_locale`]: `"0,00"` and `"TT.MM.JJJJ"` under de-DE,
 /// English keywords and the en-US code under en-US) and the result is
 /// rendered in it, as AOO's `ScText` → `GetPreviewStringGuess` does with
-/// the cell language. An unparsable code is `Err:502`.
+/// the cell language. An unparsable code, or one over
+/// [`tally_numfmt::MAX_CODE_LEN`] characters, is `Err:502`.
 fn text(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
     run(|| {
@@ -36,6 +37,12 @@ fn text(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
             other => other,
         };
         let code = a.text(1)?;
+        // Stored codes are capped at 4,096 characters; a formula's code is
+        // too (AOO has no cap; Err:502 as for an invalid code), so a
+        // multi-megabyte REPT() code cannot stall recalculation.
+        if code.chars().count() > tally_numfmt::MAX_CODE_LEN {
+            return Err(ErrorKind::InvalidArgument);
+        }
         let locale = locale_of(a.ctx());
         let ast =
             parse_format_with_locale(&code, locale).map_err(|_| ErrorKind::InvalidArgument)?;
@@ -153,5 +160,28 @@ mod tests {
             t(EvalValue::number(1.0), "[[["),
             Value::Error(ErrorKind::InvalidArgument)
         );
+    }
+
+    /// Security review 6 H3: `=TEXT(1;REPT("RR ";1398101)&"0")` (4 MiB)
+    /// parsed in O(n²) for about 24 minutes. Codes over 4,096 characters
+    /// are Err:502 before parsing.
+    #[test]
+    fn long_codes_are_refused_quickly() {
+        let at_cap = format!("{}0", "R".repeat(tally_numfmt::MAX_CODE_LEN - 1));
+        assert_eq!(
+            t(EvalValue::number(1.0), &at_cap),
+            Value::text(format!("{}1", "R".repeat(tally_numfmt::MAX_CODE_LEN - 1)))
+        );
+        let start = std::time::Instant::now();
+        for code in [
+            format!("{}0", "RR ".repeat(1_398_101)),
+            format!("{} 0", "E".repeat(4 << 20)),
+        ] {
+            assert_eq!(
+                t(EvalValue::number(1.0), &code),
+                Value::Error(ErrorKind::InvalidArgument)
+            );
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
     }
 }

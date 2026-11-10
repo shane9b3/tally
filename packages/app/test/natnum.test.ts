@@ -44,6 +44,39 @@ describe("the Format Cells preview matches the engine (shared table)", () => {
     expect(previewText(46314, "[$-411]GGGE\"年\"", languageOf("en-US"))).toBe("令和8年");
   });
 
+  it("shows ### for dates outside the engine's range, quickly (review 6 H1)", () => {
+    // 1e20 used to loop forever in hebrewDate; others gave NaN or invented years.
+    const codes = [
+      "[$-40D]EE",
+      "[$-40D][~jewish]D",
+      "[$-40D][~jewish]YYYY-MM-DD",
+      "[~jewish]D MMMM YYYY",
+      "G E",
+      "[$-401]EE",
+      "[$-401][~hijri]D/M/YYYY",
+      "[$-411]GGGE",
+      "[$-404]GE",
+      "[$-41E]GG EE",
+      "[$-412]GGG E",
+      "[NatNum1][$-411]YYYY",
+    ];
+    const t0 = performance.now();
+    for (const code of codes) {
+      for (const v of [1e15, 1e20, 1e308, -1e308, 1e8 + 1, 2958466, -693594]) expect(formatNumberLite(v, code), `${code} ${v}`).toBe("###");
+      for (const v of [Infinity, -Infinity, NaN]) expect(formatNumberLite(v, code), `${code} ${v}`).toBe("#NUM!");
+    }
+    expect(performance.now() - t0).toBeLessThan(1000);
+    // The range ends are still shown.
+    expect(formatNumberLite(2958465, "[~jewish]D MMMM YYYY")).toBe("28 Heshvan 13760");
+    expect(formatNumberLite(-693593, "[~jewish]D MMMM YYYY")).toBe("18 Tevet 3761");
+  });
+
+  it("computes the Jewish year directly (no long search)", () => {
+    // 9999-12-31 and 0001-01-01 (unix days).
+    expect(calendarFields("jewish", 9999, 12, 31, 2932896, 5)).toMatchObject({ year: 13760, month: 8, day: 28 });
+    expect(calendarFields("jewish", 1, 1, 1, -719162, 1)).toMatchObject({ year: 3761, month: 10, day: 18 });
+  });
+
   it("keeps R next to digits as text and plain codes on the fast path", () => {
     expect(formatNumberLite(1234.5, "R #,##0.00")).toBe("R 1,234.50");
     expect(formatNumberLite(46314, "YYYY-MM-DD")).toBe("2026-10-19");

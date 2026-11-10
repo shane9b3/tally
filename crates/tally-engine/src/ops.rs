@@ -384,6 +384,9 @@ pub fn block_range(
     Ok(CellRange::new(sheet, r, c, r1, c1))
 }
 
+// TEXT() caps formula format codes with tally-numfmt's copy of the limit.
+const _: () = assert!(tally_numfmt::MAX_CODE_LEN == tally_model::MAX_NUMBER_FORMAT_LEN);
+
 /// Refuses number format codes over [`tally_model::MAX_NUMBER_FORMAT_LEN`].
 pub(crate) fn check_format_len(code: &str) -> Result<(), ApiError> {
     if code.chars().count() > tally_model::MAX_NUMBER_FORMAT_LEN {

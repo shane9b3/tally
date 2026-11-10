@@ -251,6 +251,29 @@ fn transliterate_out(out: &mut Out, lang: LangId, mode: u8, locale: &Locale) {
     }
 }
 
+/// `ImpTransliterate` of the text written since byte `start`, keeping the
+/// fill position.
+fn transliterate_tail(out: &mut Out, start: usize, nat: Option<(LangId, u8)>, locale: &Locale) {
+    let Some((lang, mode)) = nat else {
+        return;
+    };
+    let sep = separators(locale);
+    if out.fill.is_some() && out.fill_pos > start {
+        let tail = out.text.split_off(start);
+        let (a, b) = tail.split_at(out.fill_pos - start);
+        out.text
+            .push_str(&natnum::transliterate(a, lang, mode, sep));
+        out.fill_pos = out.text.len();
+        out.text
+            .push_str(&natnum::transliterate(b, lang, mode, sep));
+    } else if let std::borrow::Cow::Owned(t) =
+        natnum::transliterate(&out.text[start..], lang, mode, sep)
+    {
+        out.text.truncate(start);
+        out.text.push_str(&t);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn format_in_locale(
     value: &Value,
@@ -428,16 +451,16 @@ fn format_number(
     }
     let (numeric, _) = split_text_section(ast);
     let (idx, show_sign) = select_section(numeric, x);
+    // ImpGetOutputStdToPrecision transliterates General text with the
+    // first section's NatNum, whichever section shows it; the E notation of
+    // |x| > 1e15 (ImpGetOutputStandard) is not transliterated there.
+    let nat0 = ast
+        .sections
+        .first()
+        .and_then(|s0| section_natnum(s0, locale, ctx, false));
     let Some(sec) = numeric.get(idx) else {
-        let mut text = general_string_limited(x, width, locale, std_dec);
-        // ImpGetOutputStandard transliterates with the first section's NatNum.
-        if let Some((lang, mode)) = ast
-            .sections
-            .first()
-            .and_then(|s0| section_natnum(s0, locale, ctx, false))
-        {
-            text = natnum::transliterate(&text, lang, mode, separators(locale)).into_owned();
-        }
+        let text = general_string_limited(x, width, locale, std_dec);
+        let text = general_natnum(text, nat0, locale);
         return Formatted::plain(text, AlignHint::Right);
     };
     let ax = x.abs();
@@ -445,17 +468,26 @@ fn format_number(
     let mut check_width = true;
     match &sec.kind {
         SectionKind::Number(lay) => {
-            let zero = number_section(ax, lay, &sec.tokens, locale, &mut out);
+            let nat = if sec.natnum.is_some()
+                && lay.exponent.is_none()
+                && sec.tokens.iter().any(|t| matches!(t, Token::Digit(_)))
+            {
+                section_natnum(sec, locale, ctx, false)
+            } else {
+                None
+            };
+            // Fractions transliterate only the integer, numerator and
+            // denominator (zformat.cxx NUMBERFORMAT_FRACTION:
+            // ImpTransliterate / ImpIntToString); the sign stays ASCII.
+            let frac_nat = nat.filter(|_| lay.fraction.is_some());
+            let zero = number_section(ax, lay, &sec.tokens, locale, frac_nat, &mut out);
             if show_sign && !zero {
                 out.insert_sign();
             }
             // ImpGetNumberOutput transliterates the whole text (literals
             // too); scientific and literal-only sections are left alone.
-            if sec.natnum.is_some()
-                && lay.exponent.is_none()
-                && sec.tokens.iter().any(|t| matches!(t, Token::Digit(_)))
-            {
-                if let Some((lang, mode)) = section_natnum(sec, locale, ctx, false) {
+            if lay.fraction.is_none() {
+                if let Some((lang, mode)) = nat {
                     transliterate_out(&mut out, lang, mode, locale);
                 }
             }
@@ -471,8 +503,12 @@ fn format_number(
         SectionKind::General | SectionKind::Text => {
             check_width = false;
             let v = if show_sign { x } else { ax };
-            general_section(v, &sec.tokens, locale, width, std_dec, &mut out);
-            if matches!(sec.kind, SectionKind::General) {
+            let general = matches!(sec.kind, SectionKind::General);
+            let gen_nat = nat0.filter(|_| general);
+            general_section(v, &sec.tokens, locale, width, std_dec, gen_nat, &mut out);
+            // ImpGetNumberOutput then transliterates the whole section text
+            // with the section's own NatNum.
+            if general {
                 if let Some((lang, mode)) = section_natnum(sec, locale, ctx, false) {
                     transliterate_out(&mut out, lang, mode, locale);
                 }
@@ -643,6 +679,7 @@ fn number_section(
     lay: &NumberLayout,
     tokens: &[Token],
     locale: &Locale,
+    frac_nat: Option<(LangId, u8)>,
     out: &mut Out,
 ) -> bool {
     if !tokens.iter().any(|t| matches!(t, Token::Digit(_))) {
@@ -652,7 +689,7 @@ fn number_section(
         return true;
     }
     if lay.fraction.is_some() {
-        return fraction_section(x, lay, tokens, locale, out);
+        return fraction_section(x, lay, tokens, locale, frac_nat, out);
     }
     let mut d = Decimal::from_f64(x);
     d.shift(2 * i32::from(lay.percent) - 3 * i32::from(lay.scale_commas));
@@ -800,6 +837,7 @@ fn fraction_section(
     lay: &NumberLayout,
     tokens: &[Token],
     locale: &Locale,
+    nat: Option<(LangId, u8)>,
     out: &mut Out,
 ) -> bool {
     let Some(f) = lay.fraction else {
@@ -843,6 +881,7 @@ fn fraction_section(
     while i < tokens.len() {
         if let Some((a, b)) = f.int_range {
             if i == a {
+                let start = out.text.len();
                 let n = if zero_frac && ipu == 0 {
                     1
                 } else {
@@ -857,11 +896,13 @@ fn fraction_section(
                     locale,
                     out,
                 );
+                transliterate_tail(out, start, nat, locale);
                 i = b;
                 continue;
             }
         }
         if i == num_start {
+            let start = out.text.len();
             if zero_frac {
                 for _ in num_start..num_end {
                     out.text.push(' ');
@@ -878,6 +919,7 @@ fn fraction_section(
                     out,
                 );
             }
+            transliterate_tail(out, start, nat, locale);
             i = num_end;
             continue;
         }
@@ -887,6 +929,7 @@ fn fraction_section(
             continue;
         }
         if i == den_start {
+            let start = out.text.len();
             if zero_frac {
                 for _ in den_start..den_end {
                     out.text.push(' ');
@@ -913,6 +956,7 @@ fn fraction_section(
                     }
                 }
             }
+            transliterate_tail(out, start, nat, locale);
             i = den_end.max(den_start + 1);
             continue;
         }
@@ -922,12 +966,27 @@ fn fraction_section(
     zero
 }
 
+/// General text transliterated with the first section's NatNum, unless it
+/// is in E notation (`ImpGetOutputStandard`).
+fn general_natnum(text: String, nat0: Option<(LangId, u8)>, locale: &Locale) -> String {
+    match nat0 {
+        Some((lang, mode)) if !text.contains('E') => {
+            match natnum::transliterate(&text, lang, mode, separators(locale)) {
+                std::borrow::Cow::Borrowed(_) => text,
+                std::borrow::Cow::Owned(t) => t,
+            }
+        }
+        _ => text,
+    }
+}
+
 fn general_section(
     x: f64,
     tokens: &[Token],
     locale: &Locale,
     width: Option<usize>,
     std_dec: Option<u8>,
+    gen_nat: Option<(LangId, u8)>,
     out: &mut Out,
 ) {
     let render = |out: &mut Out, w: Option<usize>| -> usize {
@@ -947,7 +1006,11 @@ fn general_section(
                     any = true;
                 }
                 Token::General(_) | Token::At => {
-                    let g = general_string_limited(x, w, locale, std_dec);
+                    let g = general_natnum(
+                        general_string_limited(x, w, locale, std_dec),
+                        gen_nat,
+                        locale,
+                    );
                     glen += g.chars().count();
                     out.text.push_str(&g);
                     any = true;
@@ -956,7 +1019,11 @@ fn general_section(
             }
         }
         if !any {
-            let g = general_string_limited(x, w, locale, std_dec);
+            let g = general_natnum(
+                general_string_limited(x, w, locale, std_dec),
+                gen_nat,
+                locale,
+            );
             glen += g.chars().count();
             out.text.push_str(&g);
         }
@@ -1443,7 +1510,13 @@ fn date_section_cal(
             _ => None,
         })
         .unwrap_or(false);
-    let at = |cal: CalendarId| calendar::fields(cal, p.y, p.m, p.d, p.unix_days, p.wd);
+    // The fields of each calendar, computed once (a code can switch
+    // calendars with hundreds of `[~x]` tags).
+    let mut cache: [Option<calendar::Fields>; 7] = [None; 7];
+    let mut at = |cal: CalendarId| {
+        *cache[cal as usize]
+            .get_or_insert_with(|| calendar::fields(cal, p.y, p.m, p.d, p.unix_days, p.wd))
+    };
     let greg = at(CalendarId::Gregorian);
     let mut cur = CalendarId::Gregorian;
     let mut other = false;
@@ -1483,6 +1556,7 @@ fn date_section_cal(
     };
     let mut frac_k = 0usize;
     let mut in_frac = false;
+    let mut last_cal: Option<&str> = None;
     for t in tokens {
         if in_frac {
             if let Token::Digit(Digit::Zero) = t {
@@ -1503,6 +1577,11 @@ fn date_section_cal(
                 continue;
             }
             Token::Calendar(name) => {
+                // Repeating the tag last applied changes nothing.
+                if last_cal == Some(name.as_str()) {
+                    continue;
+                }
+                last_cal = Some(name.as_str());
                 if let Some(c) = CalendarId::from_name(name) {
                     if calendar::has_calendar(cal_lang, c) {
                         cur = c;
@@ -1527,7 +1606,7 @@ fn date_section_cal(
         };
         let day_name = |cal: CalendarId, wd: u32| {
             name_at(
-                calendar::day_names(cal),
+                calendar::day_names(cal, cal_lang),
                 wd as usize,
                 &locale.short_day_names,
                 &locale.day_names,
@@ -1569,7 +1648,7 @@ fn date_section_cal(
             DateTimeToken::Month(2) => num(out, cur, &f, NumCode::LongMonth),
             DateTimeToken::Month(n) => {
                 let (a, l) = name_at(
-                    calendar::month_names(cur),
+                    calendar::month_names(cur, cal_lang),
                     (f.month as usize).saturating_sub(1),
                     &locale.short_month_names,
                     &locale.month_names,
@@ -1671,11 +1750,15 @@ fn date_section_cal(
             DateTimeToken::Second(n) => {
                 push_int_natnum(out, p.second, usize::from(*n), int_nat, sep)
             }
-            DateTimeToken::AmPm(_) => out.text.push_str(if p.hour < 12 {
-                locale.am_pm.0
-            } else {
-                locale.am_pm.1
-            }),
+            DateTimeToken::AmPm(_) => {
+                // Calendar_hanja::getDisplayName: the ja locale's AM / PM.
+                let (am, pm) = if cur == CalendarId::Hanja {
+                    ("午前", "午後")
+                } else {
+                    locale.am_pm
+                };
+                out.text.push_str(if p.hour < 12 { am } else { pm });
+            }
             DateTimeToken::AP(s) => {
                 let lower = s.starts_with('a');
                 out.text.push(match (p.hour < 12, lower) {

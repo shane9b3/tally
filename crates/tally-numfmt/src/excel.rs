@@ -135,16 +135,16 @@ pub fn to_excel_code(code: &str) -> Result<String, FormatError> {
         // [NatNumN] → [DBNumN] or a numeral shape; [~cal] → calendar byte.
         let mut dbnum = None;
         let mut shape = 0u8;
-        if let (Some(nn), Some(l)) = (s.natnum, lang) {
-            if nn.dbnum {
-                dbnum = Some(nn.num);
-            } else {
-                let d = map_natnum_to_dbnum(nn.num, l, date);
-                if l.is_cjk() && d > 0 {
-                    dbnum = Some(d);
-                } else if let Some(sh) = excel_numeral_shape(l, nn.num) {
-                    shape = sh;
-                }
+        // A [DBNumN] is written whatever the language (Excel reads it in
+        // its own locale); only a NatNum needs one to be mapped.
+        if let Some(nn) = s.natnum.filter(|nn| nn.dbnum) {
+            dbnum = Some(nn.num);
+        } else if let (Some(nn), Some(l)) = (s.natnum, lang) {
+            let d = map_natnum_to_dbnum(nn.num, l, date);
+            if l.is_cjk() && d > 0 {
+                dbnum = Some(d);
+            } else if let Some(sh) = excel_numeral_shape(l, nn.num) {
+                shape = sh;
             }
         }
         let cal_byte = s
@@ -331,8 +331,21 @@ mod tests {
         assert_eq!(to("[$-411]GGGE\"年\"M\"月\""), "[$-411]ggge\"年\"m\"月\"");
         assert_eq!(to("[$-411]RR"), "[$-411]gggee");
         assert_eq!(to("GGG YYYY"), "\"GGG\" yyyy");
-        // A NatNum without a language Excel can show is dropped.
+        // A NatNum without a language Excel can show is dropped; a DBNum
+        // is kept without a language (Japanese Excel writes those).
         assert_eq!(to("[NatNum1]0"), "0");
+        assert_eq!(to("[DBNum1]0"), "[DBNum1]0");
+        assert_eq!(to("[DBNum1]General"), "[DBNum1]General");
+        assert_eq!(
+            to("[DBNum1]General;[DBNum1]-General"),
+            "[DBNum1]General;[DBNum1]-General"
+        );
+        // en-US has a Jewish calendar (en_US.xml).
+        assert_eq!(
+            from("[$-1080409]d mmmm yyyy"),
+            "[$-409][~jewish]D MMMM YYYY"
+        );
+        assert_eq!(to("[$-409][~jewish]D MMMM YYYY"), "[$-80409]d mmmm yyyy");
         for code in [
             "[NatNum1][$-41E][~buddhist]D/M/YYYY",
             "[NatNum1][$-401]0.00",

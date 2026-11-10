@@ -41,8 +41,9 @@ impl CalendarId {
             ("hijri", CalendarId::Hijri),
             ("jewish", CalendarId::Jewish),
         ];
+        let name = name.trim();
         ALL.iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(name.trim()))
+            .find(|(n, _)| n.len() == name.len() && n.eq_ignore_ascii_case(name))
             .map(|(_, c)| *c)
     }
 
@@ -116,7 +117,9 @@ pub fn other_calendar(lang: LangId) -> Option<CalendarId> {
         0x1E => Some(CalendarId::Buddhist),
         // ar_OM has only the Gregorian calendar.
         0x01 if lang.0 != 0x2001 => Some(CalendarId::Hijri),
-        0x0D => Some(CalendarId::Jewish),
+        // en_US.xml (en_GB refers to it) has a Jewish calendar after the
+        // Gregorian one.
+        0x0D | 0x09 => Some(CalendarId::Jewish),
         _ => None,
     }
 }
@@ -341,16 +344,22 @@ fn hebrew_to_absolute(month: i64, day: i64, year: i64) -> i64 {
 
 /// `HebrewDate(int d)`: `(year, month, day)` of an absolute (R.D.) date.
 fn hebrew_from_absolute(d: i64) -> (i64, i64, i64) {
-    let mut year = (d + HEBREW_EPOCH) / 366;
-    while d >= hebrew_to_absolute(7, 1, year + 1) {
+    // AOO starts from `(d + HebrewEpoch) / 366`, about 7,500 years below
+    // the answer (HebrewEpoch is negative); `d - HEBREW_EPOCH` is the day
+    // count since the epoch, so the search takes a step or two. Same
+    // results (tested over Gregorian years 1..=9999).
+    let mut year = (d - HEBREW_EPOCH) / 366;
+    let mut guard = 0;
+    while d >= hebrew_to_absolute(7, 1, year + 1) && guard < 128 {
         year += 1;
+        guard += 1;
     }
     let mut month = if d < hebrew_to_absolute(1, 1, year) {
         7
     } else {
         1
     };
-    while d > hebrew_to_absolute(month, last_day_of_hebrew_month(month, year), year) {
+    while month < 13 && d > hebrew_to_absolute(month, last_day_of_hebrew_month(month, year), year) {
         month += 1;
     }
     let day = d - hebrew_to_absolute(month, 1, year) + 1;
@@ -385,6 +394,32 @@ const BUDDHIST_ERA_NAMES: Names = &[("ปีก่อน พ.ศ. ที่", "�
 const HANJA_ERA_NAMES: Names = &[("紀元前", "西曆紀元前"), ("西紀", "西曆紀元")];
 const HIJRI_ERA_NAMES: Names = &[("ه\u{200d}", "قبل الهجرة"), ("", "هجري")];
 const JEWISH_ERA_NAMES: Names = &[("לפנה\"ס", "לפנה\"ס"), ("לסה\"נ", "לסה\"נ")];
+/// en_US.xml `<Calendar unoid="jewish">`.
+const EN_JEWISH_ERA_NAMES: Names = &[("BCE", "BCE"), ("CE", "CE")];
+const EN_JEWISH_DAYS: Names = &[
+    ("Sun", "Sunday"),
+    ("Mon", "Monday"),
+    ("Tue", "Tuesday"),
+    ("Wed", "Wednesday"),
+    ("Thu", "Thursday"),
+    ("Fri", "Friday"),
+    ("Sat", "Shabbat"),
+];
+const EN_JEWISH_MONTHS: Names = &[
+    ("Nissan", "Nissan"),
+    ("Iyar", "Iyar"),
+    ("Sivan", "Sivan"),
+    ("Tammuz", "Tammuz"),
+    ("Av", "Av"),
+    ("Elul", "Elul"),
+    ("Tishri", "Tishri"),
+    ("Heshvan", "Heshvan"),
+    ("Kislev", "Kislev"),
+    ("Tevet", "Tevet"),
+    ("Shevat", "Shevat"),
+    ("Adar", "Adar"),
+    ("Adar B", "Adar B"),
+];
 const ZH_DAYS: Names = &[
     ("日", "星期日"),
     ("一", "星期一"),
@@ -515,13 +550,16 @@ pub fn era_names(cal: CalendarId, lang: LangId) -> Option<Names> {
         CalendarId::Buddhist => Some(BUDDHIST_ERA_NAMES),
         CalendarId::Hanja => Some(HANJA_ERA_NAMES),
         CalendarId::Hijri => Some(HIJRI_ERA_NAMES),
+        CalendarId::Jewish if lang.primary() == 0x09 => Some(EN_JEWISH_ERA_NAMES),
         CalendarId::Jewish => Some(JEWISH_ERA_NAMES),
     }
 }
 
-/// Weekday names of a calendar; `None` means the locale's.
-pub fn day_names(cal: CalendarId) -> Option<Names> {
+/// Weekday names of a calendar in language `lang`; `None` means the
+/// locale's.
+pub fn day_names(cal: CalendarId, lang: LangId) -> Option<Names> {
     match cal {
+        CalendarId::Jewish if lang.primary() == 0x09 => Some(EN_JEWISH_DAYS),
         CalendarId::Gengou | CalendarId::Hanja => Some(JA_DAYS),
         CalendarId::Roc => Some(ZH_DAYS),
         CalendarId::Buddhist => Some(TH_DAYS),
@@ -534,8 +572,9 @@ pub fn day_names(cal: CalendarId) -> Option<Names> {
 /// Month names of a calendar; `None` means the locale's (also for gengou:
 /// AOO's ja_JP gengou calendar has English month names, Tally keeps the
 /// ja-JP locale's `1月`).
-pub fn month_names(cal: CalendarId) -> Option<Names> {
+pub fn month_names(cal: CalendarId, lang: LangId) -> Option<Names> {
     match cal {
+        CalendarId::Jewish if lang.primary() == 0x09 => Some(EN_JEWISH_MONTHS),
         CalendarId::Roc => Some(ZH_MONTHS),
         CalendarId::Hanja => Some(HANJA_MONTHS),
         CalendarId::Buddhist => Some(TH_MONTHS),
@@ -755,6 +794,39 @@ mod tests {
         }
     }
 
+    /// AOO's `HebrewDate` (year search from `(d + HebrewEpoch) / 366`).
+    fn hebrew_from_absolute_aoo(d: i64) -> (i64, i64, i64) {
+        let mut year = (d + HEBREW_EPOCH) / 366;
+        while d >= hebrew_to_absolute(7, 1, year + 1) {
+            year += 1;
+        }
+        let mut month = if d < hebrew_to_absolute(1, 1, year) {
+            7
+        } else {
+            1
+        };
+        while d > hebrew_to_absolute(month, last_day_of_hebrew_month(month, year), year) {
+            month += 1;
+        }
+        (year, month, d - hebrew_to_absolute(month, 1, year) + 1)
+    }
+
+    #[test]
+    fn jewish_year_search_matches_aoo() {
+        // R.D. 1 .. 3,652,059 is Gregorian 0001-01-01 .. 9999-12-31. Every
+        // 7th day round-trips; a sample also equals AOO's slow search (the
+        // review checked every day of the range against it).
+        let last = days_from_civil(9999, 12, 31) + 719_163;
+        for d in (1..=last).step_by(7) {
+            let (y, m, day) = hebrew_from_absolute(d);
+            assert!((1..=13).contains(&m) && (1..=30).contains(&day), "{d}");
+            assert_eq!(hebrew_to_absolute(m, day, y), d, "{d}");
+        }
+        for d in (1..=last).step_by(36_511).chain([1, 2, last - 1, last]) {
+            assert_eq!(hebrew_from_absolute(d), hebrew_from_absolute_aoo(d), "{d}");
+        }
+    }
+
     #[test]
     fn display() {
         let ja = LangId::JA;
@@ -844,6 +916,22 @@ mod tests {
         assert_eq!(other_calendar(LangId(0x2001)), None);
         assert!(has_calendar(LangId::EN_US, CalendarId::Gregorian));
         assert!(!has_calendar(LangId::EN_US, CalendarId::Buddhist));
+        // en_US.xml / en_GB (ref en_US): Jewish is the other calendar.
+        assert_eq!(other_calendar(LangId::EN_US), Some(CalendarId::Jewish));
+        assert_eq!(other_calendar(LangId(0x0809)), Some(CalendarId::Jewish));
+        assert_eq!(other_calendar(LangId(0x0407)), None);
+        assert_eq!(
+            day_names(CalendarId::Jewish, LangId::EN_US).unwrap()[6].1,
+            "Shabbat"
+        );
+        assert_eq!(
+            month_names(CalendarId::Jewish, LangId::EN_US).unwrap()[12].0,
+            "Adar B"
+        );
+        assert_eq!(
+            month_names(CalendarId::Jewish, LangId::HE).unwrap()[0].0,
+            "ניסן"
+        );
         assert_eq!(GENGOU_ERA_NAMES[5].1, "令和");
         assert_eq!(
             CalendarId::from_excel(3),
