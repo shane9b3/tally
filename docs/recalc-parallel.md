@@ -30,14 +30,23 @@ results.
    it does not converge, at most `MAX_ITERATION_EVALS` evaluations per
    recalc). A range precedent is one edge per dirty formula in it, so the
    edges can be quadratic in the formulas; they are produced per node
-   (time O(edges), before the watchdog, as always) but not held: the DFS
-   path keeps only each frame's not-yet-visited successors, at most
-   `TARJAN_PATH_ENTRIES` (1 Mi) entries beyond one per node, and frames
-   past that recompute theirs when the DFS returns to them. The visit
-   order is the plain algorithm's (a randomized unit test compares them).
-   Before this (review 7 verification, F5) every node on the path held its
-   whole list: 16,000 `B<i> = SUM($A$1:$A$16000)+B<i+1>` took 2.1 GB in
-   both modes; now 37 MB.
+   but not held: the DFS path keeps only each frame's not-yet-visited
+   successors, at most max(`TARJAN_PATH_ENTRIES` (1 Mi), dirty formulas)
+   entries beyond one per node. Past that the shallowest frames drop
+   theirs; when the DFS returns to one it lists its successors again and
+   keeps at most half the budget of them (looking again when they run
+   out), so the lists produced in all, looks again included, are at most
+   6 × the edges: time O(formulas + edges). (Before fix review 7 a
+   frame looked at again kept its whole list, and a formula reading every
+   other one, with a short chain under each of its first k precedents, was
+   listed again k times: 13 s for k = 300 over 1.1 M formulas, ~n·√n.)
+   The watchdog deadline is checked every 64 lists; past it the recalc
+   stops before evaluating anything (every dirty formula keeps its cached
+   value, as when the budget runs out). The visit order is the plain
+   algorithm's (a randomized unit test compares them). Before this
+   (review 7 verification, F5) every node on the path held its whole
+   list: 16,000 `B<i> = SUM($A$1:$A$16000)+B<i+1>` took 2.1 GB in both
+   modes; now 37 MB.
 4. **Evaluation** in that order through `CalcCtx`. A dirty precedent met
    during evaluation (a newly discovered dynamic reference, a lazy IF
    branch) is evaluated on demand (nested up to 16 deep, deeper ones

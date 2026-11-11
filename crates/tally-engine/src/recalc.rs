@@ -60,7 +60,14 @@ pub struct RecalcReport {
     pub changed: Vec<CellRange>,
     /// Number of formulas evaluated.
     pub evaluated: usize,
-    /// Number of formulas in cycles.
+    /// Formulas this recalc found on a cycle: the members of a cycle of
+    /// strict precedents (Err:522 without evaluation), the cells of a cycle
+    /// followed during evaluation (from the re-entered cell up the
+    /// evaluation stack; for a cycle through a dynamic reference found by
+    /// the deferred work stack, the reader and its chain of waiting
+    /// ancestors), and, with iterations on, the members of a component
+    /// that did not converge (Err:523). A cell that shows Err:522 only
+    /// because it reads a circular cell is not counted.
     pub circular: usize,
     /// The [`RecalcBudget`] ran out: `skipped` formulas kept their cached
     /// values (from the file, or empty) and were marked clean.
@@ -234,8 +241,25 @@ fn recalc_pass(wb: &mut Workbook, budget: &RecalcBudget) -> RecalcReport {
     // ranges over many formulas) it is not worth the memory and the recalc
     // stays single-threaded (security review 7, H2).
     let cap = parallel.then(|| crate::parallel::edge_cap(dirty.len()));
-    let (order, preds) = topo_order(wb, &dirty, cap);
     let mut report = RecalcReport::default();
+    let (order, preds) = match topo_order(wb, &dirty, cap, budget.deadline) {
+        Some(o) => o,
+        None => {
+            // The deadline passed while ordering: as when the budget runs
+            // out before the first formula, every dirty formula keeps its
+            // cached value and is marked clean.
+            report.incomplete = true;
+            for id in &dirty {
+                if let Some(f) = wb.formulas.get_mut(*id) {
+                    if f.state == CellState::Dirty {
+                        f.state = CellState::Clean;
+                        report.skipped += 1;
+                    }
+                }
+            }
+            (Vec::new(), None)
+        }
+    };
     let now = now_serial(wb.settings.date_epoch);
     // The parallel pre-pass (docs/recalc-parallel.md): results the loop
     // below takes instead of evaluating.
@@ -628,18 +652,23 @@ fn dirty_successors(
 /// precedents (indices into `dirty`, sorted, itself included on a
 /// self-reference) for the parallel pre-pass; `None` without `keep` or when
 /// there are more edges than the cap.
+///
+/// Time is O(dirty formulas + edges) besides finding the edges (see
+/// [`tarjan_with`]); `None` if `deadline` passed first.
+#[allow(clippy::type_complexity)]
 fn topo_order(
     wb: &Workbook,
     dirty: &[FormulaCellId],
     keep: Option<usize>,
-) -> (Vec<Scc>, Option<Vec<Vec<usize>>>) {
+    deadline: Option<Instant>,
+) -> Option<(Vec<Scc>, Option<Vec<Vec<usize>>>)> {
     let mut local: SecondaryMap<FormulaCellId, usize> = SecondaryMap::new();
     for (i, id) in dirty.iter().enumerate() {
         local.insert(*id, i);
     }
     let mut scratch: Vec<FormulaCellId> = Vec::new();
     let by_col = DirtyByCol::new(wb, dirty);
-    let (sccs, succ, kept) = tarjan(dirty.len(), keep, |v| {
+    let run = tarjan(dirty.len(), keep, deadline, |v| {
         let Some(f) = wb.formulas.get(dirty[v]) else {
             return Vec::new();
         };
@@ -649,12 +678,12 @@ fn topo_order(
         }
         let spans = f.all_spans();
         dirty_successors(wb, &mut it, &spans, &by_col, &local, &mut scratch)
-    });
-    let mut out = Vec::with_capacity(sccs.len());
-    for (members, cyclic) in sccs {
+    })?;
+    let mut out = Vec::with_capacity(run.comps.len());
+    for (members, cyclic) in run.comps {
         let members: SmallVec<[FormulaCellId; 1]> = members.into_iter().map(|i| dirty[i]).collect();
         let strict = if cyclic {
-            strict_cycle_members(wb, &members, &mut scratch)
+            strict_cycle_members(wb, &members, &mut scratch, deadline)?
         } else {
             Vec::new()
         };
@@ -664,23 +693,30 @@ fn topo_order(
             cyclic,
         });
     }
-    let preds = kept.then(|| succ.into_iter().map(Option::unwrap_or_default).collect());
-    (out, preds)
+    let preds = run.kept.then(|| {
+        run.succ
+            .into_iter()
+            .map(Option::unwrap_or_default)
+            .collect()
+    });
+    Some((out, preds))
 }
 
-/// The members of `scc` that lie on a cycle of strict precedents.
+/// The members of `scc` that lie on a cycle of strict precedents; `None`
+/// if `deadline` passed first.
 fn strict_cycle_members(
     wb: &Workbook,
     scc: &[FormulaCellId],
     scratch: &mut Vec<FormulaCellId>,
-) -> Vec<FormulaCellId> {
+    deadline: Option<Instant>,
+) -> Option<Vec<FormulaCellId>> {
     let mut local: SecondaryMap<FormulaCellId, usize> = SecondaryMap::new();
     for (i, id) in scc.iter().enumerate() {
         local.insert(*id, i);
     }
     let mut out = Vec::new();
     let by_col = DirtyByCol::new(wb, scc);
-    for (members, cyclic) in tarjan(scc.len(), None, |v| {
+    for (members, cyclic) in tarjan(scc.len(), None, deadline, |v| {
         let Some(f) = wb.formulas.get(scc[v]) else {
             return Vec::new();
         };
@@ -693,14 +729,14 @@ fn strict_cycle_members(
             &local,
             scratch,
         )
-    })
-    .0
+    })?
+    .comps
     {
         if cyclic {
             out.extend(members.into_iter().map(|i| scc[i]));
         }
     }
-    out
+    Some(out)
 }
 
 /// Most successor entries the frames on the DFS path of [`tarjan`] hold
@@ -708,40 +744,52 @@ fn strict_cycle_members(
 /// frames drop theirs and recompute them when the DFS returns to them.
 pub(crate) const TARJAN_PATH_ENTRIES: usize = 1 << 20;
 
+/// What [`tarjan_with`] found.
+struct TarjanRun {
+    /// The components, successors first, each with whether it is cyclic
+    /// (several members or a self-edge).
+    comps: Vec<(SmallVec<[usize; 1]>, bool)>,
+    /// With `keep`, each node's successor list (see [`tarjan`]).
+    succ: Vec<Option<Vec<usize>>>,
+    /// The lists in `succ` were kept.
+    kept: bool,
+    /// Most successor entries the DFS path held at once.
+    #[cfg_attr(not(test), allow(dead_code))]
+    peak: usize,
+    /// Successor entries the `edges` calls returned in all, rebuilds
+    /// included.
+    #[cfg_attr(not(test), allow(dead_code))]
+    work: usize,
+    /// The deadline passed: the run stopped early and the rest is partial.
+    stopped: bool,
+}
+
 /// Iterative Tarjan over nodes `0..n`; components come out successors
 /// first, each with whether it is cyclic (several members or a self-edge).
-/// `edges(v)` lists `v`'s successors, sorted and without duplicates; they
-/// are explored in that order.
+/// `edges(v)` lists `v`'s successors, strictly increasing (sorted, without
+/// duplicates); they are explored in that order.
 ///
 /// With `keep` (a cap on the edges kept), each node's successor list is
-/// returned too (indexed by node) and the last value is `true`; once more
-/// than the cap would be kept (counted when a node is entered), all lists
-/// are freed, the rest of the run is as without `keep`, and the last value
-/// is `false`.
+/// returned too (indexed by node) and `kept` is `true`; once more than the
+/// cap would be kept (counted when a node is entered), all lists are freed,
+/// the rest of the run is as without `keep`, and `kept` is `false`.
+///
+/// `None` if `deadline` passed first (checked between `edges` calls).
 ///
 /// Live memory is O(nodes + [`TARJAN_PATH_ENTRIES`]) besides the kept
 /// lists, however long the DFS path and however wide the ranges (review 7
 /// verification, F5: a path of 16,000 nodes each holding a 16,000-entry
-/// list took 2.1 GB, single-threaded too). A frame holds only its
-/// successors that were unvisited when it last looked: an already visited
-/// one only lowers the frame's low-link if it is on the Tarjan stack, and it
-/// stays there at least until the frame finishes (its component's root is
-/// the frame or an ancestor), so that update is applied at once. Past the
-/// budget the shallowest frames drop even those and recompute them (from
-/// `edges`, after the last successor taken) when the DFS returns to them.
-/// The visit order, and so the output, is exactly the plain algorithm's.
-#[allow(clippy::type_complexity)]
+/// list took 2.1 GB, single-threaded too). Time is O(nodes + edges): see
+/// [`tarjan_with`]. The visit order, and so the output, is exactly the
+/// plain algorithm's.
 fn tarjan(
     n: usize,
     keep: Option<usize>,
+    deadline: Option<Instant>,
     edges: impl FnMut(usize) -> Vec<usize>,
-) -> (
-    Vec<(SmallVec<[usize; 1]>, bool)>,
-    Vec<Option<Vec<usize>>>,
-    bool,
-) {
-    let r = tarjan_with(n, keep, TARJAN_PATH_ENTRIES.max(n), edges);
-    (r.0, r.1, r.2)
+) -> Option<TarjanRun> {
+    let r = tarjan_with(n, keep, TARJAN_PATH_ENTRIES.max(n), deadline, edges);
+    (!r.stopped).then_some(r)
 }
 
 /// A frame of [`tarjan_with`]'s DFS path.
@@ -749,26 +797,65 @@ struct TarjanFrame {
     v: usize,
     /// The last successor taken (successors come in increasing order).
     last: Option<usize>,
-    /// The successors after `last` that were unvisited, the next one at
-    /// the end; `None` once dropped for the budget.
-    rest: Option<Vec<usize>>,
+    /// The next successors after `last` that were unvisited when the
+    /// frame last looked, the next one at the end.
+    rest: Vec<usize>,
+    /// Successors after `rest` may remain: once `rest` is empty, look
+    /// again (from `edges`, after `last`). Set when `rest` is dropped for
+    /// the budget or was cut to a chunk.
+    more: bool,
 }
 
-/// [`tarjan`] with the path budget given; the last value is the most
-/// successor entries the path held at once.
-#[allow(clippy::type_complexity)]
+/// [`tarjan`] with the path budget given (`budget` successor entries).
+///
+/// A frame holds only its successors that were unvisited when it last
+/// looked: an already visited one only lowers the frame's low-link if it
+/// is on the Tarjan stack, and it stays there at least until the frame
+/// finishes (its component's root is the frame or an ancestor), so that
+/// update is applied at once. When a node is entered and the path holds
+/// more than `budget` entries, the shallowest frames (never the top one)
+/// drop theirs; when the DFS returns to a dropped frame it calls `edges`
+/// again and keeps the next unvisited successors after the last one taken,
+/// at most `chunk` = ⌈budget / 2⌉ of them (another look when they run out).
+///
+/// Memory: after each step the path holds at most max(`budget`, the
+/// longest list) entries (the drop loop stops at `budget` or with only the
+/// top frame holding; a looked-again frame holds at most `chunk`), plus
+/// the transient list of the `edges` call; at most `budget` when
+/// `budget` ≥ `n`, as [`tarjan`] passes it.
+///
+/// Time (fix review 7: a looked-again frame used to keep its whole list,
+/// so with a list of about `budget` entries a short chain under each of its
+/// children pushed it over the budget again and each child cost a full
+/// list, ~n·√n in all). With `budget` ≥ `n` every list has at most `n` ≤
+/// `budget` entries, and the `edges` calls return at most 6E entries in
+/// all for E edges (`work`; the existing lists are only scanned, so time
+/// is O(n + E) too). Entering a node calls `edges` once per node: E. Each
+/// look again costs at most n and is charged to the latest event that set
+/// `more`:
+/// - (a) dropping a node's first list: once per node, at most E in all;
+/// - (b) cutting the list to a chunk, all of which was then taken: those
+///   are `chunk` ≥ n / 2 distinct edges of the frame, so at most 2E;
+/// - (c) dropping the list of an earlier look. At a look every frame
+///   below holds nothing (it is reached only by dropping, or by a chunk
+///   of an earlier look, of this frame, whose lower frames could not gain
+///   entries since), so `low_mark` ≤ the frame and the drop loop would
+///   reach the frame before any frame above it: until this drop no frame
+///   above it was dropped, and they hold only first lists of nodes
+///   entered since the look. The drop needs more than budget − chunk ≥
+///   budget / 2 ≥ n / 2 of them. The spans from look to drop are disjoint
+///   for frames on the path together (a deeper frame's look, after a drop
+///   of it, comes after the shallower frame's drop), so each first-list
+///   entry pays for one drop at most: at most 2E.
 fn tarjan_with(
     n: usize,
     keep: Option<usize>,
     budget: usize,
+    deadline: Option<Instant>,
     mut edges: impl FnMut(usize) -> Vec<usize>,
-) -> (
-    Vec<(SmallVec<[usize; 1]>, bool)>,
-    Vec<Option<Vec<usize>>>,
-    bool,
-    usize,
-) {
+) -> TarjanRun {
     const UNSEEN: usize = usize::MAX;
+    let chunk = budget.div_ceil(2).max(1);
     let cap = keep.unwrap_or(0);
     let mut keep = keep.is_some();
     let mut kept = 0usize;
@@ -782,31 +869,58 @@ fn tarjan_with(
     let mut counter = 0usize;
     let mut held = 0usize;
     let mut peak = 0usize;
+    let mut work = 0usize;
+    let mut calls = 0usize;
+    let mut stopped = false;
 
-    // `v`'s successors after `after`: the unvisited ones (returned, next
-    // at the end); the visited ones on the stack lower `low[v]` now.
+    // `edges(v)`, or `None` once the deadline has passed (checked every
+    // 64 calls, so the clock costs little next to the lists).
+    let mut fetch = |v: usize| -> Option<Vec<usize>> {
+        if calls.is_multiple_of(64) && deadline.is_some_and(|d| Instant::now() >= d) {
+            return None;
+        }
+        calls += 1;
+        let list = edges(v);
+        // The resume after a drop (`w <= last`) relies on it.
+        debug_assert!(
+            list.windows(2).all(|p| p[0] < p[1]),
+            "successors not strictly increasing"
+        );
+        work += list.len();
+        Some(list)
+    };
+
+    // `v`'s successors after `after`: the first `limit` unvisited ones
+    // (returned, the next one at the end) and whether unvisited ones remain
+    // after them; the visited ones on the stack before that point lower
+    // `low[v]` now.
     let scan = |v: usize,
                 after: Option<usize>,
                 list: &[usize],
+                limit: usize,
                 index: &[usize],
                 low: &mut [usize],
                 on_stack: &[bool]|
-     -> Vec<usize> {
+     -> (Vec<usize>, bool) {
+        let from = after.map_or(0, |a| list.partition_point(|&w| w <= a));
         let mut rest = Vec::new();
-        for &w in list.iter().rev() {
-            if after.is_some_and(|a| w <= a) {
-                break;
-            }
+        let mut more = false;
+        for &w in &list[from..] {
             if index[w] == UNSEEN {
+                if rest.len() == limit {
+                    more = true;
+                    break;
+                }
                 rest.push(w);
             } else if on_stack[w] {
                 low[v] = low[v].min(index[w]);
             }
         }
-        rest
+        rest.reverse();
+        (rest, more)
     };
 
-    for start in 0..n {
+    'all: for start in 0..n {
         if index[start] != UNSEEN {
             continue;
         }
@@ -821,9 +935,12 @@ fn tarjan_with(
                 counter += 1;
                 stack.push(w);
                 on_stack[w] = true;
-                let list = edges(w);
+                let Some(list) = fetch(w) else {
+                    stopped = true;
+                    break 'all;
+                };
                 self_edge[w] = list.binary_search(&w).is_ok();
-                let rest = scan(w, None, &list, &index, &mut low, &on_stack);
+                let (rest, _) = scan(w, None, &list, usize::MAX, &index, &mut low, &on_stack);
                 if keep {
                     kept = kept.saturating_add(list.len());
                     if kept > cap {
@@ -838,13 +955,17 @@ fn tarjan_with(
                 call.push(TarjanFrame {
                     v: w,
                     last: None,
-                    rest: Some(rest),
+                    rest,
+                    more: false,
                 });
                 // Over budget: the shallowest frames (never the top one)
                 // drop their successors.
                 while held > budget && low_mark + 1 < call.len() {
-                    if let Some(r) = call[low_mark].rest.take() {
-                        held -= r.len();
+                    let f = &mut call[low_mark];
+                    if !f.rest.is_empty() {
+                        held -= f.rest.len();
+                        f.rest = Vec::new();
+                        f.more = true;
                     }
                     low_mark += 1;
                 }
@@ -855,17 +976,20 @@ fn tarjan_with(
                 break;
             };
             let v = top.v;
-            if top.rest.is_none() {
-                // Dropped for the budget: recompute what is left.
-                let list = edges(v);
-                let rest = scan(v, top.last, &list, &index, &mut low, &on_stack);
+            if top.rest.is_empty() && top.more {
+                // Dropped for the budget or cut to a chunk: look again.
+                let Some(list) = fetch(v) else {
+                    stopped = true;
+                    break 'all;
+                };
+                let (rest, more) = scan(v, top.last, &list, chunk, &index, &mut low, &on_stack);
                 held += rest.len();
                 peak = peak.max(held);
-                top.rest = Some(rest);
+                top.rest = rest;
+                top.more = more;
                 low_mark = low_mark.min(top_i);
             }
-            let next = top.rest.as_mut().and_then(Vec::pop);
-            if let Some(w) = next {
+            if let Some(w) = top.rest.pop() {
                 held -= 1;
                 top.last = Some(w);
                 if index[w] == UNSEEN {
@@ -894,7 +1018,14 @@ fn tarjan_with(
             }
         }
     }
-    (out, succ, keep, peak)
+    TarjanRun {
+        comps: out,
+        succ,
+        kept: keep,
+        peak,
+        work,
+        stopped,
+    }
 }
 
 /// How a [`CalcCtx`] holds the workbook: mutably (recalc, which caches
@@ -3093,44 +3224,329 @@ mod tests {
         assert!(count <= 4, "B12 evaluated {count} times");
     }
 
-    /// Random graphs (sorted, deduplicated successor lists): the bounded
-    /// Tarjan gives exactly the plain algorithm's components, order,
-    /// cyclic flags and kept lists, whatever the path budget.
+    /// Plain recursive Tarjan: an independent reference for
+    /// [`tarjan_with`] (components, cyclic flags; lists kept when there
+    /// are at most `keep` edges in all). Small graphs only.
+    #[allow(clippy::type_complexity)]
+    fn tarjan_recursive(
+        g: &[Vec<usize>],
+        keep: Option<usize>,
+    ) -> (
+        Vec<(SmallVec<[usize; 1]>, bool)>,
+        Vec<Option<Vec<usize>>>,
+        bool,
+    ) {
+        struct S<'a> {
+            g: &'a [Vec<usize>],
+            index: Vec<usize>,
+            low: Vec<usize>,
+            on: Vec<bool>,
+            stack: Vec<usize>,
+            counter: usize,
+            out: Vec<(SmallVec<[usize; 1]>, bool)>,
+        }
+        fn go(s: &mut S, v: usize) {
+            s.index[v] = s.counter;
+            s.low[v] = s.counter;
+            s.counter += 1;
+            s.stack.push(v);
+            s.on[v] = true;
+            for &w in s.g[v].iter() {
+                if s.index[w] == usize::MAX {
+                    go(s, w);
+                    s.low[v] = s.low[v].min(s.low[w]);
+                } else if s.on[w] {
+                    s.low[v] = s.low[v].min(s.index[w]);
+                }
+            }
+            if s.low[v] == s.index[v] {
+                let mut members = SmallVec::new();
+                while let Some(w) = s.stack.pop() {
+                    s.on[w] = false;
+                    members.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                let cyclic = members.len() > 1 || s.g[v].contains(&v);
+                s.out.push((members, cyclic));
+            }
+        }
+        let n = g.len();
+        let mut s = S {
+            g,
+            index: vec![usize::MAX; n],
+            low: vec![0; n],
+            on: vec![false; n],
+            stack: Vec::new(),
+            counter: 0,
+            out: Vec::new(),
+        };
+        for v in 0..n {
+            if s.index[v] == usize::MAX {
+                go(&mut s, v);
+            }
+        }
+        let total: usize = g.iter().map(Vec::len).sum();
+        match keep {
+            Some(cap) if total <= cap => (s.out, g.iter().cloned().map(Some).collect(), true),
+            _ => (s.out, vec![None; n], false),
+        }
+    }
+
+    /// Random graphs of seven shapes (dense, a big cycle, a chain over a
+    /// wide pool, tournaments, small cycles and self-edges, a reversed
+    /// chain, sparse), sorted and deduplicated.
+    fn tarjan_test_graph(rnd: &mut impl FnMut(usize) -> usize, case: usize) -> Vec<Vec<usize>> {
+        let n = 1 + rnd(120);
+        let mut g: Vec<Vec<usize>> = vec![Vec::new(); n];
+        match case % 7 {
+            0 => {
+                // Dense, up to half of all edges.
+                let p = 1 + rnd(500);
+                for l in &mut g {
+                    for w in 0..n {
+                        if rnd(1000) < p {
+                            l.push(w);
+                        }
+                    }
+                }
+            }
+            1 => {
+                // A cycle through a random permutation, sparse extras.
+                let mut perm: Vec<usize> = (0..n).collect();
+                for i in (1..n).rev() {
+                    perm.swap(i, rnd(i + 1));
+                }
+                let k = 1 + rnd(n);
+                for i in 0..k {
+                    g[perm[i]].push(perm[(i + 1) % k]);
+                }
+                for _ in 0..rnd(3 * n) {
+                    let v = rnd(n);
+                    let w = rnd(n);
+                    g[v].push(w);
+                }
+            }
+            2 => {
+                // A chain whose nodes all read most of a wide pool (the
+                // budget is hit at many depths), a few back edges.
+                let d = 1 + rnd(n);
+                for (i, l) in g.iter_mut().enumerate().take(d) {
+                    if i + 1 < d {
+                        l.push(i + 1);
+                    }
+                    for w in d..n {
+                        if rnd(10) < 8 {
+                            l.push(w);
+                        }
+                    }
+                }
+                for l in g.iter_mut().skip(d) {
+                    if rnd(20) == 0 {
+                        l.push(rnd(n));
+                    }
+                }
+            }
+            3 => {
+                // Tournament-like DAG with some back edges.
+                for (v, l) in g.iter_mut().enumerate() {
+                    for w in v + 1..n {
+                        if rnd(3) > 0 {
+                            l.push(w);
+                        }
+                    }
+                    if rnd(5) == 0 {
+                        l.push(rnd(v + 1));
+                    }
+                }
+            }
+            4 => {
+                // Many small cycles and self-edges.
+                for (v, l) in g.iter_mut().enumerate() {
+                    if rnd(3) == 0 {
+                        l.push(v);
+                    }
+                    for _ in 0..rnd(6) {
+                        l.push((v + n - rnd(4)) % n);
+                    }
+                    if rnd(4) == 0 {
+                        l.push(rnd(n));
+                    }
+                }
+            }
+            5 => {
+                // A deep path from the high ids, fanning into the low ones.
+                for (v, l) in g.iter_mut().enumerate().skip(1) {
+                    l.push(v - 1);
+                    for _ in 0..rnd(20) {
+                        l.push(rnd(n));
+                    }
+                }
+            }
+            _ => {
+                let deg = rnd(40);
+                for l in &mut g {
+                    for _ in 0..rnd(deg + 1) {
+                        l.push(rnd(n));
+                    }
+                }
+            }
+        }
+        for l in &mut g {
+            l.sort_unstable();
+            l.dedup();
+        }
+        g
+    }
+
+    /// Random graphs: the bounded Tarjan gives exactly the plain
+    /// algorithm's components, order, cyclic flags and kept lists, whatever
+    /// the path budget and the cap on kept edges; the path holds at most
+    /// max(budget, n) entries, and with a budget of at least n the `edges`
+    /// calls return at most 6E entries.
     #[test]
     fn bounded_tarjan_matches_the_plain_algorithm() {
-        let mut x = 0x2545_F491_4F6C_DD1Du64;
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
         let mut rnd = move |m: usize| {
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;
             (x % m.max(1) as u64) as usize
         };
-        for case in 0..400 {
-            let n = 1 + rnd(60);
-            let deg = rnd(8);
-            let graph: Vec<Vec<usize>> = (0..n)
-                .map(|_| {
-                    let mut l: Vec<usize> = (0..rnd(deg + 1)).map(|_| rnd(n)).collect();
-                    l.sort_unstable();
-                    l.dedup();
-                    l
-                })
-                .collect();
-            let keep = match case % 3 {
-                0 => None,
-                1 => Some(usize::MAX),
-                _ => Some(rnd(n * 3)),
-            };
-            let want = tarjan_reference(n, keep, |v| graph[v].clone());
-            for budget in [0, 1, 3, 1000] {
-                let got = tarjan_with(n, keep, budget, |v| graph[v].clone());
-                assert_eq!(got.0, want.0, "case {case} budget {budget}: components");
-                assert_eq!(got.2, want.2, "case {case} budget {budget}: kept");
-                if got.2 {
-                    assert_eq!(got.1, want.1, "case {case} budget {budget}: lists");
+        for case in 0..700 {
+            let g = tarjan_test_graph(&mut rnd, case);
+            let n = g.len();
+            let e: usize = g.iter().map(Vec::len).sum();
+            let keep = [
+                None,
+                Some(usize::MAX),
+                Some(e),
+                Some(e.saturating_sub(1)),
+                Some(rnd(e + 2)),
+            ][case % 5];
+            let want = tarjan_recursive(&g, keep);
+            if case % 10 == 0 {
+                let old = tarjan_reference(n, keep, |v| g[v].clone());
+                assert_eq!(old.0, want.0, "case {case}: the two references");
+            }
+            let mut budgets = vec![0, 1, 2, 3, n, n * n, usize::MAX];
+            budgets.extend((0..4).map(|_| rnd(n * n + 1)));
+            budgets.extend((0..2).map(|_| rnd(e + 2)));
+            for b in budgets {
+                let got = tarjan_with(n, keep, b, None, |v| g[v].clone());
+                assert!(!got.stopped);
+                assert_eq!(
+                    got.comps, want.0,
+                    "case {case} n {n} budget {b}: components"
+                );
+                assert_eq!(got.kept, want.2, "case {case} budget {b}: kept");
+                assert_eq!(got.succ, want.1, "case {case} budget {b}: lists");
+                assert!(
+                    got.peak <= b.max(n),
+                    "case {case} budget {b}: peak {}",
+                    got.peak
+                );
+                if b >= n {
+                    assert!(
+                        got.work <= 6 * e,
+                        "case {case} budget {b}: work {}",
+                        got.work
+                    );
                 }
             }
         }
+    }
+
+    /// The adversarial shape for the bounded path (fix review 7): node 0
+    /// reads every other node, so its list fills about the whole budget;
+    /// its first `k` successors each start a chain (`s` nodes, each reading
+    /// the next one and `s` pool nodes) just long enough to push the path
+    /// over the budget again, then many plain pool nodes.
+    fn wide_reader_graph(pool: usize, k: usize) -> Vec<Vec<usize>> {
+        let mut g: Vec<Vec<usize>> = vec![Vec::new(); 1 + k];
+        let mut visited = 2usize;
+        for i in 0..k {
+            let s = (visited as f64).sqrt() as usize + 3;
+            let h0 = g.len();
+            g.resize(h0 + 2 * s, Vec::new());
+            g[1 + i].push(h0);
+            for j in 0..s {
+                if j + 1 < s {
+                    g[h0 + j].push(h0 + j + 1);
+                }
+                g[h0 + j].extend(h0 + s..h0 + 2 * s);
+            }
+            visited += 2 * s + 1;
+        }
+        let n = g.len() + pool;
+        g.resize(n, Vec::new());
+        g[0] = (1..n).collect();
+        g
+    }
+
+    /// Fix review 7: a frame looked at again after being dropped for the
+    /// budget kept its whole list, was dropped again by the short chain
+    /// under each of its children, and listed its successors (about n)
+    /// again each time: ~k·n work (11× E + n here). The successor entries
+    /// `edges` returns in all stay within a small multiple of E + n,
+    /// whatever k.
+    #[test]
+    fn tarjan_rebuild_work_is_linear() {
+        for (pool, k) in [(20_000, 40), (5_000, 150)] {
+            let g = wide_reader_graph(pool, k);
+            let n = g.len();
+            let e: usize = g.iter().map(Vec::len).sum();
+            let want = tarjan_reference(n, None, |v| g[v].clone());
+            let got = tarjan_with(n, None, n, None, |v| g[v].clone());
+            assert_eq!(got.comps, want.0, "k {k}");
+            assert!(got.peak <= n, "k {k}: peak {}", got.peak);
+            assert!(
+                got.work <= 4 * (e + n),
+                "k {k}: {} entries for E {e} + n {n}",
+                got.work
+            );
+        }
+    }
+
+    /// The recalc deadline stops the ordering between `edges` calls.
+    #[test]
+    fn the_deadline_stops_the_ordering() {
+        let g = wide_reader_graph(2_000, 10);
+        let n = g.len();
+        let past = Some(Instant::now());
+        assert!(tarjan(n, None, past, |v| g[v].clone()).is_none());
+        let later = Some(Instant::now() + Duration::from_secs(3600));
+        let got = tarjan(n, None, later, |v| g[v].clone()).expect("in time");
+        assert_eq!(got.comps, tarjan_reference(n, None, |v| g[v].clone()).0);
+        // Through a recalc: incomplete before any evaluation, the formulas
+        // keep their values and are clean, so a later edit recalculates
+        // their dependents as usual.
+        let mut wb = Workbook::new();
+        wb.set_input(a("A1"), "1");
+        for r in 1..=50u32 {
+            wb.set_input(a(&format!("B{r}")), "=A1*2");
+        }
+        recalc(&mut wb);
+        let dirty: Vec<FormulaCellId> = wb.formulas.keys().collect();
+        assert!(topo_order(&wb, &dirty, None, past).is_none());
+        wb.set_input(a("A1"), "5");
+        let rep = recalc_with(
+            &mut wb,
+            &RecalcBudget {
+                max_cells_evaluated: u64::MAX,
+                deadline: past,
+            },
+        );
+        assert!(rep.incomplete);
+        assert_eq!(rep.evaluated, 0);
+        assert_eq!(rep.skipped, 50);
+        assert_eq!(num(&wb, "B7"), Value::Number(2.0));
+        assert!(wb.formulas.values().all(|f| f.state == CellState::Clean));
+        wb.set_input(a("A1"), "6");
+        let rep = recalc(&mut wb);
+        assert!(!rep.incomplete);
+        assert_eq!(num(&wb, "B7"), Value::Number(12.0));
     }
 
     /// Review 7 verification, F5: a DFS path of `n` nodes that each read a
@@ -3165,15 +3581,15 @@ mod tests {
             ("a first", &a_first),
         ] {
             let want = tarjan_reference(2 * n, None, g);
-            let got = tarjan_with(2 * n, None, budget, g);
-            assert_eq!(got.0, want.0, "{name}");
+            let got = tarjan_with(2 * n, None, budget, None, g);
+            assert_eq!(got.comps, want.0, "{name}");
             // The plain algorithm held about n² = 9 M entries on the path.
-            assert!(got.3 <= budget + n + 1, "{name}: peak {}", got.3);
+            assert!(got.peak <= budget, "{name}: peak {}", got.peak);
         }
         // Keeping the lists counts the ones on the path too.
-        let got = tarjan_with(2 * n, Some(1_000_000), budget, b_first);
-        assert!(!got.2);
-        assert!(got.1.iter().all(Option::is_none));
+        let got = tarjan_with(2 * n, Some(1_000_000), budget, None, b_first);
+        assert!(!got.kept);
+        assert!(got.succ.iter().all(Option::is_none));
     }
 
     /// Review 7 verification, F4: emptying a set that once grew large does
@@ -3272,13 +3688,13 @@ mod tests {
         }
         let dirty: Vec<FormulaCellId> = wb.formulas.keys().collect();
         // 40 × 40 edges.
-        let (order, preds) = topo_order(&wb, &dirty, Some(1600));
+        let (order, preds) = topo_order(&wb, &dirty, Some(1600), None).unwrap();
         let preds = preds.expect("within the cap");
         assert_eq!(preds.iter().map(Vec::len).sum::<usize>(), 1600);
-        let (order2, none) = topo_order(&wb, &dirty, Some(1599));
+        let (order2, none) = topo_order(&wb, &dirty, Some(1599), None).unwrap();
         assert!(none.is_none());
         assert_eq!(order.len(), order2.len());
-        assert_eq!(topo_order(&wb, &dirty, None).1, None);
+        assert_eq!(topo_order(&wb, &dirty, None, None).unwrap().1, None);
     }
 
     /// A parallel context over `wb` whose dirty set is `dirty` (all at
