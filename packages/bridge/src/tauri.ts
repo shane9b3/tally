@@ -96,6 +96,7 @@ import type { LoadStylesOptions } from "./generated/LoadStylesOptions";
 import type { CellsOptions } from "./generated/CellsOptions";
 import { isApiError, type EngineClientV4, type SheetId, type Unsubscribe } from "./client";
 import type { EditModeOption, EditModeResult, FontFamilyInfo, OpenMode, ShellClient, TemplateInfo } from "./shell";
+import type { RestartAborted, UpdateInfo, UpdateProgress, UpdateShell, UpdateStatus } from "./updates";
 
 export { CANCELLED, type FontFamilyInfo, type TemplateInfo } from "./shell";
 
@@ -239,6 +240,12 @@ export const COMMANDS = {
   mergeWindows: "merge_windows",
   // Font pickers: apps/desktop/src-tauri/src/fonts.rs
   listFonts: "list_fonts",
+  // Auto-update: apps/desktop/src-tauri/src/updater.rs
+  updateStatus: "update_status",
+  updateCheck: "update_check",
+  updateDownload: "update_download",
+  updateRestart: "update_restart",
+  updateSkip: "update_skip",
 } as const;
 
 /**
@@ -304,8 +311,20 @@ export const WINDOW_SHELL_COMMANDS = ["windowInit", "placeDocument", "broadcastP
 /** The document-tab shell commands (windows.rs); `tabs.test.ts` covers them. */
 export const TAB_SHELL_COMMANDS = ["tabActivate", "tabClose", "tabCloseOthers", "tabMove", "tabDetach", "mergeWindows"] as const satisfies readonly (keyof typeof COMMANDS)[];
 
+/** The auto-update shell commands (updater.rs); `updater.test.ts` covers them. */
+export const UPDATE_SHELL_COMMANDS = ["updateStatus", "updateCheck", "updateDownload", "updateRestart", "updateSkip"] as const satisfies readonly (keyof typeof COMMANDS)[];
+
 /** Event names, exactly as in docs/api.md. */
-export const EVENTS = { docChanged: "doc-changed", menuAction: "menu-action", closeRequested: "close-requested", prefsChanged: "prefs-changed", tabsChanged: "tabs-changed" } as const;
+export const EVENTS = {
+  docChanged: "doc-changed",
+  menuAction: "menu-action",
+  closeRequested: "close-requested",
+  prefsChanged: "prefs-changed",
+  tabsChanged: "tabs-changed",
+  updateAvailable: "update-available",
+  updateProgress: "update-progress",
+  updateRestartAborted: "update-restart-aborted",
+} as const;
 
 /** One open document (`tabs-changed`): a tab of some window. */
 export interface TabInfo {
@@ -372,7 +391,7 @@ export function toApiError(e: unknown): ApiError {
   return { code: "internal", message: String(e) };
 }
 
-export class TauriClient implements EngineClientV4, ShellClient {
+export class TauriClient implements EngineClientV4, ShellClient, UpdateShell {
   constructor(private readonly tauri: TauriTransport) {}
 
   private call<T>(cmd: string, args?: InvokeArgs): Promise<T> {
@@ -934,6 +953,48 @@ export class TauriClient implements EngineClientV4, ShellClient {
   /** `tabs-changed`: something changed among the open documents (any window). */
   onTabsChanged(cb: (state: TabsState) => void): Unsubscribe {
     return this.subscribe(EVENTS.tabsChanged, cb);
+  }
+
+  // -- auto-update (updater.rs) ----------------------------------------------------
+
+  /** `update_status`: the running version, whether this build updates itself, a downloaded update. */
+  updateStatus(): Promise<UpdateStatus> {
+    return this.call(COMMANDS.updateStatus);
+  }
+
+  /** `update_check`: a manual check (`null`: up to date). */
+  updateCheck(): Promise<UpdateInfo | null> {
+    return this.call(COMMANDS.updateCheck);
+  }
+
+  /** `update_download`: downloads and verifies the offered update (`update-progress` events). */
+  updateDownload(): Promise<UpdateInfo> {
+    return this.call(COMMANDS.updateDownload);
+  }
+
+  /** `update_restart`: the unsaved-changes questions for every document, then install and relaunch. */
+  updateRestart(): Promise<void> {
+    return this.call(COMMANDS.updateRestart);
+  }
+
+  /** `update_skip`: Skip This Version. */
+  updateSkip(version: string): Promise<void> {
+    return this.call(COMMANDS.updateSkip, { version });
+  }
+
+  /** `update-available`: an automatic check found an update (this document is the one to ask). */
+  onUpdateAvailable(cb: (info: UpdateInfo) => void): Unsubscribe {
+    return this.subscribe(EVENTS.updateAvailable, cb);
+  }
+
+  /** `update-progress`: download progress for this document's download. */
+  onUpdateProgress(cb: (p: UpdateProgress) => void): Unsubscribe {
+    return this.subscribe(EVENTS.updateProgress, cb);
+  }
+
+  /** `update-restart-aborted`: Cancel in a save prompt, or the install failed. */
+  onUpdateRestartAborted(cb: (e: RestartAborted) => void): Unsubscribe {
+    return this.subscribe(EVENTS.updateRestartAborted, cb);
   }
 
   // -- events -----------------------------------------------------------------

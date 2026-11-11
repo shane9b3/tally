@@ -119,4 +119,9 @@ pub const APP_COMMANDS: &[&str] = &[
     "tab_detach",
     "merge_windows",
     "list_fonts",
+    "update_status",
+    "update_check",
+    "update_download",
+    "update_restart",
+    "update_skip",
 ];

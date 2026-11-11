@@ -154,6 +154,9 @@ pub enum CloseKind {
 pub enum Goal {
     /// Quit the app.
     Exit,
+    /// Install the downloaded update and relaunch (`updater.rs`): asks
+    /// like a quit, but finishes by installing instead of exiting.
+    Restart,
     /// Close this window with all its tabs.
     CloseWindow(String),
     /// Close these tabs.
@@ -1014,7 +1017,7 @@ impl Registry {
     /// The tabs a goal asks, in order.
     fn targets(&self, goal: &Goal) -> Vec<String> {
         match goal {
-            Goal::Exit => self
+            Goal::Exit | Goal::Restart => self
                 .windows_mru()
                 .iter()
                 .flat_map(|w| self.window_order(w))
@@ -1030,7 +1033,7 @@ impl Registry {
 
     fn kind_of(goal: &Goal) -> CloseKind {
         match goal {
-            Goal::Exit => CloseKind::Quit,
+            Goal::Exit | Goal::Restart => CloseKind::Quit,
             Goal::CloseWindow(_) | Goal::CloseTabs(_) => CloseKind::Tabs,
         }
     }
@@ -1057,6 +1060,29 @@ impl Registry {
     /// Whether a Quit sequence is running (asking its edited tabs).
     pub fn quitting(&self) -> bool {
         matches!(&self.sequence, Some(s) if s.goal == Goal::Exit)
+    }
+
+    /// Whether a restart-to-update sequence is running (asking its edited tabs).
+    pub fn restarting(&self) -> bool {
+        matches!(&self.sequence, Some(s) if s.goal == Goal::Restart)
+    }
+
+    /// Restart to install an update (`updater.rs`): asks the edited tabs
+    /// like a Quit (same order, same `quit` question), then finishes with
+    /// [`Goal::Restart`]. `None` while another sequence is asking (that one
+    /// is asked again instead; the restart is not queued).
+    pub fn begin_restart(&mut self) -> Option<Step> {
+        if self.sequence.is_some() {
+            return None;
+        }
+        Some(self.run(Goal::Restart))
+    }
+
+    /// The restart could not install the update after every tab answered:
+    /// the answers no longer count (the documents stay open and edited
+    /// ones are asked again next time), as after Cancel.
+    pub fn forget_answers(&mut self) {
+        self.abort();
     }
 
     /// The tab a running sequence is asking.
@@ -1858,6 +1884,54 @@ mod tests {
         // a's answer no longer counts: closing it asks again.
         assert!(r.must_ask(&a) && r.must_ask(&b));
         assert_eq!(r.begin_quit(), Step::Ask(a, CloseKind::Quit));
+    }
+
+    #[test]
+    fn restart_to_update_asks_like_a_quit_and_cancel_keeps_everything_open() {
+        let mut r = Registry::default();
+        let a = window(&mut r, None);
+        let b = tab(&mut r, &a, None);
+        let c = window(&mut r, None);
+        report(&mut r, &a, true, Some(1));
+        report(&mut r, &b, false, Some(2));
+        report(&mut r, &c, true, Some(3));
+        r.focus_changed(&win(&r, &c), true);
+        // Every edited tab of every window, the front window first, as a quit.
+        assert_eq!(
+            r.begin_restart(),
+            Some(Step::Ask(c.clone(), CloseKind::Quit))
+        );
+        assert!(r.restarting() && !r.quitting());
+        // Not twice at once.
+        assert_eq!(r.begin_restart(), None);
+        assert_eq!(r.answered(&c), Some(Step::Ask(a.clone(), CloseKind::Quit)));
+        // Cancel: nothing closes, earlier answers are forgotten.
+        assert!(r.cancel(&a));
+        assert!(!r.restarting());
+        assert!(r.must_ask(&a) && r.must_ask(&c));
+        // Answered to the end: install and relaunch.
+        assert_eq!(
+            r.begin_restart(),
+            Some(Step::Ask(c.clone(), CloseKind::Quit))
+        );
+        assert_eq!(r.answered(&c), Some(Step::Ask(a.clone(), CloseKind::Quit)));
+        assert_eq!(r.answered(&a), Some(Step::Done(Goal::Restart)));
+        assert!(!r.restarting());
+        assert!(!r.must_ask(&a) && !r.must_ask(&c));
+        // The install failed: the answers no longer count.
+        r.forget_answers();
+        assert!(r.must_ask(&a) && r.must_ask(&c));
+        // ⌘Q during a restart takes it over (a plain quit).
+        assert!(r.begin_restart().is_some());
+        assert_eq!(r.begin_quit(), Step::Ask(c.clone(), CloseKind::Quit));
+        assert!(r.quitting() && !r.restarting());
+        // While another sequence asks, no restart starts.
+        assert_eq!(r.begin_restart(), None);
+        // Nothing edited: done at once.
+        let mut clean = Registry::default();
+        let x = window(&mut clean, None);
+        report(&mut clean, &x, false, Some(9));
+        assert_eq!(clean.begin_restart(), Some(Step::Done(Goal::Restart)));
     }
 
     #[test]

@@ -1,0 +1,221 @@
+# Release: builds Tally for macOS (Apple Silicon and Intel), Windows x64 and
+# Linux x64 when a `v*` tag is pushed, signs the updater packages and
+# publishes a GitHub Release with the installers and `latest.json`, the
+# manifest the app's updater reads from
+# https://github.com/shane9b3/tally/releases/latest/download/latest.json
+# (docs/release.md).
+#
+# The release stays a draft until every platform job succeeded; only then
+# does `publish` upload latest.json and make it the latest release, so
+# `releases/latest` never points at a half-built release.
+#
+# Secrets: TAURI_SIGNING_PRIVATE_KEY (minisign key, empty password) is used
+# by the `build` job only. This workflow has no pull_request trigger, so the
+# secret is never available to code from a fork.
+#
+# Builds are not Developer ID / Authenticode signed (no certificates yet):
+# macOS bundles are ad-hoc signed (`tauri.release.conf.json`).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish (e.g. v0.2.0)"
+        required: true
+        type: string
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  REPO: ${{ github.repository }}
+
+jobs:
+  verify:
+    name: verify (tag = version)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Tag name
+        id: tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$TAG' is not a release tag (vX.Y.Z)"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: "1.94"
+      - name: Versions agree with the tag
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: cargo run --locked -p xtask -- bump-version --check "$VERSION"
+
+  draft:
+    name: draft release
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.verify.outputs.tag }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ needs.verify.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+      - name: Release notes (CHANGELOG.md section, else GitHub's generated notes)
+        run: node .github/release/release.mjs notes --version "$VERSION" --changelog CHANGELOG.md --out notes.md
+      - name: Create the draft (or reuse an unpublished one)
+        run: |
+          if state=$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$state" != "true" ]; then
+              echo "::error::release $TAG is already published; bump the version and tag again"
+              exit 1
+            fi
+            echo "reusing the draft release $TAG"
+            if [ -s notes.md ]; then gh release edit "$TAG" --repo "$REPO" --notes-file notes.md; fi
+          elif [ -s notes.md ]; then
+            gh release create "$TAG" --repo "$REPO" --draft --verify-tag --title "Tally $VERSION" --notes-file notes.md
+          else
+            gh release create "$TAG" --repo "$REPO" --draft --verify-tag --title "Tally $VERSION" --generate-notes
+          fi
+
+  build:
+    name: build (${{ matrix.platform }})
+    needs: [verify, draft]
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-aarch64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - platform: darwin-x86_64
+            os: macos-15
+            target: x86_64-apple-darwin
+          - platform: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: linux-x86_64
+            # The oldest supported runner: the AppImage runs on distributions
+            # with this glibc or newer.
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    # The token is handed only to the upload step and the signing key only
+    # to the build step, not to `pnpm install` or other build scripts.
+    env:
+      TAG: ${{ needs.verify.outputs.tag }}
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ needs.verify.outputs.tag }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: "1.94"
+          targets: ${{ matrix.target }}
+      - name: Install Linux webview dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+      - name: Build and sign the updater package
+        # Build only: no tagName/releaseId, so the action uploads nothing;
+        # the next steps publish fixed asset names.
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+      - name: Collect installers, updater package and signature
+        shell: bash
+        run: >-
+          node .github/release/release.mjs collect
+          --platform "${{ matrix.platform }}" --version "$VERSION"
+          --bundle-dir "target/${{ matrix.target }}/release/bundle" --out dist-release
+      - name: Upload to the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist-release/* --repo "$REPO" --clobber
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: fragment-${{ matrix.platform }}
+          path: dist-release/fragment-${{ matrix.platform }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish (latest.json, then out of draft)
+    needs: [verify, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.verify.outputs.tag }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ needs.verify.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: fragment-*
+          merge-multiple: true
+          path: fragments
+      - name: latest.json (the release's notes are what the app shows)
+        run: |
+          gh release view "$TAG" --repo "$REPO" --json body --jq .body > notes.md
+          node .github/release/release.mjs latest --version "$VERSION" --tag "$TAG" --repo "$REPO" \
+            --notes notes.md --fragments fragments --out latest.json
+          cat latest.json
+      - name: Upload latest.json and publish
+        run: |
+          gh release upload "$TAG" latest.json --repo "$REPO" --clobber
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest

@@ -129,6 +129,8 @@ pub fn run_step<R: Runtime>(app: &AppHandle<R>, step: Step) {
             }
         }
         Step::Done(Goal::Exit) => exit_app(app),
+        // Restart to update (updater.rs): every edited tab answered.
+        Step::Done(Goal::Restart) => crate::updater::install_and_restart(app),
         Step::Done(Goal::CloseWindow(win)) => {
             if let Some(w) = app.get_window(&win) {
                 if let Err(e) = w.destroy() {
@@ -357,10 +359,7 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &tauri::RunEvent) {
             if cfg!(debug_assertions) {
                 eprintln!("tally(debug): RunEvent::Exit");
             }
-            exit_snapshot(app);
-            // Our lock files go with us (a crash leaves them, as AOO's;
-            // the next open takes our own stale lock over).
-            app.state::<AppState>().locks.release_all();
+            exit_cleanup(app);
         }
         // Finder: double-click, Open With, a file dropped on the Dock icon.
         #[cfg(target_os = "macos")]
@@ -375,6 +374,15 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &tauri::RunEvent) {
         } => windows::reopen(app, *has_visible_windows),
         _ => {}
     }
+}
+
+/// What leaving the app does (`RunEvent::Exit`; also the Windows updater,
+/// which ends the process itself after starting the installer,
+/// `updater.rs`): the exit snapshots, then our lock files go (a crash
+/// leaves them, as AOO's; the next open takes our own stale lock over).
+pub fn exit_cleanup<R: Runtime>(app: &AppHandle<R>) {
+    exit_snapshot(app);
+    app.state::<AppState>().locks.release_all();
 }
 
 /// `RunEvent::Exit` (also tao's `applicationWillTerminate`: the Dock's
@@ -488,8 +496,16 @@ pub async fn confirm_close(app: AppHandle, webview: Webview, quit: bool) -> CmdR
 #[tauri::command]
 pub fn cancel_quit(app: AppHandle, webview: Webview, windows: State<'_, Windows>) -> CmdResult<()> {
     windows::require_doc_window(webview.label())?;
-    if windows.with(|r| r.cancel(webview.label())) {
+    let (cancelled, restart) = windows.with(|r| {
+        let restart = r.restarting();
+        (r.cancel(webview.label()), restart)
+    });
+    if cancelled {
         settle_terminate(&app);
+        if restart {
+            // The update stays downloaded; the asking tab says so.
+            crate::updater::restart_cancelled(&app, webview.label());
+        }
     }
     Ok(())
 }

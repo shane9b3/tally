@@ -393,6 +393,7 @@ const HELP: &[Entry] = &[
         "Keyboard Shortcuts",
         Some("CmdOrCtrl+Slash"),
     ),
+    Item("help.checkUpdates", "Check for Updates…", None),
     Item("help.about", "About Tally", None),
 ];
 
@@ -604,6 +605,13 @@ pub fn build_localized<R: Runtime>(app: &AppHandle<R>, locale: Locale) -> tauri:
                 )
                 .build(app)?,
             )
+            .item(
+                &MenuItemBuilder::with_id(
+                    "help.checkUpdates",
+                    l10n::item_label(locale, "help.checkUpdates", "Check for Updates…"),
+                )
+                .build(app)?,
+            )
             .separator()
             .services()
             .separator()
@@ -632,7 +640,7 @@ pub fn build_localized<R: Runtime>(app: &AppHandle<R>, locale: Locale) -> tauri:
         .item(&submenu(app, locale, "Tools", TOOLS)?);
     menu = menu.item(&window_menu(app, locale)?);
     let help = if cfg!(target_os = "macos") {
-        // "About" lives in the app menu on macOS.
+        // "Check for Updates…" and "About" live in the app menu on macOS.
         submenu(app, locale, "Help", &HELP[..1])?
     } else {
         submenu(app, locale, "Help", HELP)?
@@ -944,6 +952,7 @@ mod tests {
             "sheet.hideRows",
             "sheet.moveLeft",
             "help.shortcuts",
+            "help.checkUpdates",
             "file.exportXlsx",
             "format.conditional",
             "data.validation",

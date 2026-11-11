@@ -28,6 +28,7 @@ mod state;
 mod templates;
 #[cfg(test)]
 mod tests;
+mod updater;
 mod windows;
 
 use tauri::Manager;
@@ -60,9 +61,13 @@ pub fn run() {
             dialogs::open_os_files(app, paths);
         }))
         .plugin(tauri_plugin_dialog::init())
+        // Auto-update (updater.rs): config (endpoint, public key) from
+        // tauri.conf.json; driven from Rust only, no `updater:*` permission.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new(service))
         .manage(registry::Windows::default())
         .manage(dialogs::OsOpen::default())
+        .manage(updater::UpdaterState::default())
         .menu(menu::build)
         .on_menu_event(menu::on_event)
         .on_window_event(closing::on_window_event)
@@ -83,6 +88,8 @@ pub fn run() {
             // on a worker, at the first lock.
             state.locks.start(app.path().app_config_dir().ok());
             print::setup(app.handle());
+            // Automatic update checks (release builds, pref on; updater.rs).
+            updater::start(app.handle());
             // Our own document list (the sidebar) replaces native macOS window tabs.
             native::disable_automatic_tabbing(app.handle());
             // The first document window (tauri.conf.json lists none: every
@@ -224,6 +231,12 @@ pub fn run() {
             windows::merge_windows,
             // Font pickers (toolbar font box, Format Cells ▸ Font).
             fonts::list_fonts,
+            // Auto-update (updater.rs).
+            updater::update_status,
+            updater::update_check,
+            updater::update_download,
+            updater::update_restart,
+            updater::update_skip,
         ])
         .build(tauri::generate_context!());
     match result {

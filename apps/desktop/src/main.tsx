@@ -39,6 +39,10 @@ async function pickClient(): Promise<Client | null> {
     if (params.get("readonly") === "1") client.readOnlyHooks.openReadOnly = true;
     // `?macros=1`: workbooks open like an `.xlsm` with macros (e2e).
     if (params.get("macros") === "1") client.macroHooks.openWithMacros = true;
+    // `?update=<version>`: the simulated update server offers that release (e2e).
+    const update = params.get("update");
+    if (update) client.updateHooks.available = { version: update, notes: params.get("updateNotes") ?? "Faster recalculation.\nFixes:\n- <b>Save As</b> keeps the format", date: "2026-11-20" };
+    if (params.get("updateError")) client.updateHooks.checkError = params.get("updateError");
     return client;
   }
   return null;

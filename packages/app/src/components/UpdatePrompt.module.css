@@ -1,0 +1,61 @@
+/* Below the save prompt (z 90): the restart's unsaved-changes questions come after it closes. */
+.overlay {
+  z-index: 85;
+}
+
+.card {
+  width: 460px;
+  max-width: calc(100vw - 32px);
+}
+
+.card:focus {
+  outline: none;
+}
+
+.notesLabel {
+  margin: 0 0 4px;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Plain text from the release (never HTML): kept as written, scrolls when long. */
+.notes {
+  max-height: 220px;
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--tally-border-subtle);
+  border-radius: 8px;
+  background: var(--tally-surface);
+  color: var(--tally-text);
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.notes:focus-visible {
+  outline: 2px solid var(--tally-accent);
+  outline-offset: 1px;
+}
+
+.progress {
+  display: block;
+  width: 100%;
+  margin: 4px 0 8px;
+  accent-color: var(--tally-accent);
+}
+
+.status {
+  margin: 0 0 4px;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+}
+
+.detail {
+  margin: 0 0 12px;
+  color: var(--tally-text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

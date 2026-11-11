@@ -298,6 +298,9 @@ and their args from the rule provider:
 | `close-requested` | `{ kind: "window" \| "quit" \| "tabs" }` | `onCloseRequested(cb)` (shell; `closing.rs`); sent to the one document being asked |
 | `prefs-changed` | `{ theme: "system" \| "light" \| "dark" \| null }` | `onPrefsChanged(cb)` (shell; `prefs.rs`); sent to the other document webviews |
 | `tabs-changed` | `TabsState` (below) | `onTabsChanged(cb)` (shell; `windows.rs`); sent to every document webview on any change to the open documents |
+| `update-available` | `UpdateInfo` (below) | `onUpdateAvailable(cb)` (shell; `updater.rs`); an automatic check found an update; sent to the front document only |
+| `update-progress` | `{ received: number, total: number \| null }` | `onUpdateProgress(cb)` (shell); download progress, to the document that called `update_download` (one per whole percent) |
+| `update-restart-aborted` | `{ cancelled: boolean, message: string \| null }` | `onUpdateRestartAborted(cb)` (shell); the restart to update ended without restarting: Cancel in a save prompt (to the document that was asking) or a failed install (to the front document) |
 
 Menu ids are `CommandRegistry` command ids (`packages/app/src/commands.ts`); the
 native menu (`apps/desktop/src-tauri/src/menu.rs`) lists them, and
@@ -576,6 +579,25 @@ once and closes them in the engine, forgetting their paths (what the in-app
 Close did). ⌘W while a print window is the key window closes that print
 window. macOS keeps running when the last document window closes; Windows
 and Linux exit.
+
+### Auto-update (`updater.rs`, docs/release.md)
+
+`UpdateInfo`: `{ version, currentVersion, notes, date: "YYYY-MM-DD" | null,
+downloaded }`; `notes` is the release's text, cleaned of control and bidi
+override characters and cut at 20,000 characters, and is shown as plain
+text. The check, download, signature check and install run in Rust
+(`tauri-plugin-updater`); no `updater:*` permission is granted to any
+webview. Debug builds (and Linux installs that are not an AppImage) reject
+the check, download and restart with code `unsupported`, whose message says
+why.
+
+| Tauri command | Arguments | Returns | What it does |
+|---|---|---|---|
+| `update_status` | — | `{ currentVersion, supported, reason: string \| null, staged: UpdateInfo \| null }` | The running version, whether this build updates itself, and an update downloaded this session. |
+| `update_check` | — | `UpdateInfo \| null` | A manual check (Help ▸ Check for Updates…): `null` when up to date. Ignores the skipped version. Waits for an automatic check in progress (one at a time). 30 s timeout; errors (`io`) carry the plugin's message. |
+| `update_download` | — | `UpdateInfo` (`downloaded: true`) | Downloads the update the last check offered (HTTPS only, 15 min timeout), verifies its minisign signature and signed version, keeps it in memory; `update-progress` events to the caller. |
+| `update_restart` | — | `void` | Needs a downloaded update. Starts the restart sequence: every edited document is asked like Quit (`close-requested { kind: "quit" }`, answered with `confirm_close(true)` / `cancel_quit`); once all answered the update is installed and the app relaunches (Windows: the installer takes over and relaunches). Cancel ends it with `update-restart-aborted { cancelled: true }`; nothing closes and the update stays downloaded. Refused while another close sequence is asking. |
+| `update_skip` | `version` | `void` | Skip This Version: automatic checks stay silent for it and older versions (`updater.json` in the config dir). |
 
 ### Unsaved-changes guard (`closing.rs`)
 

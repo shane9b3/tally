@@ -25,6 +25,9 @@ tauri-build = { workspace = true, features = [] }
 tauri = { workspace = true, features = ["unstable"] }
 tauri-plugin-dialog.workspace = true
 tauri-plugin-single-instance.workspace = true
+# Auto-update (updater.rs): check, download, verify (minisign) and install in Rust.
+tauri-plugin-updater.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tally-api.workspace = true

@@ -126,6 +126,13 @@ export interface AppPrefs {
    * (`calcMultithreading`) and hands it to the engine for the whole app.
    */
   calcMultithreading: boolean;
+  /**
+   * Tools ▸ Options ▸ Online Update ▸ "Check for updates automatically"
+   * (default on, as AOO's): the desktop shell reads it (`checkForUpdates`,
+   * updater.rs) before each daily check. Updates are never installed
+   * without the user's click.
+   */
+  checkForUpdates: boolean;
   /** Tools ▸ Options ▸ View settings that are not saved with the document. */
   view: ViewPrefs;
 }
@@ -176,6 +183,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   twoDigitYearStart: 1930,
   undoSteps: 100,
   calcMultithreading: true,
+  checkForUpdates: true,
   view: DEFAULT_VIEW_PREFS,
 };
 
@@ -229,6 +237,7 @@ export function parsePrefs(raw: unknown): AppPrefs {
     twoDigitYearStart: isTwoDigitYearStart(o.twoDigitYearStart) ? o.twoDigitYearStart : DEFAULT_PREFS.twoDigitYearStart,
     undoSteps: isUndoSteps(o.undoSteps) ? o.undoSteps : DEFAULT_PREFS.undoSteps,
     calcMultithreading: bool(o.calcMultithreading, DEFAULT_PREFS.calcMultithreading),
+    checkForUpdates: bool(o.checkForUpdates, DEFAULT_PREFS.checkForUpdates),
     view: parseViewPrefs(o.view),
   };
 }

@@ -99,6 +99,7 @@ import type { FillSheetOptions } from "./generated/FillSheetOptions";
 import { expandGroup, groupOf, groupSheets } from "./group";
 import { mockTemplate } from "./mockTemplates";
 import { BUILTIN_TEMPLATES, FALLBACK_FONTS, LOCKED, NOT_WRITABLE, READ_ONLY, type EditModeOption, type EditModeResult, type FontFamilyInfo, type LockInfo, type ShellClient, type TemplateInfo } from "./shell";
+import { compareVersions, shouldPrompt, type RestartAborted, type UpdateInfo, type UpdateProgress, type UpdateShell, type UpdateStatus } from "./updates";
 
 /** Grid limits, matching `tally_types::{MAX_ROWS, MAX_COLS}`. */
 export const MAX_ROWS = 1_048_576;
@@ -614,7 +615,36 @@ export function mergeResults(results: readonly ApplyResult[]): ApplyResult {
   };
 }
 
-export class MockClient implements EngineClientV4, ShellClient {
+/** The browser mock's simulated update server (`MockClient.updateHooks`). */
+export interface MockUpdateHooks {
+  /** The release "on the server" (`null`: none). */
+  available: { version: string; notes: string; date: string | null } | null;
+  /** The version the mock app runs. */
+  currentVersion: string;
+  /** The automatic check runs this long after the UI subscribes (`< 0`: never). */
+  autoDelayMs: number;
+  /** A manual check fails with this message (the automatic one then stays silent). */
+  checkError: string | null;
+  /** The download's progress events and the time between them. */
+  downloadSteps: number;
+  downloadStepMs: number;
+  /** Restarts requested (`update_restart`; e2e reads it). */
+  restartRequested: number;
+}
+
+/** `localStorage` keys the mock updater reads: the app prefs and the skipped version. */
+const MOCK_PREFS_KEY = "tally.prefs";
+const MOCK_SKIP_KEY = "tally.updateSkipped";
+
+function mockStorage(key: string): string | null {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export class MockClient implements EngineClientV4, ShellClient, UpdateShell {
   private readonly docs = new Map<DocId, MockDoc>();
   private nextDocId = 1;
   private nextClipToken = 1;
@@ -807,6 +837,107 @@ export class MockClient implements EngineClientV4, ShellClient {
 
   listTemplates(): Promise<TemplateInfo[]> {
     return Promise.resolve(BUILTIN_TEMPLATES.map((t) => ({ ...t })));
+  }
+
+  // -- auto-update (simulated; updater.rs in the desktop app) -------------------
+
+  /** e2e/demo hooks of the simulated updater (`?update=<version>` in the dev build). */
+  readonly updateHooks: MockUpdateHooks = { available: null, currentVersion: "0.1.0", autoDelayMs: 400, checkError: null, downloadSteps: 5, downloadStepMs: 60, restartRequested: 0 };
+  private readonly updateAvailableListeners = new Set<(info: UpdateInfo) => void>();
+  private readonly updateProgressListeners = new Set<(p: UpdateProgress) => void>();
+  private readonly updateAbortedListeners = new Set<(e: RestartAborted) => void>();
+  private updateAutoStarted = false;
+  private updateStaged: UpdateInfo | null = null;
+  private updateFound: UpdateInfo | null = null;
+
+  private mockUpdateInfo(downloaded: boolean): UpdateInfo | null {
+    const a = this.updateHooks.available;
+    if (!a || (compareVersions(a.version, this.updateHooks.currentVersion) ?? 0) <= 0) return null;
+    return { version: a.version, currentVersion: this.updateHooks.currentVersion, notes: a.notes, date: a.date, downloaded };
+  }
+
+  /** The automatic check (once, like the shell's first one): honours the pref and the skipped version. */
+  private mockAutoCheck(): void {
+    if (this.updateHooks.checkError !== null) return;
+    let auto = true;
+    try {
+      const prefs = JSON.parse(mockStorage(MOCK_PREFS_KEY) ?? "{}") as { checkForUpdates?: unknown };
+      auto = prefs.checkForUpdates !== false;
+    } catch {
+      auto = true;
+    }
+    const info = this.mockUpdateInfo(false);
+    if (!auto || !info || !shouldPrompt(info.version, mockStorage(MOCK_SKIP_KEY), false)) return;
+    this.updateFound = info;
+    // One document only (the shell sends to the front document): the latest listener.
+    const last = [...this.updateAvailableListeners].pop();
+    last?.(info);
+  }
+
+  updateStatus(): Promise<UpdateStatus> {
+    return Promise.resolve({ currentVersion: this.updateHooks.currentVersion, supported: true, reason: null, staged: this.updateStaged });
+  }
+
+  updateCheck(): Promise<UpdateInfo | null> {
+    if (this.updateHooks.checkError !== null) return Promise.reject(apiError("io", this.updateHooks.checkError));
+    if (this.updateStaged) return Promise.resolve(this.updateStaged);
+    this.updateFound = this.mockUpdateInfo(false);
+    return Promise.resolve(this.updateFound);
+  }
+
+  async updateDownload(): Promise<UpdateInfo> {
+    if (this.updateStaged) return this.updateStaged;
+    const found = this.updateFound;
+    if (!found) throw apiError("invalid_argument", "no update to download: check first");
+    const { downloadSteps: steps, downloadStepMs: ms } = this.updateHooks;
+    const total = 4 * 1024 * 1024;
+    for (let i = 1; i <= steps; i++) {
+      await new Promise((r) => setTimeout(r, ms));
+      for (const cb of this.updateProgressListeners) cb({ received: Math.round((total * i) / steps), total });
+    }
+    this.updateStaged = { ...found, downloaded: true };
+    return this.updateStaged;
+  }
+
+  updateRestart(): Promise<void> {
+    if (!this.updateStaged) return Promise.reject(apiError("invalid_argument", "no update has been downloaded"));
+    // The desktop app asks about unsaved documents, installs and relaunches; the mock only counts.
+    this.updateHooks.restartRequested++;
+    return Promise.resolve();
+  }
+
+  updateSkip(version: string): Promise<void> {
+    if (compareVersions(version, "0.0.0") === null) return Promise.reject(apiError("invalid_argument", "not a version"));
+    try {
+      localStorage.setItem(MOCK_SKIP_KEY, version);
+    } catch {
+      // Storage unavailable: the skip lasts for the session only.
+    }
+    return Promise.resolve();
+  }
+
+  onUpdateAvailable(cb: (info: UpdateInfo) => void): Unsubscribe {
+    this.updateAvailableListeners.add(cb);
+    if (!this.updateAutoStarted && this.updateHooks.autoDelayMs >= 0) {
+      this.updateAutoStarted = true;
+      setTimeout(() => this.mockAutoCheck(), this.updateHooks.autoDelayMs);
+    }
+    return () => this.updateAvailableListeners.delete(cb);
+  }
+
+  onUpdateProgress(cb: (p: UpdateProgress) => void): Unsubscribe {
+    this.updateProgressListeners.add(cb);
+    return () => this.updateProgressListeners.delete(cb);
+  }
+
+  onUpdateRestartAborted(cb: (e: RestartAborted) => void): Unsubscribe {
+    this.updateAbortedListeners.add(cb);
+    return () => this.updateAbortedListeners.delete(cb);
+  }
+
+  /** Test hook: the shell ended a restart without restarting (Cancel in a save prompt, or a failed install). */
+  emitUpdateRestartAborted(e: RestartAborted): void {
+    for (const cb of this.updateAbortedListeners) cb(e);
   }
 
   /** The browser build's font list (web-safe families + Inter). */

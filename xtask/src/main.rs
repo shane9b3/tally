@@ -12,12 +12,18 @@
 //!   JSON, `--doc` (re)writes `docs/functions/coverage.md`, and `--check`
 //!   fails when anything in scope is missing.
 //!
+//! - `bump-version <x.y.z>` / `bump-version --check [x.y.z]`: set the app
+//!   version everywhere it is written (Cargo workspace and lock file,
+//!   tauri.conf.json, package.json files), or check that they agree
+//!   (`version.rs`, docs/release.md).
 //! - `perf [options]`: release-mode performance baseline (synthetic
 //!   workbooks in a temp dir); options go to the `perf` bin
 //!   (`xtask/src/bin/perf.rs`), e.g. `--quick`, `--only recalc,csv`.
 //!
 //! The argument parser and the master-list reader are hand-rolled on
 //! purpose: xtask has no dependencies (the registry is read through the CLI).
+
+mod version;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -31,6 +37,9 @@ commands:
                                 report implemented vs AOO function list
                                 (--json: machine-readable; --doc: write
                                 docs/functions/coverage.md)
+  bump-version <x.y.z>          set the app version in Cargo.toml, Cargo.lock,
+                                tauri.conf.json and every package.json
+  bump-version --check [x.y.z]  fail unless they all agree (and equal x.y.z)
   perf [--quick] [--only NAMES] [--runs N] [--deep]
                                 release-mode performance baseline
                                 (docs/perf-baseline.md)
@@ -48,9 +57,15 @@ struct CoverageOpts {
 /// A parsed command line.
 #[derive(Debug, PartialEq)]
 enum Task {
-    GenBindings { check: bool },
+    GenBindings {
+        check: bool,
+    },
     FunctionCoverage(CoverageOpts),
     Perf(Vec<String>),
+    BumpVersion {
+        version: Option<String>,
+        check: bool,
+    },
     Help,
 }
 
@@ -88,6 +103,21 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Task, String> {
                 return Err("function-coverage: --doc covers all functions, not a batch".to_owned());
             }
             Ok(Task::FunctionCoverage(o))
+        }
+        "bump-version" => {
+            let mut check = false;
+            let mut version = None;
+            for a in args {
+                match a.as_str() {
+                    "--check" => check = true,
+                    v if !v.starts_with('-') && version.is_none() => version = Some(v.to_owned()),
+                    other => return Err(format!("bump-version: unexpected argument {other}")),
+                }
+            }
+            if !check && version.is_none() {
+                return Err("bump-version: needs a version (x.y.z) or --check".to_owned());
+            }
+            Ok(Task::BumpVersion { version, check })
         }
         "help" | "-h" | "--help" => Ok(Task::Help),
         other => Err(format!("unknown command {other}")),
@@ -543,6 +573,9 @@ fn main() -> ExitCode {
         Task::GenBindings { check } => gen_bindings(check),
         Task::FunctionCoverage(o) => function_coverage(o),
         Task::Perf(args) => perf(&args),
+        Task::BumpVersion { version, check } => {
+            version::run(&workspace_root(), version.as_deref(), check)
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -593,6 +626,30 @@ mod tests {
         );
         assert!(parse(&["function-coverage", "--doc", "--batch", "0"]).is_err());
         assert_eq!(parse(&["--help"]), Ok(Task::Help));
+        assert_eq!(
+            parse(&["bump-version", "0.2.0"]),
+            Ok(Task::BumpVersion {
+                version: Some("0.2.0".into()),
+                check: false
+            })
+        );
+        assert_eq!(
+            parse(&["bump-version", "--check"]),
+            Ok(Task::BumpVersion {
+                version: None,
+                check: true
+            })
+        );
+        assert_eq!(
+            parse(&["bump-version", "--check", "1.0.0"]),
+            Ok(Task::BumpVersion {
+                version: Some("1.0.0".into()),
+                check: true
+            })
+        );
+        assert!(parse(&["bump-version"]).is_err());
+        assert!(parse(&["bump-version", "1.0.0", "2.0.0"]).is_err());
+        assert!(parse(&["bump-version", "--force"]).is_err());
     }
 
     #[test]

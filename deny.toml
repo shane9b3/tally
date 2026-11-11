@@ -3,6 +3,16 @@
 
 [graph]
 all-features = true
+# The platforms Tally ships for (.github/workflows/release.yml). Crates only
+# other targets pull in are not checked: e.g. `webpki-root-certs`
+# (CDLA-Permissive-2.0), which the updater's TLS stack (rustls-platform-
+# verifier) uses on wasm32 only.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
 
 [advisories]
 version = 2

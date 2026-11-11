@@ -55,6 +55,24 @@ pnpm tauri dev               # build the Rust side and open the desktop app
 `MockClient` (no engine). `pnpm tauri build` makes `target/release/bundle/macos/Tally.app`
 and a `.dmg` (unsigned).
 
+## Install
+
+Download the installer for your system from
+[GitHub Releases](https://github.com/shane9b3/tally/releases/latest): a
+`.dmg` for macOS (Apple Silicon `aarch64` or Intel `x64`), the
+`-setup.exe` (or `.msi`) for Windows, the `.AppImage` (or `.deb`/`.rpm`)
+for Linux. The builds are not yet signed by Apple or Microsoft: on macOS
+the first launch needs System Settings ▸ Privacy & Security ▸ Open Anyway,
+on Windows SmartScreen's More info ▸ Run anyway (details in
+[docs/release.md](docs/release.md#9-unsigned-builds-first-install-friction)).
+
+Tally then updates itself: it checks GitHub once a day and asks before
+installing a new version (Tools ▸ Options ▸ Online Update to turn the check
+off; Check for Updates… in the Help menu, or the Tally menu on macOS).
+Copies installed from the `.deb`/`.rpm` packages are updated by
+downloading the new package. Releases are made as described in
+[docs/release.md](docs/release.md).
+
 ## Build and test
 
 ```sh

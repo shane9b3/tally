@@ -93,6 +93,8 @@ import { W5Features } from "./objects/w5Features";
 import { guardDecision, isSequence, proceedAfter, useSavePromptStore, type CloseKind, type CloseShell } from "./unsaved";
 import { TabsFeature, useTabsStore, type TabShell } from "./tabs";
 import { canReuseWindow, type WindowShell } from "./windows";
+import { UpdateFeature } from "./updater";
+import type { UpdateShell } from "@tally/bridge";
 import { W56Features } from "./data/w56";
 import { t } from "./i18n";
 import { useCsvPromptStore } from "./csvExport";
@@ -176,6 +178,8 @@ export class AppController {
   readonly tabs: TabsFeature;
   /** Read-only mode and document locks (readOnly.ts). */
   readonly readOnly: ReadOnlyFeature;
+  /** Auto-update prompt and Help ▸ Check for Updates… (updater.ts). */
+  readonly updater: UpdateFeature;
 
   constructor(
     readonly client: EngineClientV3,
@@ -187,6 +191,12 @@ export class AppController {
     this.w56 = new W56Features(this);
     this.tabs = new TabsFeature(this);
     this.readOnly = new ReadOnlyFeature(this);
+    this.updater = new UpdateFeature(shell as unknown as UpdateShell, {
+      confirmUnsaved: () => this.confirmUnsaved(),
+      get multiWindow() {
+        return typeof (shell as unknown as WindowShell).placeDocument === "function";
+      },
+    });
     // A read-only document runs only viewing, copying, finding, printing
     // and Save As (AOO disables the editing slots).
     this.registry.addGate(readOnlyGate(() => this.readOnly.active));
@@ -230,6 +240,7 @@ export class AppController {
         }
       }),
       this.w56.attach(),
+      this.updater.attach(),
       useDocStore.subscribe(() => this.syncDocumentEdited()),
       useEditStore.subscribe(() => this.syncDocumentEdited()),
       this.closeShell.onCloseRequested?.((kind) => void this.closeRequested(kind)) ?? (() => undefined),

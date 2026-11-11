@@ -28,6 +28,7 @@ import { SheetTabs } from "./components/SheetTabs";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { SavePrompt } from "./components/SavePrompt";
+import { UpdatePrompt } from "./components/UpdatePrompt";
 import { LockPrompt } from "./components/LockPrompt";
 import { ReadOnlyBanner } from "./components/ReadOnlyBanner";
 import { CsvExportPrompts } from "./components/CsvExportDialog";
@@ -192,6 +193,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
         <CellPopovers />
         <W56Chrome />
         <SavePrompt />
+        <UpdatePrompt />
         <LockPrompt />
         <CsvExportPrompts />
         <Toasts />

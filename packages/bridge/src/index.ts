@@ -230,3 +230,5 @@ export type { EngineClient, EngineClientV2, EngineClientV3, EngineClientV4, Shee
 export { MockClient, DEFAULT_COL_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX, mergeResults, mixInputs } from "./mock";
 export { BUILTIN_TEMPLATES, CANCELLED, CSV_OPTIONS, FALLBACK_FONTS, LOCKED, NOT_WRITABLE, READ_ONLY } from "./shell";
 export type { EditModeOption, EditModeResult, FontFaceInfo, FontFamilyInfo, LockInfo, OpenMode, ShellClient, TemplateInfo } from "./shell";
+export { compareVersions, shouldPrompt, UPDATES_UNAVAILABLE } from "./updates";
+export type { RestartAborted, UpdateInfo, UpdateProgress, UpdateShell, UpdateStatus } from "./updates";

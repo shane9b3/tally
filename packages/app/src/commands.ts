@@ -490,6 +490,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "file.documentStats", title: t("cmd.file.documentStats", "Document statistics…"), kind: "File", keywords: ["cells", "formulas", "count"], run: () => void ctl.w56.openDocumentStats() },
     // Help
     { id: "help.shortcuts", title: "Keyboard shortcuts", kind: "Help", keywords: ["keys", "hotkeys", "cheat sheet"], ...sc("help.shortcuts"), run: () => useUiStore.getState().setShortcuts(!useUiStore.getState().shortcutsOpen) },
+    { id: "help.checkUpdates", title: "Check for Updates…", kind: "Help", keywords: ["update", "upgrade", "version", "new version"], run: () => void ctl.updater.checkNow() },
     { id: "help.about", title: "About Tally", kind: "Help", run: () => ui.showAbout() },
   ]));
 }

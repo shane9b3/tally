@@ -2,7 +2,8 @@
  * Tools ▸ Options (⌘,): Calculate (document calc settings), View (per-sheet
  * view options), Input (AutoInput, AutoCorrect, Enter moves, Delete key),
  * Formula syntax, Sort lists (the document's custom lists), Load/Save (incl.
- * "Open documents in": tabs or separate windows) and Language. Document settings go through ops (`setCalcSettings`,
+ * "Open documents in": tabs or separate windows), Language and Online Update
+ * (AOO's page name: "Check for updates automatically", the installed version). Document settings go through ops (`setCalcSettings`,
  * `setViewOptions`, `setCustomSortLists`); the rest are app prefs.
  */
 import type { CalcSettingsDto, ViewOptionsDto } from "@tally/bridge";
@@ -18,6 +19,7 @@ import w56 from "../data/W56.module.css";
 import { isTwoDigitYearStart, isUndoSteps, TWO_DIGIT_YEAR_MAX, TWO_DIGIT_YEAR_MIN, UI_LANGUAGES, UNDO_STEPS_MAX, UNDO_STEPS_MIN, type AppPrefs } from "./prefs";
 import { useV3Store } from "../stores/v3Store";
 import { ViewTab } from "./ViewTab";
+import { UpdateTab } from "./UpdateTab";
 
 const TABS: readonly { id: OptionsTab; key: string; label: string }[] = [
   { id: "calculate", key: "options.calculate", label: "Calculate" },
@@ -28,6 +30,7 @@ const TABS: readonly { id: OptionsTab; key: string; label: string }[] = [
   { id: "loadSave", key: "od.tabLoadSave", label: "Load / Save" },
   { id: "memory", key: "od.tabMemory", label: "Memory" },
   { id: "language", key: "options.language", label: "Language" },
+  { id: "update", key: "options.onlineUpdate", label: "Online Update" },
 ];
 
 export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }> }) {
@@ -258,6 +261,7 @@ export function OptionsDialog({ d }: { d: Extract<W56Dialog, { kind: "options" }
           <p className={dlg.note}>{t("od.undoStepsNote", "Applies to every open document at once; a lower number drops the oldest steps.")}</p>
         </div>
       ) : null}
+      {tab === "update" ? <UpdateTab checked={prefs.checkForUpdates} onChange={(v) => setPrefs({ ...prefs, checkForUpdates: v })} /> : null}
       {tab === "language" ? (
         <div className={w56.grid2}>
           <Field label={t("od.userInterface", "User interface")}>

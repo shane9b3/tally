@@ -26,6 +26,7 @@ fixtures, by `python3 -I tests/fixtures/ods/gen_fixtures.py`.
 | 7 | Tauri hardening | WP7 | Implemented (see the WP7 section) |
 | 8 | Engine DoS limits | WP1, WP2, WP3 | Implemented (text cap, linear wildcards, recalc watchdog, sheet cap, names by reference, per-formula and per-transaction work budgets) |
 | 9 | Fuzzing | later (Phase A drops fuzz targets) | Corpus and a mutation smoke test exist |
+| 10 | Auto-update: the app's first network access | updater (2026-11-11) | Implemented; the release workflow and a real update are unverified (see [Auto-update](#auto-update-the-apps-only-network-access)) |
 
 Plus the CSV formula-injection guard (§5.3), which is described below.
 
@@ -755,13 +756,13 @@ Details for §7 above.
 | Rule | Where |
 |---|---|
 | Capability `default` grants only `core:event:allow-listen`, `core:event:allow-unlisten` (menu-action, close, prefs and tab events), `core:window:allow-start-dragging` and `core:window:allow-internal-toggle-maximize` (the title-bar drag region) and full screen, scoped to the document **webviews** by the webview-label glob `doc-*` (every document is a `doc-<n>` child webview of a `win-<n>` window) with no `windows` entry: Tauri matches a capability when the window label matches `windows` *or* the webview label matches `webviews`, so the `win-*` windows (which have no webview of their own) and print windows match nothing. It also grants the generated `allow-<command>` permission of every app command. `build.rs` declares the commands in an app ACL manifest (`app_commands.rs`, the `generate_handler!` list; a unit test keeps the manifest, the handler list and the grants equal, and checks the capability has `webviews: ["doc-*"]` and no `windows`): without a manifest Tauri 2.12 does not ACL-check app commands at all, so any local webview (including a `tally-print://` print window) could call them. Print windows (`tally-print-<job>`) match no capability, so they can call no app command and no `core:*` command. `core:window:allow-set-title` is no longer granted: the shell sets the native title (`windows.rs`). `core:default` is not granted: it would let JS replace the app menu, create tray icons, emit events and resolve home/config paths. | `apps/desktop/src-tauri/capabilities/default.json` |
-| No `fs`, `shell`, `http`, `opener` or other plugins are exposed to JS. The only plugin is `tauri-plugin-dialog`, and **no `dialog:*` permission is granted**: dialogs are shown from Rust commands (`wb_open_dialog`, `wb_save`) via `DialogExt` on a blocking worker thread (`tauri::async_runtime::spawn_blocking`). `tauri-plugin-dialog` pulls in `tauri-plugin-fs` as a Rust dependency only; its commands are unreachable without permissions. | `src/dialogs.rs`, `src/lib.rs` |
+| No `fs`, `shell`, `http`, `opener` or other plugins are exposed to JS. The plugins are `tauri-plugin-dialog`, `tauri-plugin-single-instance` and `tauri-plugin-updater` (see [Auto-update](#auto-update-the-apps-only-network-access)), and **no `dialog:*` or `updater:*` permission is granted**: dialogs are shown from Rust commands (`wb_open_dialog`, `wb_save`) via `DialogExt` on a blocking worker thread (`tauri::async_runtime::spawn_blocking`). `tauri-plugin-dialog` pulls in `tauri-plugin-fs` as a Rust dependency only; its commands are unreachable without permissions. | `src/dialogs.rs`, `src/lib.rs` |
 | Only our commands (docs/api.md) are registered, and only document webviews may call them (app ACL manifest, see above). | `src/lib.rs` `generate_handler!`, `build.rs`, `app_commands.rs` |
 | Documents, tabs and windows (`windows.rs`, `registry.rs`): every document is its own child webview `doc-<n>` in a native window `win-<n>`; a window holds several documents as tabs (Tauri's `unstable` multi-webview API). All document webviews load the same bundled app from the same origin under the same capability, so they are one trust domain: any of them can address any open document by id through the engine commands (document ids are handles, not capabilities), can listen to another document's events by naming its label, holds `core:window:*` permissions that accept another window's label, and can show (`tab_activate`) or ask to close (`tab_close`, which still runs that document's own Save prompt) any open document — the sidebar lists them all. The split is for correctness, not isolation; what it adds is kept narrow: every document/tab command (`window_init`, `place_document`, `set_document_edited`, `confirm_close`, `cancel_quit`, `tab_*`, `merge_windows`) refuses callers that are not registered `doc-*` webviews (the registry never registers unknown labels; `Webview` is taken from Tauri, not from arguments); labels in arguments must be open documents, and `tab_close_others`/`tab_move`/`tab_detach` only act within the caller's window; a webview learns its document only through `window_init`, for the *calling* label, as the engine's own summary (no doc id in the URL or an initialization script); `place_document` takes only a document id, rebuilds the summary from the engine and refuses a document bound to another tab, as `set_document_edited` does; at most 100 documents (webviews) and 100 windows (a racing Move Tab to New Window cannot exceed it: check and window allocation are one registry step, refused while the same tab is moving or a close sequence is asking; merge waits likewise); titles are stored without C0/C1 control and bidi override/isolate characters and `&` is escaped in the Window menu; the tab list carries file paths for the caller's own window only; the tab commands are async, so a close never runs inside the closing webview's own IPC request; `confirm_close(true)`/`cancel_quit` count only from the document a sequence is asking; `broadcast_prefs` accepts only `system`/`light`/`dark` and reaches document webviews only. Events the shell meant for one document (`menu-action`, `close-requested`, `tabs-changed`) are sent with `emit_to(label)` and the UI listens with its own webview label as the target. The tab list's `path` comes from the shell's path map, never from a webview. The open-file allowlist (`allowed`), the recent list and the path map stay global. The registry lock is a leaf lock held only for in-memory updates (never across an engine call, dialog, window, webview or menu call), so the main thread still never waits for the engine. The `unstable` feature makes every webview a child webview (also print windows); behaviour verified on macOS with a native probe (ACL, events, focus, reparent); Windows/Linux unverified (see docs/TODO.md). | `src/windows.rs`, `src/registry.rs`, `src/closing.rs`, `apps/desktop/src/tauri.ts` |
 | CSP: `default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'` (`base-uri` and `form-action` do not fall back to `default-src`). No remote hosts; no `unsafe-eval`. `style-src 'unsafe-inline'` is needed for React `style=` attributes and the grid's inline styles. | `tauri.conf.json` |
 | Devtools: the `devtools` cargo feature is not enabled and no window sets `devtools: true`, so devtools exist only in debug builds. | `Cargo.toml`, `tauri.conf.json` |
 | `withGlobalTauri: false`: `window.__TAURI__` is not injected; the UI imports `@tauri-apps/api` explicitly. | `tauri.conf.json` |
-| No network access from the app: the frontend makes no `fetch`; fonts are bundled (`@fontsource-variable/inter`); CSP `connect-src` allows IPC only. | `packages/app`, `packages/tokens` |
+| No network access from the webviews: the frontend makes no `fetch`; fonts are bundled (`@fontsource-variable/inter`); CSP `connect-src` allows IPC only. The app's only network access is the update check and download, made by the Rust shell (see [Auto-update](#auto-update-the-apps-only-network-access)). | `packages/app`, `packages/tokens`, `src/updater.rs` |
 | The webview never receives raw file bytes; files are parsed in Rust (`DocumentService::open`) and only DTOs cross IPC. | `src/commands.rs` |
 | Command code has no `unsafe` (`#![forbid(unsafe_code)]`) and no `unwrap()`. Every engine call runs under `catch_unwind`: a panic becomes `ApiError { code: "internal" }` for that call, before the service guard is dropped, so the mutex is not poisoned and the other documents stay usable. Poisoned locks are recovered (`PoisonError::into_inner`) as a second line of defence. Tests: `tally-desktop::tests::engine_panic_leaves_later_commands_working`, `tally-desktop::tests::poisoned_service_lock_is_recovered`. | `src/commands.rs`, `src/state.rs` |
 | **The one crate allowed `unsafe`: `crates/tally-macos-terminate`** (approved by the owner). Why: tao's app delegate has no `applicationShouldTerminate:`, so `-[NSApp terminate:]` (the Dock's Quit, `quit app`, log-out, restart, shutdown) quit without the unsaved-changes prompt, and neither Tauri nor objc2 offers a safe way to add a method to an existing Objective-C class. Scope: macOS only (an empty API elsewhere); `unsafe_code` is `deny` in the crate (not the workspace's `forbid`, which cannot be lifted) and allowed only in `src/appkit.rs`, with `clippy::undocumented_unsafe_blocks = "deny"`. Four unsafe blocks for three operations, each with a SAFETY note: (1) `transmute` of our `extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> NSApplicationTerminateReply` to the runtime's untyped `Imp`, with the type encoding built from the same Rust types (`Q@:@`, unit-tested); (2) `class_addMethod` (or `class_replaceMethod` if tao ever adds the method; logged) on the delegate object's own class, on the main thread, once, at `RunEvent::Ready`; (3) `-[NSRunLoop performInModes:block:]` to queue `replyToApplicationShouldTerminate:` on the main run loop in its common modes, then `CFRunLoopWakeUp` (safe) so a sleeping loop runs it at once (unsafe only because the block must be sendable; it captures a `Mutex<Option<FnOnce + Send>>` and touches AppKit only after `MainThreadMarker::new()`). The method itself dereferences nothing (receiver and sender are passed as raw pointers and ignored), is `extern "C"` (a panic would abort, never unwind into AppKit) and wraps all its work in `catch_unwind` (falls back to terminating, as before; its logging uses `writeln!` to stderr, which cannot panic), and the decision logic is a plain state machine (`Gate`: approved / pending since, at most one reply per request, a request while one waits is answered "cancel" and re-asks the open question, except that after 5 s or on the second such request it answers "now" so a hung webview cannot leave Force Quit, which skips the exit snapshot, as the only way out; a question that cannot be sent also quits with the snapshot) with unit tests. The reply is never sent inline: inside tao's event callback AppKit's `applicationWillTerminate:` would re-take tao's handler lock (a deadlock observed while testing), and from the main dispatch queue it could not run if `terminate:` itself came from a main-queue block. Dependencies are the versions tao already links (`objc2` 0.6.5, `objc2-app-kit`/`objc2-foundation`/`objc2-core-foundation` 0.3.2, `block2` 0.6.2); no second copy of objc2. The app crate keeps `#![forbid(unsafe_code)]`. If the guard cannot be installed it logs and macOS quits unasked as before, with the exit snapshot. | `crates/tally-macos-terminate`, `src/closing.rs` |
@@ -1048,3 +1049,114 @@ violations with `invalid_argument`. Tests:
 `tally-desktop::links::tests`, `tally-desktop::limits::tests`,
 `tally-desktop::tests::open_url_rejects_script_and_file_links`,
 `tally-desktop::tests::oversized_arguments_are_rejected_before_the_engine`.
+
+## Auto-update: the app's only network access
+
+Added 2026-11-11 (`apps/desktop/src-tauri/src/updater.rs`, docs/release.md).
+Until then Tally made no network requests at all; the update check is now
+the only one, and it is made by the Rust shell, never by a webview.
+
+### What is sent, and when
+
+- **Requests:** an HTTPS `GET` of
+  `https://github.com/shane9b3/tally/releases/latest/download/latest.json`
+  (GitHub redirects it to its release-asset CDN), and, only after the user
+  clicks Install and Restart, an HTTPS `GET` of the package for this
+  platform from the URL in that manifest. Nothing is uploaded.
+- **What they reveal:** what any HTTPS request reveals: the IP address,
+  the time, TLS metadata, and the headers `User-Agent:
+  tauri-plugin-updater/2.14.1` and `Accept: application/json` (or
+  `application/octet-stream`). No identifier, account, document data,
+  settings or usage data is sent. The endpoint URL has no
+  `{{current_version}}`/`{{target}}` placeholders, so the request does not
+  even carry the version or platform (the download URL chosen from the
+  manifest does reveal the platform). GitHub's own logging applies.
+- **When:** 5 s after launch and every 24 h while Tally runs, only while
+  Tools ▸ Options ▸ Online Update ▸ "Check for updates automatically" is on
+  (default on, read before each check); and whenever the user chooses
+  Check for Updates…. Debug builds never check. Linux installs that are not
+  an AppImage never check (the package manager updates them). The system
+  proxy settings are honoured.
+- **Bounds:** at most one check at a time; the manifest request times out
+  after 30 s and the download after 15 min; automatic failures are only
+  logged. The package is downloaded into memory (no size limit is
+  enforced before the signature check; see below).
+
+### Trust model
+
+- **Signatures:** every package is signed with the project's minisign key
+  (Ed25519). The public key is compiled into the app from `tauri.conf.json`
+  (`plugins.updater.pubkey`); the private key exists only on the owner's
+  Mac and in the GitHub Actions secret (docs/release.md section 7). The
+  plugin verifies the signature over the downloaded bytes before anything
+  is written or installed, and again in `install`.
+- **Signed version:** `requireSignedVersion: true`. The manifest itself is
+  not signed, so without this a manifest could pair a high version number
+  with an older, validly signed package (a downgrade). With it, the
+  version recorded in the signature's trusted comment (written by the
+  Tauri CLI at build time) must equal the announced version.
+- **No downgrades:** an update is offered only when its version is
+  greater (semver) than the running one (the plugin's default comparator,
+  re-checked in `updater.rs`; `allowDowngrades` is off).
+- **Transport:** the endpoint is HTTPS (the plugin refuses a non-HTTPS
+  endpoint when it loads its configuration) and `updater.rs` refuses a package URL that
+  is not `https:` (the plugin would only warn). TLS uses rustls with the
+  platform's certificate verifier.
+- **Never without a click:** no update is downloaded or installed without
+  Install and Restart. Before installing, every edited document is asked
+  Save / Don't Save / Cancel exactly like Quit (registry `Goal::Restart`);
+  Cancel installs nothing and closes nothing.
+- **Webview surface:** the plugin's own JS commands are registered but
+  unreachable: no `updater:*` permission is granted to any capability (a
+  unit test checks `capabilities/default.json`). The app commands
+  `update_status`, `update_check`, `update_download`, `update_restart`,
+  `update_skip` are in the ACL manifest and granted to `doc-*` webviews
+  only; `update_download`/`update_restart` refuse callers that are not
+  registered document webviews; `update_skip` accepts only a version string
+  (≤ 64 bytes, semver) and writes `updater.json` in the app config dir.
+  The CSP is unchanged (`connect-src ipc: http://ipc.localhost`).
+
+### What an attacker can do
+
+| Attacker controls | Effect |
+|---|---|
+| The network (no valid TLS certificate for github.com) | Can block the check (the app says "could not check" on a manual check, nothing otherwise). Cannot substitute a manifest or package. |
+| The repository or its releases, **not** the signing key | Can publish a manifest that announces any version and serves any bytes, but an unsigned or wrongly signed package is rejected; can replay an **old** genuine package only under its own version number (`requireSignedVersion`), which is not newer than the installed one, so it is not offered. Can show arbitrary release-notes text (see below) and make the app report errors; can stop updates (denial of service). |
+| The signing key, **not** the repository | Can sign a malicious package, but installed copies only fetch from this repository's releases over HTTPS, so it must also get the manifest served (repository access or a TLS compromise). |
+| Both (or the owner's GitHub account plus the secret) | Can ship a malicious update to every copy with checks on; users still have to click Install and Restart. This is the residual risk of any auto-updater; protect the account (2FA, tag rulesets) and the key (docs/release.md section 7). |
+
+### Release notes are untrusted text
+
+`notes` comes from the release body (the manifest is not signed). In Rust
+it is cleaned (`clean_notes`: control characters other than newline and
+tab, and bidi override/isolate characters, removed; cut at 20,000
+characters) and the UI renders it as a React text node in a
+`white-space: pre-wrap` box: never as HTML or Markdown, no links. Tests:
+`tally-desktop::updater::tests::notes_are_plain_text_and_bounded`; e2e
+`tests/e2e/updater.spec.ts` checks that `<b>…</b>` in the notes shows as
+text.
+
+### Residual risks and limits
+
+- The package is buffered in memory before its signature is checked, with
+  no size cap (the plugin offers no hook to abort a download). A hostile
+  repository could make Tally download a very large file after the user
+  clicked Install; the 15-minute timeout bounds it in time only.
+- Builds are not Developer ID / Authenticode signed yet; the OS itself does
+  not vouch for the first download (docs/release.md section 9). Updates are
+  covered by the minisign signature regardless.
+- On Windows the plugin ends the process itself after starting the
+  installer; Tally first runs its exit clean-up (exit snapshots, lock
+  files) through the plugin's `on_before_exit` hook.
+- Never exercised against a real release (2026-11-11): the release
+  workflow has not run, and the real download/verify/install path is
+  covered only by the plugin's own tests, not by ours.
+
+Tests: `tally-desktop::updater::tests` (version order and no downgrades,
+skip rule, pref default, notes cleaning, HTTPS-only packages, progress
+throttling, debug builds never check, event payloads),
+`tally-desktop::registry::tests::restart_to_update_asks_like_a_quit_and_cancel_keeps_everything_open`,
+`packages/app/test/updater.test.ts` (commands registered and granted, no
+`updater:*` permission, UI state machine, browser mock),
+`tests/e2e/updater.spec.ts`, and the manual sheet
+`docs/qa/updater-manual.md`.

@@ -65,6 +65,12 @@ tauri-plugin-dialog = "=2.8.3"
 # Second launches hand their files to the running instance (file
 # associations on Windows and Linux; dialogs::open_os_files). No JS API.
 tauri-plugin-single-instance = "=2.5.5"
+# Auto-update from GitHub Releases (updater.rs, docs/release.md). Driven from
+# Rust only: no `updater:*` permission is granted to any webview.
+tauri-plugin-updater = "=2.14.1"
+# Version comparison for "Skip This Version" (updater.rs); the version the
+# updater plugin already links.
+semver = "=1.0.28"
 # macOS only: the window's "document edited" dot (`closing.rs`), through the
 # safe objc2 bindings Tauri's own tao already links (same versions as Cargo.lock).
 objc2 = { version = "=0.6.5", default-features = false, features = ["std"] }

@@ -39,6 +39,8 @@ jobs:
         run: cargo run --locked -p xtask -- gen-bindings --check
       - name: Function coverage report
         run: cargo run --locked -p xtask -- function-coverage
+      - name: App versions agree (Cargo, tauri.conf.json, package.json)
+        run: cargo run --locked -p xtask -- bump-version --check
 
   rust-test:
     name: rust-test (${{ matrix.os }})
@@ -76,3 +78,5 @@ jobs:
         run: pnpm -r typecheck
       - name: Test
         run: pnpm -r test
+      - name: Release helpers (.github/release)
+        run: node --test .github/release/release.test.mjs
