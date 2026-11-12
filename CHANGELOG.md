@@ -10,6 +10,11 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-12
+
+First public build of Tally, a spreadsheet compatible with OpenOffice Calc
+files (ODS, XLSX, XLS, CSV).
+
 ### Added
 - Automatic updates: Tally checks GitHub for a new version once a day and
   asks before installing it (Tools ▸ Options ▸ Online Update to turn the
