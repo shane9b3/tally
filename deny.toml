@@ -17,6 +17,16 @@ targets = [
 [advisories]
 version = 2
 yanked = "deny"
+# "Unmaintained" notices (no known vulnerability) for crates we cannot
+# replace ourselves. Re-check when the parents are upgraded.
+ignore = [
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: build-time macro helper pulled in by Tauri's GTK stack" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser: font parsing for fontdb / krilla (tally-io-pdf); no maintained drop-in yet" },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz: text shaping inside krilla (tally-io-pdf)" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: D-Bus stack of Tauri's Linux dependencies" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: D-Bus stack of Tauri's Linux dependencies" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: D-Bus stack of Tauri's Linux dependencies" },
+]
 
 [licenses]
 version = 2
@@ -31,9 +41,10 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
-    # "MPL-2.0" is deliberately absent. Add it here only when a transitive
-    # dependency needs it (expected with Tauri in WP7, e.g. `selectors` /
-    # `cssparser`), with a comment naming that dependency. Never copy MPL code.
+    # Tauri's HTML/CSS handling (cssparser, cssparser-macros, selectors,
+    # dom_query and friends, through tauri-utils). Used unmodified as
+    # dependencies; never copy MPL code into this repository.
+    "MPL-2.0",
 ]
 confidence-threshold = 0.9
 

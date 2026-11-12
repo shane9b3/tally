@@ -12,10 +12,20 @@ fn a(s: &str) -> CellAddr {
     CellAddr::from_a1(1, s).unwrap()
 }
 
+/// The small stack of the two `_on_a_256k_stack` tests. Debug builds with
+/// MSVC have much larger frames (the tests overflowed 256 KiB on the Windows
+/// CI runner, in debug only), so there they get 1 MiB, the default size of a
+/// Windows main thread.
+const SMALL_STACK: usize = if cfg!(all(windows, debug_assertions)) {
+    1024 * 1024
+} else {
+    256 * 1024
+};
+
 #[test]
 fn chain_of_100k_on_a_256k_stack() {
     let h = std::thread::Builder::new()
-        .stack_size(256 * 1024)
+        .stack_size(SMALL_STACK)
         .spawn(|| {
             let mut wb = Workbook::new();
             wb.set_input(a("A1"), "1");
@@ -202,7 +212,7 @@ fn nested_iferror(depth: usize) -> String {
 #[test]
 fn nested_lazy_calls_are_bounded_on_a_256k_stack() {
     let h = std::thread::Builder::new()
-        .stack_size(256 * 1024)
+        .stack_size(SMALL_STACK)
         .spawn(|| {
             let mut wb = Workbook::new();
             wb.set_input(a("A1"), &nested_if(250));
