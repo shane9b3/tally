@@ -8,6 +8,8 @@ import {
   selectCols,
   selectRows,
   stepWithin,
+  tabEnterStep,
+  type TabReturn,
   type KeyAction,
   type Limits,
   type Mods,
@@ -136,5 +138,60 @@ describe("mouse helpers", () => {
   it("shift-click extends from the anchor in any direction", () => {
     expect(extendTo(at(5, 5), { r: 2, c: 8 }).range).toEqual({ r0: 2, c0: 5, r1: 5, c1: 8 });
     expect(extendTo(at(5, 5), { r: 2, c: 8 }).active).toEqual({ r: 5, c: 5 });
+  });
+});
+
+describe("tabEnterStep: Enter returns to the column a Tab run started in", () => {
+  /** Presses keys from `start`, the way the grid does, and returns the cells visited. */
+  function press(start: Selection, keys: Array<"Tab" | "Enter" | "ShiftTab" | "ShiftEnter" | { click: [number, number] }>): Array<[number, number]> {
+    let cur = start;
+    let run: TabReturn | null = null;
+    const seen: Array<[number, number]> = [];
+    for (const k of keys) {
+      if (typeof k === "object") {
+        cur = at(k.click[0], k.click[1]); // a click does not touch the run: it is stale by position
+      } else {
+        const key = k.endsWith("Tab") ? "Tab" : "Enter";
+        const shift = k.startsWith("Shift");
+        const next = sel(reduceKey(cur, key, mods({ shift }), lim));
+        const step = tabEnterStep(cur, key, shift, next, run, lim);
+        cur = step.selection;
+        run = step.run;
+      }
+      seen.push([cur.active.r, cur.active.c]);
+    }
+    return seen;
+  }
+
+  it("Tab, Tab, Enter goes to the start column on the next row", () => {
+    expect(press(at(3, 1), ["Tab", "Tab", "Enter"])).toEqual([[3, 2], [3, 3], [4, 1]]);
+  });
+
+  it("each row of a table starts in the same column", () => {
+    expect(press(at(0, 0), ["Tab", "Tab", "Enter", "Tab", "Tab", "Enter"]).at(-1)).toEqual([2, 0]);
+  });
+
+  it("Enter with no Tab before it goes straight down", () => {
+    expect(press(at(3, 4), ["Enter", "Enter"])).toEqual([[4, 4], [5, 4]]);
+  });
+
+  it("Shift+Tab inside a run keeps the start column", () => {
+    expect(press(at(3, 1), ["Tab", "Tab", "ShiftTab", "Enter"]).at(-1)).toEqual([4, 1]);
+  });
+
+  it("clicking another cell ends the run", () => {
+    expect(press(at(3, 1), ["Tab", "Tab", { click: [8, 6] }, "Enter"]).at(-1)).toEqual([9, 6]);
+  });
+
+  it("Shift+Enter goes up and ends the run", () => {
+    expect(press(at(3, 1), ["Tab", "ShiftEnter", "Enter"])).toEqual([[3, 2], [2, 2], [3, 2]]);
+  });
+
+  it("inside a multi-cell selection Tab and Enter keep walking the range", () => {
+    const range: Selection = { range: { r0: 0, c0: 0, r1: 1, c1: 1 }, active: { r: 0, c: 0 }, anchor: { r: 0, c: 0 } };
+    const next = stepWithin(range, "right", lim);
+    const step = tabEnterStep(range, "Tab", false, next, null, lim);
+    expect(step.selection).toEqual(next);
+    expect(step.run).toBeNull();
   });
 });

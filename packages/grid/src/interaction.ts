@@ -24,6 +24,8 @@ import {
   selectRows,
   sheetEdge,
   stepWithin,
+  tabEnterStep,
+  type TabReturn,
   type Limits,
   type Mods,
 } from "./selection";
@@ -658,9 +660,17 @@ export class Interaction {
       });
       return;
     }
-    const next = move === "down" || move === "up" || move === "left" || move === "right" ? this.moveAfterCommit(sel, move, lim) : sel;
+    let next = move === "down" || move === "up" || move === "left" || move === "right" ? this.moveAfterCommit(sel, move, lim) : sel;
+    if (key === "Enter" || key === "Tab") {
+      const step = tabEnterStep(sel, key, move === "up" || move === "left", next, this.tabRun, lim);
+      next = step.selection;
+      this.tabRun = step.run;
+    }
     host.select(next, { emit: true, reveal: next.active });
   }
+
+  /** The Tab run Enter returns from (data entry across a row). */
+  private tabRun: TabReturn | null = null;
 
   /** Protected sheet: the selection after Tab / Enter (`null` when the engine finds no cell or fails). */
   private async stepProtected(sel: Selection, dir: Dir, lim: Limits): Promise<Selection | null> {
@@ -809,11 +819,17 @@ export class Interaction {
       case "select": {
         e.preventDefault();
         const extending = mods.shift && e.key !== "Tab" && e.key !== "Enter";
-        host.select(action.selection, {
+        let selection = action.selection;
+        if ((e.key === "Tab" || e.key === "Enter") && !host.rangePick()) {
+          const step = tabEnterStep(sel, e.key, mods.shift, selection, this.tabRun, lim);
+          selection = step.selection;
+          this.tabRun = step.run;
+        }
+        host.select(selection, {
           emit: true,
-          reveal: extending ? extentCorner(action.selection) : action.selection.active,
+          reveal: extending ? extentCorner(selection) : selection.active,
         });
-        if (host.rangePick()) host.pointRange({ ...action.selection.range }, "move");
+        if (host.rangePick()) host.pointRange({ ...selection.range }, "move");
         return;
       }
       case "navigateEdge": {

@@ -167,6 +167,39 @@ export function moveTo(sel: Selection, cell: CellPos, extend: boolean, lim: Limi
   return extend ? extendTo(sel, target) : cellSelection(target);
 }
 
+/** Where Enter returns to after a run of Tab presses (see [`tabEnterStep`]). */
+export interface TabReturn {
+  /** The column the Tab run started in. */
+  col: number;
+  /** The cell the last Tab landed on; the run is over once the cursor is anywhere else. */
+  at: CellPos;
+}
+
+/**
+ * Data entry across a row (AOO, Excel): Tab remembers the column the run
+ * started in, and Enter then goes to that column one row down instead of
+ * straight down. Moving the cursor any other way (a click, an arrow key)
+ * ends the run. Only for a single-cell selection: inside a range Tab and
+ * Enter walk the range. `next` is the selection the key would give by
+ * itself.
+ */
+export function tabEnterStep(
+  sel: Selection,
+  key: "Tab" | "Enter",
+  shift: boolean,
+  next: Selection,
+  run: TabReturn | null,
+  lim: Limits,
+): { selection: Selection; run: TabReturn | null } {
+  if (!isSingleCell(sel.range) || !isSingleCell(next.range)) return { selection: next, run: null };
+  const live = run && run.at.r === sel.active.r && run.at.c === sel.active.c ? run : null;
+  if (key === "Tab") {
+    return { selection: next, run: { col: live ? live.col : sel.active.c, at: { ...next.active } } };
+  }
+  if (shift || !live) return { selection: next, run: null };
+  return { selection: moveTo(next, { r: next.active.r, c: live.col }, false, lim), run: null };
+}
+
 /**
  * Tab/Enter inside a multi-cell selection: the active cell walks the range
  * (row-major for Tab, column-major for Enter) and wraps; the range stays.

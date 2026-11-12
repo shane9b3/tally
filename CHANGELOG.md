@@ -10,6 +10,17 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-12
+
+### Added
+- Page Setup, Sheet tab: choose whether zero values, formulas, notes, and
+  charts and pictures are printed. These choices are saved in ODS files.
+
+### Changed
+- Entering data across a row: after moving with Tab, Enter now goes to the
+  next row in the column where you started, instead of straight down.
+  Clicking another cell or using the arrow keys starts over.
+
 ## [0.1.1] - 2026-11-12
 
 ### Changed

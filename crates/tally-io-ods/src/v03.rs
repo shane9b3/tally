@@ -1427,6 +1427,9 @@ pub(crate) struct PageLayout {
     pub margins: MarginsData,
     pub grid: bool,
     pub headers: bool,
+    /// The other `style:print` tokens, when the attribute is present:
+    /// (charts, annotations, zero-values, formulas).
+    pub content: Option<(bool, bool, bool, bool)>,
     pub scale: Option<PageScaleData>,
     pub center_h: bool,
     pub center_v: bool,
@@ -1493,6 +1496,15 @@ pub(crate) fn parse_page_layout<R: BufRead>(
                         let print = c.attr("style:print").unwrap_or("");
                         p.grid = print.split_whitespace().any(|t| t == "grid");
                         p.headers = print.split_whitespace().any(|t| t == "headers");
+                        if c.attr("style:print").is_some() {
+                            let has = |name: &str| print.split_whitespace().any(|t| t == name);
+                            p.content = Some((
+                                has("charts"),
+                                has("annotations"),
+                                has("zero-values"),
+                                has("formulas"),
+                            ));
+                        }
                         let pct = c
                             .attr("style:scale-to")
                             .and_then(|v| v.trim().trim_end_matches('%').parse::<f64>().ok());
@@ -1759,6 +1771,16 @@ pub(crate) fn page_setup_of(m: &MasterPage, l: Option<&PageLayout>) -> PageSetup
         }
         p.print_gridlines = l.grid;
         p.print_headers = l.headers;
+        if let Some((charts, notes, zero, formulas)) = l.content {
+            p.print_charts = charts;
+            p.print_notes = if notes {
+                tally_model::NotesPrintData::AtEnd
+            } else {
+                tally_model::NotesPrintData::None
+            };
+            p.print_zero_values = zero;
+            p.print_formulas = formulas;
+        }
         p.center_h = l.center_h;
         p.center_v = l.center_v;
         p.page_order = if l.ltr {
@@ -1859,7 +1881,22 @@ pub(crate) fn write_page_layout(s: &mut String, layout: &str, p: &PageSetupData)
         hmm_to_cm(p.margins.left),
         hmm_to_cm(p.margins.right),
     );
-    let mut print = vec!["charts", "drawings", "objects", "zero-values"];
+    // AOO writes every token of what the sheet prints (Format > Page >
+    // Sheet > Print); drawings and objects have no switch of their own here
+    // and follow "charts and pictures".
+    let mut print = Vec::new();
+    if p.print_charts {
+        print.extend(["charts", "drawings", "objects"]);
+    }
+    if p.print_zero_values {
+        print.push("zero-values");
+    }
+    if p.print_formulas {
+        print.push("formulas");
+    }
+    if p.print_notes != tally_model::NotesPrintData::None {
+        print.push("annotations");
+    }
     if p.print_gridlines {
         print.push("grid");
     }

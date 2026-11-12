@@ -174,3 +174,34 @@ test("Paste Special over data asks too, and the Input option turns the warning o
   await expect(dlg).toHaveCount(0);
   await expect.poll(async () => (await recorded(page)).at(-1)?.type).toBe("pasteSpecial");
 });
+
+test("typing across a row with Tab, then Enter, starts the next row in the first column", async ({ page }) => {
+  await ready(page);
+  // Empty cells well below the template's data.
+  await clickCell(page, 20, 1);
+  await expect(activeCell(page)).toHaveValue("B21");
+  await page.keyboard.type("a");
+  await page.keyboard.press("Tab");
+  await page.keyboard.type("b");
+  await page.keyboard.press("Tab");
+  await page.keyboard.type("c");
+  await page.keyboard.press("Enter");
+  await expect(activeCell(page)).toHaveValue("B22");
+  // The second row the same way, without typing in every cell.
+  await page.keyboard.type("d");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Enter");
+  await expect(activeCell(page)).toHaveValue("B23");
+  // Plain Enter still goes straight down.
+  await page.keyboard.press("Enter");
+  await expect(activeCell(page)).toHaveValue("B24");
+  // A click in between ends the run: Enter goes down from the clicked cell.
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await clickCell(page, 21, 4);
+  await expect(activeCell(page)).toHaveValue("E22");
+  await page.keyboard.press("Enter");
+  await expect(activeCell(page)).toHaveValue("E23");
+});

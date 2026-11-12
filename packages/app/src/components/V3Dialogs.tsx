@@ -1370,6 +1370,10 @@ function PageSetupDialog({ d }: { d: Extract<DialogState, { kind: "pageSetup" }>
               <div className={styles.optionGrid}>
                 <Check label={t("v3.gridlines", "Gridlines")} checked={s.printGridlines} onChange={(x) => set({ printGridlines: x })} testId="page-gridlines" />
                 <Check label={t("v3.rowColHeaders", "Row and column headers")} checked={s.printHeaders} onChange={(x) => set({ printHeaders: x })} />
+                <Check label={t("v3.printCharts", "Charts and pictures")} checked={s.printCharts ?? true} onChange={(x) => set({ printCharts: x })} testId="page-print-charts" />
+                <Check label={t("v3.printNotes", "Notes")} checked={(s.printNotes ?? "none") !== "none"} onChange={(x) => set({ printNotes: x ? "atEnd" : "none" })} testId="page-print-notes" />
+                <Check label={t("v3.printFormulas", "Formulas")} checked={s.printFormulas ?? false} onChange={(x) => set({ printFormulas: x })} testId="page-print-formulas" />
+                <Check label={t("v3.printZeroValues", "Zero values")} checked={s.printZeroValues ?? true} onChange={(x) => set({ printZeroValues: x })} testId="page-print-zero-values" />
               </div>
               <div className={v3.row}>
                 <span className={v3.rowLabel}>{t("v3.pageOrder", "Page order")}</span>

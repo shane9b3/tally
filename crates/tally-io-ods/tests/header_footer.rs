@@ -131,3 +131,31 @@ fn line_breaks_in_a_region_are_new_lines() {
     ));
     assert_eq!(p.header.unwrap().center, "The Redwood\nBlock 90");
 }
+
+/// Format > Page > Sheet > Print: zero values, formulas, notes and charts
+/// are stored in `style:print` and read back.
+#[test]
+fn print_content_flags_round_trip() {
+    let d = PageSetupData::default();
+    let back = round_trip(&d);
+    assert!(back.print_zero_values && back.print_charts && !back.print_formulas);
+    assert_eq!(back.print_notes, d.print_notes);
+
+    let p = PageSetupData {
+        print_zero_values: false,
+        print_formulas: true,
+        print_charts: false,
+        print_notes: tally_model::NotesPrintData::AtEnd,
+        ..PageSetupData::default()
+    };
+    let back = round_trip(&p);
+    assert!(!back.print_zero_values && back.print_formulas && !back.print_charts);
+    assert_eq!(back.print_notes, tally_model::NotesPrintData::AtEnd);
+
+    // A file without the attribute keeps the defaults.
+    let none = read(ods(
+        r#"<style:page-layout-properties fo:margin-top="1cm"/>"#,
+        "",
+    ));
+    assert!(none.print_zero_values && none.print_charts && !none.print_formulas);
+}

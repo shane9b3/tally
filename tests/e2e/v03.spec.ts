@@ -247,11 +247,24 @@ test("page setup saves orientation, header and print range", async ({ page }) =>
   await dialog.getByTestId("tab-sheet").click();
   await dialog.getByTestId("page-print-range").fill("A1:G15");
   await dialog.getByTestId("page-repeat-rows").fill("1");
+  // What is printed (AOO Format ▸ Page ▸ Sheet ▸ Print): zero values and
+  // charts are on by default, formulas and notes off.
+  await expect(dialog.getByTestId("page-print-zero-values")).toBeChecked();
+  await expect(dialog.getByTestId("page-print-charts")).toBeChecked();
+  await expect(dialog.getByTestId("page-print-formulas")).not.toBeChecked();
+  await expect(dialog.getByTestId("page-print-notes")).not.toBeChecked();
+  await dialog.getByTestId("page-print-zero-values").uncheck();
+  await dialog.getByTestId("page-print-notes").check();
   await dialog.getByTestId("dialog-ok").click();
   expect((await recorded(page)).at(-1)).toMatchObject({
     type: "setPageSetup",
-    setup: { orientation: "landscape", footer: { center: "&[PAGE]" }, footerArea: { on: true }, printRange: { r0: 0, c0: 0, r1: 14, c1: 6 }, repeatRows: [0, 0] },
+    setup: { orientation: "landscape", footer: { center: "&[PAGE]" }, footerArea: { on: true }, printRange: { r0: 0, c0: 0, r1: 14, c1: 6 }, repeatRows: [0, 0], printZeroValues: false, printNotes: "atEnd" },
   });
+  // Reopened, the dialog shows what was saved.
+  await run(page, "file.pageSetup");
+  await page.getByTestId("page-setup-dialog").getByTestId("tab-sheet").click();
+  await expect(page.getByTestId("page-setup-dialog").getByTestId("page-print-zero-values")).not.toBeChecked();
+  await page.getByTestId("page-setup-dialog").getByTestId("dialog-cancel").click();
   // View ▸ Page breaks draws the print range.
   await run(page, "view.pageBreaks");
   await expect.poll(() => page.evaluate(() => (window.__tally!.controller.grid as unknown as { props: { printRange: unknown } }).props.printRange)).toEqual({ r0: 0, c0: 0, r1: 14, c1: 6 });

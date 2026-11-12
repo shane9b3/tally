@@ -645,3 +645,36 @@ fn print_scopes_on_three_sheets() {
     assert!(none.pages.is_empty());
     assert_eq!(none.warnings.len(), 1);
 }
+
+/// Format > Page > Sheet > Print > Zero values off: a numeric 0 (typed or a
+/// formula result) is not drawn; other cells are.
+#[test]
+fn zero_values_can_be_left_out_of_the_print() {
+    fn page(zero_in_b1: bool, print_zero_values: bool) -> Vec<u8> {
+        let mut f = Fixture::new();
+        let s = f.sheet;
+        f.set("A1", "label");
+        f.set("A2", "7");
+        if zero_in_b1 {
+            f.set("B1", "0");
+            f.set("B2", "=A2-7");
+        }
+        let mut setup: PageSetupDto = f.svc.page_setup(f.doc, s).unwrap();
+        setup.print_zero_values = Some(print_zero_values);
+        f.apply(vec![Op::SetPageSetup { sheet: s, setup }]);
+        let job = f.svc.prepare_print_job(f.doc, &opts(), &[]).unwrap();
+        let png = tally_engine::protection::base64_decode(
+            &f.svc.print_job_page_png(job.job, 0, 72).unwrap(),
+        )
+        .unwrap();
+        tally_io_pdf::png_pixels(&png).unwrap().2
+    }
+    let without_zeros = page(false, true);
+    let printed = page(true, true);
+    let hidden = page(true, false);
+    assert_ne!(printed, without_zeros, "zeros are printed by default");
+    assert_eq!(
+        hidden, without_zeros,
+        "zeros are left out when the box is off"
+    );
+}
