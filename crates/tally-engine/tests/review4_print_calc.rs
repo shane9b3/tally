@@ -397,7 +397,9 @@ fn iteration_work_is_bounded_per_recalc() {
     let res = f.apply(ops);
     assert!(res.errors.is_empty());
     // 2,000 cells × 32,767 steps = 65M evaluations > the 20M budget.
-    assert!(t.elapsed() < Duration::from_secs(60), "{:?}", t.elapsed());
+    // Shared CI runners need ~61 s in a debug build for the 20M budget; the
+    // unbounded 65M took more than three times that.
+    assert!(t.elapsed() < Duration::from_secs(150), "{:?}", t.elapsed());
     assert_eq!(f.value("A1"), Value::Error(ErrorKind::NoConvergence));
 }
 

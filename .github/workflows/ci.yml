@@ -35,6 +35,9 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+          # The action's container has only stable; rust-toolchain.toml asks
+          # for 1.94.
+          rust-version: "1.94"
       - name: TS bindings are fresh
         run: cargo run --locked -p xtask -- gen-bindings --check
       - name: Function coverage report

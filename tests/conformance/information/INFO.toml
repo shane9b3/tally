@@ -1,5 +1,6 @@
 [[case]]
-formula = "=LEN(INFO(\"system\"))>3"
+# "WNT" on Windows, "MACOSX", "LINUX".
+formula = "=LEN(INFO(\"system\"))>=3"
 expect = true
 
 [[case]]
