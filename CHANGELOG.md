@@ -10,6 +10,12 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-12
+
+### Changed
+- No changes to the spreadsheet itself. This is the first release
+  delivered through the in-app updater.
+
 ## [0.1.0] - 2026-11-12
 
 First public build of Tally, a spreadsheet compatible with OpenOffice Calc

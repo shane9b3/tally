@@ -1,6 +1,6 @@
 {
   "name": "@tally/app",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "React chrome: toolbar, formula bar, name box, sheet tabs, status bar, palette, stores (WP7).",
   "license": "Apache-2.0",

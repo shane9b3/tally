@@ -1,6 +1,6 @@
 {
   "name": "@tally/grid",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Canvas spreadsheet grid: rendering, virtualization, selection, editor host (WP6).",
   "license": "Apache-2.0",

@@ -27,7 +27,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.90"
 license = "Apache-2.0"
@@ -37,26 +37,26 @@ publish = false
 # version: the unpinned default resolves to the 3.0 alpha.
 [workspace.dependencies]
 # Internal crates
-tally-types = { path = "crates/tally-types", version = "0.1.0" }
-tally-model = { path = "crates/tally-model", version = "0.1.0" }
-tally-api = { path = "crates/tally-api", version = "0.1.0" }
-tally-formula = { path = "crates/tally-formula", version = "0.1.0" }
-tally-numfmt = { path = "crates/tally-numfmt", version = "0.1.0" }
-tally-functions = { path = "crates/tally-functions", version = "0.1.0" }
-tally-l10n = { path = "crates/tally-l10n", version = "0.1.0" }
-tally-engine = { path = "crates/tally-engine", version = "0.1.0" }
-tally-io-ods = { path = "crates/tally-io-ods", version = "0.1.0" }
-tally-io-xlsx = { path = "crates/tally-io-xlsx", version = "0.1.0" }
-tally-io-csv = { path = "crates/tally-io-csv", version = "0.1.0" }
-tally-io-pdf = { path = "crates/tally-io-pdf", version = "0.1.0" }
-tally-io-xls = { path = "crates/tally-io-xls", version = "0.1.0" }
-tally-io-html = { path = "crates/tally-io-html", version = "0.1.0" }
-tally-io-dbf = { path = "crates/tally-io-dbf", version = "0.1.0" }
-tally-io-xmlss = { path = "crates/tally-io-xmlss", version = "0.1.0" }
-tally-io-sylk = { path = "crates/tally-io-sylk", version = "0.1.0" }
-tally-io-dif = { path = "crates/tally-io-dif", version = "0.1.0" }
-tally-assist = { path = "crates/tally-assist", version = "0.1.0" }
-tally-macos-terminate = { path = "crates/tally-macos-terminate", version = "0.1.0" }
+tally-types = { path = "crates/tally-types", version = "0.1.1" }
+tally-model = { path = "crates/tally-model", version = "0.1.1" }
+tally-api = { path = "crates/tally-api", version = "0.1.1" }
+tally-formula = { path = "crates/tally-formula", version = "0.1.1" }
+tally-numfmt = { path = "crates/tally-numfmt", version = "0.1.1" }
+tally-functions = { path = "crates/tally-functions", version = "0.1.1" }
+tally-l10n = { path = "crates/tally-l10n", version = "0.1.1" }
+tally-engine = { path = "crates/tally-engine", version = "0.1.1" }
+tally-io-ods = { path = "crates/tally-io-ods", version = "0.1.1" }
+tally-io-xlsx = { path = "crates/tally-io-xlsx", version = "0.1.1" }
+tally-io-csv = { path = "crates/tally-io-csv", version = "0.1.1" }
+tally-io-pdf = { path = "crates/tally-io-pdf", version = "0.1.1" }
+tally-io-xls = { path = "crates/tally-io-xls", version = "0.1.1" }
+tally-io-html = { path = "crates/tally-io-html", version = "0.1.1" }
+tally-io-dbf = { path = "crates/tally-io-dbf", version = "0.1.1" }
+tally-io-xmlss = { path = "crates/tally-io-xmlss", version = "0.1.1" }
+tally-io-sylk = { path = "crates/tally-io-sylk", version = "0.1.1" }
+tally-io-dif = { path = "crates/tally-io-dif", version = "0.1.1" }
+tally-assist = { path = "crates/tally-assist", version = "0.1.1" }
+tally-macos-terminate = { path = "crates/tally-macos-terminate", version = "0.1.1" }
 
 # Desktop shell (used by apps/desktop/src-tauri from WP7 on)
 tauri = "=2.12.4"

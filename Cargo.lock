@@ -4706,7 +4706,7 @@ dependencies = [
 
 [[package]]
 name = "tally-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4717,7 +4717,7 @@ dependencies = [
 
 [[package]]
 name = "tally-assist"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tally-formula",
  "tally-types",
@@ -4726,7 +4726,7 @@ dependencies = [
 
 [[package]]
 name = "tally-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tally-api",
  "tally-engine",
@@ -4736,7 +4736,7 @@ dependencies = [
 
 [[package]]
 name = "tally-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "libc",
@@ -4763,7 +4763,7 @@ dependencies = [
 
 [[package]]
 name = "tally-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "proptest",
@@ -4796,7 +4796,7 @@ dependencies = [
 
 [[package]]
 name = "tally-formula"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "insta",
  "proptest",
@@ -4809,7 +4809,7 @@ dependencies = [
 
 [[package]]
 name = "tally-functions"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "regex",
@@ -4825,7 +4825,7 @@ dependencies = [
 
 [[package]]
 name = "tally-io-csv"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "csv",
  "encoding_rs",
@@ -4836,7 +4836,7 @@ dependencies = [
 
 [[package]]
 name = "tally-io-dbf"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "encoding_rs",
  "tally-model",
@@ -4847,7 +4847,7 @@ dependencies = [
 
 [[package]]
 name = "tally-io-dif"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tally-io-csv",
  "tally-model",
@@ -4857,7 +4857,7 @@ dependencies = [
 
 [[package]]
 name = "tally-io-html"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tally-model",
  "tally-numfmt",
@@ -4867,7 +4867,7 @@ dependencies = [
 
 [[package]]
 name = "tally-io-ods"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "quick-xml",
  "tally-model",
@@ -4879,7 +4879,7 @@ dependencies = [
 
 [[package]]
 name = "tally-io-pdf"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fontdb",
  "hayro",
@@ -4893,7 +4893,7 @@ dependencies = [
 
 [[package]]
 name = "tally-io-sylk"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tally-io-csv",
  "tally-io-ods",
@@ -4905,7 +4905,7 @@ dependencies = [
 
 [[package]]
 name = "tally-io-xls"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "calamine",
  "tally-io-xlsx",
@@ -4916,7 +4916,7 @@ dependencies = [
 
 [[package]]
 name = "tally-io-xlsx"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "quick-xml",
  "rust_xlsxwriter",
@@ -4932,7 +4932,7 @@ dependencies = [
 
 [[package]]
 name = "tally-io-xmlss"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "encoding_rs",
  "quick-xml",
@@ -4945,14 +4945,14 @@ dependencies = [
 
 [[package]]
 name = "tally-l10n"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "tally-macos-terminate"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "block2",
  "objc2",
@@ -4963,7 +4963,7 @@ dependencies = [
 
 [[package]]
 name = "tally-model"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4972,7 +4972,7 @@ dependencies = [
 
 [[package]]
 name = "tally-numfmt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "proptest",
@@ -4983,7 +4983,7 @@ dependencies = [
 
 [[package]]
 name = "tally-types"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6818,7 +6818,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tally-api",
  "tally-engine",
