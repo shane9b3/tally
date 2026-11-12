@@ -458,6 +458,7 @@ pub async fn close_doc<R: Runtime>(app: &AppHandle<R>, doc: DocId) {
 
 /// `RunEvent::Reopen` (Dock icon clicked): with no document window, a new
 /// Untitled one; with only minimised ones, the front one comes back.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn reopen<R: Runtime>(app: &AppHandle<R>, has_visible_windows: bool) {
     let front = app.state::<Windows>().with(|r| r.front_window());
     match front {

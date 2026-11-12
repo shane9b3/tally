@@ -310,10 +310,12 @@ fn wildcard_matching_is_linear() {
     let c3 = Criterion::parse(&s(&format!("*{}*", "a?".repeat(2000))), &settings(WILD));
     assert!(c3.matches(&text));
     let took = t.elapsed();
+    // Generous: shared CI runners took 2.1 s in a debug build. The old
+    // matcher needed minutes in debug for these three patterns.
     let budget = if cfg!(debug_assertions) {
-        std::time::Duration::from_millis(1500)
+        std::time::Duration::from_secs(15)
     } else {
-        std::time::Duration::from_millis(100)
+        std::time::Duration::from_secs(1)
     };
     assert!(took < budget, "took {took:?}");
 }

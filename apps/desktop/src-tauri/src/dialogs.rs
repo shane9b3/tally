@@ -316,6 +316,7 @@ async fn read_only_if_locked<R: Runtime>(
 /// The local files among the URLs the OS asks Tally to open (Finder's
 /// double-click and Open With, a file dropped on the Dock icon:
 /// `RunEvent::Opened`).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn file_paths(urls: &[impl AsRef<str>]) -> Vec<PathBuf> {
     urls.iter()
         .filter_map(|u| {
@@ -340,6 +341,7 @@ pub fn file_paths(urls: &[impl AsRef<str>]) -> Vec<PathBuf> {
         .collect()
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn percent_decode(s: &str) -> Option<Vec<u8>> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());

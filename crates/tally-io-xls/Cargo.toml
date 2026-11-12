@@ -13,7 +13,7 @@ tally-types.workspace = true
 tally-io-xlsx.workspace = true
 thiserror.workspace = true
 # Exact pin (docs/wave5-plan.md); reads BIFF5/BIFF8.
-calamine = { version = "=0.37.0", default-features = false }
+calamine = { version = "=0.38.0", default-features = false }
 
 [lints]
 workspace = true
