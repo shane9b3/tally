@@ -1,6 +1,6 @@
 {
   "name": "tally-desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Tally desktop app: Tauri 2 shell (src-tauri) and the web entry point that mounts @tally/app.",
   "license": "Apache-2.0",

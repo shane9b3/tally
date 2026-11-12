@@ -1,6 +1,6 @@
 {
   "name": "@tally/tokens",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Design tokens: CSS custom properties and a typed Theme reader for the canvas grid.",
   "license": "Apache-2.0",
