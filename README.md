@@ -61,7 +61,9 @@ Download the installer for your system from
 [GitHub Releases](https://github.com/shane9b3/tally/releases/latest): a
 `.dmg` for macOS (Apple Silicon `aarch64` or Intel `x64`), the
 `-setup.exe` (or `.msi`) for Windows, the `.AppImage` (or `.deb`/`.rpm`)
-for Linux. The builds are not yet signed by Apple or Microsoft: on macOS
+for Linux. On macOS, drag Tally to Applications, then eject the Tally disk
+image (otherwise it stays mounted and its copy can be launched by mistake).
+The builds are not yet signed by Apple or Microsoft: on macOS
 the first launch needs System Settings ▸ Privacy & Security ▸ Open Anyway,
 on Windows SmartScreen's More info ▸ Run anyway (details in
 [docs/release.md](docs/release.md#9-unsigned-builds-first-install-friction)).
