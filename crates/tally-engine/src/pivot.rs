@@ -139,8 +139,9 @@ pub struct PageLookup {
 /// indexed by item name, so one call costs O(fields).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Lookup {
-    /// Lowercased data field captions and source names.
-    pub df_names: Vec<(String, String)>,
+    /// Per data field, the lowercased names GETPIVOTDATA accepts: the
+    /// caption, the source name, AOO's given name and the long form.
+    pub df_names: Vec<Vec<String>>,
     /// Row axis.
     pub rows: AxisLookup,
     /// Column axis.
@@ -2401,18 +2402,38 @@ fn axis_lines(
     Ok(cx.out)
 }
 
-/// The caption of a data field.
+/// The function name in output captions (AOO `nFuncStrIds`,
+/// `dptabres.cxx:71-85`, en-US strings `globstr.src:695-730`): Count and
+/// Count (numbers only) are both "Count", the sample and population
+/// variants "StDev" / "Var". The dialog's function list keeps the long
+/// names ([`agg_caption`]). The output is not localised (as AOO en-US).
+pub fn measure_fn_name(f: AggFnData) -> &'static str {
+    match f {
+        AggFnData::Sum => "Sum",
+        AggFnData::Count | AggFnData::CountNums => "Count",
+        AggFnData::Average => "Average",
+        AggFnData::Max => "Max",
+        AggFnData::Min => "Min",
+        AggFnData::Product => "Product",
+        AggFnData::StDev | AggFnData::StDevP => "StDev",
+        AggFnData::Var | AggFnData::VarP => "Var",
+    }
+}
+
+/// `<function> - <source field>` with `fname` naming the function.
+fn fn_field(fname: &str, d: &PivotDataFieldData, names: &[String]) -> String {
+    format!(
+        "{fname} - {}",
+        names.get(d.source_col as usize).map_or("", String::as_str)
+    )
+}
+
+/// The caption of a data field (AOO `ScDPResultData::GetMeasureString`:
+/// its layout name, else "Sum - Revenue").
 pub fn caption(d: &PivotDataFieldData, names: &[String]) -> String {
     match &d.caption {
         Some(c) if !c.trim().is_empty() => c.clone(),
-        _ => format!(
-            "{} - {}",
-            agg_caption(d.function),
-            names
-                .get(d.source_col as usize)
-                .cloned()
-                .unwrap_or_default()
-        ),
+        _ => fn_field(measure_fn_name(d.function), d, names),
     }
 }
 
@@ -2465,6 +2486,21 @@ fn cell_fn(p: &PivotData, comp: &Computed<'_>, rl: &Line, cl: &Line) -> (usize, 
         _ => Some(own),
     };
     (di, f)
+}
+
+/// The items of `node`'s path on levels `0..levels` that the previous
+/// labelled line `prev` did not already write: `(level, ancestor node)`.
+fn unwritten(
+    trie: &Trie,
+    node: u32,
+    levels: usize,
+    prev: Option<u32>,
+) -> impl Iterator<Item = (usize, u32)> + '_ {
+    (0..levels).filter_map(move |lvl| {
+        let anc = trie.ancestor(node, lvl + 1);
+        let same = prev.is_some_and(|pn| trie.level(pn) > lvl && trie.ancestor(pn, lvl + 1) == anc);
+        (!same).then_some((lvl, anc))
+    })
 }
 
 fn item_text<'b, 'a>(ax: &'b Axis<'a>, node: u32) -> (&'b Item, &'b AxisField<'a>) {
@@ -2550,16 +2586,13 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
         match m.and_then(|m| p.data_fields.get(m)) {
             Some(d) if !(ndata == 1 && force.is_none()) => match &d.caption {
                 Some(c) if !c.trim().is_empty() => c.clone(),
-                _ => format!(
-                    "{} - {}",
-                    agg_caption(force.unwrap_or(d.function)),
-                    cache
-                        .names
-                        .get(d.source_col as usize)
-                        .map_or("", String::as_str)
+                _ => fn_field(
+                    measure_fn_name(force.unwrap_or(d.function)),
+                    d,
+                    &cache.names,
                 ),
             },
-            _ => force.map_or("Result", agg_caption).to_string(),
+            _ => force.map_or("Result", measure_fn_name).to_string(),
         }
     };
     let subtotal_text = |ax: &Axis<'_>, l: &Line, data_here: bool| -> (String, String, u32) {
@@ -2707,11 +2740,11 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
         return Err(ApiError::unsupported("the pivot output is too large"));
     }
     let (rows, cols) = (rows as u32, cols as u32);
-    // Column items: level k on header row top + 1 + k; an outer item is
-    // written on the first column of its span.
-    // An outer item is written once, on its first line; a subtotal or
-    // empty line does not repeat it (AOO's CONTINUE flags,
-    // `dptabres.cxx:1428-1431`).
+    // Column items: level k on header row top + 1 + k. Every item is
+    // written once, on the first line of its span, whatever that line is
+    // (an item, or a subtotal of an inner item that has no children with
+    // data); later lines do not repeat it (AOO: HASMEMBER at the member's
+    // first position, CONTINUE after it, `dptabres.cxx:1427-1434`).
     let ct = &comp.cols.trie;
     let mut prev: Option<u32> = None;
     for (ci, line) in col_lines.iter().enumerate() {
@@ -2726,6 +2759,14 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
             Kind::Sub(_) => {
                 let (text, item, field) = subtotal_text(&comp.cols, line, data_in_cols);
                 let lvl = ct.level(line.node) - 1;
+                for (l, anc) in unwritten(ct, line.node, lvl, prev) {
+                    let (it, f) = item_text(&comp.cols, anc);
+                    push_item(&mut cells, top + 1 + l as u32, c, it, f);
+                    if let Some(x) = cells.last_mut() {
+                        x.role = PivotCellRole::ColItem;
+                    }
+                }
+                prev = Some(line.node);
                 push(
                     &mut cells,
                     top + 1 + lvl as u32,
@@ -2737,16 +2778,11 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
                 );
             }
             Kind::Detail => {
-                for lvl in 0..ct.level(line.node) {
-                    let anc = ct.ancestor(line.node, lvl + 1);
-                    let same = prev
-                        .is_some_and(|pn| ct.level(pn) > lvl && ct.ancestor(pn, lvl + 1) == anc);
-                    if !same {
-                        let (it, f) = item_text(&comp.cols, anc);
-                        push_item(&mut cells, top + 1 + lvl as u32, c, it, f);
-                        if let Some(l) = cells.last_mut() {
-                            l.role = PivotCellRole::ColItem;
-                        }
+                for (lvl, anc) in unwritten(ct, line.node, ct.level(line.node), prev) {
+                    let (it, f) = item_text(&comp.cols, anc);
+                    push_item(&mut cells, top + 1 + lvl as u32, c, it, f);
+                    if let Some(l) = cells.last_mut() {
+                        l.role = PivotCellRole::ColItem;
                     }
                 }
                 prev = Some(line.node);
@@ -2783,6 +2819,11 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
             Kind::Sub(_) if !line.title => {
                 let (text, item, field) = subtotal_text(&comp.rows, line, data_in_rows);
                 let lvl = rt.level(line.node) - 1;
+                for (l, anc) in unwritten(rt, line.node, lvl, prev) {
+                    let (it, f) = item_text(&comp.rows, anc);
+                    push_item(&mut cells, rr, l as u32, it, f);
+                }
+                prev = Some(line.node);
                 push(
                     &mut cells,
                     rr,
@@ -2796,14 +2837,9 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
             // Items, outline title rows and subtotals shown in a title row:
             // the item (and any outer item not written yet).
             Kind::Detail | Kind::Title | Kind::Sub(_) => {
-                for lvl in 0..rt.level(line.node) {
-                    let anc = rt.ancestor(line.node, lvl + 1);
-                    let same = prev
-                        .is_some_and(|pn| rt.level(pn) > lvl && rt.ancestor(pn, lvl + 1) == anc);
-                    if !same {
-                        let (it, f) = item_text(&comp.rows, anc);
-                        push_item(&mut cells, rr, lvl as u32, it, f);
-                    }
+                for (lvl, anc) in unwritten(rt, line.node, rt.level(line.node), prev) {
+                    let (it, f) = item_text(&comp.rows, anc);
+                    push_item(&mut cells, rr, lvl as u32, it, f);
                 }
                 prev = Some(line.node);
             }
@@ -3175,7 +3211,8 @@ fn lookup_axis(ax: &Axis<'_>, lines: &[Line], names: &[String]) -> AxisLookup {
     let mut line_of: FxMap<(u32, u16), u32> = FxMap::default();
     for (i, l) in lines.iter().enumerate() {
         // An outline title row has no values; a subtotal shown in the
-        // title row is the item's subtotal.
+        // title row is the item's subtotal (AOO 4.1 answers #REF! there,
+        // a deliberate deviation, parity-deviations T5).
         if matches!(l.kind, Kind::Blank | Kind::Title | Kind::Sub(1..)) {
             continue;
         }
@@ -3215,7 +3252,12 @@ fn build_lookup(p: &PivotData, cache: &Cache, comp: &Computed<'_>, layout: &mut 
             .data_fields
             .iter()
             .map(|d| {
-                (
+                // The caption, the source name and AOO's given name
+                // (`lcl_GetDataFieldName`, `dpoutput.cxx:1668-1700`: the
+                // short function name, ignoring a custom caption), plus
+                // the long function name captions used before 2026-11-13
+                // so formulas written then keep resolving.
+                let mut v = vec![
                     lower(&caption(d, &cache.names)),
                     lower(
                         cache
@@ -3223,7 +3265,11 @@ fn build_lookup(p: &PivotData, cache: &Cache, comp: &Computed<'_>, layout: &mut 
                             .get(d.source_col as usize)
                             .map_or("", String::as_str),
                     ),
-                )
+                    lower(&fn_field(measure_fn_name(d.function), d, &cache.names)),
+                    lower(&fn_field(agg_caption(d.function), d, &cache.names)),
+                ];
+                v.dedup();
+                v
             })
             .collect(),
         rows,
@@ -3783,11 +3829,7 @@ fn parse_excel_words(
     'outer: while i < words.len() {
         for j in (i + 1..=words.len()).rev() {
             let cand = lower(&words[i..j].join(" "));
-            if let Some(d) = lk
-                .df_names
-                .iter()
-                .position(|(c, s)| *c == cand || *s == cand)
-            {
+            if let Some(d) = lk.df_names.iter().position(|n| n.contains(&cand)) {
                 df = Some(d);
                 i = j;
                 continue 'outer;
@@ -3883,7 +3925,7 @@ pub fn pivot_data(
         parse_excel_words(lk, field, &mut filters)?
     } else {
         let t = lower(field);
-        lk.df_names.iter().position(|(c, s)| *c == t || *s == t)?
+        lk.df_names.iter().position(|n| n.contains(&t))?
     };
     let mut rsel: Vec<Option<String>> = vec![None; lk.rows.fields.len()];
     let mut csel: Vec<Option<String>> = vec![None; lk.cols.fields.len()];

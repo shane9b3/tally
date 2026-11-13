@@ -174,7 +174,10 @@ pub fn agg_to_api(f: AggFnData) -> AggFn {
     }
 }
 
-/// The caption AOO uses for an aggregation (`Sum - Revenue`, `Apple Sum`).
+/// The long name of an aggregation, as the DataPilot dialog's function
+/// list shows it ("Count (Numbers only)", "StDevP (Population)"). Pivot
+/// output captions use the short AOO names instead
+/// (`pivot::measure_fn_name`); GETPIVOTDATA still accepts these.
 pub fn agg_caption(f: AggFnData) -> &'static str {
     match f {
         AggFnData::Sum => "Sum",

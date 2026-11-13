@@ -166,7 +166,8 @@ fn pivot_count_and_countnums() {
     assert_eq!(f.value("H2"), Value::text("East"));
     assert_eq!(f.value("I2"), Value::text("Count - Revenue"));
     assert_eq!(f.value("J2"), Value::Number(12.0));
-    assert_eq!(f.value("I3"), Value::text("Count (Numbers only) - Revenue"));
+    // AOO names both functions "Count" in the output (`nFuncStrIds`).
+    assert_eq!(f.value("I3"), Value::text("Count - Revenue"));
     assert_eq!(f.value("J3"), Value::Number(11.0));
 }
 
@@ -1550,7 +1551,12 @@ fn pivot_layout_outline_subtotals_at_top() {
         f.svc.pivots(f.doc).unwrap()[0].output,
         Some(range("K1:M10"))
     );
-    // The title row is an item row; GETPIVOTDATA reads its subtotal.
+    // The title row is an item row. GETPIVOTDATA reads its subtotal: a
+    // deliberate deviation (parity-deviations T5). AOO 4.1 gives #REF!
+    // here: the title row has no SUBTOTAL flag (`dptabres.cxx:1465`), so
+    // `lcl_FilterInclude` (`dpoutput.cxx:1517-1630`) keeps the title row
+    // and its three child rows and `GetPivotData` fails on more than one
+    // row (`dpoutput.cxx:1811`).
     let hit = f.svc.pivot_at(f.doc, f.sheet, 1, 10).unwrap().unwrap();
     assert_eq!(hit.role, PivotCellRole::RowItem);
     assert_eq!(hit.item.as_deref(), Some("East"));
@@ -1622,6 +1628,11 @@ fn pivot_layout_outline_bottom_with_empty_lines() {
         "Total Result |  | 2315",
     ];
     assert_eq!(got, want);
+    // Tally returns the subtotal: a deliberate deviation (T5). AOO 4.1
+    // returns 0: the empty line is a CONTINUE entry that inherits the
+    // subtotal entry (`lcl_FilterInclude`, `dpoutput.cxx:1523-1527`),
+    // `lcl_StripSubTotals` then drops the real subtotal row and only the
+    // empty row is left.
     f.set(
         "A40",
         "=GETPIVOTDATA(\"Sum - Revenue\";K1;\"Region\";\"West\")",
@@ -1735,4 +1746,154 @@ fn pivot_layout_outline_lines_are_bounded() {
     // Header, 20,000 items, 2,000 × (title + subtotal + empty), total.
     let out = f.svc.pivots(f.doc).unwrap()[0].output.unwrap();
     assert_eq!(out.r1 - out.r0 + 1, 1 + 20_000 + 3 * 2_000 + 1);
+}
+
+/// Output captions use AOO's short function names (`nFuncStrIds`,
+/// `dptabres.cxx:71-85`: Count for Count and Count (numbers only), StDev
+/// and Var for both variants); GETPIVOTDATA accepts the caption, the
+/// source name, AOO's given name (`lcl_GetDataFieldName`) and the long
+/// names Tally wrote before.
+#[test]
+fn pivot_layout_short_function_names_in_captions() {
+    let mut f = fixture();
+    let mut p = region_product(&f);
+    p.data_fields = vec![data(5, AggFn::StDevP), data(5, AggFn::CountNums)];
+    create(&mut f, p);
+    assert_eq!(
+        block(&f, &["K", "L", "M"], 2, 3),
+        ["East | Apple | StDev - Revenue", " |  | Count - Revenue"]
+    );
+    assert_eq!(
+        block(&f, &["K", "L", "M"], 8, 9),
+        ["East StDev - Revenue |  | ", "East Count - Revenue |  | "]
+    );
+    assert_eq!(
+        block(&f, &["K", "L", "M"], 18, 19),
+        ["Total StDev - Revenue |  | ", "Total Count - Revenue |  | "]
+    );
+    let east_sd = match f.value("N8") {
+        Value::Number(n) => n,
+        other => panic!("{other:?}"),
+    };
+    for name in [
+        "StDev - Revenue",
+        "StDevP (Population) - Revenue",
+        "Revenue",
+    ] {
+        f.set(
+            "A40",
+            &format!("=GETPIVOTDATA(\"{name}\";K1;\"Region\";\"East\")"),
+        );
+        assert_eq!(f.value("A40"), Value::Number(east_sd), "{name}");
+    }
+    f.set(
+        "A41",
+        "=GETPIVOTDATA(\"Count - Revenue\";K1;\"Region\";\"East\")",
+    );
+    assert_eq!(f.value("A41"), Value::Number(12.0));
+    f.set(
+        "A42",
+        "=GETPIVOTDATA(\"Count (Numbers only) - Revenue\";K1;\"Region\";\"East\")",
+    );
+    assert_eq!(f.value("A42"), Value::Number(12.0));
+    // A forced subtotal function with one data field.
+    clear_pivots(&mut f);
+    let mut p = region_product(&f);
+    p.row_fields[0].subtotals = PivotSubtotals::Custom {
+        fns: vec![AggFn::VarP],
+    };
+    create(&mut f, p);
+    assert_eq!(f.value("K5"), Value::text("East Var - Revenue"));
+    // A custom caption is still matched as well as the given name.
+    clear_pivots(&mut f);
+    let mut p = region_product(&f);
+    p.data_fields[0].caption = Some("Takings".into());
+    create(&mut f, p);
+    assert_eq!(f.value("M1"), Value::text("Takings"));
+    f.set("A43", "=GETPIVOTDATA(\"Takings\";K1;\"Region\";\"East\")");
+    assert_eq!(f.value("A43"), Value::Number(850.0));
+    f.set(
+        "A44",
+        "=GETPIVOTDATA(\"Sum - Revenue\";K1;\"Region\";\"East\")",
+    );
+    assert_eq!(f.value("A44"), Value::Number(850.0));
+}
+
+/// An item whose first line is a subtotal (its children have no data
+/// under "show items without data") is captioned on that line, with any
+/// outer item not written yet: AOO writes every member's caption on its
+/// first row (`ScDPResultMember::FillMemberResults`, HASMEMBER at `rPos`,
+/// `dptabres.cxx:1427-1434`), and the subtotal caption replaces only the
+/// member's own cell.
+#[test]
+fn pivot_layout_subtotal_first_line_labels_outer_items() {
+    let mut f = fixture();
+    let mut p = pivot(&f);
+    p.target = CellPos { r: 0, c: 10 };
+    p.col_fields.clear();
+    p.row_fields = vec![
+        field(0, "Region"),
+        field(1, "Rep"),
+        field(2, "Product"),
+        field(3, "Quarter"),
+    ];
+    p.row_fields[1].show_empty = true;
+    p.row_fields[2].show_empty = true;
+    create(&mut f, p);
+    let got = block(&f, &["K", "L", "M", "N", "O"], 13, 40);
+    let want = [
+        " | Ann Result |  |  | 720",
+        " | Bob | Apple Result |  | ",
+        " |  | Pear Result |  | ",
+        " |  | Plum | Q1 | 30",
+        " |  |  | Q2 | 40",
+        " |  |  | Q3 | 10",
+        " |  |  | Q4 | 50",
+        " |  | Plum Result |  | 130",
+        " | Bob Result |  |  | 130",
+        " | Cid | Apple Result |  | ",
+        " |  | Pear Result |  | ",
+        " |  | Plum Result |  | ",
+        " | Cid Result |  |  | ",
+        " | Dan | Apple Result |  | ",
+        " |  | Pear Result |  | ",
+        " |  | Plum Result |  | ",
+        " | Dan Result |  |  | ",
+        "East Result |  |  |  | 850",
+        "West | Ann | Apple Result |  | ",
+        " |  | Pear Result |  | ",
+        " |  | Plum Result |  | ",
+        " | Ann Result |  |  | ",
+        " | Bob | Apple Result |  | ",
+        " |  | Pear Result |  | ",
+        " |  | Plum Result |  | ",
+        " | Bob Result |  |  | ",
+        " | Cid | Apple | Q1 | 200",
+        " |  |  | Q2 | 220",
+    ];
+    assert_eq!(got, want);
+    // The item cells carry their role and item.
+    let hit = f.svc.pivot_at(f.doc, f.sheet, 30, 10).unwrap().unwrap();
+    assert_eq!(hit.role, PivotCellRole::RowItem);
+    assert_eq!(hit.item.as_deref(), Some("West"));
+    // Columns: Quarter × Product with Product shown without data, Rep
+    // filtered to Bob (only Plum has data): the first column of Q1 is the
+    // "Apple Result" subtotal and carries the Q1 caption.
+    clear_pivots(&mut f);
+    let mut p = pivot(&f);
+    p.target = CellPos { r: 0, c: 10 };
+    p.row_fields = vec![field(0, "Region")];
+    p.col_fields = vec![field(3, "Quarter"), field(2, "Product"), field(4, "Units")];
+    p.col_fields[1].show_empty = true;
+    let mut rep = field(1, "Rep");
+    rep.page_item = Some("Bob".into());
+    p.page_fields = vec![rep];
+    create(&mut f, p);
+    // Rows: page field, blank, header (corner + field names), Quarter,
+    // Product, Units.
+    assert_eq!(f.value("L4"), Value::text("Q1"));
+    assert_eq!(f.value("L5"), Value::text("Apple Result"));
+    assert_eq!(f.value("M5"), Value::text("Pear Result"));
+    assert_eq!(f.value("N5"), Value::text("Plum"));
+    assert_eq!(f.value("N6"), Value::Number(2.0));
 }

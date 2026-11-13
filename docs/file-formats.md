@@ -521,7 +521,11 @@ loses.
   is read as outline layout, and the open reports "the compact form is
   shown as outline layout" when an outer row field uses it. So an Excel
   pivot in its default compact form opens in outline layout, subtotals at
-  the top, as in AOO.
+  the top, as in AOO. This includes XLSX files written by Tally 0.1.x,
+  whose `pivotField`s carry no `outline` / `compact` attributes: they
+  reopen as outline (top), with the compact warning when they have more than
+  one row field, and the sheet keeps
+  the old tabular output cells until the pivot is refreshed.
 - **Named cell styles**: `cellStyles`/`cellStyleXfs` (the `Normal` style is
   `Default`; `xfId` gives a cell's base style). Tally writes the names with
   default-looking `cellStyleXfs` entries; the attributes stay on the cells.
