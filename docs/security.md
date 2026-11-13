@@ -843,7 +843,9 @@ libFuzzer wall-clock seconds, executions and result. The merge job appends
 those lines to the target's ledger (`ledger.tsv`, kept with the cached
 corpus). The run summary then shows, per target, "this run" and
 "accumulated (ledger)" time. Every run also uploads the ledger as
-`ledger-<target>` (kept 90 days), so the totals survive a cache eviction.
+`ledger-<target>` (kept 90 days), so the totals can be
+added up by hand from those files if the cache is evicted (the next run
+then starts a new ledger; nothing restores the old one).
 One dispatch with the defaults gives each reader target 5 × 330 min =
 27.5 h, which is more than 24 h for XLS. ODS and XLSX each get 55 h across
 their raw and parts targets. The nightly runs add 10 min per target per

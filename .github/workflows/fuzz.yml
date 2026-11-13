@@ -18,7 +18,9 @@
 # executions; `merge` appends them to a per-target ledger (ledger.tsv) kept
 # with the corpus and prints this run's and the accumulated totals in the
 # run summary. The ledger of each run is also uploaded (`ledger-<target>`,
-# kept 90 days), so the totals survive a cache eviction.
+# kept 90 days), so the totals can be
+# added up by hand from those files if the cache is evicted (the next run
+# then starts a new ledger; nothing restores the old one).
 #
 # Corpus: kept in the Actions cache (`fuzz-corpus-<target>-…`, restored by
 # prefix: the newest wins), merged and minimised (`-merge=1`) once per run.
@@ -168,6 +170,10 @@ jobs:
           NAMES: ${{ needs.plan.outputs.names }}
         run: |
           set -euo pipefail
+          # Fuzz the dependency versions the app ships: start from the
+          # root lock file (cargo adds the fuzz-only packages on top), so
+          # fuzz/Cargo.lock cannot drift after a version bump or update.
+          cp Cargo.lock fuzz/Cargo.lock
           for t in $NAMES; do cargo +nightly fuzz build "$t"; done
       - name: Pack the binaries (artifacts drop the executable bit)
         env:
@@ -222,10 +228,15 @@ jobs:
       - name: Fuzz
         run: |
           set -uo pipefail
-          mkdir -p "state/$TARGET/corpus" out/corpus out/crash
+          # Everything the merge job needs goes under up/shard-<n>/, so the
+          # artifacts of all shards can be downloaded into one directory
+          # (download-artifact extracts a single matching artifact straight
+          # into `path`, without a directory per artifact).
+          up="up/shard-$SHARD"
+          mkdir -p "state/$TARGET/corpus" "$up/corpus" out/crash
           # Seed the new corpus with the merged one; libFuzzer adds new
           # inputs to the first directory.
-          cp -a "state/$TARGET/corpus/." out/corpus/ 2>/dev/null || true
+          cp -a "state/$TARGET/corpus/." "$up/corpus/" 2>/dev/null || true
           inputs=("fuzz/seeds/$TARGET")
           if [ -d "fuzz/regressions/$TARGET" ]; then inputs+=("fuzz/regressions/$TARGET"); fi
           dict=()
@@ -241,14 +252,14 @@ jobs:
             -print_final_stats=1 \
             -artifact_prefix=out/crash/ \
             ${dict[@]+"${dict[@]}"} \
-            out/corpus "${inputs[@]}" 2>&1 | tee fuzz.log | grep -v -E '^#[0-9]+\s+(NEW|REDUCE|pulse)'
+            "$up/corpus" "${inputs[@]}" 2>&1 | tee fuzz.log | grep -v -E '^#[0-9]+\s+(NEW|REDUCE|pulse)'
           status=${PIPESTATUS[0]}
           end=$(date +%s)
           execs=$(grep -Eo 'stat::number_of_executed_units: *[0-9]+' fuzz.log | grep -Eo '[0-9]+$' | tail -n1 || true)
           result=ok
           if [ "$status" -ne 0 ]; then result="fail($status)"; fi
           printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%MZ)" "$GITHUB_RUN_ID" "$TARGET" \
-            "$SHARD" "$((end - start))" "${execs:-?}" "$result" > out/stats.tsv
+            "$SHARD" "$((end - start))" "${execs:-?}" "$result" > "$up/stats.tsv"
           cp fuzz.log out/
           echo "fuzzed $TARGET shard $SHARD for $((end - start)) s, ${execs:-?} executions: $result" >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
@@ -257,9 +268,7 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: corpus-${{ matrix.target }}-${{ matrix.shard }}
-          path: |
-            out/corpus
-            out/stats.tsv
+          path: up
           retention-days: 3
           if-no-files-found: warn
       - name: Upload the crash
@@ -312,6 +321,7 @@ jobs:
         with:
           pattern: corpus-${{ matrix.target }}-*
           path: shards
+          merge-multiple: true
       - name: Merge, minimise and account
         run: |
           set -euo pipefail
@@ -319,10 +329,16 @@ jobs:
           mkdir -p "$state/corpus" shards merged
           touch "$state/ledger.tsv"
           dirs=("$state/corpus")
-          for d in shards/*/; do
-            [ -d "$d/corpus" ] && dirs+=("$d/corpus")
-            if [ -f "$d/stats.tsv" ]; then cat "$d/stats.tsv" >> "$state/ledger.tsv"; fi
+          shards_seen=0
+          for d in shards/shard-*/; do
+            [ -d "$d" ] || continue
+            shards_seen=$((shards_seen + 1))
+            if [ -d "${d}corpus" ]; then dirs+=("${d}corpus"); fi
+            if [ -f "${d}stats.tsv" ]; then cat "${d}stats.tsv" >> "$state/ledger.tsv"; fi
           done
+          if [ "$shards_seen" -eq 0 ]; then
+            echo "::warning::no shard output found for $TARGET; the corpus and ledger are unchanged"
+          fi
           # -merge=1 keeps the inputs that add coverage, so the cached
           # corpus stays small; crashing inputs are skipped.
           "./bin/$TARGET" -merge=1 -max_len="$MAX_LEN" -timeout="$TIMEOUT" \
