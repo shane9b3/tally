@@ -15,14 +15,19 @@
 # machine) x an assumed runner slowdown (macos-15 2x, ubuntu-24.04 2.5x,
 # windows-latest 3x; 3-4 cores instead of 12 for the parallel recalc)
 # x 2 for noise and runner-to-runner variation, at least 10 ms.
+# First CI run (2026-11-13): ubuntu-24.04 and windows-latest passed at
+# 28-58 % of their limits. macos-15 (3 cores) was slower and noisier than
+# assumed: recalc_chains best 82 ms / median 113 ms against 80 (4x the
+# M4 Pro, not 2x), so the macOS guesses were raised to about 2 x that
+# run's best. Still one sample: all limits stay provisional.
 # Calibrate: limit = 1.75 x the slowest best-of-runs seen in at least
 # three CI runs on that OS, rounded up, and drop the `?`.
 #
 # workload       size  target_ms  macos   linux   windows   # M4 Pro best
-recalc_chains    full  500        80?     100?    120?      # 19.7 ms
-recalc_mix       full  3000       640?    800?    1000?     # 159 ms
+recalc_chains    full  500        200?    100?    120?      # 19.7 ms
+recalc_mix       full  3000       900?    800?    1000?     # 159 ms
 incremental_10k  full  20         10?     10?     10?       # 1.1 ms
-open_ods_50mb    full  10000      24000?  30000?  36000?    # 5.6 s
+open_ods_50mb    full  10000      32000?  30000?  36000?    # 5.6 s
 chart_10k        full  20         10?     15?     15?       # 2.5 ms
-pdf_20p          full  1000       45?     55?     65?       # 10.8 ms
-pivot_100k       full  500        115?    140?    170?      # 28.4 ms
+pdf_20p          full  1000       50?     55?     65?       # 10.8 ms
+pivot_100k       full  500        140?    140?    170?      # 28.4 ms
