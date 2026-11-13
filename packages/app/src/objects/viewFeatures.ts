@@ -198,7 +198,8 @@ export class ViewFeatures {
     void this.ctl.client
       .apply(info.doc, { ops: [op], label: split ? "Split window" : "Remove split", selectionBefore: null, selectionAfter: null })
       .then((res) => {
-        if (res.errors.length === 0) this.ctl.handleResult(res);
+        // With its op, so the result is not taken for an undo / redo (which would show the stored split again).
+        if (res.errors.length === 0) this.ctl.handleResult(res, [op]);
       })
       .catch((e: unknown) => {
         if (!isApiError(e) || e.code !== "unsupported") this.ctl.notifyError(e);

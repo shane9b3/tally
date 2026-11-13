@@ -219,8 +219,10 @@ export class W56Features {
     // Undo / redo (and Load Styles) may change the style table.
     else if (ops === null && this.store.panel === "styles") void this.refreshCellStyles();
     if (ops?.some((o) => o.type === "createScenario" || o.type === "deleteScenario" || o.type === "updateScenario")) void this.refreshNavigatorPanel();
-    // Undo/redo (ops === null), view-option edits and layout changes: the engine's view options are re-read.
-    if (ops === null || ops.some((o) => o.type === "setViewOptions") || res.layoutChanged.includes(this.sheet)) void this.refreshView(false);
+    // Undo/redo (ops === null), view-option and split edits and layout changes: the engine's view options are
+    // re-read. Undo / redo may also have changed the stored Window ▸ Split, which is then shown again.
+    if (ops === null) void this.refreshView("ifChanged");
+    else if (ops.some((o) => o.type === "setViewOptions" || o.type === "setSplit") || res.layoutChanged.includes(this.sheet)) void this.refreshView(false);
     if (ops === null || ops.some((o) => o.type === "setCustomSortLists")) this.lists = null;
   }
 
@@ -1114,9 +1116,10 @@ export class W56Features {
    * Re-reads the active sheet's view options from the engine (`view_options`)
    * and applies them: the store (View menu checks, grid gridlines/headers),
    * the grid source's `cellsWith` options and, when `restoreSplit`, the
-   * persisted Window ▸ Split.
+   * persisted Window ▸ Split (`"ifChanged"`: only when it differs from the
+   * split last read, as after an undo / redo of `setSplit`).
    */
-  async refreshView(restoreSplit: boolean): Promise<void> {
+  async refreshView(restoreSplit: boolean | "ifChanged"): Promise<void> {
     const info = this.ctl.info;
     if (!info) return;
     const sheet = this.sheet;
@@ -1128,8 +1131,11 @@ export class W56Features {
       if (!isApiError(e) || (e.code !== "unsupported" && e.code !== "not_found")) this.ctl.notifyError(e);
     }
     if (seq !== this.viewSeq || this.ctl.info?.doc !== info.doc || this.sheet !== sheet) return;
+    const before = this.store.view.split ?? null;
     this.applyView(v);
-    if (restoreSplit) this.ctl.w5.view.restoreSplit(v.split ?? null);
+    const split = v.split ?? null;
+    const changed = (before?.xPx ?? 0) !== (split?.xPx ?? 0) || (before?.yPx ?? 0) !== (split?.yPx ?? 0);
+    if (restoreSplit === true || (restoreSplit === "ifChanged" && changed)) this.ctl.w5.view.restoreSplit(split);
   }
 
   private applyView(v: ViewOptionsDto): void {
