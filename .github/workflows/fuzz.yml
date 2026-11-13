@@ -227,6 +227,9 @@ jobs:
           restore-keys: fuzz-corpus-${{ matrix.target }}-
       - name: Fuzz
         run: |
+          # No -e (the default shell adds it): a finding makes the pipeline
+          # below fail, and the stats line and the log must still be written.
+          set +e
           set -uo pipefail
           # Everything the merge job needs goes under up/shard-<n>/, so the
           # artifacts of all shards can be downloaded into one directory

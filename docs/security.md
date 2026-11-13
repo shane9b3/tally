@@ -767,6 +767,19 @@ Seeds (`fuzz/seeds/<target>/`) are generated from the fixtures already in
 (`fuzz/dict/*.dict`: element, attribute and part names from the fixtures;
 function names and operators; format-code tokens).
 
+### Guarded panics in calamine
+
+`tally_io_xls::read_xls` runs calamine under `catch_unwind` and reports a
+panic there as an unreadable file, so a calamine panic is an error message
+in the app, not a crash. libfuzzer-sys aborts on every panic, caught or
+not; the first CI run (2026-11-13) stopped the `xls` and `open` targets
+within a minute on two such panics (calamine 0.38 `xls.rs:633` and `:1531`,
+slice indexing on a truncated record). Those targets therefore call
+`tally_fuzz_harness::tolerate_guarded_panics()`: a panic located in
+calamine's sources returns to the reader's guard; a panic anywhere else,
+including Tally's own code inside the guard, still aborts. The two inputs
+are kept in `fuzz/regressions/{xls,open}/` and must stay an `Err`.
+
 ### Regressions on stable
 
 `crates/tally-fuzz-harness/tests/replay.rs` runs every file in

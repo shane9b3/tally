@@ -62,6 +62,37 @@ pub fn target(name: &str) -> Option<&'static Target> {
     TARGETS.iter().find(|t| t.name == name)
 }
 
+/// For the libFuzzer targets that reach the XLS reader (`xls`, `open`): do
+/// not treat a panic inside calamine as a finding.
+///
+/// `tally_io_xls::read_xls` runs calamine under `catch_unwind` on purpose
+/// and reports a panic there as "could not be decoded" (docs/security.md),
+/// so in the app such a file is an error message, not a crash. libfuzzer-sys
+/// installs a panic hook that aborts on every panic, caught or not, which
+/// would stop the fuzzer at the first of them. This wraps that hook: a
+/// panic whose location is in calamine's sources returns to the reader's
+/// `catch_unwind`; any other panic (our own code, also inside that guard)
+/// still aborts. A calamine panic that is not caught by the reader unwinds
+/// into libfuzzer-sys, which aborts when the test function panics.
+///
+/// Call it at the start of the fuzz target; the first call installs the
+/// hook (libFuzzer's is in place by then).
+pub fn tolerate_guarded_panics() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let guarded = info.location().is_some_and(|l| {
+                let file = l.file().replace('\\', "/");
+                file.contains("/calamine-") || file.contains("/calamine/")
+            });
+            if !guarded {
+                prev(info);
+            }
+        }));
+    });
+}
+
 /// What the app does with the bytes of a file with extension `ext`
 /// (`tally_engine::service::codec::IoCodec::read`: content sniffing, then
 /// the reader with its default limits).
