@@ -1,0 +1,28 @@
+# CI limits for `cargo xtask perf --check` (.github/workflows/perf.yml).
+# How the gate works and how to change these: docs/perf-baseline.md, "CI gate".
+#
+# Columns: workload, size (full = the size the 1.0 target is stated for;
+# quick = a tenth of it), the target in ms (the product claim on the
+# reference machine, an Apple M4 Pro; reported, never gated: the 1.0 exit
+# targets, plus the proposed-gate values for recalc_mix and
+# incremental_10k), then the CI
+# limit in ms per OS for the BEST of the runs (5 by default; 3 for
+# recalc_mix and open_ods_50mb; 15 for incremental_10k and chart_10k).
+# `123?` = not yet calibrated on that OS's GitHub-hosted runner (still
+# gates); `-` = not gated on that OS.
+#
+# Uncalibrated limits are guesses: the M4 Pro's best (2026-11-13, busy
+# machine) x an assumed runner slowdown (macos-15 2x, ubuntu-24.04 2.5x,
+# windows-latest 3x; 3-4 cores instead of 12 for the parallel recalc)
+# x 2 for noise and runner-to-runner variation, at least 10 ms.
+# Calibrate: limit = 1.75 x the slowest best-of-runs seen in at least
+# three CI runs on that OS, rounded up, and drop the `?`.
+#
+# workload       size  target_ms  macos   linux   windows   # M4 Pro best
+recalc_chains    full  500        80?     100?    120?      # 19.7 ms
+recalc_mix       full  3000       640?    800?    1000?     # 159 ms
+incremental_10k  full  20         10?     10?     10?       # 1.1 ms
+open_ods_50mb    full  10000      24000?  30000?  36000?    # 5.6 s
+chart_10k        full  20         10?     15?     15?       # 2.5 ms
+pdf_20p          full  1000       45?     55?     65?       # 10.8 ms
+pivot_100k       full  500        115?    140?    170?      # 28.4 ms

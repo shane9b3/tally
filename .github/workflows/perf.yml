@@ -1,0 +1,88 @@
+# Perf: the 1.0 performance gate (docs/perf-baseline.md, "CI gate").
+# Builds the `perf` bin in release mode on each OS, runs
+# `perf --check` against xtask/perf-thresholds.txt and fails when a
+# workload's best run is over that OS's limit. Every measured value is
+# printed next to its limit in the job summary, also when it passes, and
+# the JSON result is uploaded as an artifact.
+#
+# Triggers: pushes to main that touch the Rust engine, readers, xtask or
+# the toolchain, and manual runs (any branch of this repository). Not on
+# pull_request: a run is a 5-15 min release build per OS plus a noisy
+# timing check, regressions are rare and a post-merge signal is enough,
+# and a timing gate on shared runners should not block contributors.
+# Run it on a branch by hand (Actions > Perf > Run workflow) before
+# merging work that is likely to change performance.
+#
+# No secrets. The cache is written only from main.
+
+name: Perf
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - ".github/workflows/perf.yml"
+  workflow_dispatch:
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  perf:
+    name: perf (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: "1.94"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Release build of the perf bin only; separate from other jobs.
+          shared-key: perf-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the perf bin (release)
+        run: cargo build --locked --release -p xtask --features perf --bin perf
+      - name: Machine
+        shell: bash
+        run: |
+          echo "runner: ${RUNNER_OS} ${RUNNER_ARCH}, image ${ImageOS:-?} ${ImageVersion:-?}"
+          if [ "$RUNNER_OS" = Linux ]; then nproc; free -m; lscpu | grep -E 'Model name|^CPU\(s\)' || true; fi
+          if [ "$RUNNER_OS" = macOS ]; then sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize; fi
+          if [ "$RUNNER_OS" = Windows ]; then echo "NUMBER_OF_PROCESSORS=$NUMBER_OF_PROCESSORS"; fi
+      - name: perf --check
+        shell: bash
+        run: >-
+          cargo run --locked --release --quiet -p xtask --features perf --bin perf --
+          --check
+          --json "perf-${{ matrix.os }}.json"
+          --markdown "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: always()
+        with:
+          name: perf-${{ matrix.os }}
+          path: perf-${{ matrix.os }}.json
+          if-no-files-found: warn
+          retention-days: 90

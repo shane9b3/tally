@@ -107,6 +107,7 @@ cargo xtask perf --only recalc,csv    # scenarios: recalc incremental io10 io25 
 TALLY_CALC_THREADING=off cargo xtask perf --only recalc   # single-threaded recalc (TALLY_CALC_THREADS=N caps the pool)
 cargo xtask perf --dir /path/on/big/disk
 cargo xtask perf --only io50,csv --keep --dir DIR   # files in DIR/tally-perf-<pid>, kept; DIR itself is never deleted
+cargo xtask perf --check              # the CI gate (see "CI gate" below)
 .targets/perf/release/perf --mem FILE   # RSS, footprint and live malloc bytes after each open step
 .targets/perf/release/perf --dump FILE  # digest of the loaded workbook, to diff two builds
 pnpm perf:e2e                         # grid scroll frame times (starts dev:web itself)
@@ -119,11 +120,124 @@ config (`tests/e2e/perf.config.ts`) only matches `*.perf.ts`, so `pnpm e2e`
 never runs it. A Vite HMR reload from edits in another terminal can abort a
 run with "Execution context was destroyed"; just rerun.
 
+## CI gate (`perf --check`, `.github/workflows/perf.yml`)
+
+The 1.0 targets are product claims for the **reference machine**, the
+Apple M4 Pro described at the top (12 cores, release build): 100k-formula
+recalc < 500 ms, 50 MB ODS open < 10 s, `chart_data` 10k points < 20 ms,
+20-page PDF < 1 s, 100k-row DataPilot refresh < 500 ms. They hold there with
+a wide margin (table below). CI does not re-prove those claims on other
+hardware; it is a **regression gate** that runs the same workloads on
+GitHub-hosted runners (macos-15, ubuntu-24.04, windows-latest) and fails
+when one gets clearly slower.
+
+```sh
+cargo xtask perf --check                      # all workloads, this OS's limits
+cargo xtask perf --check --only recalc_chains,pivot_100k
+cargo xtask perf --check --thresholds FILE --json out.json --markdown out.md
+```
+
+`--check` runs every workload listed in `xtask/perf-thresholds.txt` at the
+size given there, prints a Markdown table (every value next to its limit,
+also when passing, then one line per failure with the workload, OS, how
+far over and the factor), writes `--json FILE` and appends to
+`--markdown FILE` (CI passes `$GITHUB_STEP_SUMMARY`). Exit 0 = all pass,
+1 = a workload is over its limit or did not run, 2 = bad arguments or
+threshold file. `--runs N` (default 5) and `--dir DIR` apply as usual;
+`--quick`/`--deep` are refused, the sizes come from the file. The logic
+(file format, comparison, reports) is `xtask/src/perfcheck.rs`, unit-tested
+in the plain `xtask` bin so `cargo test --workspace` covers it.
+
+What is gated (all at **full size**, the size the targets are stated for):
+
+| Workload | What | Target (reference machine) | M4 Pro best, 2026-11-13 |
+|---|---|---|---|
+| `recalc_chains` | first recalc, 100 chains x 1000 deep (99,900 formulas) | < 500 ms | 19 - 20 ms |
+| `recalc_mix` | first recalc, 100k SUM + 100k exact VLOOKUP, 1M cells | < 3 s (proposed gate) | 159 - 174 ms |
+| `incremental_10k` | 1 edit -> 10k dependents | < 20 ms (proposed gate) | 1.1 - 1.4 ms |
+| `open_ods_50mb` | `EngineService::open` of a 50 MB ODS (465k rows x 12) generated in the job | < 10 s | 5.6 - 6.9 s |
+| `chart_10k` | `chart_data` of a 10k-point line chart, cache miss | < 20 ms | 2.4 - 2.8 ms |
+| `pdf_20p` | `prepare_print_job` + `print_job_pdf`, 20 pages | < 1 s | 10.8 - 17 ms |
+| `pivot_100k` | `RefreshPivot` over 100k source rows | < 500 ms | 28 - 32 ms |
+
+Not gated: 60 fps grid scroll (measured in the webview, `pnpm perf:e2e`,
+not by this tool); XLSX open/save, ODS save, CSV import and peak RSS (in
+`cargo xtask perf`, not in the check: they add minutes and the RSS reading
+uses macOS `/usr/bin/time -l`). Nothing is gated at the quick size; the
+file can say `quick` for a workload that proves too heavy for a runner, and
+the report then prints "quick" next to it.
+
+**How noise is handled.** Each workload is run several times in one
+process (5 by default; 3 for `recalc_mix` and `open_ods_50mb`, which take
+seconds; 15 for the 1 - 3 ms `incremental_10k` and `chart_10k`) and the
+**best** run is compared with the limit: interference from other tenants
+on a shared runner only ever adds time, so the minimum is the most stable
+statistic (the median is reported next to it). Limits are **explicit
+per-OS values** in the file, not a factor applied to the Mac numbers and not
+normalised by a calibration loop: the workloads are allocator-, memory- and
+(for the open) file-bound, the gaps between the runners come largely from
+the allocator, the core count (the parallel recalc pre-pass uses 3 - 4
+cores there, 12 here) and Defender on Windows, which a fixed CPU loop does
+not see, and dividing by a second noisy timing adds noise. Explicit values
+are also what a reviewer can read.
+
+**Threshold file** (`xtask/perf-thresholds.txt`): one line per workload,
+`workload size target_ms macos linux windows`, limits in ms for the best
+run; `123?` marks a limit not yet calibrated on that OS's runner (it gates
+anyway; the report prints "uncalibrated"), `-` means not gated on that OS.
+
+**Status: every limit is a guess until the first CI runs.** Only the M4 Pro
+numbers above are measured. Windows and Linux runners have never run these
+workloads, and neither has the macos-15 runner (Apple M1 VM, 3 cores, 7 GB).
+The initial limits are M4 Pro best x an assumed runner slowdown (macos-15
+2x, ubuntu-24.04 2.5x, windows-latest 3x) x 2 for noise and runner-to-runner
+variation, at least 10 ms:
+
+| Workload | macos-15 | ubuntu-24.04 | windows-latest |
+|---|---|---|---|
+| `recalc_chains` | 80 ms? | 100 ms? | 120 ms? |
+| `recalc_mix` | 640 ms? | 800 ms? | 1000 ms? |
+| `incremental_10k` | 10 ms? | 10 ms? | 10 ms? |
+| `open_ods_50mb` | 24 s? | 30 s? | 36 s? |
+| `chart_10k` | 10 ms? | 15 ms? | 15 ms? |
+| `pdf_20p` | 45 ms? | 55 ms? | 65 ms? |
+| `pivot_100k` | 115 ms? | 140 ms? | 170 ms? |
+
+The `open_ods_50mb` limits are above the 10 s target on purpose: a slower
+runner is not the reference machine. Every other limit is below its
+target, so passing CI also shows that target holds on runner hardware.
+
+**Updating thresholds.** After a CI run, the job summary and the
+`perf-<os>` artifact (JSON: every sample, best, median, limit, ratio) show
+the numbers. To calibrate an OS: take the slowest best-of-runs from at
+least three runs on that OS, set the limit to 1.75x that, rounded up, and
+drop the `?`. That catches a regression of about 2x while leaving room for
+the spread between runner machines. A change that makes a workload slower
+on purpose raises the limit in the same commit, with the reason in the
+commit message; a faster one may lower it. Never raise a limit just to make
+a red run green without looking at the numbers.
+
+**Workflow** (`.github/workflows/perf.yml`): release build of the `perf`
+bin and `perf --check` on macos-15, ubuntu-24.04 and windows-latest, on
+pushes to main that touch Rust code, `xtask`, the lock file or the
+toolchain, and on manual dispatch (any branch). Not on pull requests: each
+run is a release build per OS plus a timing check on noisy runners; a
+post-merge signal is enough for regressions that are rare, and a timing
+gate should not block contributors. Expected duration per OS (estimated,
+not yet observed): release build 5 - 10 min cold (Windows the slowest),
+about 1 min with the cache, then 1 - 3 min for the check (26 s here; the
+50 MB ODS is built, recalculated and saved in the job, about 7 s here, 3
+opens). Peak RSS of the whole check is about 2.9 GB here (generating the
+50 MB file), within the 7 GB of the smallest runner (macos-15). No
+webview libraries are needed: the `perf` bin pulls in the engine and the
+file readers, not Tauri.
+
 ## Proposed 1.0 gate (on an M-series Mac, release build)
 
-Thresholds are about 2x the baseline for things that are fine and the target
-for things that are not yet. A regression of more than 25 % against the
-recorded baseline should also be investigated.
+The original proposal, before the CI gate above. Thresholds are about 2x
+the baseline for things that are fine and the target for things that are
+not yet. A regression of more than 25 % against the recorded baseline
+should also be investigated.
 
 | Check | Pass |
 |---|---|

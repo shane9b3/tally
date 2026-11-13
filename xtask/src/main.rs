@@ -18,11 +18,17 @@
 //!   (`version.rs`, docs/release.md).
 //! - `perf [options]`: release-mode performance baseline (synthetic
 //!   workbooks in a temp dir); options go to the `perf` bin
-//!   (`xtask/src/bin/perf.rs`), e.g. `--quick`, `--only recalc,csv`.
+//!   (`xtask/src/bin/perf.rs`), e.g. `--quick`, `--only recalc,csv`;
+//!   `perf --check` is the CI gate against `xtask/perf-thresholds.txt`
+//!   (`perfcheck.rs`).
 //!
 //! The argument parser and the master-list reader are hand-rolled on
 //! purpose: xtask has no dependencies (the registry is read through the CLI).
 
+// The `--check` logic of the `perf` bin; compiled here only so its unit
+// tests run without the `perf` feature.
+#[cfg(test)]
+mod perfcheck;
 mod version;
 
 use std::path::{Path, PathBuf};
@@ -43,6 +49,9 @@ commands:
   perf [--quick] [--only NAMES] [--runs N] [--deep]
                                 release-mode performance baseline
                                 (docs/perf-baseline.md)
+  perf --check [--thresholds FILE] [--json FILE] [--markdown FILE]
+                                CI gate: compare against
+                                xtask/perf-thresholds.txt, exit 1 on failure
   help                          show this message";
 
 /// Options of `function-coverage`.

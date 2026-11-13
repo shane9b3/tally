@@ -8,6 +8,13 @@
 //!
 //! ```text
 //! perf [--quick] [--only NAME[,NAME]] [--dir DIR] [--runs N] [--deep] [--keep]
+//! perf --check [--thresholds FILE] [--json FILE] [--markdown FILE]
+//!             [--runs N] [--only NAME[,NAME]] [--dir DIR]
+//!                             (CI gate: run the workloads listed in the
+//!                              threshold file, default
+//!                              xtask/perf-thresholds.txt, compare the best
+//!                              run with this OS's limit, exit 1 on a
+//!                              failure; docs/perf-baseline.md)
 //! perf --open-rss FILE        (internal: open FILE once and exit)
 //! perf --dump FILE            (open FILE and print a digest of the loaded
 //!                              workbook, to diff two builds)
@@ -23,6 +30,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Instant;
+
+#[path = "../perfcheck.rs"]
+mod perfcheck;
 
 use tally_api::{DocumentService, FileFormat};
 use tally_engine::recalc::{hard_recalc, recalc};
@@ -41,6 +51,11 @@ struct Opts {
     mem: Option<PathBuf>,
     keep: bool,
     dump: Option<PathBuf>,
+    check: bool,
+    runs_given: bool,
+    thresholds: Option<PathBuf>,
+    json: Option<PathBuf>,
+    markdown: Option<PathBuf>,
 }
 
 fn parse() -> Res<Opts> {
@@ -54,6 +69,11 @@ fn parse() -> Res<Opts> {
         mem: None,
         keep: false,
         dump: None,
+        check: false,
+        runs_given: false,
+        thresholds: None,
+        json: None,
+        markdown: None,
     };
     let mut a = std::env::args().skip(1);
     while let Some(x) = a.next() {
@@ -70,13 +90,27 @@ fn parse() -> Res<Opts> {
                 o.runs = a
                     .next()
                     .and_then(|v| v.parse().ok())
-                    .ok_or("--runs needs a number")?
+                    .filter(|n| *n > 0)
+                    .ok_or("--runs needs a number > 0")?;
+                o.runs_given = true;
             }
+            "--check" => o.check = true,
+            "--thresholds" => {
+                o.thresholds = Some(a.next().ok_or("--thresholds needs a file")?.into())
+            }
+            "--json" => o.json = Some(a.next().ok_or("--json needs a file")?.into()),
+            "--markdown" => o.markdown = Some(a.next().ok_or("--markdown needs a file")?.into()),
             "--dump" => o.dump = Some(a.next().ok_or("--dump needs a file")?.into()),
             "--mem" => o.mem = Some(a.next().ok_or("--mem needs a file")?.into()),
             "--open-rss" => o.open_rss = Some(a.next().ok_or("--open-rss needs a file")?.into()),
             other => return Err(format!("unknown option {other}")),
         }
+    }
+    if o.check && (o.quick || o.deep) {
+        return Err("--check takes the sizes from the threshold file; drop --quick/--deep".into());
+    }
+    if !o.check && (o.thresholds.is_some() || o.json.is_some() || o.markdown.is_some()) {
+        return Err("--thresholds, --json and --markdown need --check".into());
     }
     Ok(o)
 }
@@ -761,10 +795,16 @@ fn chart_axis() -> tally_api::ChartAxisDto {
     }
 }
 
+fn bench_chart(o: &Opts, scale: u32) -> Res<()> {
+    let (t, note) = chart_samples(o.runs.max(5), scale)?;
+    row("chart_data, 10k points", median(t), &note);
+    Ok(())
+}
+
 /// `chart_data` of a line chart with 10 000 points (one series plus text
 /// categories) read through the service, as the UI does on every repaint
-/// of a changed chart.
-fn bench_chart(o: &Opts, scale: u32) -> Res<()> {
+/// of a changed chart. Returns the cache-miss timings and a note.
+fn chart_samples(runs: usize, scale: u32) -> Res<(Vec<f64>, String)> {
     use tally_api::{
         ChartAnchor, ChartDto, ChartKind, ChartSeriesDto, DataLabelsDto, LegendPos, Op, SeriesName,
         Stacking,
@@ -839,7 +879,7 @@ fn bench_chart(o: &Opts, scale: u32) -> Res<()> {
     let mut t = Vec::new();
     let mut hit = Vec::new();
     let mut points = 0;
-    for i in 0..o.runs.max(5) {
+    for i in 0..runs {
         // Edit a series cell first so the document version moves and the
         // service's chart-data cache misses (what a repaint after an edit
         // pays).
@@ -864,20 +904,23 @@ fn bench_chart(o: &Opts, scale: u32) -> Res<()> {
     if points != n as usize {
         return Err(format!("chart_data returned {points} points, wanted {n}"));
     }
-    row(
-        "chart_data, 10k points",
-        median(t),
-        &format!(
-            "{points} points (1 series + text categories), cache miss after an edit; cached repeat {:.2} ms",
-            median(hit)
-        ),
+    let note = format!(
+        "{points} points (1 series + text categories), cache miss after an edit; cached repeat {:.2} ms",
+        median(hit)
     );
+    Ok((t, note))
+}
+
+fn bench_pdf(o: &Opts) -> Res<()> {
+    let (t, note) = pdf_samples(o.runs.max(3), 1)?;
+    row("PDF export, 20 pages", median(t), &note);
     Ok(())
 }
 
-/// A 20-page PDF: `prepare_print_job` (pagination + cell layout) plus
-/// `print_job_pdf` (krilla), which is what File > Export as PDF does.
-fn bench_pdf(o: &Opts) -> Res<()> {
+/// A 20-page PDF (2 pages with `scale` 10): `prepare_print_job`
+/// (pagination + cell layout) plus `print_job_pdf` (krilla), which is what
+/// File > Export as PDF does. Returns the timings and a note.
+fn pdf_samples(runs: usize, scale: u32) -> Res<(Vec<f64>, String)> {
     use tally_api::{PrintOptionsDto, PrintSheets};
     let opts = PrintOptionsDto {
         sheets: PrintSheets::Active,
@@ -912,11 +955,12 @@ fn bench_pdf(o: &Opts) -> Res<()> {
         .pages
         .first()
         .map_or(50, |p| p.rows[1].saturating_sub(p.rows[0]) + 1);
-    let (mut svc, doc) = build(per_page * 20);
+    let want_pages = 20 / scale.min(20);
+    let (mut svc, doc) = build(per_page * want_pages);
     let mut t = Vec::new();
     let mut pages = 0;
     let mut bytes = 0;
-    for _ in 0..o.runs.max(3) {
+    for _ in 0..runs {
         let st = Instant::now();
         let job = svc
             .prepare_print_job(doc, &opts, &[])
@@ -926,21 +970,27 @@ fn bench_pdf(o: &Opts) -> Res<()> {
         pages = job.layout.pages.len();
         bytes = pdf.len();
     }
-    row(
-        "PDF export, 20 pages",
-        median(t),
-        &format!(
-            "{pages} pages, {} rows x 6 cols, {:.0} KB; prepare_print_job + print_job_pdf",
-            per_page * 20,
-            bytes as f64 / 1024.0
-        ),
+    if pages != want_pages as usize {
+        return Err(format!("PDF has {pages} pages, wanted {want_pages}"));
+    }
+    let note = format!(
+        "{pages} pages, {} rows x 6 cols, {:.0} KB; prepare_print_job + print_job_pdf",
+        per_page * want_pages,
+        bytes as f64 / 1024.0
     );
+    Ok((t, note))
+}
+
+fn bench_pivot(o: &Opts, scale: u32) -> Res<()> {
+    let (t, note) = pivot_samples(o.runs.max(3), scale)?;
+    row("DataPilot refresh, 100k rows", median(t), &note);
     Ok(())
 }
 
 /// A DataPilot over 100 000 source rows (two row fields, one column field,
 /// two data fields): create, then `RefreshPivot` through the service.
-fn bench_pivot(o: &Opts, scale: u32) -> Res<()> {
+/// Returns the refresh timings and a note.
+fn pivot_samples(runs: usize, scale: u32) -> Res<(Vec<f64>, String)> {
     use tally_api::{
         AggFn, CellPos, DataLayout, Op, PivotDataFieldDto, PivotDto, PivotFieldDto, PivotLayout,
         PivotSort, PivotSource, PivotSubtotals, RangeDto,
@@ -1025,7 +1075,7 @@ fn bench_pivot(o: &Opts, scale: u32) -> Res<()> {
     let create = ms(st);
     let id = created_id(&r)?;
     let mut times = Vec::new();
-    for i in 0..o.runs.max(3) {
+    for i in 0..runs {
         // Change a source value so the refresh has something to do.
         apply(
             &mut svc,
@@ -1048,14 +1098,10 @@ fn bench_pivot(o: &Opts, scale: u32) -> Res<()> {
         )?;
         times.push(ms(st));
     }
-    row(
-        "DataPilot refresh, 100k rows",
-        median(times),
-        &format!(
-            "{n} rows x 5 cols, 12x50 row items x 4 quarters, Sum + Count; RefreshPivot via apply (create took {create:.0} ms)"
-        ),
+    let note = format!(
+        "{n} rows x 5 cols, 12x50 row items x 4 quarters, Sum + Count; RefreshPivot via apply (create took {create:.0} ms)"
     );
-    Ok(())
+    Ok((times, note))
 }
 
 /// Feeds formatted text into a hasher.
@@ -1223,6 +1269,212 @@ fn mem_phases(path: &Path) -> Res<()> {
     Ok(())
 }
 
+/// Workloads `--check` knows (the ids in the threshold file).
+const CHECK_WORKLOADS: [&str; 7] = [
+    "recalc_chains",
+    "recalc_mix",
+    "incremental_10k",
+    "open_ods_50mb",
+    "chart_10k",
+    "pdf_20p",
+    "pivot_100k",
+];
+
+/// Runs one `--check` workload: `runs` timed samples (ms) at `size`.
+fn measure(
+    id: &str,
+    size: perfcheck::Size,
+    runs: usize,
+    dir: &Path,
+) -> Res<perfcheck::Measurement> {
+    let scale = size.scale();
+    let setup = Instant::now();
+    let mut setup_ms = 0.0;
+    let mut samples = Vec::new();
+    let note = match id {
+        // The plan's "100k-formula recalc": 100 chains x 1000 deep, first
+        // recalc after building (default threading, as the app runs).
+        "recalc_chains" => {
+            let rows = 1000 / scale;
+            let mut n = 0;
+            for _ in 0..runs {
+                let b = Instant::now();
+                let mut wb = build_chains(rows, 100);
+                setup_ms += ms(b);
+                let s = Instant::now();
+                n = recalc(&mut wb).evaluated;
+                samples.push(ms(s));
+            }
+            format!("{n} formulas, 100 chains x {rows} deep, first recalc")
+        }
+        // 100k SUM + 100k exact VLOOKUP into 10k rows (1M cells).
+        "recalc_mix" => {
+            let rows = 100_000 / scale;
+            let mut n = 0;
+            for _ in 0..runs.min(3) {
+                let b = Instant::now();
+                let mut wb = build_mix(rows, true);
+                setup_ms += ms(b);
+                let s = Instant::now();
+                n = recalc(&mut wb).evaluated;
+                samples.push(ms(s));
+            }
+            format!(
+                "{n} formulas (SUM + exact VLOOKUP into 10k rows), {} cells, first recalc",
+                u64::from(rows) * 10 + 20_000
+            )
+        }
+        "incremental_10k" => {
+            let deps = 10_000 / scale;
+            let mut wb = Workbook::empty();
+            let s = new_sheet(&mut wb);
+            wb.set_value(addr(s, 0, 0), Value::Number(1.0));
+            for r in 0..deps {
+                wb.set_input(addr(s, r, 1), &format!("=$A$1*{}", r + 1));
+            }
+            recalc(&mut wb);
+            setup_ms = ms(setup);
+            // Cheap (about 1 ms): more samples so scheduler noise cannot
+            // hit all of them.
+            for i in 0..runs * 3 {
+                let st = Instant::now();
+                wb.set_input(addr(s, 0, 0), &format!("{}", i + 2));
+                let rep = recalc(&mut wb);
+                samples.push(ms(st));
+                if rep.evaluated != deps as usize {
+                    return Err(format!("evaluated {}, wanted {deps}", rep.evaluated));
+                }
+            }
+            format!("1 edit -> {deps} dependents, Workbook::set_input + recalc")
+        }
+        // Generated in the job (build, recalc, save), then opened through
+        // `EngineService::open` (read, build, recalc), as File > Open does.
+        "open_ods_50mb" => {
+            let (path, rows) = make_file(dir, FileFormat::Ods, 50.0 / f64::from(scale))?;
+            setup_ms = ms(setup);
+            let mb = size_mb(&path);
+            let res = (0..runs.min(3)).try_for_each(|_| {
+                samples.push(open_once(&path)?);
+                Ok::<(), String>(())
+            });
+            let _ = std::fs::remove_file(&path);
+            res?;
+            format!("{mb:.1} MB ODS, {rows} rows x 12 cols, open includes recalc")
+        }
+        "chart_10k" => {
+            let (t, note) = chart_samples(runs * 3, scale)?;
+            samples = t;
+            setup_ms = ms(setup) - samples.iter().sum::<f64>();
+            note
+        }
+        "pdf_20p" => {
+            let (t, note) = pdf_samples(runs, scale)?;
+            samples = t;
+            setup_ms = ms(setup) - samples.iter().sum::<f64>();
+            note
+        }
+        "pivot_100k" => {
+            let (t, note) = pivot_samples(runs, scale)?;
+            samples = t;
+            setup_ms = ms(setup) - samples.iter().sum::<f64>();
+            note
+        }
+        other => {
+            return Err(format!(
+                "unknown workload `{other}` (known: {})",
+                CHECK_WORKLOADS.join(", ")
+            ))
+        }
+    };
+    Ok(perfcheck::Measurement {
+        samples,
+        note,
+        setup_ms: setup_ms.max(0.0),
+    })
+}
+
+/// `--check`: runs every workload of the threshold file (or the `--only`
+/// subset), prints the report, writes `--json` / appends `--markdown`.
+/// `Ok(false)` when a workload failed its limit or did not run.
+fn check(o: &Opts) -> Res<bool> {
+    let file = o
+        .thresholds
+        .clone()
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("perf-thresholds.txt"));
+    let text = std::fs::read_to_string(&file)
+        .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+    let thresholds =
+        perfcheck::parse_thresholds(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+    if let Some(only) = &o.only {
+        if let Some(bad) = only
+            .iter()
+            .find(|x| !thresholds.iter().any(|t| &t.id == *x))
+        {
+            return Err(format!("--only: `{bad}` is not in {}", file.display()));
+        }
+    }
+    let os = std::env::consts::OS;
+    let runs = if o.runs_given { o.runs } else { 5 };
+    let base = o.dir.clone().unwrap_or_else(std::env::temp_dir);
+    let dir = base.join(format!("tally-perf-{}", std::process::id()));
+    if dir.exists() {
+        return Err(format!("{} already exists", dir.display()));
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut outcomes = Vec::new();
+    for t in &thresholds {
+        if o.only.as_ref().is_some_and(|v| !v.contains(&t.id)) {
+            continue;
+        }
+        eprintln!("perf check: {} ({})...", t.id, t.size.name());
+        let st = Instant::now();
+        let r = measure(&t.id, t.size, runs, &dir);
+        let out = perfcheck::evaluate(t, os, r);
+        eprintln!(
+            "perf check: {} best {:.1} ms, limit {}, {:.1} s in all",
+            t.id,
+            out.best_ms.unwrap_or(f64::NAN),
+            out.limit
+                .map_or("none".into(), |l| format!("{:.0} ms", l.ms)),
+            ms(st) / 1000.0
+        );
+        outcomes.push(out);
+    }
+    if o.keep {
+        eprintln!("perf: generated files kept in {}", dir.display());
+    } else {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    let shown = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| file.strip_prefix(cwd).ok().map(Path::to_path_buf))
+        .unwrap_or_else(|| file.clone());
+    let info = perfcheck::RunInfo {
+        os: os.to_owned(),
+        arch: std::env::consts::ARCH.to_owned(),
+        cpus: std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+        pool_threads: tally_engine::parallel::threads(),
+        runs,
+        thresholds_file: shown.display().to_string().replace('\\', "/"),
+    };
+    let md = perfcheck::markdown(&info, &outcomes);
+    println!("{md}");
+    if let Some(p) = &o.json {
+        std::fs::write(p, perfcheck::json(&info, &outcomes))
+            .map_err(|e| format!("cannot write {}: {e}", p.display()))?;
+    }
+    if let Some(p) = &o.markdown {
+        use std::io::Write as _;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+            .and_then(|mut f| f.write_all(md.as_bytes()))
+            .map_err(|e| format!("cannot write {}: {e}", p.display()))?;
+    }
+    Ok(!outcomes.iter().any(perfcheck::Outcome::failed))
+}
+
 fn wants_exact(o: &Opts, name: &str) -> bool {
     o.only.as_ref().is_some_and(|v| v.iter().any(|x| x == name))
 }
@@ -1259,6 +1511,19 @@ fn main() -> ExitCode {
             Err(e) => {
                 eprintln!("perf: {e}");
                 ExitCode::FAILURE
+            }
+        };
+    }
+    if o.check {
+        return match check(&o) {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => {
+                eprintln!("perf: check failed (see the table above)");
+                ExitCode::FAILURE
+            }
+            Err(e) => {
+                eprintln!("perf: {e}");
+                ExitCode::from(2)
             }
         };
     }
