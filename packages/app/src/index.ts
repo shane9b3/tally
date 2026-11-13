@@ -5,7 +5,7 @@
  */
 export { App, type AppProps, type Platform } from "./App";
 export { AppController, writeClipboard, type ControllerOptions } from "./controller";
-export { buildCommands, currencyTarget, CHART_SOON, COMING_SOON, FILTER_SOON, WAVE5_SOON, type CommandUi } from "./commands";
+export { buildCommands, currencyTarget, COMING_SOON, WAVE5_SOON, type CommandUi } from "./commands";
 export { t, setTranslations, translations, type Translations } from "./i18n";
 export { CommandRegistry, type Command, type CommandArgs } from "./registry";
 export { BINDINGS, isMacPlatform, platformBindings, resolveKey, resolveBinding, shortcutFor, type Binding, type KeyContext, type KeyLike } from "./keymap";

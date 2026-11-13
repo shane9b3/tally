@@ -35,8 +35,6 @@ const BORDER_TITLES: Record<BorderPreset, string> = {
 export const COMING_SOON = "Coming soon";
 /** Reason shown for the wave-5 commands registered as seams (W5-0b). */
 export const WAVE5_SOON = "coming in wave 5";
-export const FILTER_SOON = "Filtering is coming in v0.2";
-export const CHART_SOON = "Charts are coming in v0.3";
 
 /**
  * Target of `format.currency` from assist args: `range` (e.g. `F2:F15`, the
