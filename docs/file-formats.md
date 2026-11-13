@@ -122,7 +122,7 @@ uses `rust_xlsxwriter` (pinned `=0.100.0`).
 | `xl/workbook.xml` | sheet order, names, `state="hidden"`/`veryHidden`; `workbookPr date1904`; `workbookView activeTab`; `calcPr iterate/iterateCount/iterateDelta`; `definedNames` |
 | `xl/sharedStrings.xml` | `<t>` and rich `<r><t>` runs concatenated; phonetic `<rPh>` dropped; whitespace kept verbatim |
 | `xl/styles.xml` | `numFmts` (custom codes → OOo codes), built-in `numFmtId` 0–49 (en-US), `fonts` (b, i, u, strike, sz, name, colour rgb/theme+tint/indexed), `fills` (pattern fill fg colour), `borders` (left/right/top/bottom/start/end style + colour), `cellXfs` (font, fill, border, number format, alignment horizontal/vertical/wrapText/indent), custom `indexedColors` |
-| `xl/worksheets/sheetN.xml` | `sheetPr/tabColor`, `sheetFormatPr defaultRowHeight`, frozen `pane`, `cols` (custom width, hidden, column style → whole-column style run), `row` (custom height, hidden), `c` (see below), `mergeCells` |
+| `xl/worksheets/sheetN.xml` | `sheetPr/tabColor`, `sheetFormatPr defaultRowHeight`, `pane` (frozen → rows / columns; Window ▸ Split, `state="split"` or absent → `xSplit`/`ySplit` in 1/20 pt to 1/100 mm), `cols` (custom width, hidden, column style → whole-column style run), `row` (custom height, hidden), `c` (see below), `mergeCells` |
 | `docProps/core.xml`, `docProps/app.xml` | title, created, modified, application |
 
 Cells (`<c r s t>`):
@@ -171,6 +171,13 @@ conditional formats.
 
 - Sheets in order, hidden sheets (`state="hidden"`; the active sheet is
   never hidden), active sheet, tab colours, frozen panes.
+- Window ▸ Split: `<pane xSplit ySplit activePane state="split"/>` first in
+  `sheetView` (ECMA-376 §18.3.1.66: positions in 1/20 pt, written to one
+  decimal so the 1/100 mm value reads back unchanged; `activePane`
+  `bottomRight` / `topRight` / `bottomLeft`; no `topLeftCell`). A frozen
+  pane wins when a sheet has both, as in the ODS writer. Unverified: whether
+  Excel places the line at the same spot (Excel may count the position from
+  the window edge, including the row/column headers).
 - Only the active sheet gets `sheetView tabSelected="1"`; a multi-sheet
   selection (`Transaction.group`) is not saved in any format (parity
   deviation U24).

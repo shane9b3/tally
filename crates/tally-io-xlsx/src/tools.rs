@@ -297,12 +297,61 @@ pub(crate) fn view_patches(data: &WorkbookData, patches: &mut Patches) {
         {
             attrs.push(format!(r#"zoomScale="{z}" zoomScaleNormal="{z}""#));
         }
+        if let Some(pane) = split_pane_xml(sheet) {
+            patches
+                .sheet_panes
+                .push((format!("xl/worksheets/sheet{}.xml", i + 1), pane));
+        }
         if !attrs.is_empty() {
             patches
                 .sheet_view_attrs
                 .push((format!("xl/worksheets/sheet{}.xml", i + 1), attrs.join(" ")));
         }
     }
+}
+
+/// The `<pane>` of a Window ▸ Split (ECMA-376 §18.3.1.66: for a pane that
+/// is not frozen, `xSplit` / `ySplit` are positions in 1/20 pt). A frozen
+/// pane wins over a split, as in AOO and the ODS writer.
+fn split_pane_xml(sheet: &SheetData) -> Option<String> {
+    if sheet.frozen.is_some_and(|(r, c)| r > 0 || c > 0) {
+        return None;
+    }
+    let sp = sheet.split?;
+    if sp.x_hmm == 0 && sp.y_hmm == 0 {
+        return None;
+    }
+    let mut x = String::from("<pane");
+    if sp.x_hmm > 0 {
+        let _ = write!(x, r#" xSplit="{}""#, hmm_to_twips_text(sp.x_hmm));
+    }
+    if sp.y_hmm > 0 {
+        let _ = write!(x, r#" ySplit="{}""#, hmm_to_twips_text(sp.y_hmm));
+    }
+    let active = match (sp.x_hmm > 0, sp.y_hmm > 0) {
+        (true, true) => "bottomRight",
+        (true, false) => "topRight",
+        _ => "bottomLeft",
+    };
+    let _ = write!(x, r#" activePane="{active}" state="split"/>"#);
+    Some(x)
+}
+
+/// 1/100 mm as twips (1/20 pt) to one decimal, so that reading the value
+/// back gives the same 1/100 mm (`xSplit` is an `xsd:double`).
+fn hmm_to_twips_text(hmm: u32) -> String {
+    let tenths = (f64::from(hmm) * 14_400.0 / 2540.0).round() as u64;
+    if tenths.is_multiple_of(10) {
+        (tenths / 10).to_string()
+    } else {
+        format!("{}.{}", tenths / 10, tenths % 10)
+    }
+}
+
+/// A split position in twips (1/20 pt) as 1/100 mm, capped (about 26 km;
+/// garbage in a file must not overflow).
+pub(crate) fn split_twips_to_hmm(twips: f64) -> u32 {
+    (twips.clamp(0.0, 15_000_000.0) * 2540.0 / 1440.0).round() as u32
 }
 
 /// Adds `<scenarios>` to the sheet XML through the patches pass.

@@ -1,7 +1,7 @@
 //! Streaming `xl/worksheets/sheetN.xml` → [`SheetData`].
 //!
 //! Parsed: `sheetPr/tabColor`, `sheetFormatPr`, `sheetViews/sheetView/pane`
-//! (frozen panes), `cols/col` (widths, hidden, column styles),
+//! (frozen panes and Window ▸ Split), `cols/col` (widths, hidden, column styles),
 //! `sheetData/row` (heights, hidden) and `c` (values, shared strings,
 //! inline strings, booleans, errors, ISO dates, formulas: plain, shared and
 //! array), `mergeCells`. Everything else (`dataValidations`,
@@ -263,8 +263,8 @@ pub(crate) fn parse_sheet<R: BufRead>(
                     }
                 }
                 "pane" => {
-                    // TODO(W5-2): a non-frozen pane (`state` absent or
-                    // "split") → `SheetData::split` (twips → hmm).
+                    // Frozen → `frozen` (rows / columns); a split (`state`
+                    // absent or "split") → `split` (twips → 1/100 mm).
                     st.pane(&e);
                     xr.skip()?;
                 }
@@ -497,6 +497,15 @@ impl State<'_, '_> {
     fn pane(&mut self, e: &Elem) {
         let state = e.attr_local("state").unwrap_or("split");
         if state != "frozen" && state != "frozenSplit" {
+            // Window ▸ Split: positions in 1/20 pt (ECMA-376 §18.3.1.66).
+            let pos = |k| attr_f64(e, k).map_or(0, crate::tools::split_twips_to_hmm);
+            let split = tally_model::SplitData {
+                x_hmm: pos("xSplit"),
+                y_hmm: pos("ySplit"),
+            };
+            if split.x_hmm > 0 || split.y_hmm > 0 {
+                self.out.split = Some(split);
+            }
             return;
         }
         let split = |k| {

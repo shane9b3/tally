@@ -942,6 +942,9 @@ pub(crate) struct Patches {
     /// `xl/worksheets/sheetN.xml` → attributes to add to `<sheetView`
     /// (view options rust_xlsxwriter has no setter for).
     pub sheet_view_attrs: Vec<(String, String)>,
+    /// `xl/worksheets/sheetN.xml` → a `<pane …/>` to put first in
+    /// `<sheetView>` (Window ▸ Split, which rust_xlsxwriter cannot write).
+    pub sheet_panes: Vec<(String, String)>,
     /// `workbookView showSheetTabs="0"` (Tools ▸ Options ▸ View ▸ Sheet tabs off).
     pub hide_sheet_tabs: bool,
     /// Literal chart data (`c:numLit` / `c:strLit`, which rust_xlsxwriter
@@ -964,9 +967,34 @@ impl Patches {
             && self.sheet_inserts.is_empty()
             && self.style_names.is_empty()
             && self.sheet_view_attrs.is_empty()
+            && self.sheet_panes.is_empty()
             && !self.hide_sheet_tabs
             && self.chart_literals.is_empty()
     }
+}
+
+/// Puts `pane` first in the sheet's `<sheetView>` (CT_SheetView: `pane`,
+/// then `selection`), opening a self-closed `<sheetView …/>`. A sheet XML
+/// without a `<sheetView ` start tag is returned unchanged.
+pub(crate) fn insert_pane(xml: &str, pane: &str) -> String {
+    let Some(start) = xml.find("<sheetView ") else {
+        return xml.to_owned();
+    };
+    let Some(gt) = xml[start..].find('>').map(|i| start + i) else {
+        return xml.to_owned();
+    };
+    let mut out = String::with_capacity(xml.len() + pane.len() + 16);
+    if xml[..gt].ends_with('/') {
+        out.push_str(&xml[..gt - 1]);
+        out.push('>');
+        out.push_str(pane);
+        out.push_str("</sheetView>");
+    } else {
+        out.push_str(&xml[..=gt]);
+        out.push_str(pane);
+    }
+    out.push_str(&xml[gt + 1..]);
+    out
 }
 
 /// The elements that may follow `scenarios` in `CT_Worksheet`, in schema
@@ -1138,6 +1166,12 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             .filter(|(n, _)| *n == name)
             .map(|(_, a)| a.as_str())
             .collect();
+        let panes: Vec<&str> = p
+            .sheet_panes
+            .iter()
+            .filter(|(n, _)| *n == name)
+            .map(|(_, x)| x.as_str())
+            .collect();
         let is_ct = name == "[Content_Types].xml" && !p.content_types.is_empty();
         let is_styles = name == "xl/styles.xml" && !p.style_names.is_empty();
         let is_chart = name.starts_with("xl/charts/chart") && !p.chart_literals.is_empty();
@@ -1149,6 +1183,7 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             || is_wb
             || !sheet_ins.is_empty()
             || !view_attrs.is_empty()
+            || !panes.is_empty()
             || !rel_adds.is_empty()
             || is_ct
             || is_styles
@@ -1225,6 +1260,9 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             }
             for a in &view_attrs {
                 patched = patched.replacen("<sheetView ", &format!("<sheetView {a} "), 1);
+            }
+            if let Some(pane) = panes.first() {
+                patched = insert_pane(&patched, pane);
             }
             for x in &sheet_ins {
                 let at = AFTER_SCENARIOS
