@@ -1,0 +1,4 @@
+name,formula
+x,=1+2
+y,"=HYPERLINK(""http://evil"")"
+z,+cmd

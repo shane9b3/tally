@@ -1,0 +1,360 @@
+# Fuzz: coverage-guided fuzzing (cargo-fuzz / libFuzzer, nightly Rust) of
+# the file readers and parsers that see untrusted input (docs/security.md §9).
+# The targets are in fuzz/, their harness functions in
+# crates/tally-fuzz-harness (shared with the stable replay test that runs
+# fuzz/regressions/ on every `cargo test`).
+#
+# - Nightly (schedule): every target, one shard of 10 minutes, so each
+#   target accumulates fuzzing time and corpus day by day.
+# - Campaign (workflow_dispatch): chosen targets × shards × minutes. A job
+#   may run at most 6 h, so a long campaign is several shards that fuzz in
+#   parallel from the same corpus; the `merge` job folds their corpora
+#   together. The defaults (the five reader targets, 5 shards × 330 min)
+#   give each target 27.5 h of fuzzing in one dispatch:
+#
+#       gh workflow run fuzz.yml -f targets=readers -f shards=5 -f minutes=330
+#
+# Accounting: every shard records its libFuzzer wall-clock seconds and
+# executions; `merge` appends them to a per-target ledger (ledger.tsv) kept
+# with the corpus and prints this run's and the accumulated totals in the
+# run summary. The ledger of each run is also uploaded (`ledger-<target>`,
+# kept 90 days), so the totals survive a cache eviction.
+#
+# Corpus: kept in the Actions cache (`fuzz-corpus-<target>-…`, restored by
+# prefix: the newest wins), merged and minimised (`-merge=1`) once per run.
+#
+# A crash, timeout, out-of-memory or leak fails the shard's job and uploads
+# the input (`crash-<target>-<shard>`). Minimise it (`cargo +nightly fuzz
+# tmin <target> <file>`), fix the bug, and add the file to
+# fuzz/regressions/<target>/.
+#
+# No secrets and no pull_request trigger; the token is read-only.
+
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Targets, space-separated, or "readers" (ods ods_parts xlsx xlsx_parts xls) or "all"'
+        required: true
+        default: readers
+        type: string
+      minutes:
+        description: "Fuzzing minutes per shard (1-330; a job is capped at 6 h)"
+        required: true
+        default: "330"
+        type: string
+      shards:
+        description: "Parallel shards per target (1-8)"
+        required: true
+        default: "5"
+        type: string
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+# One run at a time: runs share the corpus caches.
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Must stay below the job's timeout-minutes (360 at most on GitHub).
+  MAX_MINUTES: 330
+  RSS_LIMIT_MB: 4096
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      targets: ${{ steps.plan.outputs.targets }}
+      names: ${{ steps.plan.outputs.names }}
+      seconds: ${{ steps.plan.outputs.seconds }}
+    steps:
+      - name: Targets, shards and duration
+        id: plan
+        env:
+          IN_TARGETS: ${{ inputs.targets || 'all' }}
+          IN_MINUTES: ${{ inputs.minutes || '10' }}
+          IN_SHARDS: ${{ inputs.shards || '1' }}
+        run: |
+          set -euo pipefail
+          # target max_len timeout(s) dictionary ("-" = none)
+          table='ods        262144 20 ods.dict
+          ods_parts  262144 20 ods.dict
+          xlsx       262144 20 xlsx.dict
+          xlsx_parts 262144 20 xlsx.dict
+          xls        131072 20 -
+          fods       131072 20 ods.dict
+          xmlss      131072 20 xmlss.dict
+          csv        65536  20 -
+          html       131072 20 -
+          dbf        65536  20 -
+          dif        65536  20 -
+          sylk       65536  20 -
+          formula    32768  10 formula.dict
+          numfmt     8192   10 numfmt.dict
+          open       262144 60 ods.dict'
+          all=$(printf '%s\n' "$table" | awk '{print $1}' | tr '\n' ' ')
+          set -f # no globbing of the targets input
+          case "$IN_TARGETS" in
+            all) wanted="$all" ;;
+            readers) wanted="ods ods_parts xlsx xlsx_parts xls" ;;
+            *) wanted="$IN_TARGETS" ;;
+          esac
+          # Once each (artifact names are per target and shard).
+          wanted=$(printf '%s\n' $wanted | awk 'NF && !seen[$0]++' | tr '\n' ' ')
+          if ! printf '%s' "$IN_MINUTES" | grep -Eq '^[0-9]{1,3}$' || [ "$((10#$IN_MINUTES))" -lt 1 ] || [ "$((10#$IN_MINUTES))" -gt "$MAX_MINUTES" ]; then
+            echo "::error::minutes must be 1-$MAX_MINUTES"; exit 1
+          fi
+          if ! printf '%s' "$IN_SHARDS" | grep -Eq '^[0-9]$' || [ "$IN_SHARDS" -lt 1 ] || [ "$IN_SHARDS" -gt 8 ]; then
+            echo "::error::shards must be 1-8"; exit 1
+          fi
+          IN_MINUTES=$((10#$IN_MINUTES))
+          shards='[]'
+          targets='[]'
+          for t in $wanted; do
+            row=$(printf '%s\n' "$table" | awk -v t="$t" '$1 == t')
+            if [ -z "$row" ]; then
+              echo "::error::unknown target '$t' (known: $all)"; exit 1
+            fi
+            read -r name max_len timeout dict <<< "$row"
+            targets=$(jq -c --arg t "$name" --argjson m "$max_len" --argjson to "$timeout" \
+              '. + [{target: $t, max_len: $m, timeout: $to}]' <<< "$targets")
+            for s in $(seq 1 "$IN_SHARDS"); do
+              shards=$(jq -c --arg t "$name" --argjson s "$s" --argjson m "$max_len" \
+                --argjson to "$timeout" --arg d "$dict" \
+                '. + [{target: $t, shard: $s, max_len: $m, timeout: $to, dict: $d}]' <<< "$shards")
+            done
+          done
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "names=$wanted" >> "$GITHUB_OUTPUT"
+          echo "seconds=$((IN_MINUTES * 60))" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Fuzz plan"
+            echo "targets: \`$wanted\`; shards per target: $IN_SHARDS; minutes per shard: $IN_MINUTES"
+            echo "fuzzing time per target this run: $((IN_SHARDS * IN_MINUTES)) min"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: build (nightly, ASan)
+    needs: plan
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: nightly
+      # rust-toolchain.toml pins the stable release for the repository, so
+      # every cargo call here names the nightly toolchain explicitly.
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --version 0.13.2 --locked
+      - name: Build the planned fuzz targets
+        # Release with debug assertions and overflow checks (cargo-fuzz's
+        # default without -O), AddressSanitizer, libFuzzer.
+        env:
+          NAMES: ${{ needs.plan.outputs.names }}
+        run: |
+          set -euo pipefail
+          for t in $NAMES; do cargo +nightly fuzz build "$t"; done
+      - name: Pack the binaries (artifacts drop the executable bit)
+        env:
+          NAMES: ${{ needs.plan.outputs.names }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086 # one word per target
+          tar -czf fuzz-bin.tgz -C fuzz/target/x86_64-unknown-linux-gnu/release $NAMES
+          ls -la fuzz-bin.tgz
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: fuzz-bin
+          path: fuzz-bin.tgz
+          retention-days: 2
+          if-no-files-found: error
+
+  fuzz:
+    name: "fuzz ${{ matrix.target }} (shard ${{ matrix.shard }})"
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.shards) }}
+    env:
+      TARGET: ${{ matrix.target }}
+      SHARD: ${{ matrix.shard }}
+      MAX_LEN: ${{ matrix.max_len }}
+      TIMEOUT: ${{ matrix.timeout }}
+      DICT: ${{ matrix.dict }}
+      SECONDS_BUDGET: ${{ needs.plan.outputs.seconds }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzz-bin
+      - name: Unpack
+        run: |
+          mkdir -p bin
+          tar -xzf fuzz-bin.tgz -C bin
+      - name: Restore the corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: state/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Fuzz
+        run: |
+          set -uo pipefail
+          mkdir -p "state/$TARGET/corpus" out/corpus out/crash
+          # Seed the new corpus with the merged one; libFuzzer adds new
+          # inputs to the first directory.
+          cp -a "state/$TARGET/corpus/." out/corpus/ 2>/dev/null || true
+          inputs=("fuzz/seeds/$TARGET")
+          if [ -d "fuzz/regressions/$TARGET" ]; then inputs+=("fuzz/regressions/$TARGET"); fi
+          dict=()
+          if [ "$DICT" != "-" ]; then dict=("-dict=fuzz/dict/$DICT"); fi
+          symbolizer=$(command -v llvm-symbolizer || ls /usr/bin/llvm-symbolizer-* 2>/dev/null | sort -V | tail -n1 || true)
+          if [ -n "$symbolizer" ]; then export ASAN_SYMBOLIZER_PATH="$symbolizer"; fi
+          start=$(date +%s)
+          "./bin/$TARGET" \
+            -max_total_time="$SECONDS_BUDGET" \
+            -max_len="$MAX_LEN" \
+            -timeout="$TIMEOUT" \
+            -rss_limit_mb="$RSS_LIMIT_MB" \
+            -print_final_stats=1 \
+            -artifact_prefix=out/crash/ \
+            ${dict[@]+"${dict[@]}"} \
+            out/corpus "${inputs[@]}" 2>&1 | tee fuzz.log | grep -v -E '^#[0-9]+\s+(NEW|REDUCE|pulse)'
+          status=${PIPESTATUS[0]}
+          end=$(date +%s)
+          execs=$(grep -Eo 'stat::number_of_executed_units: *[0-9]+' fuzz.log | grep -Eo '[0-9]+$' | tail -n1 || true)
+          result=ok
+          if [ "$status" -ne 0 ]; then result="fail($status)"; fi
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%MZ)" "$GITHUB_RUN_ID" "$TARGET" \
+            "$SHARD" "$((end - start))" "${execs:-?}" "$result" > out/stats.tsv
+          cp fuzz.log out/
+          echo "fuzzed $TARGET shard $SHARD for $((end - start)) s, ${execs:-?} executions: $result" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Upload the corpus
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: corpus-${{ matrix.target }}-${{ matrix.shard }}
+          path: |
+            out/corpus
+            out/stats.tsv
+          retention-days: 3
+          if-no-files-found: warn
+      - name: Upload the crash
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: crash-${{ matrix.target }}-${{ matrix.shard }}
+          path: |
+            out/crash
+            out/fuzz.log
+          retention-days: 30
+          if-no-files-found: warn
+
+  merge:
+    name: merge ${{ matrix.target }}
+    needs: [plan, build, fuzz]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.targets) }}
+    env:
+      TARGET: ${{ matrix.target }}
+      MAX_LEN: ${{ matrix.max_len }}
+      TIMEOUT: ${{ matrix.timeout }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzz-bin
+      - name: Unpack
+        run: |
+          mkdir -p bin
+          tar -xzf fuzz-bin.tgz -C bin
+      - name: Restore the corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: state/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Download the shards' corpora
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        continue-on-error: true
+        with:
+          pattern: corpus-${{ matrix.target }}-*
+          path: shards
+      - name: Merge, minimise and account
+        run: |
+          set -euo pipefail
+          state="state/$TARGET"
+          mkdir -p "$state/corpus" shards merged
+          touch "$state/ledger.tsv"
+          dirs=("$state/corpus")
+          for d in shards/*/; do
+            [ -d "$d/corpus" ] && dirs+=("$d/corpus")
+            if [ -f "$d/stats.tsv" ]; then cat "$d/stats.tsv" >> "$state/ledger.tsv"; fi
+          done
+          # -merge=1 keeps the inputs that add coverage, so the cached
+          # corpus stays small; crashing inputs are skipped.
+          "./bin/$TARGET" -merge=1 -max_len="$MAX_LEN" -timeout="$TIMEOUT" \
+            -rss_limit_mb="$RSS_LIMIT_MB" merged "${dirs[@]}" > merge.log 2>&1 || {
+            echo "::warning::merge failed; keeping the previous corpus plus the shards' inputs"
+            tail -n 30 merge.log
+            for d in "${dirs[@]}"; do cp -n "$d"/* merged/ 2>/dev/null || true; done
+          }
+          rm -rf "$state/corpus"
+          mv merged "$state/corpus"
+          # A re-run merge job may restore a ledger that already has these
+          # lines (one line per shard and run, so duplicates are exact).
+          sort -u -o "$state/ledger.tsv" "$state/ledger.tsv"
+          files=$(find "$state/corpus" -type f | wc -l)
+          {
+            echo "### $TARGET"
+            echo "| this run | accumulated (ledger) | failed shards this run | corpus files |"
+            echo "|---|---|---|---|"
+            awk -F'\t' -v r="$GITHUB_RUN_ID" -v files="$files" '
+              { total += $5 }
+              $2 == r { run += $5; if ($7 != "ok") fails++ }
+              END { printf "| %d s (%.1f h) | %d s (%.1f h) | %d | %d |\n", run, run / 3600, total, total / 3600, fails, files }
+            ' "$state/ledger.tsv"
+          } >> "$GITHUB_STEP_SUMMARY"
+          cp "$state/ledger.tsv" "ledger-$TARGET.tsv"
+      - name: Save the corpus
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: state/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ledger-${{ matrix.target }}
+          path: ledger-${{ matrix.target }}.tsv
+          retention-days: 90

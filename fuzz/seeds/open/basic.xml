@@ -1,0 +1,123 @@
+<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+ <DocumentProperties xmlns="urn:schemas-microsoft-com:office:office">
+  <Title>Quarterly figures</Title>
+  <Subject>Test</Subject>
+  <Author>Ada</Author>
+  <LastAuthor>Grace</LastAuthor>
+  <Created>2003-05-01T10:00:00Z</Created>
+  <LastSaved>2003-05-02T11:00:00Z</LastSaved>
+  <Keywords>alpha, beta</Keywords>
+  <Description>Hand-written fixture</Description>
+ </DocumentProperties>
+ <ExcelWorkbook xmlns="urn:schemas-microsoft-com:office:excel">
+  <ActiveSheet>1</ActiveSheet>
+ </ExcelWorkbook>
+ <Styles>
+  <Style ss:ID="Default" ss:Name="Normal">
+   <Alignment ss:Vertical="Bottom"/>
+   <Font ss:FontName="Arial" ss:Size="10"/>
+  </Style>
+  <Style ss:ID="sBold">
+   <Font ss:FontName="Arial" ss:Size="14" ss:Bold="1" ss:Italic="1" ss:Underline="Single" ss:StrikeThrough="1" ss:Color="#FF0000"/>
+  </Style>
+  <Style ss:ID="sFill">
+   <Interior ss:Color="#FFFF00" ss:Pattern="Solid"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2"/>
+    <Border ss:Position="Left" ss:LineStyle="Double" ss:Weight="3" ss:Color="#0000FF"/>
+    <Border ss:Position="Top" ss:LineStyle="Dash" ss:Weight="1"/>
+    <Border ss:Position="Right" ss:LineStyle="None"/>
+   </Borders>
+   <Alignment ss:Horizontal="Center" ss:Vertical="Top" ss:WrapText="1" ss:Indent="2" ss:Rotate="45"/>
+   <Protection ss:Protected="0"/>
+  </Style>
+  <Style ss:ID="sChild" ss:Parent="sFill">
+   <NumberFormat ss:Format="0.00%"/>
+  </Style>
+  <Style ss:ID="sDate"><NumberFormat ss:Format="Short Date"/></Style>
+  <Style ss:ID="sStd"><NumberFormat ss:Format="Standard"/></Style>
+  <Style ss:ID="sCol"><Font ss:FontName="Courier New"/></Style>
+ </Styles>
+ <Names>
+  <NamedRange ss:Name="Rates" ss:RefersTo="=Data!R1C1:R5C2"/>
+  <NamedRange ss:Name="TaxRate" ss:RefersTo="=0.2"/>
+ </Names>
+ <Worksheet ss:Name="Data">
+  <Names>
+   <NamedRange ss:Name="Print_Area" ss:RefersTo="=Data!R1C1:R10C4"/>
+   <NamedRange ss:Name="Print_Titles" ss:RefersTo="=Data!R1:R2"/>
+   <NamedRange ss:Name="_FilterDatabase" ss:RefersTo="=Data!R1C1:R5C2" ss:Hidden="1"/>
+   <NamedRange ss:Name="Local" ss:RefersTo="=Data!R2C2"/>
+  </Names>
+  <Table ss:ExpandedColumnCount="10" ss:ExpandedRowCount="20" x:FullColumns="1" x:FullRows="1">
+   <Column ss:Width="80"/>
+   <Column ss:Index="3" ss:Span="1" ss:Width="30" ss:Hidden="1"/>
+   <Column ss:Index="6" ss:StyleID="sCol" ss:Width="60"/>
+   <Row ss:Height="20" ss:AutoFitHeight="0">
+    <Cell><Data ss:Type="Number">1.5</Data></Cell>
+    <Cell><Data ss:Type="String">hello</Data></Cell>
+    <Cell><Data ss:Type="Boolean">1</Data></Cell>
+    <Cell ss:StyleID="sDate"><Data ss:Type="DateTime">1999-12-31T00:00:00.000</Data></Cell>
+    <Cell><Data ss:Type="Error">#N/A</Data></Cell>
+    <Cell><Data ss:Type="String">in styled column</Data></Cell>
+   </Row>
+   <Row>
+    <Cell ss:Formula="=R[-1]C*2"><Data ss:Type="Number">3</Data></Cell>
+    <Cell ss:Formula="=SUM(R1C1:R1C1)+Other!RC"><Data ss:Type="Number">1.5</Data></Cell>
+    <Cell ss:Index="4"><Data ss:Type="DateTime">2026-10-19T12:00:00.000</Data></Cell>
+    <Cell ss:Formula="=BOGUS(("><Data ss:Type="Number">7</Data></Cell>
+   </Row>
+   <Row ss:Index="5" ss:Hidden="1">
+    <Cell ss:MergeAcross="2" ss:MergeDown="1" ss:StyleID="sBold"><Data ss:Type="String">merged</Data></Cell>
+    <Cell ss:StyleID="sChild"><Data ss:Type="Number">0.25</Data></Cell>
+    <Cell ss:StyleID="sStd" ss:HRef="https://example.com/"><Data ss:Type="Number">1234.5</Data></Cell>
+   </Row>
+   <Row ss:Index="8" ss:Span="2" ss:StyleID="sFill">
+    <Cell><Data ss:Type="String">spanned</Data></Cell>
+   </Row>
+   <Row>
+    <Cell><ss:Data ss:Type="String" xmlns="http://www.w3.org/TR/REC-html40"><B>Rich </B><Font html:Color="#FF0000">text</Font></ss:Data><Comment ss:Author="Ada" ss:ShowAlways="1"><ss:Data xmlns="http://www.w3.org/TR/REC-html40"><B>Ada:</B> a note</ss:Data></Comment></Cell>
+    <Cell ss:Index="3"/>
+    <Cell ss:StyleID="sFill"/>
+   </Row>
+  </Table>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+   <FreezePanes/>
+   <FrozenNoSplit/>
+   <SplitHorizontal>1</SplitHorizontal>
+   <TopRowBottomPane>1</TopRowBottomPane>
+   <SplitVertical>2</SplitVertical>
+   <LeftColumnRightPane>2</LeftColumnRightPane>
+   <ActivePane>0</ActivePane>
+  </WorksheetOptions>
+  <AutoFilter x:Range="R1C1:R5C2" xmlns="urn:schemas-microsoft-com:office:excel"/>
+  <ConditionalFormatting xmlns="urn:schemas-microsoft-com:office:excel">
+   <Range>R1C1:R2C2</Range>
+   <Condition><Qualifier>Greater</Qualifier><Value1>1</Value1></Condition>
+  </ConditionalFormatting>
+ </Worksheet>
+ <Worksheet ss:Name="Other">
+  <Table>
+   <Row><Cell><Data ss:Type="Number">10</Data></Cell></Row>
+   <Row><Cell><Data ss:Type="Number">20</Data></Cell><Cell ss:Formula="=Data!R1C1+R[-1]C[-1]"><Data ss:Type="Number">11.5</Data></Cell></Row>
+  </Table>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+   <Selected/>
+   <ProtectContents>True</ProtectContents>
+  </WorksheetOptions>
+ </Worksheet>
+ <Worksheet ss:Name="Secret">
+  <Table/>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+   <Visible>SheetHidden</Visible>
+  </WorksheetOptions>
+ </Worksheet>
+ <Worksheet ss:Name="Data">
+ </Worksheet>
+</Workbook>

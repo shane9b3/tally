@@ -1,0 +1,22 @@
+[package]
+name = "tally-fuzz-harness"
+description = "Fuzz harness functions shared by the cargo-fuzz targets (fuzz/) and the stable regression replay test."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tally-api.workspace = true
+tally-engine = { workspace = true, features = ["io"] }
+tally-formula.workspace = true
+tally-io-ods.workspace = true
+tally-io-xlsx.workspace = true
+tally-numfmt.workspace = true
+tally-types.workspace = true
+# Builds the zip package of the `*_parts` targets.
+zip.workspace = true
+
+[lints]
+workspace = true

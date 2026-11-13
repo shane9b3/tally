@@ -1,0 +1,6 @@
+Invoice,Customer,Date,Qty,Price,Total,Status
+1001,Maple & Co. Bakery,10/01/2026,12,4.50,=D2*E2,Paid
+1002,Northside Café,10/03/2026,30,2.25,=D3*E3,Due
+1003,Harbour Deli,10/07/2026,8,6.00,=D4*E4,Paid
+1004,Green Grocer,10/12/2026,20,3.10,=D5*E5,Overdue
+,,,,Total,=SUM(F2:F5),

@@ -101,11 +101,17 @@ pub fn sniff_is_dbf(bytes: &[u8]) -> bool {
     }
     let header_len = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
     let record_len = u16::from_le_bytes([bytes[10], bytes[11]]) as usize;
+    // Checked first: `header_len - 1` below must not underflow (a zero
+    // header length panicked in debug builds; found by the fuzz smoke test,
+    // fuzz/regressions/dbf/).
+    if header_len < 33 {
+        return false;
+    }
     // Visual FoxPro (0x30-0x32) appends a 263-byte backlink after the
     // field terminator (correctness review 4, M32).
     let fields_ok = (header_len - 1).is_multiple_of(32)
         || (is_vfp(bytes[0]) && header_len >= 33 + 263 && (header_len - 264).is_multiple_of(32));
-    header_len >= 33 && fields_ok && record_len >= 1 && header_len <= bytes.len()
+    fields_ok && record_len >= 1 && header_len <= bytes.len()
 }
 
 /// Visual FoxPro version bytes.

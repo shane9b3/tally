@@ -1,0 +1,132 @@
+# cargo-fuzz targets for Tally's untrusted-input parsers (docs/security.md §9).
+#
+# Its own workspace (the root Cargo.toml excludes `fuzz`), so the main
+# workspace's stable builds, clippy, tests and cargo-deny never see
+# libfuzzer-sys. Needs a nightly toolchain; from the repository root:
+#
+#     cargo +nightly fuzz run ods_parts fuzz/corpus/ods_parts fuzz/seeds/ods_parts -- -dict=fuzz/dict/ods.dict
+#
+# The harness functions live in crates/tally-fuzz-harness (stable), shared
+# with the replay test that runs fuzz/regressions/ on every `cargo test`.
+
+[package]
+name = "tally-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+tally-fuzz-harness = { path = "../crates/tally-fuzz-harness" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "ods"
+path = "fuzz_targets/ods.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ods_parts"
+path = "fuzz_targets/ods_parts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xlsx"
+path = "fuzz_targets/xlsx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xlsx_parts"
+path = "fuzz_targets/xlsx_parts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xls"
+path = "fuzz_targets/xls.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fods"
+path = "fuzz_targets/fods.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xmlss"
+path = "fuzz_targets/xmlss.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "csv"
+path = "fuzz_targets/csv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "html"
+path = "fuzz_targets/html.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dbf"
+path = "fuzz_targets/dbf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dif"
+path = "fuzz_targets/dif.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sylk"
+path = "fuzz_targets/sylk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "formula"
+path = "fuzz_targets/formula.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "numfmt"
+path = "fuzz_targets/numfmt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "open"
+path = "fuzz_targets/open.rs"
+test = false
+doc = false
+bench = false

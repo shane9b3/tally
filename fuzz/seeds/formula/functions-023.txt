@@ -1,0 +1,1 @@
+=IF(A1>0,"pos",IF(A1<0,"neg","zero"))

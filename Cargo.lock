@@ -4824,6 +4824,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tally-fuzz-harness"
+version = "0.1.2"
+dependencies = [
+ "tally-api",
+ "tally-engine",
+ "tally-formula",
+ "tally-io-ods",
+ "tally-io-xlsx",
+ "tally-numfmt",
+ "tally-types",
+ "zip",
+]
+
+[[package]]
 name = "tally-io-csv"
 version = "0.1.2"
 dependencies = [

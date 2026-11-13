@@ -1,0 +1,1 @@
+=_xlfn.XLOOKUP(A1,B:B,C:C)

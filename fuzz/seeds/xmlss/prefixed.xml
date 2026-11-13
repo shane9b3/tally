@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ss:Workbook xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:x="urn:schemas-microsoft-com:office:excel">
+ <x:ExcelWorkbook>
+  <x:Date1904/>
+ </x:ExcelWorkbook>
+ <ss:Styles>
+  <ss:Style ss:ID="Default" ss:Name="Normal"><ss:Font ss:FontName="Calibri" ss:Size="11"/></ss:Style>
+ </ss:Styles>
+ <ss:Worksheet ss:Name="">
+  <ss:Table>
+   <ss:Row>
+    <ss:Cell><ss:Data ss:Type="DateTime">1904-01-02T00:00:00.000</ss:Data></ss:Cell>
+    <ss:Cell ss:Index="3"><ss:Data ss:Type="String">x</ss:Data></ss:Cell>
+   </ss:Row>
+   <ss:Row>
+    <ss:Cell><ss:Data ss:Type="DateTime">1899-12-31T06:00:00.000</ss:Data></ss:Cell>
+   </ss:Row>
+  </ss:Table>
+ </ss:Worksheet>
+</ss:Workbook>

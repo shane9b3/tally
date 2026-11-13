@@ -25,7 +25,7 @@ fixtures, by `python3 -I tests/fixtures/ods/gen_fixtures.py`.
 | 6 | Untrusted parsing happens in Rust only | WP5 (parsing), WP7 (IPC surface) | Parsing side done |
 | 7 | Tauri hardening | WP7 | Implemented (see the WP7 section) |
 | 8 | Engine DoS limits | WP1, WP2, WP3 | Implemented (text cap, linear wildcards, recalc watchdog, sheet cap, names by reference, per-formula and per-transaction work budgets) |
-| 9 | Fuzzing | later (Phase A drops fuzz targets) | Corpus and a mutation smoke test exist |
+| 9 | Fuzzing | security (2026-11-13) | 15 cargo-fuzz targets (`fuzz/`), nightly and on-demand workflow (`.github/workflows/fuzz.yml`), stable replay of `fuzz/regressions/`; the 24 h campaign has not been run yet (see [§9](#9-fuzzing-cargo-fuzz-githubworkflowsfuzzyml)) |
 | 10 | Auto-update: the app's first network access | updater (2026-11-11) | Implemented; the release workflow and a real update are unverified (see [Auto-update](#auto-update-the-apps-only-network-access)) |
 
 Plus the CSV formula-injection guard (§5.3), which is described below.
@@ -721,16 +721,139 @@ Correctness fixes in the same files (review 4, H3–H7, M8–M14) are
 described in `pivot.rs` with their AOO references; tests in
 `crates/tally-engine/tests/pivot.rs`, `tally-io-ods::tools::tests::pivot_*`.
 
-## 9. Fuzzing: later
+## 9. Fuzzing (cargo-fuzz, `.github/workflows/fuzz.yml`)
 
-Phase A drops fuzz targets (`docs/phase-a.md`). What exists today:
+**Status (2026-11-13): targets, workflow and stable regression path are in
+place; the 24-hour campaign has not been run yet.** The workflow can only
+run once it is on the default branch; nothing below has been fuzzed with
+coverage guidance so far. Until the campaign's ledger shows 24 h per
+reader, this requirement is open.
 
-- the malicious corpus in `tests/fixtures/malicious/`, which can seed
-  cargo-fuzz targets;
-- the deterministic mutation smoke test described in requirement 6.
+### Targets
 
-cargo-fuzz targets for the formula parser, the format-code parser, the ODS
-reader and the CSV reader (nightly CI) come in a later milestone.
+The cargo-fuzz crate is `fuzz/` (libFuzzer, nightly only). It is its own
+Cargo workspace, excluded from the main one (`exclude = ["fuzz"]` in the
+root `Cargo.toml`), so stable builds, clippy, `cargo test --workspace` and
+cargo-deny never see `libfuzzer-sys`. Each target is one line calling a
+harness function in `crates/tally-fuzz-harness` (a normal workspace crate),
+so the fuzzer and the stable tests run the same code. Every harness calls
+the entry point the app uses when it opens a file, with the app's limits:
+`IoCodec::read(bytes, ext)` (content sniffing, then the reader with its
+`Limits::default()`), exactly as `EngineService::decode_file` does. An
+`Err` is a normal outcome; a panic, abort, ASan report, leak, out-of-memory
+or per-input timeout is a finding.
+
+| Target | Input | Entry point |
+|---|---|---|
+| `ods` | raw `.ods` bytes | `IoCodec::read(…, "ods")` |
+| `ods_parts` | zip parts: `name \0 content \0 …` | the package is built (stored entries, a `mimetype` first unless the input has one, so `.sxc` parts work too), then `IoCodec::read(…, "ods")` |
+| `xlsx` | raw `.xlsx` bytes | `IoCodec::read(…, "xlsx")` |
+| `xlsx_parts` | zip parts, as above | `IoCodec::read(…, "xlsx")` |
+| `xls` | raw OLE2/BIFF bytes | `IoCodec::read(…, "xls")` |
+| `fods`, `xmlss`, `csv`, `html`, `dbf`, `dif`, `sylk` | raw bytes | `IoCodec::read` with `fods`, `xml`, `csv`, `html`, `dbf`, `dif`, `slk` |
+| `formula` | selector byte + UTF-8 text | `tally_formula::parse` in OpenFormula (with the engine's `OdfResolver`), Calc A1 and Excel A1 against a two-sheet workbook; stored Excel, R1C1 and AOO native formulas through `excel_formula_to_of`, `r1c1_formula_to_of`, `native_formula_to_of` first; each parse printed back and re-parsed |
+| `numfmt` | selector byte + UTF-8 text | even: `parse_format` and `parse_format_with_locale` (de-DE) of a code up to `MAX_CODE_LEN`, then `print_format` and `format_value_std` of numbers, dates, text, booleans and an error; odd: `recognize_input_with` in four locales |
+| `open` | extension byte + file bytes | the whole File ▸ Open: the bytes are written to a temporary file and `EngineService::open` reads it (file-size cap, codec, sheet cap, engine load, formula parsing, on-open recalc budget) |
+
+The zip readers' structure-aware targets (`*_parts`) exist because raw
+byte mutation of a package mostly dies at the zip layer (CRCs, offsets);
+they let mutations reach the XML parsers. The raw targets keep the zip
+layer itself covered.
+
+Seeds (`fuzz/seeds/<target>/`) are generated from the fixtures already in
+`tests/fixtures/` (and the formula tokenizer fixtures) by
+`cargo test -p tally-fuzz-harness --test generate -- --ignored`, files over
+64 KiB skipped. The same run writes the libFuzzer dictionaries
+(`fuzz/dict/*.dict`: element, attribute and part names from the fixtures;
+function names and operators; format-code tokens).
+
+### Regressions on stable
+
+`crates/tally-fuzz-harness/tests/replay.rs` runs every file in
+`fuzz/seeds/<target>/` and `fuzz/regressions/<target>/` through its harness
+on every `cargo test`, and fails if a directory does not name a target. A
+crash found by fuzzing is handled like this: download the `crash-<target>-<shard>`
+artifact, minimise it (`cargo +nightly fuzz tmin <target> <file>`), fix the
+bug, and add the minimised file to `fuzz/regressions/<target>/`. From then on
+the stable test suite guards it.
+
+`crates/tally-fuzz-harness/tests/smoke.rs` is a cheap stand-in on stable:
+every seed plus 150 deterministic random mutations per target (bit flips,
+byte and integer overwrites, deletions, duplications, truncations,
+dictionary tokens). Raise the count with `TALLY_FUZZ_SMOKE_ITERS` and vary
+the seed with `TALLY_FUZZ_SMOKE_SEED`. It is not coverage-guided. Before the
+workflow existed it was run with 3 × 5,000 and 1 × 60,000 mutations per
+target. That found one bug: `tally_io_dbf::sniff_is_dbf` computed
+`header_len - 1` before checking `header_len`, so a header length of 0
+underflowed. That panics in debug builds and in the fuzz build (debug
+assertions on); release builds wrapped and rejected the file correctly. It
+is fixed, and the reproducer is `fuzz/regressions/dbf/sniff-zero-header-length`.
+
+The older per-reader mutation tests stay as they are (requirement 6 and the
+reader tables in §3c).
+
+### Running locally (needs nightly and cargo-fuzz)
+
+From the repository root (`rust-toolchain.toml` pins stable, so name the
+nightly toolchain explicitly):
+
+```sh
+cargo install cargo-fuzz --locked
+cargo +nightly fuzz list
+cargo +nightly fuzz run ods_parts fuzz/corpus/ods_parts fuzz/seeds/ods_parts -- \
+    -dict=fuzz/dict/ods.dict -max_len=262144 -timeout=20 -rss_limit_mb=4096
+```
+
+The first directory collects new inputs (`fuzz/corpus/` is git-ignored).
+Crashes land in `fuzz/artifacts/<target>/`.
+
+### CI: `.github/workflows/fuzz.yml`
+
+- **build:** nightly Rust and cargo-fuzz 0.13.2, then `cargo +nightly fuzz
+  build` of the planned targets. The build is release with debug assertions
+  and overflow checks (cargo-fuzz's default without `-O`) and
+  AddressSanitizer. The binaries are handed to the fuzz jobs as an artifact.
+- **fuzz:** one job per target and shard, on `ubuntu-24.04`. Each job runs a
+  single libFuzzer process with `-max_total_time` and `-max_len` (256 KiB
+  for packages and `open`, 128 KiB for XML, HTML and XLS, 64 KiB for the
+  text formats, 32 KiB for formulas, 8 KiB for format codes). Other flags:
+  `-timeout` of 20 s per input (60 s for `open`, whose recalc budget alone
+  is 20 s; 10 s for formulas and format codes), `-rss_limit_mb=4096`, and
+  the target's dictionary. It starts from the cached corpus, the seeds and
+  the regressions. A crash, timeout, OOM or leak fails the job and uploads
+  `crash-<target>-<shard>` (the input plus the log, kept 30 days).
+- **merge:** per target, folds the previous corpus and every shard's new
+  inputs into one minimised corpus (`-merge=1`) and saves it in the Actions
+  cache (`fuzz-corpus-<target>-<run>`; the newest is restored by prefix).
+- **Schedule:** nightly at 03:23 UTC, every target, 1 shard × 10 minutes, so
+  corpora and fuzzing time keep growing.
+- **Campaign:** run with `workflow_dispatch`: `targets` (names, `readers`
+  = `ods ods_parts xlsx xlsx_parts xls`, or `all`), `minutes` per shard
+  (at most 330, because a GitHub-hosted job is capped at 6 h), `shards`
+  per target (1–8). Example: `gh workflow run fuzz.yml -f targets=readers
+  -f shards=5 -f minutes=330`.
+- **Hygiene:** `permissions: {}` at the top and `contents: read` per job.
+  Actions are pinned by commit SHA. Checkout uses `persist-credentials:
+  false`. There are no secrets and no `pull_request` trigger. One run at a
+  time (`concurrency: fuzz`), because runs share the caches.
+
+**How the 24 h is reached and read off.** A single job cannot fuzz for 24 h,
+so fuzzing time is counted across jobs and runs. Each shard records its
+libFuzzer wall-clock seconds, executions and result. The merge job appends
+those lines to the target's ledger (`ledger.tsv`, kept with the cached
+corpus). The run summary then shows, per target, "this run" and
+"accumulated (ledger)" time. Every run also uploads the ledger as
+`ledger-<target>` (kept 90 days), so the totals survive a cache eviction.
+One dispatch with the defaults gives each reader target 5 × 330 min =
+27.5 h, which is more than 24 h for XLS. ODS and XLSX each get 55 h across
+their raw and parts targets. The nightly runs add 10 min per target per
+day on top. The requirement counts as met when the ledgers of `ods` +
+`ods_parts`, `xlsx` + `xlsx_parts` and `xls` each show at least 24 h with
+no unfixed failure.
+
+Not covered by fuzzing yet: the PDF renderer, the clipboard and HTML paste
+paths, and evaluating formulas (the `formula` target parses and prints;
+it does not evaluate).
 
 ## Malicious corpus
 

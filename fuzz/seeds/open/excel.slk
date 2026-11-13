@@ -1,0 +1,26 @@
+ID;PWXL;N;E
+P;PGeneral
+P;P0.00
+P;Pm/d/yyyy
+P;FCalibri;M220;L9
+F;P0;DG0G8;M320
+B;Y4;X3;D0 0 3 2
+F;W1 1 12
+C;Y1;X1;K"Item"
+C;X2;K"Price"
+C;X3;K"Note"
+C;Y2;X1;K"Apple; red"
+F;P1;FF2G;X2
+C;X2;K1.5
+C;X3;KTRUE
+C;Y3;X1;K"Pear"
+F;P1;FF2G;X2
+C;X2;K2.25
+F;P2;FG0G;X3
+C;X3;K45000
+C;Y4;X1;K"Total"
+C;X2;K3.75;ESUM(R[-2]C:R[-1]C)
+C;X3;K#DIV/0!;E1/0
+C;Y5;X1;K"line :two"
+C;X2;K7;EUNKNOWNFUNC(R[-99]C)
+E

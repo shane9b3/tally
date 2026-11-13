@@ -22,9 +22,12 @@ members = [
     "crates/tally-assist",
     "crates/tally-cli",
     "crates/tally-macos-terminate",
+    "crates/tally-fuzz-harness",
     "apps/desktop/src-tauri",
     "xtask",
 ]
+# The cargo-fuzz crate is its own workspace (nightly only, docs/security.md §9).
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.2"
