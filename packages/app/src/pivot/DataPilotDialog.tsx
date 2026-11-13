@@ -18,7 +18,7 @@ import { Check, Field, RangeField, W56Shell, parseRangeText } from "../data/W56S
 import type { W56Dialog } from "../data/store";
 import w56 from "../data/W56.module.css";
 import styles from "./DataPilot.module.css";
-import { AGG_FNS, PIVOT_LAYOUTS, SHOW_AS, addField, availableFields, dataCaption, layoutError, moveField, removeField, updateDataField, updateField, type LayoutDataField, type LayoutField, type PivotArea, type PivotLayoutState } from "./pivotModel";
+import { AGG_FNS, PIVOT_LAYOUTS, SHOW_AS, addField, availableFields, dataCaption, layoutError, layoutOptionsEnabled, moveField, removeField, updateDataField, updateField, type LayoutDataField, type LayoutField, type PivotArea, type PivotLayoutState } from "./pivotModel";
 
 type Axis = Exclude<PivotArea, "data">;
 const AXES: readonly { area: Axis; key: string; label: string }[] = [
@@ -281,6 +281,7 @@ function FieldOptions({ f, area, fields, st, onChange }: { f: LayoutField; area:
   const subtotalType = f.subtotals.type;
   const customFns = f.subtotals.type === "custom" ? f.subtotals.fns : [];
   const toggleHidden = (text: string) => onChange({ hiddenItems: f.hiddenItems.includes(text) ? f.hiddenItems.filter((x) => x !== text) : [...f.hiddenItems, text] });
+  const layoutOn = layoutOptionsEnabled(st, area, f.sourceCol);
   return (
     <div className={styles.options} data-testid="pivot-field-options">
       <div className={w56.section}>
@@ -317,7 +318,7 @@ function FieldOptions({ f, area, fields, st, onChange }: { f: LayoutField; area:
             </select>
           </Field>
           <Field label={t("pivot.layout", "Layout")}>
-            <select className={dlg.select} value={f.layout} onChange={(e) => onChange({ layout: e.target.value as PivotLayout })}>
+            <select className={dlg.select} value={f.layout} disabled={!layoutOn} onChange={(e) => onChange({ layout: e.target.value as PivotLayout })} data-testid="pivot-layout">
               {PIVOT_LAYOUTS.map((l) => (
                 <option key={l.layout} value={l.layout}>
                   {t(`dp.layout.${l.layout}`, l.label)}
@@ -342,7 +343,7 @@ function FieldOptions({ f, area, fields, st, onChange }: { f: LayoutField; area:
       {area !== "page" ? (
         <div className={dlg.optionGrid}>
           <Check label={t("dp.showEmpty", "Show items without data")} checked={f.showEmpty} onChange={(v) => onChange({ showEmpty: v })} />
-          <Check label={t("dp.emptyLineAfter", "Empty line after each item")} checked={f.emptyLineAfter} onChange={(v) => onChange({ emptyLineAfter: v })} />
+          <Check label={t("dp.emptyLineAfter", "Empty line after each item")} checked={f.emptyLineAfter} disabled={!layoutOn} onChange={(v) => onChange({ emptyLineAfter: v })} testId="pivot-empty-line" />
           <Check label={t("dp.autoShow", "Show automatically (top N)")} checked={f.autoShow !== null} onChange={(v) => onChange({ autoShow: v ? { top: true, count: 5, dataField: 0 } : null })} />
           {f.autoShow ? (
             <span className={w56.row}>

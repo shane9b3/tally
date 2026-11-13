@@ -302,6 +302,102 @@ fn reads_excel_tools_fixture() {
     assert_eq!(p.data_fields[0].source_col, 3);
     assert_eq!(p.data_fields[0].function, AggFnData::Sum);
     assert_eq!(p.output, Some(r(0, 0, 3, 1)));
+    // Excel's default (compact) form: `outline` and `subtotalTop` default
+    // to true, read as AOO does (outline, subtotals at the top).
+    assert_eq!(p.row_fields[0].layout, PivotLayoutData::OutlineTop);
+    assert!(!p.row_fields[0].empty_line_after);
+}
+
+/// DataPilot field layout: tabular / outline top / outline bottom and the
+/// empty line map to `outline`, `subtotalTop` and `insertBlankRow` on
+/// `pivotField` (written with `compact="0"`); the compact form of an
+/// Excel file is read as outline layout with a warning.
+#[test]
+fn pivot_field_layout_round_trip() {
+    let mut wb = sample();
+    let p = &mut wb.sheets[1].pivots[0];
+    p.row_fields[0].layout = PivotLayoutData::OutlineBottom;
+    p.row_fields[0].empty_line_after = true;
+    p.row_fields.push(PivotFieldData {
+        source_col: 1,
+        name: "Product".into(),
+        layout: PivotLayoutData::Tabular,
+        ..PivotFieldData::default()
+    });
+    p.page_fields.clear();
+    p.col_fields = vec![PivotFieldData {
+        source_col: 2,
+        name: "Qty".into(),
+        layout: PivotLayoutData::OutlineTop,
+        ..PivotFieldData::default()
+    }];
+    let bytes = to_bytes(&wb);
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(
+        &mut zip.by_name("xl/pivotTables/pivotTable1.xml").unwrap(),
+        &mut xml,
+    )
+    .unwrap();
+    assert!(
+        xml.contains(r#"axis="axisRow" compact="0" subtotalTop="0" insertBlankRow="1""#),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(r#"axis="axisRow" compact="0" outline="0""#),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(r#"axis="axisCol" compact="0" showAll"#),
+        "{xml}"
+    );
+    let back = tally_io_xlsx::read_xlsx(
+        std::io::Cursor::new(&bytes),
+        &tally_io_xlsx::Limits::default(),
+    )
+    .unwrap();
+    let q = &back.sheets[1].pivots[0];
+    assert_eq!(q.row_fields[0].layout, PivotLayoutData::OutlineBottom);
+    assert!(q.row_fields[0].empty_line_after);
+    assert_eq!(q.row_fields[1].layout, PivotLayoutData::Tabular);
+    assert!(!q.row_fields[1].empty_line_after);
+    assert_eq!(q.col_fields[0].layout, PivotLayoutData::OutlineTop);
+    assert!(!back.warnings.iter().any(|w| w.contains("compact")));
+    // Excel's compact form on the outer row field.
+    let compact = xml.replace(
+        r#"axis="axisRow" compact="0" subtotalTop="0" insertBlankRow="1""#,
+        r#"axis="axisRow""#,
+    );
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..zip.len() {
+        let mut e = zip.by_index(i).unwrap();
+        let name = e.name().unwrap().into_owned();
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut e, &mut buf).unwrap();
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        out.start_file(name.as_str(), opts).unwrap();
+        if name == "xl/pivotTables/pivotTable1.xml" {
+            std::io::Write::write_all(&mut out, compact.as_bytes()).unwrap();
+        } else {
+            std::io::Write::write_all(&mut out, &buf).unwrap();
+        }
+    }
+    let bytes = out.finish().unwrap().into_inner();
+    let back = tally_io_xlsx::read_xlsx(
+        std::io::Cursor::new(&bytes),
+        &tally_io_xlsx::Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        back.sheets[1].pivots[0].row_fields[0].layout,
+        PivotLayoutData::OutlineTop
+    );
+    assert!(
+        back.warnings.iter().any(|w| w.contains("compact form")),
+        "{:?}",
+        back.warnings
+    );
 }
 
 /// AutoFilter: value lists, a custom condition and AOO's "Top 10" as

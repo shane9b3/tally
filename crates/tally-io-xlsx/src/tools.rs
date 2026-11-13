@@ -9,8 +9,8 @@ use std::io::BufRead;
 use rust_xlsxwriter::Worksheet;
 use tally_model::{
     AggFnData, CellContentData, CellData, CellRangeLocal, DataLayoutData, OutlineGroupData,
-    PivotData, PivotDataFieldData, PivotFieldData, PivotSourceData, PivotSubtotalsData,
-    ScenarioData, SheetData, WorkbookData,
+    PivotData, PivotDataFieldData, PivotFieldData, PivotLayoutData, PivotSourceData,
+    PivotSubtotalsData, ScenarioData, SheetData, WorkbookData,
 };
 use tally_types::{col_to_letters, Value, MAX_COLS, MAX_ROWS};
 
@@ -478,6 +478,25 @@ fn cell_text(c: &CellData) -> Option<String> {
     scenario_value_text(c)
 }
 
+/// The layout attributes of an axis `pivotField` (ECMA-376 Part 1
+/// `CT_PivotField`: `compact`, `outline` and `subtotalTop` default to
+/// true, `insertBlankRow` to false, as AOO's reader assumes too). Tabular is `outline="0"`; AOO's outline
+/// layouts are Excel's outline form (`compact="0"`), with `subtotalTop`
+/// telling top from bottom. The inverse of AOO's import
+/// (`oox/source/xls/pivottablebuffer.cxx:785-791`).
+fn layout_attrs(f: &PivotFieldData) -> &'static str {
+    match (f.layout, f.empty_line_after) {
+        (PivotLayoutData::Tabular, false) => r#" compact="0" outline="0""#,
+        (PivotLayoutData::Tabular, true) => r#" compact="0" outline="0" insertBlankRow="1""#,
+        (PivotLayoutData::OutlineTop, false) => r#" compact="0""#,
+        (PivotLayoutData::OutlineTop, true) => r#" compact="0" insertBlankRow="1""#,
+        (PivotLayoutData::OutlineBottom, false) => r#" compact="0" subtotalTop="0""#,
+        (PivotLayoutData::OutlineBottom, true) => {
+            r#" compact="0" subtotalTop="0" insertBlankRow="1""#
+        }
+    }
+}
+
 /// The source of a pivot: sheet index and range.
 fn source_of(data: &WorkbookData, p: &PivotData) -> Option<(usize, CellRangeLocal)> {
     match &p.source {
@@ -634,15 +653,19 @@ pub(crate) fn pivot_patches(data: &WorkbookData, patches: &mut Patches, report: 
                 if is_data {
                     table.push_str(r#" dataField="1""#);
                 }
-                let subtotal_off = p
+                let axis_field = p
                     .row_fields
                     .iter()
                     .chain(&p.col_fields)
                     .chain(&p.page_fields)
-                    .find(|f| f.source_col == c)
-                    .is_some_and(|f| matches!(f.subtotals, PivotSubtotalsData::None));
+                    .find(|f| f.source_col == c);
+                let subtotal_off =
+                    axis_field.is_some_and(|f| matches!(f.subtotals, PivotSubtotalsData::None));
                 if subtotal_off {
                     table.push_str(r#" defaultSubtotal="0""#);
+                }
+                if let Some(f) = axis_field {
+                    table.push_str(layout_attrs(f));
                 }
                 table.push_str(r#" showAll="0""#);
                 if axis.is_some() {
@@ -818,10 +841,12 @@ pub(crate) fn parse_table<R: BufRead>(
     cache: &CacheInfo,
     sheet_index: &dyn Fn(&str) -> Option<u32>,
     db_range: &dyn Fn(&str) -> Option<(u32, CellRangeLocal)>,
-) -> Result<Option<PivotData>, XlsxError> {
+) -> Result<Option<(PivotData, bool)>, XlsxError> {
     let mut p = PivotData::default();
     let mut field_axis: Vec<Option<&'static str>> = Vec::new();
     let mut no_subtotal: Vec<bool> = Vec::new();
+    // Per field: (layout, empty line after, compact form).
+    let mut layout: Vec<(PivotLayoutData, bool, bool)> = Vec::new();
     let mut row_x: Vec<i64> = Vec::new();
     let mut col_x: Vec<i64> = Vec::new();
     let mut page_x: Vec<i64> = Vec::new();
@@ -857,6 +882,22 @@ pub(crate) fn parse_table<R: BufRead>(
                         _ => None,
                     });
                     no_subtotal.push(e.attr_local("defaultSubtotal") == Some("0"));
+                    // AOO's mapping (`pivottablebuffer.cxx:352-354,785-791`):
+                    // outline → outline layout, top or bottom by
+                    // `subtotalTop`; `compact` has no equivalent.
+                    let flag = |name: &str, default: bool| {
+                        e.attr_local(name).map_or(default, crate::units::parse_bool)
+                    };
+                    let outline = flag("outline", true);
+                    layout.push((
+                        match (outline, flag("subtotalTop", true)) {
+                            (false, _) => PivotLayoutData::Tabular,
+                            (true, true) => PivotLayoutData::OutlineTop,
+                            (true, false) => PivotLayoutData::OutlineBottom,
+                        },
+                        flag("insertBlankRow", false),
+                        outline && flag("compact", true),
+                    ));
                     xr.skip()?;
                 }
                 "rowFields" | "colFields" => {
@@ -949,7 +990,14 @@ pub(crate) fn parse_table<R: BufRead>(
     p.source = source;
     let field = |x: i64| -> Option<PivotFieldData> {
         let i = usize::try_from(x).ok()?;
+        let (layout, empty_line_after, _) =
+            layout
+                .get(i)
+                .copied()
+                .unwrap_or((PivotLayoutData::OutlineTop, false, true));
         Some(PivotFieldData {
+            layout,
+            empty_line_after,
             source_col: i as u32,
             name: cache.fields.get(i).cloned().unwrap_or_default(),
             subtotals: if no_subtotal.get(i).copied().unwrap_or(false) {
@@ -983,7 +1031,15 @@ pub(crate) fn parse_table<R: BufRead>(
     if p.data_fields.is_empty() {
         return Ok(None);
     }
-    Ok(Some(p))
+    // Compact form on a row field with an inner row field is shown as
+    // outline layout (the inner items get a column of their own).
+    let compact = row_x.iter().rev().skip(1).any(|x| {
+        usize::try_from(*x)
+            .ok()
+            .and_then(|i| layout.get(i))
+            .is_some_and(|l| l.2)
+    });
+    Ok(Some((p, compact)))
 }
 
 // ---------------------------------------------------------------------------

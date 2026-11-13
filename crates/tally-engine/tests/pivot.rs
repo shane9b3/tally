@@ -882,13 +882,20 @@ fn pivot_no_innermost_subtotals_before_data_field() {
         rows[2],
         (Value::Empty, t("Pear"), t("Sum - Revenue"), n(270.0))
     );
+    // L6: a subtotal per data field, captioned with the data field; the
+    // Data column stays empty (AOO `FillMemberResults`, `dptabres.cxx:1484-1534`).
     assert_eq!(
         rows[6],
-        (t("East Result"), Value::Empty, t("Sum - Revenue"), n(850.0))
+        (
+            t("East Sum - Revenue"),
+            Value::Empty,
+            Value::Empty,
+            n(850.0)
+        )
     );
     assert_eq!(
         rows[7],
-        (t("East Result"), Value::Empty, t("Sum - Units"), n(77.0))
+        (t("East Sum - Units"), Value::Empty, Value::Empty, n(77.0))
     );
 }
 
@@ -1381,4 +1388,351 @@ fn pivot_source_filter_from_file_is_bounded() {
     let f = p.data.source_filter.as_ref().unwrap();
     assert_eq!(f.conditions.len(), 8);
     assert_eq!(f.conditions[0].value, "v0");
+}
+
+// ---------------------------------------------------------------------------
+// Layout parity (review 4, L6 and L7). The expected tables are derived
+// from the AOO 4.1 source (`ScDPResultMember::FillMemberResults` /
+// `FillDataResults` / `GetSize` / `IsSubTotalInTitle`, `dptabres.cxx`;
+// `ScDPResultData::GetMeasureString`; `ScDPSource::CreateRes_Impl`,
+// `dptabsrc.cxx`), not from a run of AOO.
+// ---------------------------------------------------------------------------
+
+/// The cells of columns `cols` on rows `r0..=r1` as `a | b | c` lines.
+fn block(f: &Fixture, cols: &[&str], r0: u32, r1: u32) -> Vec<String> {
+    (r0..=r1)
+        .map(|r| {
+            cols.iter()
+                .map(|c| match f.value(&format!("{c}{r}")) {
+                    Value::Empty => String::new(),
+                    Value::Number(n) => format!("{n}"),
+                    Value::Text(t) => t.to_string(),
+                    other => format!("{other:?}"),
+                })
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .collect()
+}
+
+/// Region × Product at K1, Sum - Revenue, no column fields.
+fn region_product(f: &Fixture) -> PivotDto {
+    let mut p = pivot(f);
+    p.target = CellPos { r: 0, c: 10 };
+    p.col_fields.clear();
+    p.row_fields = vec![field(0, "Region"), field(2, "Product")];
+    p
+}
+
+/// L6: several data fields in rows: subtotals and grand totals per data
+/// field, "<item> <data field>" / "Total <data field>", Data column empty.
+#[test]
+fn pivot_layout_captions_with_several_data_fields() {
+    let mut f = fixture();
+    let mut p = region_product(&f);
+    p.data_fields = vec![data(5, AggFn::Sum), data(4, AggFn::Sum)];
+    create(&mut f, p);
+    let got = block(&f, &["K", "L", "M", "N"], 2, 19);
+    let want = [
+        "East | Apple | Sum - Revenue | 450",
+        " |  | Sum - Units | 45",
+        " | Pear | Sum - Revenue | 270",
+        " |  | Sum - Units | 22",
+        " | Plum | Sum - Revenue | 130",
+        " |  | Sum - Units | 10",
+        "East Sum - Revenue |  |  | 850",
+        "East Sum - Units |  |  | 77",
+        "West | Apple | Sum - Revenue | 850",
+        " |  | Sum - Units | 85",
+        " | Pear | Sum - Revenue | 455",
+        " |  | Sum - Units | 38",
+        " | Plum | Sum - Revenue | 160",
+        " |  | Sum - Units | 14",
+        "West Sum - Revenue |  |  | 1465",
+        "West Sum - Units |  |  | 137",
+        "Total Sum - Revenue |  |  | 2315",
+        "Total Sum - Units |  |  | 214",
+    ];
+    assert_eq!(got, want);
+    // GETPIVOTDATA still finds the subtotal and grand total lines.
+    f.set(
+        "A40",
+        "=GETPIVOTDATA(\"Sum - Units\";K1;\"Region\";\"West\")",
+    );
+    assert_eq!(f.value("A40"), Value::Number(137.0));
+    f.set("A41", "=GETPIVOTDATA(\"Sum - Revenue\";K1)");
+    assert_eq!(f.value("A41"), Value::Number(2315.0));
+    // Data fields in columns: the row subtotals measure "any" data field.
+    clear_pivots(&mut f);
+    let mut p = region_product(&f);
+    p.data_fields = vec![data(5, AggFn::Sum), data(4, AggFn::Sum)];
+    p.data_layout = DataLayout::Column;
+    create(&mut f, p);
+    assert_eq!(f.value("M1"), Value::text("Data"));
+    assert_eq!(f.value("M2"), Value::text("Sum - Revenue"));
+    assert_eq!(f.value("N2"), Value::text("Sum - Units"));
+    assert_eq!(
+        block(&f, &["K", "L", "M", "N"], 6, 6),
+        ["East Result |  | 850 | 77"]
+    );
+    assert_eq!(
+        block(&f, &["K", "L", "M", "N"], 11, 11),
+        ["Total Result |  | 2315 | 214"]
+    );
+}
+
+/// L6: forced subtotal functions name the data field when there is one
+/// data field or the Data field is on the same axis ("East Max -
+/// Revenue"), only the function otherwise ("East Max").
+#[test]
+fn pivot_layout_captions_of_custom_subtotals() {
+    let mut f = fixture();
+    let mut p = region_product(&f);
+    p.row_fields[0].subtotals = PivotSubtotals::Custom {
+        fns: vec![AggFn::Max, AggFn::Min],
+    };
+    create(&mut f, p);
+    assert_eq!(
+        block(&f, &["K", "L", "M"], 5, 6),
+        ["East Max - Revenue |  | 150", "East Min - Revenue |  | 10"]
+    );
+    clear_pivots(&mut f);
+    let mut p = region_product(&f);
+    p.row_fields[0].subtotals = PivotSubtotals::Custom {
+        fns: vec![AggFn::Max],
+    };
+    p.data_fields = vec![data(5, AggFn::Sum), data(4, AggFn::Sum)];
+    p.data_layout = DataLayout::Column;
+    create(&mut f, p);
+    assert_eq!(
+        block(&f, &["K", "L", "M", "N"], 6, 6),
+        ["East Max |  | 150 | 15"]
+    );
+    clear_pivots(&mut f);
+    let mut p = region_product(&f);
+    p.row_fields[0].subtotals = PivotSubtotals::Custom {
+        fns: vec![AggFn::Max],
+    };
+    p.data_fields = vec![data(5, AggFn::Sum), data(4, AggFn::Sum)];
+    create(&mut f, p);
+    assert_eq!(
+        block(&f, &["K", "L", "M", "N"], 8, 9),
+        [
+            "East Max - Revenue |  |  | 150",
+            "East Max - Units |  |  | 15"
+        ]
+    );
+}
+
+/// L7: outline layout, subtotals at the top: with a single subtotal row
+/// the subtotal is in the item's title row (captioned with the item).
+#[test]
+fn pivot_layout_outline_subtotals_at_top() {
+    let mut f = fixture();
+    let mut p = region_product(&f);
+    p.row_fields[0].layout = PivotLayout::OutlineTop;
+    create(&mut f, p);
+    let got = block(&f, &["K", "L", "M"], 1, 10);
+    let want = [
+        "Region | Product | Sum - Revenue",
+        "East |  | 850",
+        " | Apple | 450",
+        " | Pear | 270",
+        " | Plum | 130",
+        "West |  | 1465",
+        " | Apple | 850",
+        " | Pear | 455",
+        " | Plum | 160",
+        "Total Result |  | 2315",
+    ];
+    assert_eq!(got, want);
+    assert_eq!(
+        f.svc.pivots(f.doc).unwrap()[0].output,
+        Some(range("K1:M10"))
+    );
+    // The title row is an item row; GETPIVOTDATA reads its subtotal.
+    let hit = f.svc.pivot_at(f.doc, f.sheet, 1, 10).unwrap().unwrap();
+    assert_eq!(hit.role, PivotCellRole::RowItem);
+    assert_eq!(hit.item.as_deref(), Some("East"));
+    f.set(
+        "A40",
+        "=GETPIVOTDATA(\"Sum - Revenue\";K1;\"Region\";\"East\")",
+    );
+    assert_eq!(f.value("A40"), Value::Number(850.0));
+    f.set(
+        "A41",
+        "=GETPIVOTDATA(\"Sum - Revenue\";K1;\"Region\";\"West\";\"Product\";\"Pear\")",
+    );
+    assert_eq!(f.value("A41"), Value::Number(455.0));
+    // Two subtotal rows (two data fields in rows) do not fit the title
+    // row: they follow the children, and the title row has no values.
+    clear_pivots(&mut f);
+    let mut p = region_product(&f);
+    p.row_fields[0].layout = PivotLayout::OutlineTop;
+    p.data_fields = vec![data(5, AggFn::Sum), data(4, AggFn::Sum)];
+    create(&mut f, p);
+    let got = block(&f, &["K", "L", "M", "N"], 2, 11);
+    let want = [
+        "East |  |  | ",
+        " | Apple | Sum - Revenue | 450",
+        " |  | Sum - Units | 45",
+        " | Pear | Sum - Revenue | 270",
+        " |  | Sum - Units | 22",
+        " | Plum | Sum - Revenue | 130",
+        " |  | Sum - Units | 10",
+        "East Sum - Revenue |  |  | 850",
+        "East Sum - Units |  |  | 77",
+        "West |  |  | ",
+    ];
+    assert_eq!(got, want);
+    f.set(
+        "A42",
+        "=GETPIVOTDATA(\"Sum - Units\";K1;\"Region\";\"East\")",
+    );
+    assert_eq!(f.value("A42"), Value::Number(77.0));
+    // The title row is not a data cell for drill-down.
+    let id = f.svc.pivots(f.doc).unwrap()[0].id;
+    let r = f.apply(vec![Op::PivotDrillDown { id, r: 1, c: 13 }]);
+    assert!(!r.errors.is_empty());
+}
+
+/// L7: outline layout with subtotals at the bottom and an empty line
+/// after each item.
+#[test]
+fn pivot_layout_outline_bottom_with_empty_lines() {
+    let mut f = fixture();
+    let mut p = region_product(&f);
+    p.row_fields[0].layout = PivotLayout::OutlineBottom;
+    p.row_fields[0].empty_line_after = true;
+    create(&mut f, p);
+    let got = block(&f, &["K", "L", "M"], 2, 14);
+    let want = [
+        "East |  | ",
+        " | Apple | 450",
+        " | Pear | 270",
+        " | Plum | 130",
+        "East Result |  | 850",
+        " |  | ",
+        "West |  | ",
+        " | Apple | 850",
+        " | Pear | 455",
+        " | Plum | 160",
+        "West Result |  | 1465",
+        " |  | ",
+        "Total Result |  | 2315",
+    ];
+    assert_eq!(got, want);
+    f.set(
+        "A40",
+        "=GETPIVOTDATA(\"Sum - Revenue\";K1;\"Region\";\"West\")",
+    );
+    assert_eq!(f.value("A40"), Value::Number(1465.0));
+    // Outline without subtotals: just the title row.
+    clear_pivots(&mut f);
+    let mut p = region_product(&f);
+    p.row_fields[0].layout = PivotLayout::OutlineTop;
+    p.row_fields[0].subtotals = PivotSubtotals::None;
+    create(&mut f, p);
+    assert_eq!(
+        block(&f, &["K", "L", "M"], 2, 6),
+        [
+            "East |  | ",
+            " | Apple | 450",
+            " | Pear | 270",
+            " | Plum | 130",
+            "West |  | "
+        ]
+    );
+}
+
+/// L7: the layout options do nothing on the innermost row level or on
+/// column fields (AOO `dptabsrc.cxx:690,935`); with the Data field
+/// innermost on the rows the last real row field does get them.
+#[test]
+fn pivot_layout_options_only_on_outer_row_levels() {
+    let mut f = fixture();
+    let mut p = region_product(&f);
+    p.row_fields[1].layout = PivotLayout::OutlineTop;
+    p.row_fields[1].empty_line_after = true;
+    p.col_fields = vec![field(3, "Quarter")];
+    p.col_fields[0].layout = PivotLayout::OutlineBottom;
+    p.col_fields[0].empty_line_after = true;
+    create(&mut f, p);
+    // Region | Product | Q1..Q4 | Total Result: no title rows, blank
+    // rows or blank columns.
+    assert_eq!(
+        f.svc.pivots(f.doc).unwrap()[0].output,
+        Some(range("K1:Q11"))
+    );
+    assert_eq!(
+        block(&f, &["K", "L", "M", "Q"], 3, 6),
+        [
+            "East | Apple | 100 | 450",
+            " | Pear | 60 | 270",
+            " | Plum | 30 | 130",
+            "East Result |  | 190 | 850"
+        ]
+    );
+    // Data innermost on the rows: Product has a title row and an empty
+    // line; Product has no subtotals (only the Data field follows it).
+    clear_pivots(&mut f);
+    let mut p = region_product(&f);
+    p.row_fields[1].layout = PivotLayout::OutlineTop;
+    p.row_fields[1].empty_line_after = true;
+    p.data_fields = vec![data(5, AggFn::Sum), data(4, AggFn::Sum)];
+    create(&mut f, p);
+    let got = block(&f, &["K", "L", "M", "N"], 2, 14);
+    let want = [
+        "East | Apple |  | ",
+        " |  | Sum - Revenue | 450",
+        " |  | Sum - Units | 45",
+        " |  |  | ",
+        " | Pear |  | ",
+        " |  | Sum - Revenue | 270",
+        " |  | Sum - Units | 22",
+        " |  |  | ",
+        " | Plum |  | ",
+        " |  | Sum - Revenue | 130",
+        " |  | Sum - Units | 10",
+        " |  |  | ",
+        "East Sum - Revenue |  |  | 850",
+    ];
+    assert_eq!(got, want);
+    f.set(
+        "A40",
+        "=GETPIVOTDATA(\"Sum - Units\";K1;\"Region\";\"East\";\"Product\";\"Pear\")",
+    );
+    assert_eq!(f.value("A40"), Value::Number(22.0));
+}
+
+/// The lines of a large outline layout with empty lines stay linear and
+/// within the output budget.
+#[test]
+fn pivot_layout_outline_lines_are_bounded() {
+    let mut f = Fixture::new();
+    let mut rows: Vec<Vec<String>> = vec![vec!["A".into(), "B".into(), "V".into()]];
+    for i in 0..20_000 {
+        rows.push(vec![format!("a{}", i % 2000), format!("b{i}"), "1".into()]);
+    }
+    f.apply(vec![Op::SetRangeInputs {
+        sheet: f.sheet,
+        r: 0,
+        c: 0,
+        rows,
+    }]);
+    let mut p = pivot(&f);
+    p.source = PivotSource::Range {
+        sheet: f.sheet,
+        range: range("A1:C20001"),
+    };
+    p.target = CellPos { r: 0, c: 5 };
+    p.col_fields.clear();
+    p.row_fields = vec![field(0, "A"), field(1, "B")];
+    p.row_fields[0].layout = PivotLayout::OutlineBottom;
+    p.row_fields[0].empty_line_after = true;
+    p.data_fields = vec![data(2, AggFn::Sum)];
+    create(&mut f, p);
+    // Header, 20,000 items, 2,000 × (title + subtotal + empty), total.
+    let out = f.svc.pivots(f.doc).unwrap()[0].output.unwrap();
+    assert_eq!(out.r1 - out.r0 + 1, 1 + 20_000 + 3 * 2_000 + 1);
 }

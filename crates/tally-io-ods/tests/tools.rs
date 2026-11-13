@@ -211,11 +211,14 @@ fn sample() -> WorkbookData {
                 data_field: 0,
                 ascending: false,
             },
+            layout: PivotLayoutData::OutlineBottom,
+            empty_line_after: true,
             ..PivotFieldData::default()
         }],
         col_fields: vec![PivotFieldData {
             source_col: 2,
             name: "Qty".into(),
+            layout: PivotLayoutData::OutlineTop,
             subtotals: PivotSubtotalsData::Custom(vec![AggFnData::Max, AggFnData::Min]),
             show_empty: true,
             group: Some(PivotGroupData::Numeric {
@@ -360,6 +363,11 @@ fn ods_tools_round_trip() {
             ascending: false
         }
     );
+    // `table:data-pilot-layout-info` (layout mode and empty lines).
+    assert_eq!(p.row_fields[0].layout, PivotLayoutData::OutlineBottom);
+    assert!(p.row_fields[0].empty_line_after);
+    assert_eq!(p.col_fields[0].layout, PivotLayoutData::OutlineTop);
+    assert!(!p.col_fields[0].empty_line_after);
     assert_eq!(p.col_fields[0].source_col, 2);
     assert_eq!(
         p.col_fields[0].subtotals,

@@ -5,13 +5,31 @@
 import type { PivotFieldItemsDto } from "@tally/bridge";
 import { describe, expect, it } from "vitest";
 import { WebMockClient } from "../src/dev/webMock";
-import { addField, availableFields, dataCaption, emptyLayout, fromPivotDto, layoutError, moveField, pivotAtCell, pivotHeaderRanges, removeField, toPivotDto, updateDataField, updateField } from "../src/pivot/pivotModel";
+import { addField, availableFields, dataCaption, emptyLayout, fromPivotDto, layoutError, layoutOptionsEnabled, moveField, pivotAtCell, pivotHeaderRanges, removeField, toPivotDto, updateDataField, updateField } from "../src/pivot/pivotModel";
 
 const FIELDS: PivotFieldItemsDto[] = [
   { sourceCol: 0, name: "Region", numeric: false, date: false, items: [{ text: "East", count: 2 }, { text: "West", count: 2 }] },
   { sourceCol: 1, name: "Quarter", numeric: false, date: false, items: [{ text: "Q1", count: 2 }, { text: "Q2", count: 2 }] },
   { sourceCol: 2, name: "Revenue", numeric: true, date: false, items: [] },
 ];
+
+describe("pivot field layout options", () => {
+  it("apply to row fields with an inner level only (AOO pvlaydlg.cxx:353)", () => {
+    let st = emptyLayout({ type: "range", sheet: 1, range: { r0: 0, c0: 0, r1: 4, c1: 2 } }, { r0: 0, c0: 0, r1: 4, c1: 2 }, 1);
+    st = addField(st, FIELDS[0]!, "row");
+    st = addField(st, FIELDS[1]!, "col");
+    st = addField(st, FIELDS[2]!, "data");
+    // The only (innermost) row field, one data field; a column field.
+    expect(layoutOptionsEnabled(st, "row", 0)).toBe(false);
+    expect(layoutOptionsEnabled(st, "col", 1)).toBe(false);
+    st = moveField(st, 1, "col", "row");
+    expect(layoutOptionsEnabled(st, "row", 0)).toBe(true);
+    expect(layoutOptionsEnabled(st, "row", 1)).toBe(false);
+    // Several data fields: the Data field may follow the last row field.
+    st = addField(st, FIELDS[2]!, "data");
+    expect(layoutOptionsEnabled(st, "row", 1)).toBe(true);
+  });
+});
 
 describe("pivot layout model", () => {
   it("places fields, moves them between areas and builds the DTO", () => {

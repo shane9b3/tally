@@ -142,6 +142,38 @@ test("the DataPilot Filter button opens the source filter dialog (click and âŒ¥â
   await expect(dlg).toBeHidden();
 });
 
+test("DataPilot field options: outline layout and empty lines on an outer row field only", async ({ page }) => {
+  await ready(page);
+  await clickCell(page, 2, 1);
+  await run(page, "data.dataPilot");
+  const dp = page.getByTestId("datapilot-dialog");
+  await dp.getByTestId("pivot-add-row-Status").click();
+  await dp.getByTestId("pivot-add-row-Customer").click();
+  await dp.getByTestId("pivot-add-data-Total").click();
+  const rows = dp.getByTestId("pivot-area-row");
+  // The innermost row field (one data field): layout options do not apply.
+  await rows.getByTestId("pivot-field-Customer").getByRole("button", { name: "Customer", exact: true }).click();
+  const opts = dp.getByTestId("pivot-field-options");
+  await expect(opts.getByTestId("pivot-layout")).toBeDisabled();
+  await expect(opts.getByTestId("pivot-empty-line")).toBeDisabled();
+  // The outer one: keyboard-selectable layout and the empty-line check.
+  await rows.getByTestId("pivot-field-Status").getByRole("button", { name: "Status", exact: true }).click();
+  await expect(opts.getByTestId("pivot-layout")).toBeEnabled();
+  await opts.getByTestId("pivot-layout").focus();
+  await opts.getByTestId("pivot-layout").selectOption("outlineBottom");
+  await opts.getByTestId("pivot-empty-line").check();
+  await dp.getByTestId("pivot-more").click();
+  await dp.getByTestId("pivot-target-sheet").selectOption("new");
+  await dp.getByTestId("dialog-ok").click();
+  await expect(dp).toBeHidden();
+  const ops = await recorded(page);
+  const create = ops.find((o) => o.type === "createPivot") as (Rec & { pivot: { rowFields: { name: string; layout: string; emptyLineAfter: boolean }[] } }) | undefined;
+  expect(create?.pivot.rowFields.map((f) => [f.name, f.layout, f.emptyLineAfter])).toEqual([
+    ["Status", "outlineBottom", true],
+    ["Customer", "tabular", false],
+  ]);
+});
+
 test("standard filter dialog hides 3 of the rows", async ({ page }) => {
   await ready(page);
   await clickCell(page, 1, 5);

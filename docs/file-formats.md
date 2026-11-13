@@ -354,7 +354,10 @@ loses.
   `table:selected-page`, `table:data-pilot-level` (`table:show-empty`,
   `data-pilot-subtotals` with `auto`/named functions, `data-pilot-members`
   with `table:display` for hidden items and the manual order,
-  `data-pilot-display-info`, `data-pilot-sort-info`, `data-pilot-layout-info`),
+  `data-pilot-display-info`, `data-pilot-sort-info`, `data-pilot-layout-info`
+  with `table:layout-mode` = `tabular-layout` / `outline-subtotals-top` /
+  `outline-subtotals-bottom` and `table:add-empty-lines`, written for every
+  field and read as AOO does, `xmldpimp.cxx` `ScXMLDataPilotLayoutInfoContext`),
   `table:data-pilot-field-reference` (show-as) and `table:data-pilot-groups`
   (numeric and date groups; extra date parts go into
   `table:application-data`). The "Data" pseudo-field is written as
@@ -506,7 +509,19 @@ loses.
   table on load. Read: the definition only (fields, functions, layout,
   totals, location); show-as, grouping, sorting and hidden items are not
   translated. A DataPilot source filter (the "Filter" button) has no OOXML
-  equivalent: it is dropped with a warning.
+  equivalent: it is dropped with a warning. Field layout (2026-11-13) on
+  each axis `pivotField`: tabular is `compact="0" outline="0"`, outline
+  with subtotals at the top `compact="0"` (`outline` and `subtotalTop`
+  default to true), at the bottom `compact="0" subtotalTop="0"`; "Empty
+  line after each item" is `insertBlankRow="1"`. Read as AOO's OOXML
+  import does (`oox/source/xls/pivottablebuffer.cxx:352-354,785-791`):
+  `outline` (default true) gives outline layout, top or bottom by
+  `subtotalTop`, otherwise tabular; `insertBlankRow` the empty line.
+  Excel's compact form (`compact`, default true) has no AOO equivalent: it
+  is read as outline layout, and the open reports "the compact form is
+  shown as outline layout" when an outer row field uses it. So an Excel
+  pivot in its default compact form opens in outline layout, subtotals at
+  the top, as in AOO.
 - **Named cell styles**: `cellStyles`/`cellStyleXfs` (the `Normal` style is
   `Default`; `xfId` gives a cell's base style). Tally writes the names with
   default-looking `cellStyleXfs` entries; the attributes stay on the cells.

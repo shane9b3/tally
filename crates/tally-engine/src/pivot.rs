@@ -2223,6 +2223,9 @@ enum Kind {
     Grand,
     /// A blank spacer.
     Blank,
+    /// The title row of an item in outline layout (its children start on
+    /// the next row; no values).
+    Title,
 }
 
 /// One line of an axis.
@@ -2232,11 +2235,22 @@ struct Line {
     kind: Kind,
     /// Data field when the Data pseudo-field is on this axis.
     df: Option<u16>,
+    /// A subtotal shown in the item's outline title row ("subtotals at
+    /// the top" with a single subtotal row, AOO
+    /// `ScDPResultMember::IsSubTotalInTitle`): captioned with the item
+    /// itself and styled as an item row.
+    title: bool,
 }
 
 impl Line {
+    /// A styled total line (a subtotal in a title row is not one).
     fn total(&self) -> bool {
-        matches!(self.kind, Kind::Sub(_) | Kind::Grand)
+        matches!(self.kind, Kind::Sub(_) | Kind::Grand) && !self.title
+    }
+
+    /// A line without values.
+    fn empty(&self) -> bool {
+        matches!(self.kind, Kind::Blank | Kind::Title)
     }
 }
 
@@ -2261,69 +2275,130 @@ fn subtotal_fns(f: &PivotFieldData) -> Vec<Option<AggFnData>> {
     }
 }
 
-/// Flattens an axis into lines (tabular: subtotal lines after the
-/// children of an outer item; no subtotals for the innermost field, even
-/// when only the Data pseudo-field follows it, AOO `lcl_TestSubTotal`,
-/// `dptabsrc.cxx:229-245`).
-fn axis_lines(ax: &Axis<'_>, ndata: usize, data_here: bool, grand: bool) -> Vec<Line> {
-    fn push(out: &mut Vec<Line>, node: u32, kind: Kind, ndata: usize, data_here: bool) {
-        if data_here {
-            for di in 0..ndata {
-                out.push(Line {
-                    node,
-                    kind,
-                    df: Some(di as u16),
-                });
+/// Flattens an axis into lines (AOO `ScDPResultMember::FillMemberResults`
+/// and `GetSize`, `dptabres.cxx:1205-1240,1369-1543`):
+///
+/// - no subtotals for the innermost field, even when only the Data
+///   pseudo-field follows it (`lcl_TestSubTotal`, `dptabsrc.cxx:229-245`);
+/// - the layout options (outline, empty lines) apply to row fields only,
+///   and not to the innermost row level, which is the Data pseudo-field
+///   when it is on the rows (`ScDPSource::CreateRes_Impl`,
+///   `dptabsrc.cxx:690,935`; `ScDPLevel::IsOutlineLayout`);
+/// - outline layout: a title row with the item, its children from the
+///   next row on; "subtotals at the top" with exactly one subtotal row
+///   (one function, one data field on this axis) puts the subtotal in the
+///   title row, otherwise the subtotals follow the children
+///   (`IsSubTotalInTitle`, `dptabres.cxx:1183-1203`);
+/// - the empty line comes after the item's subtotals.
+///
+/// Refused once more than `limit` lines would be built (the output
+/// cannot hold them anyway), so title and empty lines stay within the
+/// output budget before anything else is materialized.
+fn axis_lines(
+    ax: &Axis<'_>,
+    ndata: usize,
+    data_here: bool,
+    grand: bool,
+    rows_axis: bool,
+    limit: usize,
+) -> Result<Vec<Line>, ApiError> {
+    struct Ctx<'x, 'a> {
+        ax: &'x Axis<'a>,
+        ndata: usize,
+        data_here: bool,
+        rows_axis: bool,
+        limit: usize,
+        out: Vec<Line>,
+    }
+    impl Ctx<'_, '_> {
+        fn one(
+            &mut self,
+            node: u32,
+            kind: Kind,
+            df: Option<u16>,
+            title: bool,
+        ) -> Result<(), ApiError> {
+            if self.out.len() >= self.limit {
+                return Err(ApiError::unsupported("the pivot output is too large"));
             }
-        } else {
-            out.push(Line {
+            self.out.push(Line {
                 node,
                 kind,
-                df: None,
+                df,
+                title,
             });
+            Ok(())
         }
-    }
-    fn walk(ax: &Axis<'_>, node: u32, ndata: usize, data_here: bool, out: &mut Vec<Line>) {
-        let lvl = ax.trie.level(node);
-        if lvl == ax.fields.len() {
-            push(out, node, Kind::Detail, ndata, data_here);
-            return;
-        }
-        let f = &ax.fields[lvl];
-        let subs = if lvl + 1 < ax.fields.len() {
-            subtotal_fns(f.def).len()
-        } else {
-            0
-        };
-        for &child in ax.disp.get(node) {
-            walk(ax, child, ndata, data_here, out);
-            for i in 0..subs {
-                push(out, child, Kind::Sub(i as u8), ndata, data_here);
-            }
-            if f.def.empty_line_after {
-                out.push(Line {
-                    node: child,
-                    kind: Kind::Blank,
-                    df: None,
-                });
+        /// One line, or one per data field when the Data field is here.
+        fn push(&mut self, node: u32, kind: Kind, title: bool) -> Result<(), ApiError> {
+            if self.data_here {
+                for di in 0..self.ndata {
+                    self.one(node, kind, Some(di as u16), title)?;
+                }
+                Ok(())
+            } else {
+                self.one(node, kind, None, title)
             }
         }
+        fn walk(&mut self, node: u32) -> Result<(), ApiError> {
+            let ax = self.ax;
+            let nf = ax.fields.len();
+            let lvl = ax.trie.level(node);
+            if lvl == nf {
+                return self.push(node, Kind::Detail, false);
+            }
+            let f = &ax.fields[lvl];
+            let subs = if lvl + 1 < nf {
+                subtotal_fns(f.def).len()
+            } else {
+                0
+            };
+            let enabled = self.rows_axis && (lvl + 1 < nf || self.data_here);
+            let outline = enabled && f.def.layout != PivotLayoutData::Tabular;
+            let sub_rows = subs * if self.data_here { self.ndata } else { 1 };
+            let in_title = outline && f.def.layout == PivotLayoutData::OutlineTop && sub_rows == 1;
+            let empty_line = enabled && f.def.empty_line_after;
+            for &child in ax.disp.get(node) {
+                if in_title {
+                    self.push(child, Kind::Sub(0), true)?;
+                } else if outline {
+                    self.one(child, Kind::Title, None, false)?;
+                }
+                self.walk(child)?;
+                if !in_title {
+                    for i in 0..subs {
+                        self.push(child, Kind::Sub(i as u8), false)?;
+                    }
+                }
+                if empty_line {
+                    self.one(child, Kind::Blank, None, false)?;
+                }
+            }
+            Ok(())
+        }
     }
-    let mut out = Vec::new();
+    let mut cx = Ctx {
+        ax,
+        ndata,
+        data_here,
+        rows_axis,
+        limit,
+        out: Vec::new(),
+    };
     if ax.fields.is_empty() {
         let kind = if grand && data_here {
             Kind::Grand
         } else {
             Kind::Detail
         };
-        push(&mut out, 0, kind, ndata, data_here);
-        return out;
+        cx.push(0, kind, false)?;
+        return Ok(cx.out);
     }
-    walk(ax, 0, ndata, data_here, &mut out);
+    cx.walk(0)?;
     if grand {
-        push(&mut out, 0, Kind::Grand, ndata, data_here);
+        cx.push(0, Kind::Grand, false)?;
     }
-    out
+    Ok(cx.out)
 }
 
 /// The caption of a data field.
@@ -2402,8 +2477,22 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
     let ndata = p.data_fields.len();
     let data_in_rows = ndata > 1 && p.data_layout == DataLayoutData::Row;
     let data_in_cols = ndata > 1 && p.data_layout == DataLayoutData::Column;
-    let row_lines = axis_lines(&comp.rows, ndata, data_in_rows, p.row_totals);
-    let col_lines = axis_lines(&comp.cols, ndata, data_in_cols, p.col_totals);
+    let row_lines = axis_lines(
+        &comp.rows,
+        ndata,
+        data_in_rows,
+        p.row_totals,
+        true,
+        MAX_ROWS as usize,
+    )?;
+    let col_lines = axis_lines(
+        &comp.cols,
+        ndata,
+        data_in_cols,
+        p.col_totals,
+        false,
+        MAX_COLS as usize,
+    )?;
     let nr = comp.rows.fields.len() as u32 + u32::from(data_in_rows);
     let nc = comp.cols.fields.len() as u32 + u32::from(data_in_cols);
     let captions: Vec<String> = p
@@ -2443,17 +2532,52 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
             item_is_text: true,
         });
     };
-    let subtotal_text = |ax: &Axis<'_>, l: &Line| -> (String, String, u32) {
-        let (it, f) = item_text(ax, l.node);
-        let suffix = match (&f.def.subtotals, forced(ax, l)) {
-            (PivotSubtotalsData::Custom(v), Some(fun)) if !v.is_empty() => agg_caption(fun),
-            _ => "Result",
+    // The measure part of a total caption (AOO
+    // `ScDPResultData::GetMeasureString`, `dptabres.cxx:867-903`): the
+    // measure is the line's data field when the Data field is on this
+    // axis, the only data field when there is one, else "any". "Any", or a
+    // single data field with the automatic function, gives "Result" (or
+    // the forced function's name); otherwise the data field's caption with
+    // the forced function: "East Sum - Revenue", "East Max - Revenue".
+    let measure = |data_here: bool, df: Option<u16>, force: Option<AggFnData>| -> String {
+        let m = if data_here {
+            df.map(usize::from)
+        } else if ndata == 1 {
+            Some(0)
+        } else {
+            None
         };
+        match m.and_then(|m| p.data_fields.get(m)) {
+            Some(d) if !(ndata == 1 && force.is_none()) => match &d.caption {
+                Some(c) if !c.trim().is_empty() => c.clone(),
+                _ => format!(
+                    "{} - {}",
+                    agg_caption(force.unwrap_or(d.function)),
+                    cache
+                        .names
+                        .get(d.source_col as usize)
+                        .map_or("", String::as_str)
+                ),
+            },
+            _ => force.map_or("Result", agg_caption).to_string(),
+        }
+    };
+    let subtotal_text = |ax: &Axis<'_>, l: &Line, data_here: bool| -> (String, String, u32) {
+        let (it, f) = item_text(ax, l.node);
         (
-            format!("{} {suffix}", it.text),
+            format!("{} {}", it.text, measure(data_here, l.df, forced(ax, l))),
             it.text.clone(),
             f.source_col as u32,
         )
+    };
+    // The grand total: the root member "Total" with the measure ("Total
+    // Result", or "Total Sum - Revenue" per data field on this axis).
+    let grand_text = |ax: &Axis<'_>, l: &Line, data_here: bool| -> String {
+        if ax.fields.is_empty() {
+            "Total Result".to_string()
+        } else {
+            format!("Total {}", measure(data_here, l.df, None))
+        }
     };
     // Filter button and page fields.
     let mut had_top = false;
@@ -2585,30 +2709,22 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
     let (rows, cols) = (rows as u32, cols as u32);
     // Column items: level k on header row top + 1 + k; an outer item is
     // written on the first column of its span.
+    // An outer item is written once, on its first line; a subtotal or
+    // empty line does not repeat it (AOO's CONTINUE flags,
+    // `dptabres.cxx:1428-1431`).
     let ct = &comp.cols.trie;
     let mut prev: Option<u32> = None;
     for (ci, line) in col_lines.iter().enumerate() {
         let c = data_col0 + ci as u32;
         match line.kind {
-            Kind::Blank => {
-                prev = None;
-                continue;
-            }
+            Kind::Blank | Kind::Title => continue,
             Kind::Grand => {
                 let rr = if nc == 0 { top } else { top + 1 };
-                push(
-                    &mut cells,
-                    rr,
-                    c,
-                    "Total Result",
-                    PivotCellRole::Total,
-                    None,
-                    None,
-                );
-                prev = None;
+                let text = grand_text(&comp.cols, line, data_in_cols);
+                push(&mut cells, rr, c, &text, PivotCellRole::Total, None, None);
             }
             Kind::Sub(_) => {
-                let (text, item, field) = subtotal_text(&comp.cols, line);
+                let (text, item, field) = subtotal_text(&comp.cols, line, data_in_cols);
                 let lvl = ct.level(line.node) - 1;
                 push(
                     &mut cells,
@@ -2619,7 +2735,6 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
                     Some(field),
                     Some(item),
                 );
-                prev = None;
             }
             Kind::Detail => {
                 for lvl in 0..ct.level(line.node) {
@@ -2637,7 +2752,11 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
                 prev = Some(line.node);
             }
         }
-        if let Some(di) = line.df {
+        // Total lines carry the data field in their own caption; the Data
+        // level stays empty there (AOO sets only the member name,
+        // `dptabres.cxx:1514-1534`).
+        let data_label = line.kind == Kind::Detail || comp.cols.fields.is_empty();
+        if let (Some(di), true) = (line.df, data_label) {
             let cap = &captions[di as usize];
             push(
                 &mut cells,
@@ -2656,24 +2775,13 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
     for (ri, line) in row_lines.iter().enumerate() {
         let rr = first_data_row + ri as u32;
         match line.kind {
-            Kind::Blank => {
-                prev = None;
-                continue;
-            }
+            Kind::Blank => continue,
             Kind::Grand => {
-                push(
-                    &mut cells,
-                    rr,
-                    0,
-                    "Total Result",
-                    PivotCellRole::Total,
-                    None,
-                    None,
-                );
-                prev = None;
+                let text = grand_text(&comp.rows, line, data_in_rows);
+                push(&mut cells, rr, 0, &text, PivotCellRole::Total, None, None);
             }
-            Kind::Sub(_) => {
-                let (text, item, field) = subtotal_text(&comp.rows, line);
+            Kind::Sub(_) if !line.title => {
+                let (text, item, field) = subtotal_text(&comp.rows, line, data_in_rows);
                 let lvl = rt.level(line.node) - 1;
                 push(
                     &mut cells,
@@ -2684,9 +2792,10 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
                     Some(field),
                     Some(item),
                 );
-                prev = None;
             }
-            Kind::Detail => {
+            // Items, outline title rows and subtotals shown in a title row:
+            // the item (and any outer item not written yet).
+            Kind::Detail | Kind::Title | Kind::Sub(_) => {
                 for lvl in 0..rt.level(line.node) {
                     let anc = rt.ancestor(line.node, lvl + 1);
                     let same = prev
@@ -2699,7 +2808,8 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
                 prev = Some(line.node);
             }
         }
-        if let Some(di) = line.df {
+        let data_label = line.kind == Kind::Detail || comp.rows.fields.is_empty();
+        if let (Some(di), true) = (line.df, data_label) {
             let cap = &captions[di as usize];
             push(
                 &mut cells,
@@ -2717,7 +2827,7 @@ fn lay_out(p: &PivotData, cache: &Cache, comp: &Computed<'_>) -> Result<Layout, 
     let mut values: Vec<Res> = Vec::with_capacity(row_lines.len() * ncl);
     for rl in &row_lines {
         for cl in &col_lines {
-            if rl.kind == Kind::Blank || cl.kind == Kind::Blank {
+            if rl.empty() || cl.empty() {
                 values.push(Res::Empty);
                 continue;
             }
@@ -2844,7 +2954,7 @@ fn show_as(
     let ncl = col_lines.len();
     for (ri, rl) in row_lines.iter().enumerate() {
         for (ci, cl) in col_lines.iter().enumerate() {
-            if rl.kind == Kind::Blank || cl.kind == Kind::Blank {
+            if rl.empty() || cl.empty() {
                 continue;
             }
             let (di, fun) = cell_fn(p, comp, rl, cl);
@@ -3064,7 +3174,9 @@ fn lookup_field(f: &AxisField<'_>, source: &str) -> FieldLookup {
 fn lookup_axis(ax: &Axis<'_>, lines: &[Line], names: &[String]) -> AxisLookup {
     let mut line_of: FxMap<(u32, u16), u32> = FxMap::default();
     for (i, l) in lines.iter().enumerate() {
-        if matches!(l.kind, Kind::Blank | Kind::Sub(1..)) {
+        // An outline title row has no values; a subtotal shown in the
+        // title row is the item's subtotal.
+        if matches!(l.kind, Kind::Blank | Kind::Title | Kind::Sub(1..)) {
             continue;
         }
         line_of
@@ -3264,11 +3376,11 @@ fn write_output(
     let r0 = tr + layout.first_data_row;
     let c0 = tc + layout.data_col0;
     for (ri, rl) in layout.row_lines.iter().enumerate() {
-        if rl.kind == Kind::Blank {
+        if rl.empty() {
             continue;
         }
         for (ci, cl) in layout.col_lines.iter().enumerate() {
-            if cl.kind == Kind::Blank {
+            if cl.empty() {
                 continue;
             }
             let v = lookup.values[ri * ncl + ci].value();
@@ -3308,7 +3420,7 @@ fn write_output(
     let grid_line = |i: usize, l: &Line| GridLine {
         node: l.node,
         total: l.total(),
-        blank: l.kind == Kind::Blank,
+        blank: l.empty(),
         line: i as u32,
     };
     let grid = Grid {

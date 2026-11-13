@@ -308,7 +308,13 @@ pub(crate) fn read(reader: impl Read + Seek, limits: &Limits) -> Result<Workbook
         let parsed = pkg.with_entry(&part, other, |r| {
             crate::tools::parse_table(&mut XmlReader::new(r, xl), &cache, &sheet_index, &db_range)
         })?;
-        if let (Some(Some(p)), Some(sheet)) = (parsed, sheets.get_mut(tab)) {
+        if let (Some(Some((p, compact))), Some(sheet)) = (parsed, sheets.get_mut(tab)) {
+            if compact {
+                budget.warn(format!(
+                    "Pivot table {:?}: the compact form is shown as outline layout.",
+                    p.name
+                ));
+            }
             if sheet.pivots.len() < 10_000 {
                 sheet.pivots.push(p);
             }

@@ -139,6 +139,18 @@ export function updateDataField(st: PivotLayoutState, index: number, patch: Part
   return { ...st, data: st.data.map((f, i) => (i === index ? { ...f, ...patch } : f)) };
 }
 
+/**
+ * Whether a field's layout options (outline layout, empty line after each
+ * item) apply: row fields only, and not the innermost one unless the Data
+ * field may follow it (AOO `ScDPLayoutDlg` `pvlaydlg.cxx:353`; the engine
+ * ignores them elsewhere, `dptabsrc.cxx:690,935`).
+ */
+export function layoutOptionsEnabled(st: PivotLayoutState, area: PivotArea, sourceCol: number): boolean {
+  if (area !== "row") return false;
+  const i = st.row.findIndex((f) => f.sourceCol === sourceCol);
+  return i >= 0 && (st.data.length > 1 || i + 1 < st.row.length);
+}
+
 /** The caption a data field shows (`Sum - Revenue`). */
 export function dataCaption(f: LayoutDataField, fnLabel: (fn: AggFn) => string = aggLabel): string {
   return f.caption ?? `${fnLabel(f.function)} - ${f.name}`;
