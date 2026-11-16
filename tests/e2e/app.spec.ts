@@ -67,8 +67,7 @@ test("type values and a formula; formula bar, hint, bold, undo, sum", async ({ p
   await page.keyboard.press("Shift+ArrowRight");
   await page.keyboard.press("Shift+ArrowRight");
   await expect(page.getByTestId("name-box")).toHaveValue("A1:C1");
-  await expect(page.getByTestId("stat-sum")).toContainText("11");
-  await expect(page.getByTestId("stat-count")).toContainText("3");
+  await expect(page.getByTestId("stat-func")).toHaveText("Sum=11");
 });
 
 test("add a sheet and rename it", async ({ page }) => {

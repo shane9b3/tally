@@ -1044,6 +1044,9 @@ export class MockClient implements EngineClientV4, ShellClient, UpdateShell {
         min: has ? min : null,
         max: has ? max : null,
         formattedSum: has ? formatNumber(sum) : null,
+        formattedAverage: has ? formatNumber(sum / countNumbers) : null,
+        formattedMin: has ? formatNumber(min) : null,
+        formattedMax: has ? formatNumber(max) : null,
       };
     });
   }

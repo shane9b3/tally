@@ -385,6 +385,60 @@ fn m7_stats_count_booleans_and_show_errors() {
     assert_eq!(st.min, None);
     assert_eq!(st.max, None);
     assert_eq!(st.formatted_sum.as_deref(), Some("#DIV/0!"));
+    // Count and CountA stay available next to an error (AOO
+    // `lcl_UpdateSubTotal`: an error cell is no value, but it is a cell).
+    assert_eq!(st.count_numbers, 3);
+}
+
+/// Parity U19: the status-bar functions leave hidden rows and columns out
+/// (AOO `ScTable::UpdateSelectionFunction`, `ScColumn::UpdateAreaFunction`)
+/// and every value comes formatted like the active cell
+/// (`ScTabViewShell::GetFunction`).
+#[test]
+fn u19_stats_skip_hidden_cells_and_format_every_function() {
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    f.set("A1", "1");
+    f.set("A2", "10");
+    f.set("A3", "100");
+    f.set("B1", "1000");
+    f.set("B2", "text");
+    num_format(&mut f, "A1", "0.00");
+    let st = f.svc.selection_stats(f.doc, &sel(s, "A1:B3")).unwrap();
+    assert_eq!(st.sum, Some(1111.0));
+    assert_eq!((st.count, st.count_numbers), (5, 4));
+    assert_eq!(st.formatted_sum.as_deref(), Some("1111.00"));
+    assert_eq!(st.formatted_average.as_deref(), Some("277.75"));
+    assert_eq!(st.formatted_min.as_deref(), Some("1.00"));
+    assert_eq!(st.formatted_max.as_deref(), Some("1000.00"));
+
+    f.apply(vec![Op::SetRowsHidden {
+        sheet: s,
+        start: 1,
+        end: 1,
+        hidden: true,
+    }]);
+    let st = f.svc.selection_stats(f.doc, &sel(s, "A1:B3")).unwrap();
+    assert_eq!(st.sum, Some(1101.0));
+    assert_eq!((st.count, st.count_numbers), (3, 3));
+
+    f.apply(vec![Op::SetColsHidden {
+        sheet: s,
+        start: 1,
+        end: 1,
+        hidden: true,
+    }]);
+    let st = f.svc.selection_stats(f.doc, &sel(s, "A1:B3")).unwrap();
+    assert_eq!(st.sum, Some(101.0));
+    assert_eq!((st.count, st.count_numbers), (2, 2));
+    assert_eq!(st.max, Some(100.0));
+    assert_eq!(st.formatted_max.as_deref(), Some("100.00"));
+
+    // No numbers: no formatted values.
+    let st = f.svc.selection_stats(f.doc, &sel(s, "C1:C3")).unwrap();
+    assert_eq!(st.sum, None);
+    assert_eq!(st.formatted_sum, None);
+    assert_eq!(st.formatted_average, None);
 }
 
 // ---- L: unknown sheet references resolve when the sheet appears ----

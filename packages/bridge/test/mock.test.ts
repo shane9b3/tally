@@ -158,7 +158,8 @@ describe("MockClient", () => {
     const { client, doc, sheet } = await setup();
     await client.apply(doc, tx(set(sheet, 0, 0, "2"), set(sheet, 0, 1, "3"), set(sheet, 0, 2, "=A1*B1"), set(sheet, 0, 3, "note")));
     const stats = await client.selectionStats(doc, sel(sheet, 0, 0, 0, 3));
-    expect(stats).toEqual({ sum: 11, count: 4, countNumbers: 3, average: 11 / 3, min: 2, max: 6, formattedSum: "11" });
+    expect(stats).toMatchObject({ sum: 11, count: 4, countNumbers: 3, average: 11 / 3, min: 2, max: 6, formattedSum: "11", formattedMin: "2", formattedMax: "6" });
+    expect(Number(stats.formattedAverage)).toBeCloseTo(11 / 3, 5);
     const empty = await client.selectionStats(doc, sel(sheet, 9, 9, 9, 9));
     expect(empty.sum).toBeNull();
     expect(empty.count).toBe(0);

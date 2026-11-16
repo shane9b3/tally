@@ -1,4 +1,8 @@
-/** Selected sheets, Sum / Count of the selection (debounced 50 ms) and the zoom menu. */
+/**
+ * Selected sheets, the selection mode (STD / EXT / ADD), one function of
+ * the selection (debounced 50 ms; chosen from the field's menu, as in AOO)
+ * and the zoom menu.
+ */
 import type { SelectionStats } from "@tally/bridge";
 import { useEffect, useRef, useState } from "react";
 import { useController } from "../context";
@@ -9,6 +13,7 @@ import { useUiStore } from "../stores/uiStore";
 import { Popover } from "./Popover";
 import { t } from "../i18n";
 import { useW56Store } from "../data/store";
+import { STATUS_FUNCTIONS, nextSelectionMode, selectionModeHint, selectionModeLabel, selectionModeOf, statusFunctionMenuLabel, statusFunctionText } from "../statusFunction";
 import styles from "./StatusBar.module.css";
 
 export const STATS_DEBOUNCE_MS = 50;
@@ -24,6 +29,12 @@ export function StatusBar() {
   const zoom = useUiStore((s) => s.zoom);
   const [stats, setStats] = useState<SelectionStats | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [funcMenu, setFuncMenu] = useState<{ x: number; y: number } | null>(null);
+  const fn = useW56Store((s) => s.prefs.statusFunction);
+  const mode = selectionModeOf(
+    useW56Store((s) => s.extendMode),
+    useW56Store((s) => s.addMode),
+  );
   const seq = useRef(0);
 
   useEffect(() => {
@@ -42,10 +53,8 @@ export function StatusBar() {
     return () => clearTimeout(t);
   }, [ctl, doc, sheet, selection, rev]);
 
-  const sum = stats?.sum ?? null;
-  // With an error in the selection the engine sends no sum, only the
-  // error's text in formattedSum (AOO shows the error).
-  const sumText = stats?.formattedSum ?? (sum !== null ? String(sum) : null);
+  const funcText = statusFunctionText(fn, stats);
+  const funcLabel = t("status.function", "Selection function");
   return (
     <div className={styles.status} data-testid="status-bar">
       {groupSize > 1 ? (
@@ -53,15 +62,63 @@ export function StatusBar() {
           {t("status.sheetsSelected", "{n} sheets selected", { n: groupSize })}
         </span>
       ) : null}
-      {sumText !== null ? (
-        <span className={styles.stat} data-testid="stat-sum">
-          {t("status.sum", "Sum")} <b>{sumText}</b>
-        </span>
-      ) : null}
-      {stats && stats.count > 0 ? (
-        <span className={styles.stat} data-testid="stat-count">
-          {t("status.count", "Count")} <b>{stats.count}</b>
-        </span>
+      {/* AOO: a click steps STD → EXT → ADD → STD (SvxSelectionModeControl::Click). */}
+      <button
+        type="button"
+        className={styles.zoom}
+        title={selectionModeHint(mode)}
+        aria-label={`${t("status.selMode", "Selection mode")}: ${selectionModeLabel(mode)}, ${selectionModeHint(mode)}`}
+        data-testid="stat-selmode"
+        data-mode={mode}
+        onClick={() => {
+          const next = nextSelectionMode(mode);
+          const st = useW56Store.getState();
+          st.setExtendMode(next === "ext");
+          st.setAddMode(next === "add");
+          ctl.focusGrid();
+        }}
+      >
+        {selectionModeLabel(mode)}
+      </button>
+      {/* AOO opens the menu on a right click only; here a click opens it too, so the keyboard can reach it. */}
+      <button
+        type="button"
+        className={`${styles.zoom} ${styles.func}`}
+        aria-haspopup="menu"
+        aria-label={`${funcLabel}: ${funcText === "" ? statusFunctionMenuLabel("none") : funcText}`}
+        data-testid="stat-func"
+        data-function={fn}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setFuncMenu(funcMenu ? null : { x: r.right, y: r.top - 6 });
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setFuncMenu({ x: e.clientX, y: e.currentTarget.getBoundingClientRect().top - 6 });
+        }}
+      >
+        {funcText}
+      </button>
+      {funcMenu ? (
+        <Popover
+          label={funcLabel}
+          x={funcMenu.x}
+          y={funcMenu.y}
+          above
+          alignRight
+          testId="stat-func-menu"
+          onClose={() => setFuncMenu(null)}
+          items={STATUS_FUNCTIONS.map((f) => ({
+            id: f,
+            label: statusFunctionMenuLabel(f),
+            checked: f === fn,
+            onSelect: () => {
+              const st = useW56Store.getState();
+              if (f !== st.prefs.statusFunction) void ctl.w56.savePrefs({ ...st.prefs, statusFunction: f });
+              ctl.focusGrid();
+            },
+          }))}
+        />
       ) : null}
       <button
         type="button"

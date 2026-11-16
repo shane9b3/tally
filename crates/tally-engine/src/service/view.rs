@@ -896,15 +896,17 @@ pub fn cell_edit_info(
     }
 }
 
-/// Status bar statistics.
+/// Status bar statistics. Hidden columns and rows (hidden by hand, by a
+/// filter or by a collapsed outline group) are left out, as in AOO 4.1
+/// (`ScTable::UpdateSelectionFunction`, `ScColumn::UpdateAreaFunction`).
 pub fn selection_stats(wb: &Workbook, sel: &SelectionDto) -> Result<SelectionStats, ApiError> {
     let s = sheet_or_err(wb, sel.sheet)?;
     let mut count = 0u64;
     let mut nums = ApproxSum::new();
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
-    // The first error in the selection: AOO's status bar then shows the
-    // error instead of the sum.
+    // The first error in the selection: its text stands in for the sum,
+    // average, minimum and maximum.
     let mut error: Option<ErrorKind> = None;
     let ranges: Vec<RangeDto> = if sel.ranges.is_empty() {
         vec![RangeDto {
@@ -925,10 +927,16 @@ pub fn selection_stats(wb: &Workbook, sel: &SelectionDto) -> Result<SelectionSta
             continue;
         }
         for c in r.c0..=c1 {
+            if s.col_hidden(c) {
+                continue;
+            }
             let Some(col) = s.column(c) else {
                 continue;
             };
             for (row, content) in col.cells.iter_range(r.r0, r.r1) {
+                if s.row_hidden(row) {
+                    continue;
+                }
                 let v = match content {
                     CellContent::Value(v) => v.clone(),
                     CellContent::Formula(id) => wb
@@ -971,19 +979,26 @@ pub fn selection_stats(wb: &Workbook, sel: &SelectionDto) -> Result<SelectionSta
     }
     let sum = nums.total();
     let st = wb.styles.get(s.style(sel.active.r, sel.active.c));
-    let formatted_sum = if st.is_general() {
-        general_string(sum, None, wb.locale)
-    } else {
-        format_with(wb, &Value::Number(sum), st).text
+    // The active cell's number format (AOO `ScTabViewShell::GetFunction`).
+    let fmt = |v: f64| {
+        if st.is_general() {
+            general_string(v, None, wb.locale)
+        } else {
+            format_with(wb, &Value::Number(v), st).text
+        }
     };
+    let average = sum / n as f64;
     Ok(SelectionStats {
         sum: Some(sum),
         count,
         count_numbers: n,
-        average: Some(sum / n as f64),
+        average: Some(average),
         min: Some(min),
         max: Some(max),
-        formatted_sum: Some(formatted_sum),
+        formatted_sum: Some(fmt(sum)),
+        formatted_average: Some(fmt(average)),
+        formatted_min: Some(fmt(min)),
+        formatted_max: Some(fmt(max)),
     })
 }
 

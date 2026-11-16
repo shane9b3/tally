@@ -120,8 +120,7 @@ test("multi-range selection: stats cover every range", async ({ page }) => {
   await clickCell(page, 0, 0);
   await page.keyboard.press("Shift+ArrowDown");
   await clickCell(page, 0, 2, "ControlOrMeta");
-  await expect(page.getByTestId("stat-sum")).toContainText("13");
-  await expect(page.getByTestId("stat-count")).toContainText("3");
+  await expect(page.getByTestId("stat-func")).toHaveText("Sum=13");
 });
 
 test("font colour applies to the selection and the toolbar reflects it", async ({ page }) => {

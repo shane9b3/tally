@@ -15,12 +15,6 @@
   font-weight: 500;
 }
 
-.stat b {
-  margin-left: 4px;
-  color: var(--tally-text);
-  font-weight: 600;
-}
-
 .zoom {
   height: 24px;
   padding: 0 8px;
@@ -37,4 +31,11 @@
 .zoom:hover {
   background: var(--tally-hover);
   color: var(--tally-text);
+}
+
+/* The selection function: keeps a clickable width when it shows nothing (None). */
+.func {
+  min-width: 56px;
+  min-height: 24px;
+  text-align: right;
 }

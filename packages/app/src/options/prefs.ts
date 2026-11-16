@@ -76,6 +76,12 @@ export const DEFAULT_VIEW_PREFS: ViewPrefs = {
   drawings: "show",
 };
 
+/** The status bar's selection function (AOO `ScAppOptions::GetStatusFunc`). */
+export type StatusFunction = "average" | "countA" | "count" | "max" | "min" | "sum" | "none";
+
+/** The functions in the order of AOO's status bar menu (`RID_SVXMNU_PSZ_FUNC`). */
+export const STATUS_FUNCTIONS: readonly StatusFunction[] = ["average", "countA", "count", "max", "min", "sum", "none"];
+
 export interface AppPrefs {
   /** UI language (menus, dialogs, panels). */
   uiLanguage: UiLanguage;
@@ -135,6 +141,12 @@ export interface AppPrefs {
   checkForUpdates: boolean;
   /** Tools ▸ Options ▸ View settings that are not saved with the document. */
   view: ViewPrefs;
+  /**
+   * The function the status bar shows for the selection, chosen from the
+   * field's menu (AOO `Office.Calc/Layout/Other/StatusbarFunction`, an
+   * app setting; default Sum).
+   */
+  statusFunction: StatusFunction;
 }
 
 /** Range of the undo steps option (AOO's `ED_UNDO` field). */
@@ -185,6 +197,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   calcMultithreading: true,
   checkForUpdates: true,
   view: DEFAULT_VIEW_PREFS,
+  statusFunction: "sum",
 };
 
 export const UI_LANGUAGES: readonly { id: UiLanguage; label: string; tag: string }[] = [
@@ -239,6 +252,7 @@ export function parsePrefs(raw: unknown): AppPrefs {
     calcMultithreading: bool(o.calcMultithreading, DEFAULT_PREFS.calcMultithreading),
     checkForUpdates: bool(o.checkForUpdates, DEFAULT_PREFS.checkForUpdates),
     view: parseViewPrefs(o.view),
+    statusFunction: oneOf(o.statusFunction, STATUS_FUNCTIONS, DEFAULT_PREFS.statusFunction),
   };
 }
 

@@ -1978,7 +1978,8 @@ pub struct SelectionDto {
     pub active: CellPos,
 }
 
-/// Status bar statistics for a selection.
+/// Status bar statistics for a selection; cells in hidden rows and
+/// columns are left out.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -2000,8 +2001,14 @@ pub struct SelectionStats {
     pub max: Option<f64>,
     /// `sum` formatted with the active cell's number format; when the
     /// selection contains an error, that error's text (and `sum`,
-    /// `average`, `min` and `max` are `None`), as AOO's status bar shows.
+    /// `average`, `min` and `max` are `None`).
     pub formatted_sum: Option<String>,
+    /// `average` formatted with the active cell's number format.
+    pub formatted_average: Option<String>,
+    /// `min` formatted with the active cell's number format.
+    pub formatted_min: Option<String>,
+    /// `max` formatted with the active cell's number format.
+    pub formatted_max: Option<String>,
 }
 
 /// What the formula bar shows for a cell.
