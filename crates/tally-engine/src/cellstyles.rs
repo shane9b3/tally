@@ -436,7 +436,13 @@ fn propagate_to_children(wb: &mut Workbook, old: &[CellStyleData]) {
     }
 }
 
-/// `Op::DeleteCellStyle`: cells using the style fall back to its parent.
+/// `Op::DeleteCellStyle`. As in AOO 4.1: the cells that used the style
+/// take `Default` and keep their direct formatting
+/// (`ScAttrArray::FindStyleSheet` with `bReset`, called from
+/// `ScViewFunc::RemoveStyleSheetInUse`); the style's children move to its
+/// parent and lose what they inherited from it
+/// (`SfxStyleSheetBasePool::Remove` → `ChangeParent`), and their own
+/// children and cells follow.
 pub fn delete(wb: &mut Workbook, name: &str) -> Result<Vec<Change>, ApiError> {
     if is_builtin(name) {
         return Err(ApiError::invalid_argument(format!(
@@ -450,20 +456,19 @@ pub fn delete(wb: &mut Workbook, name: &str) -> Result<Vec<Change>, ApiError> {
     let removed = wb.cell_styles.remove(pos);
     let parent = removed.parent.clone().unwrap_or_else(|| "Default".into());
     let parent_data = resolved(wb, &parent).unwrap_or_default();
-    // Children of the deleted style move up to its parent.
     for s in wb.cell_styles.iter_mut() {
         if s.parent.as_deref() == Some(name) {
             s.parent = Some(parent.clone());
+            let mut re = rebase(&removed.style, &s.style, &parent_data);
+            re.style_name = Some(s.name.clone());
+            s.style = re;
         }
     }
-    let base = removed.style.clone();
-    remap_all(wb, |table, id| {
-        let data = table.get(id).data.clone();
-        if data.style_name.as_deref() != Some(name) {
-            return id;
-        }
-        table.intern(rebase(&base, &data, &parent_data))
-    });
+    // Grandchildren follow their re-based parents; then the cells: those
+    // of the deleted style go to Default, those of its descendants follow
+    // their style.
+    propagate_to_children(wb, &old);
+    after_table_change(wb, &old);
     Ok(vec![Change::CellStyles(old)])
 }
 

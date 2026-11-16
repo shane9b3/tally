@@ -94,10 +94,12 @@ fn user_style_define_and_delete() {
     f.apply(vec![Op::DeleteCellStyle {
         name: "Money".into(),
     }]);
-    // The cell falls back to the parent (Result: bold, General).
+    // The cell takes Default, not the parent (AOO
+    // `ScAttrArray::FindStyleSheet` with bReset): no bold, General.
     let s = style_of(&f, "B1");
-    assert_eq!(s.style_name.as_deref(), Some("Result"));
-    assert!(s.bold);
+    assert!(matches!(s.style_name.as_deref(), None | Some("Default")));
+    assert!(!s.bold && !s.italic && !s.underline);
+    assert_eq!(f.text("B1"), "1234.5");
     assert!(!f
         .svc
         .cell_styles(f.doc)
@@ -107,6 +109,106 @@ fn user_style_define_and_delete() {
     // Round trip through the model keeps the table.
     let data = f.data();
     assert!(data.cell_styles.iter().all(|s| s.name != "Money"));
+}
+
+/// Parity G8 (review 4 L10). Deleting a style: its cells take Default and
+/// keep their direct formatting; its children move to its parent and lose
+/// what they inherited from it (AOO `SfxStyleSheetBasePool::Remove` →
+/// `ChangeParent`); undo brings the style and the children back, the
+/// cells stay on Default (AOO `ScUndoModifyStyle` restores the style only).
+#[test]
+fn delete_style_moves_cells_to_default_and_children_to_the_parent() {
+    let mut f = Fixture::new();
+    let styles = f.svc.cell_styles(f.doc).unwrap();
+    let result = styles.iter().find(|s| s.name == "Result").unwrap().clone();
+    // Mid (parent Result): red text on top of Result's bold/italic/underline.
+    let mut mid = CellStyleDto {
+        name: "Mid".into(),
+        parent: Some("Result".into()),
+        builtin: false,
+        style: result.style.clone(),
+    };
+    mid.style.color = Some(0xff00_00ff);
+    f.apply(vec![Op::DefineCellStyle { style: mid.clone() }]);
+    // Leaf (parent Mid): adds a fill.
+    let mut leaf = CellStyleDto {
+        name: "Leaf".into(),
+        parent: Some("Mid".into()),
+        builtin: false,
+        style: mid.style.clone(),
+    };
+    leaf.style.fill = Some(0x00ff_00ff);
+    f.apply(vec![Op::DefineCellStyle { style: leaf }]);
+    for (cell, name) in [("A1", "Mid"), ("A2", "Mid"), ("A3", "Leaf")] {
+        f.set(cell, "1");
+        f.apply(vec![Op::ApplyCellStyle {
+            sheet: f.sheet,
+            ranges: vec![range(cell)],
+            name: name.into(),
+        }]);
+    }
+    // Direct formatting on A2.
+    f.apply(vec![Op::ApplyStyle {
+        sheet: f.sheet,
+        ranges: vec![range("A2")],
+        patch: tally_api::StylePatch {
+            fill: Some(0xffff_00ff),
+            ..Default::default()
+        },
+    }]);
+
+    let r = f.apply(vec![Op::DeleteCellStyle { name: "Mid".into() }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+
+    // Cells of the deleted style: Default, not Result.
+    let a1 = style_of(&f, "A1");
+    assert!(matches!(a1.style_name.as_deref(), None | Some("Default")));
+    assert!(!a1.bold && !a1.italic && !a1.underline);
+    assert_eq!(a1.color, None);
+    // Direct formatting survives.
+    let a2 = style_of(&f, "A2");
+    assert!(matches!(a2.style_name.as_deref(), None | Some("Default")));
+    assert!(!a2.bold);
+    assert_eq!(a2.fill, Some(0xffff_00ff));
+    // The child hangs under Result now, without Mid's red.
+    let styles = f.svc.cell_styles(f.doc).unwrap();
+    let leaf = styles.iter().find(|s| s.name == "Leaf").unwrap();
+    assert_eq!(leaf.parent.as_deref(), Some("Result"));
+    assert!(leaf.style.bold);
+    assert_eq!(leaf.style.color, None);
+    assert_eq!(leaf.style.fill, Some(0x00ff_00ff));
+    let a3 = style_of(&f, "A3");
+    assert_eq!(a3.style_name.as_deref(), Some("Leaf"));
+    assert!(a3.bold);
+    assert_eq!(a3.color, None);
+    assert_eq!(a3.fill, Some(0x00ff_00ff));
+
+    f.svc.undo(f.doc).unwrap();
+    let styles = f.svc.cell_styles(f.doc).unwrap();
+    assert!(styles.iter().any(|s| s.name == "Mid"));
+    let leaf = styles.iter().find(|s| s.name == "Leaf").unwrap();
+    assert_eq!(leaf.parent.as_deref(), Some("Mid"));
+    assert_eq!(leaf.style.color, Some(0xff00_00ff));
+    assert_eq!(style_of(&f, "A3").color, Some(0xff00_00ff));
+    let a1 = style_of(&f, "A1");
+    assert!(matches!(a1.style_name.as_deref(), None | Some("Default")));
+}
+
+/// Parity G8 (review 4 L15), a deviation that stays: `Result2` carries
+/// the en-US currency format in every document locale. AOO takes the
+/// office locale's default currency format the first time the style's
+/// items are read (`ScStyleSheet::GetItemSet`, `HID_SC_SHEET_CELL_ERG1`).
+#[test]
+fn result2_currency_format_does_not_follow_the_locale() {
+    let mut f = Fixture::new();
+    f.svc.set_locale(f.doc, "de-DE").unwrap();
+    let styles = f.svc.cell_styles(f.doc).unwrap();
+    let r2 = styles.iter().find(|s| s.name == "Result2").unwrap();
+    assert_eq!(r2.parent.as_deref(), Some("Result"));
+    assert_eq!(
+        r2.style.number_format,
+        "[$$-409]#,##0.00;[RED]-[$$-409]#,##0.00"
+    );
 }
 
 #[test]
