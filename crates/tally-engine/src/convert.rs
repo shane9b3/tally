@@ -219,7 +219,7 @@ impl Workbook {
                 wb.import_warnings.push(w);
             }
         }
-        wb.cell_styles = data.cell_styles.clone();
+        wb.cell_styles = crate::cellstyles::redefined_only(&data.cell_styles);
         wb.custom_sort_lists = data.settings.custom_sort_lists.clone();
         wb.doc_view = data.settings.view.clone();
         wb.default_font = data

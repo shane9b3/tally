@@ -124,6 +124,27 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
             faces.push(f);
         }
     }
+    let bases = named_bases(data);
+    let no_style = StyleData::default();
+    let parent_of = |st: &tally_model::CellStyleData| -> &StyleData {
+        st.parent
+            .as_deref()
+            .and_then(|p| bases.get(p).copied())
+            .unwrap_or(&no_style)
+    };
+    let default_font = data.settings.default_font.as_deref();
+    // The application font, named by a style that resets its parent's.
+    let resets = data.cell_styles.iter().any(|st| {
+        let look = StyleLook {
+            st: &st.style,
+            base: parent_of(st),
+            default_font,
+        };
+        st.name != "Default" && look.reset_face().is_some()
+    });
+    if resets && default_font.is_none() {
+        faces.push(tally_model::APP_FONT_FAMILY);
+    }
     font_face_decls(&mut s, faces);
     s.push_str("<office:styles>");
     s.push_str(r#"<style:default-style style:family="table-cell">"#);
@@ -136,7 +157,6 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
         );
     }
     s.push_str(r#"<style:paragraph-properties style:tab-stop-distance="1.25cm"/>"#);
-    let default_font = data.settings.default_font.as_deref();
     if data.settings.locale.is_some() || default_font.is_some() {
         s.push_str("<style:text-properties");
         if let Some(f) = default_font {
@@ -165,34 +185,27 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
     // AOO writes a style's `style:data-style-name` into office:styles).
     let mut named_data: HashMap<&str, String> = HashMap::new();
     let doc_lang = doc_lang_of(data);
-    let bases = named_bases(data);
-    let no_style = StyleData::default();
-    let parent_of = |st: &tally_model::CellStyleData| -> &StyleData {
-        st.parent
-            .as_deref()
-            .and_then(|p| bases.get(p).copied())
-            .unwrap_or(&no_style)
-    };
     let mut general_written = false;
     for (i, st) in data.cell_styles.iter().enumerate() {
         let code = st.style.number_format.as_deref().unwrap_or("");
-        if code.is_empty() || code.eq_ignore_ascii_case("General") {
-            // General under a parent with a number format: say so, or the
-            // reader takes the parent's.
-            if st.name != "Default" && has_number_format(parent_of(st)) {
-                if !general_written {
-                    general_written = true;
-                    general_data_style(&mut s, "NSGeneral");
-                }
-                named_data.insert(st.name.as_str(), "NSGeneral".into());
+        if !code.is_empty() && !code.eq_ignore_ascii_case("General") {
+            let name = format!("NS{i}");
+            let mut xml = String::new();
+            if code_to_xml_in(code, &name, &mut xml, doc_lang.as_deref()).is_ok() {
+                s.push_str(&xml);
+                named_data.insert(st.name.as_str(), name);
+                continue;
             }
-            continue;
         }
-        let name = format!("NS{i}");
-        let mut xml = String::new();
-        if code_to_xml_in(code, &name, &mut xml, doc_lang.as_deref()).is_ok() {
-            s.push_str(&xml);
-            named_data.insert(st.name.as_str(), name);
+        // General (or a format that is written as General) under a
+        // parent with a number format: say so, or the reader takes the
+        // parent's.
+        if st.name != "Default" && has_number_format(parent_of(st)) {
+            if !general_written {
+                general_written = true;
+                general_data_style(&mut s, "NSGeneral");
+            }
+            named_data.insert(st.name.as_str(), "NSGeneral".into());
         }
     }
     // Wave 5: named cell styles with their parent chains.
@@ -471,6 +484,9 @@ impl StylePlan {
                             }
                         })
                         .clone()
+                        // Written as General: said so under a named style
+                        // with a number format, as for General itself.
+                        .or_else(|| general(&mut plan))
                 }
             };
             if st.display.is_some() && !warned_display {
@@ -485,19 +501,20 @@ impl StylePlan {
                     .warnings
                     .push("indent levels are not written in this version".into());
             }
-            if let Some(f) = &st.font.family {
-                if !plan.fonts.contains(f) {
-                    plan.fonts.push(f.clone());
+            let look = StyleLook {
+                st,
+                base: base_of(&bases, st),
+                default_font,
+            };
+            if let Some(f) = st.font.family.as_deref().or(look.reset_face()) {
+                if !plan.fonts.iter().any(|x| x == f) {
+                    plan.fonts.push(f.to_string());
                 }
             }
             cell_style_xml(
                 &mut plan.cell_xml,
                 &format!("ce{}", i + 1),
-                &StyleLook {
-                    st,
-                    base: base_of(&bases, st),
-                    default_font,
-                },
+                &look,
                 data_name.as_deref(),
             );
             data_names.push(data_name);
@@ -814,6 +831,21 @@ struct StyleLook<'a> {
     default_font: Option<&'a str>,
 }
 
+impl<'a> StyleLook<'a> {
+    /// The family a style without one is drawn with: the document's
+    /// default font, else the application font.
+    fn reset_font(&self) -> &'a str {
+        self.default_font.unwrap_or(tally_model::APP_FONT_FAMILY)
+    }
+
+    /// The family this style has to name because its parent names
+    /// another and it has none of its own (a font face to declare).
+    fn reset_face(&self) -> Option<&'a str> {
+        (self.st.font.family.is_none() && self.base.font.family.is_some())
+            .then(|| self.reset_font())
+    }
+}
+
 fn cell_style_xml(out: &mut String, name: &str, look: &StyleLook, data_style: Option<&str>) {
     let parent = look
         .st
@@ -824,9 +856,6 @@ fn cell_style_xml(out: &mut String, name: &str, look: &StyleLook, data_style: Op
         .unwrap_or_else(|| "Default".into());
     cell_style_xml_with(out, name, &parent, None, look, data_style);
 }
-
-/// The default font size, points (a style without a size).
-const DEFAULT_FONT_PT: f32 = 10.0;
 
 /// One `table-cell` style with an explicit parent (and, for named
 /// styles, a display name). Only the attributes that differ from the
@@ -1047,22 +1076,21 @@ fn cell_style_xml_with(
         }
     }
     // The default size is not stored: under a parent with a size it is
-    // written as the 10 pt it is.
+    // written as the size it is shown at.
     let size = |s: &Option<f32>| s.filter(|s| s.is_finite() && *s > 0.0);
     if size(&f.size_pt) != size(&bf.size_pt) {
-        let sz = size(&f.size_pt).unwrap_or(DEFAULT_FONT_PT);
+        let sz = size(&f.size_pt).unwrap_or(tally_model::DEFAULT_FONT_SIZE_PT);
         let _ = write!(
             tp,
             r#" fo:font-size="{sz}pt" style:font-size-asian="{sz}pt" style:font-size-complex="{sz}pt""#
         );
     }
-    // Likewise the default font, when the document names one.
+    // Likewise the default font: the document's, else the application's.
     if f.family != bf.family {
-        if let Some(fam) = f.family.as_deref().or(look.default_font) {
-            tp.push_str(r#" style:font-name=""#);
-            escape_attr(fam, &mut tp);
-            tp.push('"');
-        }
+        let fam = f.family.as_deref().unwrap_or(look.reset_font());
+        tp.push_str(r#" style:font-name=""#);
+        escape_attr(fam, &mut tp);
+        tp.push('"');
     }
     if !tp.is_empty() {
         let _ = write!(out, "<style:text-properties{tp}/>");

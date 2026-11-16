@@ -582,9 +582,9 @@ fn child_styles_keep_overrides_back_to_the_default() {
         back.styles[c.style.unwrap() as usize].clone()
     };
     // The default size is not stored; under a parent with a size it is
-    // written, and read back, as the 10 pt it is.
+    // written, and read back, as the size it is shown at.
     let mut direct_back = direct.clone();
-    direct_back.font.size_pt = Some(10.0);
+    direct_back.font.size_pt = Some(DEFAULT_FONT_SIZE_PT);
     assert_eq!(style_of(0), direct_back);
     assert_eq!(style_of(1), plain);
 }
@@ -741,4 +741,310 @@ fn child_styles_are_written_as_the_difference_from_the_parent() {
     assert_eq!(named("Child"), &child);
     let c = &back.sheets[0].cells[0];
     assert_eq!(back.styles[c.style.unwrap() as usize], direct);
+}
+
+/// One sheet with a number in A1.. down column A, cell `i` on style `i`.
+fn styled_book(styles: Vec<StyleData>, cell_styles: Vec<CellStyleData>) -> WorkbookData {
+    WorkbookData {
+        sheets: vec![SheetData {
+            name: "S".into(),
+            cells: (0..styles.len() as u32)
+                .map(|i| CellData {
+                    row: i,
+                    col: 0,
+                    content: CellContentData::Value(Value::Number(1.0)),
+                    style: Some(i),
+                })
+                .collect(),
+            ..SheetData::default()
+        }],
+        styles,
+        cell_styles,
+        ..WorkbookData::default()
+    }
+}
+
+fn named(name: &str, parent: &str, style: &StyleData) -> CellStyleData {
+    CellStyleData {
+        name: name.into(),
+        parent: Some(parent.into()),
+        style: StyleData {
+            style_name: Some(name.into()),
+            ..style.clone()
+        },
+    }
+}
+
+fn style_of_row(wb: &WorkbookData, row: u32) -> StyleData {
+    let c = wb.sheets[0].cells.iter().find(|c| c.row == row).unwrap();
+    wb.styles[c.style.unwrap() as usize].clone()
+}
+
+/// A style without a size under a parent with one is written with the
+/// size it is shown at, the one default every part of Tally uses
+/// (review 6 M2: the writer said 10 pt, the engine shows 11).
+#[test]
+fn default_size_under_a_sized_parent_is_written_as_shown() {
+    let mut heading = StyleData::default();
+    heading.font.size_pt = Some(16.0);
+    let small = StyleData::default();
+    let wb = styled_book(
+        vec![StyleData {
+            style_name: Some("Small".into()),
+            ..StyleData::default()
+        }],
+        vec![
+            named("Heading", "Default", &heading),
+            named("Small", "Heading", &small),
+        ],
+    );
+    let mut out = Cursor::new(Vec::new());
+    write_ods(&wb, &mut out).unwrap();
+    let bytes = out.into_inner();
+    let size = format!(r#"fo:font-size="{DEFAULT_FONT_SIZE_PT}pt""#);
+    let styles = part(&bytes, "styles.xml");
+    let at = styles.find(r#"<style:style style:name="Small""#).unwrap();
+    assert!(styles[at..].contains(&size), "{styles}");
+    let back = read_ods(Cursor::new(bytes), &Limits::default()).unwrap();
+    let shown = |s: &StyleData| s.font.size_pt.unwrap_or(DEFAULT_FONT_SIZE_PT);
+    let small_back = &back
+        .cell_styles
+        .iter()
+        .find(|s| s.name == "Small")
+        .unwrap()
+        .style;
+    assert_eq!(shown(small_back), DEFAULT_FONT_SIZE_PT);
+    assert_eq!(shown(&style_of_row(&back, 0)), DEFAULT_FONT_SIZE_PT);
+}
+
+/// A style without a font under a parent with one names the font it is
+/// drawn with: the document's default font, else the application font
+/// (review 6 L2: nothing was written without a default font, and the
+/// parent's font came back).
+#[test]
+fn font_reset_under_a_parent_names_the_font_in_use() {
+    let mut fancy = StyleData::default();
+    fancy.font.family = Some("Georgia".into());
+    let plain = StyleData::default();
+    let book = || {
+        styled_book(
+            vec![StyleData {
+                style_name: Some("Fancy".into()),
+                ..StyleData::default()
+            }],
+            vec![
+                named("Fancy", "Default", &fancy),
+                named("Plain", "Fancy", &plain),
+            ],
+        )
+    };
+    for default_font in [None, Some("Arial")] {
+        let mut wb = book();
+        wb.settings.default_font = default_font.map(str::to_string);
+        let want = default_font.unwrap_or(APP_FONT_FAMILY);
+        let mut out = Cursor::new(Vec::new());
+        write_ods(&wb, &mut out).unwrap();
+        let bytes = out.into_inner();
+        let attr = format!(r#"style:font-name="{want}""#);
+        let face = format!(r#"<style:font-face style:name="{want}""#);
+        for name in ["styles.xml", "content.xml"] {
+            let xml = part(&bytes, name);
+            assert!(xml.contains(&face), "{name}: {xml}");
+            let style = if name == "styles.xml" {
+                r#"<style:style style:name="Plain""#
+            } else {
+                r#"<style:style style:name="ce1""#
+            };
+            let at = xml.find(style).unwrap();
+            let end = at + xml[at..].find("</style:style>").unwrap();
+            assert!(xml[at..end].contains(&attr), "{name}: {xml}");
+        }
+        let back = read_ods(Cursor::new(bytes), &Limits::default()).unwrap();
+        let plain_back = &back
+            .cell_styles
+            .iter()
+            .find(|s| s.name == "Plain")
+            .unwrap()
+            .style;
+        // Not the parent's Georgia: the font in use, by name.
+        assert_eq!(plain_back.font.family.as_deref(), Some(want));
+        assert_eq!(style_of_row(&back, 0).font.family.as_deref(), Some(want));
+    }
+}
+
+/// A number format the writer cannot express is written as General; under
+/// a parent with a number format that has to be said, or the parent's
+/// format comes back (review 6 L3).
+#[test]
+fn unwritable_number_format_is_general_not_the_parents() {
+    // ODF 1.2 has no `E-` exponent.
+    let bad = "0.00E-00";
+    let loud = StyleData {
+        number_format: Some("0.00".into()),
+        ..StyleData::default()
+    };
+    let sci = StyleData {
+        number_format: Some(bad.into()),
+        ..StyleData::default()
+    };
+    let wb = styled_book(
+        vec![
+            StyleData {
+                style_name: Some("Loud".into()),
+                ..sci.clone()
+            },
+            // No named style: nothing to override, nothing written.
+            sci.clone(),
+        ],
+        vec![named("Loud", "Default", &loud), named("Sci", "Loud", &sci)],
+    );
+    let mut out = Cursor::new(Vec::new());
+    let report = tally_io_ods::write_ods_with_report(&wb, &mut out).unwrap();
+    assert!(
+        report.warnings.iter().any(|w| w.contains(bad)),
+        "{:?}",
+        report.warnings
+    );
+    let bytes = out.into_inner();
+    let styles = part(&bytes, "styles.xml");
+    assert!(
+        styles.contains(r#"<style:style style:name="Sci" style:family="table-cell" style:parent-style-name="Loud" style:display-name="Sci" style:data-style-name="NSGeneral">"#),
+        "{styles}"
+    );
+    let content = part(&bytes, "content.xml");
+    assert!(
+        content.contains(r#"<style:style style:name="ce1" style:family="table-cell" style:parent-style-name="Loud" style:data-style-name="NGeneral">"#),
+        "{content}"
+    );
+    assert!(
+        content.contains(r#"<style:style style:name="ce2" style:family="table-cell" style:parent-style-name="Default">"#),
+        "{content}"
+    );
+    let back = read_ods(Cursor::new(bytes), &Limits::default()).unwrap();
+    let fmt = |n: &str| {
+        back.cell_styles
+            .iter()
+            .find(|s| s.name == n)
+            .unwrap()
+            .style
+            .number_format
+            .clone()
+    };
+    assert_eq!(fmt("Loud").as_deref(), Some("0.00"));
+    assert_eq!(fmt("Sci"), None);
+    assert_eq!(style_of_row(&back, 0).number_format, None);
+    assert_eq!(style_of_row(&back, 0).style_name.as_deref(), Some("Loud"));
+    // The plain cell is General, with or without a style of its own.
+    let plain = back.sheets[0].cells.iter().find(|c| c.row == 1).unwrap();
+    assert!(plain
+        .style
+        .is_none_or(|i| back.styles[i as usize].number_format.is_none()));
+}
+
+/// Styles are written as differences, so a chain of any depth has to be
+/// walked to its root on reading (review 6 L1: the walk stopped after 16
+/// parents and the root's attributes were lost).
+#[test]
+fn deep_parent_chains_keep_the_roots_attributes() {
+    let mut bold = StyleData::default();
+    bold.font.bold = true;
+    bold.fill = Some(0x1122_33ff);
+    let depth = 40;
+    let mut cell_styles = vec![named("L0", "Default", &bold)];
+    for i in 1..depth {
+        cell_styles.push(named(&format!("L{i}"), &format!("L{}", i - 1), &bold));
+    }
+    let leaf = format!("L{}", depth - 1);
+    let on_leaf = StyleData {
+        style_name: Some(leaf.clone()),
+        ..bold.clone()
+    };
+    let wb = styled_book(vec![on_leaf.clone()], cell_styles);
+    let mut out = Cursor::new(Vec::new());
+    write_ods(&wb, &mut out).unwrap();
+    let bytes = out.into_inner();
+    // Only the root says bold.
+    assert_eq!(
+        part(&bytes, "styles.xml").matches("fo:font-weight").count(),
+        1
+    );
+    let back = read_ods(Cursor::new(bytes), &Limits::default()).unwrap();
+    for s in &back.cell_styles {
+        assert!(s.style.font.bold, "{}", s.name);
+        assert_eq!(s.style.fill, Some(0x1122_33ff), "{}", s.name);
+    }
+    assert_eq!(back.cell_styles.len(), depth);
+    assert_eq!(style_of_row(&back, 0), on_leaf);
+}
+
+/// The package with `styles.xml` passed through `edit`.
+fn with_styles(bytes: Vec<u8>, edit: impl Fn(String) -> String) -> Vec<u8> {
+    let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let name = f.name().unwrap().to_string();
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut f, &mut data).unwrap();
+        if name == "styles.xml" {
+            data = edit(String::from_utf8(data).unwrap()).into_bytes();
+        }
+        out.start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut out, &data).unwrap();
+    }
+    out.finish().unwrap().into_inner()
+}
+
+/// A parent cycle in a file ends where it closes, and a long chain that
+/// runs into one is read in time linear in its length.
+#[test]
+fn parent_cycles_end() {
+    let mut bold = StyleData::default();
+    bold.font.bold = true;
+    let mut italic = bold.clone();
+    italic.font.italic = true;
+    let n = 3000;
+    let mut cell_styles = vec![named("A", "Default", &bold), named("B", "A", &italic)];
+    // A long tail hanging off the cycle.
+    for i in 0..n {
+        let parent = if i == 0 {
+            "B".to_string()
+        } else {
+            format!("T{}", i - 1)
+        };
+        cell_styles.push(named(&format!("T{i}"), &parent, &italic));
+    }
+    let wb = styled_book(
+        vec![StyleData {
+            style_name: Some(format!("T{}", n - 1)),
+            ..italic.clone()
+        }],
+        cell_styles,
+    );
+    let mut out = Cursor::new(Vec::new());
+    write_ods(&wb, &mut out).unwrap();
+    // A's parent becomes B: A → B → A.
+    let a = r#"<style:style style:name="A" style:family="table-cell" style:parent-style-name="Default""#;
+    let bytes = with_styles(out.into_inner(), |x| {
+        assert!(x.contains(a), "{x}");
+        x.replacen(a, &a.replace(r#""Default""#, r#""B""#), 1)
+    });
+    let t = std::time::Instant::now();
+    let back = read_ods(Cursor::new(bytes), &Limits::default()).unwrap();
+    assert!(t.elapsed() < std::time::Duration::from_secs(20));
+    assert_eq!(back.cell_styles.len(), n + 2);
+    // The cycle is cut at one of its two links (which one depends on the
+    // style that is resolved first), so its members keep at least their
+    // own attributes; everything behind it has both.
+    for s in &back.cell_styles {
+        let f = &s.style.font;
+        match s.name.as_str() {
+            "A" => assert!(f.bold),
+            "B" => assert!(f.italic),
+            _ => assert!(f.bold && f.italic, "{}", s.name),
+        }
+    }
+    let cell = style_of_row(&back, 0);
+    assert!(cell.font.bold && cell.font.italic);
 }

@@ -246,7 +246,11 @@ mod pdf {
             family: crate::fonts::family(wb, st).map(str::to_string),
             bold: st.font.bold,
             italic: st.font.italic,
-            size_pt: st.font.size_pt.unwrap_or(10.0).clamp(1.0, 400.0),
+            size_pt: st
+                .font
+                .size_pt
+                .unwrap_or(crate::styles::DEFAULT_FONT_SIZE_PT)
+                .clamp(1.0, 400.0),
             color: color.or(st.font.color).unwrap_or(0x000000ff),
             underline: st.font.underline,
             strike: st.font.strike,

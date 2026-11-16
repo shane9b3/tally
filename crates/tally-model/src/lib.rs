@@ -57,6 +57,19 @@ pub fn clean_font_name(raw: &str) -> Option<String> {
     Some(name.chars().take(MAX_FONT_NAME_LEN).collect())
 }
 
+/// The font size of a cell without one, points: the size the Format
+/// toolbar shows for an unformatted cell, the grid draws it at, row
+/// heights assume, print uses and the ODS writer writes when a style
+/// resets the size under a parent that sets one. The single source of
+/// truth; the grid's fallback (`DEFAULT_FONT_SIZE_PT` in
+/// `packages/grid/src/renderer.ts`) repeats the value.
+pub const DEFAULT_FONT_SIZE_PT: f32 = 11.0;
+
+/// The application font: the family of a cell whose style names none in
+/// a document without a default font. The ODS writer names it when a
+/// style resets the family under a parent that sets one.
+pub const APP_FONT_FAMILY: &str = "Inter";
+
 /// A whole workbook.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct WorkbookData {
@@ -1024,7 +1037,7 @@ impl Default for MarginsData {
 }
 
 /// A header or footer: three regions of text with placeholders `&[PAGE]`,
-/// `&[PAGES]`, `&[SHEET]`, `&[FILE]`, `&[DATE]`, `&[TIME]`.
+/// `&[PAGES]`, `&[SHEET]`, `&[FILE]`, `&[PATH]`, `&[DATE]`, `&[TIME]`.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct HeaderFooterData {
     /// Left region.

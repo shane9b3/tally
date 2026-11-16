@@ -84,9 +84,16 @@ export function cssColor(rgba: number): string {
   return s;
 }
 
+/**
+ * The size of a cell without a font size, pt: the engine's
+ * `tally_model::DEFAULT_FONT_SIZE_PT`, repeated here by value (the engine
+ * sends a style for every cell, so this only shows before styles arrive).
+ */
+export const DEFAULT_FONT_SIZE_PT = 11;
+
 /** Cell font size in px for a style (10 pt = the theme size). */
 export function fontPx(style: StyleDto | undefined, theme: Theme, zoom: number): number {
-  const pt = style?.fontSizePt ?? 10;
+  const pt = style?.fontSizePt ?? DEFAULT_FONT_SIZE_PT;
   return (theme.fonts.sizePx * pt * zoom) / 10;
 }
 

@@ -54,7 +54,7 @@ impl<'a> FontRef<'a> {
         self.family.is_none_or(|f| {
             let f = f.trim();
             f.is_empty()
-                || f.eq_ignore_ascii_case("inter")
+                || f.eq_ignore_ascii_case(tally_model::APP_FONT_FAMILY)
                 || f.eq_ignore_ascii_case("inter variable")
         })
     }

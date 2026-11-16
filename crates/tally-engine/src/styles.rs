@@ -16,8 +16,8 @@ use tally_types::CellRange;
 
 use crate::storage::StyleId;
 
-/// Default font size in points.
-pub const DEFAULT_FONT_SIZE_PT: f32 = 11.0;
+/// Default font size in points ([`tally_model::DEFAULT_FONT_SIZE_PT`]).
+pub const DEFAULT_FONT_SIZE_PT: f32 = tally_model::DEFAULT_FONT_SIZE_PT;
 
 /// One style.
 #[derive(Clone, Debug)]

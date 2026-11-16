@@ -106,6 +106,56 @@ pub fn table_of(stored: &[CellStyleData]) -> Vec<CellStyleData> {
     out
 }
 
+/// The named styles an ODS file gets: the stored ones, then every
+/// built-in that was never redefined and is used, by a cell format of
+/// `styles` or as an ancestor of a used style (in [`BUILTIN`] order, so a
+/// parent comes before its child). ODS writes a style as the difference
+/// from its parent, so the parent has to be in the file: another
+/// application supplies its own built-in otherwise, and a reader has no
+/// style to link the cells to. `Default` is every chain's baseline and is
+/// not added. Only for ODS: the XLSX writer keeps a style's name and not
+/// its look, and a built-in read back from there would be redefined as a
+/// plain style.
+pub fn for_export(stored: &[CellStyleData], styles: &[StyleData]) -> Vec<CellStyleData> {
+    let mut used: HashSet<&str> = HashSet::new();
+    let mut todo: Vec<&str> = styles
+        .iter()
+        .filter_map(|s| s.style_name.as_deref())
+        .chain(stored.iter().filter_map(|s| s.parent.as_deref()))
+        .collect();
+    while let Some(name) = todo.pop() {
+        let Some(b) = BUILTIN.iter().find(|b| **b == name && name != "Default") else {
+            continue;
+        };
+        if !used.insert(b) || stored.iter().any(|s| s.name == *b) {
+            // A redefined built-in is in `stored` with its own parent,
+            // which the chain over `stored` above covers.
+            continue;
+        }
+        let parent = builtin_data(b).and_then(|d| d.parent);
+        todo.extend(BUILTIN.iter().filter(|p| Some(**p) == parent.as_deref()));
+    }
+    let mut out = stored.to_vec();
+    for b in BUILTIN {
+        if used.contains(b) && !stored.iter().any(|s| s.name == b) {
+            out.extend(builtin_data(b));
+        }
+    }
+    out
+}
+
+/// A file's named styles as they are stored: without the built-ins the
+/// file defines exactly as they are built in (what [`for_export`] adds,
+/// and what AOO writes for its own), so "never redefined" survives a
+/// save and the stored table stays what the user changed.
+pub fn redefined_only(from_file: &[CellStyleData]) -> Vec<CellStyleData> {
+    from_file
+        .iter()
+        .filter(|s| !is_builtin(&s.name) || builtin_data(&s.name).as_ref() != Some(*s))
+        .cloned()
+        .collect()
+}
+
 /// The resolved attributes of `name`, if defined.
 pub fn resolved(wb: &Workbook, name: &str) -> Option<StyleData> {
     wb.cell_styles

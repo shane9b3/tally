@@ -295,3 +295,199 @@ fn custom_auto_format_lays_the_16_slots_over_the_range() {
     }]);
     assert!(!bad.errors.is_empty());
 }
+
+/// A new document in a service that reads and writes files.
+#[cfg(feature = "io")]
+fn io_fixture() -> Fixture {
+    let mut svc = tally_engine::EngineService::with_default_codec();
+    let info = svc.new_workbook(None).unwrap();
+    Fixture {
+        doc: info.doc,
+        sheet: info.sheets[0].id,
+        svc,
+    }
+}
+
+/// The document saved as `name` (ODS) and opened again, with the package
+/// bytes.
+#[cfg(feature = "io")]
+fn through_ods(f: &mut Fixture, name: &str) -> (Fixture, Vec<u8>) {
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    f.svc
+        .save(f.doc, Some(&path), tally_api::FileFormat::Ods)
+        .unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let mut svc = tally_engine::EngineService::with_default_codec();
+    let info = svc.open(&path).unwrap();
+    (
+        Fixture {
+            doc: info.doc,
+            sheet: info.sheets[0].id,
+            svc,
+        },
+        bytes,
+    )
+}
+
+#[cfg(feature = "io")]
+fn xml_part(bytes: &[u8], name: &str) -> String {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    let mut f = z.by_name(name).unwrap();
+    let mut s = String::new();
+    std::io::Read::read_to_string(&mut f, &mut s).unwrap();
+    s
+}
+
+/// Review 6 M1: a built-in style that was never redefined is still
+/// written to the file when a cell (or a user style) is based on it. ODS
+/// styles are written as the difference from their parent, so without
+/// the parent in the file another application supplies its own bold
+/// Heading under a cell that switched bold off, and Tally lost the
+/// cell's link to the style.
+#[cfg(feature = "io")]
+#[test]
+fn unredefined_builtin_styles_are_saved_with_the_cells_on_them() {
+    let mut f = io_fixture();
+    f.set("A1", "Title");
+    f.set("A2", "plain");
+    let r = f.apply(vec![
+        Op::ApplyCellStyle {
+            sheet: f.sheet,
+            ranges: vec![range("A1")],
+            name: "Heading".into(),
+        },
+        Op::ApplyStyle {
+            sheet: f.sheet,
+            ranges: vec![range("A1")],
+            patch: tally_api::StylePatch {
+                bold: Some(false),
+                ..Default::default()
+            },
+        },
+    ]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    // A user style under Result2, whose own parent is Result.
+    let mut money = f
+        .svc
+        .cell_styles(f.doc)
+        .unwrap()
+        .into_iter()
+        .find(|s| s.name == "Result2")
+        .unwrap();
+    money.name = "Money".into();
+    money.parent = Some("Result2".into());
+    money.builtin = false;
+    money.style.underline = false;
+    let r = f.apply(vec![Op::DefineCellStyle { style: money }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+
+    // In memory only what was defined is stored.
+    let stored =
+        |f: &Fixture| -> Vec<String> { f.data().cell_styles.into_iter().map(|s| s.name).collect() };
+    assert_eq!(stored(&f), ["Money"]);
+
+    let (back, bytes) = through_ods(&mut f, "cellstyles-builtins.ods");
+    // The file has what is used: Heading (a cell), Result2 (a parent) and
+    // Result (its parent); not Heading1.
+    let file = tally_io_ods::read_ods(
+        std::io::Cursor::new(bytes.clone()),
+        &tally_io_ods::Limits::default(),
+    )
+    .unwrap();
+    let mut names: Vec<String> = file.cell_styles.into_iter().map(|s| s.name).collect();
+    names.sort();
+    assert_eq!(names, ["Heading", "Money", "Result", "Result2"]);
+    let styles = xml_part(&bytes, "styles.xml");
+    let at = styles
+        .find(r#"<style:style style:name="Heading" style:family="table-cell" style:parent-style-name="Default""#)
+        .unwrap_or_else(|| panic!("{styles}"));
+    let end = at + styles[at..].find("</style:style>").unwrap();
+    assert!(
+        styles[at..end].contains(r#"fo:font-weight="bold""#),
+        "{styles}"
+    );
+    // The cell says that it is not bold.
+    let content = xml_part(&bytes, "content.xml");
+    assert!(
+        content.contains(
+            r#"style:parent-style-name="Heading"><style:text-properties fo:font-weight="normal""#
+        ),
+        "{content}"
+    );
+    let a1 = style_of(&back, "A1");
+    assert_eq!(a1.style_name.as_deref(), Some("Heading"));
+    assert!(!a1.bold && a1.italic);
+    assert_eq!(a1.font_size_pt, 16.0);
+    assert_eq!(a1, {
+        let mut want = style_of(&f, "A1");
+        want.id = a1.id;
+        want
+    });
+    // Money kept its parent chain and its look.
+    let find = |f: &Fixture, n: &str| {
+        f.svc
+            .cell_styles(f.doc)
+            .unwrap()
+            .into_iter()
+            .find(|s| s.name == n)
+            .unwrap()
+    };
+    let (m0, m1) = (find(&f, "Money"), find(&back, "Money"));
+    assert_eq!(m1.parent.as_deref(), Some("Result2"));
+    assert_eq!(m1.style, m0.style);
+    assert!(m1.style.bold && !m1.style.underline);
+    // The built-ins read back are still "never redefined": only Money is
+    // stored (so an XLSX export, which keeps a style's name but not its
+    // look, does not hand Heading back as a plain style).
+    assert_eq!(stored(&back), ["Money"]);
+    let h = find(&back, "Heading");
+    assert!(h.builtin && h.style.bold);
+    assert_eq!(h.style, find(&f, "Heading").style);
+    assert_eq!(find(&back, "Result2").style, find(&f, "Result2").style);
+}
+
+/// Review 6 M2: one default font size. A style without a size under a
+/// parent with one (Heading, 16 pt) is shown at the default, and comes
+/// back from an ODS file at the same size.
+#[cfg(feature = "io")]
+#[test]
+fn default_size_under_heading_keeps_its_displayed_size_through_ods() {
+    let default_pt = tally_model::DEFAULT_FONT_SIZE_PT;
+    let mut f = io_fixture();
+    f.set("A1", "small");
+    f.set("B1", "plain");
+    assert_eq!(style_of(&f, "B1").font_size_pt, default_pt);
+    let mut small = f
+        .svc
+        .cell_styles(f.doc)
+        .unwrap()
+        .into_iter()
+        .find(|s| s.name == "Heading")
+        .unwrap();
+    small.name = "Small".into();
+    small.parent = Some("Heading".into());
+    small.builtin = false;
+    small.style.font_size_pt = default_pt;
+    let r = f.apply(vec![
+        Op::DefineCellStyle { style: small },
+        Op::ApplyCellStyle {
+            sheet: f.sheet,
+            ranges: vec![range("A1")],
+            name: "Small".into(),
+        },
+    ]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(style_of(&f, "A1").font_size_pt, default_pt);
+    let (back, _) = through_ods(&mut f, "cellstyles-small.ods");
+    assert_eq!(style_of(&back, "A1").font_size_pt, default_pt);
+    assert_eq!(style_of(&back, "A1").style_name.as_deref(), Some("Small"));
+    let small = back
+        .svc
+        .cell_styles(back.doc)
+        .unwrap()
+        .into_iter()
+        .find(|s| s.name == "Small")
+        .unwrap();
+    assert_eq!(small.style.font_size_pt, default_pt);
+    assert_eq!(style_of(&back, "B1").font_size_pt, default_pt);
+}

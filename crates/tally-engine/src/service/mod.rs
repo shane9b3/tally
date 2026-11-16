@@ -301,6 +301,11 @@ impl EngineService {
         if data.meta.created.is_none() {
             data.meta.created = data.meta.modified.clone();
         }
+        if format == FileFormat::Ods {
+            // The built-in styles in use: ODS styles are written as the
+            // difference from their parent, which has to be in the file.
+            data.cell_styles = crate::cellstyles::for_export(&data.cell_styles, &data.styles);
+        }
         let csv_rows = if format == FileFormat::Csv {
             Some(Self::csv_rows(&d.wb, d.csv_options.as_shown)?)
         } else {

@@ -1,8 +1,10 @@
 //! Reading ODF styles (cell, column, row, table and data styles) and
 //! resolving cell style names into deduplicated [`StyleData`] entries.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::io::BufRead;
+use std::sync::Arc;
 
 use tally_model::{BorderLine, CellProtectionData, CfStyleData, HAlign, StyleData, VAlign};
 
@@ -64,6 +66,15 @@ pub(crate) struct TableStyle {
     pub master_page: Option<String>,
 }
 
+/// A cell style with what its parent chain sets.
+#[derive(Debug, Default)]
+struct Merged {
+    /// The properties (`parent`, `maps` and `display_name` unset).
+    raw: RawCellStyle,
+    /// The nearest ancestor that is a named style, if any.
+    named: Option<String>,
+}
+
 /// The styles from one place (styles.xml or content.xml).
 #[derive(Debug, Default)]
 pub(crate) struct Scope {
@@ -85,6 +96,9 @@ pub(crate) struct StyleSheet {
     pub content: Scope,
     fonts: HashMap<String, String>,
     resolved: HashMap<String, Option<u32>>,
+    /// Style name → the style merged over its parent chain
+    /// ([`Self::merged`]); emptied whenever a style is added.
+    merged: RefCell<HashMap<String, Arc<Merged>>>,
     /// Canonical key ([`style_key`]) → index into `styles`, so deduplication
     /// is O(1) per style instead of a scan of every style so far.
     dedup: HashMap<String, u32>,
@@ -124,6 +138,7 @@ pub(crate) enum Origin {
 
 impl StyleSheet {
     fn scope_mut(&mut self, origin: Origin) -> &mut Scope {
+        self.merged.get_mut().clear();
         match origin {
             Origin::Styles => &mut self.common,
             Origin::Content => &mut self.content,
@@ -304,21 +319,40 @@ impl StyleSheet {
         Some(i)
     }
 
-    fn build(&self, name: &str) -> StyleData {
-        // Collect the parent chain (leaf first), stopping at the root
-        // "Default" style, which defines the baseline look.
-        let mut chain = Vec::new();
-        let mut cur = Some(name.to_string());
-        while let Some(n) = cur {
-            if n == "Default" || chain.len() >= 16 {
-                break;
-            }
-            let Some(raw) = self.cell(&n) else { break };
-            chain.push(raw);
-            cur = raw.parent.clone();
+    /// `name` with everything its parent chain sets (the root `Default`
+    /// defines the baseline look and is not part of a chain). Chains have
+    /// no depth limit, as in AOO: each style is merged onto its parent's
+    /// merged form once and kept, so resolving every style of a document
+    /// is linear in the number of styles however deep they nest. A parent
+    /// cycle (a broken file) is cut where the first walk into it closes.
+    fn merged<'a>(&'a self, name: &'a str) -> Arc<Merged> {
+        if let Some(m) = self.merged.borrow().get(name) {
+            return m.clone();
         }
-        let mut m = RawCellStyle::default();
-        for raw in chain.iter().rev() {
+        // Up the chain (leaf first) to the root, a kept style or a cycle.
+        let mut path: Vec<&str> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut acc: Option<(&str, Arc<Merged>)> = None;
+        let mut cur = Some(name);
+        {
+            let memo = self.merged.borrow();
+            while let Some(n) = cur {
+                if n == "Default" || !seen.insert(n) {
+                    break;
+                }
+                if let Some(m) = memo.get(n) {
+                    acc = Some((n, m.clone()));
+                    break;
+                }
+                let Some(raw) = self.cell(n) else { break };
+                path.push(n);
+                cur = raw.parent.as_deref();
+            }
+        }
+        let mut memo = self.merged.borrow_mut();
+        for n in path.into_iter().rev() {
+            let Some(raw) = self.cell(n) else { continue };
+            let mut m = acc.as_ref().map(|(_, a)| a.raw.clone()).unwrap_or_default();
             macro_rules! inherit {
                 ($($f:ident),*) => { $( if raw.$f.is_some() { m.$f = raw.$f.clone(); } )* };
             }
@@ -351,17 +385,33 @@ impl StyleSheet {
                 underline_style,
                 indent
             );
+            // The nearest named ancestor (styles.xml).
+            let named = acc.as_ref().and_then(|(p, a)| {
+                if self.common.cells.contains_key(*p) {
+                    Some(p.to_string())
+                } else {
+                    a.named.clone()
+                }
+            });
+            let entry = Arc::new(Merged { raw: m, named });
+            memo.insert(n.to_string(), entry.clone());
+            acc = Some((n, entry));
         }
+        match acc {
+            Some((n, m)) if n == name => m,
+            _ => Arc::new(Merged::default()),
+        }
+    }
+
+    fn build(&self, name: &str) -> StyleData {
+        let merged = self.merged(name);
+        let m = merged.raw.clone();
         // The nearest named style (styles.xml) in the chain is the cell's
         // base style; the rest is direct formatting.
-        let style_name = chain
-            .iter()
-            .zip(
-                std::iter::once(name.to_string())
-                    .chain(chain.iter().map(|r| r.parent.clone().unwrap_or_default())),
-            )
-            .map(|(_, n)| n)
-            .find(|n| n != name && self.common.cells.contains_key(n) && n != "Default")
+        let style_name = merged
+            .named
+            .clone()
+            .filter(|n| n != name)
             .or_else(|| {
                 (name != "Default" && self.common.cells.contains_key(name))
                     .then(|| name.to_string())
