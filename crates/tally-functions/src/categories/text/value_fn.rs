@@ -18,7 +18,11 @@ pub const VALUE: FunctionDef = FunctionDef::new("VALUE", Category::Text, VALUE_P
 /// Converts text with the full input recognizer of the document locale
 /// (thousands separators, currency, percent, dates, times in that
 /// locale's spelling; AOO `ScValue` → `IsNumberFormat`), independent of
-/// `settings.text_to_number`. Only a numeric result is accepted.
+/// `settings.text_to_number`. The locale's TRUE / FALSE word, in any
+/// case and with surrounding spaces, is 1 / 0 (`ImpSvNumberInputScan::
+/// GetLogical` compares the trimmed, upper-cased input with the format
+/// scanner's `GetTrueString` / `GetFalseString`); the English words in
+/// another locale are not numbers.
 pub(super) fn text_to_value(
     s: &str,
     ctx: &RecognizeContext,
@@ -27,6 +31,15 @@ pub(super) fn text_to_value(
     let rec = recognize_input_with(s, locale, ctx);
     match rec.value {
         Value::Number(n) => Some((n, rec.implied_format)),
+        Value::Bool(b) => {
+            let word = if b {
+                locale.true_name
+            } else {
+                locale.false_name
+            };
+            (s.trim().to_lowercase() == word.to_lowercase())
+                .then_some((if b { 1.0 } else { 0.0 }, None))
+        }
         _ => None,
     }
 }
@@ -38,14 +51,14 @@ fn value(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
         Value::Number(n) => Ok(Value::Number(n)),
         Value::Bool(b) => Ok(Value::Number(if b { 1.0 } else { 0.0 })),
         Value::Empty => Ok(Value::Number(0.0)),
-        // AOO pushes an illegal argument (Err:502) for empty text.
-        Value::Text(s) if s.trim().is_empty() => Err(ErrorKind::InvalidArgument),
+        // Text the number scanner rejects (empty text included) is AOO's
+        // `PushIllegalArgument`, Err:502, not `#VALUE!`.
         Value::Text(s) => {
             let rc = RecognizeContext::for_settings(a.ctx().settings());
             let locale = locale_of(a.ctx());
             text_to_value(&s, &rc, locale)
                 .map(|(n, _)| Value::Number(n))
-                .ok_or(ErrorKind::Value)
+                .ok_or(ErrorKind::InvalidArgument)
         }
         _ => Err(ErrorKind::Value),
     })
@@ -92,7 +105,7 @@ mod tests {
         assert_eq!(v("1,5 €"), Value::Number(1.5));
         // en-US spellings are not German numbers: `1.7` is 1 July.
         assert_eq!(v("1.7"), Value::Number(46204.0));
-        assert_eq!(v("$1,234.50"), Value::Error(ErrorKind::Value));
+        assert_eq!(v("$1,234.50"), Value::Error(ErrorKind::InvalidArgument));
         let mut c = MockEvalContext::new();
         c.set_locale("fr-FR");
         assert_eq!(
@@ -107,16 +120,30 @@ mod tests {
         assert_eq!(v(EvalValue::bool(true)), Value::Number(1.0));
         assert_eq!(v(EvalValue::bool(false)), Value::Number(0.0));
         assert_eq!(v(EvalValue::Missing), Value::Number(0.0));
-        let bad = Value::Error(ErrorKind::Value);
+        let bad = Value::Error(ErrorKind::InvalidArgument);
         assert_eq!(v(EvalValue::text("abc")), bad);
-        assert_eq!(
-            v(EvalValue::text("")),
-            Value::Error(ErrorKind::InvalidArgument)
-        );
-        assert_eq!(v(EvalValue::text("TRUE")), bad);
+        assert_eq!(v(EvalValue::text("")), bad);
+        assert_eq!(v(EvalValue::text(" ")), bad);
+        assert_eq!(v(EvalValue::text("TRUE 1")), bad);
         assert_eq!(
             v(EvalValue::error(ErrorKind::Div0)),
             Value::Error(ErrorKind::Div0)
         );
+    }
+
+    /// AOO `ImpSvNumberInputScan::GetLogical`: the locale's logical words
+    /// are 1 and 0, in any case and with surrounding spaces.
+    #[test]
+    fn logical_words() {
+        let s = |x: &str| v(EvalValue::text(x));
+        assert_eq!(s("TRUE"), Value::Number(1.0));
+        assert_eq!(s(" true "), Value::Number(1.0));
+        assert_eq!(s("False"), Value::Number(0.0));
+        let mut c = MockEvalContext::new();
+        c.set_locale("de-DE");
+        let mut v = |x: &str| call(&mut c, "VALUE", vec![EvalValue::text(x)]);
+        assert_eq!(v("wahr"), Value::Number(1.0));
+        assert_eq!(v("FALSCH"), Value::Number(0.0));
+        assert_eq!(v("TRUE"), Value::Error(ErrorKind::InvalidArgument));
     }
 }

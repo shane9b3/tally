@@ -10,8 +10,9 @@ use crate::{run, ArgList, Args, EvalContext, EvalValue};
 
 const PARAMS: &[Param] = &[Param::required("text", ParamKind::Text)];
 
-/// `DATEVALUE(text)`: only text is accepted; the text must be recognized as
-/// a date or date-time in the document locale (the time part is dropped).
+/// `DATEVALUE(text)`: the text must be recognized as a date or date-time
+/// in the document locale (the time part is dropped); anything else is
+/// `Err:502`, as in AOO.
 pub const DATEVALUE: FunctionDef =
     FunctionDef::new("DATEVALUE", Category::DateTime, PARAMS, datevalue)
         .returns(ReturnKind::Number)
@@ -27,24 +28,22 @@ fn recognize(s: &str, ctx: &RecognizeContext, locale: &Locale) -> Option<(f64, O
 
 fn datevalue(ctx: &mut dyn EvalContext, args: &mut dyn ArgList) -> EvalValue {
     let mut a = Args::new(ctx, args);
-    run(|| match a.value(0) {
-        Value::Error(e) => Err(e),
-        Value::Text(s) => {
-            let rc = RecognizeContext::for_settings(a.ctx().settings());
-            let locale = locale_of(a.ctx());
-            let (n, fmt) = recognize(&s, &rc, locale).ok_or(ErrorKind::Value)?;
-            // Date formats contain a day or year code; time-only ("HH:MM")
-            // and plain numbers do not.
-            let is_date = fmt.is_some_and(|f| f.contains(['D', 'Y']));
-            if is_date {
-                Ok(Value::Number(n.floor()))
-            } else {
-                // A number or time that is not a date: AOO's
-                // PushIllegalArgument (Err:502).
-                Err(ErrorKind::InvalidArgument)
-            }
+    run(|| {
+        // AOO `ScGetDateValue` takes `GetString()` (a number argument is
+        // its text) and pushes an illegal argument, Err:502, for anything
+        // the number scanner does not type as a date or date-time: a
+        // time, a plain number, a logical word, other text, empty text.
+        let s = a.text(0)?;
+        let rc = RecognizeContext::for_settings(a.ctx().settings());
+        let locale = locale_of(a.ctx());
+        let (n, fmt) = recognize(&s, &rc, locale).ok_or(ErrorKind::InvalidArgument)?;
+        // Date formats contain a day or year code; time-only ("HH:MM")
+        // and plain numbers do not.
+        if fmt.is_some_and(|f| f.contains(['D', 'Y'])) {
+            Ok(Value::Number(n.floor()))
+        } else {
+            Err(ErrorKind::InvalidArgument)
         }
-        _ => Err(ErrorKind::Value),
     })
 }
 
@@ -73,15 +72,15 @@ mod tests {
 
     #[test]
     fn rejects() {
-        let bad = Value::Error(ErrorKind::Value);
-        assert_eq!(dv(EvalValue::text("abc")), bad);
-        // Recognized, but not a date: Err:502 (AOO).
+        // AOO `ScGetDateValue`: everything that is not a date is Err:502.
         let illegal = Value::Error(ErrorKind::InvalidArgument);
+        assert_eq!(dv(EvalValue::text("abc")), illegal);
         assert_eq!(dv(EvalValue::text("14:30")), illegal);
         assert_eq!(dv(EvalValue::text("42")), illegal);
-        assert_eq!(dv(EvalValue::text("")), bad);
-        assert_eq!(dv(EvalValue::number(46314.0)), bad);
-        assert_eq!(dv(EvalValue::bool(true)), bad);
+        assert_eq!(dv(EvalValue::text("")), illegal);
+        assert_eq!(dv(EvalValue::text("TRUE")), illegal);
+        assert_eq!(dv(EvalValue::number(46314.0)), illegal);
+        assert_eq!(dv(EvalValue::bool(true)), illegal);
         assert_eq!(
             dv(EvalValue::error(ErrorKind::NA)),
             Value::Error(ErrorKind::NA)
@@ -99,7 +98,7 @@ mod tests {
         assert_eq!(dv("19. Oktober 2026"), Value::Number(46314.0));
         assert_eq!(dv("2026-10-19"), Value::Number(46314.0));
         // Month-day-year is not a German date.
-        assert_eq!(dv("10/19/2026"), Value::Error(ErrorKind::Value));
+        assert_eq!(dv("10/19/2026"), Value::Error(ErrorKind::InvalidArgument));
         let mut c = MockEvalContext::new();
         c.set_locale("en-GB");
         assert_eq!(

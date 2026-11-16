@@ -49,7 +49,8 @@ expect = 1
 [[case]]
 name = "not a number"
 formula = '=VALUE("abc")'
-expect = "#VALUE!"
+expect = "Err:502"
+note = "AOO ScValue: IsNumberFormat fails, PushIllegalArgument."
 
 [[case]]
 name = "empty text"
@@ -68,3 +69,19 @@ name = "cell text"
 cells = { A1 = "1,234" }
 formula = '=VALUE(A1)'
 expect = 1234
+
+[[case]]
+name = "logical word"
+formula = '=VALUE("TRUE")'
+expect = 1
+note = "AOO ImpSvNumberInputScan::GetLogical: the locale's TRUE word scans as 1."
+
+[[case]]
+name = "logical word, lower case and spaces"
+formula = '=VALUE(" false ")'
+expect = 0
+
+[[case]]
+name = "blank text"
+formula = '=VALUE(" ")'
+expect = "Err:502"

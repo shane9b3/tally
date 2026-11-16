@@ -23,7 +23,8 @@ expect = 0
 [[case]]
 name = "not a date"
 formula = '=DATEVALUE("abc")'
-expect = "#VALUE!"
+expect = "Err:502"
+note = "AOO ScGetDateValue: IsNumberFormat fails, PushIllegalArgument."
 
 [[case]]
 name = "time only"
@@ -40,13 +41,13 @@ note = "Recognized but not a date: AOO ScGetDateValue pushes an illegal argument
 [[case]]
 name = "empty text"
 formula = '=DATEVALUE("")'
-expect = "#VALUE!"
+expect = "Err:502"
 
 [[case]]
 name = "number argument"
 formula = '=DATEVALUE(46314)'
-expect = "#VALUE!"
-note = "Only text is accepted."
+expect = "Err:502"
+note = "AOO GetString() makes it the text 46314, which is a number, not a date."
 
 [[case]]
 name = "cell text"
