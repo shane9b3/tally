@@ -30,6 +30,29 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   form is shown as outline layout.
   The cells on the sheet keep the old layout until you refresh the
   pivot table; to go back, choose Tabular layout in the field options.
+- VALUE("TRUE") is 1 and VALUE("FALSE") is 0, as in OpenOffice (the words
+  of the document language). Text that VALUE or DATEVALUE cannot convert
+  now gives Err:502 instead of #VALUE!, as in OpenOffice.
+- Delete Contents with Formats checked also removes merged cells that
+  start in the selection, and the conditional formatting and validity
+  rules of the selected cells, as in OpenOffice.
+- Double-clicking a DataPilot value puts the details on a sheet with the
+  next default name (Sheet2, Sheet3, ...) in front of the DataPilot's
+  sheet, as in OpenOffice. It was named after the table and placed behind.
+- Consolidate by labels leaves out rows and columns whose label is empty
+  and keeps the top-left label when all source ranges share it.
+- Text to Columns treats a quote as the start of a quoted field only when
+  it is the first character of the field; a quote in the middle of a field
+  is kept as typed.
+- Standard filter: a condition such as "Begins with" with an empty value
+  matches no row, and "Does not begin with" every row, as in OpenOffice.
+- Scenarios: on a protected sheet, the cells of the scenario being shown
+  cannot be edited when it has both "Prevent changes" and "Copy back", and
+  a scenario with "Prevent changes" cannot be changed or deleted.
+
+### Fixed
+- Copying a sheet no longer creates a second database range with the same
+  name.
 
 ## [0.1.2] - 2026-11-12
 

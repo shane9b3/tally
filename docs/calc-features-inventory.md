@@ -73,7 +73,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 | Paste Special (selection types, operations, skip empty, transpose, link, shift) | done | Paste all, Text, Numbers, Date and time, Formulas, Notes, Formats (and the Everything / Values / Formats presets), five operations, Skip empty cells, Transpose, Link, Shift cells (`Dialogs.tsx` `PasteSpecialDialog`; `PasteOptions` / `PasteSelection` in `dto.rs`; `clipboard.rs` `paste_internal`); no Objects box (the clipboard carries no drawing objects); see parity U27 |
 | Selection list | deviation (U1) | `⌃D` |
 | Merge cells with data prompt | done | |
-| Text to Columns | done | `data.textToColumns`; T7 notes a quote difference |
+| Text to Columns | done | `data.textToColumns`; quotes as in AOO (T7) |
 | Recognise column/row labels in formulas | missing | P3 |
 
 ### 3. Selection and navigation
@@ -181,7 +181,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 |---|---|---|
 | AutoFilter with value list and empty entry | done | |
 | AutoFilter Top 10 | done | "Top 10" in the AutoFilter popover = `FilterOp::TopValues` with 10 (AOO `SC_TOPVAL`); the condition list also has largest / smallest / largest % / smallest % (`filter.rs`, ties pass as in `ScTable::TopTenQuery`); ODS `top values` … `bottom percent`, XLSX `top10` |
-| Standard filter: operators, AND/OR, options | partial | Operators in T2; regex is Rust syntax (P4) |
+| Standard filter: operators, AND/OR, options | done | All AOO conditions; text conditions on number cells differ (T2); regex is Rust syntax (P4) |
 | Advanced filter | done | |
 | Reset filter, Hide AutoFilter | done | `data.resetFilter`, `data.clearFilters` |
 
@@ -189,7 +189,7 @@ The numbered sections after this block keep the original AOO text, which is the 
 
 | Item | Status | Note |
 |---|---|---|
-| Subtotals: 3 groups, 11 functions, page break, pre-sort, remove | done | T7 lists a grand-total difference |
+| Subtotals: 3 groups, 11 functions, page break, pre-sort, remove | done | Grand total as in AOO (T7) |
 | DataPilot fields (page, column, row, data) and 11 functions | done | |
 | Show data as (difference, %, running total, index ...) | done | |
 | Field options: subtotals, sort, AutoShow, hide items, show items without data | done | |
@@ -227,8 +227,8 @@ The numbered sections after this block keep the original AOO text, which is the 
 |---|---|---|
 | Goal Seek | done | `tools.goalSeek` |
 | Solver: target, max/min/value, constraints, time limit | partial | Linear only (T9); options differ |
-| Scenarios | done | T8 lists differences |
-| Consolidate: 11 functions, labels, link | partial | T7 |
+| Scenarios | done | "Prevent changes" as in AOO (T8) |
+| Consolidate: 11 functions, labels, link | partial | Link writes one formula per cell, no detail rows or outline (T7) |
 | Multiple Operations | done | `data.multipleOperations`; capped (P14) |
 
 ### 20. Names and database ranges

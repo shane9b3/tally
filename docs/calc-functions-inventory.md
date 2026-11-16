@@ -83,7 +83,7 @@ The registry has 408 entries against the inventory's 405: the three extra functi
 | LEN, MID, LEFT, RIGHT, FIND, SEARCH, REPLACE | deviation | Unicode scalar values, not UTF-16 units |
 | COUNTIF family, MATCH, LOOKUP, D-functions | deviation | Criteria compare by code point and ignore case by default; regex uses the Rust `regex` syntax |
 | Elementwise array operators, SUMPRODUCT | deviation | Larger-extent rule (Excel/LO), not AOO's smaller extent |
-| VALUE, DATEVALUE, TIMEVALUE | unverified | Locale-aware (en/de/fr/es); behaviour for `VALUE("TRUE")`, `VALUE("")` against AOO not checked |
+| VALUE, DATEVALUE, TIMEVALUE | done | Locale-aware (en/de/fr/es). Error codes and logical words follow the AOO source (`ScValue`, `ScGetDateValue`, `ScGetTimeValue`, `ImpSvNumberInputScan`): rejected text is Err:502, `VALUE("TRUE")` is 1 (F14). Which spellings the two number scanners accept is not compared beyond the conformance cases |
 | PROPER, SUBSTITUTE, TRUNC, FREQUENCY | done | Aligned to AOO after correctness reviews 1-2 |
 | BAHTTEXT, CELL, INFO, FORMULA | done | `CELL("filename")` needs a saved document; `INFO("system")` gives `MACOSX` on macOS |
 | WEBSERVICE, FILTERXML, ENCODEURL | n/a | Not in AOO 4.1, not registered |
