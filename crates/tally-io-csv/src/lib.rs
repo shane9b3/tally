@@ -56,7 +56,9 @@ pub struct CsvOptions {
     /// Maximum number of non-empty cells.
     pub max_cells: u64,
     /// Whether the importer should turn fields starting with `=` into live
-    /// formulas (AOO's "Evaluate formulas", off by default). [`read_csv`]
+    /// formulas (off by default; AOO 4.1 always does, through
+    /// `lcl_PutString` and `ScColumn::SetString`, and has no option for
+    /// it). [`read_csv`]
     /// always returns raw text; the engine reads this flag when it runs the
     /// input recognizer, and with `false` `=1+2` stays the text `=1+2`.
     pub evaluate_formulas: bool,

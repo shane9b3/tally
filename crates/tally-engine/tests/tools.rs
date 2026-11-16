@@ -369,6 +369,66 @@ fn text_to_columns_semicolon() {
     assert_eq!(f.value("B1"), Value::text("gone"));
 }
 
+/// Parity X17: Text to Columns takes fixed-width column starts, per-column
+/// types (Hide drops a column), merged separators and "detect numbers"
+/// (off: every field is text, where AOO's "Detect special numbers" off
+/// still reads plain numbers). A field that starts with `=` stays text
+/// (AOO `lcl_PutString` makes a formula of it).
+#[test]
+fn text_to_columns_fixed_width_types_and_formula_fields() {
+    let mut f = Fixture::new();
+    f.set("A1", "ab 12 05.03.2024x");
+    let r = f.apply(vec![Op::TextToColumns {
+        sheet: f.sheet,
+        range: range("A1:A1"),
+        options: CsvImportOptionsDto {
+            delimiters: String::new(),
+            fixed_widths: Some(vec![3, 6, 16]),
+            column_types: vec![
+                CsvColumnType::Hide,
+                CsvColumnType::Standard,
+                CsvColumnType::DateDmy,
+                CsvColumnType::Text,
+            ],
+            ..CsvImportOptionsDto::default()
+        },
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(f.value("A1"), Value::Number(12.0));
+    assert_eq!(f.text("B1"), "2024-03-05");
+    assert_eq!(f.value("C1"), Value::text("x"));
+    assert_eq!(f.value("D1"), Value::Empty);
+
+    f.set("A3", "1,,=1+2,,x");
+    let r = f.apply(vec![Op::TextToColumns {
+        sheet: f.sheet,
+        range: range("A3:A3"),
+        options: CsvImportOptionsDto {
+            delimiters: ",".into(),
+            merge_delimiters: true,
+            ..CsvImportOptionsDto::default()
+        },
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(f.value("A3"), Value::Number(1.0));
+    assert_eq!(f.value("B3"), Value::text("=1+2"));
+    assert_eq!(f.value("C3"), Value::text("x"));
+
+    f.set("A5", "1;2");
+    let r = f.apply(vec![Op::TextToColumns {
+        sheet: f.sheet,
+        range: range("A5:A5"),
+        options: CsvImportOptionsDto {
+            delimiters: ";".into(),
+            detect_numbers: false,
+            ..CsvImportOptionsDto::default()
+        },
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(f.value("A5"), Value::text("1"));
+    assert_eq!(f.value("B5"), Value::text("2"));
+}
+
 #[test]
 fn remove_duplicates_keeps_first() {
     let mut f = Fixture::new();
