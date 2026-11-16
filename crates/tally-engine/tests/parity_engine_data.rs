@@ -614,3 +614,177 @@ fn t8_copy_sheet_does_not_duplicate_database_ranges() {
         Value::text("Ann")
     );
 }
+
+/// Review 6 M3: on a protected sheet Delete Contents ▸ Formats does not
+/// remove what the direct commands refuse there. Merge / Unmerge and the
+/// conditional format and validation commands are refused on a protected
+/// sheet whatever it allows, so a Formats delete that would take a merge,
+/// a conditional format or a validation with it is refused as a whole
+/// (as every protection test: nothing changes); where there is none, the
+/// cell formats still go.
+#[test]
+fn g12_delete_contents_formats_on_a_protected_sheet() {
+    let formats = |a1: &str, sheet| Op::DeleteContents {
+        sheet,
+        ranges: vec![range(a1)],
+        what: DeleteContentsFlags {
+            formats: true,
+            ..DeleteContentsFlags::default()
+        },
+    };
+    let bold = |a1: &str, sheet| Op::ApplyStyle {
+        sheet,
+        ranges: vec![range(a1)],
+        patch: tally_api::StylePatch {
+            bold: Some(true),
+            ..Default::default()
+        },
+    };
+    let is_bold = |f: &Fixture, a1: &str| {
+        let a = CellAddr::from_a1(f.sheet, a1).unwrap();
+        let wb = &f.svc.document(f.doc).unwrap().wb;
+        wb.styles.to_dto(wb.style_at(a)).bold
+    };
+    let mut f = Fixture::new();
+    let s = f.sheet;
+    let r = f.apply(vec![
+        Op::MergeCells {
+            sheet: s,
+            range: range("B3:C4"),
+        },
+        Op::AddConditionalFormat {
+            sheet: s,
+            ranges: vec![range("E1:E4")],
+            rules: vec![CfRuleDto {
+                kind: CfRuleKind::CellValue {
+                    op: CmpOp::Gt,
+                    formulas: vec!["1".into()],
+                },
+                style: CfStyleDto {
+                    bold: Some(true),
+                    ..CfStyleDto::default()
+                },
+                stop_if_true: false,
+            }],
+        },
+        Op::AddValidation {
+            sheet: s,
+            validation: stop_list("G1:G4"),
+        },
+        bold("A1:H8", s),
+        // Every cell unlocked: only the sheet's protection is in the way.
+        Op::SetCellProtection {
+            sheet: s,
+            ranges: vec![range("A1:H8")],
+            locked: Some(false),
+            hidden_formula: None,
+            hidden: None,
+            hide_print: None,
+        },
+        Op::ProtectSheet {
+            sheet: s,
+            password: None,
+            options: Some(tally_api::ProtectionOptions {
+                select_locked: true,
+                select_unlocked: true,
+                insert_rows: false,
+                insert_cols: false,
+                delete_rows: false,
+                delete_cols: false,
+                format_cells: true,
+                sort: false,
+                auto_filter: false,
+            }),
+        },
+    ]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let before = f.data();
+    // The direct commands are refused.
+    let r = f.apply(vec![Op::UnmergeCells {
+        sheet: s,
+        range: range("B3:C4"),
+    }]);
+    assert!(!r.errors.is_empty());
+    // And so is a Formats delete over the merge, the conditional format
+    // or the validation; nothing changes, the cell formats included.
+    for a1 in ["B3:C4", "E2", "G4:H5", "A1:H8"] {
+        let r = f.apply(vec![formats(a1, s)]);
+        assert_eq!(r.errors.len(), 1, "{a1}");
+        assert_eq!(r.errors[0].code, "protected", "{a1}");
+        assert_eq!(f.data(), before, "{a1}");
+    }
+    // A merge that only reaches into the range is not removed (G12), so
+    // it does not refuse it; neither do cells with none of the three.
+    let r = f.apply(vec![formats("C4:D4", s), formats("A6:H8", s)]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert!(!is_bold(&f, "D4") && !is_bold(&f, "A6"));
+    assert!(is_bold(&f, "A1"));
+    let d = f.data();
+    assert_eq!(d.sheets[0].merges, before.sheets[0].merges);
+    assert_eq!(
+        d.sheets[0].conditional_formats,
+        before.sheets[0].conditional_formats
+    );
+    assert_eq!(d.sheets[0].validations, before.sheets[0].validations);
+    // Not protected: everything goes, as before.
+    protect(&mut f, false);
+    let r = f.apply(vec![formats("A1:H8", s)]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let d = f.data();
+    assert!(d.sheets[0].merges.is_empty());
+    assert!(d.sheets[0].conditional_formats.is_empty());
+    assert!(d.sheets[0].validations.is_empty());
+    assert!(!is_bold(&f, "A1"));
+}
+
+/// T8 / review 6 L6: with several active scenarios over a cell (only a
+/// file can have that), the first one decides, as the loop of AOO
+/// `ScTable::IsBlockEditable` over the scenario sheets breaks at the
+/// first active one with the range.
+#[test]
+fn t8_the_first_active_scenario_over_a_cell_decides() {
+    let load = |first_frozen: bool| {
+        let mut f = Fixture::new();
+        let s = f.sheet;
+        f.set("A1", "10");
+        let r = f.apply(vec![
+            Op::SetCellProtection {
+                sheet: s,
+                ranges: vec![range("A1:C2")],
+                locked: Some(false),
+                hidden_formula: None,
+                hidden: None,
+                hide_print: None,
+            },
+            Op::CreateScenario {
+                sheet: s,
+                scenario: scenario("One", true, first_frozen),
+            },
+            Op::CreateScenario {
+                sheet: s,
+                scenario: scenario("Two", true, !first_frozen),
+            },
+        ]);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        protect(&mut f, true);
+        let mut data = f.data();
+        assert_eq!(data.sheets[0].scenarios.len(), 2);
+        for sc in &mut data.sheets[0].scenarios {
+            sc.active = true;
+        }
+        let mut svc = tally_engine::EngineService::new();
+        let info = svc.open_workbook(tally_engine::workbook::Workbook::from_data(&data), "t");
+        Fixture {
+            svc,
+            doc: info.doc,
+            sheet: info.sheets[0].id,
+        }
+    };
+    // "One" comes first and prevents changes.
+    let mut f = load(true);
+    assert!(!f.set("A1", "11").errors.is_empty());
+    assert!(f.set("C1", "1").errors.is_empty());
+    // "One" comes first and does not: "Two" behind it is not asked.
+    let mut f = load(false);
+    assert!(f.set("A1", "11").errors.is_empty());
+}

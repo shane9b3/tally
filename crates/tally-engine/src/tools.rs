@@ -2181,8 +2181,44 @@ pub fn delete_contents(
         check_edit(wb, &ranges)?;
         crate::ops::check_array_blocks(wb, &ranges)?;
     }
+    // The merges, conditional formats and validations Formats takes with
+    // it (below) sit in these areas.
+    let cuts: Vec<tally_model::CellRangeLocal> = ranges
+        .iter()
+        .map(|r| tally_model::CellRangeLocal {
+            r0: r.r0,
+            c0: r.c0,
+            r1: r.r1,
+            c1: r.c1,
+        })
+        .collect();
+    let origin_in = |m: &tally_model::CellRangeLocal| {
+        cuts.iter()
+            .any(|l| l.r0 <= m.r0 && m.r0 <= l.r1 && l.c0 <= m.c0 && m.c0 <= l.c1)
+    };
     if what.formats {
         check_format(wb, &ranges)?;
+        // Merge / Unmerge and the conditional format and validation
+        // commands are refused on a protected sheet whatever it allows
+        // (`ops::check_protection`, `ops_v03`), so removing one this way
+        // is too. As every protection test here, it refuses the whole
+        // command before anything changes; cell formats alone still go.
+        if crate::protection::sheet_protection(wb, sheet).is_some() {
+            let hit = |list: &[tally_model::CellRangeLocal]| {
+                list.iter().any(|r| {
+                    cuts.iter()
+                        .any(|l| crate::condfmt::intersect_rect(r, l).is_some())
+                })
+            };
+            let takes = wb.sheet(sheet).is_some_and(|s| {
+                s.meta.merges.iter().any(origin_in)
+                    || s.meta.cond_formats.iter().any(|cf| hit(&cf.ranges))
+                    || s.meta.validations.iter().any(|v| hit(&v.ranges))
+            });
+            if takes {
+                return Err(crate::protection::protected_error());
+            }
+        }
     }
     let mut changes = Vec::new();
     for r in &ranges {
@@ -2234,19 +2270,6 @@ pub fn delete_contents(
         // conditional format and the validation with it (both are cell
         // attributes there, `ATTR_CONDITIONAL` / `ATTR_VALIDDATA`). A merge
         // that only reaches into the range stays.
-        let cuts: Vec<tally_model::CellRangeLocal> = ranges
-            .iter()
-            .map(|r| tally_model::CellRangeLocal {
-                r0: r.r0,
-                c0: r.c0,
-                r1: r.r1,
-                c1: r.c1,
-            })
-            .collect();
-        let origin_in = |m: &tally_model::CellRangeLocal| {
-            cuts.iter()
-                .any(|l| l.r0 <= m.r0 && m.r0 <= l.r1 && l.c0 <= m.c0 && m.c0 <= l.c1)
-        };
         changes.extend(with_meta(wb, sheet, fx, |_, meta| {
             if meta.merges.iter().any(origin_in) {
                 Arc::make_mut(&mut meta.merges).retain(|m| !origin_in(m));

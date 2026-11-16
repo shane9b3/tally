@@ -745,18 +745,23 @@ pub fn check_edit(wb: &Workbook, ranges: &[CellRange]) -> Result<(), ApiError> {
         if sheet_protection(wb, r.sheet).is_none() {
             continue;
         }
-        let frozen = wb.sheet(r.sheet).is_some_and(|s| {
-            s.meta.scenarios.iter().any(|sc| {
-                sc.data.active
-                    && sc.data.prevent_changes
-                    && sc.data.copy_back
-                    && sc
-                        .data
-                        .ranges
-                        .iter()
-                        .any(|x| x.r0 <= r.r1 && r.r0 <= x.r1 && x.c0 <= r.c1 && r.c0 <= x.c1)
-            })
-        });
+        // The first active scenario over the range decides, as AOO's loop
+        // over the scenario sheets behind the sheet (it breaks there).
+        // Only a file can have several active ones; the list keeps the
+        // file's order, which is AOO's sheet order.
+        let frozen =
+            wb.sheet(r.sheet).is_some_and(|s| {
+                s.meta
+                    .scenarios
+                    .iter()
+                    .find(|sc| {
+                        sc.data.active
+                            && sc.data.ranges.iter().any(|x| {
+                                x.r0 <= r.r1 && r.r0 <= x.r1 && x.c0 <= r.c1 && r.c0 <= x.c1
+                            })
+                    })
+                    .is_some_and(|sc| sc.data.prevent_changes && sc.data.copy_back)
+            });
         if frozen {
             return Err(protected_error());
         }
