@@ -194,3 +194,22 @@ test("View ▸ Zoom: 20 % and 400 %, and the grid renders", async ({ page }) => 
   // A cell is still where the grid draws it.
   await expect.poll(() => cellText(page, 0, 0)).not.toBe("");
 });
+
+test("lengths have fixed units: pixels for rows and columns, mm for the page (parity G13)", async ({ page }) => {
+  // AOO: Tools ▸ Options ▸ Calc ▸ General "Measurement unit" (mm, cm, inch, pica, point)
+  // sets the unit of these fields. Tally has no such option.
+  await ready(page);
+  await page.evaluate(() => window.__tally!.controller.registry.run("sheet.rowHeight"));
+  await expect(page.getByRole("dialog")).toContainText("Row height in pixels");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  await page.evaluate(() => window.__tally!.controller.registry.run("file.pageSetup"));
+  const setup = page.getByRole("dialog");
+  await setup.getByRole("tab", { name: "Margins" }).click();
+  for (const side of ["Top", "Bottom", "Left", "Right"]) await expect(setup.getByText(`${side} (mm)`, { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  const prefs = await page.evaluate(() => JSON.stringify(window.__tally!.controller.w56.store.prefs));
+  expect(prefs).not.toMatch(/unit|metric/i);
+});

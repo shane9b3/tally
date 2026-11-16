@@ -16,6 +16,11 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   now change the table, as in OpenOffice. They apply to row fields that
   have another row field (or the Data field) inside them; the dialog
   greys them out elsewhere. They are saved in ODS and XLSX files.
+- Status bar: choose what is calculated for the selection. Click (or
+  right-click) the "Sum=" field and pick Average, CountA, Count, Maximum,
+  Minimum, Sum or None, as in OpenOffice. The choice is remembered.
+- Status bar: a STD / EXT / ADD field shows the selection mode (F8 and
+  Shift+F8); clicking it switches to the next mode.
 
 ### Changed
 - DataPilot totals with several data fields are labelled as in OpenOffice:
@@ -49,6 +54,13 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 - Scenarios: on a protected sheet, the cells of the scenario being shown
   cannot be edited when it has both "Prevent changes" and "Copy back", and
   a scenario with "Prevent changes" cannot be changed or deleted.
+- The status bar shows one result for the selection ("Sum=11") instead of
+  Sum and Count side by side, and leaves out cells in hidden or filtered
+  rows and hidden columns, as in OpenOffice.
+- Deleting a cell style: cells that used it now get the Default style and
+  keep their own formatting, as in OpenOffice. Before, they took the
+  deleted style's parent. Styles based on the deleted style move to its
+  parent.
 
 ### Fixed
 - Copying a sheet no longer creates a second database range with the same

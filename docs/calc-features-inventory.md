@@ -341,7 +341,7 @@ Use `docs/shortcuts.md` (generated from the keymap) as the Tally table. Differen
 | Limit decimals for General | done | Options > Calculate "Limit decimals for general number format" (0-20, `CalcSettings::standard_decimals`); ODS `style:decimal-places` on the default cell style (AOO `StandardDecimals`; there is no `table:decimal-places`); precision as shown, TEXT(x; "General"), validity list items and HTML export follow it |
 | AutoCalculate toggle | deviation (U3) | Always on |
 | Volatile functions, hard recalculation | done | `⇧⌘F9` |
-| Status-bar function choice | partial | Sum, count, average shown (U19) |
+| Status-bar function choice | done | One function (`Sum=11`) chosen from the field's menu: Average, CountA, Count, Maximum, Minimum, Sum, None; an app preference (U19 for the error display); tests `statusFunction.test.ts`, `tests/e2e/status-bar.spec.ts` |
 
 ### 28. View
 
