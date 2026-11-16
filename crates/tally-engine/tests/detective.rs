@@ -497,12 +497,18 @@ fn auto_refresh_is_bounded_and_marks_incomplete_arrows() {
         };
         1_000
     ];
-    f.svc.document_mut(f.doc).unwrap().wb.sheets[0]
-        .meta
-        .detective = Arc::new(SheetDetective {
-        ops,
-        ..SheetDetective::default()
-    });
+    // The state is put in behind the document's back, and a change is
+    // told by the state's address: the replaced one is kept alive so the
+    // refreshed state cannot be allocated where it was.
+    let _replaced = std::mem::replace(
+        &mut f.svc.document_mut(f.doc).unwrap().wb.sheets[0]
+            .meta
+            .detective,
+        Arc::new(SheetDetective {
+            ops,
+            ..SheetDetective::default()
+        }),
+    );
     let t = std::time::Instant::now();
     let r = f.set("D1", "=1");
     let took = t.elapsed();
