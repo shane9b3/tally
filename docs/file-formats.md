@@ -196,8 +196,9 @@ conditional formats.
   with `Formula::set_result`. Formulas that cannot be translated are written
   as their cached value and reported.
 - Array formulas from `SheetData::array_formulas` (`{=…}` over the block).
-- Styles: font (bold, italic, single underline, strike, family, size,
-  colour), solid fill (chip display styles are written as their background
+- Styles: font (bold, italic, underline: single, double, single and
+  double accounting; other underline styles as single; strike, family,
+  size, colour), solid fill (chip display styles are written as their background
   fill), borders, horizontal/vertical alignment, wrap, indent, number formats
   via `tally_numfmt::excel::to_excel_code` (untranslatable codes fall back
   to General and are reported).
@@ -274,9 +275,11 @@ Excel's 1900 date system counts 1900-01-01 as 1 and has a fictitious
 - Row height: points → hmm (`pt · 2540 / 72`). Only `customHeight` or hidden
   rows are recorded; Excel and LibreOffice write auto-fit heights for many
   rows, which the app re-fits itself.
-- Colours: ARGB → `0xRRGGBBAA` with alpha `ff`. Theme colours use a fixed
-  copy of the default Office palette (not `theme1.xml`), with tints applied
-  in HLS; theme 1 without tint, `auto` and indexed 64/65 mean "automatic".
+- Colours: ARGB → `0xRRGGBBAA` with alpha `ff`. Theme colours come from
+  the workbook's `xl/theme/theme1.xml` (`colors.rs` `parse_theme`; the
+  default Office palette when the part is missing or incomplete), with
+  tints applied in HLS; theme 1 without tint, `auto` and indexed 64/65 mean
+  "automatic".
 - Borders: thin 26 hmm, medium 53, thick 79, double 79, hair (dotted) 9,
   dotted 26, dashed variants 26/53; written back by width.
 
@@ -315,7 +318,6 @@ share it in a common crate). Tests: `crates/tally-io-xlsx/tests/malicious.rs`
   effective formatting).
 - Rich text runs are flattened to plain text.
 - Row styles (`<row s customFormat="1">`) are not imported.
-- Theme colours ignore a custom `theme1.xml`.
 - East-Asian built-in formats 27–36 and 50–58 import as `YYYY-MM-DD`.
 - Structured references, R1C1 formulas, dynamic-array spill semantics and
   3D whole-column references are not translated (kept as text).
@@ -323,7 +325,9 @@ share it in a common crate). Tests: `crates/tally-io-xlsx/tests/malicious.rs`
 - A formula cell whose cached result is text that looks like a number is
   written as a numeric result (`rust_xlsxwriter` infers the result type).
 - A D1900 workbook re-imports as D1899 (same dates, different epoch).
-- Only one underline style (single) and solid fills are written.
+- Dotted, dashed, wave and bold underlines are written as single
+  underlines (single, double and the accounting ones are kept); only solid
+  fills are written.
 
 ## Wave 5 data tools (W5-2)
 
@@ -407,9 +411,15 @@ loses.
 - **Named cell styles**: `office:styles` `style:style
   style:family="table-cell"` with `style:parent-style-name` (and
   `style:display-name`; names are escaped `_20_`-style). Cell automatic
-  styles name their base style as parent. Attributes are stored resolved,
-  so a redefined parent in another application does not change Tally's
-  children (and vice versa). The number format of a named style is written
+  styles name their base style as parent. Tally keeps the attributes
+  resolved in memory and writes a style as its difference from its parent
+  (as AOO writes a style's own items), with the off value where the parent
+  sets something the style does not have (`fo:font-weight="normal"`,
+  `fo:background-color="transparent"`, `fo:border-top="none"`,
+  `style:text-align-source="value-type"`, `style:use-window-font-color`,
+  a General data style), so a parent redefined in another application
+  changes the children there and in Tally. A child that sets the same
+  value as its parent is saved as inheriting it. The number format of a named style is written
   as a common data style `NS<i>` in office:styles (since 2026-11-09, for
   Load Styles; before, only the cells carried it) and read back.
 - **Format extras**: `style:rotation-angle`, `style:direction="ttb"`
@@ -805,10 +815,16 @@ fall back per character to an installed face (CJK) or are drawn as the
 fills included), borders (solid/dashed/dotted/double), alignment, wrapping,
 overflow into empty neighbours, `###` for numbers that do not fit,
 optional gridlines and row/column headers, headers and footers with
-`&[PAGE]`-style placeholders (each line of each region in its own 14 pt box
+`&[PAGE]`-style placeholders (`&[PAGE]`, `&[PAGES]`, `&[SHEET]`, `&[FILE]`,
+`&[PATH]`, `&[DATE]`, `&[TIME]`; each line of each region in its own 14 pt box
 from the top of its area; lines past a fixed height are left off), charts from the SVGs the UI supplies, notes
-on a page at the end when the page setup asks for it. Without a print
-range a sheet prints from A1 to the last cell with content or a note,
+on pages after each sheet's own pages when the page setup asks for them
+(one line `A1: text` per note of the printed area; the pages count in the
+page total and carry the header and footer, with "Comments" as the sheet
+name, as in AOO). With formulas printed, hiding zero values does not hide
+a formula. Without a print
+range a sheet prints from A1 to the last cell with content (or with a
+note, when notes are printed),
 extended by fills and borders as AOO's `ScTable::GetPrintArea` does: a run
 of 84 or more equal rows below a column's data, or 30 or more equally
 formatted columns after the data, ends the area there, so formatting

@@ -61,10 +61,27 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   keep their own formatting, as in OpenOffice. Before, they took the
   deleted style's parent. Styles based on the deleted style move to its
   parent.
+- Printing notes (Page Setup, Sheet tab): the notes pages now come after
+  each sheet's own pages, appear in the print preview, count in the page
+  total and carry the header and footer, with "Comments" in place of the
+  sheet name, as in OpenOffice. Each note is listed as "A1: text".
+- A note outside the data no longer widens the printed area unless notes
+  are printed.
 
 ### Fixed
 - Copying a sheet no longer creates a second database range with the same
   name.
+- ODS: a cell style based on another style, or a cell formatted on top of
+  a named style, lost what it had switched off: after saving and
+  reopening, the parent's bold, background, borders, alignment or number
+  format came back. Styles are now saved as their difference from the
+  parent, so OpenOffice and Tally both read them back as they were, and
+  an edit to the parent style in OpenOffice reaches its children.
+- Printing with "Formulas" on and "Zero values" off no longer hides
+  formulas whose result is zero.
+- Headers and footers: the "Path/File Name" field of an OpenOffice or
+  Excel file is kept (as `&[PATH]`) instead of turning into the file name
+  or disappearing.
 
 ## [0.1.2] - 2026-11-12
 
