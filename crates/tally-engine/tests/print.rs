@@ -134,8 +134,14 @@ fn print_options_sheets_breaks_notes_and_charts() {
     let one = f.svc.print_layout(f.doc, &o).unwrap();
     assert_eq!(one.pages.len(), 1);
     assert_eq!(one.pages[0].number, 2);
-    // A job with notes at the end gets an extra page in the PDF, charts
-    // without SVG are reported.
+    // The note's page is the job's last page and is counted ("Comments"
+    // in place of the sheet name, as AOO); charts without SVG are reported.
+    let last = layout.pages.last().unwrap();
+    assert_eq!(last.header.as_ref().unwrap()[1], "Comments");
+    assert_eq!(
+        last.header.as_ref().unwrap()[2],
+        format!("Page {0} of {0}", layout.pages.len())
+    );
     let job = f
         .svc
         .prepare_print_job(
@@ -160,8 +166,10 @@ fn print_options_sheets_breaks_notes_and_charts() {
         c1: 1,
     }]);
     let sel = f.svc.print_layout(f.doc, &o).unwrap();
-    assert_eq!(sel.pages.len(), 1);
+    // The selection's page and the page of the note inside it.
+    assert_eq!(sel.pages.len(), 2);
     assert_eq!(sel.pages[0].rows, [0, 9]);
+    assert_eq!(sel.pages[1].header.as_ref().unwrap()[1], "Comments");
     // All sheets.
     let mut o = opts();
     o.sheets = PrintSheets::All;

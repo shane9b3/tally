@@ -40,8 +40,8 @@ use tally_api::{
     RangeDto,
 };
 use tally_model::{
-    BorderStyle, HfAreaData, OrientationData, PageOrderData, PageScaleData, PageSetupData,
-    PaperData,
+    BorderStyle, HfAreaData, NotesPrintData, OrientationData, PageOrderData, PageScaleData,
+    PageSetupData, PaperData,
 };
 use tally_types::{CellAddr, CellRange, SheetId, Value, MAX_COLS, MAX_ROWS};
 
@@ -306,6 +306,9 @@ pub struct PageSpec {
     pub footer: Option<[String; 3]>,
     /// Row span of the sheet's print area (for gridline/header drawing).
     pub area: CellRange,
+    /// The lines of a notes page (`A1: text`), empty on a cell page. A
+    /// notes page has no rows or columns.
+    pub notes: Vec<String>,
 }
 
 impl PageSpec {
@@ -804,7 +807,9 @@ impl VisualColumns {
 /// area as AOO's `ScTable::GetPrintArea` does: runs of many equal rows
 /// below the data and of many equal columns after it are left out, so a
 /// fill or border repeated down whole columns prints no empty pages.
-/// Notes count as data, as in AOO.
+/// Notes count as data when the page setup prints them, as in AOO
+/// (`ScPrintFunc::AdjustPrintArea` passes `aTableParam.bNotes` to
+/// `GetPrintArea`, which hands it to `ScColumn::GetLastVisDataPos`).
 fn used_print_area(wb: &Workbook, s: &Sheet, sheet: SheetId) -> Option<CellRange> {
     let mut area = s.used_range();
     // Last data row per column (cells and notes).
@@ -814,7 +819,8 @@ fn used_print_area(wb: &Workbook, s: &Sheet, sheet: SheetId) -> Option<CellRange
             last_data.insert(ci as u32, r);
         }
     }
-    for &(r, c) in s.meta.notes.keys() {
+    let notes_on = s.meta.page_setup.print_notes != NotesPrintData::None;
+    for &(r, c) in s.meta.notes.keys().filter(|_| notes_on) {
         let e = last_data.entry(c).or_insert(r);
         *e = (*e).max(r);
         area = Some(match area {
@@ -1116,6 +1122,74 @@ fn band_has_content(
     false
 }
 
+/// The area one print of a sheet covers: the selection cut to the data,
+/// or the sheet's print area.
+fn area_of(wb: &Workbook, s: &Sheet, selection: Option<CellRange>) -> Option<CellRange> {
+    match selection {
+        Some(sel) => clip_to_data(wb, s, s.id, sel),
+        None => print_area(wb, s.id),
+    }
+}
+
+/// Most characters of one note on a notes page.
+const MAX_NOTE_CHARS: usize = 2000;
+/// What the sheet-name field shows on a notes page (AOO `STR_NOTES`,
+/// set in `ScPrintFunc::DoPrint` before the notes pages).
+pub const NOTES_PAGE_NAME: &str = "Comments";
+
+/// The notes pages of a sheet (page setup "Notes"): one line per note
+/// inside the printed `areas`, `A1: text`, in row order, after the sheet's
+/// cell pages, with the sheet's header and footer (AOO
+/// `ScPrintFunc::CountNotePages` and `PrintNotes`). Page numbers and
+/// headers are filled in by [`layout`].
+fn note_pages(s: &Sheet, areas: &[CellRange]) -> Vec<PageSpec> {
+    let p = &s.meta.page_setup;
+    let Some(first) = areas.first() else {
+        return Vec::new();
+    };
+    if p.print_notes != NotesPrintData::AtEnd {
+        return Vec::new();
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for ((r, c), note) in s.meta.notes.iter() {
+        if areas
+            .iter()
+            .any(|a| a.contains(CellAddr::new(s.id, *r, *c)))
+        {
+            let text: String = note.text.chars().take(MAX_NOTE_CHARS).collect();
+            lines.push(format!(
+                "{}{}: {}",
+                tally_types::col_to_letters(*c),
+                r + 1,
+                text.replace('\n', " ")
+            ));
+        }
+    }
+    let b = body_of(p);
+    let per_page = ((b.h / HF_LINE_HMM) as usize).max(1);
+    lines
+        .chunks(per_page)
+        .map(|chunk| PageSpec {
+            sheet: s.id,
+            rows: Items::default(),
+            cols: Items::default(),
+            repeat_rows: Items::default(),
+            repeat_cols: Items::default(),
+            scale: 100,
+            paper: paper_hmm(p),
+            origin: (p.margins.left, b.top),
+            body: (b.w, b.h),
+            header_block: b.header,
+            footer_block: b.footer,
+            number: 0,
+            header: None,
+            footer: None,
+            area: *first,
+            notes: chunk.to_vec(),
+        })
+        .collect()
+}
+
 /// Paginates one sheet (page numbers and headers are filled in later by
 /// [`layout`]).
 pub fn paginate_sheet(
@@ -1127,11 +1201,7 @@ pub fn paginate_sheet(
     let s = wb
         .sheet(sheet)
         .ok_or_else(|| ApiError::not_found(format!("no sheet {sheet}")))?;
-    let area = match selection {
-        Some(sel) => clip_to_data(wb, s, sheet, sel),
-        None => print_area(wb, sheet),
-    };
-    let Some(area) = area else {
+    let Some(area) = area_of(wb, s, selection) else {
         return Ok(Vec::new());
     };
     let p = &s.meta.page_setup;
@@ -1236,6 +1306,7 @@ pub fn paginate_sheet(
             header: None,
             footer: None,
             area,
+            notes: Vec::new(),
         });
     };
     match p.page_order {
@@ -1323,6 +1394,10 @@ pub fn layout(
                 .collect(),
             _ => vec![None],
         };
+        let notes_on = wb
+            .sheet(sheet)
+            .is_some_and(|s| s.meta.page_setup.print_notes == NotesPrintData::AtEnd);
+        let mut areas: Vec<CellRange> = Vec::new();
         for sel in sels {
             let mut sp = paginate_sheet(wb, sheet, sel, opts.suppress_empty_pages)?;
             if pages.len() + sp.len() > MAX_PAGES {
@@ -1331,6 +1406,19 @@ pub fn layout(
                 )));
             }
             pages.append(&mut sp);
+            if notes_on {
+                areas.extend(wb.sheet(sheet).and_then(|s| area_of(wb, s, sel)));
+            }
+        }
+        // The sheet's notes pages follow its cell pages and count as pages.
+        if let Some(s) = wb.sheet(sheet).filter(|_| notes_on) {
+            let mut np = note_pages(s, &areas);
+            let room = MAX_PAGES.saturating_sub(pages.len());
+            if np.len() > room {
+                np.truncate(room);
+                warnings.push("Some notes were not printed: the job has too many pages.".into());
+            }
+            pages.append(&mut np);
         }
     }
     let total = pages.len() as u32;
@@ -1351,10 +1439,13 @@ pub fn layout(
         }
         number = number.saturating_add(1);
         page.number = number;
-        let name = wb
-            .sheet(page.sheet)
-            .map(|s| s.name.to_string())
-            .unwrap_or_default();
+        let name = if page.notes.is_empty() {
+            wb.sheet(page.sheet)
+                .map(|s| s.name.to_string())
+                .unwrap_or_default()
+        } else {
+            NOTES_PAGE_NAME.to_string()
+        };
         let resolve = |h: &tally_model::HeaderFooterData| {
             [
                 resolve_placeholders(&h.left, number, total, &name, ctx),
@@ -1611,22 +1702,118 @@ mod tests {
         let area = print_area(&wb, s).unwrap();
         assert_eq!((area.r1, area.c1), (83, 3));
 
-        // Notes are data.
-        let mut wb = book(2, 2);
+        // A fill over whole rows (review 4, L21): the columns after the
+        // data are all equal, so the area ends at the data.
+        let mut wb = book(3, 2);
         let s = wb.sheets[0].id;
-        let mut notes = std::collections::BTreeMap::new();
+        let grey = wb.styles.intern(tally_model::StyleData {
+            fill: Some(0xeeee_eeff),
+            ..Default::default()
+        });
+        let sheet = wb.sheet_mut(s).unwrap();
+        for c in 0..MAX_COLS {
+            sheet.column_mut(c).unwrap().styles.set(0, 1, grey);
+        }
+        let area = print_area(&wb, s).unwrap();
+        assert_eq!((area.r1, area.c1), (2, 1));
+        let mut o = opts();
+        o.suppress_empty_pages = false;
+        let (p, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!(p.len(), 1);
+    }
+
+    fn note(wb: &mut Workbook, r: u32, c: u32, text: &str) {
+        let s = wb.sheets[0].id;
+        let notes = std::sync::Arc::make_mut(&mut wb.sheet_mut(s).unwrap().meta.notes);
         notes.insert(
-            (40, 6),
+            (r, c),
             crate::annotations::Note {
-                text: "n".into(),
+                text: text.into(),
                 author: None,
                 created: None,
                 shown: false,
             },
         );
-        wb.sheet_mut(s).unwrap().meta.notes = std::sync::Arc::new(notes);
+    }
+
+    /// AOO `ScPrintFunc::AdjustPrintArea` hands `aTableParam.bNotes` to
+    /// `GetPrintArea`: a note outside the data widens the print area only
+    /// when notes are printed (review 4, L20).
+    #[test]
+    fn notes_extend_the_area_only_when_they_print() {
+        let mut wb = book(2, 2);
+        let s = wb.sheets[0].id;
+        note(&mut wb, 40, 6, "n");
+        let area = print_area(&wb, s).unwrap();
+        assert_eq!((area.r1, area.c1), (1, 1));
+        setup(&mut wb).print_notes = NotesPrintData::AtEnd;
         let area = print_area(&wb, s).unwrap();
         assert_eq!((area.r1, area.c1), (40, 6));
+    }
+
+    /// AOO `ScPrintFunc::CountNotePages` / `PrintNotes`: the notes pages
+    /// follow the sheet's pages, count in the page total, carry the header
+    /// and footer, and show "Comments" as the sheet name (review 4, L19).
+    #[test]
+    fn notes_pages_are_pages_of_the_job() {
+        let mut wb = book(3, 2);
+        note(&mut wb, 1, 1, "second\nline");
+        note(&mut wb, 0, 0, "first");
+        // Outside the print range: not listed.
+        note(&mut wb, 30, 0, "outside");
+        let st = setup(&mut wb);
+        st.print_notes = NotesPrintData::AtEnd;
+        st.print_range = Some(tally_model::CellRangeLocal {
+            r0: 0,
+            c0: 0,
+            r1: 2,
+            c1: 1,
+        });
+        st.header = Some(HeaderFooterData {
+            left: String::new(),
+            center: "&[SHEET]".into(),
+            right: "Page &[PAGE] of &[PAGES]".into(),
+        });
+        let (p, w) = layout(&wb, &opts(), &HfContext::default()).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(p.len(), 2);
+        assert!(p[0].notes.is_empty());
+        assert_eq!(p[0].header.as_ref().unwrap()[2], "Page 1 of 2");
+        assert_eq!(p[0].header.as_ref().unwrap()[1], "Sheet1");
+        assert_eq!(p[1].notes, ["A1: first", "B2: second line"]);
+        assert!(p[1].rows.is_empty() && p[1].cols.is_empty());
+        assert_eq!(p[1].number, 2);
+        assert_eq!(p[1].header.as_ref().unwrap()[2], "Page 2 of 2");
+        assert_eq!(p[1].header.as_ref().unwrap()[1], NOTES_PAGE_NAME);
+        assert_eq!(p[1].header_block, p[0].header_block);
+        // The page range picks the notes page like any other.
+        let mut o = opts();
+        o.page_from = Some(2);
+        let (only, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].notes.len(), 2);
+
+        // Many notes fill the body, one 4.94 mm line each, then start
+        // another page: A4 less 20 mm margins and the 5 mm header block
+        // (and its 2.5 mm spacing, if any) holds 50 lines or so.
+        for r in 0..120 {
+            note(&mut wb, r, 0, "n");
+        }
+        setup(&mut wb).print_range = None;
+        let (p, _) = layout(&wb, &opts(), &HfContext::default()).unwrap();
+        let per_page = (p[0].body.1 / HF_LINE_HMM) as usize;
+        let note_pages: Vec<_> = p.iter().filter(|x| !x.notes.is_empty()).collect();
+        assert_eq!(note_pages.len(), 121_usize.div_ceil(per_page));
+        assert_eq!(note_pages[0].notes.len(), per_page);
+        let last = p.last().unwrap();
+        assert_eq!(
+            last.header.as_ref().unwrap()[2],
+            format!("Page {0} of {0}", p.len())
+        );
+
+        // Notes off: no notes page.
+        setup(&mut wb).print_notes = NotesPrintData::None;
+        assert!(pages(&wb).iter().all(|x| x.notes.is_empty()));
     }
 
     #[test]

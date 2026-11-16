@@ -6,7 +6,7 @@
 //! borders, optional gridlines and row/column headers, the display text
 //! with the cell's alignment, wrap and overflow into free neighbouring
 //! cells, headers and footers, charts from the SVGs the UI supplied, and
-//! notes on a page at the end when the page setup asks for it. The engine
+//! notes pages after each sheet when the page setup asks for them. The engine
 //! keeps the last [`crate::print::JOB_LRU`] jobs; the PDF is rendered on
 //! first use and cached with the job, so preview, print and export share
 //! one rendering. Without the `pdf` feature every method reports
@@ -164,9 +164,7 @@ mod pdf {
         cell_flags, ApiError, CellView, ChartSvgDto, PrintLayoutDto, RangeDto, Result, ValueKind,
     };
     use tally_io_pdf::{FontSpec, HAlign, Item, LineStyle, PageJob, PrintJob, Rect, VAlign};
-    use tally_model::{
-        BorderLine, BorderStyle, HAlign as HA, NotesPrintData, StyleData, VAlign as VA,
-    };
+    use tally_model::{BorderLine, BorderStyle, HAlign as HA, StyleData, VAlign as VA};
     use tally_types::{CellAddr, SheetId, Value};
 
     use crate::document::Document;
@@ -429,8 +427,13 @@ mod pdf {
         };
         let mut missing_charts = 0usize;
         for page in pages {
-            let (items, missing) = build_page(wb, doc.version, page, &svgs, &mut fonts);
-            missing_charts += missing;
+            let items = if page.notes.is_empty() {
+                let (items, missing) = build_page(wb, doc.version, page, &svgs, &mut fonts);
+                missing_charts += missing;
+                items
+            } else {
+                note_items(wb, page)
+            };
             job.pages.push(PageJob {
                 width_pt: hmm_to_pt(page.paper.0),
                 height_pt: hmm_to_pt(page.paper.1),
@@ -441,45 +444,6 @@ mod pdf {
             warnings.push(format!(
                 "{missing_charts} chart(s) had no image supplied and were not printed."
             ));
-        }
-        // Notes at the end.
-        let mut note_lines: Vec<String> = Vec::new();
-        let mut seen: Vec<SheetId> = Vec::new();
-        for page in pages {
-            if seen.contains(&page.sheet) {
-                continue;
-            }
-            seen.push(page.sheet);
-            let Some(s) = wb.sheet(page.sheet) else {
-                continue;
-            };
-            if s.meta.page_setup.print_notes != NotesPrintData::AtEnd {
-                continue;
-            }
-            for ((r, c), note) in s.meta.notes.iter() {
-                if page.area.contains(CellAddr::new(page.sheet, *r, *c)) {
-                    let text: String = note.text.chars().take(2000).collect();
-                    note_lines.push(format!(
-                        "{}.{}{}: {}",
-                        s.name,
-                        col_letters(*c),
-                        r + 1,
-                        text.replace('\n', " ")
-                    ));
-                }
-            }
-        }
-        if !note_lines.is_empty() {
-            if let Some(first) = pages.first() {
-                let room = tally_io_pdf::MAX_PAGES.saturating_sub(job.pages.len());
-                let mut notes = note_pages(first, &note_lines, wb.default_font.as_deref());
-                if notes.len() > room {
-                    notes.truncate(room);
-                    warnings
-                        .push("Some notes were not printed: the job has too many pages.".into());
-                }
-                job.pages.extend(notes);
-            }
         }
         let layout = PrintLayoutDto {
             pages: pages
@@ -492,40 +456,34 @@ mod pdf {
         Ok((job, layout))
     }
 
-    fn note_pages(like: &PageSpec, lines: &[String], family: Option<&str>) -> Vec<PageJob> {
-        let w = hmm_to_pt(like.paper.0);
-        let h = hmm_to_pt(like.paper.1);
-        let x = hmm_to_pt(like.origin.0);
-        let top = hmm_to_pt(like.origin.1);
-        let line_h = HF_SIZE * 1.4;
-        let per_page = (((h - 2.0 * top) / line_h).floor() as usize).max(1);
-        lines
-            .chunks(per_page)
-            .map(|chunk| {
-                let mut items = Vec::with_capacity(chunk.len());
-                for (i, l) in chunk.iter().enumerate() {
-                    items.push(Item::Text {
-                        rect: Rect::new(x, top + line_h * i as f32, w - 2.0 * x, line_h),
-                        text: l.clone(),
-                        font: FontSpec {
-                            family: family.map(str::to_string),
-                            size_pt: HF_SIZE,
-                            ..FontSpec::default()
-                        },
-                        h_align: HAlign::Left,
-                        v_align: VAlign::Middle,
-                        wrap: false,
-                        overflow: (0.0, 0.0),
-                        clip: true,
-                    });
-                }
-                PageJob {
-                    width_pt: w,
-                    height_pt: h,
-                    items,
-                }
-            })
-            .collect()
+    /// The items of a notes page: the header and footer, then one line per
+    /// note from the top of the body, clipped at its width.
+    fn note_items(wb: &Workbook, page: &PageSpec) -> Vec<Item> {
+        let family = wb.default_font.as_deref();
+        let mut items = Vec::with_capacity(page.notes.len() + 6);
+        hf_items(&mut items, &page.header, page.header_block, family);
+        hf_items(&mut items, &page.footer, page.footer_block, family);
+        let x = hmm_to_pt(page.origin.0);
+        let top = hmm_to_pt(page.origin.1);
+        let w = hmm_to_pt(page.body.0).max(1.0);
+        let line_h = hmm_to_pt(HF_LINE_HMM);
+        for (i, l) in page.notes.iter().enumerate() {
+            items.push(Item::Text {
+                rect: Rect::new(x, top + line_h * i as f32, w, line_h),
+                text: l.clone(),
+                font: FontSpec {
+                    family: family.map(str::to_string),
+                    size_pt: HF_SIZE,
+                    ..FontSpec::default()
+                },
+                h_align: HAlign::Left,
+                v_align: VAlign::Middle,
+                wrap: false,
+                overflow: (0.0, 0.0),
+                clip: true,
+            });
+        }
+        items
     }
 
     /// The header or footer lines of a page: each line of each region in
@@ -769,7 +727,12 @@ mod pdf {
                         text = wb.formula_text(id).unwrap_or(text);
                     }
                 }
+                // Hide zeros leaves a printed formula alone (AOO
+                // `ScCellFormat::GetString`: `bFormula` is tested before
+                // `bNullVals`).
+                let as_formula = setup.print_formulas && v.flags & cell_flags::FORMULA != 0;
                 if !setup.print_zero_values
+                    && !as_formula
                     && v.kind == ValueKind::Number
                     && matches!(wb.value(addr), Value::Number(n) if n == 0.0)
                 {
@@ -1077,6 +1040,116 @@ mod hide_print_tests {
             svc.cells(doc, sheet, &cell(0, 1)).unwrap()[0].cells[0].text,
             "secret"
         );
+    }
+
+    /// AOO `ScCellFormat::GetString` (cellform.cxx) tests `bFormula`
+    /// before `bNullVals`: with formulas printed, a formula whose result is
+    /// zero still prints its text; zero constants stay hidden (review 4,
+    /// L18).
+    #[test]
+    fn printed_formulas_ignore_hide_zeros() {
+        let mut svc = EngineService::new();
+        let info = svc.new_workbook(None).unwrap();
+        let (doc, sheet) = (info.doc, info.sheets[0].id);
+        let input = |r: u32, t: &str| Op::SetCellInput {
+            sheet,
+            r,
+            c: 0,
+            input: t.into(),
+        };
+        let mut setup = svc.page_setup(doc, sheet).unwrap();
+        setup.print_zero_values = Some(false);
+        svc.apply(
+            doc,
+            tx(vec![
+                input(0, "=1-1"),
+                input(1, "0"),
+                input(2, "=2+3"),
+                input(3, "x"),
+                Op::SetPageSetup {
+                    sheet,
+                    setup: setup.clone(),
+                },
+            ]),
+        )
+        .unwrap();
+        // Values printed: both zeros are hidden.
+        assert_eq!(printed(&mut svc, doc), ["Sheet1", "Page 1", "5", "x"]);
+        setup.print_formulas = Some(true);
+        svc.apply(doc, tx(vec![Op::SetPageSetup { sheet, setup }]))
+            .unwrap();
+        assert_eq!(
+            printed(&mut svc, doc),
+            ["Sheet1", "Page 1", "=1-1", "=2+3", "x"]
+        );
+    }
+
+    /// The notes page is in the layout, so the preview and the page count
+    /// match the PDF (review 4, L19: "1 of 1" with a 2-page PDF).
+    #[test]
+    fn the_notes_page_is_in_the_layout_and_in_the_pdf() {
+        let mut svc = EngineService::new();
+        let info = svc.new_workbook(None).unwrap();
+        let (doc, sheet) = (info.doc, info.sheets[0].id);
+        let mut setup = svc.page_setup(doc, sheet).unwrap();
+        setup.print_notes = Some(tally_api::NotesPrint::AtEnd);
+        setup.footer = Some(tally_api::HeaderFooter {
+            left: String::new(),
+            center: "&[PAGE] of &[PAGES]".into(),
+            right: String::new(),
+        });
+        svc.apply(
+            doc,
+            tx(vec![
+                Op::SetCellInput {
+                    sheet,
+                    r: 0,
+                    c: 0,
+                    input: "x".into(),
+                },
+                Op::SetNote {
+                    sheet,
+                    r: 0,
+                    c: 0,
+                    note: tally_api::NoteDto {
+                        r: 0,
+                        c: 0,
+                        text: "remember".into(),
+                        author: None,
+                        created: None,
+                        shown: false,
+                    },
+                },
+                Op::SetPageSetup { sheet, setup },
+            ]),
+        )
+        .unwrap();
+        let opts = PrintOptionsDto {
+            sheets: PrintSheets::Active,
+            selection: None,
+            suppress_empty_pages: true,
+            page_from: None,
+            page_to: None,
+            active_sheet: None,
+            page_ranges: None,
+        };
+        let info = svc.prepare_print_job(doc, &opts, &[]).unwrap();
+        assert_eq!(info.layout.pages.len(), 2);
+        assert_eq!(info.layout.pages[1].footer.as_ref().unwrap()[1], "2 of 2");
+        let job = svc.job(info.job).unwrap();
+        assert_eq!(job.job.pages.len(), 2);
+        let texts: Vec<&str> = job.job.pages[1]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        // The default header shows the sheet name: "Comments" here.
+        assert_eq!(texts, ["Comments", "2 of 2", "A1: remember"]);
+        // The preview can show it.
+        assert!(svc.print_job_page_png(info.job, 1, 36).is_ok());
     }
 
     #[test]
