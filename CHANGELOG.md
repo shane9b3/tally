@@ -40,7 +40,9 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   now gives Err:502 instead of #VALUE!, as in OpenOffice.
 - Delete Contents with Formats checked also removes merged cells that
   start in the selection, and the conditional formatting and validity
-  rules of the selected cells, as in OpenOffice.
+  rules of the selected cells, as in OpenOffice. On a protected sheet it
+  is refused when it would remove any of these, as Merge Cells,
+  Conditional Formatting and Validity are there.
 - Double-clicking a DataPilot value puts the details on a sheet with the
   next default name (Sheet2, Sheet3, ...) in front of the DataPilot's
   sheet, as in OpenOffice. It was named after the table and placed behind.
@@ -76,7 +78,13 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   reopening, the parent's bold, background, borders, alignment or number
   format came back. Styles are now saved as their difference from the
   parent, so OpenOffice and Tally both read them back as they were, and
-  an edit to the parent style in OpenOffice reaches its children.
+  an edit to the parent style in OpenOffice reaches its children. The
+  built-in styles Heading, Heading1, Result and Result2 are saved with
+  the cells and styles that use them.
+- Printing: text without a font size of its own prints at 11 pt, the size
+  it has on screen. It printed at 10 pt.
+- Zoom to Page Width and Whole Page no longer take a notes page for the
+  first page of the sheet.
 - Printing with "Formulas" on and "Zero values" off no longer hides
   formulas whose result is zero.
 - Headers and footers: the "Path/File Name" field of an OpenOffice or
