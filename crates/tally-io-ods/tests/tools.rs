@@ -37,9 +37,11 @@ fn sample() -> WorkbookData {
     heading.font.bold = true;
     heading.font.size_pt = Some(16.0);
     heading.style_name = Some("Heading".into());
+    // A child of Heading: styles are stored resolved, so it carries the
+    // bold and the size it inherits.
     let mut money = StyleData {
         fill: Some(0xffff_ccff),
-        ..StyleData::default()
+        ..heading.clone()
     };
     money.align.shrink_to_fit = true;
     money.align.indent = 2;
@@ -506,4 +508,237 @@ fn window_split_round_trips_and_frozen_panes_win() {
     assert_eq!(back.sheets[0].frozen, None);
     assert_eq!(back.sheets[1].split, None, "a frozen pane wins");
     assert_eq!(back.sheets[1].frozen, Some((1, 2)));
+}
+
+/// A child style (named, or a cell's direct format) that turns an
+/// attribute of its parent back off must not get it back from the parent
+/// chain on reading (parity X13, review 4 L11).
+#[test]
+fn child_styles_keep_overrides_back_to_the_default() {
+    let mut heading = StyleData {
+        fill: Some(0xffff_ccff),
+        style_name: Some("Heading".into()),
+        ..StyleData::default()
+    };
+    heading.font.bold = true;
+    heading.font.italic = true;
+    heading.font.underline = true;
+    heading.font.size_pt = Some(16.0);
+    heading.align.h = HAlign::Center;
+    heading.align.wrap = true;
+    heading.borders.top = Some(BorderLine::default());
+    // The named child: Heading without bold, fill, centring and border.
+    let mut plain = StyleData {
+        style_name: Some("Plain".into()),
+        ..StyleData::default()
+    };
+    plain.font.italic = true;
+    plain.font.size_pt = Some(16.0);
+    // A cell on Heading with direct formatting that removes the rest.
+    let direct = StyleData {
+        style_name: Some("Heading".into()),
+        ..StyleData::default()
+    };
+    let wb = WorkbookData {
+        sheets: vec![SheetData {
+            name: "S".into(),
+            cells: vec![
+                CellData {
+                    row: 0,
+                    col: 0,
+                    content: CellContentData::Value(Value::Number(1.0)),
+                    style: Some(0),
+                },
+                CellData {
+                    row: 1,
+                    col: 0,
+                    content: CellContentData::Value(Value::Number(2.0)),
+                    style: Some(1),
+                },
+            ],
+            ..SheetData::default()
+        }],
+        styles: vec![direct.clone(), plain.clone()],
+        cell_styles: vec![
+            CellStyleData {
+                name: "Heading".into(),
+                parent: Some("Default".into()),
+                style: heading,
+            },
+            CellStyleData {
+                name: "Plain".into(),
+                parent: Some("Heading".into()),
+                style: plain.clone(),
+            },
+        ],
+        ..WorkbookData::default()
+    };
+    let back = round_trip(&wb);
+    let named = back.cell_styles.iter().find(|s| s.name == "Plain").unwrap();
+    assert_eq!(named.parent.as_deref(), Some("Heading"));
+    assert_eq!(named.style, plain);
+    let style_of = |row: u32| {
+        let c = back.sheets[0].cells.iter().find(|c| c.row == row).unwrap();
+        back.styles[c.style.unwrap() as usize].clone()
+    };
+    // The default size is not stored; under a parent with a size it is
+    // written, and read back, as the 10 pt it is.
+    let mut direct_back = direct.clone();
+    direct_back.font.size_pt = Some(10.0);
+    assert_eq!(style_of(0), direct_back);
+    assert_eq!(style_of(1), plain);
+}
+
+/// The other attributes a parent can set and a child turn off again:
+/// number format, text colour, strike-through, rotation, shrink to fit,
+/// indent, vertical alignment, diagonal lines and protection.
+#[test]
+fn child_styles_reset_every_inherited_attribute() {
+    let mut parent = StyleData {
+        number_format: Some("0.00".into()),
+        protection: Some(CellProtectionData {
+            locked: false,
+            hidden_formula: true,
+            hidden: false,
+            hide_print: true,
+        }),
+        style_name: Some("Loud".into()),
+        ..StyleData::default()
+    };
+    parent.font.strike = true;
+    parent.font.color = Some(0xff00_00ff);
+    parent.align.rotation_deg = 45;
+    parent.align.shrink_to_fit = true;
+    parent.align.indent = 2;
+    parent.align.v = VAlign::Top;
+    let line = BorderLine {
+        style: BorderStyle::Solid,
+        width_hmm: 26,
+        color: 0x0000_00ff,
+    };
+    parent.borders.diagonal_down = Some(line.clone());
+    parent.borders.diagonal_up = Some(line.clone());
+    parent.borders.left = Some(line);
+    let quiet = StyleData {
+        style_name: Some("Quiet".into()),
+        ..StyleData::default()
+    };
+    let direct = StyleData {
+        style_name: Some("Loud".into()),
+        ..StyleData::default()
+    };
+    let wb = WorkbookData {
+        sheets: vec![SheetData {
+            name: "S".into(),
+            cells: vec![CellData {
+                row: 0,
+                col: 0,
+                content: CellContentData::Value(Value::Number(1.5)),
+                style: Some(0),
+            }],
+            ..SheetData::default()
+        }],
+        styles: vec![direct.clone()],
+        cell_styles: vec![
+            CellStyleData {
+                name: "Loud".into(),
+                parent: Some("Default".into()),
+                style: parent.clone(),
+            },
+            CellStyleData {
+                name: "Quiet".into(),
+                parent: Some("Loud".into()),
+                style: quiet.clone(),
+            },
+        ],
+        ..WorkbookData::default()
+    };
+    let back = round_trip(&wb);
+    let named = |n: &str| &back.cell_styles.iter().find(|s| s.name == n).unwrap().style;
+    assert_eq!(named("Loud"), &parent);
+    assert_eq!(named("Quiet"), &quiet);
+    let c = &back.sheets[0].cells[0];
+    assert_eq!(back.styles[c.style.unwrap() as usize], direct);
+}
+
+fn part(bytes: &[u8], name: &str) -> String {
+    let mut z = zip::ZipArchive::new(Cursor::new(bytes.to_vec())).unwrap();
+    let mut f = z.by_name(name).unwrap();
+    let mut s = String::new();
+    std::io::Read::read_to_string(&mut f, &mut s).unwrap();
+    s
+}
+
+/// A child style is written as its difference from the parent, as AOO
+/// writes only a style's own items (`XMLStyleExport::exportStyle`): what
+/// it shares with the parent stays inherited, so an edit to the parent in
+/// AOO reaches the child (review 4 L11).
+#[test]
+fn child_styles_are_written_as_the_difference_from_the_parent() {
+    let mut heading = StyleData {
+        fill: Some(0xffff_ccff),
+        number_format: Some("0.00".into()),
+        style_name: Some("Heading".into()),
+        ..StyleData::default()
+    };
+    heading.font.bold = true;
+    heading.font.size_pt = Some(16.0);
+    heading.align.h = HAlign::Center;
+    // The child adds italic and nothing else.
+    let mut child = heading.clone();
+    child.font.italic = true;
+    child.style_name = Some("Child".into());
+    // A cell on the child with a red text colour as direct formatting.
+    let mut direct = child.clone();
+    direct.font.color = Some(0xff00_00ff);
+    let wb = WorkbookData {
+        sheets: vec![SheetData {
+            name: "S".into(),
+            cells: vec![CellData {
+                row: 0,
+                col: 0,
+                content: CellContentData::Value(Value::Number(1.0)),
+                style: Some(0),
+            }],
+            ..SheetData::default()
+        }],
+        styles: vec![direct.clone()],
+        cell_styles: vec![
+            CellStyleData {
+                name: "Heading".into(),
+                parent: Some("Default".into()),
+                style: heading.clone(),
+            },
+            CellStyleData {
+                name: "Child".into(),
+                parent: Some("Heading".into()),
+                style: child.clone(),
+            },
+        ],
+        ..WorkbookData::default()
+    };
+    let mut out = Cursor::new(Vec::new());
+    write_ods(&wb, &mut out).unwrap();
+    let bytes = out.into_inner();
+    let styles = part(&bytes, "styles.xml");
+    assert!(
+        styles.contains(
+            r#"<style:style style:name="Child" style:family="table-cell" style:parent-style-name="Heading" style:display-name="Child"><style:text-properties fo:font-style="italic" style:font-style-asian="italic" style:font-style-complex="italic"/></style:style>"#
+        ),
+        "{styles}"
+    );
+    let content = part(&bytes, "content.xml");
+    assert!(
+        content.contains(
+            r##"<style:style style:name="ce1" style:family="table-cell" style:parent-style-name="Child"><style:text-properties fo:color="#ff0000"/></style:style>"##
+        ),
+        "{content}"
+    );
+    // Read back, every style is whole again.
+    let back = read_ods(Cursor::new(bytes), &Limits::default()).unwrap();
+    let named = |n: &str| &back.cell_styles.iter().find(|s| s.name == n).unwrap().style;
+    assert_eq!(named("Heading"), &heading);
+    assert_eq!(named("Child"), &child);
+    let c = &back.sheets[0].cells[0];
+    assert_eq!(back.styles[c.style.unwrap() as usize], direct);
 }

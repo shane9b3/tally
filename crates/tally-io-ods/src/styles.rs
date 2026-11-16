@@ -752,6 +752,9 @@ fn apply_text_props(s: &mut RawCellStyle, p: &Elem) {
     }
     if let Some(v) = p.attr("fo:color") {
         s.color = Some(parse_color(v));
+    } else if p.attr("style:use-window-font-color") == Some("true") {
+        // The automatic colour (AOO `COL_AUTO`): not the parent's.
+        s.color = Some(None);
     }
     if let Some(v) = p.attr("fo:font-size").and_then(font_size_pt) {
         s.size_pt = Some(v);

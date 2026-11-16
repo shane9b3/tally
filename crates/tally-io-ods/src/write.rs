@@ -165,11 +165,27 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
     // AOO writes a style's `style:data-style-name` into office:styles).
     let mut named_data: HashMap<&str, String> = HashMap::new();
     let doc_lang = doc_lang_of(data);
+    let bases = named_bases(data);
+    let no_style = StyleData::default();
+    let parent_of = |st: &tally_model::CellStyleData| -> &StyleData {
+        st.parent
+            .as_deref()
+            .and_then(|p| bases.get(p).copied())
+            .unwrap_or(&no_style)
+    };
+    let mut general_written = false;
     for (i, st) in data.cell_styles.iter().enumerate() {
-        let Some(code) = st.style.number_format.as_deref() else {
-            continue;
-        };
+        let code = st.style.number_format.as_deref().unwrap_or("");
         if code.is_empty() || code.eq_ignore_ascii_case("General") {
+            // General under a parent with a number format: say so, or the
+            // reader takes the parent's.
+            if st.name != "Default" && has_number_format(parent_of(st)) {
+                if !general_written {
+                    general_written = true;
+                    general_data_style(&mut s, "NSGeneral");
+                }
+                named_data.insert(st.name.as_str(), "NSGeneral".into());
+            }
             continue;
         }
         let name = format!("NS{i}");
@@ -189,7 +205,12 @@ fn styles_xml(data: &WorkbookData, plan: &StylePlan) -> String {
         let mut display = String::new();
         escape_attr(&st.name, &mut display);
         let ds = named_data.get(st.name.as_str()).map(String::as_str);
-        cell_style_xml_with(out, name, &parent, Some(&display), &st.style, ds);
+        let look = StyleLook {
+            st: &st.style,
+            base: parent_of(st),
+            default_font,
+        };
+        cell_style_xml_with(out, name, &parent, Some(&display), &look, ds);
     });
     s.push_str(&plan.cf_data_xml);
     for (st, name, ds) in &plan.cf_styles {
@@ -408,10 +429,27 @@ impl StylePlan {
         let mut warned_display = false;
         let mut warned_indent = false;
         let mut data_names: Vec<Option<String>> = Vec::with_capacity(data.styles.len());
+        let bases = named_bases(data);
+        let default_font = data.settings.default_font.as_deref();
+        let mut general_written = false;
         for (i, st) in data.styles.iter().enumerate() {
+            // General on a named style with a number format: say so, or
+            // the reader takes the named style's.
+            let mut general = |plan: &mut StylePlan| {
+                if !has_number_format(base_of(&bases, st)) {
+                    return None;
+                }
+                if !general_written {
+                    general_written = true;
+                    general_data_style(&mut plan.data_xml, "NGeneral");
+                }
+                Some("NGeneral".to_string())
+            };
             let data_name = match st.number_format.as_deref() {
-                None => None,
-                Some(code) if code.eq_ignore_ascii_case("General") || code.is_empty() => None,
+                None => general(&mut plan),
+                Some(code) if code.eq_ignore_ascii_case("General") || code.is_empty() => {
+                    general(&mut plan)
+                }
                 Some(code) => {
                     let next = codes.len();
                     codes
@@ -455,7 +493,11 @@ impl StylePlan {
             cell_style_xml(
                 &mut plan.cell_xml,
                 &format!("ce{}", i + 1),
-                st,
+                &StyleLook {
+                    st,
+                    base: base_of(&bases, st),
+                    default_font,
+                },
                 data_name.as_deref(),
             );
             data_names.push(data_name);
@@ -576,6 +618,8 @@ impl StylePlan {
     /// formula rules. Empty cells are not covered.
     fn plan_derived(&mut self, data: &WorkbookData, data_names: &[Option<String>]) {
         let mut by_key: HashMap<(Option<u32>, Vec<usize>), String> = HashMap::new();
+        let bases = named_bases(data);
+        let default_font = data.settings.default_font.as_deref();
         for (tab, sheet) in data.sheets.iter().enumerate() {
             let mappable: Vec<(usize, &tally_model::ConditionalFormatData)> = sheet
                 .conditional_formats
@@ -619,7 +663,12 @@ impl StylePlan {
                         let st = base.map_or(&default, |i| &data.styles[i as usize]);
                         let ds = base.and_then(|i| data_names[i as usize].clone());
                         let mut xml = String::new();
-                        cell_style_xml(&mut xml, &name, st, ds.as_deref());
+                        let look = StyleLook {
+                            st,
+                            base: base_of(&bases, st),
+                            default_font,
+                        };
+                        cell_style_xml(&mut xml, &name, &look, ds.as_deref());
                         let close = "</style:style>";
                         if xml.ends_with(close) {
                             xml.truncate(xml.len() - close.len());
@@ -720,26 +769,80 @@ impl StylePlan {
     }
 }
 
-fn cell_style_xml(out: &mut String, name: &str, st: &StyleData, data_style: Option<&str>) {
-    let parent = st
+/// The named cell styles by name (not `Default`, whose look is the
+/// baseline every chain ends at).
+fn named_bases(data: &WorkbookData) -> HashMap<&str, &StyleData> {
+    data.cell_styles
+        .iter()
+        .filter(|s| s.name != "Default")
+        .map(|s| (s.name.as_str(), &s.style))
+        .collect()
+}
+
+/// The attributes a cell format inherits: its named style's, or none.
+fn base_of<'a>(bases: &HashMap<&str, &'a StyleData>, st: &StyleData) -> &'a StyleData {
+    static NONE: std::sync::OnceLock<StyleData> = std::sync::OnceLock::new();
+    st.style_name
+        .as_deref()
+        .and_then(|n| bases.get(n).copied())
+        .unwrap_or_else(|| NONE.get_or_init(StyleData::default))
+}
+
+fn has_number_format(st: &StyleData) -> bool {
+    st.number_format
+        .as_deref()
+        .is_some_and(|c| !c.is_empty() && !c.eq_ignore_ascii_case("General"))
+}
+
+/// The General number format as a data style (AOO writes its Standard
+/// format the same way).
+fn general_data_style(out: &mut String, name: &str) {
+    let _ = write!(
+        out,
+        r#"<number:number-style style:name="{name}"><number:number number:min-integer-digits="1"/></number:number-style>"#
+    );
+}
+
+/// A cell style to write: its attributes (`st`, stored resolved), the
+/// resolved attributes of the parent it is written under (`base`) and the
+/// document's default font. A reader resolves the style through its
+/// parent chain, so an attribute the parent sets and the style does not
+/// have is written with its off value.
+struct StyleLook<'a> {
+    st: &'a StyleData,
+    base: &'a StyleData,
+    default_font: Option<&'a str>,
+}
+
+fn cell_style_xml(out: &mut String, name: &str, look: &StyleLook, data_style: Option<&str>) {
+    let parent = look
+        .st
         .style_name
         .as_deref()
         .filter(|n| *n != "Default")
         .map(crate::tools::odf_style_name)
         .unwrap_or_else(|| "Default".into());
-    cell_style_xml_with(out, name, &parent, None, st, data_style);
+    cell_style_xml_with(out, name, &parent, None, look, data_style);
 }
 
+/// The default font size, points (a style without a size).
+const DEFAULT_FONT_PT: f32 = 10.0;
+
 /// One `table-cell` style with an explicit parent (and, for named
-/// styles, a display name).
+/// styles, a display name). Only the attributes that differ from the
+/// parent's are written, as AOO writes a style's own items
+/// (`XMLStyleExport::exportStyle` with `SvXMLExportPropertyMapper::Filter`:
+/// direct values only); one the parent sets and the style does not have
+/// is written with its off value.
 fn cell_style_xml_with(
     out: &mut String,
     name: &str,
     parent: &str,
     display_name: Option<&str>,
-    st: &StyleData,
+    look: &StyleLook,
     data_style: Option<&str>,
 ) {
+    let (st, base) = (look.st, look.base);
     let _ = write!(
         out,
         r#"<style:style style:name="{name}" style:family="table-cell" style:parent-style-name="{parent}""#
@@ -747,58 +850,90 @@ fn cell_style_xml_with(
     if let Some(d) = display_name {
         let _ = write!(out, r#" style:display-name="{d}""#);
     }
-    if let Some(ds) = data_style {
+    let code = |s: &StyleData| {
+        s.number_format
+            .clone()
+            .filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("General"))
+    };
+    if let Some(ds) = data_style.filter(|_| code(st) != code(base)) {
         let _ = write!(out, r#" style:data-style-name="{ds}""#);
     }
     out.push('>');
     let mut cell_props = String::new();
-    if st.align.rotation_deg != 0 {
+    if st.align.rotation_deg != base.align.rotation_deg {
         let _ = write!(
             cell_props,
-            r#" style:rotation-angle="{}" style:rotation-align="none""#,
+            r#" style:rotation-angle="{}""#,
             st.align.rotation_deg.rem_euclid(360)
         );
+        if st.align.rotation_deg != 0 {
+            cell_props.push_str(r#" style:rotation-align="none""#);
+        }
     }
-    if st.align.stacked {
-        cell_props.push_str(r#" style:direction="ttb""#);
+    if st.align.stacked != base.align.stacked {
+        let v = if st.align.stacked { "ttb" } else { "ltr" };
+        let _ = write!(cell_props, r#" style:direction="{v}""#);
     }
-    if st.align.shrink_to_fit {
-        cell_props.push_str(r#" style:shrink-to-fit="true""#);
+    if st.align.shrink_to_fit != base.align.shrink_to_fit {
+        let _ = write!(
+            cell_props,
+            r#" style:shrink-to-fit="{}""#,
+            st.align.shrink_to_fit
+        );
     }
-    if let Some(l) = &st.borders.diagonal_down {
+    let line = |l: &Option<tally_model::BorderLine>| {
+        l.as_ref()
+            .map_or_else(|| "none".to_string(), border_to_string)
+    };
+    if st.borders.diagonal_down != base.borders.diagonal_down {
         let _ = write!(
             cell_props,
             r#" style:diagonal-tl-br="{}""#,
-            border_to_string(l)
+            line(&st.borders.diagonal_down)
         );
     }
-    if let Some(l) = &st.borders.diagonal_up {
+    if st.borders.diagonal_up != base.borders.diagonal_up {
         let _ = write!(
             cell_props,
             r#" style:diagonal-bl-tr="{}""#,
-            border_to_string(l)
+            line(&st.borders.diagonal_up)
         );
     }
-    if let Some(fill) = st.fill {
-        let _ = write!(cell_props, r#" fo:background-color="{}""#, color_hex(fill));
-    }
-    let b = &st.borders;
-    let sides = [&b.top, &b.bottom, &b.left, &b.right];
-    if sides.iter().all(|x| x.is_some() && **x == b.top) {
-        if let Some(l) = &b.top {
-            let _ = write!(cell_props, r#" fo:border="{}""#, border_to_string(l));
+    if st.fill != base.fill {
+        match st.fill {
+            Some(fill) => {
+                let _ = write!(cell_props, r#" fo:background-color="{}""#, color_hex(fill));
+            }
+            None => cell_props.push_str(r#" fo:background-color="transparent""#),
         }
-    } else {
-        for (name, side) in ["top", "bottom", "left", "right"].iter().zip(sides) {
-            if let Some(l) = side {
-                let _ = write!(cell_props, r#" fo:border-{name}="{}""#, border_to_string(l));
+    }
+    let (b, bb) = (&st.borders, &base.borders);
+    let sides = [
+        ("top", &b.top, &bb.top),
+        ("bottom", &b.bottom, &bb.bottom),
+        ("left", &b.left, &bb.left),
+        ("right", &b.right, &bb.right),
+    ];
+    if sides.iter().any(|(_, side, base_side)| side != base_side) {
+        if sides.iter().all(|(_, side, _)| *side == &b.top) {
+            let _ = write!(cell_props, r#" fo:border="{}""#, line(&b.top));
+        } else {
+            for (name, side, base_side) in sides {
+                if side != base_side {
+                    let _ = write!(cell_props, r#" fo:border-{name}="{}""#, line(side));
+                }
             }
         }
     }
-    if st.align.wrap {
-        cell_props.push_str(r#" fo:wrap-option="wrap""#);
+    if st.align.wrap != base.align.wrap {
+        let v = if st.align.wrap { "wrap" } else { "no-wrap" };
+        let _ = write!(cell_props, r#" fo:wrap-option="{v}""#);
     }
-    if let Some(p) = st.protection {
+    let (p, bp) = (
+        st.protection.unwrap_or_default(),
+        base.protection.unwrap_or_default(),
+    );
+    if (p.hidden, p.locked, p.hidden_formula) != (bp.hidden, bp.locked, bp.hidden_formula) {
         let v = match (p.hidden, p.locked, p.hidden_formula) {
             (true, _, _) => "hidden-and-protected",
             (false, true, true) => "protected formula-hidden",
@@ -807,16 +942,20 @@ fn cell_style_xml_with(
             (false, false, false) => "none",
         };
         let _ = write!(cell_props, r#" style:cell-protect="{v}""#);
-        if p.hide_print {
-            cell_props.push_str(r#" style:print-content="false""#);
-        }
     }
-    match st.align.v {
-        VAlign::Bottom => {}
-        VAlign::Middle => cell_props.push_str(r#" style:vertical-align="middle""#),
-        VAlign::Top => cell_props.push_str(r#" style:vertical-align="top""#),
+    if p.hide_print != bp.hide_print {
+        let _ = write!(cell_props, r#" style:print-content="{}""#, !p.hide_print);
+    }
+    if st.align.v != base.align.v {
+        let v = match st.align.v {
+            VAlign::Bottom => "automatic",
+            VAlign::Middle => "middle",
+            VAlign::Top => "top",
+        };
+        let _ = write!(cell_props, r#" style:vertical-align="{v}""#);
     }
     let text_align = match st.align.h {
+        _ if st.align.h == base.align.h => None,
         HAlign::General => None,
         HAlign::Left => Some("start"),
         HAlign::Center => Some("center"),
@@ -825,67 +964,105 @@ fn cell_style_xml_with(
     };
     if text_align.is_some() {
         cell_props.push_str(r#" style:text-align-source="fix" style:repeat-content="false""#);
+    } else if st.align.h != base.align.h {
+        cell_props.push_str(r#" style:text-align-source="value-type""#);
     }
     if !cell_props.is_empty() {
         let _ = write!(out, "<style:table-cell-properties{cell_props}/>");
     }
-    if text_align.is_some() || st.align.indent > 0 {
+    let indent = (st.align.indent != base.align.indent).then_some(st.align.indent);
+    if text_align.is_some() || indent.is_some() {
         out.push_str("<style:paragraph-properties");
         if let Some(a) = text_align {
             let _ = write!(out, r#" fo:text-align="{a}""#);
         }
-        if st.align.indent > 0 {
+        if let Some(n) = indent {
             // AOO's indent step is 10 pt (0.353 cm).
             let _ = write!(
                 out,
                 r#" fo:margin-left="{}""#,
-                hmm_to_cm(u32::from(st.align.indent) * 353)
+                hmm_to_cm(u32::from(n) * 353)
             );
         }
         out.push_str("/>");
     }
-    let f = &st.font;
+    let (f, bf) = (&st.font, &base.font);
     let mut tp = String::new();
-    if f.bold {
-        tp.push_str(r#" fo:font-weight="bold" style:font-weight-asian="bold" style:font-weight-complex="bold""#);
-    }
-    if f.italic {
-        tp.push_str(r#" fo:font-style="italic" style:font-style-asian="italic" style:font-style-complex="italic""#);
-    }
-    if f.underline {
-        let (style, ty, width) = match f.underline_style {
-            tally_model::UnderlineStyleData::Single => ("solid", "single", "auto"),
-            tally_model::UnderlineStyleData::Double => ("solid", "double", "auto"),
-            tally_model::UnderlineStyleData::SingleAccounting => ("solid", "single", "auto"),
-            tally_model::UnderlineStyleData::DoubleAccounting => ("solid", "double", "auto"),
-            tally_model::UnderlineStyleData::Dotted => ("dotted", "single", "auto"),
-            tally_model::UnderlineStyleData::Dashed => ("dash", "single", "auto"),
-            tally_model::UnderlineStyleData::Wave => ("wave", "single", "auto"),
-            tally_model::UnderlineStyleData::Bold => ("solid", "single", "bold"),
-        };
+    if f.bold != bf.bold {
+        let v = if f.bold { "bold" } else { "normal" };
         let _ = write!(
             tp,
-            r#" style:text-underline-style="{style}" style:text-underline-type="{ty}" style:text-underline-width="{width}" style:text-underline-color="font-color""#
+            r#" fo:font-weight="{v}" style:font-weight-asian="{v}" style:font-weight-complex="{v}""#
         );
     }
-    if f.strike {
-        tp.push_str(
-            r#" style:text-line-through-style="solid" style:text-line-through-type="single""#,
+    if f.italic != bf.italic {
+        let v = if f.italic { "italic" } else { "normal" };
+        let _ = write!(
+            tp,
+            r#" fo:font-style="{v}" style:font-style-asian="{v}" style:font-style-complex="{v}""#
         );
     }
-    if let Some(c) = f.color {
-        let _ = write!(tp, r#" fo:color="{}""#, color_hex(c));
+    let underline = |f: &tally_model::FontData| f.underline.then_some(f.underline_style);
+    if underline(f) != underline(bf) {
+        match underline(f) {
+            Some(u) => {
+                let (style, ty, width) = match u {
+                    tally_model::UnderlineStyleData::Single => ("solid", "single", "auto"),
+                    tally_model::UnderlineStyleData::Double => ("solid", "double", "auto"),
+                    tally_model::UnderlineStyleData::SingleAccounting => {
+                        ("solid", "single", "auto")
+                    }
+                    tally_model::UnderlineStyleData::DoubleAccounting => {
+                        ("solid", "double", "auto")
+                    }
+                    tally_model::UnderlineStyleData::Dotted => ("dotted", "single", "auto"),
+                    tally_model::UnderlineStyleData::Dashed => ("dash", "single", "auto"),
+                    tally_model::UnderlineStyleData::Wave => ("wave", "single", "auto"),
+                    tally_model::UnderlineStyleData::Bold => ("solid", "single", "bold"),
+                };
+                let _ = write!(
+                    tp,
+                    r#" style:text-underline-style="{style}" style:text-underline-type="{ty}" style:text-underline-width="{width}" style:text-underline-color="font-color""#
+                );
+            }
+            None => tp.push_str(r#" style:text-underline-style="none""#),
+        }
     }
-    if let Some(sz) = f.size_pt.filter(|s| s.is_finite() && *s > 0.0) {
+    if f.strike != bf.strike {
+        if f.strike {
+            tp.push_str(
+                r#" style:text-line-through-style="solid" style:text-line-through-type="single""#,
+            );
+        } else {
+            tp.push_str(r#" style:text-line-through-style="none""#);
+        }
+    }
+    if f.color != bf.color {
+        match f.color {
+            Some(c) => {
+                let _ = write!(tp, r#" fo:color="{}""#, color_hex(c));
+            }
+            // The automatic colour, as AOO writes it.
+            None => tp.push_str(r#" style:use-window-font-color="true""#),
+        }
+    }
+    // The default size is not stored: under a parent with a size it is
+    // written as the 10 pt it is.
+    let size = |s: &Option<f32>| s.filter(|s| s.is_finite() && *s > 0.0);
+    if size(&f.size_pt) != size(&bf.size_pt) {
+        let sz = size(&f.size_pt).unwrap_or(DEFAULT_FONT_PT);
         let _ = write!(
             tp,
             r#" fo:font-size="{sz}pt" style:font-size-asian="{sz}pt" style:font-size-complex="{sz}pt""#
         );
     }
-    if let Some(fam) = &f.family {
-        tp.push_str(r#" style:font-name=""#);
-        escape_attr(fam, &mut tp);
-        tp.push('"');
+    // Likewise the default font, when the document names one.
+    if f.family != bf.family {
+        if let Some(fam) = f.family.as_deref().or(look.default_font) {
+            tp.push_str(r#" style:font-name=""#);
+            escape_attr(fam, &mut tp);
+            tp.push('"');
+        }
     }
     if !tp.is_empty() {
         let _ = write!(out, "<style:text-properties{tp}/>");
