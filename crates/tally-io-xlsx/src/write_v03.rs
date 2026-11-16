@@ -774,6 +774,9 @@ pub(crate) fn hf_to_excel(h: &HeaderFooterData) -> String {
             .replace("&&[PAGES]", "&N")
             .replace("&&[PAGE]", "&P")
             .replace("&&[SHEET]", "&A")
+            // Excel's path field is the folder; with the file name it is
+            // the Path/File Name field.
+            .replace("&&[PATH]", "&Z&F")
             .replace("&&[FILE]", "&F")
             .replace("&&[DATE]", "&D")
             .replace("&&[TIME]", "&T")
@@ -1352,6 +1355,12 @@ mod tests {
             right: String::new(),
         };
         assert_eq!(hf_to_excel(&h), "&L&F && co&CPage &P of &N");
+        let path = HeaderFooterData {
+            left: String::new(),
+            center: "&[PATH]".into(),
+            right: String::new(),
+        };
+        assert_eq!(hf_to_excel(&path), "&C&Z&F");
         assert_eq!(
             sqref(&[
                 CellRangeLocal {

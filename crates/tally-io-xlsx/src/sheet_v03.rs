@@ -660,6 +660,14 @@ pub(crate) fn hf_from_excel(s: &str) -> HeaderFooterData {
             'N' => push(&mut out, cur, "&[PAGES]"),
             'A' => push(&mut out, cur, "&[SHEET]"),
             'F' => push(&mut out, cur, "&[FILE]"),
+            // `&Z&F`, folder and file name: the Path/File Name field. The
+            // folder alone has no field and is left out.
+            'Z' => {
+                if chars.get(i) == Some(&'&') && chars.get(i + 1) == Some(&'F') {
+                    i += 2;
+                    push(&mut out, cur, "&[PATH]");
+                }
+            }
             'D' => push(&mut out, cur, "&[DATE]"),
             'T' => push(&mut out, cur, "&[TIME]"),
             '"' => {
@@ -674,7 +682,7 @@ pub(crate) fn hf_from_excel(s: &str) -> HeaderFooterData {
                     i += 1;
                 }
             }
-            // &B &I &U &S &E &X &Y &K…, &Z (path), &G (picture): dropped.
+            // &B &I &U &S &E &X &Y &K…, &G (picture): dropped.
             'K' => i = (i + 6).min(chars.len()),
             _ => {}
         }
@@ -877,6 +885,9 @@ mod tests {
         assert_eq!(h.center, "Page &[PAGE] of &[PAGES]");
         assert_eq!(h.right, "&[DATE]");
         assert_eq!(hf_from_excel("Plain").center, "Plain");
+        let h = hf_from_excel("&C&Z&F&R&Z x &F");
+        assert_eq!(h.center, "&[PATH]");
+        assert_eq!(h.right, " x &[FILE]");
         assert_eq!(
             print_titles("Sheet1!$1:$2,Sheet1!$A:$B"),
             (Some((0, 1)), Some((0, 1)))

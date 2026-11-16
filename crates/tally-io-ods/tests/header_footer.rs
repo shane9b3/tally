@@ -132,6 +132,23 @@ fn line_breaks_in_a_region_are_new_lines() {
     assert_eq!(p.header.unwrap().center, "The Redwood\nBlock 90");
 }
 
+/// AOO's header fields (`ScHFEditPage`, scuitphfedit.cxx): Title, File
+/// Name, Path/File Name, Sheet Name, Page, Pages, Date, Time. Title and
+/// File Name are both `&[FILE]`; the others have a placeholder each and
+/// are written back as the same fields (parity R5).
+#[test]
+fn every_aoo_header_field_has_a_placeholder() {
+    let p = read(ods(
+        r#"<style:page-layout-properties/>"#,
+        r#"<style:header><style:region-left><text:p><text:title>t</text:title>|<text:file-name text:display="name-and-extension">f</text:file-name>|<text:file-name text:display="full">p</text:file-name></text:p></style:region-left><style:region-center><text:p><text:sheet-name>s</text:sheet-name>|<text:page-number>1</text:page-number>|<text:page-count>9</text:page-count></text:p></style:region-center><style:region-right><text:p><text:date>d</text:date>|<text:time>t</text:time></text:p></style:region-right></style:header>"#,
+    ));
+    let h = p.header.clone().unwrap();
+    assert_eq!(h.left, "&[FILE]|&[FILE]|&[PATH]");
+    assert_eq!(h.center, "&[SHEET]|&[PAGE]|&[PAGES]");
+    assert_eq!(h.right, "&[DATE]|&[TIME]");
+    assert_eq!(round_trip(&p).header, p.header);
+}
+
 /// Format > Page > Sheet > Print: zero values, formulas, notes and charts
 /// are stored in `style:print` and read back.
 #[test]

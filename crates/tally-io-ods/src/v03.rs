@@ -1618,6 +1618,10 @@ fn hf_paragraphs<R: BufRead>(xml: &mut XmlReader<R>) -> Result<String, OdsError>
                     "text:page-number" => Some("&[PAGE]"),
                     "text:page-count" => Some("&[PAGES]"),
                     "text:sheet-name" => Some("&[SHEET]"),
+                    // AOO's "Path/File Name" field (`SvxExtFileField` with
+                    // `SVXFILEFORMAT_FULLPATH`); "File Name" and "Title" are
+                    // the file name.
+                    "text:file-name" if c.attr("text:display") == Some("full") => Some("&[PATH]"),
                     "text:file-name" | "text:title" => Some("&[FILE]"),
                     "text:date" => Some("&[DATE]"),
                     "text:time" => Some("&[TIME]"),
@@ -1817,6 +1821,10 @@ fn write_hf_region(s: &mut String, tag: &str, text: &str) {
                 ("&[PAGE]", "<text:page-number>1</text:page-number>"),
                 ("&[SHEET]", "<text:sheet-name>???</text:sheet-name>"),
                 ("&[FILE]", "<text:title>???</text:title>"),
+                (
+                    "&[PATH]",
+                    r#"<text:file-name text:display="full">???</text:file-name>"#,
+                ),
                 ("&[DATE]", "<text:date>01/01/2026</text:date>"),
                 ("&[TIME]", "<text:time>00:00:00</text:time>"),
             ];
