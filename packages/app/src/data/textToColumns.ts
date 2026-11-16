@@ -1,8 +1,8 @@
 /**
  * Text to Columns: the dialog's separator options and a client-side split
  * preview of the selected column's texts (the engine does the real split
- * with the `tally-io-csv` tokenizer; this mirrors its rules closely enough
- * for the live preview grid).
+ * with `split_fields`; this follows the same rules for the live preview
+ * grid).
  */
 import { t } from "../i18n";
 import type { CsvColumnType, CsvImportOptionsDto } from "@tally/bridge";
@@ -58,7 +58,14 @@ export function toCsvOptions(s: SeparatorState): CsvImportOptionsDto {
   };
 }
 
-/** Splits one line by the separator options (quotes protect separators; `""` is a literal quote). */
+/**
+ * Splits one line by the separator options, as the engine's `split_fields`
+ * (OpenOffice's field scanner): a quote opens a quoted string only as the
+ * first character of a field, `""` inside it is a literal quote, the text
+ * after the closing quote up to the separator is appended as typed, and a
+ * quote anywhere else is an ordinary character. A separator at the very
+ * end starts no field.
+ */
 export function splitLine(line: string, s: SeparatorState): string[] {
   if (s.fixedWidth) {
     const starts = [0, ...s.widths.filter((w) => w > 0).sort((a, b) => a - b)];
@@ -73,30 +80,38 @@ export function splitLine(line: string, s: SeparatorState): string[] {
   const seps = delimiterString(s);
   if (seps === "") return [s.trim ? line.trim() : line];
   const out: string[] = [];
-  let cur = "";
-  let quoted = false;
-  let lastWasSep = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i] ?? "";
-    if (ch === s.quote) {
-      if (quoted && line[i + 1] === s.quote) {
-        cur += ch;
-        i++;
-      } else quoted = !quoted;
-      lastWasSep = false;
-      continue;
+  const n = line.length;
+  let i = 0;
+  while (i < n) {
+    let cur = "";
+    if (line[i] === s.quote) {
+      i++;
+      for (;;) {
+        let doubled = false;
+        const p0 = i;
+        while (i < n) {
+          if (line[i] === s.quote) {
+            i++;
+            if (i < n && line[i] === s.quote) {
+              i++;
+              doubled = true;
+            }
+            break;
+          }
+          i++;
+        }
+        // Without the closing quote (or the second of a pair).
+        if (p0 < i) cur += line.slice(p0, i < n || line[i - 1] === s.quote ? i - 1 : i);
+        if (!doubled) break;
+      }
     }
-    if (!quoted && seps.includes(ch)) {
-      if (s.mergeDelimiters && lastWasSep) continue;
-      out.push(cur);
-      cur = "";
-      lastWasSep = true;
-      continue;
-    }
-    cur += ch;
-    lastWasSep = false;
+    const p1 = i;
+    while (i < n && !seps.includes(line[i] ?? "")) i++;
+    cur += line.slice(p1, i);
+    if (i < n) i++;
+    if (s.mergeDelimiters) while (i < n && seps.includes(line[i] ?? "")) i++;
+    out.push(cur);
   }
-  out.push(cur);
   return s.trim ? out.map((f) => f.trim()) : out;
 }
 

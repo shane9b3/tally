@@ -83,6 +83,12 @@ describe("text to columns", () => {
     expect(splitLine('a,"b,c",d', st)).toEqual(["a", "b,c", "d"]);
     expect(splitLine("a,,b", { ...st, mergeDelimiters: true })).toEqual(["a", "b"]);
     expect(splitLine('x,"say ""hi"""', st)).toEqual(["x", 'say "hi"']);
+    // A quote opens a string only at the start of a field (OpenOffice's scanner).
+    expect(splitLine('ab"c,d"e,f', st)).toEqual(['ab"c', 'd"e', "f"]);
+    expect(splitLine('"c,d"e"f,g', st)).toEqual(['c,de"f', "g"]);
+    expect(splitLine('a,"b,c', st)).toEqual(["a", "b,c"]);
+    expect(splitLine("a,,b,", st)).toEqual(["a", "", "b"]);
+    expect(splitLine("", st)).toEqual([]);
     expect(splitLine("abcdefgh", { ...st, fixedWidth: true, widths: [3, 5] })).toEqual(["abc", "de", "fgh"]);
     expect(delimiterString({ ...st, tab: true, other: true, otherChar: "|" })).toBe("\t,|");
     expect(previewSplit(["a;b", "c"], DEFAULT_SEPARATORS)).toEqual([
