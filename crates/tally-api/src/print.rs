@@ -104,9 +104,14 @@ pub struct PrintPageDto {
     pub number: u32,
     /// Sheet.
     pub sheet: SheetId,
-    /// Rows `[first, last]` on the page (repeat rows excluded).
+    /// `true` for a notes page (page setup "Notes"): it lists the
+    /// sheet's notes and shows no cells, so `rows` and `cols` are
+    /// `[0, 0]` and mean nothing.
+    pub notes: bool,
+    /// Rows `[first, last]` on the page (repeat rows excluded; unused on
+    /// a notes page).
     pub rows: [u32; 2],
-    /// Columns `[first, last]`.
+    /// Columns `[first, last]` (unused on a notes page).
     pub cols: [u32; 2],
     /// Repeated rows printed above `rows`.
     pub repeat_rows: Option<[u32; 2]>,
@@ -524,6 +529,7 @@ mod tests {
             index: 0,
             number: 3,
             sheet: 1,
+            notes: false,
             rows: [0, 55],
             cols: [0, 6],
             repeat_rows: None,
@@ -537,5 +543,6 @@ mod tests {
         let v = serde_json::to_value(&page).unwrap();
         assert_eq!(v["paperMm"], json!([210.0, 297.0]));
         assert_eq!(v["header"][1], "Sheet1");
+        assert_eq!(v["notes"], json!(false));
     }
 }

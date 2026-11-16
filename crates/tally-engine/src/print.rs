@@ -352,6 +352,7 @@ impl PageSpec {
             index,
             number: self.number,
             sheet: self.sheet,
+            notes: !self.notes.is_empty(),
             rows: self.row_span(),
             cols: self.col_span(),
             repeat_rows: repeat(&self.repeat_rows),
@@ -632,7 +633,12 @@ fn extend_for_overflow(wb: &Workbook, s: &Sheet, area: CellRange) -> CellRange {
             {
                 continue;
             }
-            let size = f64::from(st.font.size_pt.unwrap_or(10.0).clamp(1.0, 400.0));
+            let size = f64::from(
+                st.font
+                    .size_pt
+                    .unwrap_or(crate::styles::DEFAULT_FONT_SIZE_PT)
+                    .clamp(1.0, 400.0),
+            );
             let chars = t.chars().take(4096).count() as f64;
             // pt → hmm: 2540 / 72.
             let need = (chars * size * 0.55 * 2540.0 / 72.0) as u64;
@@ -1142,20 +1148,32 @@ pub const NOTES_PAGE_NAME: &str = "Comments";
 /// cell pages, with the sheet's header and footer (AOO
 /// `ScPrintFunc::CountNotePages` and `PrintNotes`). Page numbers and
 /// headers are filled in by [`layout`].
-fn note_pages(s: &Sheet, areas: &[CellRange]) -> Vec<PageSpec> {
+///
+/// At most `room` pages are built (what the job has left of
+/// [`MAX_PAGES`]): the lines of notes that would not fit are never made.
+/// The flag says that notes were left out.
+fn note_pages(s: &Sheet, areas: &[CellRange], room: usize) -> (Vec<PageSpec>, bool) {
     let p = &s.meta.page_setup;
     let Some(first) = areas.first() else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     if p.print_notes != NotesPrintData::AtEnd {
-        return Vec::new();
+        return (Vec::new(), false);
     }
+    let b = body_of(p);
+    let per_page = ((b.h / HF_LINE_HMM) as usize).max(1);
+    let most = room.saturating_mul(per_page);
     let mut lines: Vec<String> = Vec::new();
+    let mut cut = false;
     for ((r, c), note) in s.meta.notes.iter() {
         if areas
             .iter()
             .any(|a| a.contains(CellAddr::new(s.id, *r, *c)))
         {
+            if lines.len() >= most {
+                cut = true;
+                break;
+            }
             let text: String = note.text.chars().take(MAX_NOTE_CHARS).collect();
             lines.push(format!(
                 "{}{}: {}",
@@ -1165,11 +1183,11 @@ fn note_pages(s: &Sheet, areas: &[CellRange]) -> Vec<PageSpec> {
             ));
         }
     }
-    let b = body_of(p);
-    let per_page = ((b.h / HF_LINE_HMM) as usize).max(1);
-    lines
-        .chunks(per_page)
-        .map(|chunk| PageSpec {
+    let mut lines = lines.into_iter().peekable();
+    let mut pages = Vec::new();
+    while lines.peek().is_some() {
+        let notes: Vec<String> = lines.by_ref().take(per_page).collect();
+        pages.push(PageSpec {
             sheet: s.id,
             rows: Items::default(),
             cols: Items::default(),
@@ -1185,9 +1203,10 @@ fn note_pages(s: &Sheet, areas: &[CellRange]) -> Vec<PageSpec> {
             header: None,
             footer: None,
             area: *first,
-            notes: chunk.to_vec(),
-        })
-        .collect()
+            notes,
+        });
+    }
+    (pages, cut)
 }
 
 /// Paginates one sheet (page numbers and headers are filled in later by
@@ -1412,10 +1431,9 @@ pub fn layout(
         }
         // The sheet's notes pages follow its cell pages and count as pages.
         if let Some(s) = wb.sheet(sheet).filter(|_| notes_on) {
-            let mut np = note_pages(s, &areas);
             let room = MAX_PAGES.saturating_sub(pages.len());
-            if np.len() > room {
-                np.truncate(room);
+            let (mut np, cut) = note_pages(s, &areas, room);
+            if cut {
                 warnings.push("Some notes were not printed: the job has too many pages.".into());
             }
             pages.append(&mut np);
@@ -1814,6 +1832,57 @@ mod tests {
         // Notes off: no notes page.
         setup(&mut wb).print_notes = NotesPrintData::None;
         assert!(pages(&wb).iter().all(|x| x.notes.is_empty()));
+    }
+
+    /// Review 6 L4: a notes page says so in the DTO; its row and column
+    /// spans are `[0, 0]` and are not a cell range.
+    #[test]
+    fn notes_pages_are_flagged_in_the_dto() {
+        let mut wb = book(3, 2);
+        note(&mut wb, 1, 1, "n");
+        setup(&mut wb).print_notes = NotesPrintData::AtEnd;
+        let p = pages(&wb);
+        assert_eq!(p.len(), 2);
+        let (cells, notes) = (p[0].to_dto(0), p[1].to_dto(1));
+        assert!(!cells.notes);
+        assert_eq!((cells.rows, cells.cols), ([0, 2], [0, 1]));
+        assert!(notes.notes);
+        assert_eq!((notes.rows, notes.cols), ([0, 0], [0, 0]));
+    }
+
+    /// Review 6 L5: the notes pages are built only as far as the job has
+    /// pages left; the lines of the notes behind that are never made.
+    #[test]
+    fn notes_pages_stop_at_the_page_budget() {
+        let mut wb = book(1, 1);
+        let s = wb.sheets[0].id;
+        let long = "x".repeat(MAX_NOTE_CHARS + 500);
+        let n = 20_000u32;
+        for r in 0..n {
+            note(&mut wb, r, 0, &long);
+        }
+        setup(&mut wb).print_notes = NotesPrintData::AtEnd;
+        let sheet = wb.sheet(s).unwrap();
+        let area = CellRange::new(s, 0, 0, MAX_ROWS - 1, 0);
+        let per_page = (body_of(&sheet.meta.page_setup).h / HF_LINE_HMM) as usize;
+        let t = std::time::Instant::now();
+        let (p, cut) = note_pages(sheet, &[area], 3);
+        let took = t.elapsed();
+        assert!(cut);
+        assert_eq!(p.len(), 3);
+        assert!(p.iter().all(|x| x.notes.len() == per_page));
+        // A1, A2, …: the first notes in row order, each cut to its limit.
+        assert!(p[0].notes[0].starts_with("A1: xx"));
+        assert_eq!(p[0].notes[0].chars().count(), 4 + MAX_NOTE_CHARS);
+        // 3 pages of lines, not 20,000 (40 MB of text in a debug build).
+        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+        // No room: nothing is built, and the notes are reported left out.
+        let (p, cut) = note_pages(sheet, &[area], 0);
+        assert!(p.is_empty() && cut);
+        // Room for all: every note, no cut.
+        let (p, cut) = note_pages(sheet, &[area], MAX_PAGES);
+        assert!(!cut);
+        assert_eq!(p.iter().map(|x| x.notes.len()).sum::<usize>(), n as usize);
     }
 
     #[test]

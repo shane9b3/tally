@@ -3,7 +3,7 @@
  * print store.
  */
 import { describe, expect, it } from "vitest";
-import { clampPage, clampPreviewZoom, DEFAULT_PRINT_SCOPE, dpiFor, fitWidthZoom, fitZoom, MAX_PAGE_RANGES, MAX_PRINT_PAGE, pageLabel, paperPx, parsePageRanges, printOptionsFor, stepPage, stepPreviewZoom, thumbWindow } from "../src/print/printReducer";
+import { clampPage, clampPreviewZoom, DEFAULT_PRINT_SCOPE, dpiFor, firstCellPage, fitWidthZoom, fitZoom, MAX_PAGE_RANGES, MAX_PRINT_PAGE, pageLabel, paperPx, parsePageRanges, printOptionsFor, stepPage, stepPreviewZoom, thumbWindow } from "../src/print/printReducer";
 import { usePrintStore } from "../src/print/printStore";
 
 describe("print preview reducers", () => {
@@ -16,6 +16,19 @@ describe("print preview reducers", () => {
     expect(stepPage(2, 3, 1)).toBe(2);
     expect(pageLabel(0, 3)).toBe("Page 1 of 3");
     expect(pageLabel(0, 0)).toBe("No pages");
+  });
+  it("takes the first page with cells, never a notes page", () => {
+    // A notes page lists notes: its rows / cols are [0, 0] and are not A1.
+    const notes = (index: number, sheet: number) => ({ ...page(index), sheet, notes: true, rows: [0, 0] as [number, number], cols: [0, 0] as [number, number] });
+    const cells = (index: number, sheet: number) => ({ ...page(index), sheet, rows: [20, 40] as [number, number], cols: [2, 7] as [number, number] });
+    // Sheet 2's own cell page, though sheet 1's pages come first.
+    expect(firstCellPage([cells(0, 1), notes(1, 1), cells(2, 2), notes(3, 2)], 2)?.index).toBe(2);
+    // A notes page first in the job (the cell pages of its sheet were empty): the next cell page.
+    expect(firstCellPage([notes(0, 2), cells(1, 3)], 2)?.index).toBe(1);
+    expect(firstCellPage([notes(0, 2), cells(1, 2)], 2)?.rows).toEqual([20, 40]);
+    // Only notes pages, or none: no cell range to show.
+    expect(firstCellPage([notes(0, 2)], 2)).toBeNull();
+    expect(firstCellPage([], 2)).toBeNull();
   });
   it("steps zoom through the presets and clamps", () => {
     expect(stepPreviewZoom(1, 1)).toBe(1.25);
@@ -112,5 +125,5 @@ describe("print range", () => {
 });
 
 function page(index: number) {
-  return { index, number: index + 1, sheet: 1, rows: [0, 10] as [number, number], cols: [0, 5] as [number, number], repeatRows: null, repeatCols: null, scalePct: 100, paperMm: [210, 297] as [number, number], originMm: [20, 20] as [number, number], header: null, footer: null };
+  return { index, number: index + 1, sheet: 1, notes: false, rows: [0, 10] as [number, number], cols: [0, 5] as [number, number], repeatRows: null, repeatCols: null, scalePct: 100, paperMm: [210, 297] as [number, number], originMm: [20, 20] as [number, number], header: null, footer: null };
 }

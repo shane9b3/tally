@@ -17,11 +17,18 @@ number: number,
  */
 sheet: number, 
 /**
- * Rows `[first, last]` on the page (repeat rows excluded).
+ * `true` for a notes page (page setup "Notes"): it lists the
+ * sheet's notes and shows no cells, so `rows` and `cols` are
+ * `[0, 0]` and mean nothing.
+ */
+notes: boolean, 
+/**
+ * Rows `[first, last]` on the page (repeat rows excluded; unused on
+ * a notes page).
  */
 rows: [number, number], 
 /**
- * Columns `[first, last]`.
+ * Columns `[first, last]` (unused on a notes page).
  */
 cols: [number, number], 
 /**

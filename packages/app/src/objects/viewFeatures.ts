@@ -11,6 +11,7 @@ import { useDocStore } from "../stores/docStore";
 import { useUiStore } from "../stores/uiStore";
 import { useV3Store } from "../stores/v3Store";
 import { autoPageBreaks, defaultPageSetup } from "../v03";
+import { firstCellPage } from "../print/printReducer";
 import { DEFAULT_PRINT_OPTIONS } from "../print/printStore";
 import type { W5Shell } from "./shell";
 import { clampRatio, type SplitAxis } from "@tally/grid";
@@ -283,7 +284,7 @@ export class ViewFeatures {
     if (!info) return null;
     try {
       const layout = await clientV4(this.ctl).printLayout(info.doc, { ...DEFAULT_PRINT_OPTIONS, activeSheet: this.ctl.sheet });
-      const p = layout.pages.find((pg) => pg.sheet === this.ctl.sheet) ?? layout.pages[0];
+      const p = firstCellPage(layout.pages, this.ctl.sheet);
       if (p) return p;
     } catch {
       // Estimate below.

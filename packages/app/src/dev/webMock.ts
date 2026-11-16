@@ -1395,10 +1395,12 @@ export class WebMockClient extends MockClient {
     const layout = await this.sheetLayout(j.doc, p.sheet);
     const v3 = this.ext.get(j.doc)?.v3;
     // "Hide when printing" (the engine's `lcl_HidePrint` port) empties the text.
-    const cells = (await this.cellsOf(j.doc, p.sheet, { r0: p.rows[0], c0: p.cols[0], r1: p.rows[1], c1: p.cols[1] })).map((v) => (v3 && isHidePrint(v3, p.sheet, v.r, v.c) ? { ...v, text: "", kind: "empty" as const, num: null } : v));
+    // A notes page has no cells (its rows / cols mean nothing).
+    const shown = p.notes ? [] : await this.cellsOf(j.doc, p.sheet, { r0: p.rows[0], c0: p.cols[0], r1: p.rows[1], c1: p.cols[1] });
+    const cells = shown.map((v) => (v3 && isHidePrint(v3, p.sheet, v.r, v.c) ? { ...v, text: "", kind: "empty" as const, num: null } : v));
     this.recordedCalls.push({ type: "printJobPagePng", job, page, texts: cells.filter((v) => v.text !== "").map((v) => ({ r: v.r, c: v.c, text: v.text })) });
     const boxes = (this.docExt(j.doc).w5.charts[p.sheet] ?? [])
-      .filter((c) => c.anchor.r >= p.rows[0] && c.anchor.r <= p.rows[1] && c.anchor.c >= p.cols[0] && c.anchor.c <= p.cols[1])
+      .filter((c) => !p.notes && c.anchor.r >= p.rows[0] && c.anchor.r <= p.rows[1] && c.anchor.c >= p.cols[0] && c.anchor.c <= p.cols[1])
       .map((c) => ({ id: c.id, x: p.originMm[0] + 10 + (c.anchor.c - p.cols[0]) * 20, y: p.originMm[1] + 10 + (c.anchor.r - p.rows[0]) * 6, w: c.anchor.widthMm * (p.scalePct / 100), h: c.anchor.heightMm * (p.scalePct / 100) }));
     const png = renderPagePng(p, cells, layout, Math.min(dpi, 200), j.charts, boxes);
     return png || BLANK_PNG;

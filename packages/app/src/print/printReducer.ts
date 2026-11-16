@@ -3,7 +3,7 @@
  * fit-to-window zoom, the raster dpi for a zoom level, and the print range
  * (sheet scope and the "1-3,5" page list) turned into engine options.
  */
-import type { PrintOptionsDto, RangeDto } from "@tally/bridge";
+import type { PrintOptionsDto, PrintPageDto, RangeDto } from "@tally/bridge";
 
 /** Zoom steps of the preview (1 = 96 dpi, the page at its paper size). */
 export const PREVIEW_ZOOMS = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3] as const;
@@ -15,6 +15,16 @@ export const THUMB_DPI = 24;
 export const MAX_DPI = 600;
 /** Thumbnails rendered around the current page. */
 export const THUMB_WINDOW = 12;
+
+/**
+ * The first page that shows cells: `sheet`'s, else the job's. Notes pages
+ * (page setup "Notes") list notes and have no rows or columns, so their
+ * `rows` / `cols` must not be read as a cell range.
+ */
+export function firstCellPage(pages: readonly PrintPageDto[], sheet: number): PrintPageDto | null {
+  const cells = pages.filter((p) => !p.notes);
+  return cells.find((p) => p.sheet === sheet) ?? cells[0] ?? null;
+}
 
 export function clampPage(page: number, count: number): number {
   if (count <= 0) return 0;

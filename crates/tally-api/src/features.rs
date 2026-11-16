@@ -724,7 +724,7 @@ pub struct HeaderFooterArea {
 }
 
 /// A header or footer; placeholders `&[PAGE]`, `&[PAGES]`, `&[SHEET]`,
-/// `&[FILE]`, `&[DATE]`, `&[TIME]`.
+/// `&[FILE]`, `&[PATH]`, `&[DATE]`, `&[TIME]`.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]

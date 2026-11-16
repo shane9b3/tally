@@ -2,7 +2,7 @@
 
 /**
  * A header or footer; placeholders `&[PAGE]`, `&[PAGES]`, `&[SHEET]`,
- * `&[FILE]`, `&[DATE]`, `&[TIME]`.
+ * `&[FILE]`, `&[PATH]`, `&[DATE]`, `&[TIME]`.
  */
 export type HeaderFooter = { 
 /**

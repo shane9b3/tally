@@ -527,6 +527,7 @@ export function printPagesFor(sheet: number, setup: PageSetupDto, layout: SheetL
       index: idx,
       number: firstNumber + pages.length,
       sheet,
+      notes: false,
       rows: [r0, r1],
       cols: [c0, c1],
       repeatRows: setup.repeatRows,
