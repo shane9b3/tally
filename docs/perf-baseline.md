@@ -41,7 +41,7 @@ everything `EngineService::open` / `save` does, i.e. read, build, recalc):
 | CSV import, 1M rows x 6 cols (47 MB) | 1.15 - 1.35 s (was 7.6 s; 3.9 s on the same machine on 2026-10-27 before the change) | about 35 - 40 MB/s |
 | Peak RSS, CSV 1M rows | 0.61 - 0.74 GB (was 0.94 - 1.12 GB) | |
 | `chart_data`, line chart with 10k points | 2.6 - 3.7 ms (cache miss after an edit); 0.3 ms cached | gate: < 20 ms |
-| PDF export, 20 pages (1060 rows x 6 cols) | 11 - 12 ms | `prepare_print_job` + `print_job_pdf`; gate: < 1 s |
+| PDF export, 20 pages (1060 rows x 6 cols) | 16 - 17 ms (11 - 12 ms before default text printed at 11 pt, 2026-11-16) | `prepare_print_job` + `print_job_pdf`; gate: < 1 s |
 | DataPilot refresh, 100k source rows | 29 ms (create 29 - 33 ms) | 2 row fields (12 x 50 items), 1 column field (4), Sum + Count, `RefreshPivot` through `apply`; gate: < 500 ms |
 
 ### Multithreaded recalc (2026-11-10)
@@ -250,7 +250,7 @@ should also be investigated.
 | Peak RSS opening 50 MB | < 2 GB (aim < 1 GB; 0.9 - 1.1 GB now) |
 | CSV import, 1M rows | < 3 s (1.2 - 1.35 s now) |
 | `chart_data`, 10k points | < 20 ms (about 3 ms) |
-| PDF export, 20 pages | < 1 s (about 12 ms) |
+| PDF export, 20 pages | < 1 s (about 16 ms) |
 | DataPilot refresh, 100k rows | < 500 ms (about 30 ms) |
 | Grid scroll on the real webview, 1M cells | p95 frame < 20 ms, p99 < 34 ms, no frame > 100 ms during a 10-row/frame fling |
 | Grid scroll in headless Chromium (this spec) | p95 < 67 ms, p99 < 100 ms, to catch regressions only |

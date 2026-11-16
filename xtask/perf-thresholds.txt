@@ -22,16 +22,20 @@
 # run's best. Still one sample: all limits stay provisional.
 # Calibrate: limit = 1.75 x the slowest best-of-runs seen in at least
 # three CI runs on that OS, rounded up, and drop the `?`.
-# Calibrated 2026-11-16 for ubuntu-24.04 and windows-latest from three CI
-# runs (2026-11-13 twice, 2026-11-16), with a floor of 10 ms for the
-# two workloads that take about 5 ms. macos-15 has two samples only (its
-# job got no runner twice on 2026-11-16) and stays provisional.
+# Calibrated 2026-11-16: ubuntu-24.04 from three CI runs (2026-11-13
+# twice, 2026-11-16), windows-latest from four (the fourth ran on a
+# runner about 25 % slower in every workload), macos-15 from three, with
+# a floor of 10 ms for the two workloads that take about 5 ms.
+# pdf_20p is provisional again on every OS: since 2026-11-16 default-size
+# text prints at 11 pt, as on screen, not 10 pt, which takes the workload
+# from 11 ms to 16 ms on the M4 Pro (one CI sample since: macOS 26 ms,
+# Linux 31 ms, Windows 46 ms on the slow runner).
 #
 # workload       size  target_ms  macos   linux   windows   # M4 Pro best
-recalc_chains    full  500        200?    105     130       # 19.7 ms
-recalc_mix       full  3000       900?    765     630       # 159 ms
-incremental_10k  full  20         10?     10      10        # 1.1 ms
-open_ods_50mb    full  10000      32000?  22000   24000     # 5.6 s
-chart_10k        full  20         10?     10      10        # 2.5 ms
-pdf_20p          full  1000       50?     50      45        # 10.8 ms
-pivot_100k       full  500        140?    125     110       # 28.4 ms
+recalc_chains    full  500        145     105     155       # 19.7 ms
+recalc_mix       full  3000       790     765     800       # 159 ms
+incremental_10k  full  20         10      10      10        # 1.1 ms
+open_ods_50mb    full  10000      29000   22000   30500     # 5.6 s
+chart_10k        full  20         10      10      13        # 2.5 ms
+pdf_20p          full  1000       50?     55?     80?       # 16.4 ms
+pivot_100k       full  500        120     125     140       # 28.4 ms
