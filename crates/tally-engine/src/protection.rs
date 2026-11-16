@@ -734,14 +734,63 @@ pub fn all_unlocked(wb: &Workbook, range: &CellRange) -> bool {
     true
 }
 
-/// Refuses content edits of locked cells on a protected sheet.
+/// Refuses content edits of locked cells on a protected sheet, and of
+/// unlocked cells there that lie in the ranges of the scenario being
+/// shown when it has both "Prevent changes" and "Copy back" (AOO
+/// `ScTable::IsBlockEditable`: `SC_SCENARIO_PROTECT` with
+/// `SC_SCENARIO_TWOWAY` on the active scenario).
 pub fn check_edit(wb: &Workbook, ranges: &[CellRange]) -> Result<(), ApiError> {
+    check_cells_unlocked(wb, ranges)?;
+    for r in ranges {
+        if sheet_protection(wb, r.sheet).is_none() {
+            continue;
+        }
+        let frozen = wb.sheet(r.sheet).is_some_and(|s| {
+            s.meta.scenarios.iter().any(|sc| {
+                sc.data.active
+                    && sc.data.prevent_changes
+                    && sc.data.copy_back
+                    && sc
+                        .data
+                        .ranges
+                        .iter()
+                        .any(|x| x.r0 <= r.r1 && r.r0 <= x.r1 && x.c0 <= r.c1 && r.c0 <= x.c1)
+            })
+        });
+        if frozen {
+            return Err(protected_error());
+        }
+    }
+    Ok(())
+}
+
+/// Refuses locked cells on a protected sheet, whatever the scenarios say:
+/// the test for showing a scenario (AOO `ScTable::TestCopyScenarioTo`
+/// looks at the cell protection only).
+pub fn check_cells_unlocked(wb: &Workbook, ranges: &[CellRange]) -> Result<(), ApiError> {
     for r in ranges {
         if sheet_protection(wb, r.sheet).is_some() && !all_unlocked(wb, r) {
             return Err(protected_error());
         }
     }
     Ok(())
+}
+
+/// Refuses changing or deleting a "Prevent changes" scenario of a
+/// protected sheet (AOO opens the Delete / Properties menu of the
+/// Navigator's scenario list only when not both are set,
+/// `ScCellShell::GetState` `SID_SELECT_SCENARIO` and
+/// `ScScenarioListBox::Notify`).
+pub fn check_scenario_change(
+    wb: &Workbook,
+    sheet: SheetId,
+    prevent_changes: bool,
+) -> Result<(), ApiError> {
+    if prevent_changes && sheet_protection(wb, sheet).is_some() {
+        Err(protected_error())
+    } else {
+        Ok(())
+    }
 }
 
 /// Refuses formatting on a protected sheet unless allowed or unlocked.

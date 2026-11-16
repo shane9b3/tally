@@ -684,6 +684,20 @@ fn test_passes(t: &Test, v: &Value, input: &str, cs: bool) -> bool {
             text: o,
         } => {
             let t = || fold(input, cs);
+            // An empty value is never found (AOO `String::Search` gives
+            // `STRING_NOTFOUND` for an empty search string): the three
+            // positive conditions fail, the negated ones pass.
+            if o.is_empty() {
+                match op {
+                    StdFilterOpData::Contains
+                    | StdFilterOpData::BeginsWith
+                    | StdFilterOpData::EndsWith => return false,
+                    StdFilterOpData::NotContains
+                    | StdFilterOpData::NotBeginsWith
+                    | StdFilterOpData::NotEndsWith => return true,
+                    _ => {}
+                }
+            }
             match op {
                 StdFilterOpData::Contains => return t().contains(o.as_str()),
                 StdFilterOpData::NotContains => return !t().contains(o.as_str()),
@@ -1667,20 +1681,37 @@ pub fn consolidate(
     // (row key, col key) → the running aggregate (and, with links, the
     // source cells).
     let mut cells: BTreeMap<(usize, usize), (Agg, Vec<CellAddr>)> = BTreeMap::new();
+    // The top-left cell, when both label kinds are on and every source
+    // has the same text there (AOO `aCornerText`).
+    let mut corner: Option<String> = None;
     for s in &srcs {
         let r_start = s.r0 + u32::from(by_col_labels);
         let c_start = s.c0 + u32::from(by_row_labels);
-        let col_ix: Vec<usize> = (c_start..=s.c1)
+        if by_row_labels && by_col_labels {
+            let t = display_text(wb, CellAddr::new(s.sheet, s.r0, s.c0));
+            match &corner {
+                Some(c) if *c != t => corner = Some(String::new()),
+                Some(_) => {}
+                None => corner = Some(t),
+            }
+        }
+        // A row or column whose label is empty is left out, data and all
+        // (AOO `ScConsData::AddFields` / `AddData`: `if (aTitle.Len())`,
+        // else `SC_CONS_NOTFOUND`).
+        let col_ix: Vec<Option<usize>> = (c_start..=s.c1)
             .map(|c| {
                 let ck = if by_col_labels {
                     display_text(wb, CellAddr::new(s.sheet, s.r0, c))
                 } else {
                     (c - c_start).to_string()
                 };
-                *col_index.entry(ck.clone()).or_insert_with(|| {
+                if ck.is_empty() {
+                    return None;
+                }
+                Some(*col_index.entry(ck.clone()).or_insert_with(|| {
                     col_keys.push(ck);
                     col_keys.len() - 1
-                })
+                }))
             })
             .collect();
         for r in r_start..=s.r1 {
@@ -1689,13 +1720,17 @@ pub fn consolidate(
             } else {
                 (r - r_start).to_string()
             };
+            if rk.is_empty() {
+                continue;
+            }
             let ri = *row_index.entry(rk.clone()).or_insert_with(|| {
                 row_keys.push(rk);
                 row_keys.len() - 1
             });
             for (i, c) in (c_start..=s.c1).enumerate() {
+                let Some(ci) = col_ix[i] else { continue };
                 let a = CellAddr::new(s.sheet, r, c);
-                let e = cells.entry((ri, col_ix[i])).or_default();
+                let e = cells.entry((ri, ci)).or_default();
                 e.0.push(&wb.value(a));
                 if link {
                     e.1.push(a);
@@ -1729,6 +1764,9 @@ pub fn consolidate(
     clear_range_content(wb, target);
     let r_off = dest.r + u32::from(by_col_labels);
     let c_off = dest.c + u32::from(by_row_labels);
+    if let Some(c) = corner.filter(|c| !c.is_empty()) {
+        wb.set_value(CellAddr::new(dest.sheet, dest.r, dest.c), Value::text(c));
+    }
     if by_col_labels {
         for (ci, k) in col_keys.iter().enumerate() {
             wb.set_value(
@@ -1823,36 +1861,65 @@ pub fn split_fields(text: &str, o: &CsvImportOptionsDto) -> Vec<String> {
         }
         return out;
     }
+    // AOO `ScImportExport::ScanNextFieldFromString` (impex.cxx), field by
+    // field while text is left: a quote opens a string only as the first
+    // character of a field (a doubled quote inside is one quote,
+    // `lcl_ScanString` with `DQM_ESCAPE`); what follows the closing quote
+    // up to the separator is appended as it is; anywhere else a quote is
+    // an ordinary character. A separator at the very end starts no field.
     let seps: Vec<char> = o.delimiters.chars().collect();
     let quote = o.quote.chars().next();
+    let p: Vec<char> = text.chars().collect();
+    let n = p.len();
     let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_quote = false;
-    let mut chars = text.chars().peekable();
-    let mut last_was_sep = false;
-    while let Some(c) = chars.next() {
-        if Some(c) == quote {
-            if in_quote && chars.peek() == quote.as_ref() {
-                cur.push(c);
-                chars.next();
-            } else {
-                in_quote = !in_quote;
+    let mut i = 0;
+    while i < n {
+        let mut cur = String::new();
+        if Some(p[i]) == quote {
+            i += 1;
+            loop {
+                let mut doubled = false;
+                let p0 = i;
+                while i < n {
+                    if Some(p[i]) == quote {
+                        i += 1;
+                        if i < n && Some(p[i]) == quote {
+                            i += 1;
+                            doubled = true;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+                if p0 < i {
+                    // Without the closing quote (or the second of a pair).
+                    let end = if i < n || Some(p[i - 1]) == quote {
+                        i - 1
+                    } else {
+                        i
+                    };
+                    cur.extend(&p[p0..end]);
+                }
+                if !doubled {
+                    break;
+                }
             }
-            last_was_sep = false;
-            continue;
         }
-        if !in_quote && seps.contains(&c) {
-            if o.merge_delimiters && last_was_sep {
-                continue;
+        let p1 = i;
+        while i < n && !seps.contains(&p[i]) {
+            i += 1;
+        }
+        cur.extend(&p[p1..i]);
+        if i < n {
+            i += 1;
+        }
+        if o.merge_delimiters {
+            while i < n && seps.contains(&p[i]) {
+                i += 1;
             }
-            out.push(std::mem::take(&mut cur));
-            last_was_sep = true;
-            continue;
         }
-        last_was_sep = false;
-        cur.push(c);
+        out.push(cur);
     }
-    out.push(cur);
     if o.trim {
         for f in &mut out {
             *f = f.trim().to_string();
@@ -2159,6 +2226,36 @@ pub fn delete_contents(
             changes.push(Change::Range(capture_range(wb, *r, false, true)));
             crate::undo::clear_range_styles(wb, *r);
         }
+    }
+    if what.formats {
+        // AOO `ScAttrArray::DeleteArea` (the dialog's Formats box is
+        // `IDF_ATTRIB`): `RemoveAreaMerge` dissolves every merge whose
+        // top-left cell is in the range, and the default pattern takes the
+        // conditional format and the validation with it (both are cell
+        // attributes there, `ATTR_CONDITIONAL` / `ATTR_VALIDDATA`). A merge
+        // that only reaches into the range stays.
+        let cuts: Vec<tally_model::CellRangeLocal> = ranges
+            .iter()
+            .map(|r| tally_model::CellRangeLocal {
+                r0: r.r0,
+                c0: r.c0,
+                r1: r.r1,
+                c1: r.c1,
+            })
+            .collect();
+        let origin_in = |m: &tally_model::CellRangeLocal| {
+            cuts.iter()
+                .any(|l| l.r0 <= m.r0 && m.r0 <= l.r1 && l.c0 <= m.c0 && m.c0 <= l.c1)
+        };
+        changes.extend(with_meta(wb, sheet, fx, |_, meta| {
+            if meta.merges.iter().any(origin_in) {
+                Arc::make_mut(&mut meta.merges).retain(|m| !origin_in(m));
+            }
+            for l in &cuts {
+                crate::condfmt::remove_area(meta, l);
+            }
+            Ok(())
+        })?);
     }
     if what.notes {
         changes.extend(with_meta(wb, sheet, fx, |_, meta| {
@@ -2618,6 +2715,10 @@ pub fn copy_sheet(
         // Detective operations and arrows stay with the source sheet (AOO
         // copies only cells and attributes; the list is document-level).
         m.detective = Arc::default();
+        // So do the named database ranges: their names are unique in the
+        // document (AOO `ScDocument::CopyTab` only shifts the tabs of
+        // `pDBCollection`, it adds no entry).
+        m.database_ranges = Arc::default();
         // Rule formulas, charts and pivots are re-pointed: areas on the
         // source sheet now name the copy (pivot targets and outputs are
         // sheet-local, so the copied pivots stay on the copy).
@@ -3388,6 +3489,21 @@ mod tests {
             ..CsvImportOptionsDto::default()
         };
         assert_eq!(split_fields("a;\"b;c\";d", &o), vec!["a", "b;c", "d"]);
+        // AOO `ScanNextFieldFromString` (T7, review 4 L4): a quote is a
+        // string delimiter only at the start of a field.
+        assert_eq!(split_fields("ab\"c;d\"e;f", &o), vec!["ab\"c", "d\"e", "f"]);
+        // A doubled quote is one quote; text after the closing quote is
+        // appended as it is.
+        assert_eq!(
+            split_fields("\"a\"\"b\";\"c;d\"e\"f;g", &o),
+            vec!["a\"b", "c;de\"f", "g"]
+        );
+        // An unclosed string runs to the end; a separator at the very end
+        // starts no field; an empty text has no field.
+        assert_eq!(split_fields("a;\"b;c", &o), vec!["a", "b;c"]);
+        assert_eq!(split_fields("a;;b;", &o), vec!["a", "", "b"]);
+        assert_eq!(split_fields("\"\";x", &o), vec!["", "x"]);
+        assert!(split_fields("", &o).is_empty());
         o.delimiters = " ".into();
         o.merge_delimiters = true;
         assert_eq!(split_fields("a   b c", &o), vec!["a", "b", "c"]);

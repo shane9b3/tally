@@ -11,7 +11,10 @@
 //! scenario ranges.
 //!
 //! Styles are not copied with a scenario (`copy_styles` is kept for the
-//! file but has no effect); `prevent_changes` is a file flag too.
+//! file but has no effect). `prevent_changes` acts on a protected sheet
+//! only, as in AOO: with `copy_back` the shown scenario's cells cannot be
+//! edited (`protection::check_edit`), and the scenario cannot be changed
+//! or deleted.
 
 use std::sync::Arc;
 
@@ -22,7 +25,7 @@ use tally_types::{CellAddr, CellRange, SheetId, Value};
 
 use crate::ops::{check_sheet, to_range};
 use crate::ops_v03::with_meta;
-use crate::protection::check_edit;
+use crate::protection::{check_cells_unlocked, check_scenario_change};
 use crate::storage::{CellContent, ColumnStore};
 use crate::structure::{span_after, Shape};
 use crate::undo::{capture_range, clear_range_content, Change, Effects};
@@ -283,7 +286,7 @@ pub fn create(
     check_sheet(wb, sheet)?;
     check_dto(dto)?;
     let ranges = ranges_of(sheet, dto)?;
-    check_edit(wb, &ranges)?;
+    check_cells_unlocked(wb, &ranges)?;
     let cells: u64 = ranges.iter().map(|r| r.cell_count()).sum();
     if cells > MAX_SCENARIO_CELLS {
         return Err(ApiError::invalid_argument(
@@ -329,6 +332,16 @@ pub fn create(
     Ok(ch)
 }
 
+/// `true` when scenario `id` of `sheet` has "Prevent changes".
+fn prevents_changes(wb: &Workbook, sheet: SheetId, id: u32) -> bool {
+    wb.sheet(sheet).is_some_and(|s| {
+        s.meta
+            .scenarios
+            .iter()
+            .any(|x| x.id == id && x.data.prevent_changes)
+    })
+}
+
 /// `Op::UpdateScenario`: new settings, the values are kept (cells outside
 /// new ranges are dropped).
 pub fn update(
@@ -348,6 +361,7 @@ pub fn update(
         ));
     }
     check_doc_budget(wb, Some((sheet, id)), cells)?;
+    check_scenario_change(wb, sheet, prevents_changes(wb, sheet, id))?;
     with_meta(wb, sheet, fx, |_, meta| {
         let list = Arc::make_mut(&mut meta.scenarios);
         let pos = list
@@ -408,7 +422,7 @@ pub fn show(
         .collect();
     let mut all = target_ranges.clone();
     all.extend(prev_ranges.iter().copied());
-    check_edit(wb, &all)?;
+    check_cells_unlocked(wb, &all)?;
     let mut changes = union_snapshot(wb, &all);
     let copy_back = previous
         .as_ref()
@@ -448,6 +462,7 @@ pub fn delete(
     fx: &mut Effects,
 ) -> Result<Vec<Change>, ApiError> {
     check_sheet(wb, sheet)?;
+    check_scenario_change(wb, sheet, prevents_changes(wb, sheet, id))?;
     with_meta(wb, sheet, fx, |_, meta| {
         if !meta.scenarios.iter().any(|s| s.id == id) {
             return Err(ApiError::not_found(format!("no scenario {id}")));

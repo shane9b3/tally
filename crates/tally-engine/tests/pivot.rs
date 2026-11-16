@@ -516,6 +516,12 @@ fn pivot_drill_down_sheet() {
     assert_eq!(f.value_on(new, "D2"), Value::text("Q1"));
     assert_eq!(f.value_on(new, "A4"), Value::text("East"));
     assert_eq!(f.value_on(new, "A5"), Value::Empty, "three East/Q1 rows");
+    // T6: the next default sheet name, at the tab of the pivot's sheet
+    // (AOO `ScDBFunc::ShowDataPilotSourceData`).
+    let sheets = f.svc.info(f.doc).unwrap().sheets;
+    assert_eq!(sheets.len(), 2);
+    assert_eq!((sheets[0].id, sheets[0].name.as_str()), (new, "Sheet2"));
+    assert_eq!(sheets[1].id, f.sheet);
     f.svc.undo(f.doc).unwrap();
     assert!(f.svc.document(f.doc).unwrap().wb.sheet(new).is_none());
 }

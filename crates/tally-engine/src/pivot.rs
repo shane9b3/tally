@@ -3784,9 +3784,12 @@ pub fn drill_down(
     if matches.len() as u64 + 1 > u64::from(MAX_ROWS) {
         return Err(ApiError::invalid_argument("too many rows"));
     }
-    let name = wb.unique_sheet_name(&format!("{}_Data", p.data.name), None);
-    let tab = wb.tab_of(holder).unwrap_or(0) + 1;
-    let new = wb.add_sheet(Some(&name), Some(tab));
+    // AOO `ScDBFunc::ShowDataPilotSourceData`: the sheet gets the next
+    // default name (`CreateValidTabName` of an empty name) and is
+    // inserted at the tab of the sheet being viewed, which a double-click
+    // on the table makes the table's own sheet; that sheet moves right.
+    let tab = wb.tab_of(holder).unwrap_or(0);
+    let new = wb.add_sheet(None, Some(tab));
     for (ci, n) in cache.names.iter().enumerate() {
         wb.set_value(CellAddr::new(new, 0, ci as u32), Value::text(n.as_str()));
     }
