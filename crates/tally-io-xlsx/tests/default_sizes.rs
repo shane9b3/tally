@@ -321,6 +321,85 @@ fn a_million_rows_are_runs_not_rows() {
     assert!(t.elapsed().as_secs() < 30, "took {:?}", t.elapsed());
 }
 
+/// Security review of 2026-11-17, M1: rows given again and again made the
+/// reader's memory grow with the file. The reader now keeps one entry per
+/// row of the sheet from the first row that is out of order (unit test
+/// `sheet::tests::repeated_rows_are_bounded_by_the_sheet` checks what it
+/// holds); here, that the last `<row>` of each row counts.
+#[test]
+fn millions_of_repeated_rows_resolve_to_the_last() {
+    let mut rows = String::with_capacity(64 * 1024 * 1024);
+    // Rows of alternating heights (no two merge), then two rows three
+    // million times, then a descending tail.
+    for r in 1..=200_000u32 {
+        let ht = if r % 2 == 0 { 15 } else { 30 };
+        rows.push_str(&format!(r#"<row r="{r}" ht="{ht}"/>"#));
+    }
+    for i in 0..3_000_000u32 {
+        rows.push_str(if i % 2 == 0 {
+            r#"<row r="1" ht="45"/>"#
+        } else {
+            r#"<row r="2" hidden="1"/>"#
+        });
+    }
+    for r in (5..=8u32).rev() {
+        rows.push_str(&format!(r#"<row r="{r}" ht="60"/>"#));
+    }
+    let bytes = package(&ws(r#"<sheetFormatPr defaultRowHeight="15"/>"#, "", &rows));
+    drop(rows);
+    let t = Instant::now();
+    let s = read_xlsx(Cursor::new(bytes), &Limits::default())
+        .unwrap()
+        .sheets
+        .remove(0);
+    assert!(t.elapsed().as_secs() < 30, "took {:?}", t.elapsed());
+    assert_eq!(
+        s.row_heights[..6],
+        [
+            run(0, 0, 1588, false),
+            run(1, 1, 529, true),
+            run(2, 2, 1058, false),
+            run(3, 3, 529, false),
+            run(4, 7, 2117, false),
+            run(8, 8, 1058, false),
+        ]
+    );
+    // Rows 10 … 200,000 alternate; the rest of the sheet is one run that
+    // starts with row 200,000 (15 pt, like the default).
+    assert_eq!(s.row_heights.len(), 6 + (200_000 - 9));
+    assert_eq!(
+        s.row_heights.last(),
+        Some(&run(199_999, LAST_ROW, 529, false))
+    );
+}
+
+/// A size that is not 0 but rounds to nothing is not "hidden": it is
+/// ignored, like any other size that cannot be used.
+#[test]
+fn only_an_explicit_zero_hides() {
+    let s = read(&ws(
+        r#"<sheetFormatPr defaultRowHeight="0.0000001"/>"#,
+        r#"<col min="2" max="2" width="0.0000001" customWidth="1"/><col min="4" max="4" width="0.0"/>"#,
+        r#"<row r="2" ht="0.0000001" customHeight="1"/><row r="4" ht="0.00"/>"#,
+    ));
+    assert_eq!(
+        s.row_heights,
+        [
+            run(0, 2, 529, false),
+            run(3, 3, 529, true),
+            run(4, LAST_ROW, 529, false)
+        ]
+    );
+    assert_eq!(
+        s.col_widths,
+        [
+            run(0, 2, 1693, false),
+            run(3, 3, 1693, true),
+            run(4, LAST_COL, 1693, false)
+        ]
+    );
+}
+
 #[test]
 fn size_runs_count_against_the_cell_limit() {
     // 20,000 rows of alternating heights are 20,000 runs.
@@ -468,6 +547,7 @@ fn sizes_set_in_tally_round_trip_next_to_the_defaults() {
             run(3, 3, 1693, false), // 64 px: Excel's default, not Tally's
             run(5, 6, 2646, true),  // hidden, of the default width
             run(8, 8, 3810, true),
+            run(15, 15, 1693, true), // hidden at 64 px
         ],
         row_heights: vec![
             run(1, 1, 1058, false), // 40 px
@@ -593,6 +673,117 @@ fn an_excel_sheet_round_trips_through_tally() {
     let back = round_trip(&plain);
     assert_eq!(back.sheets[0].row_heights, [run(0, LAST_ROW, 529, false)]);
     assert_eq!(back.sheets[0].col_widths, [run(0, LAST_COL, 1693, false)]);
+}
+
+#[test]
+fn rows_hidden_to_the_end_of_the_sheet_round_trip() {
+    // Two shown rows, then everything hidden (Excel's "hide the unused
+    // rows"), with a cell and a formatted blank among the hidden rows and
+    // one shown row further down.
+    let rows = vec![
+        run(0, 0, 529, false),
+        run(1, 1, 1058, false),
+        run(2, 49, 529, true),
+        run(50, 50, 529, false),
+        run(51, LAST_ROW, 529, true),
+    ];
+    let mut wb = book(SheetData {
+        name: "S".into(),
+        cells: vec![cell(0, 0, 1.0), cell(10, 0, 2.0), cell(50, 1, 3.0)],
+        row_heights: rows.clone(),
+        style_runs: vec![StyleRun {
+            col: 2,
+            start_row: 20,
+            end_row: 21,
+            style: 0,
+        }],
+        ..SheetData::default()
+    });
+    wb.styles = vec![StyleData {
+        fill: Some(0xff00_00ff),
+        ..StyleData::default()
+    }];
+    let mut out = Cursor::new(Vec::new());
+    let report = tally_io_xlsx::write_xlsx(&wb, &mut out).unwrap();
+    assert_eq!(report.warnings, Vec::<String>::new());
+    let bytes = out.into_inner();
+    let xml = sheet_xml(&bytes);
+    let format = element(&xml, "sheetFormatPr");
+    assert!(format.contains(r#"zeroHeight="1""#), "{format}");
+    // The three shown rows and the three hidden ones that have content.
+    assert_eq!(xml.matches("<row ").count(), 6, "{xml}");
+    assert!(xml.len() < 4000, "{} bytes", xml.len());
+
+    let back = read_xlsx(Cursor::new(bytes), &Limits::default()).unwrap();
+    assert_eq!(back.sheets[0].row_heights, rows);
+    assert_eq!(back.sheets[0].cells.len(), 5);
+    let again = round_trip(&back);
+    assert_eq!(again.sheets[0].row_heights, rows);
+
+    // Read from a file that says it with `zeroHeight`, and back.
+    let source = ws(
+        r#"<sheetFormatPr defaultRowHeight="15" zeroHeight="1"/>"#,
+        "",
+        r#"<row r="1"><c r="A1"><v>1</v></c></row><row r="2" ht="30" customHeight="1"/>"#,
+    );
+    let first = read_xlsx(Cursor::new(package(&source)), &Limits::default()).unwrap();
+    let want = [
+        run(0, 0, 529, false),
+        run(1, 1, 1058, false),
+        run(2, LAST_ROW, 529, true),
+    ];
+    assert_eq!(first.sheets[0].row_heights, want);
+    let bytes = to_bytes(&first);
+    assert_eq!(sheet_xml(&bytes).matches("<row ").count(), 2);
+    let second = read_xlsx(Cursor::new(bytes), &Limits::default()).unwrap();
+    assert_eq!(second.sheets[0].row_heights, want);
+}
+
+#[test]
+fn a_sheet_with_rows_or_columns_missing_from_its_runs_keeps_its_default() {
+    // What inserting and deleting leaves of a sheet read from Excel: a few
+    // rows and columns without a run among a million with the file's
+    // size.
+    let wb = book(SheetData {
+        name: "S".into(),
+        cells: vec![cell(0, 0, 1.0), cell(3, 0, 2.0)],
+        row_heights: vec![
+            run(0, 2, 529, false),
+            run(5, 5, 1058, false),
+            run(6, LAST_ROW - 1, 529, false),
+        ],
+        col_widths: vec![run(0, 1, 1693, false), run(4, LAST_COL - 2, 1693, false)],
+        ..SheetData::default()
+    });
+    let mut out = Cursor::new(Vec::new());
+    let report = tally_io_xlsx::write_xlsx(&wb, &mut out).unwrap();
+    assert_eq!(report.warnings, Vec::<String>::new());
+    let bytes = out.into_inner();
+    let xml = sheet_xml(&bytes);
+    assert_eq!(
+        element(&xml, "sheetFormatPr"),
+        r#"<sheetFormatPr defaultRowHeight="15"/>"#
+    );
+    // Rows 4, 5 (no run), 6 (30 pt) and the last one; row 1 has a cell.
+    assert_eq!(xml.matches("<row ").count(), 5, "{xml}");
+    assert_eq!(xml.matches("<col ").count(), 2, "{xml}");
+    let back = read_xlsx(Cursor::new(bytes), &Limits::default()).unwrap();
+    // The rows without a run come back as rows of 24 px; the columns
+    // without one as columns without one (100 px).
+    assert_eq!(
+        back.sheets[0].row_heights,
+        [
+            run(0, 2, 529, false),
+            run(3, 4, 635, false),
+            run(5, 5, 1058, false),
+            run(6, LAST_ROW - 1, 529, false),
+            run(LAST_ROW, LAST_ROW, 635, false),
+        ]
+    );
+    assert_eq!(back.sheets[0].col_widths, wb.sheets[0].col_widths);
+    let again = round_trip(&back);
+    assert_eq!(again.sheets[0].row_heights, back.sheets[0].row_heights);
+    assert_eq!(again.sheets[0].col_widths, back.sheets[0].col_widths);
 }
 
 /// A 1 × 1 px PNG.

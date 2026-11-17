@@ -178,10 +178,7 @@ fn sample() -> WorkbookData {
             DimRun {
                 start: 7,
                 end: 7,
-                // A hidden column of the default width (a hidden column
-                // that is 64 px wide is written with width 0, as Excel
-                // does, and comes back at the default width).
-                size_hmm: 2646,
+                size_hmm: 1693,
                 hidden: true,
             },
         ],

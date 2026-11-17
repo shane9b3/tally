@@ -75,6 +75,118 @@ struct RowRun {
     hidden: bool,
 }
 
+/// A size attribute (`ht`, `width`, `defaultRowHeight`) as stored.
+enum Stored {
+    /// Absent, out of range, not a number, or so small that it rounds to
+    /// nothing: ignored.
+    Unusable,
+    /// Exactly 0: hidden.
+    Zero,
+    /// A size, 1/100 mm (never 0).
+    Size(u32),
+}
+
+fn stored(value: Option<f64>, max: f64, to_hmm: impl Fn(f64) -> u32) -> Stored {
+    match value {
+        Some(0.0) => Stored::Zero,
+        Some(v) if v > 0.0 && v <= max => match to_hmm(v) {
+            0 => Stored::Unusable,
+            size => Stored::Size(size),
+        },
+        _ => Stored::Unusable,
+    }
+}
+
+/// One row of the per-row table the reader falls back to when `<row>`
+/// elements are out of order or repeated (`RowSizes::table`): 0 for a
+/// row without an element, else these bits and the height (1/100 mm) in
+/// the rest.
+const ROW_PRESENT: u32 = 1 << 31;
+const ROW_HIDDEN: u32 = 1 << 30;
+const ROW_SIZED: u32 = 1 << 29;
+const ROW_SIZE_MASK: u32 = ROW_SIZED - 1;
+
+/// The sizes of the `<row>` elements of a sheet, in memory bounded by
+/// the sheet and not by the file.
+#[derive(Default)]
+struct RowSizes {
+    /// The elements as runs, ascending: all of them as long as the file
+    /// gives its rows in ascending order (consecutive equal rows share a
+    /// run, so a million rows of one height are one entry).
+    runs: Vec<RowRun>,
+    /// Once a `<row>` came out of order or twice: one entry per row of the
+    /// sheet (`ROW_PRESENT` …), the last element of a row counting. It is
+    /// allocated once (4 MiB) and `runs` is empty from then on, so rows
+    /// given again and again cost no memory.
+    table: Option<Vec<u32>>,
+}
+
+impl RowSizes {
+    /// Records the `<row>` of `row` (inside the sheet): its height
+    /// (`None`: the sheet's default) and whether it is hidden.
+    fn add(&mut self, row: u32, size: Option<u32>, hidden: bool) {
+        if let Some(table) = &mut self.table {
+            if let Some(slot) = table.get_mut(row as usize) {
+                *slot = pack_row(size, hidden);
+            }
+            return;
+        }
+        match self.runs.last_mut() {
+            Some(last) if row <= last.end => {
+                let mut table = vec![0u32; MAX_ROWS as usize];
+                for r in std::mem::take(&mut self.runs) {
+                    let packed = pack_row(r.size, r.hidden);
+                    let end = (r.end as usize).min(table.len() - 1);
+                    if let Some(slots) = table.get_mut(r.start as usize..=end) {
+                        slots.fill(packed);
+                    }
+                }
+                if let Some(slot) = table.get_mut(row as usize) {
+                    *slot = pack_row(size, hidden);
+                }
+                self.table = Some(table);
+            }
+            Some(last) if last.end + 1 == row && last.size == size && last.hidden == hidden => {
+                last.end = row;
+            }
+            _ => self.runs.push(RowRun {
+                start: row,
+                end: row,
+                size,
+                hidden,
+            }),
+        }
+    }
+
+    /// The elements as ascending runs.
+    fn into_runs(self) -> Vec<RowRun> {
+        let Some(table) = self.table else {
+            return self.runs;
+        };
+        let mut runs: Vec<RowRun> = Vec::new();
+        for (row, &packed) in table.iter().enumerate() {
+            if packed & ROW_PRESENT == 0 {
+                continue;
+            }
+            let row = row as u32;
+            let size = (packed & ROW_SIZED != 0).then_some(packed & ROW_SIZE_MASK);
+            let hidden = packed & ROW_HIDDEN != 0;
+            match runs.last_mut() {
+                Some(last) if last.end + 1 == row && last.size == size && last.hidden == hidden => {
+                    last.end = row;
+                }
+                _ => runs.push(RowRun {
+                    start: row,
+                    end: row,
+                    size,
+                    hidden,
+                }),
+            }
+        }
+        runs
+    }
+}
+
 /// The width (`None`: the sheet's default) and hidden flag of a `<col>`.
 type ColSize = (Option<u32>, bool);
 
@@ -180,10 +292,8 @@ struct State<'a, 'b> {
     /// `sheetFormatPr defaultColWidth` and `baseColWidth` (characters).
     default_col_chars: Option<f64>,
     base_col_chars: Option<u32>,
-    /// The `<row>` elements of the sheet, as runs.
-    rows: Vec<RowRun>,
-    /// `rows` is in ascending order without overlaps.
-    rows_sorted: bool,
+    /// The `<row>` elements of the sheet.
+    rows: RowSizes,
     /// `<col>` entries: (first, last, size), in file order.
     cols: Vec<(u32, u32, ColSize)>,
     /// Next implied row (0-based) for `<row>` without `r`.
@@ -218,8 +328,7 @@ pub(crate) fn parse_sheet<R: BufRead>(
         default_row_hidden: false,
         default_col_chars: None,
         base_col_chars: None,
-        rows: Vec::new(),
-        rows_sorted: true,
+        rows: RowSizes::default(),
         cols: Vec::new(),
         next_row: 0,
         row: 0,
@@ -518,6 +627,18 @@ pub(crate) fn parse_range(s: &str) -> Option<CellRangeLocal> {
     })
 }
 
+/// A `<row>` as an entry of the per-row table.
+fn pack_row(size: Option<u32>, hidden: bool) -> u32 {
+    let mut packed = ROW_PRESENT;
+    if hidden {
+        packed |= ROW_HIDDEN;
+    }
+    if let Some(size) = size {
+        packed |= ROW_SIZED | size.min(ROW_SIZE_MASK);
+    }
+    packed
+}
+
 /// Appends a run, merging with the previous one when contiguous and equal.
 fn push_run(runs: &mut Vec<DimRun>, start: u32, end: u32, size_hmm: u32, hidden: bool) {
     if let Some(last) = runs.last_mut() {
@@ -565,70 +686,24 @@ impl State<'_, '_> {
     /// of their own. Values out of range are ignored.
     fn sheet_format(&mut self, e: &Elem) {
         let mut hidden = e.attr_local("zeroHeight").is_some_and(parse_bool);
-        let height = attr_f64(e, "defaultRowHeight")
-            .filter(|h| *h >= 0.0 && *h <= MAX_ROW_HEIGHT_PT)
-            .map(pt_to_hmm);
+        let height = stored(
+            attr_f64(e, "defaultRowHeight"),
+            MAX_ROW_HEIGHT_PT,
+            pt_to_hmm,
+        );
         self.default_row_hmm = match height {
-            // A default height of 0 hides the rows that take it.
-            Some(0) => {
+            // A default height of exactly 0 hides the rows that take it.
+            Stored::Zero => {
                 hidden = true;
                 DEFAULT_ROW_HEIGHT_HMM
             }
-            Some(h) => h,
-            None => DEFAULT_ROW_HEIGHT_HMM,
+            Stored::Size(h) => h,
+            Stored::Unusable => DEFAULT_ROW_HEIGHT_HMM,
         };
         self.default_row_hidden = hidden;
         self.default_col_chars =
             attr_f64(e, "defaultColWidth").filter(|w| *w > 0.0 && *w <= MAX_COL_WIDTH_CHARS);
         self.base_col_chars = attr_u32(e, "baseColWidth").filter(|b| (1..=255).contains(b));
-    }
-
-    /// Records the `<row>` of `row`: its height (`None`: the sheet's
-    /// default) and whether it is hidden. Consecutive equal rows share a
-    /// run, so a sheet of a million rows of one height is one entry.
-    fn add_row(&mut self, row: u32, size: Option<u32>, hidden: bool) {
-        if let Some(last) = self.rows.last_mut() {
-            if row <= last.end {
-                // Out of order or twice: sorted out by `normalise_rows`.
-                self.rows_sorted = false;
-            } else if last.end + 1 == row && last.size == size && last.hidden == hidden {
-                last.end = row;
-                return;
-            }
-        }
-        self.rows.push(RowRun {
-            start: row,
-            end: row,
-            size,
-            hidden,
-        });
-        // Rows given again and again must not grow the list without bound:
-        // a sheet has `MAX_ROWS` rows.
-        if !self.rows_sorted && self.rows.len() > 2 * MAX_ROWS as usize {
-            self.normalise_rows();
-        }
-    }
-
-    /// Puts `rows` in ascending order; of a row given more than once the
-    /// last `<row>` counts. Linear in the `<row>` elements read (a run only
-    /// covers rows that had an element).
-    fn normalise_rows(&mut self) {
-        if self.rows_sorted {
-            return;
-        }
-        let mut single: Vec<(u32, Option<u32>, bool)> = Vec::new();
-        for r in self.rows.drain(..) {
-            single.extend((r.start..=r.end).map(|row| (row, r.size, r.hidden)));
-        }
-        // Stable: the later of two entries for a row stays the later one.
-        single.sort_by_key(|r| r.0);
-        self.rows_sorted = true;
-        for (i, &(row, size, hidden)) in single.iter().enumerate() {
-            if single.get(i + 1).is_some_and(|n| n.0 == row) {
-                continue;
-            }
-            self.add_row(row, size, hidden);
-        }
     }
 
     /// The row heights of the sheet, as OpenOffice lays an Excel file out
@@ -644,12 +719,12 @@ impl State<'_, '_> {
     /// its shown rows of the default height get no entry, which is the
     /// model's automatic row of exactly that height.
     fn finish_rows(&mut self) -> Vec<DimRun> {
-        self.normalise_rows();
+        let rows = std::mem::take(&mut self.rows).into_runs();
         let (default, default_hidden) = (self.default_row_hmm, self.default_row_hidden);
         let automatic = default == APP_DEFAULT_ROW_HEIGHT_HMM && !default_hidden;
         let mut out = Vec::new();
         let mut next = 0u32;
-        for r in &self.rows {
+        for r in &rows {
             if r.start > next && !automatic {
                 push_run(&mut out, next, r.start - 1, default, default_hidden);
             }
@@ -662,7 +737,6 @@ impl State<'_, '_> {
         if next < MAX_ROWS && !automatic {
             push_run(&mut out, next, MAX_ROWS - 1, default, default_hidden);
         }
-        self.rows = Vec::new();
         out
     }
 
@@ -764,14 +838,16 @@ impl State<'_, '_> {
         let hidden = e.attr_local("hidden").is_some_and(parse_bool);
         // The width counts whether or not `customWidth` says the user set
         // it (Excel shows the column at it either way). A width out of
-        // range is the sheet's default; a width of 0 is a hidden column
-        // of the default width.
-        let width = attr_f64(e, "width")
-            .filter(|w| *w >= 0.0 && *w <= MAX_COL_WIDTH_CHARS)
-            .map(|w| px_to_hmm(col_width_to_px(w, self.ctx.styles.mdw)));
+        // range (or too small to show) is the sheet's default; a width of
+        // exactly 0 is a hidden column of the default width.
+        let mdw = self.ctx.styles.mdw;
+        let width = stored(attr_f64(e, "width"), MAX_COL_WIDTH_CHARS, |w| {
+            px_to_hmm(col_width_to_px(w, mdw))
+        });
         let size: ColSize = match width {
-            Some(0) => (None, true),
-            other => (other, hidden),
+            Stored::Zero => (None, true),
+            Stored::Size(w) => (Some(w), hidden),
+            Stored::Unusable => (None, hidden),
         };
         self.cols.push((c0, c1, size));
         let level = attr_u32(e, "outlineLevel")
@@ -803,15 +879,13 @@ impl State<'_, '_> {
         }
         // The row has the height the file stores, whether the user set it
         // (`customHeight`) or Excel fitted it. A height out of range is
-        // the sheet's default; a height of 0 is a hidden row of the
-        // default height.
+        // (or too small to show) is the sheet's default; a height of
+        // exactly 0 is a hidden row of the default height.
         let hidden = e.attr_local("hidden").is_some_and(parse_bool);
-        let ht = attr_f64(e, "ht")
-            .filter(|h| *h >= 0.0 && *h <= MAX_ROW_HEIGHT_PT)
-            .map(pt_to_hmm);
-        match ht {
-            Some(0) => self.add_row(row, None, true),
-            other => self.add_row(row, other, hidden),
+        match stored(attr_f64(e, "ht"), MAX_ROW_HEIGHT_PT, pt_to_hmm) {
+            Stored::Zero => self.rows.add(row, None, true),
+            Stored::Size(h) => self.rows.add(row, Some(h), hidden),
+            Stored::Unusable => self.rows.add(row, None, hidden),
         }
         let level = attr_u32(e, "outlineLevel")
             .unwrap_or(0)
@@ -1046,6 +1120,72 @@ mod tests {
         assert_eq!(error_value("#DIV/0!"), Value::Error(ErrorKind::Div0));
         assert_eq!(error_value("#SPILL!"), Value::Error(ErrorKind::Value));
         assert_eq!(error_value("#GETTING_DATA"), Value::Error(ErrorKind::NA));
+    }
+
+    /// Rows given again and again, or out of order, take one table of
+    /// the size of the sheet and nothing per element (security review of
+    /// 2026-11-17, M1: 20 million repeated rows made the process grow to
+    /// 559 MB).
+    #[test]
+    fn repeated_rows_are_bounded_by_the_sheet() {
+        let mut rows = RowSizes::default();
+        for row in 0..1000 {
+            rows.add(row, Some(500 + row % 2), false);
+        }
+        assert_eq!(rows.runs.len(), 1000);
+        assert!(rows.table.is_none());
+        // The first row again: from here on, the table.
+        for i in 0..5_000_000u32 {
+            rows.add(i % 3, Some(700 + i % 7), i % 2 == 0);
+        }
+        rows.add(MAX_ROWS - 1, None, true);
+        rows.add(10, Some(u32::MAX), false);
+        assert_eq!(rows.runs.capacity(), 0, "the list is given up");
+        let table = rows.table.as_ref().map(|t| (t.len(), t.capacity()));
+        assert_eq!(table, Some((MAX_ROWS as usize, MAX_ROWS as usize)));
+        let runs = rows.into_runs();
+        // i = 4,999,997 / 4,999,998 / 4,999,999 were the last for rows
+        // 2, 0 and 1.
+        assert_eq!(
+            runs[..3],
+            [
+                RowRun {
+                    start: 0,
+                    end: 0,
+                    size: Some(700 + 4_999_998 % 7),
+                    hidden: true
+                },
+                RowRun {
+                    start: 1,
+                    end: 1,
+                    size: Some(700 + 4_999_999 % 7),
+                    hidden: false
+                },
+                RowRun {
+                    start: 2,
+                    end: 2,
+                    size: Some(700 + 4_999_997 % 7),
+                    hidden: false
+                },
+            ]
+        );
+        // The rows of the list are still there, an oversized height is
+        // capped, and the last row is in.
+        assert_eq!(runs[3].size, Some(501));
+        assert_eq!(
+            runs.iter().find(|r| r.start == 10).map(|r| r.size),
+            Some(Some(ROW_SIZE_MASK))
+        );
+        assert_eq!(runs.len(), 1001);
+        assert_eq!(
+            runs.last(),
+            Some(&RowRun {
+                start: MAX_ROWS - 1,
+                end: MAX_ROWS - 1,
+                size: None,
+                hidden: true
+            })
+        );
     }
 
     #[test]

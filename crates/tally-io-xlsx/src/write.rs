@@ -36,49 +36,78 @@ const MAX_SIZED_ROWS: u32 = 100_000;
 /// Most warnings kept (the rest are counted).
 const MAX_WARNINGS: usize = 200;
 
-/// The size all rows (or columns; `count` of them) have unless they say
-/// otherwise: when the runs leave none without a size, the size of the
-/// (shown) run that reaches the last one. `None` when some row or column
-/// has no run (it has the application's default size) or when the last
-/// ones are hidden.
-fn covering_size(runs: &[tally_model::DimRun], count: u32) -> Option<u32> {
-    let mut sorted: Vec<&tally_model::DimRun> = runs.iter().filter(|r| r.start <= r.end).collect();
+/// What a row or column is, as far as its size goes: `None` has no run
+/// (the application's default size; a row is fitted to its content),
+/// `Some((size, hidden))` has one.
+type Sized = Option<(u32, bool)>;
+
+/// The runs as segments `(first, last, what)` that cover `0..count` once:
+/// ascending, the rows or columns without a run included. Runs that
+/// overlap (no well-formed sheet has them) are cut where the previous one
+/// ends.
+fn segments(runs: &[tally_model::DimRun], count: u32) -> Vec<(u32, u32, Sized)> {
+    let mut sorted: Vec<&tally_model::DimRun> = runs
+        .iter()
+        .filter(|r| r.start <= r.end && r.start < count)
+        .collect();
     sorted.sort_by_key(|r| r.start);
+    let mut out = Vec::with_capacity(2 * sorted.len() + 1);
     let mut next = 0u32;
-    let mut last = None;
     for r in sorted {
-        if r.start > next {
-            return None;
+        let (start, end) = (r.start.max(next), r.end.min(count - 1));
+        if start > end {
+            continue;
         }
-        if r.end >= count - 1 {
-            last = Some(r);
+        if start > next {
+            out.push((next, start - 1, None));
         }
-        next = next.max(r.end.saturating_add(1));
+        out.push((start, end, Some((r.size_hmm, r.hidden))));
+        next = end + 1;
     }
-    last.filter(|r| next >= count && !r.hidden)
-        .map(|r| r.size_hmm)
-        .filter(|size| hmm_to_px(*size) > 0)
+    if next < count {
+        out.push((next, count - 1, None));
+    }
+    out
+}
+
+/// What most rows (or columns) of the sheet are: the default the sheet
+/// is written with, so that as few as possible are written one by one. A
+/// sheet read from an Excel file keeps the file's default this way, also
+/// after rows were inserted or deleted (which leaves a few without a
+/// run). On a tie the application's default wins, then the smaller size.
+/// A shown size that rounds to 0 px cannot be a default, nor can hidden
+/// columns (`hidden`: rows only, `zeroHeight`).
+fn dominant(segments: &[(u32, u32, Sized)], hidden: bool) -> Sized {
+    let mut counts: std::collections::HashMap<Sized, u64> = std::collections::HashMap::new();
+    for &(start, end, what) in segments {
+        match what {
+            Some((_, true)) if !hidden => continue,
+            Some((size, false)) if hmm_to_px(size) == 0 => continue,
+            _ => {}
+        }
+        *counts.entry(what).or_default() += u64::from(end - start) + 1;
+    }
+    let mut totals: Vec<(Sized, u64)> = counts.into_iter().collect();
+    totals.sort_by_key(|&(what, n)| (std::cmp::Reverse(n), what));
+    totals.first().and_then(|t| t.0)
 }
 
 /// The default sizes a sheet is written with (`sheetFormatPr`): what the
-/// rows and columns that are not written one by one have.
+/// rows and columns that are not written one by one have, see
+/// [`dominant`].
 ///
-/// A sheet whose runs cover every row (one read from an Excel file: the
-/// rows with a height of their own, the file's default for the others)
-/// has the height of the run that reaches the end of the sheet as its
-/// default. Any other sheet has rows without a run, which are the
-/// application's default height, so that is the file's default: the file
-/// says what Tally shows, and the reader takes such a default back as "no
-/// run". Columns work the same way.
+/// When most rows have no run, the default is the application's (24 px,
+/// 100 px): the file says what Tally shows, and the reader takes such a
+/// default back as "no run". When most rows have one height, that height
+/// is the default; the rows without a run are then written as rows of
+/// 24 px (the file has no other way to say "automatic" under a default
+/// that is a set height) and read back with that height set. When most
+/// rows are hidden, the default is hidden (`zeroHeight`).
 struct SheetDefaults {
-    /// The default row height, 1/100 mm.
-    row_hmm: u32,
-    /// The default is the application's: rows without a run are fitted
-    /// to their content, in Tally and (when their `<row>` has no height)
-    /// in Excel.
-    rows_automatic: bool,
-    /// The default column width, pixels.
-    col_px: u32,
+    /// What the rows that are not written have.
+    rows: Sized,
+    /// What the columns that are not written have (never hidden).
+    cols: Sized,
     /// `rust_xlsxwriter`'s own default column width, pixels: what it
     /// writes and lays objects out with for a column it was told
     /// nothing about.
@@ -87,13 +116,9 @@ struct SheetDefaults {
 
 impl SheetDefaults {
     fn new(data: &WorkbookData, sheet: &SheetData) -> Self {
-        let covered = covering_size(&sheet.row_heights, MAX_ROWS);
-        let col_hmm =
-            covering_size(&sheet.col_widths, MAX_COLS).unwrap_or(APP_DEFAULT_COL_WIDTH_HMM);
         SheetDefaults {
-            row_hmm: covered.unwrap_or(APP_DEFAULT_ROW_HEIGHT_HMM),
-            rows_automatic: covered.is_none(),
-            col_px: hmm_to_px(col_hmm),
+            rows: dominant(&segments(&sheet.row_heights, MAX_ROWS), true),
+            cols: dominant(&segments(&sheet.col_widths, MAX_COLS), false),
             writer_col_px: match default_font(data) {
                 Some(_) => default_col_width_px(data),
                 None => 64,
@@ -101,17 +126,35 @@ impl SheetDefaults {
         }
     }
 
-    /// `sheetFormatPr/@defaultColWidth` when the default is not the one
-    /// `rust_xlsxwriter` implies: the width in characters of the default
-    /// font (the unit of `<col width>`), so that it reads back as
-    /// `col_px` exactly.
-    fn default_col_width_attr(&self, data: &WorkbookData) -> Option<String> {
-        if self.col_px == self.writer_col_px {
-            return None;
+    /// The default row height, pixels (of hidden rows: at least 1).
+    fn row_px(&self) -> u32 {
+        match self.rows {
+            None => hmm_to_px(APP_DEFAULT_ROW_HEIGHT_HMM),
+            Some((size, _)) => hmm_to_px(size).max(1),
         }
+    }
+
+    /// The default column width, pixels.
+    fn col_px(&self) -> u32 {
+        hmm_to_px(self.cols.map_or(APP_DEFAULT_COL_WIDTH_HMM, |c| c.0))
+    }
+
+    /// A width in pixels as `<col width>` counts it: characters of the
+    /// default font, so that it reads back as `px` exactly.
+    fn col_chars(data: &WorkbookData, px: u32) -> f64 {
         let mdw = crate::units::max_digit_width(default_font(data), Some(11.0));
-        let chars = (f64::from(self.col_px) * 256.0 / mdw).trunc() / 256.0;
-        Some(format!(r#"defaultColWidth="{chars}""#))
+        (f64::from(px) * 256.0 / mdw).trunc() / 256.0
+    }
+
+    /// `sheetFormatPr/@defaultColWidth` when the default is not the one
+    /// `rust_xlsxwriter` implies.
+    fn default_col_width_attr(&self, data: &WorkbookData) -> Option<String> {
+        (self.col_px() != self.writer_col_px).then(|| {
+            format!(
+                r#"defaultColWidth="{}""#,
+                Self::col_chars(data, self.col_px())
+            )
+        })
     }
 
     /// The attributes `rust_xlsxwriter` gives a `<row>` that only has the
@@ -119,9 +162,21 @@ impl SheetDefaults {
     /// taken out of a sheet whose default rows are automatic: a `<row>`
     /// with a height is a row Excel no longer fits to its content.
     fn default_row_attrs(&self) -> Option<String> {
-        let px = hmm_to_px(self.row_hmm);
-        (self.rows_automatic && px != 20)
+        let px = self.row_px();
+        (self.rows.is_none() && px != 20)
             .then(|| format!(r#" ht="{}" customHeight="1""#, f64::from(px) * 0.75))
+    }
+
+    /// The real width of the hidden columns that are as wide as
+    /// `rust_xlsxwriter`'s default: it writes those with `width="0"`
+    /// (as Excel does for a column hidden by dragging), which would read
+    /// back as the sheet's default width.
+    fn hidden_col_width(&self, data: &WorkbookData, sheet: &SheetData) -> Option<f64> {
+        sheet
+            .col_widths
+            .iter()
+            .any(|r| r.hidden && hmm_to_px(r.size_hmm) == self.writer_col_px)
+            .then(|| Self::col_chars(data, self.writer_col_px))
     }
 }
 
@@ -179,7 +234,10 @@ fn default_size_patches(data: &WorkbookData, patches: &mut crate::write_v03::Pat
             patches.sheet_format_attrs.push((part.clone(), attr));
         }
         if let Some(attrs) = defaults.default_row_attrs() {
-            patches.row_attr_strips.push((part, attrs));
+            patches.row_attr_strips.push((part.clone(), attrs));
+        }
+        if let Some(chars) = defaults.hidden_col_width(data, sheet) {
+            patches.hidden_col_widths.push((part, chars));
         }
     }
 }
@@ -614,48 +672,100 @@ impl SheetWriter<'_> {
         // Column widths and hidden columns. The columns of the default
         // width are not written (`sheetFormatPr` has it), except where
         // `rust_xlsxwriter` would use its own default instead.
-        if defaults.col_px != defaults.writer_col_px {
+        let col_px = defaults.col_px();
+        if col_px != defaults.writer_col_px {
             for (c0, c1) in default_width_columns(sheet) {
-                ws.set_column_range_width_pixels(c0, c1, defaults.col_px)?;
+                ws.set_column_range_width_pixels(c0, c1, col_px)?;
             }
         }
-        for run in &sheet.col_widths {
-            if run.start >= MAX_COLS || run.start > run.end {
+        for (start, end, what) in segments(&sheet.col_widths, MAX_COLS) {
+            if what == defaults.cols {
                 continue;
             }
-            if !run.hidden && hmm_to_px(run.size_hmm) == defaults.col_px {
+            // A column without a run under another default: 100 px.
+            let (size, hidden) = what.unwrap_or((APP_DEFAULT_COL_WIDTH_HMM, false));
+            if !hidden && hmm_to_px(size) == col_px {
                 continue;
             }
-            let (c0, c1) = (col_num(run.start), col_num(run.end.min(MAX_COLS - 1)));
-            ws.set_column_range_width_pixels(c0, c1, hmm_to_px(run.size_hmm))?;
-            if run.hidden {
+            let (c0, c1) = (col_num(start), col_num(end));
+            ws.set_column_range_width_pixels(c0, c1, hmm_to_px(size))?;
+            if hidden {
                 ws.set_column_range_hidden(c0, c1)?;
             }
         }
-        // Row heights and hidden rows.
+        // Row heights and hidden rows: the rows that are not what the
+        // sheet's default says (see `SheetDefaults`), one by one.
+        let row_segments = segments(&sheet.row_heights, MAX_ROWS);
+        let row_px = defaults.row_px();
+        ws.set_default_row_height_pixels(row_px);
+        let default_hidden = matches!(defaults.rows, Some((_, true)));
+        if default_hidden {
+            ws.hide_unused_rows(true);
+        }
         let mut sized = 0u32;
-        // The rows of the sheet's default height are not written one by
-        // one (see `SheetDefaults`).
-        ws.set_default_row_height_pixels(hmm_to_px(defaults.row_hmm));
-        for run in &sheet.row_heights {
-            if run.start >= MAX_ROWS || run.start > run.end {
-                continue;
-            }
-            let end = run.end.min(MAX_ROWS - 1);
-            if !run.hidden && run.size_hmm == defaults.row_hmm {
-                continue;
-            }
-            for row in run.start..=end {
-                if sized >= MAX_SIZED_ROWS {
+        let mut capped = false;
+        let mut count = |report: &mut Report| {
+            if sized >= MAX_SIZED_ROWS {
+                if !capped {
                     report.warn(format!(
                         "sheet {:?}: only the first {MAX_SIZED_ROWS} row heights were written",
                         sheet.name
                     ));
-                    break;
                 }
-                sized += 1;
-                ws.set_row_height_pixels(row, hmm_to_px(run.size_hmm))?;
-                if run.hidden {
+                capped = true;
+                return false;
+            }
+            sized += 1;
+            true
+        };
+        'rows: for &(start, end, what) in &row_segments {
+            if what == defaults.rows {
+                continue;
+            }
+            // A row without a run under another default: a row of 24 px.
+            let (size, hidden) = what.unwrap_or((APP_DEFAULT_ROW_HEIGHT_HMM, false));
+            if defaults.rows.is_none() && !hidden && size == APP_DEFAULT_ROW_HEIGHT_HMM {
+                // Under the automatic default a set height of 24 px is not
+                // kept apart from an automatic row.
+                continue;
+            }
+            for row in start..=end {
+                if !count(report) {
+                    break 'rows;
+                }
+                ws.set_row_height_pixels(row, hmm_to_px(size))?;
+                if hidden {
+                    ws.set_row_hidden(row)?;
+                }
+            }
+        }
+        if default_hidden {
+            // A `<row>` element is a shown row unless it says otherwise,
+            // and the rows with cells, formatted blanks or an outline
+            // level get one: those that take the hidden default say so.
+            let is_default = |row: u32| {
+                let at = row_segments.partition_point(|s| s.1 < row);
+                row_segments.get(at).is_some_and(|s| s.2 == defaults.rows)
+            };
+            let cells = sheet.cells.iter().map(|c| (c.row, c.row));
+            let blanks = sheet
+                .style_runs
+                .iter()
+                .filter(|r| {
+                    r.start_row <= r.end_row && r.end_row - r.start_row < MAX_STYLED_EMPTY_RUN
+                })
+                .map(|r| (r.start_row, r.end_row));
+            let groups = sheet.row_groups.iter().map(|g| (g.start, g.end));
+            let mut last = None;
+            'hidden: for (start, end) in cells.chain(blanks).chain(groups) {
+                for row in start..=end.min(MAX_ROWS - 1) {
+                    if last == Some(row) || !is_default(row) {
+                        continue;
+                    }
+                    last = Some(row);
+                    if !count(report) {
+                        break 'hidden;
+                    }
                     ws.set_row_hidden(row)?;
                 }
             }
@@ -894,6 +1004,18 @@ pub(crate) fn write(
     };
     let epoch = data.settings.calc_settings.date_epoch;
     let mut wb = Workbook::new();
+    // The sheets whose default sizes need an edit of their XML (nearly
+    // every sheet made in Tally) are compressed after the edit. So that
+    // they are not compressed at full cost twice, `rust_xlsxwriter` then
+    // writes the package at its fastest level (it has no "stored") and
+    // the edit pass compresses every part at the normal one: about 15 %
+    // on top of a save without edits, instead of 80 %.
+    let mut size_patches = crate::write_v03::Patches::default();
+    default_size_patches(data, &mut size_patches);
+    let compress_later = !size_patches.is_empty();
+    if compress_later {
+        wb.set_zip_compression_level(1);
+    }
     // The default font becomes the `Normal` style's (fonts[0]); Calibri
     // 11's column metrics (64 px) and row height (20 px) are kept.
     let base = base_format(data);
@@ -957,7 +1079,7 @@ pub(crate) fn write(
         // An empty sheet, with the sizes of one (`default_size_patches`).
         let defaults = SheetDefaults::new(data, &SheetData::default());
         wb.add_worksheet()
-            .set_default_row_height_pixels(hmm_to_px(defaults.row_hmm));
+            .set_default_row_height_pixels(defaults.row_px());
     }
 
     // Defined names.
@@ -1020,7 +1142,10 @@ pub(crate) fn write(
     crate::write_v04::pivot_patches(data, &mut patches, &mut report);
     crate::tools::style_patches(data, &mut patches);
     crate::tools::view_patches(data, &mut patches);
-    default_size_patches(data, &mut patches);
+    patches.sheet_format_attrs = size_patches.sheet_format_attrs;
+    patches.row_attr_strips = size_patches.row_attr_strips;
+    patches.hidden_col_widths = size_patches.hidden_col_widths;
+    patches.compress = compress_later;
     let bytes = if patches.is_empty() {
         bytes
     } else {

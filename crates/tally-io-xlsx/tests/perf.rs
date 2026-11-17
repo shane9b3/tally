@@ -73,3 +73,62 @@ fn read_one_million_cells_under_three_seconds() {
     assert_eq!(wb.sheets[0].cells.len(), 1_000_000);
     assert!(elapsed < Duration::from_secs(3), "took {elapsed:?}");
 }
+
+/// Save time of a 200,000-cell sheet (20,000 rows × 10 columns): one made
+/// in Tally (rows and columns without a size: the sheet XML is edited
+/// after `rust_xlsxwriter` wrote it) and the same cells in a sheet read
+/// from Excel (every row and column has a size: nothing to edit). Prints
+/// the two times; the first should stay close to the second.
+#[test]
+#[ignore = "perf: run in release with --ignored"]
+fn write_200k_cells_timing() {
+    use tally_model::{CellContentData, CellData, DimRun, SheetData, WorkbookData};
+    use tally_types::{Value, MAX_COLS, MAX_ROWS};
+    let cells: Vec<CellData> = (0..20_000u32)
+        .flat_map(|row| {
+            (0..10u32).map(move |col| CellData {
+                row,
+                col,
+                content: CellContentData::Value(Value::Number(f64::from(row * 10 + col) + 0.5)),
+                style: None,
+            })
+        })
+        .collect();
+    let whole = |count: u32, size_hmm: u32| {
+        vec![DimRun {
+            start: 0,
+            end: count - 1,
+            size_hmm,
+            hidden: false,
+        }]
+    };
+    let made_here = SheetData {
+        name: "S".into(),
+        cells,
+        ..SheetData::default()
+    };
+    let from_excel = SheetData {
+        row_heights: whole(MAX_ROWS, 529),
+        col_widths: whole(MAX_COLS, 1693),
+        ..made_here.clone()
+    };
+    for (what, sheet) in [
+        ("made in Tally", made_here),
+        ("read from Excel", from_excel),
+    ] {
+        let wb = WorkbookData {
+            sheets: vec![sheet],
+            ..WorkbookData::default()
+        };
+        let mut best = Duration::MAX;
+        let mut size = 0;
+        for _ in 0..7 {
+            let mut out = Cursor::new(Vec::new());
+            let t = Instant::now();
+            tally_io_xlsx::write_xlsx(&wb, &mut out).unwrap();
+            best = best.min(t.elapsed());
+            size = out.into_inner().len();
+        }
+        eprintln!("TIMING write 200k cells, {what}: {best:?} ({size} bytes)");
+    }
+}

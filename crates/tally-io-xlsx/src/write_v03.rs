@@ -957,6 +957,13 @@ pub(crate) struct Patches {
     /// `<row>` start tag (the default height rust_xlsxwriter repeats on
     /// each row).
     pub row_attr_strips: Vec<(String, String)>,
+    /// `xl/worksheets/sheetN.xml` → the width (characters) to give the
+    /// hidden `<col>` elements rust_xlsxwriter wrote with `width="0"`.
+    pub hidden_col_widths: Vec<(String, f64)>,
+    /// The package was written at the fastest compression level: every
+    /// part that is not edited is compressed again here too (set together
+    /// with one of the edits above, never alone).
+    pub compress: bool,
     /// Literal chart data (`c:numLit` / `c:strLit`, which rust_xlsxwriter
     /// cannot write): `(marker, xml)`, the marker being the formula of a
     /// placeholder reference in `xl/charts/chartN.xml`.
@@ -980,9 +987,18 @@ impl Patches {
             && self.sheet_panes.is_empty()
             && self.sheet_format_attrs.is_empty()
             && self.row_attr_strips.is_empty()
+            && self.hidden_col_widths.is_empty()
             && !self.hide_sheet_tabs
             && self.chart_literals.is_empty()
     }
+}
+
+/// The options of a part of `len` bytes written by the edit pass
+/// (ZIP64 sizes for a part that could reach 4 GiB).
+fn deflated(len: usize) -> zip::write::SimpleFileOptions {
+    zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .large_file(len as u64 >= 0xFFFF_0000)
 }
 
 /// Takes `attrs` out of every `<row …>` start tag of a sheet XML. Only
@@ -1006,6 +1022,22 @@ pub(crate) fn strip_row_attrs(xml: &str, attrs: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Gives the hidden `<col>` elements written with `width="0"` the width
+/// `chars`. Only the `<cols>` element is touched.
+pub(crate) fn restore_hidden_col_widths(xml: &str, chars: f64) -> String {
+    let (Some(start), Some(end)) = (xml.find("<cols>"), xml.find("</cols>")) else {
+        return xml.to_string();
+    };
+    if start > end {
+        return xml.to_string();
+    }
+    let cols = xml[start..end].replace(
+        r#" width="0" hidden="1""#,
+        &format!(r#" width="{chars}" hidden="1""#),
+    );
+    format!("{}{cols}{}", &xml[..start], &xml[end..])
 }
 
 /// Puts `pane` first in the sheet's `<sheetView>` (CT_SheetView: `pane`,
@@ -1219,6 +1251,11 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             .filter(|(n, _)| *n == name)
             .map(|(_, a)| a.as_str())
             .collect();
+        let hidden_cols: Option<f64> = p
+            .hidden_col_widths
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, w)| *w);
         let is_ct = name == "[Content_Types].xml" && !p.content_types.is_empty();
         let is_styles = name == "xl/styles.xml" && !p.style_names.is_empty();
         let is_chart = name.starts_with("xl/charts/chart") && !p.chart_literals.is_empty();
@@ -1233,6 +1270,7 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             || !panes.is_empty()
             || !format_attrs.is_empty()
             || !row_strips.is_empty()
+            || hidden_cols.is_some()
             || !rel_adds.is_empty()
             || is_ct
             || is_styles
@@ -1245,6 +1283,9 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             // First, on the XML as rust_xlsxwriter wrote it.
             for a in &row_strips {
                 patched = strip_row_attrs(&patched, a);
+            }
+            if let Some(chars) = hidden_cols {
+                patched = restore_hidden_col_widths(&patched, chars);
             }
             for a in &format_attrs {
                 patched = patched.replacen("<sheetFormatPr ", &format!("<sheetFormatPr {a} "), 1);
@@ -1363,11 +1404,17 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             if is_chart {
                 patched = crate::chart_write::patch_chart_literals(&patched, &p.chart_literals);
             }
-            let opts = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
-            out.start_file(name, opts)?;
+            out.start_file(name, deflated(patched.len()))?;
             out.write_all(patched.as_bytes())?;
+        } else if p.compress && file.compression() == zip::CompressionMethod::Deflated {
+            // Written at the fastest level: compressed properly here.
+            let mut raw = Vec::with_capacity(usize::try_from(file.size()).unwrap_or(0));
+            file.read_to_end(&mut raw)?;
+            drop(file);
+            out.start_file(name, deflated(raw.len()))?;
+            out.write_all(&raw)?;
         } else {
+            // Untouched: copied as it is, without recompressing.
             out.raw_copy_file(file)?;
         }
     }
