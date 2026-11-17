@@ -252,7 +252,7 @@ tested by the malicious corpora in `crates/tally-io-xls/tests/fixtures.rs`,
 
 | Reader | Pre-checks | Budgets | Notes |
 |---|---|---|---|
-| XLS (`tally-io-xls`) | OLE2 signature; file ≤ 256 MiB; `prescan`: strict CFB chain walks, canonical container, BIFF budgets (see "Review 4 fixes") | ≤ 1024 sheets, ≤ 10 M cells, ≤ 512 MiB text/formula bytes; before calamine: ≤ 8 M dense cells, ≤ 256 MiB text estimate | calamine 0.37 decodes the rebuilt container and the sanitized BIFF stream under `catch_unwind` (a panic is `XlsError::Malformed`, never a crash); formulas are converted by Tally's own parser, nothing is evaluated from the file. |
+| XLS (`tally-io-xls`) | OLE2 signature; file ≤ 256 MiB; `prescan`: strict CFB chain walks, canonical container, BIFF budgets (see "Review 4 fixes") | ≤ 1024 sheets, ≤ 10 M cells, ≤ 512 MiB text/formula bytes; before calamine: ≤ 8 M dense cells, ≤ 256 MiB text estimate; formatting pass: see "XLS formatting reader" | calamine 0.38 decodes the rebuilt container and the sanitized BIFF stream under `catch_unwind` (a panic is `XlsError::Malformed`, never a crash); formulas are converted by Tally's own parser, nothing is evaluated from the file. Formatting (widths, heights, cell formats, pictures, notes) is read by Tally's own BIFF8 reader from the same sanitized stream. |
 | SXC (`tally-io-ods`) | zip `mimetype`; the ODS zip-bomb, XML depth/attribute and cell/text budgets | identical to ODS | names are mapped while reading; no extra allocation per element. |
 | HTML (`tally-io-html`) | input ≤ 64 MiB (`MAX_INPUT_BYTES`) | ≤ 1024 tables, ≤ 10 M cells, ≤ 64 KiB per cell, `colspan`/`rowspan` clamped to 1000 | a hand-written tokenizer: no DOM, no script execution, `<script>`/`<style>`/`<template>` bodies skipped, entities decoded without recursion; formulas stay text (the engine recognizes numbers and dates only). |
 | dBase (`tally-io-dbf`) | version byte, header length `= 32 + 32·fields + 1`, record length `= 1 + Σ field widths`, record count ≤ what the file holds (+1 for a truncated last record) | ≤ 2 M records, ≤ 1024 fields, ≤ 10 M cells, file ≤ 256 MiB | memo/binary fields are never followed (no `.dbt` is opened). |
@@ -280,6 +280,69 @@ rounds per cyclic component and at most 20M evaluations per recalc. The
 solver evaluates the sandbox at most 10,000 times per request, within
 `timeout_ms` (≤ 60 s, sampling included), and branch-and-bound is bounded
 by `max_iterations` (≤ 100,000) nodes and a depth of 1,000.
+
+### XLS formatting reader
+
+`tally_io_xls::format` (2026-11-17) is a second parser over hostile bytes:
+it reads the BIFF8 formatting records calamine does not expose (`FONT`,
+`FORMAT`, `XF`, `PALETTE`, `COLINFO`, `ROW`, the XF index of every cell
+record, `WINDOW2`, `PANE`, `MSODRAWINGGROUP` / `MSODRAWING` pictures,
+`NOTE` / `TXO`; docs/file-formats.md). Its rules:
+
+- It runs on the workbook stream the pre-scan extracted (strict chain
+  walks, ≤ 256 MiB) and already walked, with the pre-scan's record
+  framing (`prescan::record`: a record never extends past the stream) and
+  the same sheet walk budget (2 × the stream), so sheets that share or
+  overlap substreams cannot multiply the work. It never touches the
+  compound file.
+- It cannot fail a file. A record shorter than the fields read from it is
+  skipped (a truncated `FONT` or `XF` still takes its index, with the
+  default look, so later indices keep their meaning); an index without a
+  target (an XF naming a missing font or format, a cell naming a missing
+  XF, a picture naming a missing BLIP) falls back to the default; a count
+  field is never trusted over the bytes present (`PALETTE`, `MULBLANK`,
+  `MULRK`, OfficeArt property tables, string lengths). The pass runs
+  under `catch_unwind`: a panic (a bug) opens the file with its values
+  only and the warning "The formatting of this file could not be read";
+  the tests and the fuzz harness treat that as a failure (the harness's
+  panic hook aborts on any panic outside calamine's sources).
+- Every allocation is bounded by a `tally_io_xls::Limits` field or by the
+  stream: `max_fonts` and `max_xfs` (65,536 each), `max_number_formats`
+  (16,384), `max_col_infos` (256 per sheet; column state is a 256-entry
+  table per sheet, whatever the records say), `max_row_records`
+  (1,048,576), `max_styled_cells` (10 M cell formats of 8 bytes; `BLANK` /
+  `MULBLANK` cells that become styled empty cells also count against
+  `max_cells`), `max_images` (1,000), `max_image_bytes` (16 MiB),
+  `max_total_image_bytes` (256 MiB, every placement counts, the bytes are
+  shared `Arc<[u8]>`), `max_drawing_bytes` (64 MiB of `MSODRAWING` data),
+  `max_notes` (65,536). Past a limit the rest is left out with a warning
+  and the file still opens.
+- Identical cell formats share one `StyleData` (at most one per XF), so
+  the number of styles does not grow with the number of cells. Number
+  format codes over 4,096 characters become General (as in the other
+  readers); font names go through `tally_model::clean_font_name`.
+- OfficeArt data is scanned flat and iteratively (a container's header is
+  skipped, an atom whose length exceeds the remaining bytes ends the
+  scan): no recursion, no allocation from a declared length. Pictures are
+  stored, never decoded; only PNG and JPEG signatures are accepted.
+- Linear in the stream: one pass over the globals, one over each sheet
+  (within the walk budget), one sort of each sheet's cell formats and row
+  records when they are not already in order.
+- BIFF5 and older streams are detected from the first `BOF` and skipped
+  (their record layouts differ), with a warning.
+
+Tests: `tally-io-xls::hostile_formatting::*`
+(`every_record_cut_at_every_length`, `counts_that_lie`,
+`indices_without_a_target`, `column_and_row_records_out_of_range`,
+`limits_degrade_with_a_warning`, `pictures_with_lying_sizes`,
+`mutated_fixtures_never_panic`, `garbage_records_never_panic`) and
+`tally-io-xls::formatting::*` (`blank_cells_respect_the_cell_budget`,
+`picture_budgets`, `biff5_opens_with_values_only_and_a_warning`). The
+`xls` and `open` fuzz targets reach the pass through `read_xls`; three
+synthetic seeds (`fuzz/seeds/xls/formatted.xls`, `pictures.xls`,
+`notes.xls`, generated from `tests/fixtures/xls/`, which
+`crates/tally-io-xls/tests/biff/books.rs` builds) exercise it. It has not
+been through a fuzz campaign yet.
 
 ## 3d. Document fonts (`tally-io-pdf/src/fonts.rs`, `tally-engine/src/fonts.rs`)
 
@@ -680,8 +743,10 @@ release-built reader.
 | M8 HTML 64 KiB per-cell cap not enforced | Text is cut at a char boundary to the remaining room | `tally-io-html::review4::cell_text_is_cut_at_the_cap` | 60 MB HTML: one 63 MB cell, 1.45 GB → 64 KiB |
 | LOW-P11 Trace Precedents scans every range | One budget of 5M stored cells per detective query (`detective::MAX_ERROR_SCAN_PER_QUERY`); past it targets are reported without the error flag | `tally-engine::detective::tests` | 427 × 1M-row ranges: 17.2 s → ≤ 5M cells scanned |
 
-Residual risks: the XLS pre-scan models calamine 0.37's decoder (pinned
-`=0.37.0`) and must be re-checked on an upgrade; a calamine allocation
+Residual risks: the XLS pre-scan models calamine 0.37's decoder. calamine
+is now pinned `=0.38.0` (the upgrade for RUSTSEC-2026-0436); a re-check of
+the pre-scan against 0.38's decoder is not recorded and is still to do,
+as on every upgrade. A calamine allocation
 inside the budgets (≈ 8M × 32-byte dense cells plus one cloned sheet,
 plus the text bound) can still reach about 1 GB for a hostile file, and
 an allocation failure there would still abort, since the decoder cannot

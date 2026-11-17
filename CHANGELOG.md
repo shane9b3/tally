@@ -21,6 +21,14 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   Minimum, Sum or None, as in OpenOffice. The choice is remembered.
 - Status bar: a STD / EXT / ADD field shows the selection mode (F8 and
   Shift+F8); clicking it switches to the next mode.
+- Excel 97-2003 (.xls) files open with their layout: column widths, row
+  heights, hidden rows and columns, fonts, text and background colours,
+  borders, alignment, text wrapping and rotation, number formats (dates,
+  currency, percent and custom formats), cell protection, frozen panes,
+  hidden grid lines and the other view settings, sheet tab colours,
+  pictures (PNG and JPEG) and cell notes. Until now only the values,
+  formulas and merged cells were read. Files from Excel 5.0 / 95 still
+  open with their values only, and Tally says so when it opens one.
 
 ### Changed
 - DataPilot totals with several data fields are labelled as in OpenOffice:

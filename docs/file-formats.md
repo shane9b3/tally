@@ -10,7 +10,7 @@ information. All readers produce, and all writers consume,
 | ODS (OpenDocument spreadsheet) | `tally-io-ods` | yes | yes | read + write |
 | XLSX (Office Open XML, Excel 2007+) | `tally-io-xlsx` | yes | yes | read only |
 | CSV / TSV | `tally-io-csv` | yes | yes | read + write |
-| XLS (Excel 97–2003, BIFF8) | `tally-io-xls` (calamine 0.37) | yes | no | read + write |
+| XLS (Excel 97–2003, BIFF8) | `tally-io-xls` (calamine 0.38 for values and formulas, Tally's own BIFF8 formatting reader) | yes | no | read + write |
 | SXC (StarOffice 6 / OpenOffice.org 1.x) | `tally-io-ods` (`sxc.rs`) | yes | no | read + write |
 | HTML tables | `tally-io-html` | yes | yes | read + write |
 | dBase III/IV (`.dbf`) | `tally-io-dbf` | yes | yes | read + write |
@@ -638,19 +638,75 @@ written (Save As offers ODS).
 
 ### XLS, Excel 97–2003 (`crates/tally-io-xls`, read only)
 
-Read through calamine 0.37 (MIT): sheet names, order and visibility; cell
-values (numbers, text, booleans, errors); dates and times (as serials with
-a `YYYY-MM-DD`, `HH:MM:SS` or `[HH]:MM:SS` format, the 1904 date system
-honoured); formulas with their cached results, converted from calamine's
-ExcelA1 text to OpenFormula through `tally_io_xlsx::excel_formula_to_of`
-(a formula calamine cannot decode keeps its cached value and is counted in
-a warning); merged areas. Not available from calamine, so not read: column
-widths, row heights, cell styles, number formats other than dates, names,
-hidden rows, notes, charts. BIFF5 files are read the same way; BIFF2–4
-(Excel 2–4) are refused. Export is not supported (documented in
-`docs/parity-deviations.md`); save as XLSX instead. Pre-checks: the OLE2
+Two passes over the workbook stream that the pre-scan
+(`src/prescan.rs`, docs/security.md) extracted and validated.
+
+**Values and formulas** come from calamine 0.38 (MIT): sheet names, order
+and visibility; cell values (numbers, text, booleans, errors); formulas
+with their cached results, converted from calamine's ExcelA1 text to
+OpenFormula through `tally_io_xlsx::excel_formula_to_of` (a formula
+calamine cannot decode keeps its cached value and is counted in a
+warning); merged areas; the 1904 date system. calamine's
+`Range::used_cells()` yields positions relative to the range's first used
+row and column; the reader adds `Range::start()` (a sheet whose row 1 or
+column A is empty used to load shifted).
+
+**Formatting** comes from Tally's own BIFF8 reader (`src/format.rs`),
+which reuses the pre-scan's record framing (substreams, `CONTINUE`) and
+maps onto the model the way the XLSX reader maps the equivalent
+constructs, with its helpers (`column_width_to_hmm`, `max_digit_width`,
+`pt_to_hmm`, `border_line_style`, `INDEXED_PALETTE`, `excel_to_ooo`,
+`builtin_format_code`, `is_date_format`, `excel_serial_to_tally`):
+
+| BIFF8 records | Model | Notes |
+|---|---|---|
+| `COLINFO`, `DEFCOLWIDTH`, `STANDARDWIDTH` | `col_widths` (width, hidden) | Every `COLINFO` width is applied (writers other than Excel do not set its "user set" flag). Width in 1/256 character of the default font (font 0), converted as for XLSX `<col width>`. A range whose last column is ≥ 255 runs to the last column of the sheet. Width 0 is a hidden column. `STANDARDWIDTH`, or a `DEFCOLWIDTH` that is not the standard 64 px, gives the columns without a `COLINFO` that width |
+| `ROW`, `DEFAULTROWHEIGHT` | `row_heights` (height, hidden) | Height in twips. Only rows with the "unsynced" (height set by hand or by the writer) flag or the hidden flag are recorded; a height without it is an auto-fit result and is re-fitted, like an XLSX row without `customHeight`. Rows without a recorded height use Tally's default, not the file's `DEFAULTROWHEIGHT` (which is only used for hidden rows and picture extents) |
+| `FONT`, `FORMAT`, `XF`, `PALETTE` | `styles` (one per distinct look) | Font name, size, bold (weight ≥ 600), italic, underline (single, double, accounting), strikeout, colour; fill; the four borders and both diagonals with style and colour; horizontal and vertical alignment, wrap, indent, rotation (0–90, 91–180 → −1…−90, 255 = stacked), shrink to fit; number format (`FORMAT` code or built-in id, translated like XLSX `numFmts`); locked and hidden-formula protection. Font index 4 does not exist (the fifth `FONT` record is font 5). A cell XF's own fields are the effective look: the "used attribute" flags and the parent style XF are not consulted (as for XLSX `cellXfs`, and with the same result as OpenOffice's `XclImpXF`). `STYLE` records (named styles) are not read. The family of font 0 becomes the document's default font; a font size is kept unless it is 11 pt, the size cells without one are drawn at |
+| Colour indices | `0xRRGGBBAA` | 0–7 fixed, 8–63 the default BIFF8 palette or the file's `PALETTE`, 0x40 / 0x41 the system window text / background (automatic for text and lines), 0x7FFF automatic font colour |
+| Fill patterns | `fill` | Pattern 1 is the foreground colour. Patterns 2–18 become one solid colour: the mix of pattern and background colour OpenOffice uses (`XclTools::GetPatternColor`, e.g. 50 % grey for pattern 2); unknown patterns the foreground colour |
+| XF index of `LABELSST`, `LABEL`, `RSTRING`, `NUMBER`, `RK`, `MULRK`, `FORMULA`, `BOOLERR` | `CellData::style` | |
+| `BLANK`, `MULBLANK` | styled empty cells | Only when the format shows something besides the default font; they count against the cell budget (past it they are left out with a warning) |
+| `COLINFO` XF | `style_runs` (whole column) | Columns A–IV only, when the format is more than the default font |
+| `WINDOW2`, `PANE`, `SCL` | `view_options` (formulas, grid, headers, zero values), `frozen` or `split`, `zoom` | |
+| `WINDOW1` | `settings.active_sheet` | |
+| `SHEETEXT` | `tab_color` | |
+| `MSODRAWINGGROUP` (BLIP store), `MSODRAWING` (client anchors) | `images` | PNG and JPEG, recognized by their signature (as for XLSX media; some writers store a PNG in a JPEG record). The two-cell anchor (column + 1/1024, row + 1/256) is converted to position and size with the file's column widths and row heights. EMF, WMF, PICT, DIB and TIFF pictures are left out with one warning; text boxes, shapes, controls and charts with another |
+| `NOTE` + the `TXO` of its object | `notes` (text, author, always shown) | |
+
+Number formats decide what a number is, as for XLSX: under a format that
+shows a calendar date the value is a date serial (the 1900 leap-year
+mapping of `excel_serial_to_tally`); any other number is kept as it is.
+Only a cell without a usable format that calamine reports as a date or
+time (a code Tally cannot translate) gets a guessed `YYYY-MM-DD`,
+`HH:MM:SS`, `YYYY-MM-DD HH:MM:SS` or `[HH]:MM:SS` format. Rich-text runs
+in strings are flattened (the cell has its XF's font), as for XLSX
+(parity X3).
+
+Not read: defined names, hyperlinks (`HLINK`), page setup, headers and
+footers, print areas, row default formats (`ROW` XF; the model has no row
+styles), named styles (`STYLE`), right-to-left sheets, conditional
+formats, data validation, outline groups, AutoFilter, protection
+passwords, charts, text boxes and shapes.
+
+BIFF5 (Excel 5.0/95) files are read for their values and formulas only:
+their `XF`/`FONT` layouts differ, so the formatting pass is skipped and
+the workbook opens with a warning saying so (dates then get the guessed
+formats above). BIFF2–4 (Excel 2–4) are refused. Export is not supported
+(documented in `docs/parity-deviations.md`); save as XLSX instead.
+
+Pre-checks and limits (`tally_io_xls::Limits`, docs/security.md): the OLE2
 signature, file size ≤ 256 MiB, ≤ 1024 sheets, ≤ 10 M cells, ≤ 512 MiB of
-text; calamine runs under `catch_unwind`, so a malformed stream is an error.
+text; calamine runs under `catch_unwind`, so a malformed stream is an
+error. The formatting pass never fails a file: what it cannot read is
+skipped, and past a limit (65,536 fonts and cell formats, 16,384 number
+formats, 256 `COLINFO` per sheet, 1,048,576 `ROW` records, 10 M formatted
+cells, 1,000 pictures of at most 16 MiB each and 256 MiB together, 64 MiB
+of sheet drawing data, 65,536 notes) the rest is left out with a warning.
+Tests: `crates/tally-io-xls/tests/formatting.rs`, `hostile_formatting.rs`
+and `positions.rs`, on workbooks built in code
+(`tests/biff/`); `crates/tally-engine/tests/open_formats.rs`
+(`xls_opens_with_its_formatting`).
 
 ### SXC, OpenOffice.org 1.x (`crates/tally-io-ods/src/sxc.rs`, read only)
 
