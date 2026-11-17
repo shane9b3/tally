@@ -333,7 +333,7 @@ impl Identity {
             name: self.name.clone(),
             sys_user: self.sys_user.clone(),
             host: self.host.clone(),
-            time: chrono::Local::now().format("%d.%m.%Y %H:%M").to_string(),
+            time: jiff::Zoned::now().strftime("%d.%m.%Y %H:%M").to_string(),
             user_url: self.user_url.clone(),
         }
     }

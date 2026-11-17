@@ -25,7 +25,6 @@ ignore = [
     { id = "RUSTSEC-2026-0206", reason = "rustybuzz: text shaping inside krilla (tally-io-pdf)" },
     { id = "RUSTSEC-2026-0370", reason = "zvariant: D-Bus stack of Tauri's Linux dependencies" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names: D-Bus stack of Tauri's Linux dependencies" },
-    { id = "RUSTSEC-2026-0543", reason = "chrono: only the local clock is used (tally-numfmt TODAY/NOW, desktop lock time); no vulnerability; replacement tracked in docs/TODO.md" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: D-Bus stack of Tauri's Linux dependencies" },
 ]
 

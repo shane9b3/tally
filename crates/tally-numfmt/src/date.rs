@@ -202,24 +202,50 @@ pub fn iso_week_number(unix_days: i64) -> u32 {
 /// The current local date and time as a serial in `epoch` (for `NOW()`;
 /// `TODAY()` is its floor).
 pub fn now_serial(epoch: DateEpoch) -> f64 {
-    use chrono::{Datelike, Timelike};
-    let now = chrono::Local::now().naive_local();
-    let days = days_from_civil(i64::from(now.year()), now.month(), now.day());
-    let secs = f64::from(now.num_seconds_from_midnight())
-        + f64::from(now.nanosecond() % 1_000_000_000) / 1e9;
+    let now = jiff::Zoned::now();
+    let days = days_from_civil(
+        i64::from(now.year()),
+        now.month().unsigned_abs().into(),
+        now.day().unsigned_abs().into(),
+    );
+    let secs = f64::from(now.hour()) * 3600.0
+        + f64::from(now.minute()) * 60.0
+        + f64::from(now.second())
+        + f64::from(now.subsec_nanosecond()) / 1e9;
     (days - epoch_offset(epoch)) as f64 + secs / 86_400.0
 }
 
 /// Today's local date `(year, month, day)`.
 pub fn today_ymd() -> (i32, u32, u32) {
-    use chrono::Datelike;
-    let now = chrono::Local::now().naive_local();
-    (now.year(), now.month(), now.day())
+    let now = jiff::Zoned::now();
+    (
+        i32::from(now.year()),
+        now.month().unsigned_abs().into(),
+        now.day().unsigned_abs().into(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_clock_is_local_time() {
+        // NOW() and TODAY() read the same local clock; retry once in case
+        // midnight falls between the two readings.
+        let agree = || {
+            let (y, m, d) = today_ymd();
+            let day = days_from_civil(i64::from(y), m, d) - epoch_offset(DateEpoch::D1899);
+            let now = now_serial(DateEpoch::D1899);
+            now.floor() as i64 == day && now.fract() < 1.0
+        };
+        assert!(agree() || agree());
+        let (y, m, d) = today_ymd();
+        println!(
+            "local clock: {y:04}-{m:02}-{d:02} serial {}",
+            now_serial(DateEpoch::D1899)
+        );
+    }
 
     #[test]
     fn anchors() {

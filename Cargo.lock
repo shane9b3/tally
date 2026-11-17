@@ -4738,7 +4738,7 @@ dependencies = [
 name = "tally-desktop"
 version = "0.1.2"
 dependencies = [
- "chrono",
+ "jiff",
  "libc",
  "objc2",
  "objc2-app-kit",
@@ -4988,7 +4988,7 @@ dependencies = [
 name = "tally-numfmt"
 version = "0.1.2"
 dependencies = [
- "chrono",
+ "jiff",
  "proptest",
  "serde_json",
  "tally-types",

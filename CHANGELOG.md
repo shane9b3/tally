@@ -40,6 +40,9 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   shows on its empty cells.
 
 ### Changed
+- The local clock (NOW, TODAY, the lock-file time stamp) is read with
+  `jiff`; `chrono` is flagged unmaintained (RUSTSEC-2026-0543) and is no
+  longer a dependency.
 - DataPilot totals with several data fields are labelled as in OpenOffice:
   "East Sum - Revenue" and "Total Sum - Revenue" instead of "East Result"
   with the data field in the next column. Function names in DataPilot
