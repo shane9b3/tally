@@ -286,8 +286,10 @@ by `max_iterations` (≤ 100,000) nodes and a depth of 1,000.
 `tally_io_xls::format` (2026-11-17) is a second parser over hostile bytes:
 it reads the BIFF8 formatting records calamine does not expose (`FONT`,
 `FORMAT`, `XF`, `PALETTE`, `COLINFO`, `ROW`, the XF index of every cell
-record, `WINDOW2`, `PANE`, `MSODRAWINGGROUP` / `MSODRAWING` pictures,
-`NOTE` / `TXO`; docs/file-formats.md). Its rules:
+record, `WINDOW2`, `PANE`, the page setup records (`SETUP`, the margins,
+`HEADER`, `FOOTER`, the print options, `WSBOOL`, the page breaks), the
+built-in `NAME`s `Print_Area` and `Print_Titles`, `MSODRAWINGGROUP` /
+`MSODRAWING` pictures, `NOTE` / `TXO`; docs/file-formats.md). Its rules:
 
 - It runs on the workbook stream the pre-scan extracted (strict chain
   walks, ≤ 256 MiB) and already walked, with the pre-scan's record
@@ -310,17 +312,63 @@ record, `WINDOW2`, `PANE`, `MSODRAWINGGROUP` / `MSODRAWING` pictures,
   stream: `max_fonts` and `max_xfs` (65,536 each), `max_number_formats`
   (16,384), `max_col_infos` (256 per sheet; column state is a 256-entry
   table per sheet, whatever the records say), `max_row_records`
-  (1,048,576), `max_styled_cells` (10 M cell formats of 8 bytes; `BLANK` /
-  `MULBLANK` cells that become styled empty cells also count against
-  `max_cells`), `max_images` (1,000), `max_image_bytes` (16 MiB),
+  (1,048,576), `max_styled_cells` (10 M cell formats of 8 bytes, the
+  empty cells a row's default format adds included: a sheet whose 65,536
+  rows all have one and that uses 256 columns asks for 16.7 M and gets the
+  budget, in time linear in the cells there are and the cells added),
+  `max_style_text_bytes` (16 MiB of number format codes and font names in
+  the style table, see below), `max_page_breaks` (4,096 per sheet and
+  direction), `max_images` (1,000), `max_image_bytes` (16 MiB),
   `max_total_image_bytes` (256 MiB, every placement counts, the bytes are
   shared `Arc<[u8]>`), `max_drawing_bytes` (64 MiB of `MSODRAWING` data),
-  `max_notes` (65,536). Past a limit the rest is left out with a warning
-  and the file still opens.
+  `max_notes` (65,536). Print names kept: 2 × `max_sheets`, 8 areas each.
+  Past a limit the rest is left out with a warning and the file still
+  opens.
+- Formatting never makes a file exceed `max_cells`. The pre-scan counts
+  the value and formula records (each once, so never fewer than the cells
+  that are materialized); empty cells that only carry a format (`BLANK`,
+  `MULBLANK`, the cells of a row default format) and column formats share
+  what is left of `max_cells` after that count, and past it they are left
+  out with one warning. (Before 2026-11-17 they were counted together
+  with the values while materializing, so formatted empty cells in front
+  of the values could push a value over the limit and fail a file that
+  opens without its formatting.) Tests:
+  `tally-io-xls::layout_review::formatted_empty_cells_never_fail_a_file`,
+  `…::every_file_that_opens_without_formats_opens_with_them`.
+- Row heights and column widths are runs whatever the file says: at most
+  2 × the `ROW` records + 1 row runs and 257 column runs per sheet. A
+  default height that hides every row is one hidden run to the end of the
+  sheet, not a million rows
+  (`hostile_formatting::row_formats_of_a_hostile_sheet_are_bounded`).
+- Page setup values are clamped, not trusted: margins that are NaN or ±∞
+  are ignored, negative ones are 0, none exceeds 50 in; the scale is
+  10–400 %; a paper code without a size is the default paper; a header or
+  footer is at most one record (8,224 bytes) and is converted in one
+  pass; page break counts are cut to the entries present and to
+  `max_page_breaks`. A print name's formula is read token by token within
+  its declared length; any token other than an area, a cell, a union or
+  the `ptgMemFunc` header skips the name
+  (`hostile_formatting::page_records_that_lie`,
+  `…::print_names_with_garbage_formulas_never_panic`,
+  `format::tests::print_names_cut_or_garbled_are_skipped`,
+  `page_setup::absurd_values_are_clamped_or_dropped`).
 - Identical cell formats share one `StyleData` (at most one per XF), so
-  the number of styles does not grow with the number of cells. Number
-  format codes over 4,096 characters become General (as in the other
-  readers); font names go through `tally_model::clean_font_name`.
+  the number of styles does not grow with the number of cells. XFs that
+  are equal field by field are resolved once; styles are found through a
+  64-bit hash of their debug text, which is not kept (it was the map's
+  key before, one copy of every format code per XF), and compared for
+  equality. Every style owns its number format code and font name, so
+  their total is capped: `max_style_text_bytes` (16 MiB) for the codes
+  read from `FORMAT` records and again for the codes and names in the
+  styles; past it a new style keeps its look without them (and is then
+  shared with every other format of that look), with one warning. 65,520
+  XFs over 16,000 formats of 4,000 characters and 500 font names (a 63 MB
+  file) peaked at 1.26 GB; now at about 340 MB for the whole read, most
+  of it the file, the sanitized copy and calamine's own tables
+  (`layout_review::the_text_of_the_styles_is_bounded`,
+  `…::equal_cell_formats_share_a_style`). Number format codes over 4,096
+  characters become General (as in the other readers); font names go
+  through `tally_model::clean_font_name`.
 - OfficeArt data is scanned flat and iteratively (a container's header is
   skipped, an atom whose length exceeds the remaining bytes ends the
   scan): no recursion, no allocation from a declared length. Pictures are
@@ -335,12 +383,16 @@ Tests: `tally-io-xls::hostile_formatting::*`
 (`every_record_cut_at_every_length`, `counts_that_lie`,
 `indices_without_a_target`, `column_and_row_records_out_of_range`,
 `limits_degrade_with_a_warning`, `pictures_with_lying_sizes`,
-`mutated_fixtures_never_panic`, `garbage_records_never_panic`) and
+`mutated_fixtures_never_panic`, `garbage_records_never_panic`,
+`page_records_that_lie`, `a_header_of_the_largest_record_is_linear`,
+`print_names_with_garbage_formulas_never_panic`,
+`row_formats_of_a_hostile_sheet_are_bounded`),
 `tally-io-xls::formatting::*` (`blank_cells_respect_the_cell_budget`,
-`picture_budgets`, `biff5_opens_with_values_only_and_a_warning`). The
-`xls` and `open` fuzz targets reach the pass through `read_xls`; three
+`picture_budgets`, `biff5_opens_with_values_only_and_a_warning`),
+`tally-io-xls::layout_review::*` and `tally-io-xls::page_setup::*`. The
+`xls` and `open` fuzz targets reach the pass through `read_xls`; four
 synthetic seeds (`fuzz/seeds/xls/formatted.xls`, `pictures.xls`,
-`notes.xls`, generated from `tests/fixtures/xls/`, which
+`notes.xls`, `page.xls`, generated from `tests/fixtures/xls/`, which
 `crates/tally-io-xls/tests/biff/books.rs` builds) exercise it. It has not
 been through a fuzz campaign yet.
 

@@ -29,6 +29,15 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   pictures (PNG and JPEG) and cell notes. Until now only the values,
   formulas and merged cells were read. Files from Excel 5.0 / 95 still
   open with their values only, and Tally says so when it opens one.
+- Excel 97-2003 files keep their page setup: paper size, orientation,
+  scale or "fit to pages", margins, header and footer, centring, printed
+  grid lines and headers, manual page breaks, the print area and the rows
+  and columns to repeat.
+- Excel 97-2003 files are laid out as in OpenOffice: every row has the
+  height stored in the file, column widths use OpenOffice's conversion,
+  rows and columns hidden through a height or width of 0 or a hidden
+  default are hidden, and formatting applied to a whole row or column
+  shows on its empty cells.
 
 ### Changed
 - DataPilot totals with several data fields are labelled as in OpenOffice:

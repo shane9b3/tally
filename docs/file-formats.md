@@ -203,8 +203,10 @@ conditional formats.
   via `tally_numfmt::excel::to_excel_code` (untranslatable codes fall back
   to General and are reported).
 - Column widths and hidden columns, row heights and hidden rows (whole
-  pixels at 96 dpi; a run over all rows becomes the default row height; at
-  most 100,000 individually sized rows per sheet), whole-column style runs
+  pixels at 96 dpi; when the runs leave no row without a height, as in an
+  imported `.xls`, the run that reaches the last row becomes the default
+  row height and the rows of that height are not written; at most 100,000
+  individually sized rows per sheet), whole-column style runs
   as column formats, shorter style runs (≤ 4,096 rows) as styled blanks.
 - Merges, defined names (workbook and sheet scope), `Print_Area` as the
   sheet's print area, document title.
@@ -652,26 +654,34 @@ row and column; the reader adds `Range::start()` (a sheet whose row 1 or
 column A is empty used to load shifted).
 
 **Formatting** comes from Tally's own BIFF8 reader (`src/format.rs`),
-which reuses the pre-scan's record framing (substreams, `CONTINUE`) and
-maps onto the model the way the XLSX reader maps the equivalent
-constructs, with its helpers (`column_width_to_hmm`, `max_digit_width`,
-`pt_to_hmm`, `border_line_style`, `INDEXED_PALETTE`, `excel_to_ooo`,
-`builtin_format_code`, `is_date_format`, `excel_serial_to_tally`):
+which reuses the pre-scan's record framing (substreams, `CONTINUE`). The
+sizes of columns and rows follow the OpenOffice 4.1 import filter
+(`XclImpColRowSettings`, `XclTools::GetScColumnWidth`), so a sheet is laid
+out as OpenOffice lays it out; the rest maps onto the model the way the
+XLSX reader maps the equivalent constructs, with its helpers (`pt_to_hmm`,
+`border_line_style`, `INDEXED_PALETTE`, `excel_to_ooo`,
+`builtin_format_code`, `is_date_format`, `excel_serial_to_tally`,
+`PageParts`, `header_footer_from_excel`, `paper_from_excel_code`):
 
 | BIFF8 records | Model | Notes |
 |---|---|---|
-| `COLINFO`, `DEFCOLWIDTH`, `STANDARDWIDTH` | `col_widths` (width, hidden) | Every `COLINFO` width is applied (writers other than Excel do not set its "user set" flag). Width in 1/256 character of the default font (font 0), converted as for XLSX `<col width>`. A range whose last column is ≥ 255 runs to the last column of the sheet. Width 0 is a hidden column. `STANDARDWIDTH`, or a `DEFCOLWIDTH` that is not the standard 64 px, gives the columns without a `COLINFO` that width |
-| `ROW`, `DEFAULTROWHEIGHT` | `row_heights` (height, hidden) | Height in twips. Only rows with the "unsynced" (height set by hand or by the writer) flag or the hidden flag are recorded; a height without it is an auto-fit result and is re-fitted, like an XLSX row without `customHeight`. Rows without a recorded height use Tally's default, not the file's `DEFAULTROWHEIGHT` (which is only used for hidden rows and picture extents) |
-| `FONT`, `FORMAT`, `XF`, `PALETTE` | `styles` (one per distinct look) | Font name, size, bold (weight ≥ 600), italic, underline (single, double, accounting), strikeout, colour; fill; the four borders and both diagonals with style and colour; horizontal and vertical alignment, wrap, indent, rotation (0–90, 91–180 → −1…−90, 255 = stacked), shrink to fit; number format (`FORMAT` code or built-in id, translated like XLSX `numFmts`); locked and hidden-formula protection. Font index 4 does not exist (the fifth `FONT` record is font 5). A cell XF's own fields are the effective look: the "used attribute" flags and the parent style XF are not consulted (as for XLSX `cellXfs`, and with the same result as OpenOffice's `XclImpXF`). `STYLE` records (named styles) are not read. The family of font 0 becomes the document's default font; a font size is kept unless it is 11 pt, the size cells without one are drawn at |
+| `COLINFO`, `DEFCOLWIDTH`, `STANDARDWIDTH` | `col_widths` (width, hidden), for every column of the sheet | Every `COLINFO` width is applied (writers other than Excel do not set its "user set" flag). OpenOffice's conversion: a width is in 1/256 of the width of a character of font 0, and that character is 11/20 of the font's height wide (`XclRoot::SetCharWidth`; OpenOffice measures the digit 0 on its printer and uses this value when it has none, Tally always, so widths do not depend on the machine): 10 characters of a 10 pt font are 1100 twips (73.3 px), where Excel shows 75 px. The result is rounded to twips. A range whose last column is ≥ 255 runs to the last column of the sheet. Width 0 is a hidden column of the default width. The columns without a `COLINFO` have the sheet's default: `STANDARDWIDTH` (1/256 character) if present, else `DEFCOLWIDTH` (characters) plus Excel's extra room `40960 / max(font height − 15, 60) + 50` (1/256 character; `XclTools::GetXclDefColWidthCorrection`), else OpenOffice's standard width of 1285 twips |
+| `ROW`, `DEFAULTROWHEIGHT` | `row_heights` (height, hidden), for every row of the sheet | As OpenOffice (`XclImpColRowSettings::Convert`): every `ROW` record gives its row the height it stores (twips), whether it was set by hand ("unsynced") or fitted by Excel; a `ROW` with the default-height bit, and every row without a record, has the `DEFAULTROWHEIGHT` (OpenOffice's standard 256 twips in a file without one). Hidden: the row's hidden flag, a stored height of 0, or `DEFAULTROWHEIGHT` bit 1 (or a default height of 0) for the rows that take the default. The rows are kept as runs (equal neighbours merge; the rows after the last record are one run to the end of the sheet), never row by row. The model has no "automatic height of this size", so every row is a row with a set height: it is shown and printed at the file's height and does not grow when its content changes (Format ▸ Row ▸ Optimal Height fits it). Saved as ODS the runs are repeated rows; saved as XLSX the run that reaches the end of the sheet becomes `sheetFormatPr/@defaultRowHeight` and only the rows that differ are written |
+| `FONT`, `FORMAT`, `XF`, `PALETTE` | `styles` (one per distinct look) | Font name, size, bold (weight ≥ 550: semibold and heavier, `XclFontData::GetScWeight`), italic, underline (single, double, accounting), strikeout, colour; fill; the four borders and both diagonals with style and colour; horizontal and vertical alignment, wrap, indent, rotation (0–90, 91–180 → −1…−90, 255 = stacked), shrink to fit; number format (`FORMAT` code or built-in id, translated like XLSX `numFmts`; where OpenOffice's built-in table differs from ECMA-376's, the `.xls` reader follows OpenOffice: ids 32–35 are `h:mm:ss`, and 59–62, 67–81 stand for 1–4, 9, 10, 12–17, 20–22, 45–47); locked and hidden-formula protection. Font index 4 is not in the file (the fifth `FONT` record is font 5): it is font 0 in bold, as in OpenOffice. Superscript and subscript are not read (the model's font has neither). A cell XF's own fields are the effective look: the "used attribute" flags and the parent style XF are not consulted (as for XLSX `cellXfs`, and with the same result as OpenOffice's `XclImpXF`). `STYLE` records (named styles) are not read. Equal looks share one style; the number format codes and font names the styles own are bounded by `Limits::max_style_text_bytes` (16 MiB; past it a format is read without them, with a warning). The family of font 0 becomes the document's default font; a font size is kept unless it is 11 pt, the size cells without one are drawn at |
 | Colour indices | `0xRRGGBBAA` | 0–7 fixed, 8–63 the default BIFF8 palette or the file's `PALETTE`, 0x40 / 0x41 the system window text / background (automatic for text and lines), 0x7FFF automatic font colour |
 | Fill patterns | `fill` | Pattern 1 is the foreground colour. Patterns 2–18 become one solid colour: the mix of pattern and background colour OpenOffice uses (`XclTools::GetPatternColor`, e.g. 50 % grey for pattern 2); unknown patterns the foreground colour |
 | XF index of `LABELSST`, `LABEL`, `RSTRING`, `NUMBER`, `RK`, `MULRK`, `FORMULA`, `BOOLERR` | `CellData::style` | |
-| `BLANK`, `MULBLANK` | styled empty cells | Only when the format shows something besides the default font; they count against the cell budget (past it they are left out with a warning) |
+| `BLANK`, `MULBLANK` | styled empty cells | When the format shows something besides the default font, and, with any format, inside a column that has a format of its own (the cell then keeps its look instead of taking the column's: a cell with the default format gets a style that is the default look). Formatted empty cells and column formats get the room the value cells leave under `Limits::max_cells`; past it they are left out with a warning. They never make a file exceed the limit |
+| `ROW` default format (`fGhostDirty` and the XF in bits 16–27) | styled empty cells | As OpenOffice (`ImportExcel::Row34`, `SetRowDefXF`): the row's cells without a record take the row's format. The model has no row styles (a style run is one column), so the format becomes styled empty cells from column A to the last column the sheet uses (a cell record or a `COLINFO`); a default format that is the plain look only needs cells where a column format would show instead. They count against `Limits::max_styled_cells` (warning past it) |
+| Cells with a value in a formatted column or row | `CellData::style` | A cell record's own XF is its look: a value with the default format in a formatted column gets the default look as a style of its own |
 | `COLINFO` XF | `style_runs` (whole column) | Columns A–IV only, when the format is more than the default font |
-| `WINDOW2`, `PANE`, `SCL` | `view_options` (formulas, grid, headers, zero values), `frozen` or `split`, `zoom` | |
+| `WINDOW2`, `PANE`, `SCL` | `view_options` (formulas, grid, headers, zero values), `frozen` or `split`, `zoom` | Frozen panes: the counts of `PANE`. OpenOffice freezes at the first visible cell plus the counts (a sheet frozen while scrolled keeps its scroll position there); the model's frozen panes start at A1, so the counts alone are kept |
 | `WINDOW1` | `settings.active_sheet` | |
-| `SHEETEXT` | `tab_color` | |
-| `MSODRAWINGGROUP` (BLIP store), `MSODRAWING` (client anchors) | `images` | PNG and JPEG, recognized by their signature (as for XLSX media; some writers store a PNG in a JPEG record). The two-cell anchor (column + 1/1024, row + 1/256) is converted to position and size with the file's column widths and row heights. EMF, WMF, PICT, DIB and TIFF pictures are left out with one warning; text boxes, shapes, controls and charts with another |
+| `SHEETEXT` | `tab_color` | Palette indices 8–63 only, as OpenOffice |
+| `SETUP`, `LEFTMARGIN` … `BOTTOMMARGIN`, `HEADER`, `FOOTER`, `HCENTER`, `VCENTER`, `PRINTGRIDLINES`, `PRINTHEADERS`, `WSBOOL` | `page_setup` | Mapped like XLSX `pageSetup`, `pageMargins`, `headerFooter`, `printOptions` and `pageSetUpPr` (through `tally_io_xlsx::PageParts`, so header and footer sit in the page margins the same way): paper (the sizes the model names, the others as custom sizes from OpenOffice's table; code 0 and unknown codes are the default paper), orientation, scale (10–400 %), fit to pages wide × tall when `WSBOOL` bit 8 is set, first page number (with its flag), page order, the four margins and the header and footer margins (inches; a margin the file does not give is Excel's default of 0.75 / 1 / 0.5 in; NaN and ±∞ are ignored, negative is 0, at most 50 in), header and footer text with Excel's `&L &C &R &P &N &D &T &F &A &Z&F` codes (font codes dropped), centring, grid lines, headers. `SETUP` bit 2 ("never set") drops paper, scale and orientation, bit 6 the orientation. Black and white, draft quality, copies and print resolution are read past (the model has no place for them) |
+| `HORIZONTALPAGEBREAKS`, `VERTICALPAGEBREAKS` | `row_breaks`, `col_breaks` | The row or column after each break; at most `Limits::max_page_breaks` (4,096) per sheet and direction |
+| `NAME` with the built-in ids 0x06 (`Print_Area`) and 0x07 (`Print_Titles`) of a sheet | `page_setup.print_range`, `repeat_rows`, `repeat_cols` | Like `_xlnm.Print_Area` and `_xlnm.Print_Titles` in XLSX: one area is the print range (several areas are not kept); a title area over all 256 columns names rows, one over all 65,536 rows names columns. Only formulas made of `ptgArea3d`, `ptgRef3d`, `ptgUnion` and `ptgMemFunc` are read; the sheet is the one the name is local to |
+| `MSODRAWINGGROUP` (BLIP store), `MSODRAWING` (client anchors) | `images` | PNG and JPEG, recognized by their signature (as for XLSX media; some writers store a PNG in a JPEG record). The two-cell anchor (column + 1/1024, row + 1/256) is converted to position and size with the column widths and row heights the sheet is shown at. A BLIP stored directly in the store (without a store entry) takes its index like an entry. EMF, WMF, PICT, DIB and TIFF pictures are left out with one warning; text boxes, shapes, controls, charts and group shapes with the pictures in them (placed relative to the group) with another |
 | `NOTE` + the `TXO` of its object | `notes` (text, author, always shown) | |
 
 Number formats decide what a number is, as for XLSX: under a format that
@@ -683,11 +693,14 @@ time (a code Tally cannot translate) gets a guessed `YYYY-MM-DD`,
 in strings are flattened (the cell has its XF's font), as for XLSX
 (parity X3).
 
-Not read: defined names, hyperlinks (`HLINK`), page setup, headers and
-footers, print areas, row default formats (`ROW` XF; the model has no row
-styles), named styles (`STYLE`), right-to-left sheets, conditional
-formats, data validation, outline groups, AutoFilter, protection
-passwords, charts, text boxes and shapes.
+A formula whose cell has no value in the file (a text result without its
+`STRING` record) is kept as a formula without a cached value.
+
+Not read: defined names other than the print area and print titles,
+hyperlinks (`HLINK`), named styles (`STYLE`), superscript and subscript,
+right-to-left sheets, conditional formats, data validation, outline
+groups, AutoFilter, protection passwords, charts, text boxes, shapes and
+grouped pictures.
 
 BIFF5 (Excel 5.0/95) files are read for their values and formulas only:
 their `XF`/`FONT` layouts differ, so the formatting pass is skipped and
@@ -700,11 +713,16 @@ signature, file size ≤ 256 MiB, ≤ 1024 sheets, ≤ 10 M cells, ≤ 512 MiB o
 text; calamine runs under `catch_unwind`, so a malformed stream is an
 error. The formatting pass never fails a file: what it cannot read is
 skipped, and past a limit (65,536 fonts and cell formats, 16,384 number
-formats, 256 `COLINFO` per sheet, 1,048,576 `ROW` records, 10 M formatted
-cells, 1,000 pictures of at most 16 MiB each and 256 MiB together, 64 MiB
-of sheet drawing data, 65,536 notes) the rest is left out with a warning.
-Tests: `crates/tally-io-xls/tests/formatting.rs`, `hostile_formatting.rs`
-and `positions.rs`, on workbooks built in code
+formats, 16 MiB of number format codes and font names in the styles, 256
+`COLINFO` per sheet, 1,048,576 `ROW` records, 10 M formatted cells, 4,096
+page breaks per sheet and direction, 1,000 pictures of at most 16 MiB each
+and 256 MiB together, 64 MiB of sheet drawing data, 65,536 notes) the rest
+is left out with a warning. Formatted empty cells get the room the value
+cells leave under the cell limit, so the formatting never turns a file
+that opens into one that does not.
+Tests: `crates/tally-io-xls/tests/formatting.rs`, `layout_review.rs`,
+`page_setup.rs`, `hostile_formatting.rs` and `positions.rs`, on workbooks
+built in code
 (`tests/biff/`); `crates/tally-engine/tests/open_formats.rs`
 (`xls_opens_with_its_formatting`).
 
