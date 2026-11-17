@@ -37,7 +37,7 @@ tally-assist.workspace = true
 tally-l10n.workspace = true
 zip.workspace = true
 # Local time in lock files (doclock.rs; `DD.MM.YYYY HH:MM`, as AOO).
-chrono.workspace = true
+jiff.workspace = true
 # The installed-font list for the font pickers (fonts.rs; metadata only).
 tally-io-pdf.workspace = true
 # macOS: the Dock's Quit and log-out ask about unsaved changes too

@@ -9,7 +9,7 @@ publish.workspace = true
 
 [dependencies]
 tally-types.workspace = true
-chrono.workspace = true
+jiff.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

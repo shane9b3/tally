@@ -51,6 +51,9 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   and reopen in Tally as they were. An .xlsx saved by Tally 0.1.2 or
   older opens with Excel's row height and column width, which is how
   Excel shows that file.
+- The local clock (NOW, TODAY, the lock-file time stamp) is read with
+  `jiff`; `chrono` is flagged unmaintained (RUSTSEC-2026-0543) and is no
+  longer a dependency.
 - DataPilot totals with several data fields are labelled as in OpenOffice:
   "East Sum - Revenue" and "Total Sum - Revenue" instead of "East Result"
   with the data field in the next column. Function names in DataPilot

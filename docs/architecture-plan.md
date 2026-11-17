@@ -330,7 +330,7 @@ Coercion rules live in one place, `calc-functions/src/coerce.rs`, so no function
 - **Input recognizer:** `recognize(input, &Locale) -> Recognized { value: Value, implied_format: Option<FormatCode> }`.
   - Typing `15%` gives 0.15 with `0%`; `$1,200.50` gives currency format; `2026-10-19` or `10/19/2026` give a date with format; `TRUE` gives Bool; `'0123` gives text; `=...` is a formula (handled upstream).
 - **Dates:** serial `f64`, epoch selectable among **1899-12-30 (default, OOo)**, 1900-01-01 (StarCalc 1.0) and 1904-01-01 (Mac).
-  - Own proleptic-Gregorian `days_from_civil` / `civil_from_days`. Use chrono only for the clock and time zone in NOW().
+  - Own proleptic-Gregorian `days_from_civil` / `civil_from_days`. Use jiff (chrono until 2026-11) only for the clock and time zone in NOW().
   - Negative serials (pre-1899 dates) are supported, as OOo does.
   - OOo switches to the Julian calendar before 1582-10-15. Decide whether to replicate this (open question Q7).
   - XLSX import: Excel's 1900 leap-year bug means serials ≥ 61 coincide with ours and serials 1–60 shift by one. Handle on import/export and document it.
