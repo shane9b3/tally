@@ -122,7 +122,7 @@ uses `rust_xlsxwriter` (pinned `=0.100.0`).
 | `xl/workbook.xml` | sheet order, names, `state="hidden"`/`veryHidden`; `workbookPr date1904`; `workbookView activeTab`; `calcPr iterate/iterateCount/iterateDelta`; `definedNames` |
 | `xl/sharedStrings.xml` | `<t>` and rich `<r><t>` runs concatenated; phonetic `<rPh>` dropped; whitespace kept verbatim |
 | `xl/styles.xml` | `numFmts` (custom codes → OOo codes), built-in `numFmtId` 0–49 (en-US), `fonts` (b, i, u, strike, sz, name, colour rgb/theme+tint/indexed), `fills` (pattern fill fg colour), `borders` (left/right/top/bottom/start/end style + colour), `cellXfs` (font, fill, border, number format, alignment horizontal/vertical/wrapText/indent), custom `indexedColors` |
-| `xl/worksheets/sheetN.xml` | `sheetPr/tabColor`, `sheetFormatPr defaultRowHeight`, `pane` (frozen → rows / columns; Window ▸ Split, `state="split"` or absent → `xSplit`/`ySplit` in 1/20 pt to 1/100 mm), `cols` (custom width, hidden, column style → whole-column style run), `row` (custom height, hidden), `c` (see below), `mergeCells` |
+| `xl/worksheets/sheetN.xml` | `sheetPr/tabColor`, `sheetFormatPr` (`defaultRowHeight`, `zeroHeight`, `defaultColWidth`, `baseColWidth`: the size of every row and column without one of its own, see "Units"), `pane` (frozen → rows / columns; Window ▸ Split, `state="split"` or absent → `xSplit`/`ySplit` in 1/20 pt to 1/100 mm), `cols` (width, hidden, column style → whole-column style run), `row` (height, hidden), `c` (see below), `mergeCells` |
 | `docProps/core.xml`, `docProps/app.xml` | title, created, modified, application |
 
 Cells (`<c r s t>`):
@@ -203,11 +203,32 @@ conditional formats.
   via `tally_numfmt::excel::to_excel_code` (untranslatable codes fall back
   to General and are reported).
 - Column widths and hidden columns, row heights and hidden rows (whole
-  pixels at 96 dpi; when the runs leave no row without a height, as in an
-  imported `.xls`, the run that reaches the last row becomes the default
-  row height and the rows of that height are not written; at most 100,000
-  individually sized rows per sheet), whole-column style runs
-  as column formats, shorter style runs (≤ 4,096 rows) as styled blanks.
+  pixels at 96 dpi; at most 100,000 individually sized rows per sheet),
+  whole-column style runs as column formats, shorter style runs (≤ 4,096
+  rows) as styled blanks.
+- The sheet's default sizes (`sheetFormatPr`), so that the file says what
+  Tally shows and the rows and columns of the default size are not written
+  one by one. When the runs leave no row without a height (a sheet read
+  from an Excel file), the run that reaches the last row is the default
+  row height. Otherwise the sheet has rows without a run, which are 24 px
+  in Tally: the default is `defaultRowHeight="18" customHeight="1"`, and
+  the `<row>` elements of those rows carry no height, so Excel fits them
+  to their content as Tally does. Columns work the same way: the run that
+  reaches the last column, else Tally's 100 px, written as
+  `defaultColWidth` in digits of the default font (14.28515625 for
+  Calibri) when it is not the 64 px (72, 80 … for other default fonts)
+  that `rust_xlsxwriter` implies. `rust_xlsxwriter` has no setter for
+  `defaultColWidth` and repeats a changed default height on every row, so
+  both are edits of the finished sheet XML (`write.rs`
+  `default_size_patches`: every sheet made in Tally is re-zipped). It also
+  uses its own 64 px for a column it was told nothing about: the columns
+  it writes a `<col>` for (a whole-column format, an outline level) get
+  the default width explicitly, and so do all columns of a sheet with a
+  chart, picture or note, whose end cells it computes from the widths.
+  Not kept: a row set to exactly the default height in a sheet made in
+  Tally becomes an automatic row, and a hidden column that is exactly
+  64 px wide is written with width 0 (as Excel does) and comes back at
+  the default width.
 - Merges, defined names (workbook and sheet scope), `Print_Area` as the
   sheet's print area, document title.
 - `date1904="1"` for D1904 workbooks (`rust_xlsxwriter` has no option for
@@ -272,11 +293,38 @@ Excel's 1900 date system counts 1900-01-01 as 1 and has a fictitious
   `px = trunc((256·width + trunc(128/7)) / 256 · 7)` (ECMA-376 §18.3.1.13),
   then 1/100 mm at 96 dpi (`px · 2540 / 96`). Excel's default column (8.43
   characters shown, stored as 9.140625) is 64 px = 1693 hmm
-  (`tally_io_xlsx::DEFAULT_COL_WIDTH_HMM`). Only `customWidth` or hidden
-  columns are recorded.
-- Row height: points → hmm (`pt · 2540 / 72`). Only `customHeight` or hidden
-  rows are recorded; Excel and LibreOffice write auto-fit heights for many
-  rows, which the app re-fits itself.
+  (`tally_io_xlsx::DEFAULT_COL_WIDTH_HMM`).
+- Row height: points → hmm (`pt · 2540 / 72`).
+- Which rows and columns have a size: all of them, as OpenOffice lays an
+  Excel file out and as the `.xls` reader does (`sheet.rs` `finish_rows`,
+  `finish_cols`). A row has the height its `<row ht>` stores, whether the
+  user set it (`customHeight`) or Excel fitted it; a row without `ht` or
+  without a `<row>` has `sheetFormatPr/@defaultRowHeight` (15 pt = 20 px
+  when absent) and, without a `<row>`, is hidden when the default is
+  (`zeroHeight`, or a default of 0). `ht="0"` is a hidden row of the
+  default height. A column has its `<col width>`, with or without
+  `customWidth` (of overlapping entries the last counts; width 0 is a
+  hidden column of the default width); every other column has
+  `defaultColWidth`, or else Excel's derivation from `baseColWidth` (8
+  when absent): that many digits of the default font plus 5 px, rounded up
+  to a multiple of 8 px (Calibri 11: 61 → 64 px). OpenOffice adds the 5 px
+  without the rounding (61 px); Excel's value is used because it is what
+  the author of the file saw. Sizes that are negative, not finite or
+  larger than 1,638 pt / 256 characters are ignored. The sizes are runs
+  over the whole sheet (equal neighbours merge; a million rows of one
+  height are one run), never one entry per row, and count against
+  `Limits::max_cells`. The model has no "automatic height of this size",
+  so these rows have a set height: shown and printed at the file's
+  height, not growing when their content changes (Format ▸ Row ▸ Optimal
+  Height fits them).
+- The exception is Tally's own default, so that a workbook made in Tally
+  reads back as it was: in a sheet whose default row height is 18 pt
+  (24 px), the shown rows of that height get no entry (an automatic row),
+  and a shown column of exactly 100 px never gets one
+  (`tally_model::APP_DEFAULT_ROW_HEIGHT_HMM`, `APP_DEFAULT_COL_WIDTH_HMM`).
+  An `.xlsx` saved by Tally 0.1.2 or older says 15 pt and 64 px for such
+  rows and columns (it cannot be told from an Excel file) and opens with
+  those.
 - Colours: ARGB → `0xRRGGBBAA` with alpha `ff`. Theme colours come from
   the workbook's `xl/theme/theme1.xml` (`colors.rs` `parse_theme`; the
   default Office palette when the part is missing or incomplete), with

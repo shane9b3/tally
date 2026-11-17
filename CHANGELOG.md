@@ -40,6 +40,17 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   shows on its empty cells.
 
 ### Changed
+- Excel workbooks (.xlsx) open with the row heights and column widths of
+  the file: a sheet from Excel has its 20 px rows and
+  64 px columns instead of Tally's 24 px and 100 px, and rows that Excel
+  fitted to their content keep that height. As with .xls files, such rows
+  have a set height and do not grow when their content changes (Format >
+  Row > Optimal Height fits them).
+- Workbooks made in Tally and saved as .xlsx now say Tally's own row
+  height and column width, so they open in Excel laid out as in Tally,
+  and reopen in Tally as they were. An .xlsx saved by Tally 0.1.2 or
+  older opens with Excel's row height and column width, which is how
+  Excel shows that file.
 - DataPilot totals with several data fields are labelled as in OpenOffice:
   "East Sum - Revenue" and "Total Sum - Revenue" instead of "East Result"
   with the data field in the next column. Function names in DataPilot
