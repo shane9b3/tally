@@ -67,6 +67,9 @@ test("the Undo drop-down undoes the marked steps at once; the Redo list works by
   await expect.poll(() => cellText(page, 4, 0)).toBe("");
 
   // Redo by keyboard: Tab to the arrow, open, ArrowDown twice, Enter.
+  // The pointer still rests where the Undo entry was clicked; the Redo list
+  // can open under it, and hovering an entry marks it. Move it away.
+  await page.mouse.move(0, 0);
   await page.getByTestId("redo-history-arrow").focus();
   await page.keyboard.press("Enter");
   const redo = page.getByRole("listbox", { name: "Redo history" });
