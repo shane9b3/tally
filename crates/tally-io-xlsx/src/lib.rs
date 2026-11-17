@@ -54,6 +54,39 @@ pub use formula::excel_formula_to_of;
 pub use numfmt::{builtin_format_code, excel_to_ooo, is_date_format};
 pub use r1c1::{r1c1_formula_to_of, r1c1_to_a1};
 
+/// The legacy 64-colour indexed palette (`indexed="N"`, the default BIFF8
+/// palette) as `0xRRGGBB`; shared with the `.xls` reader.
+pub const INDEXED_PALETTE: [u32; 64] = colors::INDEXED;
+
+/// Excel border style name (`thin`, `medium`, `double`, …) → the model's
+/// line style and width in 1/100 mm; shared with the `.xls` reader.
+pub fn border_line_style(style: &str) -> (tally_model::BorderStyle, u32) {
+    styles::border_line(style)
+}
+
+/// Maximum digit width in pixels (96 dpi) of a workbook's default font,
+/// the unit Excel column widths count in (Calibri 11 and Arial 10 → 7).
+pub fn max_digit_width(family: Option<&str>, size_pt: Option<f32>) -> f64 {
+    units::max_digit_width(family, size_pt)
+}
+
+/// An Excel column width in characters (`<col width>`, BIFF `COLINFO`
+/// width / 256) → 1/100 mm, for a default font of maximum digit width
+/// `mdw` pixels.
+pub fn column_width_to_hmm(width: f64, mdw: f64) -> u32 {
+    units::px_to_hmm(units::col_width_to_px(width, mdw))
+}
+
+/// Screen pixels (96 dpi) → 1/100 mm.
+pub fn px_to_hmm(px: f64) -> u32 {
+    units::px_to_hmm(px)
+}
+
+/// Points → 1/100 mm.
+pub fn pt_to_hmm(pt: f64) -> u32 {
+    units::pt_to_hmm(pt)
+}
+
 /// Excel's default column width (8.43 characters, 64 px), in 1/100 mm.
 /// Columns without a `<col>` entry use it; they are not recorded in
 /// [`tally_model::SheetData::col_widths`].

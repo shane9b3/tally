@@ -512,7 +512,7 @@ fn parse_dxf<R: BufRead>(xr: &mut XmlReader<R>) -> Result<RawDxf, XlsxError> {
 }
 
 /// Excel border style → (model style, width in 1/100 mm).
-fn border_line(style: &str) -> (BorderStyle, u32) {
+pub(crate) fn border_line(style: &str) -> (BorderStyle, u32) {
     match style {
         "thin" => (BorderStyle::Solid, 26),
         "medium" => (BorderStyle::Solid, 53),
