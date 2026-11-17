@@ -42,23 +42,44 @@ const MAX_HASH_LEN: usize = 1024;
 /// Longest attribute-like text kept (messages, header/footer).
 const MAX_TEXT: usize = 64 * 1024;
 
-/// Page setup pieces, assembled at the end of the sheet.
-#[derive(Debug, Default)]
-pub(crate) struct PageParts {
+/// Page setup pieces of an Excel sheet (`pageMargins`, `pageSetup`,
+/// `printOptions`, `headerFooter`, `sheetPr/pageSetUpPr`; in a `.xls` the
+/// `SETUP`, margin, `HEADER`/`FOOTER`, `HCENTER`/`VCENTER`,
+/// `PRINTGRIDLINES`, `PRINTHEADERS` and `WSBOOL` records), assembled into
+/// the model's page setup by [`PageParts::build`]. Shared with the `.xls`
+/// reader.
+#[derive(Clone, Debug, Default)]
+pub struct PageParts {
+    /// The sheet has page setup parts at all.
     pub any: bool,
+    /// Excel's margins, 1/100 mm (`header`/`footer`: the distances of the
+    /// header and the footer from the page edge).
     pub margins: Option<MarginsData>,
+    /// Orientation.
     pub orientation: Option<OrientationData>,
+    /// Paper.
     pub paper: Option<PaperData>,
+    /// Scale in percent (clamped to 10..=400 when it is used).
     pub scale: Option<u32>,
+    /// Fit to (pages wide, pages tall); 0 = any number.
     pub fit: Option<(u32, u32)>,
+    /// Fit to pages is switched on (else the scale applies).
     pub fit_to_page: bool,
+    /// First page number.
     pub first_page: Option<u32>,
+    /// Page order "over, then down".
     pub over_then_down: bool,
+    /// Print grid lines.
     pub gridlines: bool,
+    /// Print row and column headers.
     pub headings: bool,
+    /// Centre horizontally.
     pub center_h: bool,
+    /// Centre vertically.
     pub center_v: bool,
+    /// The header.
     pub header: Option<HeaderFooterData>,
+    /// The footer.
     pub footer: Option<HeaderFooterData>,
 }
 
@@ -565,7 +586,7 @@ pub(crate) fn parse_protection(e: &Elem) -> Option<SheetProtectionData> {
     Some(p)
 }
 
-fn paper_from_code(code: u32) -> Option<PaperData> {
+pub(crate) fn paper_from_code(code: u32) -> Option<PaperData> {
     Some(match code {
         1 | 2 => PaperData::Letter,
         3 => PaperData::Tabloid,

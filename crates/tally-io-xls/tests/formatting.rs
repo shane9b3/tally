@@ -37,10 +37,19 @@ fn run(start: u32, end: u32, size_hmm: u32, hidden: bool) -> DimRun {
     }
 }
 
-/// Characters → 1/100 mm for the fixtures' default font (Arial 10).
-fn chars(w: f64) -> u32 {
-    tally_io_xlsx::column_width_to_hmm(w, 7.0)
+/// A column width of `w`/256 characters as OpenOffice converts it
+/// (`XclTools::GetScColumnWidth`) for the fixtures' font 0 of 10 pt: a
+/// character is 11 × 200 / 20 = 110 twips wide (the fallback of
+/// `XclRoot::SetCharWidth`), the width is rounded to twips.
+fn width(w: u16) -> u32 {
+    let twips = (f64::from(w) / 256.0 * 110.0 + 0.5) as u32;
+    tally_io_xlsx::pt_to_hmm(f64::from(twips) / 20.0)
 }
+
+/// OpenOffice's standard column width, 1285 twips (`STD_COL_WIDTH`).
+const STD_COL: u32 = 2267;
+/// OpenOffice's standard row height, 256 twips.
+const STD_ROW: u32 = 452;
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/xls")
@@ -51,75 +60,210 @@ fn column_widths_and_hidden_columns() {
     let wb = read(&biff::books::formatted());
     assert_eq!(wb.warnings, Vec::<String>::new());
     let s = &wb.sheets[0];
-    assert_eq!(chars(10.0), 1852);
+    // 10 characters: 1100 twips. DEFCOLWIDTH 8: 8 × 256 + 40960 / (200 −
+    // 15) + 50 = 2319 (1/256 character) = 996 twips.
+    assert_eq!((width(2560), width(2319)), (1940, 1757));
     assert_eq!(
         s.col_widths,
         vec![
-            run(0, 0, 1852, false),
-            // Hidden by its flag; the width is kept.
-            run(2, 3, chars(4.0), true),
+            run(0, 0, 1940, false),
+            run(1, 1, 1757, false),
+            // Hidden by its flag; the width (4 characters, 440 twips) is
+            // kept.
+            run(2, 3, 776, true),
             // Width 0 is a hidden column of the default width.
-            run(4, 4, tally_io_xlsx::DEFAULT_COL_WIDTH_HMM, true),
-            run(6, 6, chars(2.0), false),
+            run(4, 4, 1757, true),
+            run(5, 5, 1757, false),
+            run(6, 6, 388, false),
             // `first > last` (9..8) is ignored; a range that reaches the
             // last BIFF column runs to the end of the sheet.
-            run(10, MAX_COLS - 1, chars(5.0), false),
+            run(7, 9, 1757, false),
+            run(10, MAX_COLS - 1, 970, false),
         ]
     );
-    // Sheet "Two" has no column records.
-    assert!(wb.sheets[1].col_widths.is_empty());
+    // Sheet "Two" has no column records: OpenOffice's standard width.
+    assert_eq!(
+        wb.sheets[1].col_widths,
+        vec![run(0, MAX_COLS - 1, STD_COL, false)]
+    );
 }
 
 #[test]
 fn default_column_widths_fill_the_columns_without_a_record() {
-    let book = |extra: Vec<u8>| {
+    let book = |fonts: &[biff::Font], extra: Vec<u8>| {
         let mut sheet = biff::colinfo(1, 1, 2560, 15, 0);
         sheet.extend(extra);
         sheet.extend(biff::number(0, 0, 15, 1.0));
         read(&biff::file(biff::stream(
-            &biff::globals(&[], &[], &[]),
+            &biff::globals(fonts, &[], &[]),
             &[("S", sheet)],
         )))
     };
-    // The standard default (8 characters): only the record's column.
-    let wb = book(biff::defcolwidth(8));
-    assert_eq!(wb.sheets[0].col_widths, vec![run(1, 1, 1852, false)]);
-    // STANDARDWIDTH: every other column has that width.
-    let wb = book(biff::standardwidth(1024));
-    assert_eq!(
-        wb.sheets[0].col_widths,
-        vec![
-            run(0, 0, chars(4.0), false),
-            run(1, 1, 1852, false),
-            run(2, MAX_COLS - 1, chars(4.0), false),
-        ]
+    let widths = |wb: &WorkbookData, default: u32, b: u32| {
+        assert_eq!(
+            wb.sheets[0].col_widths,
+            vec![
+                run(0, 0, default, false),
+                run(1, 1, b, false),
+                run(2, MAX_COLS - 1, default, false),
+            ]
+        );
+    };
+    // No default width record: OpenOffice's standard width.
+    widths(&book(&[], Vec::new()), STD_COL, 1940);
+    // DEFCOLWIDTH counts characters and gets Excel's extra room for the
+    // font: 8 × 256 + 40960 / max(200 − 15, 60) + 50 = 2319.4 → 2319.
+    widths(&book(&[], biff::defcolwidth(8)), 1757, 1940);
+    // 4 × 256 + 271.4 = 1295 → 1295 / 256 × 110 + 0.5 = 556 twips.
+    assert_eq!(width(1295), tally_io_xlsx::pt_to_hmm(27.8));
+    widths(&book(&[], biff::defcolwidth(4)), 981, 1940);
+    // STANDARDWIDTH is in 1/256 character, has no extra room and wins
+    // over DEFCOLWIDTH, whatever their order.
+    widths(&book(&[], biff::standardwidth(1024)), 776, 1940);
+    let mut both = biff::standardwidth(1024);
+    both.extend(biff::defcolwidth(8));
+    widths(&book(&[], both), 776, 1940);
+    // A font 0 of 20 pt: a character is 11 × 400 / 20 = 220 twips, and
+    // DEFCOLWIDTH 8 is 2048 + 40960 / 385 + 50 = 2204 → 1894 twips.
+    let big = [biff::Font {
+        twips: 400,
+        ..biff::Font::default()
+    }];
+    widths(
+        &book(&big, biff::defcolwidth(8)),
+        tally_io_xlsx::pt_to_hmm(1894.0 / 20.0),
+        tally_io_xlsx::pt_to_hmm(2200.0 / 20.0),
     );
-    // DEFCOLWIDTH of 4 characters: 4 × 7 px + 5 px padding, rounded up to
-    // 8 px steps = 40 px.
-    let wb = book(biff::defcolwidth(4));
-    let w = tally_io_xlsx::px_to_hmm(40.0);
-    assert_eq!(
-        wb.sheets[0].col_widths,
-        vec![
-            run(0, 0, w, false),
-            run(1, 1, 1852, false),
-            run(2, MAX_COLS - 1, w, false),
-        ]
+    // A font below 3.75 pt: the correction's divisor stops at 60.
+    let tiny = [biff::Font {
+        twips: 40,
+        ..biff::Font::default()
+    }];
+    // 2048 + 40960 / 60 + 50 = 2780 (1/256 of 22 twips) = 239 twips.
+    widths(
+        &book(&tiny, biff::defcolwidth(8)),
+        tally_io_xlsx::pt_to_hmm(239.0 / 20.0),
+        tally_io_xlsx::pt_to_hmm(220.0 / 20.0),
     );
 }
 
 #[test]
-fn row_heights_and_hidden_rows() {
+fn every_row_has_the_height_of_the_file() {
     let wb = read(&biff::books::formatted());
     let s = &wb.sheets[0];
     assert_eq!(
         s.row_heights,
         vec![
+            // DEFAULTROWHEIGHT: 255 twips = 12.75 pt.
+            run(0, 0, 450, false),
             // 600 twips = 30 pt, set by hand ("unsynced").
             run(1, 1, tally_io_xlsx::pt_to_hmm(30.0), false),
-            // Row 2 has an auto-fit height: not recorded. Row 3 is hidden.
-            run(3, 3, tally_io_xlsx::pt_to_hmm(12.75), true),
+            // Row 2 has an automatic height of 15 pt: shown at it.
+            run(2, 2, tally_io_xlsx::pt_to_hmm(15.0), false),
+            // Row 3 is hidden.
+            run(3, 3, 450, true),
+            run(4, 4, 450, false),
             run(5, 5, tally_io_xlsx::pt_to_hmm(20.0), false),
+            run(6, MAX_ROWS - 1, 450, false),
+        ]
+    );
+    // Sheet "Two" has no row records at all: OpenOffice's standard
+    // height, in one run.
+    assert_eq!(
+        wb.sheets[1].row_heights,
+        vec![run(0, MAX_ROWS - 1, STD_ROW, false)]
+    );
+}
+
+/// A sheet with the given row records around one number.
+fn rows_book(records: Vec<u8>) -> WorkbookData {
+    let mut sheet = records;
+    sheet.extend(biff::number(0, 0, 15, 1.0));
+    read(&biff::file(biff::stream(
+        &biff::globals(&[], &[], &[]),
+        &[("S", sheet)],
+    )))
+}
+
+#[test]
+fn row_heights_follow_openoffice() {
+    // DEFAULTROWHEIGHT 20 pt; row 1: 30 pt, automatic; row 2: 30 pt, set
+    // by hand; row 4: the default height (bit 0x8000; its own number is
+    // ignored); row 6: height 0 = hidden; row 8: hidden by its flag.
+    let mut s = biff::defaultrowheight(1, 400);
+    s.extend(biff::row(1, 600, 0x0100));
+    s.extend(biff::row(2, 600, 0x0140));
+    s.extend(biff::row(4, 0x8000 | 900, 0x0100));
+    s.extend(biff::row(6, 0, 0x0100));
+    s.extend(biff::row(8, 300, 0x0120));
+    let wb = rows_book(s);
+    let (d, h30) = (
+        tally_io_xlsx::pt_to_hmm(20.0),
+        tally_io_xlsx::pt_to_hmm(30.0),
+    );
+    assert_eq!((d, h30), (706, 1058));
+    assert_eq!(
+        wb.sheets[0].row_heights,
+        vec![
+            run(0, 0, d, false),
+            run(1, 2, h30, false),
+            run(3, 5, d, false),
+            run(6, 6, d, true),
+            run(7, 7, d, false),
+            run(8, 8, tally_io_xlsx::pt_to_hmm(15.0), true),
+            run(9, MAX_ROWS - 1, d, false),
+        ]
+    );
+    assert_eq!(wb.warnings, Vec::<String>::new());
+}
+
+#[test]
+fn rows_hidden_by_default_stay_runs() {
+    // DEFAULTROWHEIGHT bit 1: the rows without a record are hidden. Row 2
+    // has a height of its own; row 3 takes the default, hidden with it.
+    for default in [biff::defaultrowheight(2, 300), biff::defaultrowheight(0, 0)] {
+        let zero = default[6..8] == [0, 0];
+        let mut s = default;
+        s.extend(biff::row(2, 500, 0x0140));
+        s.extend(biff::row(3, 0x8000 | 255, 0x0100));
+        let wb = rows_book(s);
+        // A default height of 0 is OpenOffice's standard height, hidden.
+        let d = if zero {
+            STD_ROW
+        } else {
+            tally_io_xlsx::pt_to_hmm(15.0)
+        };
+        assert_eq!(
+            wb.sheets[0].row_heights,
+            vec![
+                run(0, 1, d, true),
+                run(2, 2, tally_io_xlsx::pt_to_hmm(25.0), false),
+                run(3, MAX_ROWS - 1, d, true),
+            ]
+        );
+    }
+}
+
+#[test]
+fn sixty_thousand_rows_are_runs() {
+    // Every row has a record: equal neighbours are one run, and the rows
+    // after the last record are one more.
+    let mut s = biff::defaultrowheight(0, 255);
+    for r in 0..60_000u32 {
+        s.extend(biff::row(r as u16, 300 + (r / 20_000) as u16, 0x0100));
+    }
+    let wb = rows_book(s);
+    assert_eq!(
+        wb.sheets[0]
+            .row_heights
+            .iter()
+            .map(|r| (r.start, r.end))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, 19_999),
+            (20_000, 39_999),
+            (40_000, 59_999),
+            (60_000, MAX_ROWS - 1)
         ]
     );
 }
@@ -407,19 +551,22 @@ fn pictures_are_anchored_and_other_objects_are_reported() {
         vec![("image/png", 48), ("image/jpeg", 24), ("image/png", 20)]
     );
     assert_eq!(&s.images[0].bytes[..8], b"\x89PNG\r\n\x1a\n");
-    // Column 1 is 1852 wide, row 2 is 20 pt high; the first picture starts
-    // in the middle of both and ends at the start of column 3 and row 4.
+    // Column 1 is 1940 wide, row 2 is 20 pt high; the first picture starts
+    // in the middle of both and ends at the start of column 3 and row 4,
+    // across a column and a row of the sizes the sheet shows them at.
     let a = &s.images[0].anchor;
     let h = tally_io_xlsx::pt_to_hmm(20.0);
     assert_eq!((a.row, a.col), (2, 1));
-    assert_eq!((a.dx_hmm, a.dy_hmm), (926, h / 2));
-    assert_eq!(a.width_hmm, 926 + tally_io_xlsx::DEFAULT_COL_WIDTH_HMM);
-    assert_eq!(a.height_hmm, h / 2 + tally_io_xlsx::DEFAULT_ROW_HEIGHT_HMM);
+    assert_eq!((a.dx_hmm, a.dy_hmm), (970, h / 2));
+    assert_eq!(a.width_hmm, 970 + STD_COL);
+    assert_eq!(a.height_hmm, h / 2 + STD_ROW);
+    assert_eq!(s.col_widths[2], run(2, MAX_COLS - 1, STD_COL, false));
+    assert_eq!(s.row_heights[2], run(3, MAX_ROWS - 1, STD_ROW, false));
     // The third one covers nearly all of F6.
     let a = &s.images[2].anchor;
     assert_eq!((a.row, a.col, a.dx_hmm, a.dy_hmm), (5, 5, 0, 0));
-    assert_eq!(a.width_hmm, 1693 * 1023 / 1024);
-    assert_eq!(a.height_hmm, 529 * 255 / 256);
+    assert_eq!(a.width_hmm, STD_COL * 1023 / 1024);
+    assert_eq!(a.height_hmm, STD_ROW * 255 / 256);
     // The EMF is one warning, the text box and the picture whose BLIP is
     // missing another.
     assert_eq!(wb.warnings.len(), 2, "{:?}", wb.warnings);

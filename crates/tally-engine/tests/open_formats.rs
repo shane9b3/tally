@@ -326,8 +326,10 @@ fn xls_opens_with_its_formatting() {
             .find(|r| r.start <= c && c <= r.end)
             .map(|r| (r.size_hmm, r.hidden))
     };
-    assert_eq!(col(0), Some((1852, false)));
-    assert_eq!(col(1), None);
+    // OpenOffice's widths: 10 characters of Arial 10 are 1100 twips, the
+    // sheet's default (DEFCOLWIDTH 8) 996 twips.
+    assert_eq!(col(0), Some((1940, false)));
+    assert_eq!(col(1), Some((1757, false)));
     assert_eq!(col(2).map(|c| c.1), Some(true));
     assert_eq!(col(200).map(|c| c.1), Some(false));
     let row = |r: u32| {
@@ -336,8 +338,16 @@ fn xls_opens_with_its_formatting() {
             .find(|x| x.start <= r && r <= x.end)
             .map(|x| (x.size_hmm, x.hidden))
     };
+    // Every row has the height of the file: its own, or the sheet's
+    // default of 12.75 pt.
+    assert_eq!(row(0), Some((450, false)));
     assert_eq!(row(1), Some((1058, false)));
+    assert_eq!(row(2), Some((529, false)));
     assert_eq!(row(3).map(|r| r.1), Some(true));
+    assert_eq!(row(70_000), Some((450, false)));
+    let layout = svc.sheet_layout(info.doc, sheet).unwrap();
+    assert!(layout.row_runs.len() < 10, "{:?}", layout.row_runs);
+    assert_eq!(layout.row_runs[0].size.round(), 17.0);
     assert_eq!(one.frozen, Some((1, 2)));
     assert_eq!(one.zoom, Some(150));
     assert_eq!(one.tab_color, Some(0xFF00_00FF));
@@ -345,6 +355,65 @@ fn xls_opens_with_its_formatting() {
     assert!(!view.show_gridlines && !view.show_headers && !view.show_zero_values);
     assert_eq!(data.settings.default_font.as_deref(), Some("Arial"));
     assert_eq!(data.settings.active_sheet, 1);
+
+    // page.xls: the page setup, a row default format and a formatted
+    // column whose cells with the default format keep the default look.
+    let info = open(&mut svc, &repo("tests/fixtures/xls/page.xls"));
+    let sheet = info.sheets[0].id;
+    let wb = &svc.document(info.doc).unwrap().wb;
+    let bordered = |r: u32, c: u32| {
+        wb.styles
+            .to_dto(wb.style_at(CellAddr::new(sheet, r, c)))
+            .borders
+            .left
+            .is_some()
+    };
+    // Column B is bordered: B9 has it, B1 (a number) and B3 (an empty
+    // cell), both with the default format, have not.
+    assert!(bordered(8, 1));
+    assert!(!bordered(0, 1) && !bordered(2, 1));
+    // Row 2's default format: A2, B2 and D2, not the number in C2, and
+    // not past the columns the sheet uses.
+    assert!(bordered(1, 0) && bordered(1, 1) && bordered(1, 3));
+    assert!(!bordered(1, 2) && !bordered(1, 4));
+    let data = wb.to_data();
+    let p = data.sheets[0].page_setup.as_ref().unwrap();
+    assert_eq!(p.orientation, tally_model::OrientationData::Landscape);
+    assert_eq!(p.paper, tally_model::PaperData::Letter);
+    assert_eq!(p.scale, tally_model::PageScaleData::Percent(80));
+    assert_eq!((p.margins.left, p.margins.right), (422, 635));
+    assert_eq!(p.repeat_rows, Some((0, 1)));
+    assert_eq!(data.sheets[0].row_breaks, vec![5, 20]);
+    assert_eq!(
+        data.sheets[1].page_setup.as_ref().map(|p| p.scale),
+        Some(tally_model::PageScaleData::FitTo {
+            width: 1,
+            height: 0
+        })
+    );
+    // Saved as ODS and XLSX the rows stay runs: the files are small and
+    // the heights come back from the ODS.
+    let dir = temp_dir("xls-save");
+    for (ext, format) in [
+        ("ods", tally_api::FileFormat::Ods),
+        ("xlsx", tally_api::FileFormat::Xlsx),
+    ] {
+        let out = dir.join(format!("page.{ext}"));
+        svc.save_copy(info.doc, &out, format).unwrap();
+        let len = std::fs::metadata(&out).unwrap().len();
+        assert!(len < 64 * 1024, "{ext}: {len} bytes");
+    }
+    let back = open(&mut svc, &dir.join("page.ods"));
+    let rows = svc
+        .document(back.doc)
+        .unwrap()
+        .wb
+        .to_data()
+        .sheets
+        .swap_remove(0)
+        .row_heights;
+    assert_eq!(rows, data.sheets[0].row_heights);
+    let _ = std::fs::remove_dir_all(&dir);
 
     let info = open(&mut svc, &repo("tests/fixtures/xls/pictures.xls"));
     let images = svc.images(info.doc, info.sheets[0].id).unwrap();

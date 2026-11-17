@@ -10,20 +10,25 @@
 //!
 //! The look of a BIFF8 workbook, which calamine does not expose, is read
 //! by this crate's own formatting reader (`format.rs`) from the same
-//! stream: column widths and hidden columns, row heights and hidden rows,
+//! stream: the width of every column and the height of every row as
+//! OpenOffice 4.1 computes them from `COLINFO`, `DEFCOLWIDTH`,
+//! `STANDARDWIDTH`, `ROW` and `DEFAULTROWHEIGHT`, hidden rows and columns,
 //! fonts, fills, borders, alignment, number formats and cell protection
 //! (`FONT`, `FORMAT`, `XF`, `PALETTE` and the XF index of every cell
-//! record, `BLANK` and `MULBLANK` included), column default formats,
-//! sheet view settings (grid lines, headers, zero values, frozen panes,
-//! split, zoom, tab colour, the active sheet), PNG and JPEG pictures with
-//! their anchors, and cell notes. It maps onto the model the way the XLSX
-//! reader maps the equivalent constructs and never fails a file: what it
-//! cannot read is skipped with a warning in
-//! [`WorkbookData::warnings`](tally_model::WorkbookData::warnings). BIFF5
-//! files open with their values only. Not read: defined names,
-//! hyperlinks, page setup, named styles, charts and shapes
-//! (docs/file-formats.md). Export is not supported
-//! (docs/parity-deviations.md).
+//! record, `BLANK` and `MULBLANK` included), column and row default
+//! formats, sheet view settings (grid lines, headers, zero values, frozen
+//! panes, split, zoom, tab colour, the active sheet), the page setup
+//! (paper, orientation, scale or fit to pages, margins, header and footer,
+//! print options, manual page breaks, print area and print titles), PNG
+//! and JPEG pictures with their anchors, and cell notes. It maps onto the
+//! model the way the XLSX reader maps the equivalent constructs and never
+//! fails a file: what it cannot read is skipped with a warning in
+//! [`WorkbookData::warnings`](tally_model::WorkbookData::warnings), and
+//! empty cells that only carry a format get the room the value cells
+//! leave under [`Limits::max_cells`]. BIFF5 files open with their values
+//! only. Not read: defined names other than the print ranges, hyperlinks,
+//! named styles, charts and shapes (docs/file-formats.md). Export is not
+//! supported (docs/parity-deviations.md).
 //!
 //! Hardening (docs/security.md): the file must start with the OLE2
 //! signature and be at most [`Limits::max_bytes`]. Before calamine runs,
@@ -80,9 +85,16 @@ pub struct Limits {
     pub max_col_infos: usize,
     /// Most `ROW` records read (all sheets).
     pub max_row_records: usize,
-    /// Most cell records whose format is kept (all sheets); the cells
-    /// beyond keep their values and get the default look.
+    /// Most cell records whose format is kept (all sheets), the empty
+    /// cells a row's default format adds included; the cells beyond keep
+    /// their values and get the default look.
     pub max_styled_cells: u64,
+    /// Most bytes of number format codes and font names kept in the cell
+    /// styles (every style owns a copy of its own); the formats beyond
+    /// are read without them.
+    pub max_style_text_bytes: u64,
+    /// Most manual page breaks read per sheet and direction.
+    pub max_page_breaks: usize,
     /// Most pictures placed on sheets (all sheets).
     pub max_images: usize,
     /// Largest single picture.
@@ -109,6 +121,8 @@ impl Default for Limits {
             max_col_infos: 256,
             max_row_records: 1_048_576,
             max_styled_cells: 10_000_000,
+            max_style_text_bytes: 16 * 1024 * 1024,
+            max_page_breaks: 4_096,
             max_images: 1_000,
             max_image_bytes: 16 * 1024 * 1024,
             max_total_image_bytes: tally_model::MAX_TOTAL_IMAGE_BYTES as u64,
@@ -208,8 +222,8 @@ pub fn read_xls(bytes: &[u8], limits: &Limits) -> Result<WorkbookData, XlsError>
     let scanned = catch_unwind(AssertUnwindSafe(|| {
         prescan::sanitize_with_offset(bytes, limits.max_sheets, limits.max_cells)
     }));
-    let (data, stream_at) = match scanned {
-        Ok(Ok((data, at, _))) => (data, at),
+    let (data, stream_at, scanned_cells) = match scanned {
+        Ok(Ok((data, at, scan))) => (data, at, scan.cells),
         Ok(Err(prescan::Refusal::Malformed(m))) => return Err(XlsError::Malformed(m)),
         Ok(Err(prescan::Refusal::Budget { what, limit })) => {
             return Err(XlsError::LimitExceeded { what, limit })
@@ -227,7 +241,14 @@ pub fn read_xls(bytes: &[u8], limits: &Limits) -> Result<WorkbookData, XlsError>
         format::read(data.get(stream_at..).unwrap_or_default(), limits)
     }))
     .unwrap_or_else(|_| format::failed());
-    let result = catch_unwind(AssertUnwindSafe(|| decode(data, formatting, limits)));
+    // Empty cells that only carry a format, and column formats, get the
+    // room the value cells leave (the pre-scan counted those, each record
+    // once, so never fewer than are materialized): formatting never makes
+    // a file exceed the cell limit.
+    let blank_budget = limits.max_cells.saturating_sub(scanned_cells);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        decode(data, formatting, limits, blank_budget)
+    }));
     match result {
         Ok(r) => r,
         Err(_) => Err(XlsError::Malformed(
@@ -242,6 +263,8 @@ struct Styles {
     styles: Vec<StyleData>,
     /// (base style, format code) → style.
     guessed: std::collections::HashMap<(Option<u32>, &'static str), u32>,
+    /// The default look as a style of its own, once a cell needs it.
+    plain: Option<u32>,
 }
 
 impl Styles {
@@ -259,38 +282,72 @@ impl Styles {
         self.guessed.insert((base, code), i);
         i
     }
+
+    /// The default look, for a cell in a column with a format: a cell
+    /// without a style would take the column's.
+    fn plain(&mut self) -> u32 {
+        if let Some(i) = self.plain {
+            return i;
+        }
+        self.styles.push(StyleData::default());
+        let i = (self.styles.len() - 1) as u32;
+        self.plain = Some(i);
+        i
+    }
+
+    /// The style of a cell with the format `info`; in a column with a
+    /// format (`covered`) the default look is a style too.
+    fn of(&mut self, info: Option<&format::XfInfo>, covered: bool) -> Option<u32> {
+        info.and_then(|x| x.style)
+            .or_else(|| covered.then(|| self.plain()))
+    }
 }
 
-/// Adds an empty cell that only carries a format (a `BLANK` or `MULBLANK`
-/// record, or a value calamine dropped), within the cell budget; `false`
-/// when the budget left it out.
-fn styled_blank(
-    cells: &mut Vec<CellData>,
-    cells_total: &mut u64,
-    max_cells: u64,
-    info: Option<&format::XfInfo>,
-    (row, col): (u32, u32),
-) -> bool {
-    let Some(info) = info.filter(|x| !x.plain) else {
-        return true;
-    };
-    if *cells_total >= max_cells {
-        return false;
+/// The empty cells that only carry a format, within the room the value
+/// cells leave.
+struct Blanks {
+    left: u64,
+    dropped: bool,
+}
+
+impl Blanks {
+    /// Adds an empty cell with the format `info` (a `BLANK` or `MULBLANK`
+    /// record, a value calamine dropped, or a cell of a row with a
+    /// default format) if the format shows, or if the cell is in a column
+    /// with a format (`covered`), whose look it must not take.
+    fn add(
+        &mut self,
+        cells: &mut Vec<CellData>,
+        styles: &mut Styles,
+        info: Option<&format::XfInfo>,
+        covered: bool,
+        (row, col): (u32, u32),
+    ) {
+        if info.is_none_or(|x| x.plain) && !covered {
+            return;
+        }
+        let Some(style) = styles.of(info, covered) else {
+            return;
+        };
+        if self.left == 0 {
+            self.dropped = true;
+            return;
+        }
+        self.left -= 1;
+        cells.push(CellData {
+            row,
+            col,
+            content: CellContentData::Value(Value::Empty),
+            style: Some(style),
+        });
     }
-    *cells_total += 1;
-    cells.push(CellData {
-        row,
-        col,
-        content: CellContentData::Value(Value::Empty),
-        style: info.style,
-    });
-    true
 }
 
 fn decode(
     data: Vec<u8>,
     mut formatting: format::Formatting,
     limits: &Limits,
+    blank_budget: u64,
 ) -> Result<WorkbookData, XlsError> {
     let mut wb: Xls<Cursor<Vec<u8>>> =
         Xls::new_with_options(Cursor::new(data), XlsOptions::default())
@@ -315,45 +372,86 @@ fn decode(
     let mut styles = Styles {
         styles: std::mem::take(&mut formatting.styles),
         guessed: std::collections::HashMap::new(),
+        plain: None,
+    };
+    let mut blanks = Blanks {
+        left: blank_budget,
+        dropped: false,
     };
     let mut cells_total: u64 = 0;
     let mut text_total: u64 = 0;
     let mut sheets: Vec<SheetData> = Vec::with_capacity(names.len());
     let mut formula_failures = 0usize;
-    let mut blanks_dropped = false;
     for (si, meta) in metas.iter().enumerate() {
         let name = meta.name.clone();
         let range = wb
             .worksheet_range(&name)
             .map_err(|e| XlsError::Malformed(e.to_string()))?;
         let formulas = wb.worksheet_formula(&name).ok();
-        let sf = sheet_formats.next().unwrap_or_default();
+        let mut sf = sheet_formats.next().unwrap_or_default();
         let mut sheet = SheetData {
             name: name.clone(),
             hidden: !matches!(meta.visible, calamine::SheetVisible::Visible),
             ..SheetData::default()
         };
-        // Both lists are row-major: the formats are merged in as the cells
+        let styled_cols = std::mem::take(&mut sf.styled_cols);
+        let covered = |c: u32| styled_cols.get(c as usize).copied().unwrap_or(false);
+        // The lists are row-major: the formats are merged in as the cells
         // go by.
         let mut formats = sf.cells.iter().peekable();
         // `used_cells()` yields positions relative to the range's start
         // (its first used row and column), not sheet coordinates; merges
-        // and `Range::get_value` are absolute.
+        // and `Range::get_value` are absolute. Values and formulas are
+        // walked together: a formula whose cell has no value (a string
+        // result without its `STRING` record) is a cell too.
         let (row0, col0) = range.start().unwrap_or((0, 0));
-        for (r, c, value) in range.used_cells() {
-            let r = (r as u64).saturating_add(u64::from(row0));
-            let c = (c as u64).saturating_add(u64::from(col0));
+        let at = |r: usize, c: usize, (r0, c0): (u32, u32)| {
+            (
+                (r as u64).saturating_add(u64::from(r0)),
+                (c as u64).saturating_add(u64::from(c0)),
+            )
+        };
+        let mut values = range
+            .used_cells()
+            .map(|(r, c, v)| (at(r, c, (row0, col0)), v))
+            .peekable();
+        let formula_start = formulas
+            .as_ref()
+            .and_then(calamine::Range::start)
+            .unwrap_or((0, 0));
+        let mut formula_cells = formulas
+            .iter()
+            .flat_map(calamine::Range::used_cells)
+            .map(|(r, c, t)| (at(r, c, formula_start), t))
+            .peekable();
+        let empty = Data::Empty;
+        loop {
+            let ((r, c), value, formula) = match (
+                values.peek().map(|v| v.0),
+                formula_cells.peek().map(|f| f.0),
+            ) {
+                (None, None) => break,
+                (Some(v), Some(f)) if v == f => (
+                    v,
+                    values.next().map_or(&empty, |x| x.1),
+                    formula_cells.next().map(|x| x.1),
+                ),
+                (Some(v), Some(f)) if v < f => (v, values.next().map_or(&empty, |x| x.1), None),
+                (Some(v), None) => (v, values.next().map_or(&empty, |x| x.1), None),
+                (_, Some(f)) => (f, &empty, formula_cells.next().map(|x| x.1)),
+            };
             if r >= u64::from(MAX_ROWS) || c >= u64::from(MAX_COLS) {
                 continue;
             }
             let (r, c) = (r as u32, c as u32);
             while let Some(f) = formats.next_if(|f| (f.row, u32::from(f.col)) < (r, c)) {
-                blanks_dropped |= !styled_blank(
+                let col = u32::from(f.col);
+                blanks.add(
                     &mut sheet.cells,
-                    &mut cells_total,
-                    limits.max_cells,
+                    &mut styles,
                     formatting.xf(f.xf),
-                    (f.row, u32::from(f.col)),
+                    covered(col),
+                    (f.row, col),
                 );
             }
             let xf = formats
@@ -362,18 +460,14 @@ fn decode(
                 .copied();
             // calamine reports an undecodable formula as text starting
             // with "Unrecognised formula": keep the cached value then.
-            let formula_text = formulas
-                .as_ref()
-                .and_then(|f| f.get_value((r, c)))
-                .filter(|t| !t.is_empty())
-                .filter(|t| {
-                    if t.starts_with("Unrecognised formula") {
-                        formula_failures += 1;
-                        false
-                    } else {
-                        true
-                    }
-                });
+            let formula_text = formula.filter(|t| !t.is_empty()).filter(|t| {
+                if t.starts_with("Unrecognised formula") {
+                    formula_failures += 1;
+                    false
+                } else {
+                    true
+                }
+            });
             // A number under a real number format: a date format makes it
             // a date serial (the 1900 leap-year shift), any other format
             // leaves it alone, as in the XLSX reader.
@@ -419,11 +513,11 @@ fn decode(
                 Data::DateTimeIso(s) | Data::DurationIso(s) => (Value::text(s.as_str()), None),
             };
             if val.is_empty() && formula_text.is_none() {
-                blanks_dropped |= !styled_blank(
+                blanks.add(
                     &mut sheet.cells,
-                    &mut cells_total,
-                    limits.max_cells,
+                    &mut styles,
                     xf.as_ref(),
+                    covered(c),
                     (r, c),
                 );
                 continue;
@@ -460,7 +554,7 @@ fn decode(
                     limit: limits.max_text_bytes,
                 });
             }
-            let base = xf.and_then(|x| x.style);
+            let base = styles.of(xf.as_ref(), covered(c));
             sheet.cells.push(CellData {
                 row: r,
                 col: c,
@@ -472,12 +566,13 @@ fn decode(
             });
         }
         for f in formats {
-            blanks_dropped |= !styled_blank(
+            let col = u32::from(f.col);
+            blanks.add(
                 &mut sheet.cells,
-                &mut cells_total,
-                limits.max_cells,
+                &mut styles,
                 formatting.xf(f.xf),
-                (f.row, u32::from(f.col)),
+                covered(col),
+                (f.row, col),
             );
         }
         if let Ok(merges) = wb.merge_cells_by_sheet_name(&name) {
@@ -501,13 +596,15 @@ fn decode(
         sheet.tab_color = sf.tab_color;
         sheet.images = sf.images;
         sheet.notes = sf.notes;
+        sheet.page_setup = sf.page_setup;
+        sheet.row_breaks = sf.row_breaks;
+        sheet.col_breaks = sf.col_breaks;
         // Column default formats count as cells, like the XLSX reader's.
-        let room = limits.max_cells.saturating_sub(cells_total);
-        if sf.style_runs.len() as u64 <= room {
-            cells_total += sf.style_runs.len() as u64;
+        if sf.style_runs.len() as u64 <= blanks.left {
+            blanks.left -= sf.style_runs.len() as u64;
             sheet.style_runs = sf.style_runs;
         } else {
-            blanks_dropped = true;
+            blanks.dropped = true;
         }
         sheets.push(sheet);
     }
@@ -516,9 +613,10 @@ fn decode(
             "{formula_failures} formula(s) could not be converted and were imported as values."
         ));
     }
-    if blanks_dropped {
+    if blanks.dropped {
         warnings.push(format!(
-            "The file has more than {} cells: the formatting of some empty cells was left out.",
+            "The file has more than {} cells with its formatted empty cells: the formatting of \
+             some empty cells was left out.",
             limits.max_cells
         ));
     }

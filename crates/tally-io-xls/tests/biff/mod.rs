@@ -47,6 +47,8 @@ pub struct Font<'a> {
     pub strike: bool,
     pub underline: u8,
     pub color: u16,
+    /// The weight (400 = normal, 700 = bold); `None` follows `bold`.
+    pub weight: Option<u16>,
 }
 
 impl Default for Font<'_> {
@@ -59,13 +61,15 @@ impl Default for Font<'_> {
             strike: false,
             underline: 0,
             color: 0x7FFF,
+            weight: None,
         }
     }
 }
 
 pub fn font(f: &Font) -> Vec<u8> {
     let grbit = u16::from(f.italic) << 1 | u16::from(f.strike) << 3;
-    let mut d = words(&[f.twips, grbit, f.color, if f.bold { 700 } else { 400 }, 0]);
+    let weight = f.weight.unwrap_or(if f.bold { 700 } else { 400 });
+    let mut d = words(&[f.twips, grbit, f.color, weight, 0]);
     d.extend_from_slice(&[f.underline, 0, 0, 0]);
     d.push(f.name.encode_utf16().count() as u8);
     d.extend(utf16(f.name));
@@ -522,4 +526,161 @@ pub fn note(r: u16, c: u16, id: u16, shown: bool, author: &str, text: &str) -> V
     out.extend(rec(0x001C, &n));
     out
 }
+// ------------------------------------------------------------- page setup
+
+/// `SETUP` fields; the defaults are what Excel writes for a new sheet
+/// (A4, 100 %, portrait, 0.5 in header and footer margins).
+pub struct Setup {
+    pub paper: u16,
+    pub scale: u16,
+    pub start: u16,
+    pub fit_w: u16,
+    pub fit_h: u16,
+    /// Bit 0 over-then-down, 1 portrait, 2 "not set", 3 black and white,
+    /// 4 draft, 6 "no orientation", 7 use the start page.
+    pub flags: u16,
+    pub header: f64,
+    pub footer: f64,
+    pub copies: u16,
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        Self {
+            paper: 9,
+            scale: 100,
+            start: 1,
+            fit_w: 1,
+            fit_h: 1,
+            flags: 0x0002,
+            header: 0.5,
+            footer: 0.5,
+            copies: 1,
+        }
+    }
+}
+
+pub fn setup(p: &Setup) -> Vec<u8> {
+    let mut d = words(&[
+        p.paper, p.scale, p.start, p.fit_w, p.fit_h, p.flags, 600, 600,
+    ]);
+    d.extend_from_slice(&p.header.to_le_bytes());
+    d.extend_from_slice(&p.footer.to_le_bytes());
+    d.extend(words(&[p.copies]));
+    rec(0x00A1, &d)
+}
+
+/// `LEFTMARGIN` (0x26), `RIGHTMARGIN` (0x27), `TOPMARGIN` (0x28) or
+/// `BOTTOMMARGIN` (0x29), in inches.
+pub fn margin(typ: u16, inches: f64) -> Vec<u8> {
+    rec(typ, &inches.to_le_bytes())
+}
+
+/// `HEADER` (0x14) or `FOOTER` (0x15) with Excel's `&` codes; an empty
+/// text is the empty record Excel writes for "none".
+pub fn header_footer(typ: u16, text: &str) -> Vec<u8> {
+    if text.is_empty() {
+        return rec(typ, &[]);
+    }
+    let mut d = words(&[text.encode_utf16().count() as u16]);
+    d.extend(utf16(text));
+    rec(typ, &d)
+}
+
+/// A record holding one word: `PRINTHEADERS` (0x2A), `PRINTGRIDLINES`
+/// (0x2B), `HCENTER` (0x83), `VCENTER` (0x84), `WSBOOL` (0x81).
+pub fn word(typ: u16, v: u16) -> Vec<u8> {
+    rec(typ, &words(&[v]))
+}
+
+/// `HORIZONTALPAGEBREAKS` (breaks above these rows) or
+/// `VERTICALPAGEBREAKS` (left of these columns).
+pub fn page_breaks(horizontal: bool, at: &[u16]) -> Vec<u8> {
+    let mut d = words(&[at.len() as u16]);
+    for b in at {
+        d.extend(words(&[*b, 0, if horizontal { 255 } else { 65_535 }]));
+    }
+    rec(if horizontal { 0x001B } else { 0x001A }, &d)
+}
+
+/// `PtgArea3d` on the first `EXTERNSHEET` entry.
+pub fn ptg_area3d(r0: u16, r1: u16, c0: u16, c1: u16) -> Vec<u8> {
+    let mut d = vec![0x3B];
+    d.extend(words(&[0, r0, r1, c0, c1]));
+    d
+}
+
+/// `PtgRef3d` on the first `EXTERNSHEET` entry.
+pub fn ptg_ref3d(r: u16, c: u16) -> Vec<u8> {
+    let mut d = vec![0x3A];
+    d.extend(words(&[0, r, c]));
+    d
+}
+
+/// Two areas joined as Excel writes print titles: `PtgMemFunc` over the
+/// areas and a `PtgUnion`.
+pub fn ptg_union(a: &[u8], b: &[u8]) -> Vec<u8> {
+    let mut d = vec![0x29];
+    d.extend(words(&[(a.len() + b.len() + 1) as u16]));
+    d.extend_from_slice(a);
+    d.extend_from_slice(b);
+    d.push(0x10);
+    d
+}
+
+/// A built-in `NAME` (`id` 0x06 = `Print_Area`, 0x07 = `Print_Titles`)
+/// local to sheet `itab` (1-based) with the formula `rgce`.
+pub fn builtin_name(id: u8, itab: u16, rgce: &[u8]) -> Vec<u8> {
+    let mut d = words(&[0x0020]);
+    d.extend_from_slice(&[0, 1]);
+    d.extend(words(&[rgce.len() as u16, 0, itab]));
+    d.extend_from_slice(&[0, 0, 0, 0]);
+    d.extend_from_slice(&[0, id]);
+    d.extend_from_slice(rgce);
+    rec(0x0018, &d)
+}
+
+/// `SUPBOOK` for the workbook itself and an `EXTERNSHEET` whose entries
+/// point at the sheets `0..sheets`, for 3-D references in names.
+pub fn externsheet(sheets: u16) -> Vec<u8> {
+    let mut out = rec(0x01AE, &words(&[sheets, 0x0401]));
+    let mut d = words(&[sheets]);
+    for i in 0..sheets {
+        d.extend(words(&[0, i, i]));
+    }
+    out.extend(rec(0x0017, &d));
+    out
+}
+
+/// A BLIP record directly in a BLIP store (no `FBSE` around it).
+pub fn bare_blip(blip_type: u16, inst: u16, data: &[u8]) -> Vec<u8> {
+    let mut blip = vec![0u8; 16];
+    blip.push(0xFF);
+    blip.extend_from_slice(data);
+    art(0, inst, blip_type, &blip)
+}
+
+/// A group shape with the client anchor `anchor` holding `children`
+/// (shapes placed with a child anchor, in the group's coordinates).
+pub fn group(anchor: [u16; 8], children: &[Vec<u8>]) -> Vec<u8> {
+    let mut own = art(1, 0, 0xF009, &[0u8; 16]);
+    own.extend(art(2, 0, 0xF00A, &[0u8; 8]));
+    let mut a = words(&[0]);
+    a.extend(words(&anchor));
+    own.extend(art(0, 0, 0xF010, &a));
+    let mut body = art(0xF, 0, 0xF004, &own);
+    body.extend(children.concat());
+    art(0xF, 0, 0xF003, &body)
+}
+
+/// A picture inside a group: its blip and a child anchor.
+pub fn child_picture(pib: u32) -> Vec<u8> {
+    let mut body = art(2, 75, 0xF00A, &[0u8; 8]);
+    let mut opt = words(&[0x4104]);
+    opt.extend_from_slice(&pib.to_le_bytes());
+    body.extend(art(3, 1, 0xF00B, &opt));
+    body.extend(art(0, 0, 0xF00F, &[0u8; 16]));
+    art(0xF, 0, 0xF004, &body)
+}
+
 pub mod books;

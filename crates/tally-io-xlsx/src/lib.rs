@@ -53,6 +53,20 @@ pub use dates::{excel_serial_to_tally, tally_serial_to_excel};
 pub use formula::excel_formula_to_of;
 pub use numfmt::{builtin_format_code, excel_to_ooo, is_date_format};
 pub use r1c1::{r1c1_formula_to_of, r1c1_to_a1};
+pub use sheet_v03::PageParts;
+
+/// An Excel header or footer string (`&L…&C…&R…` with `&P`, `&N`, `&D`,
+/// `&T`, `&F`, `&A`, `&Z&F` and font codes) → the model's three regions;
+/// shared with the `.xls` reader.
+pub fn header_footer_from_excel(text: &str) -> tally_model::HeaderFooterData {
+    sheet_v03::hf_from_excel(text)
+}
+
+/// The paper of an Excel paper size code (`pageSetup/@paperSize`, BIFF
+/// `SETUP`), for the sizes the model names; shared with the `.xls` reader.
+pub fn paper_from_excel_code(code: u32) -> Option<tally_model::PaperData> {
+    sheet_v03::paper_from_code(code)
+}
 
 /// The legacy 64-colour indexed palette (`indexed="N"`, the default BIFF8
 /// palette) as `0xRRGGBB`; shared with the `.xls` reader.
@@ -62,24 +76,6 @@ pub const INDEXED_PALETTE: [u32; 64] = colors::INDEXED;
 /// line style and width in 1/100 mm; shared with the `.xls` reader.
 pub fn border_line_style(style: &str) -> (tally_model::BorderStyle, u32) {
     styles::border_line(style)
-}
-
-/// Maximum digit width in pixels (96 dpi) of a workbook's default font,
-/// the unit Excel column widths count in (Calibri 11 and Arial 10 → 7).
-pub fn max_digit_width(family: Option<&str>, size_pt: Option<f32>) -> f64 {
-    units::max_digit_width(family, size_pt)
-}
-
-/// An Excel column width in characters (`<col width>`, BIFF `COLINFO`
-/// width / 256) → 1/100 mm, for a default font of maximum digit width
-/// `mdw` pixels.
-pub fn column_width_to_hmm(width: f64, mdw: f64) -> u32 {
-    units::px_to_hmm(units::col_width_to_px(width, mdw))
-}
-
-/// Screen pixels (96 dpi) → 1/100 mm.
-pub fn px_to_hmm(px: f64) -> u32 {
-    units::px_to_hmm(px)
 }
 
 /// Points → 1/100 mm.

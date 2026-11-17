@@ -6,16 +6,23 @@
 //! `CONTINUE` handling) and reads
 //!
 //! - the workbook globals: `FONT`, `FORMAT`, `XF`, `PALETTE`, `WINDOW1`
-//!   (active sheet) and the `MSODRAWINGGROUP` picture store;
-//! - per sheet: `COLINFO`, `DEFCOLWIDTH`, `STANDARDWIDTH`, `ROW`,
-//!   `DEFAULTROWHEIGHT`, the XF index of every cell record (`BLANK` and
-//!   `MULBLANK` included), `WINDOW2`, `PANE`, `SCL`, `SHEETEXT`, the
+//!   (active sheet), the `MSODRAWINGGROUP` picture store and the built-in
+//!   `NAME`s `Print_Area` and `Print_Titles`;
+//! - per sheet: `COLINFO`, `DEFCOLWIDTH`, `STANDARDWIDTH`, `ROW` (height,
+//!   hidden, default format), `DEFAULTROWHEIGHT`, the XF index of every
+//!   cell record (`BLANK` and `MULBLANK` included), `WINDOW2`, `PANE`,
+//!   `SCL`, `SHEETEXT`, the page setup (`SETUP`, the four margin records,
+//!   `HEADER`, `FOOTER`, `HCENTER`, `VCENTER`, `PRINTGRIDLINES`,
+//!   `PRINTHEADERS`, `WSBOOL`, the two page break records), the
 //!   `MSODRAWING` picture anchors and cell notes (`NOTE` with the text of
 //!   its `TXO`).
 //!
-//! The result maps onto the model the way the XLSX reader maps the
-//! equivalent constructs (its unit conversions, palette, border table and
-//! number-format translation are reused).
+//! Column widths, row heights and the defaults for both follow the
+//! OpenOffice 4.1 import filter (`XclImpColRowSettings`): every row and
+//! column of the sheet gets the size the file gives it, so the sheet is
+//! laid out as in OpenOffice. The rest maps onto the model the way the
+//! XLSX reader maps the equivalent constructs (its palette, border table,
+//! number-format translation and page setup conversion are reused).
 //!
 //! This pass never fails a file: a record that is too short, a count over
 //! a limit or an index without a target is skipped, and what was dropped
@@ -28,9 +35,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tally_model::{
-    AlignData, BorderLine, BordersData, CellProtectionData, ChartAnchorData, DimRun, FontData,
-    HAlign, ImageData, NoteData, SplitData, StyleData, StyleRun, UnderlineStyleData, VAlign,
-    ViewOptionsData,
+    AlignData, BorderLine, BordersData, CellProtectionData, CellRangeLocal, ChartAnchorData,
+    DimRun, FontData, HAlign, ImageData, MarginsData, NoteData, OrientationData, PageSetupData,
+    PaperData, SplitData, StyleData, StyleRun, UnderlineStyleData, VAlign, ViewOptionsData,
 };
 use tally_types::{MAX_COLS, MAX_ROWS};
 
@@ -39,8 +46,23 @@ use crate::Limits;
 
 /// Columns of a BIFF8 sheet.
 const BIFF_COLS: usize = 256;
+/// Rows of a BIFF8 sheet.
+const BIFF_ROWS: u32 = 65_536;
 /// Most entries of the picture store looked at.
 const MAX_BLIPS: usize = 65_536;
+/// OpenOffice's standard column width (`STD_COL_WIDTH`), twips: the width
+/// of the columns of a sheet without `DEFCOLWIDTH` and `STANDARDWIDTH`.
+const STD_COL_WIDTH_TWIPS: u16 = 1285;
+/// OpenOffice's standard row height (`ScGlobal::nStdRowHeight`), twips:
+/// the height of the rows of a sheet without `DEFAULTROWHEIGHT`.
+const STD_ROW_HEIGHT_TWIPS: u16 = 256;
+/// The height of font 0 when the workbook has no `FONT` record, twips
+/// (`XclImpFontBuffer::Initialize`: Arial 10).
+const APP_FONT_TWIPS: u16 = 200;
+/// Largest page margin kept, 1/100 mm (50 in).
+const MAX_MARGIN_HMM: f64 = 127_000.0;
+/// Most areas of a `Print_Area` or `Print_Titles` name looked at.
+const MAX_NAME_AREAS: usize = 8;
 
 /// What a cell format (XF) maps to.
 #[derive(Clone, Copy, Debug, Default)]
@@ -56,7 +78,8 @@ pub(crate) struct XfInfo {
     pub plain: bool,
 }
 
-/// The format of one cell record.
+/// The format of one cell record, or of an empty cell of a row with a
+/// default format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CellFmt {
     pub row: u32,
@@ -70,9 +93,18 @@ pub(crate) struct SheetFormat {
     pub col_widths: Vec<DimRun>,
     pub row_heights: Vec<DimRun>,
     pub style_runs: Vec<StyleRun>,
-    /// Cells whose XF is not the default look, sorted row-major, one per
-    /// position.
+    /// The columns (of the 256) that have a style run: a cell there needs
+    /// a style of its own, the default look included, or it would take
+    /// the column's.
+    pub styled_cols: Vec<bool>,
+    /// Cells whose XF is not the default look, cells in a styled column
+    /// or in a row with a default format, and the empty cells such a row
+    /// formats; sorted row-major, one per position.
     pub cells: Vec<CellFmt>,
+    pub page_setup: Option<PageSetupData>,
+    /// Manual page breaks before these rows / columns, sorted.
+    pub row_breaks: Vec<u32>,
+    pub col_breaks: Vec<u32>,
     pub view_options: Option<ViewOptionsData>,
     pub frozen: Option<(u32, u32)>,
     pub split: Option<SplitData>,
@@ -133,6 +165,166 @@ struct RawXf {
     fill: u16,
 }
 
+/// An XF's fields: equal keys are equal looks.
+type XfKey = (u16, u16, u16, [u8; 3], u16, u16, u32, u16);
+
+impl RawXf {
+    fn key(&self) -> XfKey {
+        (
+            self.ifnt,
+            self.ifmt,
+            // Locked and hidden; the rest (style XF, parent) is not read.
+            self.flags & 3,
+            [self.align, self.rotation, self.indent],
+            self.lines,
+            self.colors1,
+            self.colors2,
+            self.fill,
+        )
+    }
+}
+
+/// A built-in `NAME` that sets up printing: `Print_Area` or
+/// `Print_Titles` of one sheet.
+struct PrintName {
+    /// Index of the sheet (the name's `itab` − 1).
+    sheet: usize,
+    /// `Print_Titles`, else `Print_Area`.
+    titles: bool,
+    areas: Vec<CellRangeLocal>,
+}
+
+impl PrintName {
+    /// The rows and the columns to repeat: an area over all 256 columns
+    /// names rows, one over all 65,536 rows names columns.
+    #[allow(clippy::type_complexity)]
+    fn titles(&self) -> (Option<(u32, u32)>, Option<(u32, u32)>) {
+        let mut rows = None;
+        let mut cols = None;
+        for a in &self.areas {
+            if a.c0 == 0 && a.c1 == BIFF_COLS as u32 - 1 {
+                rows = Some((a.r0, a.r1));
+            } else if a.r0 == 0 && a.r1 == BIFF_ROWS - 1 {
+                cols = Some((a.c0, a.c1));
+            }
+        }
+        (rows, cols)
+    }
+}
+
+/// Reads a `NAME` record that is the built-in `Print_Area` (0x06) or
+/// `Print_Titles` (0x07) of a sheet. Its formula may only hold areas and
+/// cells of a sheet (`ptgArea3d`, `ptgRef3d`), joined by `ptgUnion` under
+/// a `ptgMemFunc`; anything else is not a print range Tally can keep, and
+/// the name is skipped.
+fn print_name(d: &[u8]) -> Option<PrintName> {
+    let flags = u16_at(d, 0)?;
+    let cch = *d.get(3)?;
+    let cce = usize::from(u16_at(d, 4)?);
+    let itab = usize::from(u16_at(d, 8)?);
+    // Built-in, one character, local to a sheet.
+    if flags & 0x20 == 0 || cch != 1 || itab == 0 {
+        return None;
+    }
+    // The name: option flags, then the built-in's id as its character.
+    let wide = d.get(14)? & 1 != 0;
+    let id = *d.get(15)?;
+    let titles = match id {
+        0x06 => false,
+        0x07 => true,
+        _ => return None,
+    };
+    let at: usize = if wide { 17 } else { 16 };
+    let rgce = d.get(at..at.checked_add(cce)?)?;
+    let mut areas: Vec<CellRangeLocal> = Vec::new();
+    let mut p = 0usize;
+    while let Some(&ptg) = rgce.get(p) {
+        let (r0, r1, c0, c1, len) = match ptg {
+            // ptgUnion, ptgParen.
+            0x10 | 0x15 => {
+                p += 1;
+                continue;
+            }
+            // ptgMemFunc: the length of the expression that follows.
+            0x29 | 0x49 | 0x69 => {
+                p += 3;
+                continue;
+            }
+            // ptgRef3d: sheet, row, column.
+            0x3A | 0x5A | 0x7A => {
+                let (r, c) = (u16_at(rgce, p + 3)?, u16_at(rgce, p + 5)?);
+                (r, r, c, c, 7)
+            }
+            // ptgArea3d: sheet, rows, columns.
+            0x3B | 0x5B | 0x7B => (
+                u16_at(rgce, p + 3)?,
+                u16_at(rgce, p + 5)?,
+                u16_at(rgce, p + 7)?,
+                u16_at(rgce, p + 9)?,
+                11,
+            ),
+            _ => return None,
+        };
+        // The column's upper bits say "relative".
+        let (c0, c1) = (c0 & 0xFF, c1 & 0xFF);
+        if r0 > r1 || c0 > c1 || areas.len() >= MAX_NAME_AREAS {
+            return None;
+        }
+        areas.push(CellRangeLocal {
+            r0: u32::from(r0),
+            c0: u32::from(c0),
+            r1: u32::from(r1),
+            c1: u32::from(c1),
+        });
+        p += len;
+    }
+    (!areas.is_empty()).then_some(PrintName {
+        sheet: itab - 1,
+        titles,
+        areas,
+    })
+}
+
+/// The deduplicated model styles. Styles are found through a hash of
+/// their debug text (which is not kept) and compared for equality.
+#[derive(Default)]
+struct StyleTable {
+    styles: Vec<StyleData>,
+    by_hash: HashMap<u64, Vec<u32>>,
+}
+
+impl StyleTable {
+    fn hash(style: &StyleData) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        format!("{style:?}").hash(&mut h);
+        h.finish()
+    }
+
+    /// The index of `style`; `None` for the default look and for a style
+    /// that is not in the table.
+    fn find(&self, style: &StyleData) -> Option<u32> {
+        if *style == StyleData::default() {
+            return None;
+        }
+        self.by_hash
+            .get(&Self::hash(style))?
+            .iter()
+            .copied()
+            .find(|i| self.styles.get(*i as usize) == Some(style))
+    }
+
+    fn push(&mut self, style: StyleData) -> u32 {
+        let next = u32::try_from(self.styles.len()).unwrap_or(u32::MAX);
+        self.by_hash
+            .entry(Self::hash(&style))
+            .or_default()
+            .push(next);
+        self.styles.push(style);
+        next
+    }
+}
+
 /// What the pass dropped, reported once each.
 #[derive(Default)]
 struct Dropped {
@@ -143,6 +335,8 @@ struct Dropped {
     col_infos: bool,
     rows: bool,
     cells: bool,
+    style_text: bool,
+    page_breaks: bool,
     drawing_bytes: bool,
     images: bool,
     notes: bool,
@@ -287,24 +481,57 @@ struct StyleBuilder<'a> {
     long_format: bool,
 }
 
+/// The code of a built-in number format of a `.xls` where OpenOffice's
+/// table (`spBuiltInFormats`, xlstyle.cxx) differs from the one the XLSX
+/// reader uses (ECMA-376): 32–35 are times, and the ids past 58 reuse
+/// earlier ones.
+fn builtin_format_code(ifmt: u16) -> Option<&'static str> {
+    let reuse = match ifmt {
+        32..=35 | 77 => 21,
+        59 => 1,
+        60 => 2,
+        61 => 3,
+        62 => 4,
+        67 => 9,
+        68 => 10,
+        69 => 12,
+        70 => 13,
+        71 | 72 => 14,
+        73 => 15,
+        74 => 16,
+        75 => 17,
+        76 => 20,
+        78 => 22,
+        79 => 45,
+        80 => 46,
+        81 => 47,
+        other => other,
+    };
+    tally_io_xlsx::builtin_format_code(u32::from(reuse))
+}
+
 impl StyleBuilder<'_> {
-    /// BIFF font indices skip 4: the fifth `FONT` record is font 5.
-    fn font(&self, ifnt: u16) -> Option<&RawFont> {
+    /// BIFF font indices skip 4: the fifth `FONT` record is font 5. Font 4
+    /// itself is not in the file: it is font 0 in bold (`true`), as in
+    /// OpenOffice (`XclImpFontBuffer::UpdateAppFont`).
+    fn font(&self, ifnt: u16) -> (Option<&RawFont>, bool) {
         let i = match ifnt {
             0..=3 => usize::from(ifnt),
-            4 => return self.fonts.first(),
+            4 => return (self.fonts.first(), true),
             _ => usize::from(ifnt) - 1,
         };
-        self.fonts.get(i).or_else(|| self.fonts.first())
+        (self.fonts.get(i).or_else(|| self.fonts.first()), false)
     }
 
     fn font_data(&self, ifnt: u16) -> FontData {
-        let Some(f) = self.font(ifnt) else {
+        let (Some(f), font4) = self.font(ifnt) else {
             return FontData::default();
         };
         let size = f32::from(f.twips.min(409 * 20)) / 20.0;
         FontData {
-            bold: f.bls >= 600,
+            // OpenOffice shows weights from 550 up (semibold, bold, …) in
+            // bold (`XclFontData::GetScWeight`).
+            bold: font4 || f.bls >= 550,
             italic: f.grbit & 0x02 != 0,
             underline: f.uls != 0,
             strike: f.grbit & 0x08 != 0,
@@ -333,7 +560,7 @@ impl StyleBuilder<'_> {
             .formats
             .get(&ifmt)
             .map(String::as_str)
-            .or_else(|| tally_io_xlsx::builtin_format_code(u32::from(ifmt)));
+            .or_else(|| builtin_format_code(ifmt));
         let ooo = match code {
             Some(c) if c.chars().count() > tally_model::MAX_NUMBER_FORMAT_LEN => {
                 self.long_format = true;
@@ -489,6 +716,12 @@ fn blip_of(bse: &[u8], max_bytes: u64) -> Blip {
         // The BLIP claims more bytes than its entry holds.
         return Blip::Missing;
     };
+    blip_record(vi >> 4, typ, data, max_bytes)
+}
+
+/// The picture of a BLIP record (`inst`, type and data), inside a store
+/// entry or directly in the store.
+fn blip_record(inst: u16, typ: u16, data: &[u8], max_bytes: u64) -> Blip {
     match typ {
         // JPEG, PNG, JPEG (CMYK).
         0xF01D | 0xF01E | 0xF02A => {}
@@ -498,7 +731,7 @@ fn blip_of(bse: &[u8], max_bytes: u64) -> Blip {
     // One or two 16-byte UIDs (odd instance: two) and a tag byte, then the
     // file. What it is is taken from its signature, as in the XLSX
     // reader: writers are known to store a PNG in a JPEG record.
-    let first = if (vi >> 4) & 1 == 1 { 33 } else { 17 };
+    let first = if inst & 1 == 1 { 33 } else { 17 };
     for skip in [first, 50 - first] {
         let Some(pic) = data.get(skip..) else {
             continue;
@@ -532,7 +765,9 @@ struct ColDef {
     /// 1/256 of a character.
     width: u16,
     hidden: bool,
-    xf: u16,
+    /// The style of the column's XF when that is not the plain look: the
+    /// column gets a style run.
+    style: Option<u32>,
 }
 
 #[derive(Clone, Copy)]
@@ -540,6 +775,15 @@ struct RowRec {
     row: u32,
     twips: u16,
     flags: u32,
+}
+
+impl RowRec {
+    /// The row's default format (`fGhostDirty` and the XF in bits 16–27),
+    /// which OpenOffice applies to the row's cells without a record
+    /// (`ImportExcel::Row34`).
+    fn default_xf(&self) -> Option<u16> {
+        (self.flags & 0x80 != 0).then_some(((self.flags >> 16) & 0x0FFF) as u16)
+    }
 }
 
 /// Sizes along one axis for picture anchors: explicit sizes (sorted by
@@ -593,10 +837,16 @@ struct Reader<'a> {
     limits: &'a Limits,
     xfs: Vec<XfInfo>,
     palette: Palette,
-    /// Maximum digit width of the default font, px.
-    mdw: f64,
+    /// The height of font 0, twips.
+    font_twips: i64,
+    /// The width of a character of font 0, twips: the unit of column
+    /// widths (`XclRoot::SetCharWidth`).
+    char_width: i64,
     blips: Vec<Blip>,
     dropped: Dropped,
+    /// The rows of the sheet being read that have a default format (one
+    /// bit per BIFF row).
+    row_xf: Vec<u64>,
     // Workbook-wide counters.
     rows: usize,
     cells: u64,
@@ -634,14 +884,180 @@ fn txo_text(s: &[u8], r: &Rec, cch: usize) -> String {
     out
 }
 
+/// An IEEE double of a record.
+fn f64_at(d: &[u8], i: usize) -> Option<f64> {
+    let b = d.get(i..i.checked_add(8)?)?;
+    Some(f64::from_le_bytes(b.try_into().ok()?))
+}
+
+/// A margin in inches → 1/100 mm; `None` for a value that is not a
+/// length (NaN, ±∞). Negative margins are 0, huge ones 50 in.
+fn inch_to_hmm(v: f64) -> Option<u32> {
+    v.is_finite()
+        .then(|| (v.max(0.0) * 2540.0).min(MAX_MARGIN_HMM).round() as u32)
+}
+
+const fn inch(v: f64) -> u32 {
+    (v * 2540.0 + 0.5) as u32
+}
+
+/// Paper sizes of the `SETUP` paper codes the model has no name for
+/// (code, width, height in 1/100 mm; OpenOffice's `pPaperSizeTable`,
+/// xlpage.cxx).
+const PAPER_SIZES: [(u16, u32, u32); 58] = [
+    (4, inch(17.0), inch(11.0)),
+    (6, inch(5.5), inch(8.5)),
+    (12, 25_700, 36_400),
+    (14, inch(8.5), inch(13.0)),
+    (15, 21_500, 27_500),
+    (16, inch(10.0), inch(14.0)),
+    (17, inch(11.0), inch(17.0)),
+    (18, inch(8.5), inch(11.0)),
+    (19, inch(3.875), inch(8.875)),
+    (20, inch(4.125), inch(9.5)),
+    (21, inch(4.5), inch(10.375)),
+    (22, inch(4.75), inch(11.0)),
+    (23, inch(5.0), inch(11.5)),
+    (24, inch(17.0), inch(22.0)),
+    (25, inch(22.0), inch(34.0)),
+    (26, inch(34.0), inch(44.0)),
+    (27, 11_000, 22_000),
+    (28, 16_200, 22_900),
+    (29, 32_400, 45_800),
+    (30, 22_900, 32_400),
+    (31, 11_400, 16_200),
+    (32, 11_400, 22_900),
+    (33, 25_000, 35_300),
+    (35, 12_500, 17_600),
+    (36, 11_000, 23_000),
+    (37, inch(3.875), inch(7.5)),
+    (38, inch(3.625), inch(6.5)),
+    (39, inch(14.875), inch(11.0)),
+    (40, inch(8.5), inch(12.0)),
+    (41, inch(8.5), inch(13.0)),
+    (42, 25_000, 35_300),
+    (43, 10_000, 14_800),
+    (44, inch(9.0), inch(11.0)),
+    (45, inch(10.0), inch(11.0)),
+    (46, inch(15.0), inch(11.0)),
+    (47, 22_000, 22_000),
+    (50, inch(9.5), inch(12.0)),
+    (51, inch(9.5), inch(15.0)),
+    (52, inch(11.69), inch(18.0)),
+    (53, 23_500, 32_200),
+    (54, inch(8.5), inch(11.0)),
+    (55, 21_000, 29_700),
+    (56, inch(9.5), inch(12.0)),
+    (57, 22_700, 35_600),
+    (58, 30_500, 48_700),
+    (59, inch(8.5), inch(12.69)),
+    (60, 21_000, 33_000),
+    (61, 14_800, 21_000),
+    (62, 18_200, 25_700),
+    (63, 32_200, 44_500),
+    (64, 17_400, 23_500),
+    (65, 20_100, 27_600),
+    (66, 42_000, 59_400),
+    (67, 29_700, 42_000),
+    (68, 32_200, 44_500),
+    (69, 20_000, 14_800),
+    (70, 10_500, 14_800),
+    (88, 12_800, 18_200),
+];
+
+/// The paper of a `SETUP` paper code; `None` for "undefined" (the
+/// default paper).
+fn paper_of(code: u16) -> Option<PaperData> {
+    // B5 (JIS), 182 × 257 mm, is not the model's B5 (ISO).
+    if code == 13 {
+        return Some(PaperData::from_size_hmm(18_200, 25_700));
+    }
+    if let Some(p) = tally_io_xlsx::paper_from_excel_code(u32::from(code)) {
+        return Some(p);
+    }
+    // The rotated papers (75–83, 89, 90) are their upright size: the
+    // orientation flag says how the sheet is printed.
+    let code = match code {
+        75 => return Some(PaperData::Letter),
+        76 => return Some(PaperData::A3),
+        77 => return Some(PaperData::A4),
+        78 => return Some(PaperData::A5),
+        79 => 12,
+        80 => return Some(PaperData::from_size_hmm(18_200, 25_700)),
+        81 => 43,
+        82 => 69,
+        83 => 70,
+        89 => 88,
+        90 => return Some(PaperData::from_size_hmm(inch(11.0), inch(12.0))),
+        other => other,
+    };
+    PAPER_SIZES
+        .iter()
+        .find(|p| p.0 == code)
+        .map(|p| PaperData::from_size_hmm(p.1, p.2))
+}
+
+/// The page setup records of a sheet.
+#[derive(Default)]
+struct PageRecs {
+    parts: tally_io_xlsx::PageParts,
+    left: Option<u32>,
+    right: Option<u32>,
+    top: Option<u32>,
+    bottom: Option<u32>,
+    header: Option<u32>,
+    footer: Option<u32>,
+}
+
+impl PageRecs {
+    /// The model's page setup; the margins a file does not give are
+    /// Excel's defaults (0.75 in at the sides, 1 in at top and bottom,
+    /// 0.5 in for header and footer; `XclPageData::SetDefaults`).
+    fn build(mut self) -> Option<PageSetupData> {
+        if !self.parts.any {
+            return None;
+        }
+        self.parts.margins = Some(MarginsData {
+            left: self.left.unwrap_or(1900),
+            right: self.right.unwrap_or(1900),
+            top: self.top.unwrap_or(2500),
+            bottom: self.bottom.unwrap_or(2500),
+            header: self.header.unwrap_or(1300),
+            footer: self.footer.unwrap_or(1300),
+        });
+        self.parts.build()
+    }
+}
+
 impl Reader<'_> {
-    fn cell(&mut self, out: &mut Vec<CellFmt>, row: u32, col: u32, xf: u16, value: bool) {
-        let Some(info) = self.xfs.get(usize::from(xf)) else {
+    fn row_has_xf(&self, row: u32) -> bool {
+        self.row_xf
+            .get((row / 64) as usize)
+            .is_some_and(|w| w & (1u64 << (row % 64)) != 0)
+    }
+
+    /// Notes the format of a cell record. Kept are the cells whose format
+    /// shows, and every cell of a column with a style or of a row with a
+    /// default format (`COLINFO` and `ROW` come before the cells they
+    /// apply to): such a cell must not take the column's or the row's
+    /// format.
+    fn cell(
+        &mut self,
+        out: &mut Vec<CellFmt>,
+        cols: &[Option<ColDef>],
+        (row, col): (u32, u32),
+        xf: u16,
+        value: bool,
+    ) {
+        let Some(def) = cols.get(col as usize) else {
             return;
         };
+        let info = self.xfs.get(usize::from(xf));
         // A value cell needs its style; an empty one only if the format
         // shows.
-        if info.style.is_none() || (!value && info.plain) || col >= BIFF_COLS as u32 {
+        let shows = info.is_some_and(|x| x.style.is_some() && (value || !x.plain));
+        let covered = def.is_some_and(|d| d.style.is_some()) || self.row_has_xf(row);
+        if !shows && !covered {
             return;
         }
         if self.cells >= self.limits.max_styled_cells {
@@ -664,10 +1080,14 @@ impl Reader<'_> {
         let mut col_infos = 0usize;
         let mut def_col_chars: Option<u16> = None;
         let mut standard_width: Option<u16> = None;
-        let mut def_row_twips: Option<u16> = None;
+        // DEFAULTROWHEIGHT: flags, height.
+        let mut def_row: Option<(u16, u16)> = None;
         let mut rows: Vec<RowRec> = Vec::new();
+        // The last column with a cell record or a definition.
+        let mut last_col: Option<u32> = None;
         let mut window2: Option<u16> = None;
         let mut pane: Option<(u16, u16)> = None;
+        let mut page = PageRecs::default();
         let mut drawing: Vec<u8> = Vec::new();
         // Notes: the object records before a TXO name the object the text
         // belongs to; NOTE records point at the object.
@@ -677,6 +1097,7 @@ impl Reader<'_> {
         let mut seen_bof = false;
         let mut depth = 0usize;
         let mut pos = start;
+        self.row_xf.iter_mut().for_each(|w| *w = 0);
         while let Some(Ok(r)) = record(s, pos) {
             *walked += (r.next - pos) as u64;
             if *walked > walk_budget {
@@ -721,13 +1142,18 @@ impl Reader<'_> {
                     }
                     let def = ColDef {
                         width,
-                        hidden: flags & 1 != 0 || width == 0,
-                        xf,
+                        hidden: flags & 1 != 0,
+                        style: self
+                            .xfs
+                            .get(usize::from(xf))
+                            .filter(|x| !x.plain)
+                            .and_then(|x| x.style),
                     };
                     let end = usize::from(last).min(BIFF_COLS - 1);
                     for slot in cols.iter_mut().take(end + 1).skip(usize::from(first)) {
                         *slot = Some(def);
                     }
+                    last_col = last_col.max(Some(end as u32));
                     // A range that reaches the last BIFF column runs to the
                     // end of the sheet.
                     if usize::from(last) >= BIFF_COLS - 1 {
@@ -736,7 +1162,11 @@ impl Reader<'_> {
                 }
                 0x0055 => def_col_chars = w(0).or(def_col_chars),
                 0x0099 => standard_width = w(0).or(standard_width),
-                0x0225 => def_row_twips = w(2).or(def_row_twips),
+                0x0225 => {
+                    if let (Some(flags), Some(h)) = (w(0), w(2)) {
+                        def_row = Some((flags, h));
+                    }
+                }
                 // ROW
                 0x0208 => {
                     let (Some(row), Some(h), Some(flags)) = (w(0), w(6), u32_at(d, 12)) else {
@@ -747,22 +1177,36 @@ impl Reader<'_> {
                         continue;
                     }
                     self.rows += 1;
-                    rows.push(RowRec {
+                    let rec = RowRec {
                         row: u32::from(row),
                         twips: h,
                         flags,
-                    });
+                    };
+                    if let Some(word) = self.row_xf.get_mut(usize::from(row / 64)) {
+                        // Of several records for one row the last counts.
+                        let bit = 1u64 << (row % 64);
+                        if rec.default_xf().is_some() {
+                            *word |= bit;
+                        } else {
+                            *word &= !bit;
+                        }
+                    }
+                    rows.push(rec);
                 }
                 // NUMBER, RK, LABELSST, LABEL, RSTRING, FORMULA, BOOLERR.
                 0x0203 | 0x027E | 0x00FD | 0x0204 | 0x00D6 | 0x0006 | 0x0205 => {
                     if let (Some(row), Some(col), Some(xf)) = (w(0), w(2), w(4)) {
-                        self.cell(&mut out.cells, u32::from(row), u32::from(col), xf, true);
+                        let at = (u32::from(row), u32::from(col));
+                        last_col = last_col.max(Some(at.1));
+                        self.cell(&mut out.cells, &cols, at, xf, true);
                     }
                 }
                 // BLANK
                 0x0201 => {
                     if let (Some(row), Some(col), Some(xf)) = (w(0), w(2), w(4)) {
-                        self.cell(&mut out.cells, u32::from(row), u32::from(col), xf, false);
+                        let at = (u32::from(row), u32::from(col));
+                        last_col = last_col.max(Some(at.1));
+                        self.cell(&mut out.cells, &cols, at, xf, false);
                     }
                 }
                 // MULRK: row, first column, (XF, RK)…, last column.
@@ -770,8 +1214,9 @@ impl Reader<'_> {
                     if let (Some(row), Some(col)) = (w(0), w(2)) {
                         for k in 0..d.len().saturating_sub(6) / 6 {
                             if let Some(xf) = w(4 + 6 * k) {
-                                let c = u32::from(col) + k as u32;
-                                self.cell(&mut out.cells, u32::from(row), c, xf, true);
+                                let at = (u32::from(row), u32::from(col) + k as u32);
+                                last_col = last_col.max(Some(at.1));
+                                self.cell(&mut out.cells, &cols, at, xf, true);
                             }
                         }
                     }
@@ -781,8 +1226,9 @@ impl Reader<'_> {
                     if let (Some(row), Some(col)) = (w(0), w(2)) {
                         for k in 0..d.len().saturating_sub(6) / 2 {
                             if let Some(xf) = w(4 + 2 * k) {
-                                let c = u32::from(col) + k as u32;
-                                self.cell(&mut out.cells, u32::from(row), c, xf, false);
+                                let at = (u32::from(row), u32::from(col) + k as u32);
+                                last_col = last_col.max(Some(at.1));
+                                self.cell(&mut out.cells, &cols, at, xf, false);
                             }
                         }
                     }
@@ -802,13 +1248,113 @@ impl Reader<'_> {
                         }
                     }
                 }
-                // SHEETEXT: a 12-byte header, the size, the tab colour.
+                // SHEETEXT: a 12-byte header, the size, the tab colour: a
+                // palette colour, as in OpenOffice
+                // (`XclImpTabViewSettings::ReadTabBgColor`).
                 0x0862 => {
                     if let Some(icv) = u32_at(d, 16) {
                         let icv = (icv & 0x7F) as u16;
-                        if icv != 0x7F {
+                        if (8..=63).contains(&icv) {
                             out.tab_color = self.palette.rgb(icv).map(|c| (c << 8) | 0xff);
                         }
+                    }
+                }
+                // SETUP: paper, scale, first page number, fit to pages
+                // (wide, tall), flags, resolutions, header and footer
+                // margins, copies.
+                0x00A1 => {
+                    let (Some(paper), Some(scale), Some(first), Some(fit_w), Some(fit_h), Some(f)) =
+                        (w(0), w(2), w(4), w(6), w(8), w(10))
+                    else {
+                        continue;
+                    };
+                    let p = &mut page.parts;
+                    p.any = true;
+                    // Bit 2: paper, scale and orientation were never set;
+                    // bit 6: the orientation was not.
+                    let valid = f & 0x04 == 0;
+                    p.paper = valid.then(|| paper_of(paper)).flatten();
+                    p.scale = (valid && scale > 0).then_some(u32::from(scale));
+                    p.orientation = (valid && f & 0x40 == 0).then_some(if f & 0x02 != 0 {
+                        OrientationData::Portrait
+                    } else {
+                        OrientationData::Landscape
+                    });
+                    p.fit = Some((u32::from(fit_w), u32::from(fit_h)));
+                    p.first_page = (f & 0x80 != 0 && (1..=0x7FFF).contains(&first))
+                        .then_some(u32::from(first));
+                    p.over_then_down = f & 0x01 != 0;
+                    page.header = f64_at(d, 16).and_then(inch_to_hmm).or(page.header);
+                    page.footer = f64_at(d, 24).and_then(inch_to_hmm).or(page.footer);
+                }
+                // LEFTMARGIN, RIGHTMARGIN, TOPMARGIN, BOTTOMMARGIN: inches.
+                0x0026..=0x0029 => {
+                    if let Some(m) = f64_at(d, 0).and_then(inch_to_hmm) {
+                        page.parts.any = true;
+                        match r.typ {
+                            0x0026 => page.left = Some(m),
+                            0x0027 => page.right = Some(m),
+                            0x0028 => page.top = Some(m),
+                            _ => page.bottom = Some(m),
+                        }
+                    }
+                }
+                // HEADER, FOOTER: a string with Excel's `&` codes; an empty
+                // record is "none".
+                0x0014 | 0x0015 => {
+                    page.parts.any = true;
+                    let text = w(0).map_or_else(String::new, |cch| unicode(d, 2, usize::from(cch)));
+                    let hf = tally_io_xlsx::header_footer_from_excel(&text);
+                    if r.typ == 0x0014 {
+                        page.parts.header = Some(hf);
+                    } else {
+                        page.parts.footer = Some(hf);
+                    }
+                }
+                // PRINTHEADERS, PRINTGRIDLINES, HCENTER, VCENTER.
+                0x002A | 0x002B | 0x0083 | 0x0084 => {
+                    if let Some(v) = w(0) {
+                        let p = &mut page.parts;
+                        p.any = true;
+                        match r.typ {
+                            0x002A => p.headings = v != 0,
+                            0x002B => p.gridlines = v != 0,
+                            0x0083 => p.center_h = v != 0,
+                            _ => p.center_v = v != 0,
+                        }
+                    }
+                }
+                // WSBOOL: bit 8 = fit to pages.
+                0x0081 => {
+                    if let Some(f) = w(0) {
+                        page.parts.fit_to_page = f & 0x0100 != 0;
+                        page.parts.any |= page.parts.fit_to_page;
+                    }
+                }
+                // VERTICALPAGEBREAKS, HORIZONTALPAGEBREAKS: a count, then
+                // (the column or row after the break, the first and the
+                // last row or column it spans) each. A later record
+                // replaces an earlier one.
+                0x001A | 0x001B => {
+                    let (breaks, end) = if r.typ == 0x001B {
+                        (&mut out.row_breaks, BIFF_ROWS)
+                    } else {
+                        (&mut out.col_breaks, BIFF_COLS as u32)
+                    };
+                    breaks.clear();
+                    let n = usize::from(w(0).unwrap_or(0)).min(d.len().saturating_sub(2) / 6);
+                    for k in 0..n {
+                        let Some(b) = w(2 + 6 * k).map(u32::from) else {
+                            break;
+                        };
+                        if b == 0 || b >= end {
+                            continue;
+                        }
+                        if breaks.len() >= self.limits.max_page_breaks {
+                            self.dropped.page_breaks = true;
+                            break;
+                        }
+                        breaks.push(b);
                     }
                 }
                 // MSODRAWING: the sheet's OfficeArt data, in pieces.
@@ -868,37 +1414,48 @@ impl Reader<'_> {
             }
         }
 
-        // Columns.
-        let mdw = self.mdw;
-        let to_hmm = |w: u16| tally_io_xlsx::column_width_to_hmm(f64::from(w) / 256.0, mdw);
-        let default_col: Option<u32> = match (standard_width, def_col_chars) {
-            (Some(w), _) if w > 0 => Some(to_hmm(w)),
-            // Excel pads the characters and rounds up to 8 px.
-            (None, Some(ch)) if ch > 0 => Some(tally_io_xlsx::px_to_hmm(
-                ((f64::from(ch.min(255)) * mdw + 5.0) / 8.0).ceil() * 8.0,
-            )),
-            _ => None,
-        }
-        .filter(|w| *w != tally_io_xlsx::DEFAULT_COL_WIDTH_HMM);
-        let size_of = |def: Option<ColDef>| -> Option<(u32, bool)> {
-            match def {
-                Some(c) if c.width == 0 => Some((
-                    default_col.unwrap_or(tally_io_xlsx::DEFAULT_COL_WIDTH_HMM),
-                    true,
-                )),
-                Some(c) => Some((to_hmm(c.width), c.hidden)),
-                None => default_col.map(|w| (w, false)),
+        // Columns: OpenOffice's conversion (`XclTools::GetScColumnWidth`),
+        // a width in 1/256 of the character width of font 0, rounded to
+        // twips. Every column gets its width: the ones without a `COLINFO`
+        // the sheet's default.
+        let char_width = self.char_width as f64;
+        let sc_width =
+            |w: u16| -> u16 { (f64::from(w) / 256.0 * char_width + 0.5).min(65_535.0) as u16 };
+        let default_twips = match (standard_width, def_col_chars) {
+            // STANDARDWIDTH, in 1/256 of a character, wins over
+            // DEFCOLWIDTH.
+            (Some(w), _) if w > 0 => sc_width(w),
+            // DEFCOLWIDTH counts whole characters, and Excel adds room
+            // that depends on the font size
+            // (`XclTools::GetXclDefColWidthCorrection`).
+            (_, Some(ch)) if ch > 0 => {
+                let correction = 40_960.0 / (self.font_twips - 15).max(60) as f64 + 50.0;
+                sc_width((256.0 * f64::from(ch) + correction).min(65_535.0) as u16)
+            }
+            _ => 0,
+        };
+        let default_col = twips_to_hmm(if default_twips == 0 {
+            STD_COL_WIDTH_TWIPS
+        } else {
+            default_twips
+        });
+        // (width, hidden); a width of 0 is a hidden column of the default
+        // width.
+        let size_of = |def: Option<ColDef>| -> (u32, bool) {
+            match def.map(|c| (sc_width(c.width), c.hidden)) {
+                Some((0, _)) => (default_col, true),
+                Some((twips, hidden)) => (twips_to_hmm(twips), hidden),
+                None => (default_col, false),
             }
         };
+        out.styled_cols = cols
+            .iter()
+            .map(|d| d.is_some_and(|d| d.style.is_some()))
+            .collect();
         for (c, def) in cols.iter().enumerate() {
-            if let Some((size, hidden)) = size_of(*def) {
-                push_run(&mut out.col_widths, c as u32, c as u32, size, hidden);
-            }
-            let style = def
-                .and_then(|d| self.xfs.get(usize::from(d.xf)))
-                .filter(|x| !x.plain)
-                .and_then(|x| x.style);
-            if let Some(style) = style {
+            let (size, hidden) = size_of(*def);
+            push_run(&mut out.col_widths, c as u32, c as u32, size, hidden);
+            if let Some(style) = def.and_then(|d| d.style) {
                 out.style_runs.push(StyleRun {
                     col: c as u32,
                     start_row: 0,
@@ -907,51 +1464,76 @@ impl Reader<'_> {
                 });
             }
         }
-        if let Some((size, hidden)) = size_of(tail) {
-            push_run(
-                &mut out.col_widths,
-                BIFF_COLS as u32,
-                MAX_COLS - 1,
-                size,
-                hidden,
-            );
-        }
+        let (size, hidden) = size_of(tail);
+        push_run(
+            &mut out.col_widths,
+            BIFF_COLS as u32,
+            MAX_COLS - 1,
+            size,
+            hidden,
+        );
 
-        // Rows: a height the user (or the writer) set, or a hidden row. A
-        // height without the "unsynced" flag is an auto-fit result, which
-        // the application re-fits (as for XLSX rows without customHeight).
-        let default_row = def_row_twips
-            .map(|t| t & 0x7FFF)
-            .filter(|t| *t > 0)
-            .map_or(tally_io_xlsx::DEFAULT_ROW_HEIGHT_HMM, twips_to_hmm);
+        // Rows, as OpenOffice lays them out
+        // (`XclImpColRowSettings::Convert`): every `ROW` record gives its
+        // row a height (the "unsynced" flag only says whether the user set
+        // it), the other rows have the sheet's default height, and a
+        // default that is hidden hides them. The model has no "automatic
+        // height of this size", so every row is given its height.
+        let (def_flags, def_twips) = match def_row {
+            // A default height of 0 is "hidden".
+            Some((flags, 0)) => (flags | 0x02, STD_ROW_HEIGHT_TWIPS),
+            Some(d) => d,
+            None => (0, STD_ROW_HEIGHT_TWIPS),
+        };
+        let default_row = twips_to_hmm(def_twips);
+        let default_hidden = def_flags & 0x02 != 0;
         if !rows.is_sorted_by_key(|r| r.row) {
             rows.sort_by_key(|r| r.row);
         }
         let mut row_sizes: Vec<(u32, i64)> = Vec::with_capacity(rows.len());
+        // (row, XF) of the rows with a default format.
+        let mut row_xfs: Vec<(u32, u16)> = Vec::new();
+        let mut next = 0u32;
         for (i, r) in rows.iter().enumerate() {
             // Of several records for one row the last one counts.
             if rows.get(i + 1).is_some_and(|n| n.row == r.row) {
                 continue;
             }
-            let hidden = r.flags & 0x20 != 0;
-            let unsynced = r.flags & 0x40 != 0;
+            if let Some(xf) = r.default_xf() {
+                row_xfs.push((r.row, xf));
+            }
             let twips = r.twips & 0x7FFF;
-            let own = (twips > 0 && r.twips & 0x8000 == 0).then(|| twips_to_hmm(twips));
-            if hidden || (unsynced && own.is_some()) {
+            // The default height when the record says so.
+            let (size, mut hidden) = if r.twips & 0x8000 != 0 {
+                (default_row, default_hidden)
+            } else if twips == 0 {
+                // A height of 0 is a hidden row.
+                (default_row, true)
+            } else {
+                (twips_to_hmm(twips), false)
+            };
+            hidden |= r.flags & 0x20 != 0;
+            if r.row > next {
                 push_run(
                     &mut out.row_heights,
-                    r.row,
-                    r.row,
-                    own.unwrap_or(default_row),
-                    hidden,
+                    next,
+                    r.row - 1,
+                    default_row,
+                    default_hidden,
                 );
             }
-            let shown = if hidden {
-                0
-            } else {
-                own.unwrap_or(default_row)
-            };
-            row_sizes.push((r.row, i64::from(shown)));
+            push_run(&mut out.row_heights, r.row, r.row, size, hidden);
+            next = r.row + 1;
+            row_sizes.push((r.row, if hidden { 0 } else { i64::from(size) }));
+        }
+        if next < MAX_ROWS {
+            push_run(
+                &mut out.row_heights,
+                next,
+                MAX_ROWS - 1,
+                default_row,
+                default_hidden,
+            );
         }
 
         // Cells: row-major, one per position (the last record wins).
@@ -972,6 +1554,14 @@ impl Reader<'_> {
             kept += 1;
         }
         out.cells.truncate(kept);
+        self.row_formats(&mut out, &row_xfs, last_col);
+
+        // Page setup and manual breaks.
+        out.page_setup = page.build();
+        for breaks in [&mut out.row_breaks, &mut out.col_breaks] {
+            breaks.sort_unstable();
+            breaks.dedup();
+        }
 
         // View.
         if let Some(flags) = window2 {
@@ -987,7 +1577,10 @@ impl Reader<'_> {
             }
             if let Some((x, y)) = pane {
                 if flags & 0x08 != 0 {
-                    // Frozen: columns and rows.
+                    // Frozen: columns and rows. (OpenOffice freezes at
+                    // the first visible cell plus these counts; the
+                    // model's frozen panes start at A1, so a sheet frozen
+                    // while scrolled keeps its counts.)
                     let cols = u32::from(x).min(MAX_COLS - 1);
                     let rows = u32::from(y).min(MAX_ROWS - 1);
                     if rows > 0 || cols > 0 {
@@ -1035,14 +1628,12 @@ impl Reader<'_> {
         }
         let note_shapes = out.notes.len();
 
-        // Pictures.
+        // Pictures, placed with the sizes the columns and rows are shown
+        // at.
         if !drawing.is_empty() {
-            let col_default =
-                i64::from(default_col.unwrap_or(tally_io_xlsx::DEFAULT_COL_WIDTH_HMM));
             let shown = |def: Option<ColDef>| match size_of(def) {
-                Some((_, true)) => 0,
-                Some((size, false)) => i64::from(size),
-                None => col_default,
+                (_, true) => 0,
+                (size, false) => i64::from(size),
             };
             let col_sizes: Vec<(u32, i64)> = cols
                 .iter()
@@ -1050,10 +1641,71 @@ impl Reader<'_> {
                 .map(|(c, def)| (c as u32, shown(*def)))
                 .collect();
             let col_axis = Axis::new(col_sizes, shown(tail));
-            let row_axis = Axis::new(row_sizes, i64::from(default_row));
+            let row_default = if default_hidden {
+                0
+            } else {
+                i64::from(default_row)
+            };
+            let row_axis = Axis::new(row_sizes, row_default);
             self.pictures(&drawing, &col_axis, &row_axis, note_shapes, &mut out.images);
         }
         out
+    }
+
+    /// Adds the empty cells the rows with a default format (`row_xfs`,
+    /// sorted) give their format to: the positions without a cell record
+    /// from column A to the last column the sheet uses (`last_col`). A
+    /// default format that is the plain look only needs cells where a
+    /// column style would show instead. Linear in the cells there are
+    /// and the cells added, which count against the styled-cell budget.
+    fn row_formats(
+        &mut self,
+        out: &mut SheetFormat,
+        row_xfs: &[(u32, u16)],
+        last_col: Option<u32>,
+    ) {
+        let Some(last_col) = last_col.map(|c| c.min(BIFF_COLS as u32 - 1)) else {
+            return;
+        };
+        if row_xfs.is_empty() {
+            return;
+        }
+        let all: Vec<u32> = (0..=last_col).collect();
+        let styled: Vec<u32> = all
+            .iter()
+            .copied()
+            .filter(|c| out.styled_cols.get(*c as usize) == Some(&true))
+            .collect();
+        let mut merged: Vec<CellFmt> = Vec::with_capacity(out.cells.len());
+        let mut cells = std::mem::take(&mut out.cells).into_iter().peekable();
+        for &(row, xf) in row_xfs {
+            merged.extend(std::iter::from_fn(|| cells.next_if(|c| c.row < row)));
+            let shows = self.xfs.get(usize::from(xf)).is_some_and(|x| !x.plain);
+            for &col in if shows { &all } else { &styled } {
+                merged.extend(std::iter::from_fn(|| {
+                    cells.next_if(|c| c.row == row && u32::from(c.col) < col)
+                }));
+                if let Some(c) = cells.next_if(|c| c.row == row && u32::from(c.col) == col) {
+                    merged.push(c);
+                    continue;
+                }
+                if self.cells >= self.limits.max_styled_cells {
+                    self.dropped.cells = true;
+                    break;
+                }
+                self.cells += 1;
+                merged.push(CellFmt {
+                    row,
+                    col: col as u16,
+                    xf,
+                });
+            }
+            if self.dropped.cells {
+                break;
+            }
+        }
+        merged.extend(cells);
+        out.cells = merged;
     }
 
     fn pictures(
@@ -1075,8 +1727,10 @@ impl Reader<'_> {
                 (Some(_), Some(_)) if shapes.len() < cap => shapes.push(shape),
                 (Some(_), Some(_)) => capped = true,
                 // An anchored shape without a picture: a text box, a
-                // line, a control…
-                (None, Some(_)) => others += 1,
+                // line, a control… A picture without a sheet anchor is
+                // part of a group shape (its place is relative to the
+                // group), which is not imported.
+                (None, Some(_)) | (Some(_), None) => others += 1,
                 // The group's own shape and other bookkeeping.
                 _ => {}
             }
@@ -1235,6 +1889,8 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
     let mut sheet_pos: Vec<usize> = Vec::new();
     let mut group: Vec<u8> = Vec::new();
     let mut active: Option<u16> = None;
+    let mut prints: Vec<PrintName> = Vec::new();
+    let mut format_bytes = 0u64;
     let mut dropped = Dropped::default();
     let group_cap = usize::try_from(limits.max_total_image_bytes)
         .unwrap_or(usize::MAX)
@@ -1284,7 +1940,15 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
                     dropped.formats = true;
                     continue;
                 }
-                formats.insert(id, unicode(d, 4, usize::from(cch)));
+                let code = unicode(d, 4, usize::from(cch));
+                // The codes share the text budget of the styles they end
+                // up in.
+                format_bytes = format_bytes.saturating_add(code.len() as u64);
+                if format_bytes > limits.max_style_text_bytes {
+                    dropped.style_text = true;
+                    continue;
+                }
+                formats.insert(id, code);
             }
             // XF: a truncated record still takes its index (default look).
             0x00E0 => {
@@ -1325,6 +1989,16 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
                 }
             }
             0x003D => active = w(10).or(active),
+            // NAME: the print area and the print titles of a sheet.
+            0x0018 => {
+                if let Some(p) = print_name(d) {
+                    // One of each per sheet; they are applied in file
+                    // order, so of several the last one counts.
+                    if prints.len() < limits.max_sheets.saturating_mul(2) {
+                        prints.push(p);
+                    }
+                }
+            }
             0x0085 => {
                 if sheet_pos.len() < limits.max_sheets {
                     sheet_pos.push(u32_at(d, 0).unwrap_or(u32::MAX) as usize);
@@ -1342,10 +2016,7 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
 
     // Styles.
     let default_family = fonts.first().and_then(|f| f.name.clone());
-    let default_size = fonts
-        .first()
-        .filter(|f| f.twips > 0)
-        .map(|f| f32::from(f.twips.min(409 * 20)) / 20.0);
+    let font_twips = i64::from(fonts.first().map_or(APP_FONT_TWIPS, |f| f.twips));
     let mut builder = StyleBuilder {
         fonts: &fonts,
         formats: &formats,
@@ -1359,40 +2030,67 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
         font: builder.font_data(0),
         ..StyleData::default()
     };
-    let mut styles: Vec<StyleData> = Vec::new();
-    let mut dedup: HashMap<String, u32> = HashMap::new();
+    // One model style per distinct look. XFs that are equal field by
+    // field are resolved once.
+    let mut table = StyleTable::default();
+    let mut by_xf: HashMap<XfKey, XfInfo> = HashMap::new();
+    let mut style_text = 0u64;
     let mut xfs: Vec<XfInfo> = Vec::with_capacity(raw_xfs.len());
     for x in &raw_xfs {
-        let style = builder.style(x);
-        let mut info = XfInfo {
-            style: None,
+        if let Some(info) = by_xf.get(&x.key()) {
+            xfs.push(*info);
+            continue;
+        }
+        let mut style = builder.style(x);
+        let mut idx = table.find(&style);
+        if idx.is_none() && style != StyleData::default() {
+            // Every style owns its number format and font name: their
+            // total is bounded. Past the budget a new style keeps its look
+            // without them (and may then be a look there already).
+            let text = style.number_format.as_ref().map_or(0, String::len)
+                + style.font.family.as_ref().map_or(0, String::len);
+            if style_text.saturating_add(text as u64) > limits.max_style_text_bytes {
+                dropped.style_text = true;
+                style.number_format = None;
+                style.font.family = None;
+                idx = table.find(&style);
+            } else {
+                style_text += text as u64;
+            }
+            if idx.is_none() && style != StyleData::default() {
+                idx = Some(table.push(style.clone()));
+            }
+        }
+        let info = XfInfo {
+            style: idx,
             date: style
                 .number_format
                 .as_deref()
                 .is_some_and(tally_io_xlsx::is_date_format),
             has_format: style.number_format.is_some(),
-            plain: style == base,
+            plain: idx.is_none() || style == base,
         };
-        if style != StyleData::default() {
-            let key = format!("{style:?}");
-            let next = u32::try_from(styles.len()).unwrap_or(u32::MAX);
-            let idx = *dedup.entry(key).or_insert(next);
-            if idx == next {
-                styles.push(style);
-            }
-            info.style = Some(idx);
-        } else {
-            info.plain = true;
-        }
+        by_xf.insert(x.key(), info);
         xfs.push(info);
     }
+    drop(by_xf);
+    let styles = table.styles;
     dropped.long_format = builder.long_format;
 
     // The picture store.
     let mut blips: Vec<Blip> = Vec::new();
     art_scan(&group, |r| {
-        if r.typ == 0xF007 && blips.len() < MAX_BLIPS {
-            blips.push(blip_of(r.body, limits.max_image_bytes));
+        if blips.len() >= MAX_BLIPS {
+            return;
+        }
+        match r.typ {
+            0xF007 => blips.push(blip_of(r.body, limits.max_image_bytes)),
+            // A BLIP directly in the store (MS-ODRAW allows it instead of
+            // a store entry) takes an index too.
+            0xF018..=0xF117 => {
+                blips.push(blip_record(r.inst, r.typ, r.body, limits.max_image_bytes));
+            }
+            _ => {}
         }
     });
     drop(group);
@@ -1402,9 +2100,14 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
         limits,
         xfs,
         palette,
-        mdw: tally_io_xlsx::max_digit_width(default_family.as_deref(), default_size),
+        font_twips,
+        // The fallback of `XclRoot::SetCharWidth` (OpenOffice measures '0'
+        // on its printer; the reader measures nothing): 11/20 of the font
+        // height.
+        char_width: (11 * font_twips / 20).max(1),
         blips,
         dropped,
+        row_xf: vec![0u64; (BIFF_ROWS / 64) as usize],
         rows: 0,
         cells: 0,
         drawing_bytes: 0,
@@ -1424,6 +2127,26 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
         }
         sheets.push(reader.sheet(start, &mut walked, walk_budget));
     }
+    // Print areas and titles, as the XLSX reader places `_xlnm.Print_Area`
+    // and `_xlnm.Print_Titles`.
+    for p in prints {
+        let Some(sheet) = sheets.get_mut(p.sheet) else {
+            continue;
+        };
+        if p.titles {
+            let (rows, cols) = p.titles();
+            if rows.is_some() || cols.is_some() {
+                let setup = sheet.page_setup.get_or_insert_with(PageSetupData::default);
+                setup.repeat_rows = rows.or(setup.repeat_rows);
+                setup.repeat_cols = cols.or(setup.repeat_cols);
+            }
+        } else if let [area] = p.areas.as_slice() {
+            sheet
+                .page_setup
+                .get_or_insert_with(PageSetupData::default)
+                .print_range = Some(*area);
+        }
+    }
 
     let d = &reader.dropped;
     let mut warnings: Vec<String> = Vec::new();
@@ -1435,6 +2158,19 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
     }
     if d.long_format {
         warnings.push(tally_model::long_number_format_warning());
+    }
+    if d.style_text {
+        warnings.push(format!(
+            "The number formats and font names of this file take more than {} MiB: some cell \
+             formats were read without them.",
+            limits.max_style_text_bytes / (1024 * 1024)
+        ));
+    }
+    if d.page_breaks {
+        warnings.push(format!(
+            "Only the first {} manual page breaks of a sheet were read.",
+            limits.max_page_breaks
+        ));
     }
     if d.col_infos {
         warnings.push(format!(
@@ -1487,5 +2223,85 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
         active_sheet: active.map(u32::from),
         sheets,
         warnings,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A built-in NAME record's data: `id` for sheet `itab` with `rgce`.
+    fn name(id: u8, itab: u16, rgce: &[u8]) -> Vec<u8> {
+        let mut d = vec![0x20, 0, 0, 1];
+        d.extend_from_slice(&(rgce.len() as u16).to_le_bytes());
+        d.extend_from_slice(&[0, 0]);
+        d.extend_from_slice(&itab.to_le_bytes());
+        d.extend_from_slice(&[0, 0, 0, 0, 0, id]);
+        d.extend_from_slice(rgce);
+        d
+    }
+
+    fn area(r0: u16, r1: u16, c0: u16, c1: u16) -> Vec<u8> {
+        let mut d = vec![0x3B, 0, 0];
+        for w in [r0, r1, c0, c1] {
+            d.extend_from_slice(&w.to_le_bytes());
+        }
+        d
+    }
+
+    #[test]
+    fn print_names_cut_or_garbled_are_skipped() {
+        let full = name(0x06, 1, &area(1, 4, 2, 3));
+        let p = print_name(&full).unwrap();
+        assert_eq!((p.sheet, p.titles, p.areas.len()), (0, false, 1));
+        // Cut anywhere: no panic, and never a name with half an area.
+        for cut in 0..full.len() {
+            assert!(print_name(&full[..cut]).is_none(), "cut at {cut}");
+        }
+        // A formula length beyond the record, a token cut by the formula
+        // length, a token that is no area, more areas than are looked at.
+        let mut long = full.clone();
+        long[4] = 200;
+        assert!(print_name(&long).is_none());
+        let mut short = full.clone();
+        short[4] = 6;
+        assert!(print_name(&short).is_none());
+        assert!(print_name(&name(0x06, 1, &[0x1E, 1, 0])).is_none());
+        let many: Vec<u8> = (0..=MAX_NAME_AREAS)
+            .flat_map(|_| area(0, 0, 0, 0))
+            .collect();
+        assert!(print_name(&name(0x07, 1, &many)).is_none());
+        // Every single byte as a formula, and as the token after an area.
+        for b in 0..=255u8 {
+            let _ = print_name(&name(0x06, 1, &[b]));
+            let mut rgce = area(0, 1, 0, 1);
+            rgce.push(b);
+            let _ = print_name(&name(0x07, 1, &rgce));
+        }
+        // A 16-bit name string.
+        let mut wide = full.clone();
+        wide[14] = 1;
+        wide.insert(16, 0);
+        assert_eq!(print_name(&wide).map(|p| p.areas.len()), Some(1));
+    }
+
+    #[test]
+    fn margins_and_papers() {
+        assert_eq!(inch_to_hmm(0.5), Some(1270));
+        assert_eq!(inch_to_hmm(-1.0), Some(0));
+        assert_eq!(inch_to_hmm(1e9), Some(127_000));
+        assert_eq!(inch_to_hmm(f64::NAN), None);
+        assert_eq!(inch_to_hmm(f64::INFINITY), None);
+        assert_eq!(f64_at(&[0; 7], 0), None);
+        assert_eq!(f64_at(&[0; 8], usize::MAX), None);
+        // Every paper code maps to a size or to none, upright.
+        for code in 0..=u16::MAX {
+            if let Some(p) = paper_of(code) {
+                let (w, h) = p.size_hmm();
+                assert!(w > 0 && w <= h, "code {code}");
+            }
+        }
+        assert_eq!(paper_of(0), None);
+        assert_eq!(paper_of(9), Some(PaperData::A4));
     }
 }

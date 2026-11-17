@@ -96,6 +96,39 @@ fn every_record_cut_at_every_length() {
         (false, note[..obj_len].to_vec(), true),
         (false, note[obj_len..obj_len + txo_len].to_vec(), true),
         (false, note[note_at..].to_vec(), true),
+        // Page setup.
+        (false, biff::setup(&biff::Setup::default()), true),
+        (false, biff::margin(0x0026, 0.5), true),
+        (false, biff::margin(0x0027, 0.5), true),
+        (false, biff::margin(0x0028, 0.5), true),
+        (false, biff::margin(0x0029, 0.5), true),
+        (false, biff::header_footer(0x0014, "&LL&CC&RR&P"), true),
+        (false, biff::header_footer(0x0015, "&LL&CC&RR&P"), true),
+        (false, biff::word(0x002A, 1), true),
+        (false, biff::word(0x002B, 1), true),
+        (false, biff::word(0x0083, 1), true),
+        (false, biff::word(0x0084, 1), true),
+        (false, biff::word(0x0081, 0x05C1), true),
+        (false, biff::page_breaks(true, &[3, 9, 12]), true),
+        (false, biff::page_breaks(false, &[3, 9, 12]), true),
+        // Names are calamine's too: a cut one may fail the file there.
+        (
+            true,
+            biff::builtin_name(0x06, 1, &biff::ptg_area3d(0, 9, 0, 3)),
+            false,
+        ),
+        (
+            true,
+            biff::builtin_name(
+                0x07,
+                1,
+                &biff::ptg_union(
+                    &biff::ptg_area3d(0, 65_535, 0, 0),
+                    &biff::ptg_area3d(0, 1, 0, 255),
+                ),
+            ),
+            false,
+        ),
     ];
     for (in_globals, record, must_open) in &cases {
         let (typ, body) = data(record);
@@ -245,11 +278,24 @@ fn column_and_row_records_out_of_range() {
         (c.start, c.end, c.hidden),
         (0, tally_types::MAX_COLS - 1, true)
     );
-    let rows: Vec<(u32, u32)> = sheet.row_heights.iter().map(|r| (r.start, r.end)).collect();
-    assert_eq!(rows, vec![(0, 0), (3, 3), (65_535, 65_535)]);
+    let rows: Vec<(u32, u32, u32)> = sheet
+        .row_heights
+        .iter()
+        .map(|r| (r.start, r.end, r.size_hmm))
+        .collect();
+    // No DEFAULTROWHEIGHT: the other rows have OpenOffice's standard
+    // height (256 twips), and so has row 1 with its "default" bit.
+    let (std, h20) = (452, tally_io_xlsx::pt_to_hmm(20.0));
     assert_eq!(
-        sheet.row_heights[1].size_hmm,
-        tally_io_xlsx::pt_to_hmm(20.0)
+        rows,
+        vec![
+            (0, 0, tally_io_xlsx::pt_to_hmm(f64::from(0x7FFF) / 20.0)),
+            (1, 2, std),
+            (3, 3, h20),
+            (4, 65_534, std),
+            (65_535, 65_535, h20),
+            (65_536, tally_types::MAX_ROWS - 1, std),
+        ]
     );
 }
 
@@ -278,9 +324,10 @@ fn limits_degrade_with_a_warning() {
         ..Limits::default()
     };
     let wb = read_with(&bytes, &limits).unwrap();
-    assert_eq!(wb.sheets[0].col_widths.len(), 1);
+    // The records read, then the default for the rest.
+    assert_eq!(wb.sheets[0].col_widths.len(), 2);
     assert_eq!(wb.sheets[0].col_widths[0].end, 4);
-    assert_eq!(wb.sheets[0].row_heights.len(), 1);
+    assert_eq!(wb.sheets[0].row_heights.len(), 2);
     assert_eq!(wb.sheets[0].row_heights[0].end, 5);
     for part in ["first 2 fonts", "column definitions", "row definitions"] {
         assert!(
@@ -414,4 +461,161 @@ fn garbage_records_never_panic() {
         let _ = read(&book(&g, &s));
         let _ = read(&biff::file(biff::stream(&g, &[("S", s)])));
     }
+}
+
+#[test]
+fn page_records_that_lie() {
+    // Page breaks announcing 65,535 entries with one present, and with a
+    // count of 0 before entries; a header announcing 65,535 characters,
+    // one of 16-bit characters with half a character, one with nothing
+    // but its length.
+    let mut rows = biff::page_breaks(true, &[7]);
+    rows[4..6].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    let mut cols = biff::page_breaks(false, &[7]);
+    cols[4..6].copy_from_slice(&0u16.to_le_bytes());
+    let mut header = biff::header_footer(0x0014, "abc");
+    header[4..6].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    let mut footer = biff::header_footer(0x0015, "&P");
+    footer.pop();
+    footer[2] -= 1;
+    let mut s = rows;
+    s.extend(cols);
+    s.extend(header);
+    s.extend(footer);
+    s.extend(biff::rec(0x0014, &[9, 0]));
+    // SETUP, the margins and the flag records with every bit set.
+    s.extend(biff::rec(0x00A1, &[0xFF; 34]));
+    for typ in 0x0026..=0x0029u16 {
+        s.extend(biff::rec(typ, &[0xFF; 8]));
+    }
+    for typ in [0x002Au16, 0x002B, 0x0083, 0x0084, 0x0081] {
+        s.extend(biff::rec(typ, &[0xFF; 2]));
+    }
+    let wb = read(&book(&[], &s)).unwrap();
+    let sheet = &wb.sheets[0];
+    assert_eq!(sheet.row_breaks, vec![7]);
+    assert!(sheet.col_breaks.is_empty());
+    let p = sheet.page_setup.as_ref().unwrap();
+    // All bits set: "not valid", NaN margins, fit to 65,535 pages.
+    assert_eq!(p.paper, tally_model::PaperData::A4);
+    assert_eq!(
+        p.scale,
+        tally_model::PageScaleData::FitTo {
+            width: 0xFFFF,
+            height: 0xFFFF
+        }
+    );
+    assert_eq!(p.margins.left, 1900);
+    assert_eq!(p.first_page_number, None);
+    // The last HEADER (cut after its length) has no text.
+    assert_eq!(p.header, None);
+    assert_eq!(p.footer.as_ref().map(|f| f.center.as_str()), Some("&"));
+}
+
+#[test]
+fn a_header_of_the_largest_record_is_linear() {
+    // Thousands of section and font codes in one record: every character
+    // is looked at once.
+    let text = "&L&\"Font,Bold\"&8&P&K000000".repeat(300);
+    let mut s = biff::header_footer(0x0014, &text[..4_000]);
+    s.extend(biff::header_footer(0x0015, &"&".repeat(4_000)));
+    let wb = read(&book(&[], &s)).unwrap();
+    let p = wb.sheets[0].page_setup.as_ref().unwrap();
+    assert!(p.header.is_some());
+    assert_eq!(p.footer.as_ref().map(|f| f.center.len()), Some(2_000));
+}
+
+#[test]
+fn print_names_with_garbage_formulas_never_panic() {
+    // Pseudo-random token bytes in Print_Area and Print_Titles names of
+    // sheets that exist and that do not. calamine reads names too and
+    // may refuse some; this reader must not panic on any.
+    let mut x = 0x2545_F491u32;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        x
+    };
+    let mut opened = 0;
+    for i in 0..600u32 {
+        let len = (next() % 40) as usize;
+        let mut rgce: Vec<u8> = (0..len).map(|_| next() as u8).collect();
+        // Half of them start like a real print range.
+        if i % 2 == 0 {
+            let mut real = biff::ptg_area3d(0, 9, 0, 3);
+            real.extend(rgce);
+            rgce = real;
+        }
+        let id = if i % 3 == 0 { 0x07 } else { 0x06 };
+        let itab = [1u16, 1, 2, 0, 0xFFFF][(i % 5) as usize];
+        let mut g = biff::externsheet(1);
+        g.extend(biff::builtin_name(id, itab, &rgce));
+        if read(&book(&g, &[])).is_ok() {
+            opened += 1;
+        }
+    }
+    assert!(opened > 0);
+    // A thousand names for one sheet: only the first 2 × max_sheets are
+    // looked at, nothing piles up.
+    let mut g = biff::externsheet(1);
+    for i in 0..1_000u16 {
+        g.extend(biff::builtin_name(0x06, 1, &biff::ptg_area3d(i, i, 0, 0)));
+    }
+    let limits = Limits {
+        max_sheets: 4,
+        ..Limits::default()
+    };
+    let wb = read_with(&book(&g, &[]), &limits).unwrap();
+    assert_eq!(
+        wb.sheets[0].page_setup.as_ref().unwrap().print_range,
+        Some(tally_model::CellRangeLocal {
+            r0: 7,
+            c0: 0,
+            r1: 7,
+            c1: 0
+        })
+    );
+}
+
+#[test]
+fn row_formats_of_a_hostile_sheet_are_bounded() {
+    // Every row of the sheet has a default format and the sheet uses all
+    // 256 columns: 16.7 million cells asked for, the styled-cell budget
+    // given.
+    let bordered = biff::Xf {
+        lines: [1, 1, 1, 1, 0],
+        ..biff::Xf::default()
+    };
+    let g = biff::globals(&[], &[], &[bordered]);
+    let mut s = biff::colinfo(0, 255, 2560, 16, 0);
+    for r in 0..=65_535u16 {
+        s.extend(biff::row(r, 300, 0x0180 | (16 << 16)));
+    }
+    s.extend(biff::number(0, 0, 15, 1.0));
+    let bytes = biff::file(biff::stream(&g, &[("S", s)]));
+    let limits = Limits {
+        max_styled_cells: 50_000,
+        ..Limits::default()
+    };
+    let t = std::time::Instant::now();
+    let wb = read_with(&bytes, &limits).unwrap();
+    assert!(wb.sheets[0].cells.len() <= 50_000);
+    assert!(wb
+        .warnings
+        .iter()
+        .any(|w| w.contains("formatting of the first 50000 cells")));
+    assert!(t.elapsed().as_secs() < 20, "{:?}", t.elapsed());
+    // Hidden by default and 65,536 row records: runs, not rows.
+    let mut s = biff::defaultrowheight(2, 255);
+    for r in 0..=65_535u16 {
+        s.extend(biff::row(r, if r % 2 == 0 { 0 } else { 300 }, 0x0100));
+    }
+    let wb = read(&book(&[], &s)).unwrap();
+    let rows = &wb.sheets[0].row_heights;
+    assert_eq!(rows.len(), 65_537);
+    assert_eq!(
+        rows.last().map(|r| (r.start, r.end, r.hidden)),
+        Some((65_536, tally_types::MAX_ROWS - 1, true))
+    );
 }

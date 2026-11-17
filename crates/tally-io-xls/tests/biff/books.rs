@@ -1,4 +1,4 @@
-//! The synthetic workbooks of the formatting tests. They are also written
+//! The synthetic workbooks of the formatting and page setup tests. They are also written
 //! to `tests/fixtures/xls/` (the fuzz seeds are generated from that
 //! directory); `tests/formatting.rs` checks that the committed files are
 //! what this code builds.
@@ -191,11 +191,81 @@ pub fn notes() -> Vec<u8> {
     file(stream(&globals(&[], &[], &[]), &[("Notes", sheet)]))
 }
 
+/// Page setup of every kind on two sheets (the first with a header, page
+/// breaks, a print area and print titles, the second fitted to one page
+/// wide), a row with a default format and a formatted column with cells
+/// of the default format in it.
+pub fn page() -> Vec<u8> {
+    let bordered = Xf {
+        lines: [1, 1, 1, 1, 0],
+        ..Xf::default()
+    };
+    let mut g = globals(&[], &[], &[bordered]);
+    g.extend(externsheet(2));
+    g.extend(builtin_name(0x06, 1, &ptg_area3d(0, 29, 0, 5)));
+    g.extend(builtin_name(
+        0x07,
+        1,
+        &ptg_union(&ptg_area3d(0, 65_535, 0, 0), &ptg_area3d(0, 1, 0, 255)),
+    ));
+
+    let mut one = word(0x002A, 1);
+    one.extend(word(0x002B, 1));
+    one.extend(defaultrowheight(0, 255));
+    one.extend(word(0x0081, 0x04C1));
+    one.extend(page_breaks(true, &[20, 5]));
+    one.extend(page_breaks(false, &[3]));
+    one.extend(header_footer(0x0014, "&LLeft&CPage &P of &N&R&D"));
+    one.extend(header_footer(0x0015, ""));
+    one.extend(word(0x0083, 1));
+    one.extend(word(0x0084, 0));
+    one.extend(margin(0x0026, 0.166));
+    one.extend(margin(0x0027, 0.25));
+    one.extend(margin(0x0028, 1.0));
+    one.extend(margin(0x0029, 0.75));
+    one.extend(setup(&Setup {
+        paper: 1,
+        scale: 80,
+        start: 3,
+        flags: 0x0081,
+        header: 0.3,
+        footer: 0.4,
+        ..Setup::default()
+    }));
+    one.extend(defcolwidth(8));
+    // Column B is bordered; row 2 has the bordered format as its default,
+    // row 4 is hidden by a height of 0.
+    one.extend(colinfo(1, 1, 2560, 16, 0));
+    one.extend(row(0, 255, 0x0100));
+    one.extend(row(1, 300, 0x0180 | 16 << 16));
+    one.extend(row(3, 0, 0x0100));
+    one.extend(number(0, 0, 15, 1.0));
+    one.extend(number(0, 1, 15, 2.0));
+    one.extend(number(0, 3, 15, 3.0));
+    one.extend(number(1, 2, 15, 4.0));
+    one.extend(blank(2, 1, 15));
+    one.extend(window2(0x00B6));
+
+    let mut two = word(0x0081, 0x05C1);
+    two.extend(header_footer(0x0014, ""));
+    two.extend(header_footer(0x0015, "&C&A"));
+    two.extend(setup(&Setup {
+        fit_w: 1,
+        fit_h: 0,
+        ..Setup::default()
+    }));
+    two.extend(number(0, 0, 15, 1.0));
+    two.extend(window2(0x00B6));
+
+    file(stream(&g, &[("Page", one), ("Fit", two)]))
+}
+
 /// The fixtures by file name.
 pub fn all() -> Vec<(&'static str, Vec<u8>)> {
     vec![
         ("formatted.xls", formatted()),
         ("pictures.xls", pictures()),
         ("notes.xls", notes()),
+        ("page.xls", page()),
     ]
 }
