@@ -10,6 +10,8 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-17
+
 ### Added
 - DataPilot field options: the Layout choices (outline layout with
   subtotals at the top or at the bottom) and "Empty line after each item"
