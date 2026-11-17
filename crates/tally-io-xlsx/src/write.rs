@@ -36,6 +36,29 @@ const MAX_SIZED_ROWS: u32 = 100_000;
 /// Most warnings kept (the rest are counted).
 const MAX_WARNINGS: usize = 200;
 
+/// The height to write as the sheet's default row height: when the runs
+/// leave no row without a height, the height of the (shown) run that
+/// reaches the last row. `None` when some row has no run (it has the
+/// application's default height, which the file's default must not
+/// replace) or when the last rows are hidden.
+fn default_row_height(runs: &[tally_model::DimRun]) -> Option<u32> {
+    let mut sorted: Vec<&tally_model::DimRun> = runs.iter().filter(|r| r.start <= r.end).collect();
+    sorted.sort_by_key(|r| r.start);
+    let mut next = 0u32;
+    let mut last = None;
+    for r in sorted {
+        if r.start > next {
+            return None;
+        }
+        if r.end >= MAX_ROWS - 1 {
+            last = Some(r);
+        }
+        next = next.max(r.end.saturating_add(1));
+    }
+    last.filter(|r| next >= MAX_ROWS && !r.hidden)
+        .map(|r| r.size_hmm)
+}
+
 struct Report {
     warnings: Vec<String>,
     dropped: usize,
@@ -475,13 +498,21 @@ impl SheetWriter<'_> {
         }
         // Row heights and hidden rows.
         let mut sized = 0u32;
+        // A sheet whose runs cover every row (an imported `.xls`: the
+        // rows with a height of their own, the sheet's default for the
+        // others) has the height of its last run, the one that reaches
+        // the end of the sheet, as its default row height: the rows of
+        // that height are not written one by one.
+        let default_height = default_row_height(&sheet.row_heights);
+        if let Some(h) = default_height {
+            ws.set_default_row_height_pixels(hmm_to_px(h));
+        }
         for run in &sheet.row_heights {
             if run.start >= MAX_ROWS || run.start > run.end {
                 continue;
             }
             let end = run.end.min(MAX_ROWS - 1);
-            if run.start == 0 && end == MAX_ROWS - 1 && !run.hidden {
-                ws.set_default_row_height_pixels(hmm_to_px(run.size_hmm));
+            if !run.hidden && default_height == Some(run.size_hmm) {
                 continue;
             }
             for row in run.start..=end {
