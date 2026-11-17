@@ -90,6 +90,10 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 - Headers and footers: the "Path/File Name" field of an OpenOffice or
   Excel file is kept (as `&[PATH]`) instead of turning into the file name
   or disappearing.
+- Excel 97-2003 (.xls) files whose first row or first column is empty
+  opened with every cell shifted up and to the left, so texts ended up
+  under the wrong merged cells or disappeared and formulas pointed at
+  the wrong cells. Cells are now where the file puts them.
 
 ## [0.1.2] - 2026-11-12
 

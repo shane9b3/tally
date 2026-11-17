@@ -217,11 +217,17 @@ fn decode(data: Vec<u8>, limits: &Limits) -> Result<WorkbookData, XlsError> {
             hidden: !matches!(meta.visible, calamine::SheetVisible::Visible),
             ..SheetData::default()
         };
+        // `used_cells()` yields positions relative to the range's start
+        // (its first used row and column), not sheet coordinates; merges
+        // and `Range::get_value` are absolute.
+        let (row0, col0) = range.start().unwrap_or((0, 0));
         for (r, c, value) in range.used_cells() {
-            let (r, c) = (r as u32, c as u32);
-            if r >= MAX_ROWS || c >= MAX_COLS {
+            let r = (r as u64).saturating_add(u64::from(row0));
+            let c = (c as u64).saturating_add(u64::from(col0));
+            if r >= u64::from(MAX_ROWS) || c >= u64::from(MAX_COLS) {
                 continue;
             }
+            let (r, c) = (r as u32, c as u32);
             // calamine reports an undecodable formula as text starting
             // with "Unrecognised formula": keep the cached value then.
             let formula_text = formulas
