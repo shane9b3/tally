@@ -168,7 +168,12 @@ fn huge_references_are_harmless() {
         .col_widths
         .iter()
         .all(|r| r.end < 16_384 && r.size_hmm < 100_000));
-    assert!(s.row_heights.is_empty());
+    // Every row has the sheet's default height: one run, not a million.
+    assert_eq!(s.row_heights.len(), 1);
+    assert_eq!(
+        (s.row_heights[0].start, s.row_heights[0].end),
+        (0, 1_048_575)
+    );
     assert_eq!(s.frozen, Some((1_048_575, 16_383)));
     assert_eq!(s.merges.len(), 1);
 }

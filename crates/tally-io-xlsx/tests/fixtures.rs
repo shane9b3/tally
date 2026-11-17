@@ -9,7 +9,7 @@ mod common;
 use common::*;
 use tally_io_xlsx::{sniff_is_xlsx, DEFAULT_COL_WIDTH_HMM};
 use tally_model::{BorderStyle, CellContentData, CellRangeLocal, DimRun, HAlign, StyleRun, VAlign};
-use tally_types::{DateEpoch, ErrorKind, Value, MAX_ROWS};
+use tally_types::{DateEpoch, ErrorKind, Value, MAX_COLS, MAX_ROWS};
 
 #[test]
 fn excel365_sheets_and_settings() {
@@ -31,40 +31,34 @@ fn excel365_sheets_and_settings() {
             c1: 2
         }]
     );
-    // B: 20.7109375 characters = 145 px; D: hidden (width 0 → default).
+    // Every column has a width: B is 20.7109375 characters = 145 px, D is
+    // hidden (width 0 → default), the others have Excel's default (64 px;
+    // the file has no `defaultColWidth`).
+    let col = |start, end, size_hmm, hidden| DimRun {
+        start,
+        end,
+        size_hmm,
+        hidden,
+    };
     assert_eq!(
         data.col_widths,
         [
-            DimRun {
-                start: 1,
-                end: 1,
-                size_hmm: 3836,
-                hidden: false
-            },
-            DimRun {
-                start: 3,
-                end: 3,
-                size_hmm: DEFAULT_COL_WIDTH_HMM,
-                hidden: true
-            }
+            col(0, 0, DEFAULT_COL_WIDTH_HMM, false),
+            col(1, 1, 3836, false),
+            col(2, 2, DEFAULT_COL_WIDTH_HMM, false),
+            col(3, 3, DEFAULT_COL_WIDTH_HMM, true),
+            col(4, MAX_COLS - 1, DEFAULT_COL_WIDTH_HMM, false),
         ]
     );
-    // Row 8 hidden (default 14.5 pt), row 9 30 pt.
+    // Every row has a height: the sheet's default (14.5 pt), row 8 hidden,
+    // row 9 30 pt.
     assert_eq!(
         data.row_heights,
         [
-            DimRun {
-                start: 7,
-                end: 7,
-                size_hmm: 512,
-                hidden: true
-            },
-            DimRun {
-                start: 8,
-                end: 8,
-                size_hmm: 1058,
-                hidden: false
-            }
+            col(0, 6, 512, false),
+            col(7, 7, 512, true),
+            col(8, 8, 1058, false),
+            col(9, MAX_ROWS - 1, 512, false),
         ]
     );
     // Columns G:H carry a column style (bold).
@@ -274,14 +268,41 @@ fn libreoffice_shapes() {
     assert_eq!(wb.settings.active_sheet, 1);
     let s = &wb.sheets[0];
     assert_eq!(s.frozen, Some((1, 0)));
-    assert_eq!(s.col_widths.len(), 1);
-    assert_eq!(s.col_widths[0].start, 0);
-    // Only customHeight / hidden rows are recorded (12.8 pt auto heights
-    // are not); row 3 is 24.05 pt, row 4 hidden.
-    let rows: Vec<(u32, bool)> = s.row_heights.iter().map(|r| (r.start, r.hidden)).collect();
-    assert_eq!(rows, [(2, false), (3, true)]);
-    assert_eq!(s.row_heights[0].size_hmm, 848);
-    assert!(wb.sheets[1].row_heights.is_empty());
+    // Column A is 20.5 characters of Arial 10 (143 px); the others have
+    // the sheet's `defaultColWidth` (11.53515625 characters, 81 px).
+    let cols: Vec<(u32, u32, u32)> = s
+        .col_widths
+        .iter()
+        .map(|r| (r.start, r.end, r.size_hmm))
+        .collect();
+    assert_eq!(cols, [(0, 0, 3784), (1, MAX_COLS - 1, 2143)]);
+    // Every row has the file's height: 12.8 pt (the sheet's default, also
+    // for the rows after the last one stored), row 3 24.05 pt, row 4
+    // hidden.
+    let rows: Vec<(u32, u32, u32, bool)> = s
+        .row_heights
+        .iter()
+        .map(|r| (r.start, r.end, r.size_hmm, r.hidden))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (0, 1, 452, false),
+            (2, 2, 848, false),
+            (3, 3, 452, true),
+            (4, MAX_ROWS - 1, 452, false)
+        ]
+    );
+    // The second sheet has no `sheetFormatPr`: Excel's 15 pt and 64 px
+    // below and beside its one row of 12.8 pt.
+    let rows: Vec<(u32, u32, u32)> = wb.sheets[1]
+        .row_heights
+        .iter()
+        .map(|r| (r.start, r.end, r.size_hmm))
+        .collect();
+    assert_eq!(rows, [(0, 0, 452), (1, MAX_ROWS - 1, 529)]);
+    assert_eq!(wb.sheets[1].col_widths.len(), 1);
+    assert_eq!(wb.sheets[1].col_widths[0].size_hmm, DEFAULT_COL_WIDTH_HMM);
     assert_eq!(value(&wb, 0, "C1"), text("Total"));
     assert_eq!(value(&wb, 0, "A3"), Value::Bool(true));
     assert_eq!(

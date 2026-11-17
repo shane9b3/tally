@@ -950,6 +950,13 @@ pub(crate) struct Patches {
     pub sheet_panes: Vec<(String, String)>,
     /// `workbookView showSheetTabs="0"` (Tools ▸ Options ▸ View ▸ Sheet tabs off).
     pub hide_sheet_tabs: bool,
+    /// `xl/worksheets/sheetN.xml` → attributes to add to `<sheetFormatPr`
+    /// (`defaultColWidth`, which rust_xlsxwriter cannot write).
+    pub sheet_format_attrs: Vec<(String, String)>,
+    /// `xl/worksheets/sheetN.xml` → attribute text to take out of every
+    /// `<row>` start tag (the default height rust_xlsxwriter repeats on
+    /// each row).
+    pub row_attr_strips: Vec<(String, String)>,
     /// Literal chart data (`c:numLit` / `c:strLit`, which rust_xlsxwriter
     /// cannot write): `(marker, xml)`, the marker being the formula of a
     /// placeholder reference in `xl/charts/chartN.xml`.
@@ -971,9 +978,34 @@ impl Patches {
             && self.style_names.is_empty()
             && self.sheet_view_attrs.is_empty()
             && self.sheet_panes.is_empty()
+            && self.sheet_format_attrs.is_empty()
+            && self.row_attr_strips.is_empty()
             && !self.hide_sheet_tabs
             && self.chart_literals.is_empty()
     }
+}
+
+/// Takes `attrs` out of every `<row …>` start tag of a sheet XML. Only
+/// start tags are touched: `<` is escaped everywhere else, so text and
+/// formulas that happen to hold the same characters are left alone.
+pub(crate) fn strip_row_attrs(xml: &str, attrs: &str) -> String {
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(i) = rest.find("<row ") {
+        let end = rest[i..].find('>').map_or(rest.len(), |j| i + j);
+        out.push_str(&rest[..i]);
+        let tag = &rest[i..end];
+        match tag.find(attrs) {
+            Some(k) => {
+                out.push_str(&tag[..k]);
+                out.push_str(&tag[k + attrs.len()..]);
+            }
+            None => out.push_str(tag),
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Puts `pane` first in the sheet's `<sheetView>` (CT_SheetView: `pane`,
@@ -1175,6 +1207,18 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             .filter(|(n, _)| *n == name)
             .map(|(_, x)| x.as_str())
             .collect();
+        let format_attrs: Vec<&str> = p
+            .sheet_format_attrs
+            .iter()
+            .filter(|(n, _)| *n == name)
+            .map(|(_, a)| a.as_str())
+            .collect();
+        let row_strips: Vec<&str> = p
+            .row_attr_strips
+            .iter()
+            .filter(|(n, _)| *n == name)
+            .map(|(_, a)| a.as_str())
+            .collect();
         let is_ct = name == "[Content_Types].xml" && !p.content_types.is_empty();
         let is_styles = name == "xl/styles.xml" && !p.style_names.is_empty();
         let is_chart = name.starts_with("xl/charts/chart") && !p.chart_literals.is_empty();
@@ -1187,6 +1231,8 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             || !sheet_ins.is_empty()
             || !view_attrs.is_empty()
             || !panes.is_empty()
+            || !format_attrs.is_empty()
+            || !row_strips.is_empty()
             || !rel_adds.is_empty()
             || is_ct
             || is_styles
@@ -1196,6 +1242,13 @@ pub(crate) fn apply_patches(bytes: &[u8], p: &Patches) -> Result<Vec<u8>, XlsxEr
             file.read_to_string(&mut xml)?;
             drop(file);
             let mut patched = xml;
+            // First, on the XML as rust_xlsxwriter wrote it.
+            for a in &row_strips {
+                patched = strip_row_attrs(&patched, a);
+            }
+            for a in &format_attrs {
+                patched = patched.replacen("<sheetFormatPr ", &format!("<sheetFormatPr {a} "), 1);
+            }
             for a in sheet_attrs {
                 patched =
                     patched.replacen("<sheetProtection ", &format!("<sheetProtection {a} "), 1);

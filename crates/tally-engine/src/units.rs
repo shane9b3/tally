@@ -28,6 +28,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn model_defaults_agree() {
+        assert_eq!(
+            px_to_hmm(DEFAULT_COL_WIDTH_PX),
+            tally_model::APP_DEFAULT_COL_WIDTH_HMM
+        );
+        assert_eq!(
+            px_to_hmm(DEFAULT_ROW_HEIGHT_PX),
+            tally_model::APP_DEFAULT_ROW_HEIGHT_HMM
+        );
+    }
+
+    #[test]
     fn round_trip() {
         assert_eq!(px_to_hmm(96.0), 2540);
         assert!((hmm_to_px(2540) - 96.0).abs() < 1e-4);

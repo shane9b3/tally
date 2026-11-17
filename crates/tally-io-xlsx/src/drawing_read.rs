@@ -20,7 +20,13 @@ use crate::archive::Package;
 use crate::sheet::Budget;
 use crate::workbook::{parse_rels, part_dir, rels_path, Rels};
 use crate::xml::{Ev, XmlLimits, XmlReader};
-use crate::{XlsxError, DEFAULT_COL_WIDTH_HMM, DEFAULT_ROW_HEIGHT_HMM};
+use crate::XlsxError;
+// A row or column without an entry has the application's default size:
+// the worksheet reader gives every other one an entry.
+use tally_model::{
+    APP_DEFAULT_COL_WIDTH_HMM as DEFAULT_COL_WIDTH_HMM,
+    APP_DEFAULT_ROW_HEIGHT_HMM as DEFAULT_ROW_HEIGHT_HMM,
+};
 
 /// Most charts read per document.
 pub(crate) const MAX_CHARTS: usize = 1_000;
@@ -187,8 +193,12 @@ pub(crate) fn parse_drawing<R: BufRead>(
     }
 }
 
+/// The shown size of row or column `i`. `runs` are the worksheet reader's:
+/// ascending and without overlaps (a sheet read from a file has one for
+/// nearly every row, so the lookup is a binary search).
 fn run_size(runs: &[DimRun], i: u32, default: u32) -> i64 {
-    match runs.iter().find(|r| r.start <= i && i <= r.end) {
+    let at = runs.partition_point(|r| r.end < i);
+    match runs.get(at).filter(|r| r.start <= i) {
         Some(r) if r.hidden => 0,
         Some(r) => i64::from(r.size_hmm),
         None => i64::from(default),

@@ -101,7 +101,7 @@ fn column_widths_follow_the_default_font() {
     wb.sheets[0].col_widths = vec![tally_model::DimRun {
         start: 0,
         end: 0,
-        size_hmm: 2646, // 100 px
+        size_hmm: 3175, // 120 px (100 px is the default: not written)
         hidden: false,
     }];
     let arial = to_bytes(&wb);
@@ -111,7 +111,7 @@ fn column_widths_follow_the_default_font() {
         first_col_width(&part(&arial, "xl/worksheets/sheet1.xml")),
         first_col_width(&part(&calibri, "xl/worksheets/sheet1.xml")),
     );
-    // 100 px: (100 - 5) / 8 vs (100 - 5) / 7 digits (+ padding).
+    // 120 px: (120 - 5) / 8 vs (120 - 5) / 7 digits (+ padding).
     assert!(wa < wc * 0.9, "{wa} vs {wc}");
     for bytes in [arial, calibri] {
         let back = tally_io_xlsx::read_xlsx(
@@ -120,7 +120,7 @@ fn column_widths_follow_the_default_font() {
         )
         .unwrap();
         let w = back.sheets[0].col_widths[0].size_hmm;
-        assert!((i64::from(w) - 2646).abs() <= 27, "{w}");
+        assert!((i64::from(w) - 3175).abs() <= 27, "{w}");
     }
 }
 

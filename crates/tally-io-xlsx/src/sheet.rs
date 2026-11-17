@@ -7,6 +7,16 @@
 //! array), `mergeCells`. Everything else (`dataValidations`,
 //! `conditionalFormatting`, `hyperlinks`, drawings, …) is skipped.
 //!
+//! Row heights and column widths are read as OpenOffice lays an Excel
+//! file out (and as `tally-io-xls` does): a row has the height its `<row
+//! ht>` stores, whether Excel fitted it or the user set it, and every other
+//! row the sheet's `defaultRowHeight`; a column has its `<col width>`, and
+//! every other column the sheet's default width. Both are kept as runs
+//! over the whole sheet, never row by row. The one exception is the
+//! application's own default (see `State::finish_rows` and
+//! `State::finish_cols`), which stays "no entry", so a workbook written
+//! by Tally reads back as it was.
+//!
 //! Cell positions come from the `r` attributes (or are implied by order
 //! when absent). Out-of-grid references are skipped; duplicate positions keep
 //! the last cell. Every cell element materializes at most one model cell,
@@ -17,7 +27,10 @@ use std::collections::HashMap;
 use std::io::BufRead;
 use std::sync::Arc;
 
-use tally_model::{CellContentData, CellData, CellRangeLocal, DimRun, SheetData, StyleRun};
+use tally_model::{
+    CellContentData, CellData, CellRangeLocal, DimRun, SheetData, StyleRun,
+    APP_DEFAULT_COL_WIDTH_HMM, APP_DEFAULT_ROW_HEIGHT_HMM,
+};
 use tally_types::{parse_a1, CellAddr, ErrorKind, SheetId, Value, MAX_COLS, MAX_ROWS};
 
 use crate::colors::{XColor, INDEXED};
@@ -25,9 +38,9 @@ use crate::dates::{excel_serial_to_tally, iso_to_serial};
 use crate::formula::{excel_to_of, parse_excel, print_of, XlsxResolver};
 use crate::sst::{read_string_item, MAX_CELL_TEXT};
 use crate::styles::StyleTable;
-use crate::units::{col_width_to_px, parse_bool, pt_to_hmm, px_to_hmm};
+use crate::units::{col_width_to_px, parse_bool, pt_to_hmm, px_to_hmm, MDW};
 use crate::xml::{Elem, Ev, XmlReader};
-use crate::{Limits, XlsxError, DEFAULT_ROW_HEIGHT_HMM};
+use crate::{Limits, XlsxError, DEFAULT_COL_WIDTH_HMM, DEFAULT_ROW_HEIGHT_HMM};
 
 /// Longest formula text accepted: the formula parser's own limit (longer
 /// `<f>` text fails with a limit error instead of being kept).
@@ -40,6 +53,30 @@ pub const MAX_MERGES_PER_SHEET: usize = 100_000;
 /// Most `<col>` elements read per sheet (a sheet has 16,384 columns, so a
 /// valid file never needs more; review 2, MEDIUM-2).
 const MAX_COL_ELEMENTS: usize = MAX_COLS as usize;
+
+/// The tallest row height read, points: four times Excel's own limit of
+/// 409.5 (other writers exceed it). A larger, negative or non-finite
+/// height is ignored.
+const MAX_ROW_HEIGHT_PT: f64 = 409.5 * 4.0;
+
+/// The widest column read, characters (Excel's limit is 255).
+const MAX_COL_WIDTH_CHARS: f64 = 256.0;
+
+/// Excel's `baseColWidth` when the sheet has none (characters).
+const BASE_COL_WIDTH_CHARS: u32 = 8;
+
+/// The rows of consecutive `<row>` elements with one height: `None` is the
+/// sheet's default height, known for sure only at the end of the part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RowRun {
+    start: u32,
+    end: u32,
+    size: Option<u32>,
+    hidden: bool,
+}
+
+/// The width (`None`: the sheet's default) and hidden flag of a `<col>`.
+type ColSize = (Option<u32>, bool);
 
 /// Budgets shared by all sheets of one workbook.
 #[derive(Debug, Default)]
@@ -136,7 +173,19 @@ struct State<'a, 'b> {
     budget: &'a mut Budget,
     out: SheetData,
     shared: HashMap<u32, Shared>,
+    /// `sheetFormatPr`: the height of the rows without one of their own
+    /// (1/100 mm) and whether those rows are hidden (`zeroHeight`).
     default_row_hmm: u32,
+    default_row_hidden: bool,
+    /// `sheetFormatPr defaultColWidth` and `baseColWidth` (characters).
+    default_col_chars: Option<f64>,
+    base_col_chars: Option<u32>,
+    /// The `<row>` elements of the sheet, as runs.
+    rows: Vec<RowRun>,
+    /// `rows` is in ascending order without overlaps.
+    rows_sorted: bool,
+    /// `<col>` entries: (first, last, size), in file order.
+    cols: Vec<(u32, u32, ColSize)>,
     /// Next implied row (0-based) for `<row>` without `r`.
     next_row: u32,
     /// Current row (0-based) and next implied column.
@@ -166,6 +215,12 @@ pub(crate) fn parse_sheet<R: BufRead>(
         out: SheetData::default(),
         shared: HashMap::new(),
         default_row_hmm: DEFAULT_ROW_HEIGHT_HMM,
+        default_row_hidden: false,
+        default_col_chars: None,
+        base_col_chars: None,
+        rows: Vec::new(),
+        rows_sorted: true,
+        cols: Vec::new(),
         next_row: 0,
         row: 0,
         next_col: 0,
@@ -232,9 +287,7 @@ pub(crate) fn parse_sheet<R: BufRead>(
                     xr.skip()?;
                 }
                 "sheetFormatPr" => {
-                    if let Some(h) = attr_f64(&e, "defaultRowHeight").filter(|h| *h > 0.0) {
-                        st.default_row_hmm = pt_to_hmm(h);
-                    }
+                    st.sheet_format(&e);
                     xr.skip()?;
                 }
                 "sheetView" => {
@@ -328,6 +381,12 @@ pub(crate) fn parse_sheet<R: BufRead>(
     let runs = column_style_runs(&st.col_styles);
     st.budget.add_cells(runs.len() as u64, ctx.limits)?;
     st.out.style_runs.extend(runs);
+    // Sizes: runs over the whole sheet, which count against the cell cap
+    // like the style runs.
+    st.out.col_widths = st.finish_cols();
+    st.out.row_heights = st.finish_rows();
+    let sized = st.out.col_widths.len() + st.out.row_heights.len();
+    st.budget.add_cells(sized as u64, ctx.limits)?;
     // Outline groups from the per-row/column levels (wave 5).
     if !st.row_levels.is_empty() {
         st.row_levels.sort_by_key(|l| l.0);
@@ -351,17 +410,14 @@ pub(crate) fn parse_sheet<R: BufRead>(
     Ok((out, st.extras))
 }
 
-/// One whole-column style run per styled column. Overlapping `<col>`
-/// entries resolve last-wins in one pass from the end with a "next
-/// unpainted column" union-find, so N overlapping entries cost
-/// O(N + 16,384) and at most 16,384 runs (review 2, MEDIUM-2: 10,000
-/// `<col min="1" max="16384">` made 164M runs, 5.8 s and 3.5 GB).
-fn column_style_runs(entries: &[(u32, u32, u32)]) -> Vec<StyleRun> {
-    if entries.is_empty() {
-        return Vec::new();
-    }
+/// What each column gets from `<col>` entries `(first, last, value)`:
+/// overlapping entries resolve last-wins in one pass from the end with a
+/// "next unpainted column" union-find, so N overlapping entries cost
+/// O(N + 16,384) (review 2, MEDIUM-2: 10,000 `<col min="1" max="16384">`
+/// made 164M runs, 5.8 s and 3.5 GB).
+fn paint_columns<T: Copy>(entries: &[(u32, u32, T)]) -> Vec<Option<T>> {
     let n = MAX_COLS as usize;
-    let mut style: Vec<Option<u32>> = vec![None; n];
+    let mut painted: Vec<Option<T>> = vec![None; n];
     // next[i]: the first unpainted column ≥ i (n when none).
     let mut next: Vec<u32> = (0..=MAX_COLS).collect();
     fn find(next: &mut [u32], mut i: u32) -> u32 {
@@ -376,15 +432,26 @@ fn column_style_runs(entries: &[(u32, u32, u32)]) -> Vec<StyleRun> {
         }
         root
     }
-    for &(c0, c1, st) in entries.iter().rev() {
+    for &(c0, c1, value) in entries.iter().rev() {
+        if c0 >= MAX_COLS {
+            continue;
+        }
         let mut c = find(&mut next, c0);
         while c <= c1 && (c as usize) < n {
-            style[c as usize] = Some(st);
+            painted[c as usize] = Some(value);
             next[c as usize] = c + 1;
             c = find(&mut next, c + 1);
         }
     }
-    style
+    painted
+}
+
+/// One whole-column style run per styled column (at most 16,384 runs).
+fn column_style_runs(entries: &[(u32, u32, u32)]) -> Vec<StyleRun> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    paint_columns(entries)
         .iter()
         .enumerate()
         .filter_map(|(c, s)| {
@@ -494,6 +561,165 @@ struct RawCell {
 }
 
 impl State<'_, '_> {
+    /// `<sheetFormatPr>`: the sizes of the rows and columns without one
+    /// of their own. Values out of range are ignored.
+    fn sheet_format(&mut self, e: &Elem) {
+        let mut hidden = e.attr_local("zeroHeight").is_some_and(parse_bool);
+        let height = attr_f64(e, "defaultRowHeight")
+            .filter(|h| *h >= 0.0 && *h <= MAX_ROW_HEIGHT_PT)
+            .map(pt_to_hmm);
+        self.default_row_hmm = match height {
+            // A default height of 0 hides the rows that take it.
+            Some(0) => {
+                hidden = true;
+                DEFAULT_ROW_HEIGHT_HMM
+            }
+            Some(h) => h,
+            None => DEFAULT_ROW_HEIGHT_HMM,
+        };
+        self.default_row_hidden = hidden;
+        self.default_col_chars =
+            attr_f64(e, "defaultColWidth").filter(|w| *w > 0.0 && *w <= MAX_COL_WIDTH_CHARS);
+        self.base_col_chars = attr_u32(e, "baseColWidth").filter(|b| (1..=255).contains(b));
+    }
+
+    /// Records the `<row>` of `row`: its height (`None`: the sheet's
+    /// default) and whether it is hidden. Consecutive equal rows share a
+    /// run, so a sheet of a million rows of one height is one entry.
+    fn add_row(&mut self, row: u32, size: Option<u32>, hidden: bool) {
+        if let Some(last) = self.rows.last_mut() {
+            if row <= last.end {
+                // Out of order or twice: sorted out by `normalise_rows`.
+                self.rows_sorted = false;
+            } else if last.end + 1 == row && last.size == size && last.hidden == hidden {
+                last.end = row;
+                return;
+            }
+        }
+        self.rows.push(RowRun {
+            start: row,
+            end: row,
+            size,
+            hidden,
+        });
+        // Rows given again and again must not grow the list without bound:
+        // a sheet has `MAX_ROWS` rows.
+        if !self.rows_sorted && self.rows.len() > 2 * MAX_ROWS as usize {
+            self.normalise_rows();
+        }
+    }
+
+    /// Puts `rows` in ascending order; of a row given more than once the
+    /// last `<row>` counts. Linear in the `<row>` elements read (a run only
+    /// covers rows that had an element).
+    fn normalise_rows(&mut self) {
+        if self.rows_sorted {
+            return;
+        }
+        let mut single: Vec<(u32, Option<u32>, bool)> = Vec::new();
+        for r in self.rows.drain(..) {
+            single.extend((r.start..=r.end).map(|row| (row, r.size, r.hidden)));
+        }
+        // Stable: the later of two entries for a row stays the later one.
+        single.sort_by_key(|r| r.0);
+        self.rows_sorted = true;
+        for (i, &(row, size, hidden)) in single.iter().enumerate() {
+            if single.get(i + 1).is_some_and(|n| n.0 == row) {
+                continue;
+            }
+            self.add_row(row, size, hidden);
+        }
+    }
+
+    /// The row heights of the sheet, as OpenOffice lays an Excel file out
+    /// (`tally-io-xls` does the same): a row has the height its `<row>`
+    /// stores, every other row (no `<row>`, or one without `ht`) the
+    /// sheet's default height, hidden when the default is (`zeroHeight`)
+    /// and the row has no `<row>`. The runs cover the whole sheet: the
+    /// model has no "automatic height of this size", so these are set
+    /// heights.
+    ///
+    /// The exception is a sheet whose default is the application's own
+    /// (18 pt, what Tally writes for a sheet whose rows have no height):
+    /// its shown rows of the default height get no entry, which is the
+    /// model's automatic row of exactly that height.
+    fn finish_rows(&mut self) -> Vec<DimRun> {
+        self.normalise_rows();
+        let (default, default_hidden) = (self.default_row_hmm, self.default_row_hidden);
+        let automatic = default == APP_DEFAULT_ROW_HEIGHT_HMM && !default_hidden;
+        let mut out = Vec::new();
+        let mut next = 0u32;
+        for r in &self.rows {
+            if r.start > next && !automatic {
+                push_run(&mut out, next, r.start - 1, default, default_hidden);
+            }
+            let size = r.size.unwrap_or(default);
+            if !(automatic && size == default && !r.hidden) {
+                push_run(&mut out, r.start, r.end, size, r.hidden);
+            }
+            next = r.end.saturating_add(1);
+        }
+        if next < MAX_ROWS && !automatic {
+            push_run(&mut out, next, MAX_ROWS - 1, default, default_hidden);
+        }
+        self.rows = Vec::new();
+        out
+    }
+
+    /// The default column width of the sheet, 1/100 mm: `defaultColWidth`
+    /// (the unit of `<col width>`), else Excel's derivation from
+    /// `baseColWidth` (8 when absent): that many digits of the default
+    /// font plus 5 px of padding, rounded up to a multiple of 8 px
+    /// (Calibri 11: 8 · 7 + 5 = 61 → 64 px, the width Excel shows).
+    /// OpenOffice adds the 5 px without the rounding (61 px); Excel's
+    /// value is used because it is what the file's author saw.
+    fn default_col_hmm(&self) -> u32 {
+        let mdw = Some(self.ctx.styles.mdw)
+            .filter(|m| m.is_finite() && *m >= 1.0)
+            .unwrap_or(MDW);
+        let px = match self.default_col_chars {
+            Some(w) => col_width_to_px(w, mdw),
+            None => {
+                let base = f64::from(self.base_col_chars.unwrap_or(BASE_COL_WIDTH_CHARS));
+                ((base * mdw + 5.0) / 8.0).ceil() * 8.0
+            }
+        };
+        match px_to_hmm(px) {
+            0 => DEFAULT_COL_WIDTH_HMM,
+            hmm => hmm,
+        }
+    }
+
+    /// The column widths of the sheet: a column has the width of its
+    /// `<col>` (the last one that names it), every other column the
+    /// sheet's default width. A shown column of exactly the
+    /// application's default width gets no entry (that is what "no
+    /// entry" means), so a sheet whose default is Tally's reads back
+    /// without any.
+    fn finish_cols(&mut self) -> Vec<DimRun> {
+        let default = self.default_col_hmm();
+        let mut out = Vec::new();
+        if self.cols.is_empty() {
+            if default != APP_DEFAULT_COL_WIDTH_HMM {
+                push_run(&mut out, 0, MAX_COLS - 1, default, false);
+            }
+            return out;
+        }
+        let painted = paint_columns(&self.cols);
+        for (c, p) in painted.iter().enumerate() {
+            let (size, hidden) = match p {
+                Some((size, hidden)) => (size.unwrap_or(default), *hidden),
+                None => (default, false),
+            };
+            if size == APP_DEFAULT_COL_WIDTH_HMM && !hidden {
+                continue;
+            }
+            push_run(&mut out, c as u32, c as u32, size, hidden);
+        }
+        self.cols = Vec::new();
+        out
+    }
+
     fn pane(&mut self, e: &Elem) {
         let state = e.attr_local("state").unwrap_or("split");
         if state != "frozen" && state != "frozenSplit" {
@@ -536,16 +762,18 @@ impl State<'_, '_> {
         }
         let (c0, c1) = (min - 1, max.min(MAX_COLS) - 1);
         let hidden = e.attr_local("hidden").is_some_and(parse_bool);
-        let custom = e.attr_local("customWidth").is_some_and(parse_bool);
-        // Excel caps widths at 255 characters.
-        let width = attr_f64(e, "width").filter(|w| *w > 0.0 && *w <= 256.0);
-        if custom || hidden {
-            let hmm = match width {
-                Some(w) if w > 0.0 => px_to_hmm(col_width_to_px(w, self.ctx.styles.mdw)),
-                _ => crate::DEFAULT_COL_WIDTH_HMM,
-            };
-            push_run(&mut self.out.col_widths, c0, c1, hmm, hidden);
-        }
+        // The width counts whether or not `customWidth` says the user set
+        // it (Excel shows the column at it either way). A width out of
+        // range is the sheet's default; a width of 0 is a hidden column
+        // of the default width.
+        let width = attr_f64(e, "width")
+            .filter(|w| *w >= 0.0 && *w <= MAX_COL_WIDTH_CHARS)
+            .map(|w| px_to_hmm(col_width_to_px(w, self.ctx.styles.mdw)));
+        let size: ColSize = match width {
+            Some(0) => (None, true),
+            other => (other, hidden),
+        };
+        self.cols.push((c0, c1, size));
         let level = attr_u32(e, "outlineLevel")
             .unwrap_or(0)
             .min(u32::from(crate::tools::MAX_OUTLINE_LEVEL)) as u8;
@@ -573,18 +801,17 @@ impl State<'_, '_> {
         if row >= MAX_ROWS {
             return;
         }
-        // A height without `customHeight` is an auto-fit result (Excel and
-        // LibreOffice write one for every row); the app re-fits those.
+        // The row has the height the file stores, whether the user set it
+        // (`customHeight`) or Excel fitted it. A height out of range is
+        // the sheet's default; a height of 0 is a hidden row of the
+        // default height.
         let hidden = e.attr_local("hidden").is_some_and(parse_bool);
-        let custom = e.attr_local("customHeight").is_some_and(parse_bool);
         let ht = attr_f64(e, "ht")
-            .filter(|h| *h >= 0.0 && *h <= 409.5 * 4.0)
+            .filter(|h| *h >= 0.0 && *h <= MAX_ROW_HEIGHT_PT)
             .map(pt_to_hmm);
-        if hidden || (custom && ht.is_some()) {
-            let size = ht
-                .filter(|_| custom || hidden)
-                .unwrap_or(self.default_row_hmm);
-            push_run(&mut self.out.row_heights, row, row, size, hidden);
+        match ht {
+            Some(0) => self.add_row(row, None, true),
+            other => self.add_row(row, other, hidden),
         }
         let level = attr_u32(e, "outlineLevel")
             .unwrap_or(0)

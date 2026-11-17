@@ -550,12 +550,13 @@ fn reads_excel_fixture() {
         ]))
     );
     // Absolute anchor at (7200000, 7200000) EMU = 20000 hmm: column A has
-    // a custom width, the other columns are 1693 hmm, rows 529 hmm.
+    // a custom width, the other columns are 1693 hmm, the rows the
+    // sheet's default of 14.5 pt (512 hmm).
     let col_a = s.col_widths.iter().find(|r| r.start == 0).unwrap().size_hmm;
     let rest = 20000 - col_a;
     assert_eq!(pie.anchor.col, 1 + rest / 1693);
     assert_eq!(pie.anchor.dx_hmm, rest % 1693);
-    assert_eq!(pie.anchor.row, 20000 / 529);
+    assert_eq!(pie.anchor.row, 20000 / 512);
 
     assert_eq!(s.images.len(), 1);
     assert_eq!(&*s.images[0].bytes, PNG);
@@ -580,9 +581,10 @@ fn two_cell_anchor_emu_to_hmm() {
     assert_eq!(a.dx_hmm, 190_500 / 360);
     assert_eq!(a.dy_hmm, 95_250 / 360);
     // to (col 12, row 16) with colOff 285750: 8 default columns minus the
-    // from offset plus the to offset; 15 default rows.
+    // from offset plus the to offset; 15 rows of the sheet's default
+    // height (14.5 pt = 512 hmm).
     assert_eq!(a.width_hmm as i64, 8 * 1693 - 190_500 / 360 + 285_750 / 360);
-    assert_eq!(a.height_hmm as i64, 15 * 529 - 95_250 / 360);
+    assert_eq!(a.height_hmm as i64, 15 * 512 - 95_250 / 360);
     // one-cell anchor: ext 4320000 × 2880000 EMU.
     let b = wb.sheets[0].charts[1].anchor;
     assert_eq!(

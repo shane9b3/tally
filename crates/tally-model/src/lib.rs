@@ -65,6 +65,19 @@ pub fn clean_font_name(raw: &str) -> Option<String> {
 /// `packages/grid/src/renderer.ts`) repeats the value.
 pub const DEFAULT_FONT_SIZE_PT: f32 = 11.0;
 
+/// The width of a column without an entry in [`SheetData::col_widths`],
+/// 1/100 mm: the application's default of 100 px at 96 dpi
+/// (`DEFAULT_COL_WIDTH_PX` in `tally-engine`, which checks the two agree).
+/// File readers leave a shown column of exactly this width without an
+/// entry.
+pub const APP_DEFAULT_COL_WIDTH_HMM: u32 = 2646;
+
+/// The height of a row without an entry in [`SheetData::row_heights`],
+/// 1/100 mm: the application's default of 24 px at 96 dpi
+/// (`DEFAULT_ROW_HEIGHT_PX` in `tally-engine`). Such a row is fitted to its
+/// content; a row with an entry has a set height.
+pub const APP_DEFAULT_ROW_HEIGHT_HMM: u32 = 635;
+
 /// The application font: the family of a cell whose style names none in
 /// a document without a default font. The ODS writer names it when a
 /// style resets the family under a parent that sets one.
