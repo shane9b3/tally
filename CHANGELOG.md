@@ -48,7 +48,10 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   Row > Optimal Height fits them).
 - Workbooks made in Tally and saved as .xlsx now say Tally's own row
   height and column width, so they open in Excel laid out as in Tally,
-  and reopen in Tally as they were. An .xlsx saved by Tally 0.1.2 or
+  and reopen in Tally as they were. A sheet from Excel keeps the file's
+  row height and column width when it is saved as .xlsx again, also
+  after rows or columns were inserted or deleted, and rows hidden to the
+  end of the sheet stay hidden. An .xlsx saved by Tally 0.1.2 or
   older opens with Excel's row height and column width, which is how
   Excel shows that file.
 - The local clock (NOW, TODAY, the lock-file time stamp) is read with

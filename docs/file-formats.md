@@ -208,27 +208,61 @@ conditional formats.
   rows) as styled blanks.
 - The sheet's default sizes (`sheetFormatPr`), so that the file says what
   Tally shows and the rows and columns of the default size are not written
-  one by one. When the runs leave no row without a height (a sheet read
-  from an Excel file), the run that reaches the last row is the default
-  row height. Otherwise the sheet has rows without a run, which are 24 px
-  in Tally: the default is `defaultRowHeight="18" customHeight="1"`, and
-  the `<row>` elements of those rows carry no height, so Excel fits them
-  to their content as Tally does. Columns work the same way: the run that
-  reaches the last column, else Tally's 100 px, written as
-  `defaultColWidth` in digits of the default font (14.28515625 for
-  Calibri) when it is not the 64 px (72, 80 … for other default fonts)
-  that `rust_xlsxwriter` implies. `rust_xlsxwriter` has no setter for
-  `defaultColWidth` and repeats a changed default height on every row, so
-  both are edits of the finished sheet XML (`write.rs`
-  `default_size_patches`: every sheet made in Tally is re-zipped). It also
-  uses its own 64 px for a column it was told nothing about: the columns
-  it writes a `<col>` for (a whole-column format, an outline level) get
-  the default width explicitly, and so do all columns of a sheet with a
-  chart, picture or note, whose end cells it computes from the widths.
-  Not kept: a row set to exactly the default height in a sheet made in
-  Tally becomes an automatic row, and a hidden column that is exactly
-  64 px wide is written with width 0 (as Excel does) and comes back at
-  the default width.
+  one by one (`write.rs` `SheetDefaults`). The default is what most rows
+  are:
+  - Most rows have no run (a sheet made in Tally; such rows are 24 px
+    and fitted to their content): `defaultRowHeight="18" customHeight="1"`,
+    and the `<row>` elements of those rows carry no height, so that Excel
+    fits them to their content as Tally does. A row set to exactly 24 px
+    is not kept apart from them: it comes back as an automatic row.
+  - Most rows have one height (a sheet read from an Excel file, also
+    after rows were inserted or deleted, which leaves a few rows without
+    a run): that height is the default. The rows without a run are
+    written as rows of 24 px (`ht="18" customHeight="1"`): under a
+    default that is a set height the file has no way to say "automatic",
+    so they come back with that height set, like the other rows of the
+    sheet.
+  - Most rows are hidden (Excel's "hide the unused rows"):
+    `zeroHeight="1"` with the height of those rows; the hidden rows that
+    have cells, formatted blanks or an outline level are written hidden
+    one by one (a `<row>` element is a shown row unless it says
+    otherwise).
+
+  Every other row is written with its height, at most 100,000 per sheet
+  (the rest keep the default, with a warning). That cap now also counts
+  the rows without a run under a set default and the hidden rows with
+  content under a hidden default; it is reached by a sheet with more than
+  100,000 rows that differ from what most rows are (for example 150,000
+  rows set to 30 px in a sheet made in Tally).
+  Columns work the same way, without a hidden default: the width most
+  columns have, else Tally's 100 px, written as `defaultColWidth` in
+  digits of the default font (14.28515625 for Calibri) when it is not the
+  64 px (72, 80 … for other default fonts) that `rust_xlsxwriter` implies.
+  A column without a run under another default is written at 100 px and
+  comes back without one.
+- What `rust_xlsxwriter` cannot write is edited into the finished sheet
+  XML (`write.rs` `default_size_patches`, `write_v03.rs` `apply_patches`):
+  `defaultColWidth`; the height it repeats on every `<row>` once the
+  default is not its own 20 px, taken out again for automatic rows; and
+  the real width of a hidden column that is as wide as its default
+  (it writes `width="0"`). Nearly every sheet made in Tally needs the
+  first two, so those workbooks are written by `rust_xlsxwriter` at its
+  fastest compression level and compressed at the normal level by the
+  edit pass, each part once: a 200,000-cell sheet saves in about 100 ms
+  instead of 88 ms without edits (155 ms when both passes compressed
+  fully). The whole package is in memory twice for the pass, the first
+  copy lightly compressed (about 1.7 times the final size). Parts that
+  are not edited in a package that needs no recompression are copied as
+  they are; a part of 4 GiB or more is written with ZIP64 sizes.
+  `rust_xlsxwriter` also uses its own 64 px for a column it was told
+  nothing about: the columns it writes a `<col>` for (a whole-column
+  format, an outline level) get the default width explicitly, and so do
+  all columns of a sheet with a chart, picture or note, whose end cells
+  it computes from the widths.
+- Not checked in Excel: how Excel shows `defaultRowHeight="18"
+  customHeight="1"` with `<row>` elements that have no height (by the
+  specification, 24 px rows that it fits to their content), and
+  `zeroHeight` written by Tally.
 - Merges, defined names (workbook and sheet scope), `Print_Area` as the
   sheet's print area, document title.
 - `date1904="1"` for D1904 workbooks (`rust_xlsxwriter` has no option for
@@ -309,8 +343,9 @@ Excel's 1900 date system counts 1900-01-01 as 1 and has a fictitious
   when absent): that many digits of the default font plus 5 px, rounded up
   to a multiple of 8 px (Calibri 11: 61 → 64 px). OpenOffice adds the 5 px
   without the rounding (61 px); Excel's value is used because it is what
-  the author of the file saw. Sizes that are negative, not finite or
-  larger than 1,638 pt / 256 characters are ignored. The sizes are runs
+  the author of the file saw. Sizes that are negative, not finite,
+  larger than 1,638 pt / 256 characters, or not 0 but so small that they
+  round to nothing are ignored (only an explicit 0 hides). The sizes are runs
   over the whole sheet (equal neighbours merge; a million rows of one
   height are one run), never one entry per row, and count against
   `Limits::max_cells`. The model has no "automatic height of this size",
