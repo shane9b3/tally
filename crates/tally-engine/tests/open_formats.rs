@@ -290,3 +290,67 @@ fn content_wins_over_the_extension() {
     assert_eq!(value(&svc, &info, 0, 1), Value::Number(42.0));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A formatted `.xls` (the synthetic fixtures built by
+/// `crates/tally-io-xls/tests/biff/books.rs`) opens with its layout:
+/// column widths, row heights, cell formats, view settings, pictures and
+/// notes reach the document.
+#[test]
+fn xls_opens_with_its_formatting() {
+    let mut svc = EngineService::with_default_codec();
+    let info = open(&mut svc, &repo("tests/fixtures/xls/formatted.xls"));
+    assert_eq!(info.sheets.len(), 2);
+    let sheet = info.sheets[0].id;
+    let wb = &svc.document(info.doc).unwrap().wb;
+    let style = |r: u32, c: u32| wb.styles.to_dto(wb.style_at(CellAddr::new(sheet, r, c)));
+    // A1: Times New Roman, bold italic red, centred, wrapped, "0.000".
+    let a1 = style(0, 0);
+    assert_eq!(a1.font_family.as_deref(), Some("Times New Roman"));
+    assert!(a1.bold && a1.italic && a1.wrap);
+    assert_eq!(a1.color, Some(0xFF00_00FF));
+    assert_eq!(a1.number_format, "0.000");
+    // B1: Courier New 8 pt on a red fill; A2 is a date.
+    let b1 = style(0, 1);
+    assert_eq!(b1.font_size_pt, 8.0);
+    assert_eq!(b1.fill, Some(0xFF00_00FF));
+    assert_eq!(wb.value(CellAddr::new(sheet, 1, 0)), Value::Number(45000.0));
+    assert_eq!(style(1, 0).number_format, "YYYY-MM-DD");
+    // A4 is an empty cell with borders; G9 has column G's default format.
+    assert!(style(3, 0).borders.bottom.is_some());
+    assert!(style(8, 6).borders.bottom.is_some());
+    let data = wb.to_data();
+    let one = &data.sheets[0];
+    let col = |c: u32| {
+        one.col_widths
+            .iter()
+            .find(|r| r.start <= c && c <= r.end)
+            .map(|r| (r.size_hmm, r.hidden))
+    };
+    assert_eq!(col(0), Some((1852, false)));
+    assert_eq!(col(1), None);
+    assert_eq!(col(2).map(|c| c.1), Some(true));
+    assert_eq!(col(200).map(|c| c.1), Some(false));
+    let row = |r: u32| {
+        one.row_heights
+            .iter()
+            .find(|x| x.start <= r && r <= x.end)
+            .map(|x| (x.size_hmm, x.hidden))
+    };
+    assert_eq!(row(1), Some((1058, false)));
+    assert_eq!(row(3).map(|r| r.1), Some(true));
+    assert_eq!(one.frozen, Some((1, 2)));
+    assert_eq!(one.zoom, Some(150));
+    assert_eq!(one.tab_color, Some(0xFF00_00FF));
+    let view = svc.view_options(info.doc, sheet).unwrap();
+    assert!(!view.show_gridlines && !view.show_headers && !view.show_zero_values);
+    assert_eq!(data.settings.default_font.as_deref(), Some("Arial"));
+    assert_eq!(data.settings.active_sheet, 1);
+
+    let info = open(&mut svc, &repo("tests/fixtures/xls/pictures.xls"));
+    let images = svc.images(info.doc, info.sheets[0].id).unwrap();
+    assert_eq!(images.len(), 3);
+    let info = open(&mut svc, &repo("tests/fixtures/xls/notes.xls"));
+    let data = svc.document(info.doc).unwrap().wb.to_data();
+    assert_eq!(data.sheets[0].notes.len(), 2);
+    assert_eq!(data.sheets[0].notes[0].text, "first note");
+}

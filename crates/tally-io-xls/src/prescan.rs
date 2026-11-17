@@ -28,8 +28,12 @@
 //!    (shared strings, their copies per `LABELSST`, labels, decoded
 //!    formulas) and the formula decoder's quadratic work.
 //!
-//! Residual risk: this models calamine 0.37's decoder; it is pinned
-//! exactly (`=0.37.0`) and must be re-reviewed on upgrade.
+//! Residual risk: this models calamine 0.37's decoder. calamine is pinned
+//! exactly (now `=0.38.0`) and the model must be re-reviewed on every
+//! upgrade (docs/security.md).
+//!
+//! The record framing here ([`record`]) is shared with the formatting
+//! reader (`format.rs`), which walks the same sanitized stream.
 
 use std::collections::HashSet;
 
@@ -68,11 +72,11 @@ fn bad(s: impl Into<String>) -> Refusal {
     Refusal::Malformed(s.into())
 }
 
-fn u16_at(b: &[u8], i: usize) -> Option<u16> {
+pub(crate) fn u16_at(b: &[u8], i: usize) -> Option<u16> {
     Some(u16::from_le_bytes([*b.get(i)?, *b.get(i + 1)?]))
 }
 
-fn u32_at(b: &[u8], i: usize) -> Option<u32> {
+pub(crate) fn u32_at(b: &[u8], i: usize) -> Option<u32> {
     Some(u32::from_le_bytes([
         *b.get(i)?,
         *b.get(i + 1)?,
@@ -457,20 +461,20 @@ pub fn build_container(mut stream: Vec<u8>) -> (Vec<u8>, usize) {
 // ---------------------------------------------------------------- BIFF
 
 /// One record as calamine's `RecordIter` frames it.
-struct Rec {
-    typ: u16,
+pub(crate) struct Rec {
+    pub(crate) typ: u16,
     /// Offset of the record data in the stream.
-    data: usize,
-    len: usize,
+    pub(crate) data: usize,
+    pub(crate) len: usize,
     /// (offset, len) of each following CONTINUE record's data.
-    cont: Vec<(usize, usize)>,
+    pub(crate) cont: Vec<(usize, usize)>,
     /// Offset after the record and its continues.
-    next: usize,
+    pub(crate) next: usize,
 }
 
 /// Frames the record at `pos`; `None` at the end, `Err` on a short stream
 /// (calamine fails the workbook then).
-fn record(s: &[u8], pos: usize) -> Option<Result<Rec, ()>> {
+pub(crate) fn record(s: &[u8], pos: usize) -> Option<Result<Rec, ()>> {
     let rest = s.len().saturating_sub(pos);
     if rest == 0 {
         return None;
@@ -743,6 +747,16 @@ fn scan_formula(rgce: &mut [u8], pre_biff8: bool, name_max: u64, sheet_max: u64)
     (out, tokens)
 }
 
+/// Whether a `BOF` with version `v` and substream type `dt` opens a
+/// BIFF2–BIFF5 stream (calamine's `parse_bof`).
+pub(crate) fn bof_is_pre_biff8(v: u16, dt: u16) -> bool {
+    match v {
+        0x0200 | 0x0002 | 0x0007 | 0x0300 | 0x0400 | 0x0500 => true,
+        0 => dt == 0x1000,
+        _ => false,
+    }
+}
+
 /// Scans (and patches, see the module docs) the workbook stream.
 fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
     let mut scan = Scan::default();
@@ -766,11 +780,7 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                 } else {
                     0
                 };
-                pre_biff8 = match v {
-                    0x0200 | 0x0002 | 0x0007 | 0x0300 | 0x0400 | 0x0500 => true,
-                    0 => dt == 0x1000,
-                    _ => false,
-                };
+                pre_biff8 = bof_is_pre_biff8(v, dt);
             }
             0x0085 => {
                 scan.sheets += 1;
@@ -944,6 +954,18 @@ pub fn sanitize(
     max_sheets: usize,
     max_cells: u64,
 ) -> Result<(Vec<u8>, Scan), Refusal> {
+    let (out, _, scan) = sanitize_with_offset(file, max_sheets, max_cells)?;
+    Ok((out, scan))
+}
+
+/// [`sanitize`], also returning the offset of the (patched) workbook
+/// stream in the canonical file; the stream runs to the end of the file
+/// (zero padded). The formatting reader walks it.
+pub(crate) fn sanitize_with_offset(
+    file: &[u8],
+    max_sheets: usize,
+    max_cells: u64,
+) -> Result<(Vec<u8>, usize, Scan), Refusal> {
     let stream = extract_workbook_stream(file)?;
     let (mut out, off) = build_container(stream);
     let scan = scan_stream(
@@ -953,5 +975,5 @@ pub fn sanitize(
             max_cells,
         },
     )?;
-    Ok((out, scan))
+    Ok((out, off, scan))
 }

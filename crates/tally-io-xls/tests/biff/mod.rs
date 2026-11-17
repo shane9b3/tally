@@ -65,13 +65,7 @@ impl Default for Font<'_> {
 
 pub fn font(f: &Font) -> Vec<u8> {
     let grbit = u16::from(f.italic) << 1 | u16::from(f.strike) << 3;
-    let mut d = words(&[
-        f.twips,
-        grbit,
-        f.color,
-        if f.bold { 700 } else { 400 },
-        0,
-    ]);
+    let mut d = words(&[f.twips, grbit, f.color, if f.bold { 700 } else { 400 }, 0]);
     d.extend_from_slice(&[f.underline, 0, 0, 0]);
     d.push(f.name.encode_utf16().count() as u8);
     d.extend(utf16(f.name));
@@ -498,3 +492,34 @@ pub fn globals(fonts: &[Font], formats: &[(u16, &str)], xfs: &[Xf]) -> Vec<u8> {
 pub fn file(stream: Vec<u8>) -> Vec<u8> {
     prescan::build_container(stream).0
 }
+
+/// `RSTRING`: a label with (ignored) formatting runs.
+pub fn rstring(r: u16, c: u16, x: u16, s: &str) -> Vec<u8> {
+    let mut d = words(&[r, c, x, s.encode_utf16().count() as u16]);
+    d.extend(utf16(s));
+    d.extend(words(&[1, 0, 0]));
+    rec(0x00D6, &d)
+}
+
+/// The records of a cell note: the `OBJ` of its text box (object `id`),
+/// the `TXO` with its text, and the `NOTE` that places it.
+pub fn note(r: u16, c: u16, id: u16, shown: bool, author: &str, text: &str) -> Vec<u8> {
+    // OBJ: ftCmo (type 0x19 = note) and ftEnd.
+    let mut o = words(&[0x15, 0x12, 0x19, id, 0x4011]);
+    o.extend_from_slice(&[0u8; 12]);
+    o.extend(words(&[0, 0]));
+    let mut out = rec(0x005D, &o);
+    // TXO, then CONTINUE with the text and CONTINUE with the runs.
+    let cch = text.encode_utf16().count() as u16;
+    let mut t = words(&[0x0212, 0, 0, 0, 0, cch, 16, 0, 0]);
+    t.truncate(18);
+    out.extend(rec(0x01B6, &t));
+    out.extend(rec(0x003C, &utf16(text)));
+    out.extend(rec(0x003C, &[0u8; 16]));
+    let mut n = words(&[r, c, if shown { 2 } else { 0 }, id]);
+    n.extend(words(&[author.encode_utf16().count() as u16]));
+    n.extend(utf16(author));
+    out.extend(rec(0x001C, &n));
+    out
+}
+pub mod books;
