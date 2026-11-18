@@ -643,7 +643,8 @@ fn decode(
     if names_skipped > 0 {
         warnings.push(format!(
             "{names_skipped} defined name(s) with a formula Tally does not read from an .xls \
-             file (functions, references to other workbooks or to deleted sheets) were left out."
+             file (functions, references to other workbooks or to deleted sheets), or with a \
+             name that is a cell reference here, were left out."
         ));
     }
     if formula_failures > 0 {

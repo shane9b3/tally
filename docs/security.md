@@ -494,7 +494,10 @@ hyperlinks (`HLINK`, `hlink.rs`); docs/file-formats.md). Its rules:
   length: a token that is cut, an operator without operands, operands
   left over, a sheet index without a sheet of this workbook, a name index
   without a name, a number that is not finite and text with control
-  characters all skip the name; so does any token the decoder does not
+  characters, a name that is not one by the engine's rule (`A1`, `TRUE`,
+  `R1C1`: in formula text it would be a cell or a constant) or that uses
+  a name that is not imported (propagated along chains with a worklist,
+  each record once) all skip the name; so does any token the decoder does not
   know (functions, arrays, errors), so there is no table to index and no
   recursion (the expression is reverse Polish, kept on a stack of
   strings). The Excel text of a name is at most 8 KiB (`MAX_FORMULA_TEXT`;

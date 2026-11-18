@@ -376,49 +376,21 @@ pub fn resolve_chain<'a>(names: &'a NameTable, mut e: &'a Expr, sheet: SheetId) 
 /// Checks a name: `[A-Za-z_][A-Za-z0-9_.]*`, at most 255 characters, not a
 /// cell or range reference, not `TRUE`/`FALSE`, not R1C1-like.
 pub fn validate_name(wb: &Workbook, name: &str) -> Result<(), ApiError> {
-    let bad = |why: &str| Err(ApiError::invalid_argument(format!("{name:?} {why}")));
-    let mut chars = name.chars();
-    match chars.next() {
-        // Letters of any script, as the formula parser reads them (AOO
-        // `SC_COMPILER_C_CHAR_NAME`; correctness review 4, M18).
-        Some(c) if c.is_alphabetic() || c == '_' => {}
-        Some(_) => return bad("must start with a letter or _"),
-        None => return Err(ApiError::invalid_argument("the name is empty")),
-    }
-    if !chars.all(|c| c.is_alphanumeric() || c == '_' || c == '.') {
-        return bad("may contain only letters, digits, _ and .");
-    }
-    if name.len() > 255 {
-        return bad("is too long");
-    }
-    if name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE") {
-        return bad("is reserved");
-    }
-    let upper = name.to_ascii_uppercase();
-    let r1c1 = upper.strip_prefix('R').is_some_and(|rest| {
-        let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
-        rest.is_empty()
-            || rest
-                .strip_prefix('C')
-                .is_some_and(|x| x.chars().all(|c| c.is_ascii_digit()))
-    }) || upper
-        .strip_prefix('C')
-        .is_some_and(|x| x.chars().all(|c| c.is_ascii_digit()));
-    if r1c1 {
-        return bad("looks like an R1C1 reference");
-    }
-    // Anything the formula parser would not read back as a name (a cell
-    // reference such as AB12, a sheet-qualified reference…) is refused.
+    use tally_formula::NameProblem as P;
+    // The rule itself is `tally_formula::defined_name_problem`, shared with
+    // the readers that write names into formula text.
     let origin = CellAddr::new(wb.sheets.first().map_or(1, |s| s.id), 0, 0);
-    match tally_formula::parse(
-        &format!("={name}"),
-        origin,
-        Dialect::calc_a1_en_us(),
-        &NoNames(wb),
-    ) {
-        Ok(f) if matches!(f.expr, Expr::Name(_)) => Ok(()),
-        _ => bad("is a cell reference or not a valid name"),
-    }
+    let why = match tally_formula::defined_name_problem(name, origin, &NoNames(wb)) {
+        None => return Ok(()),
+        Some(P::Empty) => return Err(ApiError::invalid_argument("the name is empty")),
+        Some(P::Start) => "must start with a letter or _",
+        Some(P::Chars) => "may contain only letters, digits, _ and .",
+        Some(P::TooLong) => "is too long",
+        Some(P::Reserved) => "is reserved",
+        Some(P::R1C1) => "looks like an R1C1 reference",
+        Some(P::NotAName) => "is a cell reference or not a valid name",
+    };
+    Err(ApiError::invalid_argument(format!("{name:?} {why}")))
 }
 
 /// A resolver over the workbook that knows no names (for validation).

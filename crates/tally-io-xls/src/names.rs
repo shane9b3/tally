@@ -122,15 +122,32 @@ impl NameRecs {
     }
 
     /// The names of the model, in file order, and how many were left out
-    /// because their formula is not one this reader decodes. `sheets` are
-    /// the workbook's sheet names in `BOUNDSHEET` order.
+    /// because their formula is not one this reader decodes or because
+    /// they are not names Tally accepts. `sheets` are the workbook's sheet
+    /// names in `BOUNDSHEET` order.
     pub fn resolve(&self, sheets: &[String]) -> (Vec<NameData>, usize) {
-        let mut out = Vec::new();
+        // Per `NAME` record: the name it becomes and the records its
+        // formula uses.
+        let mut found: Vec<Option<(NameData, Vec<usize>)>> = Vec::new();
+        found.resize_with(self.names.len(), || None);
         let mut skipped = 0usize;
         let mut work = WORK_BUDGET;
         let converter = tally_io_xlsx::ExcelNameConverter::new(sheets);
-        for raw in &self.names {
+        // A name Tally would read as something else in a formula (a cell
+        // such as `A1` or `TAX2024` in the larger grid, `TRUE`, an R1C1
+        // reference) is not imported, and neither is a name that uses it:
+        // written into formula text it would mean that other thing.
+        let valid: Vec<bool> = self
+            .names
+            .iter()
+            .map(|n| !n.name.is_empty() && converter.is_name(&n.name))
+            .collect();
+        for (slot, (raw, ok)) in found.iter_mut().zip(self.names.iter().zip(&valid)) {
             if raw.name.is_empty() {
+                continue;
+            }
+            if !ok {
+                skipped += 1;
                 continue;
             }
             let sheet = match raw.itab {
@@ -147,21 +164,55 @@ impl NameRecs {
             let Some(rgce) = raw.rgce.as_deref() else {
                 continue;
             };
-            let formula = self
-                .excel_text(rgce, sheets, &mut work)
-                .and_then(|text| converter.to_of(&text, sheet.map(|s| s as usize)));
+            // Relative references are offsets from the cell that uses the
+            // name. They are written for a formula in A1 when none points
+            // up or left of it, else for one in the middle of the BIFF
+            // sheet, from where every offset has a cell.
+            let mut base = (0u32, 0u32);
+            let mut decoded = self.excel_text(rgce, sheets, &valid, base, &mut work);
+            if decoded.as_ref().is_some_and(|d| d.outside) {
+                base = REBASE;
+                decoded = self.excel_text(rgce, sheets, &valid, base, &mut work);
+            }
+            let formula = decoded.and_then(|d| {
+                let of = converter.to_of_at(&d.text, sheet.map(|s| s as usize), base)?;
+                Some((of, d.uses))
+            });
             match formula {
-                Some(formula) => out.push(NameData {
-                    name: raw.name.clone(),
-                    sheet,
-                    formula,
-                    base_cell: None,
-                    usage: Default::default(),
-                }),
+                Some((formula, uses)) => {
+                    let name = NameData {
+                        name: raw.name.clone(),
+                        sheet,
+                        formula,
+                        base_cell: (base != (0, 0)).then(|| (sheet.unwrap_or(0), base.0, base.1)),
+                        usage: Default::default(),
+                    };
+                    *slot = Some((name, uses));
+                }
                 None => skipped += 1,
             }
         }
-        (out, skipped)
+        // A name that uses a name that is not imported would be a formula
+        // with an unknown name in it: it is left out too, and so on along
+        // the chain (each record is visited once).
+        let mut users: Vec<Vec<u32>> = vec![Vec::new(); found.len()];
+        for (i, f) in found.iter().enumerate() {
+            for &u in f.iter().flat_map(|f| &f.1) {
+                if let Some(list) = users.get_mut(u) {
+                    list.push(i as u32);
+                }
+            }
+        }
+        let mut gone: Vec<usize> = (0..found.len()).filter(|i| found[*i].is_none()).collect();
+        while let Some(i) = gone.pop() {
+            for user in std::mem::take(&mut users[i]) {
+                if found[user as usize].take().is_some() {
+                    skipped += 1;
+                    gone.push(user as usize);
+                }
+            }
+        }
+        (found.into_iter().flatten().map(|f| f.0).collect(), skipped)
     }
 
     /// The sheet of an `EXTERNSHEET` index, quoted for Excel text: one
@@ -180,10 +231,21 @@ impl NameRecs {
     }
 
     /// Decodes the reverse Polish expression `rgce` into Excel formula
-    /// text; `None` for an expression with a token this reader does not
-    /// decode, a malformed one, or one past the text or work limits.
-    fn excel_text(&self, rgce: &[u8], sheets: &[String], work: &mut u64) -> Option<String> {
+    /// text for a formula in the cell `base` (row, column); `None` for an
+    /// expression with a token this reader does not decode, a malformed
+    /// one, one that uses a name that is not one (`valid`, per `NAME`
+    /// record), or one past the text or work limits.
+    fn excel_text(
+        &self,
+        rgce: &[u8],
+        sheets: &[String],
+        valid: &[bool],
+        base: (u32, u32),
+        work: &mut u64,
+    ) -> Option<Decoded> {
         let mut stack: Vec<String> = Vec::new();
+        let mut outside = false;
+        let mut uses: Vec<usize> = Vec::new();
         // Charges `n` bytes of moved text to the workbook's budget.
         // Once it is spent it stays spent.
         let mut charge = |n: usize| -> Option<()> {
@@ -310,12 +372,12 @@ impl NameRecs {
                 }
                 // Another name, by its 1-based index.
                 0x23 => {
-                    let i = usize::try_from(u32_at(rgce, p + 1)?).ok()?;
-                    let name = &self.names.get(i.checked_sub(1)?)?.name;
-                    if !is_plain_name(name) {
+                    let i = usize::try_from(u32_at(rgce, p + 1)?).ok()?.checked_sub(1)?;
+                    if valid.get(i) != Some(&true) {
                         return None;
                     }
-                    stack.push(name.clone());
+                    stack.push(self.names.get(i)?.name.clone());
+                    uses.push(i);
                     5
                 }
                 // ptgMemArea, ptgMemErr, ptgMemNoMem and ptgMemFunc only
@@ -327,7 +389,9 @@ impl NameRecs {
                     let sheet = self.sheet_ref(u16_at(rgce, p + 1)?, sheets)?;
                     let (row, col) = (u16_at(rgce, p + 3)?, u16_at(rgce, p + 5)?);
                     let mut t = sheet;
-                    push_cell(&mut t, u32::from(row), col);
+                    let cell = Corner::new(row, col, base);
+                    outside |= cell.outside;
+                    cell.push(&mut t);
                     stack.push(t);
                     7
                 }
@@ -337,7 +401,7 @@ impl NameRecs {
                     let (r0, r1) = (u16_at(rgce, p + 3)?, u16_at(rgce, p + 5)?);
                     let (c0, c1) = (u16_at(rgce, p + 7)?, u16_at(rgce, p + 9)?);
                     let mut t = sheet;
-                    push_area(&mut t, (r0, r1), (c0, c1));
+                    outside |= push_area(&mut t, (r0, r1), (c0, c1), base);
                     stack.push(t);
                     11
                 }
@@ -350,18 +414,28 @@ impl NameRecs {
         }
         // Exactly the declared bytes, and one result.
         let text = stack.pop()?;
-        (p == rgce.len() && stack.is_empty()).then_some(text)
+        (p == rgce.len() && stack.is_empty()).then_some(Decoded {
+            text,
+            outside,
+            uses,
+        })
     }
 }
 
-/// Whether `name` can be written into a formula as it is: letters,
-/// digits, `_`, `.`, `\` and `?`, not starting with a digit.
-fn is_plain_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.starts_with(|c: char| c.is_ascii_digit())
-        && name
-            .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '\\' | '?'))
+/// The base cell (row, column) for names with a relative reference that
+/// points up or left: every offset of a BIFF8 name (a signed 16-bit row,
+/// a signed 8-bit column) has a cell from here.
+const REBASE: (u32, u32) = (0x8000, 0x80);
+
+/// A decoded name formula.
+#[derive(Debug, PartialEq, Eq)]
+struct Decoded {
+    text: String,
+    /// A relative reference points above or left of the base cell: the
+    /// text is not usable, the formula wants a base further in.
+    outside: bool,
+    /// The `NAME` records (0-based) the formula uses.
+    uses: Vec<usize>,
 }
 
 /// The fields of a `NAME` record; `None` when it is too short for them.
@@ -410,50 +484,88 @@ fn push_col(t: &mut String, col: u32) {
     t.extend(letters[..n].iter().rev().map(|b| char::from(*b)));
 }
 
-/// Appends a cell. The column word's bits 14 and 15 say "relative"
-/// (column, row); a name's relative references are stored as the cell
-/// they mean for a formula in A1, which is the model's base cell.
-fn push_cell(t: &mut String, row: u32, col: u16) {
-    if col & 0x4000 == 0 {
-        t.push('$');
-    }
-    push_col(t, u32::from(col & 0xFF));
-    if col & 0x8000 == 0 {
-        t.push('$');
-    }
-    t.push_str(&(row + 1).to_string());
+/// One cell of a reference in a name: where it is for a formula in the
+/// base cell, and what is relative.
+///
+/// The column word's bits 14 and 15 say "relative" (column, row). In a
+/// name a relative part is not a position but an offset from the cell
+/// that uses the name: the row word as a signed 16-bit number, the low
+/// byte of the column word as a signed 8-bit one (OpenOffice
+/// `ExcelToSc8::ExcRelToScRel8` with `bName`).
+#[derive(Clone, Copy)]
+struct Corner {
+    row: u32,
+    col: u32,
+    row_rel: bool,
+    col_rel: bool,
+    /// An offset points above or left of the base cell.
+    outside: bool,
 }
 
-/// Appends an area. An area over all 65,536 rows or all 256 columns of
-/// the BIFF8 sheet is a whole column or row of the model's larger sheet,
-/// as in OpenOffice (`ExcelToSc8`: `SetComplCol`, `SetComplRow`).
-fn push_area(t: &mut String, (r0, r1): (u16, u16), (c0, c1): (u16, u16)) {
-    let (mut row0, mut row1) = (u32::from(r0), u32::from(r1));
-    let (mut col0, mut col1) = (u32::from(c0 & 0xFF), u32::from(c1 & 0xFF));
-    if row0 == 0 && row1 == 0xFFFF {
-        row1 = MAX_ROWS - 1;
-    } else if col0 == 0 && col1 == 0xFF {
-        col1 = MAX_COLS - 1;
+impl Corner {
+    fn new(row: u16, col: u16, base: (u32, u32)) -> Self {
+        let (col_rel, row_rel) = (col & 0x4000 != 0, col & 0x8000 != 0);
+        let at = |rel: bool, base: u32, offset: i64, position: u32| -> (u32, bool) {
+            if !rel {
+                return (position, false);
+            }
+            match u32::try_from(i64::from(base) + offset) {
+                Ok(v) => (v, false),
+                Err(_) => (0, true),
+            }
+        };
+        let (r, out_r) = at(row_rel, base.0, i64::from(row as i16), u32::from(row));
+        let (c, out_c) = at(
+            col_rel,
+            base.1,
+            i64::from(col as u8 as i8),
+            u32::from(col & 0xFF),
+        );
+        Self {
+            row: r,
+            col: c,
+            row_rel,
+            col_rel,
+            outside: out_r || out_c,
+        }
     }
-    if row0 > row1 {
-        std::mem::swap(&mut row0, &mut row1);
-    }
-    if col0 > col1 {
-        std::mem::swap(&mut col0, &mut col1);
-    }
-    let cell = |t: &mut String, row: u32, col: u32, flags: u16| {
-        if flags & 0x4000 == 0 {
+
+    fn push(&self, t: &mut String) {
+        if !self.col_rel {
             t.push('$');
         }
-        push_col(t, col);
-        if flags & 0x8000 == 0 {
+        push_col(t, self.col);
+        if !self.row_rel {
             t.push('$');
         }
-        t.push_str(&(row + 1).to_string());
-    };
-    cell(t, row0, col0, c0);
+        t.push_str(&(self.row + 1).to_string());
+    }
+}
+
+/// Appends an area; `true` when a relative corner is outside the sheet
+/// from `base`. An absolute area over all 65,536 rows or all 256 columns
+/// of the BIFF8 sheet is a whole column or row of the model's larger
+/// sheet, as in OpenOffice (`ExcelToSc8`: `SetComplCol`, `SetComplRow`).
+fn push_area(t: &mut String, (r0, r1): (u16, u16), (c0, c1): (u16, u16), base: (u32, u32)) -> bool {
+    let (mut a, mut b) = (Corner::new(r0, c0, base), Corner::new(r1, c1, base));
+    if !a.row_rel && !b.row_rel && a.row == 0 && b.row == 0xFFFF {
+        b.row = MAX_ROWS - 1;
+    } else if !a.col_rel && !b.col_rel && a.col == 0 && b.col == 0xFF {
+        b.col = MAX_COLS - 1;
+    }
+    // Corners out of order are put in order, each part with its flag.
+    if a.row > b.row {
+        std::mem::swap(&mut a.row, &mut b.row);
+        std::mem::swap(&mut a.row_rel, &mut b.row_rel);
+    }
+    if a.col > b.col {
+        std::mem::swap(&mut a.col, &mut b.col);
+        std::mem::swap(&mut a.col_rel, &mut b.col_rel);
+    }
+    a.push(t);
     t.push(':');
-    cell(t, row1, col1, c1);
+    b.push(t);
+    a.outside || b.outside
 }
 
 #[cfg(test)]
@@ -485,8 +597,11 @@ mod tests {
         vec!["One".to_string(), "It's two".to_string()]
     }
 
+    /// Decoded for a formula in A1, every name being a good one.
     fn text(n: &NameRecs, rgce: &[u8]) -> Option<String> {
-        n.excel_text(rgce, &sheets(), &mut WORK_BUDGET.clone())
+        let valid = vec![true; n.names.len()];
+        n.excel_text(rgce, &sheets(), &valid, (0, 0), &mut WORK_BUDGET.clone())
+            .map(|d| d.text)
     }
 
     fn area(ixti: u16, r0: u16, r1: u16, c0: u16, c1: u16) -> Vec<u8> {
@@ -609,8 +724,127 @@ mod tests {
         parens.extend(std::iter::repeat_n(0x15, 1_000));
         assert!(text(&n, &parens).is_some());
         let mut work = 10_000u64;
-        assert_eq!(n.excel_text(&parens, &sheets(), &mut work), None);
+        assert_eq!(
+            n.excel_text(&parens, &sheets(), &[], (0, 0), &mut work),
+            None
+        );
         assert!(work <= 10_000);
+    }
+
+    /// The data of a `NAME` record of the workbook: `name` = `rgce`.
+    fn record(name: &str, rgce: &[u8]) -> Vec<u8> {
+        let mut d = vec![0, 0, 0, name.len() as u8, rgce.len() as u8];
+        d.extend_from_slice(&[0; 10]);
+        d.extend_from_slice(name.as_bytes());
+        d.extend_from_slice(rgce);
+        d
+    }
+
+    #[test]
+    fn relative_references_are_offsets() {
+        let n = recs();
+        let at = |rgce: &[u8], base: (u32, u32)| {
+            n.excel_text(rgce, &sheets(), &[], base, &mut WORK_BUDGET.clone())
+                .map(|d| (d.text, d.outside))
+        };
+        // Row −1 (0xFFFF), same column, both relative: no cell from A1,
+        // the cell above from the base in the middle of the sheet.
+        let up = [0x3A, 0, 0, 0xFF, 0xFF, 0x00, 0xC0];
+        assert_eq!(at(&up, (0, 0)).map(|d| d.1), Some(true));
+        assert_eq!(at(&up, REBASE), Some(("'One'!DY32768".to_string(), false)));
+        // Column −1 (0xFF), absolute row 4.
+        let left = [0x3A, 0, 0, 3, 0, 0xFF, 0x40];
+        assert_eq!(at(&left, (0, 0)).map(|d| d.1), Some(true));
+        assert_eq!(at(&left, REBASE), Some(("'One'!DX$4".to_string(), false)));
+        // The extremes stay on the BIFF sheet from the base.
+        let far = [0x3A, 0, 0, 0x00, 0x80, 0x80, 0xC0];
+        assert_eq!(at(&far, REBASE), Some(("'One'!A1".to_string(), false)));
+        let near = [0x3A, 0, 0, 0xFF, 0x7F, 0x7F, 0xC0];
+        assert_eq!(
+            at(&near, REBASE),
+            Some(("'One'!IV65536".to_string(), false))
+        );
+        // An area from one row up to one row down, columns absolute: not a
+        // whole column although the row words are 0xFFFF and 1.
+        let mut area = vec![0x3B, 0, 0, 0xFF, 0xFF, 1, 0];
+        area.extend_from_slice(&[0, 0x80, 1, 0x80]);
+        assert_eq!(at(&area, (0, 0)).map(|d| d.1), Some(true));
+        assert_eq!(
+            at(&area, REBASE),
+            Some(("'One'!$A32768:$B32770".to_string(), false))
+        );
+        // An absolute row 0xFFFF is row 65,536, not an offset.
+        assert_eq!(
+            at(&[0x3A, 0, 0, 0xFF, 0xFF, 0, 0], (0, 0)),
+            Some(("'One'!$A$65536".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn names_with_a_relative_reference_get_a_base_cell() {
+        let mut n = recs();
+        let limits = Limits::default();
+        n.name(
+            &record("Up", &[0x3A, 0, 0, 0xFF, 0xFF, 0x00, 0xC0]),
+            &limits,
+        );
+        n.name(&record("Down", &[0x3A, 0, 0, 1, 0, 0x00, 0xC0]), &limits);
+        let (names, skipped) = n.resolve(&sheets());
+        assert_eq!(skipped, 0);
+        let got: Vec<_> = names
+            .iter()
+            .map(|n| (n.name.as_str(), n.formula.as_str(), n.base_cell))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                // The cell above the one that uses the name.
+                ("Up", "of:=[$One.DY32768]", Some((0, 0x8000, 0x80))),
+                // Offsets down and right keep A1 as the base.
+                ("Down", "of:=[$One.A2]", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn names_that_read_as_something_else_are_left_out() {
+        let mut n = recs();
+        let limits = Limits::default();
+        let uses = |i: u8| vec![0x23, i, 0, 0, 0, 0x1E, 1, 0, 0x03];
+        // 1: a cell address, 2: a name on it, 3: a name on that one.
+        n.name(&record("A1", &[0x1E, 6, 0]), &limits);
+        n.name(&record("OnCell", &uses(1)), &limits);
+        n.name(&record("OnOnCell", &uses(2)), &limits);
+        // 4–8: a boolean, R1C1 references, a cell of the larger grid, and
+        // names on them.
+        n.name(&record("TRUE", &[0x1E, 1, 0]), &limits);
+        n.name(&record("R1C1", &[0x1E, 1, 0]), &limits);
+        n.name(&record("TAX2024", &[0x1E, 1, 0]), &limits);
+        n.name(&record("OnTrue", &uses(4)), &limits);
+        n.name(&record("OnTax", &uses(6)), &limits);
+        // 9, 10: good names.
+        n.name(&record("Good", &[0x1E, 2, 0]), &limits);
+        n.name(&record("OnGood", &uses(9)), &limits);
+        let (names, skipped) = n.resolve(&sheets());
+        let got: Vec<_> = names
+            .iter()
+            .map(|n| (n.name.as_str(), n.formula.as_str()))
+            .collect();
+        assert_eq!(got, [("Good", "of:=2"), ("OnGood", "of:=Good+1")]);
+        assert_eq!(skipped, 8);
+
+        // Along a chain, whatever the order of the records: 1 uses 2, 2
+        // uses 3, 3 has a function. A name that uses itself is left out
+        // with them only when it also uses one of them.
+        let mut n = recs();
+        n.name(&record("First", &uses(2)), &limits);
+        n.name(&record("Second", &uses(3)), &limits);
+        n.name(&record("Third", &[0x21, 74, 0]), &limits);
+        n.name(&record("Loop", &uses(4)), &limits);
+        let (names, skipped) = n.resolve(&sheets());
+        let got: Vec<_> = names.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(got, ["Loop"]);
+        assert_eq!(skipped, 3);
     }
 
     #[test]
@@ -642,15 +876,5 @@ mod tests {
         let mut empty = d.clone();
         empty[3] = 0;
         assert!(raw_name(&empty).is_none());
-    }
-
-    #[test]
-    fn plain_names() {
-        assert!(is_plain_name("Rate_1"));
-        assert!(is_plain_name("Größe"));
-        assert!(!is_plain_name("1st"));
-        assert!(!is_plain_name("a b"));
-        assert!(!is_plain_name("a+b"));
-        assert!(!is_plain_name(""));
     }
 }

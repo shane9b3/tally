@@ -384,11 +384,29 @@ impl ExcelNameConverter {
     /// the workbook) → OpenFormula text with absolute sheet markers
     /// (`of:=[$Sheet1.$A$1:.$B$10]`), or `None` when it does not parse.
     pub fn to_of(&self, text: &str, sheet: Option<usize>) -> Option<String> {
+        self.to_of_at(text, sheet, (0, 0))
+    }
+
+    /// [`to_of`](Self::to_of) for a name whose relative references are
+    /// written for a formula in the cell `base` (row, column) of its sheet
+    /// (the first sheet for a name of the workbook): the model's
+    /// `NameData::base_cell`.
+    pub fn to_of_at(&self, text: &str, sheet: Option<usize>, base: (u32, u32)) -> Option<String> {
         if text.len() > 64 * 1024 {
             return None;
         }
-        let origin = CellAddr::new(sheet.unwrap_or(0) as SheetId, 0, 0);
+        let origin = CellAddr::new(sheet.unwrap_or(0) as SheetId, base.0, base.1);
         excel_name_to_of(text, origin, &self.0)
+    }
+
+    /// Whether `name` can stand in a formula as a defined name: the
+    /// engine's rule for names (`tally_formula::defined_name_problem`: not
+    /// a cell or R1C1 reference of the grid, not `TRUE` / `FALSE`…), and
+    /// read back as a name from Excel formula text too.
+    pub fn is_name(&self, name: &str) -> bool {
+        let origin = CellAddr::new(0, 0, 0);
+        tally_formula::defined_name_problem(name, origin, &self.0).is_none()
+            && parse_excel(name, origin, &self.0).is_ok_and(|f| matches!(f.expr, Expr::Name(_)))
     }
 }
 

@@ -226,3 +226,66 @@ fn a_link_split_over_continue_records() {
     let wb = read(&book(&[], &s));
     assert_eq!(links(&wb, 0), [(1, 1, "https://example.org/continued")]);
 }
+
+#[test]
+fn relative_names_are_offsets_from_the_cell_that_uses_them() {
+    // "Above": one row up in the same column (row word 0xFFFF = -1, both
+    // parts relative); "Left3": three columns to the left in the absolute
+    // row 2; "Next": one row down.
+    let mut g = biff::defined_name("Above", 0, 0, &[0x3A, 0, 0, 0xFF, 0xFF, 0x00, 0xC0]);
+    g.extend(biff::defined_name(
+        "Left3",
+        0,
+        2,
+        &[0x3A, 1, 0, 1, 0, 0xFD, 0x40],
+    ));
+    g.extend(biff::defined_name(
+        "Next",
+        0,
+        0,
+        &[0x3A, 0, 0, 1, 0, 0x00, 0xC0],
+    ));
+    let wb = read(&book(&g, &[]));
+    let got: Vec<_> = wb
+        .names
+        .iter()
+        .map(|n| (n.name.as_str(), n.formula.as_str(), n.base_cell))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            // Written for a formula in DY32769 (row 32768, column 128):
+            // the cell above it. Never the absolute row 65,536.
+            ("Above", "of:=[$Main.DY32768]", Some((0, 32_768, 128))),
+            ("Left3", "of:=[$'Other sheet'.DV$2]", Some((1, 32_768, 128))),
+            // Down and right of A1: the base stays A1.
+            ("Next", "of:=[$Main.A2]", None),
+        ]
+    );
+    assert!(!wb.warnings.iter().any(|w| w.contains("defined name")));
+}
+
+#[test]
+fn names_that_are_cells_or_keywords_are_left_out_with_their_users() {
+    // "A1" = 6 and "Twice" = A1 * 2: written as text, Twice would double
+    // the cell A1. "TRUE", an R1C1 reference and a cell of the larger grid
+    // (a legal name in Excel 97-2003, whose sheet ends at column IV).
+    let mut twice = biff::ptg_name(1);
+    twice.extend(biff::ptg_int(2));
+    twice.push(0x05);
+    let mut g = biff::defined_name("A1", 0, 0, &biff::ptg_num(6.0));
+    g.extend(biff::defined_name("Twice", 0, 0, &twice));
+    g.extend(biff::defined_name("TRUE", 0, 0, &biff::ptg_num(1.0)));
+    g.extend(biff::defined_name("R1C1", 0, 0, &biff::ptg_num(1.0)));
+    g.extend(biff::defined_name("TAX2024", 0, 0, &biff::ptg_num(1.0)));
+    g.extend(biff::defined_name("Kept", 0, 0, &biff::ptg_num(2.0)));
+    let wb = read(&book(&g, &[]));
+    assert_eq!(names(&wb), [("Kept", None, "of:=2")]);
+    assert!(
+        wb.warnings
+            .iter()
+            .any(|w| w.starts_with("5 defined name(s)")),
+        "{:?}",
+        wb.warnings
+    );
+}

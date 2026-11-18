@@ -249,7 +249,7 @@ fn name_limits_degrade_with_a_warning() {
     let mut g = Vec::new();
     for i in 0..10u16 {
         g.extend(biff::defined_name(
-            &format!("N{i}"),
+            &format!("Item_{i}"),
             0,
             0,
             &biff::ptg_num(f64::from(i)),
@@ -264,9 +264,9 @@ fn name_limits_degrade_with_a_warning() {
     let wb = read_with(&bytes, &limits).unwrap();
     assert_eq!(wb.names.len(), 4);
     assert!(has(&wb, "Only the first 4 defined names"));
-    // The byte budget: each name keeps 2 bytes of name and 9 of formula.
+    // The byte budget: each name keeps 6 bytes of name and 9 of formula.
     let limits = Limits {
-        max_name_bytes: 25,
+        max_name_bytes: 35,
         ..Limits::default()
     };
     let wb = read_with(&bytes, &limits).unwrap();
