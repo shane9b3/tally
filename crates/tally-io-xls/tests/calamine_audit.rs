@@ -343,7 +343,7 @@ fn the_reference_books_open() {
         assert!(
             !wb.warnings
                 .iter()
-                .any(|w| w.contains("damaged") || w.contains("formula")),
+                .any(|w| w.contains("damaged") || w.contains("could not be converted")),
             "{:?}",
             wb.warnings
         );
@@ -673,7 +673,13 @@ fn a_name_with_a_truncated_formula_is_neutralized() {
     let file = book(&name8("Good", &area3d()), &biff::number(0, 0, 15, 1.0));
     let (_, scan) = prescan::sanitize(&file, 1024, 10_000_000).unwrap();
     assert_eq!(scan.damaged_names, 0);
-    assert!(read(&file).unwrap().warnings.is_empty());
+    // (The names reader may leave the name out, with its own warning: this
+    // book has no EXTERNSHEET for the reference.)
+    assert!(!read(&file)
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|w| w.contains("damaged")));
 
     // Too short for its fixed part: nothing to keep the index with.
     let file = book(&biff::rec(0x0018, &[0; 14]), &biff::number(0, 0, 15, 1.0));

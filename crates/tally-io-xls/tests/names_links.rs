@@ -160,8 +160,9 @@ fn name_scopes_and_references() {
 #[test]
 fn names_that_are_left_out_are_counted() {
     // A reference to another workbook's sheet (no such EXTERNSHEET entry),
-    // a name local to a sheet that is not there, an error value, an empty
-    // formula.
+    // a name local to a sheet that is not there, an error value. A name
+    // without a formula is not counted: the pre-scan empties a damaged
+    // name's formula and reports it itself.
     let mut g = biff::defined_name("Far", 0, 0, &biff::ptg_area3d_on(7, 0, 0, 0, 0));
     g.extend(biff::defined_name("Nowhere", 0, 9, &biff::ptg_num(1.0)));
     g.extend(biff::defined_name("Broken", 0, 0, &[0x1C, 0x17]));
@@ -172,7 +173,7 @@ fn names_that_are_left_out_are_counted() {
     assert!(wb
         .warnings
         .iter()
-        .any(|w| w.starts_with("4 defined name(s)")));
+        .any(|w| w.starts_with("3 defined name(s)")));
 }
 
 #[test]

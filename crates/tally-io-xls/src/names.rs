@@ -142,10 +142,13 @@ impl NameRecs {
                     continue;
                 }
             };
-            let formula = raw
-                .rgce
-                .as_deref()
-                .and_then(|rgce| self.excel_text(rgce, sheets, &mut work))
+            // No formula: an empty name, or one the pre-scan found damaged
+            // and emptied (it has its own warning). Not a name to import.
+            let Some(rgce) = raw.rgce.as_deref() else {
+                continue;
+            };
+            let formula = self
+                .excel_text(rgce, sheets, &mut work)
                 .and_then(|text| converter.to_of(&text, sheet.map(|s| s as usize)));
             match formula {
                 Some(formula) => out.push(NameData {
