@@ -134,9 +134,13 @@ impl NameRecs {
         let mut work = WORK_BUDGET;
         let converter = tally_io_xlsx::ExcelNameConverter::new(sheets);
         // A name Tally would read as something else in a formula (a cell
-        // such as `A1` or `TAX2024` in the larger grid, `TRUE`, an R1C1
-        // reference) is not imported, and neither is a name that uses it:
-        // written into formula text it would mean that other thing.
+        // of the BIFF8 sheet such as `A1`, `TRUE`, an R1C1 reference: none
+        // of them a name Excel allows) is not imported, and neither is a
+        // name that uses it: written into formula text it would mean that
+        // other thing. A name spelled like a cell outside the BIFF8 sheet
+        // (`TAX2024`: legal in Excel 97-2003, a cell in the larger grid)
+        // is one: the conversion reads it as a name, and the engine keeps
+        // it under another spelling with this one as an alias.
         let valid: Vec<bool> = self
             .names
             .iter()
@@ -830,8 +834,18 @@ mod tests {
             .iter()
             .map(|n| (n.name.as_str(), n.formula.as_str()))
             .collect();
-        assert_eq!(got, [("Good", "of:=2"), ("OnGood", "of:=Good+1")]);
-        assert_eq!(skipped, 8);
+        // "TAX2024" is a cell only in the larger grid: a name of the file,
+        // kept with the name that uses it.
+        assert_eq!(
+            got,
+            [
+                ("TAX2024", "of:=1"),
+                ("OnTax", "of:=TAX2024+1"),
+                ("Good", "of:=2"),
+                ("OnGood", "of:=Good+1")
+            ]
+        );
+        assert_eq!(skipped, 6);
 
         // Along a chain, whatever the order of the records: 1 uses 2, 2
         // uses 3, 3 has a function. A name that uses itself is left out

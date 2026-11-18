@@ -476,3 +476,49 @@ fn xls_opens_with_its_names_and_links() {
         .as_ref()
         .is_some_and(|p| p.print_range.is_some()));
 }
+
+/// Names that Excel 97-2003 allows and that are cells in Tally's larger
+/// grid (`TAX2024`, `FYE2025`, `A70000`) are kept: the engine lists them
+/// with a trailing `_` and resolves the file's spelling, so the formulas
+/// and names that use them calculate (they must not read the cells of
+/// those addresses). And a name with a relative reference gives each
+/// cell that uses it its own result.
+#[test]
+fn xls_names_that_are_cells_in_the_larger_grid_and_relative_names() {
+    let mut svc = EngineService::with_default_codec();
+    let info = open(&mut svc, &repo("tests/fixtures/xls/widenames.xls"));
+    let main = info.sheets[0].id;
+    let names = svc.names(info.doc).unwrap();
+    let mut listed: Vec<&str> = names.iter().map(|n| n.name.as_str()).collect();
+    listed.sort_unstable();
+    assert_eq!(
+        listed,
+        ["A70000_", "Above", "FYE2025_", "Gross", "TAX2024_"]
+    );
+    assert!(
+        info.warnings
+            .iter()
+            .any(|w| w.contains("TAX2024 → TAX2024_") && w.contains("FYE2025 → FYE2025_")),
+        "{:?}",
+        info.warnings
+    );
+    // The stored results in the file are all 0: these are calculated.
+    svc.recalc_all(info.doc).unwrap();
+    let wb = &svc.document(info.doc).unwrap().wb;
+    let value = |r: u32, c: u32| wb.value(CellAddr::new(main, r, c));
+    let close = |v: Value, want: f64| match v {
+        Value::Number(n) => assert!((n - want).abs() < 1e-9, "{n} != {want}"),
+        other => panic!("{other:?}"),
+    };
+    // A3 = TAX2024 + 1, B3 = FYE2025 * 2, D3 = Gross (= FYE2025 *
+    // TAX2024), E3 = A70000 + FYE2025.
+    close(value(2, 0), 1.2);
+    close(value(2, 1), 10.0);
+    close(value(2, 3), 1.0);
+    close(value(2, 4), 8.0);
+    // "Above" from B2 is B1, from C3 it is C2.
+    close(value(1, 1), 10.0);
+    close(value(2, 2), 20.0);
+    // A4 = IV65535 + A1: a reference at the edge of the old sheet.
+    close(value(3, 0), 5.0);
+}

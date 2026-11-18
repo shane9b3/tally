@@ -77,6 +77,43 @@ pub fn defined_name_problem(
     }
 }
 
+/// Columns of the Excel 97-2003 (BIFF8) sheet, the narrowest grid Tally
+/// reads names from.
+const NARROW_COLS: u32 = 256;
+/// Rows of the Excel 97-2003 sheet.
+const NARROW_ROWS: u32 = 65_536;
+
+/// `true` if `name` is spelled like a cell that is outside the Excel
+/// 97-2003 sheet (`A1`…`IV65536`) but inside Tally's (`A1`…`XFD1048576`):
+/// letters and digits only, a column past `IV` or a row past 65,536, such
+/// as `TAX2024` or `A70000`. Such a text is a legal defined name in a
+/// program with the narrower sheet (OpenOffice 4.1's ends at `AMJ1048576`,
+/// so every cell-like name it allows is of this kind too) and reads as a
+/// cell reference in Tally: a file may define it, Tally keeps it under
+/// another spelling.
+pub fn is_narrow_grid_name(name: &str) -> bool {
+    if name.len() > 255 {
+        return false;
+    }
+    let letters = name.len()
+        - name
+            .trim_start_matches(|c: char| c.is_ascii_alphabetic())
+            .len();
+    let (letters, digits) = name.split_at(letters);
+    if letters.is_empty() || digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let Some(col) = tally_types::letters_to_col(letters) else {
+        return false;
+    };
+    // `A0` and `A01` are not cells; a row past the sheet is a name anyway.
+    let row = match digits.parse::<u32>() {
+        Ok(r) if (1..=tally_types::MAX_ROWS).contains(&r) && !digits.starts_with('0') => r,
+        _ => return false,
+    };
+    col >= NARROW_COLS || row > NARROW_ROWS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +137,29 @@ mod tests {
         }
         for cell in ["A1", "N1", "ab12", "XFD1048576", "TAX2024"] {
             assert_eq!(check(cell), Some(NameProblem::NotAName), "{cell}");
+        }
+    }
+
+    #[test]
+    fn narrow_grid_names() {
+        // Outside A1…IV65536, inside A1…XFD1048576.
+        for name in [
+            "TAX2024",
+            "tax2024",
+            "IW1",
+            "A65537",
+            "A70000",
+            "XFD1048576",
+            "AMK5",
+        ] {
+            assert!(is_narrow_grid_name(name), "{name}");
+        }
+        // Cells of the narrow sheet; not cells at all; names everywhere.
+        for name in [
+            "A1", "IV65536", "FY2025", "N1", "XFE1", "A1048577", "A0", "A01", "RATE2025", "Tax",
+            "T_1", "2024", "", "A1.B",
+        ] {
+            assert!(!is_narrow_grid_name(name), "{name}");
         }
     }
 }

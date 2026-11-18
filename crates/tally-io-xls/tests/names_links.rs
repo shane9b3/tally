@@ -268,8 +268,9 @@ fn relative_names_are_offsets_from_the_cell_that_uses_them() {
 #[test]
 fn names_that_are_cells_or_keywords_are_left_out_with_their_users() {
     // "A1" = 6 and "Twice" = A1 * 2: written as text, Twice would double
-    // the cell A1. "TRUE", an R1C1 reference and a cell of the larger grid
-    // (a legal name in Excel 97-2003, whose sheet ends at column IV).
+    // the cell A1. "TRUE", an R1C1 reference and "FY2025", a cell of the
+    // Excel 97-2003 sheet itself (column FY, row 2025): none of them a
+    // name Excel allows.
     let mut twice = biff::ptg_name(1);
     twice.extend(biff::ptg_int(2));
     twice.push(0x05);
@@ -277,7 +278,7 @@ fn names_that_are_cells_or_keywords_are_left_out_with_their_users() {
     g.extend(biff::defined_name("Twice", 0, 0, &twice));
     g.extend(biff::defined_name("TRUE", 0, 0, &biff::ptg_num(1.0)));
     g.extend(biff::defined_name("R1C1", 0, 0, &biff::ptg_num(1.0)));
-    g.extend(biff::defined_name("TAX2024", 0, 0, &biff::ptg_num(1.0)));
+    g.extend(biff::defined_name("FY2025", 0, 0, &biff::ptg_num(1.0)));
     g.extend(biff::defined_name("Kept", 0, 0, &biff::ptg_num(2.0)));
     let wb = read(&book(&g, &[]));
     assert_eq!(names(&wb), [("Kept", None, "of:=2")]);
@@ -288,4 +289,42 @@ fn names_that_are_cells_or_keywords_are_left_out_with_their_users() {
         "{:?}",
         wb.warnings
     );
+}
+
+#[test]
+fn names_that_are_cells_only_in_the_larger_grid_are_kept() {
+    // Legal names in Excel 97-2003, whose sheet ends at IV65536: a column
+    // past IV, a row past 65,536. They are names of the file, and the
+    // formulas that use them (other names, cells) name them.
+    let wb = read(&biff::books::wide_names());
+    assert_eq!(
+        names(&wb),
+        [
+            ("TAX2024", None, "of:=0.2"),
+            ("FYE2025", None, "of:=[$Main.$A$1]"),
+            ("Gross", None, "of:=FYE2025*TAX2024"),
+            ("A70000", None, "of:=3"),
+            ("Above", None, "of:=[$Main.DY32768]"),
+        ]
+    );
+    assert!(!wb.warnings.iter().any(|w| w.contains("defined name")));
+    let formula = |r: u32, c: u32| {
+        let cell = wb.sheets[0]
+            .cells
+            .iter()
+            .find(|x| (x.row, x.col) == (r, c))
+            .unwrap();
+        match &cell.content {
+            CellContentData::Formula { text, .. } => text.to_string(),
+            other => panic!("{other:?}"),
+        }
+    };
+    // Names, not the cells TAX2024, FYE2025 and A70000.
+    assert_eq!(formula(2, 0), "of:=TAX2024+1");
+    assert_eq!(formula(2, 1), "of:=FYE2025*2");
+    assert_eq!(formula(2, 3), "of:=Gross");
+    assert_eq!(formula(2, 4), "of:=A70000+FYE2025");
+    // A reference inside the Excel 97-2003 sheet stays a reference, also
+    // in its last column and next to its last row.
+    assert_eq!(formula(3, 0), "of:=[.IV65535]+[.A1]");
 }

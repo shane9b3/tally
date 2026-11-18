@@ -411,38 +411,6 @@ impl tally_formula::Resolver for NoNames<'_> {
     }
 }
 
-/// `true` if `name` is a legal name in AOO 4.1's 1,024-column grid (letters,
-/// digits, `_` and `.`; not a reference there: a leading letter run of a
-/// column past `AMJ` followed by digits is a name, `AB12` is not), but reads
-/// as a cell reference in Tally's 16,384-column grid.
-pub fn is_aoo_only_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
-        _ => return false,
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
-        || name.len() > 255
-    {
-        return false;
-    }
-    let letters: String = name
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect();
-    let rest = &name[letters.len()..];
-    if letters.is_empty() || rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
-        return false;
-    }
-    let Some(col) = tally_types::letters_to_col(&letters) else {
-        return false;
-    };
-    // AMJ = 1,023 (0-based): AOO's last column.
-    col > 1023 && col < tally_types::MAX_COLS
-}
-
 /// The model's base cell of a definition (`None` for A1 of the first
 /// sheet, the model default).
 pub fn base_cell_of(wb: &Workbook, def: &NameDef) -> Option<(u32, u32, u32)> {
@@ -457,9 +425,12 @@ pub fn base_cell_of(wb: &Workbook, def: &NameDef) -> Option<(u32, u32, u32)> {
 /// Loads the names of the interchange model (`Workbook::from_data`):
 /// relative references are parsed against `base_cell` (ODS
 /// `table:base-cell-address`, review 3, H3). Names that read as cell
-/// references only in Tally's wider grid are kept under `<name>_` with
-/// the original spelling as an alias, and a warning lists them (H4);
-/// invalid names are dropped with a warning.
+/// references only in Tally's larger grid
+/// (`tally_formula::is_narrow_grid_name`: legal in OpenOffice 4.1 or in
+/// Excel 97-2003) are kept under `<name>_` with the original spelling as
+/// an alias, and a warning lists them (H4); the model's formulas name
+/// them by the original spelling, which the alias resolves. Invalid names
+/// are dropped with a warning.
 pub fn load_from_data(wb: &mut Workbook, names: &[tally_model::NameData], ids: &[SheetId]) {
     let mut renamed: Vec<String> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
@@ -473,7 +444,10 @@ pub fn load_from_data(wb: &mut Workbook, names: &[tally_model::NameData], ids: &
         };
         let (name, alias) = if validate_name(wb, &n.name).is_ok() {
             (n.name.clone(), None)
-        } else if is_aoo_only_name(&n.name) {
+        } else if tally_formula::is_narrow_grid_name(&n.name) {
+            // A legal name where the sheet is narrower (OpenOffice 4.1:
+            // 1,024 columns; Excel 97-2003: 256 columns, 65,536 rows) that
+            // is a cell here.
             let mut candidate = format!("{}_", n.name);
             while validate_name(wb, &candidate).is_err() {
                 candidate.push('_');
@@ -534,7 +508,7 @@ pub fn load_from_data(wb: &mut Workbook, names: &[tally_model::NameData], ids: &
     }
     if !renamed.is_empty() {
         wb.import_warnings.push(format!(
-            "Names that read as cell references in Tally's 16,384-column grid were \
+            "Names that read as cell references in Tally's larger grid were \
              renamed (formulas from the file still resolve them): {}",
             renamed.join(", ")
         ));

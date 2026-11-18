@@ -365,8 +365,35 @@ pub fn excel_formula_to_of(
     }
     let r = XlsxResolver::new(sheet_names);
     let origin = CellAddr::new(sheet as SheetId, row, col);
-    let f = parse_excel(text, origin, &r).ok()?;
+    let mut f = parse_excel(text, origin, &r).ok()?;
+    for_each_expr_mut(&mut f.expr, |e| biff8_name(e, origin));
     Some(print_of(&f, origin, &r))
+}
+
+/// In formula text from an Excel 97-2003 file, a cell outside that
+/// format's sheet (`A1`…`IV65536`) cannot be a reference: `TAX2024` or
+/// `A70000` there is a defined name (legal in that program, a cell in
+/// Tally's larger grid). Such a reference, written without a sheet and
+/// without `$`, becomes the name again; the engine keeps the name under
+/// another spelling and resolves this one (`names::load_from_data`).
+fn biff8_name(e: &mut Expr, origin: CellAddr) {
+    let Expr::Ref(RefExpr::Cell(c)) = e else {
+        return;
+    };
+    if !matches!(c.sheet, SheetRef::Current) || c.row.abs || c.col.abs {
+        return;
+    }
+    let (Ok(row), Ok(col)) = (
+        u32::try_from(i64::from(origin.row) + i64::from(c.row.v)),
+        u32::try_from(i64::from(origin.col) + i64::from(c.col.v)),
+    ) else {
+        return;
+    };
+    if col < 256 && row < 65_536 {
+        return;
+    }
+    let name = format!("{}{}", tally_types::col_to_letters(col), u64::from(row) + 1);
+    *e = Expr::Name(tally_formula::NameRef::Unresolved(Arc::from(name)));
 }
 
 /// Converts the ExcelA1 text of the defined names of one workbook to
@@ -396,17 +423,29 @@ impl ExcelNameConverter {
             return None;
         }
         let origin = CellAddr::new(sheet.unwrap_or(0) as SheetId, base.0, base.1);
-        excel_name_to_of(text, origin, &self.0)
+        let mut f = parse_excel(text, origin, &self.0).ok()?;
+        for_each_expr_mut(&mut f.expr, |e| {
+            biff8_name(e, origin);
+            if let Expr::Ref(re) = e {
+                mark_sheets_abs(re);
+            }
+        });
+        Some(print_of(&f, origin, &self.0))
     }
 
-    /// Whether `name` can stand in a formula as a defined name: the
-    /// engine's rule for names (`tally_formula::defined_name_problem`: not
-    /// a cell or R1C1 reference of the grid, not `TRUE` / `FALSE`…), and
-    /// read back as a name from Excel formula text too.
+    /// Whether `name` can stand in the formula text given to
+    /// [`to_of`](Self::to_of) as a defined name. Either it is a name by
+    /// the engine's rule (`tally_formula::defined_name_problem`: not a
+    /// cell or R1C1 reference of the grid, not `TRUE` / `FALSE`…) and
+    /// reads back as one from Excel formula text; or it is spelled like a
+    /// cell outside the Excel 97-2003 sheet
+    /// (`tally_formula::is_narrow_grid_name`: `TAX2024`), which that
+    /// program allows as a name and which the conversion reads as one.
     pub fn is_name(&self, name: &str) -> bool {
         let origin = CellAddr::new(0, 0, 0);
-        tally_formula::defined_name_problem(name, origin, &self.0).is_none()
-            && parse_excel(name, origin, &self.0).is_ok_and(|f| matches!(f.expr, Expr::Name(_)))
+        tally_formula::is_narrow_grid_name(name)
+            || tally_formula::defined_name_problem(name, origin, &self.0).is_none()
+                && parse_excel(name, origin, &self.0).is_ok_and(|f| matches!(f.expr, Expr::Name(_)))
     }
 }
 

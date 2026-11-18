@@ -15,7 +15,9 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   Define): names of the whole workbook and names that belong to one
   sheet, so formulas that use them calculate instead of showing #NAME?.
   A name whose formula uses a function is not read yet; Tally says how
-  many were left out when it opens the file.
+  many were left out when it opens the file. A name that would be a cell
+  address in Tally's larger sheet, such as TAX2024, is shown with an
+  underscore at its end (TAX2024_); formulas that use it keep working.
 - Excel 97-2003 files open with their hyperlinks: web and e-mail
   addresses, links to other files and links to a cell or a name in the
   same workbook.

@@ -494,7 +494,8 @@ hyperlinks (`HLINK`, `hlink.rs`); docs/file-formats.md). Its rules:
   length: a token that is cut, an operator without operands, operands
   left over, a sheet index without a sheet of this workbook, a name index
   without a name, a number that is not finite and text with control
-  characters, a name that is not one by the engine's rule (`A1`, `TRUE`,
+  characters, a name that is not one by the engine's rule and that Excel 97-2003
+  would not allow either (`A1`, `TRUE`,
   `R1C1`: in formula text it would be a cell or a constant) or that uses
   a name that is not imported (propagated along chains with a worklist,
   each record once) all skip the name; so does any token the decoder does not
@@ -597,9 +598,9 @@ Tests: `tally-io-xls::hostile_formatting::*`
 `many_links_on_the_same_cells_are_one_each`) and the unit tests of
 `names.rs` and `hlink.rs` (every cut, every byte as a token, every flag
 combination). The
-`xls` and `open` fuzz targets reach the pass through `read_xls`; five
+`xls` and `open` fuzz targets reach the pass through `read_xls`; six
 synthetic seeds (`fuzz/seeds/xls/formatted.xls`, `pictures.xls`,
-`notes.xls`, `page.xls`, `names.xls`, generated from `tests/fixtures/xls/`, which
+`notes.xls`, `page.xls`, `names.xls`, `widenames.xls`, generated from `tests/fixtures/xls/`, which
 `crates/tally-io-xls/tests/biff/books.rs` builds) exercise it. It has not
 been through a fuzz campaign yet.
 
