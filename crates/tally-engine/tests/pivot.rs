@@ -1903,3 +1903,154 @@ fn pivot_layout_subtotal_first_line_labels_outer_items() {
     assert_eq!(f.value("N5"), Value::text("Plum"));
     assert_eq!(f.value("N6"), Value::Number(2.0));
 }
+
+/// A pivot over `n` distinct keys in A:B (one output row each), written
+/// at D1: `(fixture, pivot id)`.
+fn tall_pivot(n: usize) -> (Fixture, u32) {
+    let mut f = Fixture::new();
+    let mut rows = vec![vec!["Key".to_string(), "Amount".to_string()]];
+    rows.extend((0..n).map(|i| vec![format!("k{i:05}"), i.to_string()]));
+    let r = f.apply(vec![Op::SetRangeInputs {
+        sheet: f.sheet,
+        r: 0,
+        c: 0,
+        rows,
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let mut p = pivot(&f);
+    p.source = PivotSource::Range {
+        sheet: f.sheet,
+        range: range(&format!("A1:B{}", n + 1)),
+    };
+    p.target = CellPos { r: 0, c: 3 };
+    p.row_fields = vec![field(0, "Key")];
+    p.col_fields.clear();
+    p.data_fields = vec![data(1, AggFn::Sum)];
+    let id = create(&mut f, p);
+    (f, id)
+}
+
+fn refresh(f: &mut Fixture, id: u32) {
+    let r = f.apply(vec![Op::RefreshPivot {
+        id,
+        overwrite: false,
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+}
+
+/// Every refresh keeps the previous output (its cells and the previous
+/// table) in its undo step. The steps count against the undo byte budget
+/// (`undo::UNDO_BUDGET`, security review 5 LOW-1), so refreshing a large
+/// pivot again and again drops the oldest steps instead of growing
+/// without bound, and the latest refresh can always be undone.
+#[test]
+fn repeated_pivot_refresh_stays_within_the_undo_budget() {
+    use tally_engine::undo::{record_weight, Change};
+    const N: usize = 3_000;
+    let (mut f, id) = tall_pivot(N);
+    // k00000 is the first item, below the header row.
+    assert_eq!(f.value("D2"), Value::text("k00000"));
+    assert_eq!(f.value("E2"), Value::Number(0.0));
+    f.set("B2", "1");
+    refresh(&mut f, id);
+    assert_eq!(f.value("E2"), Value::Number(1.0));
+    // What one refresh holds: the cells of the old output and the old
+    // table with its lookup, both counted.
+    let step = {
+        let undo = &f.svc.document(f.doc).unwrap().undo;
+        let rec = undo.undo_records().last().unwrap();
+        let cells: usize = rec
+            .changes
+            .iter()
+            .map(|c| match c {
+                Change::Range(s) => s.contents.as_ref().map_or(0, Vec::len),
+                _ => 0,
+            })
+            .sum();
+        assert!(cells >= 2 * N, "{cells}");
+        record_weight(rec)
+    };
+    // 2 N output cells at 96 bytes, and the table: N label cells, N
+    // values, N tree nodes with their map entries.
+    let n = N as u64;
+    assert!(step >= 2 * n * 96 + n * (96 + 24 + 64), "{step}");
+    // Room for four refreshes (and the small source edits between them).
+    let budget = 4 * step + step / 2;
+    f.svc.document_mut(f.doc).unwrap().undo.set_budget(budget);
+    for i in 2..=40 {
+        f.set("B2", &i.to_string());
+        refresh(&mut f, id);
+        let undo = &f.svc.document(f.doc).unwrap().undo;
+        assert!(undo.weight() <= budget, "{i}: {} > {budget}", undo.weight());
+    }
+    assert_eq!(f.value("E2"), Value::Number(40.0));
+    {
+        let undo = &f.svc.document(f.doc).unwrap().undo;
+        // Well under the depth: the budget did the trimming. Four
+        // refreshes with their source edits are left.
+        assert_eq!(undo.depth(), 100);
+        assert_eq!(undo.undo_len(), 8, "{}", undo.weight());
+        assert!(undo.weight() > 3 * step);
+    }
+    // The latest refresh is undone and redone; the source edit is its own
+    // step.
+    f.svc.undo(f.doc).unwrap();
+    assert_eq!(f.value("E2"), Value::Number(39.0));
+    assert_eq!(f.value("B2"), Value::Number(40.0));
+    assert_eq!(f.svc.pivots(f.doc).unwrap()[0].id, id);
+    f.svc.redo(f.doc).unwrap();
+    assert_eq!(f.value("E2"), Value::Number(40.0));
+    // All that is left can be undone: back to the state before the
+    // oldest kept step.
+    for _ in 0..8 {
+        f.svc.undo(f.doc).unwrap();
+    }
+    assert_eq!(f.value("E2"), Value::Number(36.0));
+    assert_eq!(f.value("B2"), Value::Number(36.0));
+    assert_eq!(f.svc.document(f.doc).unwrap().undo.undo_len(), 0);
+}
+
+/// A budget smaller than one refresh still keeps the newest step, so the
+/// refresh (and Update and Delete, which keep the previous tables the
+/// same way) can be undone right after it.
+#[test]
+fn pivot_steps_larger_than_the_undo_budget_can_still_be_undone() {
+    let (mut f, id) = tall_pivot(500);
+    f.svc.document_mut(f.doc).unwrap().undo.set_budget(1);
+    let undo_len = |f: &Fixture| f.svc.document(f.doc).unwrap().undo.undo_len();
+    assert_eq!(undo_len(&f), 1);
+    f.set("B2", "7");
+    refresh(&mut f, id);
+    assert_eq!(undo_len(&f), 1);
+    assert_eq!(f.value("E2"), Value::Number(7.0));
+    f.svc.undo(f.doc).unwrap();
+    assert_eq!(f.value("E2"), Value::Number(0.0));
+    f.svc.redo(f.doc).unwrap();
+    assert_eq!(f.value("E2"), Value::Number(7.0));
+    // Update: no totals.
+    let mut p = f.svc.pivots(f.doc).unwrap().remove(0);
+    p.col_totals = false;
+    p.row_totals = false;
+    let r = f.apply(vec![Op::UpdatePivot {
+        id,
+        pivot: p,
+        overwrite: false,
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(undo_len(&f), 1);
+    assert!(f.value("D502").is_empty());
+    f.svc.undo(f.doc).unwrap();
+    assert_eq!(f.value("D502"), Value::text("Total Result"));
+    // Delete with its output.
+    let r = f.apply(vec![Op::DeletePivot {
+        id,
+        clear_output: true,
+    }]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(undo_len(&f), 1);
+    assert!(f.value("D2").is_empty());
+    f.svc.undo(f.doc).unwrap();
+    assert_eq!(f.value("D2"), Value::text("k00000"));
+    assert_eq!(f.value("E2"), Value::Number(7.0));
+    assert_eq!(f.svc.pivots(f.doc).unwrap().len(), 1);
+}

@@ -183,6 +183,54 @@ impl PivotTable {
             lookup: Arc::new(Lookup::default()),
         }
     }
+
+    /// Approximate bytes the table holds, for the undo byte budget
+    /// ([`crate::undo::change_weight`]): every create, update, refresh or
+    /// delete keeps the previous tables of the sheet in its undo step.
+    /// Counted: the label roles, the grid lines, the displayed values,
+    /// the lookup trees and maps of both axes (GETPIVOTDATA, drill-down)
+    /// and the item lists of the definition. Map entries are counted with
+    /// their table overhead, strings by length.
+    pub fn retained_weight(&self) -> u64 {
+        const LABEL: u64 = 96;
+        const MAP_ENTRY: u64 = 32;
+        let n = |x: usize| x as u64;
+        let axis = |a: &AxisLookup| {
+            n(a.parent.len() + a.item.len()) * 4
+                + n(a.edges.len() + a.line_of.len()) * MAP_ENTRY
+                + a.fields
+                    .iter()
+                    .map(|f| {
+                        n(f.names.0.len() + f.names.1.len())
+                            + n(f.by_text.len()) * MAP_ENTRY
+                            + n(f.keys.len()) * 8
+                            + f.dups
+                                .values()
+                                .map(|v| MAP_ENTRY + n(v.len()) * 4)
+                                .sum::<u64>()
+                            + 128
+                    })
+                    .sum::<u64>()
+        };
+        let fields = |v: &[tally_model::PivotFieldData]| {
+            v.iter()
+                .map(|f| {
+                    256 + n(f.name.len())
+                        + f.hidden_items.iter().map(|s| 24 + n(s.len())).sum::<u64>()
+                })
+                .sum::<u64>()
+        };
+        let d = &self.data;
+        1024 + n(self.cells.len()) * LABEL
+            + n(self.grid.rows.len() + self.grid.cols.len()) * 24
+            + n(self.lookup.values.len()) * 24
+            + axis(&self.lookup.rows)
+            + axis(&self.lookup.cols)
+            + fields(&d.row_fields)
+            + fields(&d.col_fields)
+            + fields(&d.page_fields)
+            + n(d.data_fields.len()) * 256
+    }
 }
 
 /// Most pivot tables per document.

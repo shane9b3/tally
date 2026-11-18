@@ -262,18 +262,12 @@ pub fn change_weight(c: &Change) -> u64 {
         Change::Meta { parts, .. } => parts
             .iter()
             .map(|p| match p {
-                // A pivot refresh keeps the previous tables: their label
-                // cells, grid lines and computed values.
-                MetaPart::Pivots(v) => {
-                    v.iter()
-                        .map(|t| {
-                            n(t.cells.len()) * CELL_BYTES
-                                + n(t.grid.rows.len() + t.grid.cols.len()) * 24
-                                + n(t.lookup.values.len()) * 24
-                        })
-                        .sum::<u64>()
-                        + 1024
-                }
+                // A pivot create, update, refresh or delete keeps the
+                // previous tables of the sheet (the cells of the old
+                // output are a `Change::Range` of the same step). Every
+                // table of the list is counted in every step, although
+                // steps share the tables they did not replace.
+                MetaPart::Pivots(v) => v.iter().map(|t| t.retained_weight()).sum::<u64>() + 1024,
                 MetaPart::NoteEntries(e) => n(e.len()) * CELL_BYTES,
                 MetaPart::LinkEntries(e) => n(e.len()) * CELL_BYTES,
                 _ => 1024,
