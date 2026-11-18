@@ -42,13 +42,43 @@ fn calamine_opens(file: &[u8]) -> bool {
 
 /// Reads `file`; calamine must not have panicked (the pre-scan refuses or
 /// neutralizes first) and neither may the formatting pass.
+///
+/// What the pre-scan hands on is what it validated: sanitizing the
+/// sanitized file changes nothing and counts the same, and calamine
+/// materializes no more dense cells than the pre-scan counted.
 fn read(file: &[u8]) -> Result<WorkbookData, XlsError> {
-    if let Ok((clean, _)) = prescan::sanitize(file, 1024, 10_000_000) {
+    if let Ok((clean, scan)) = prescan::sanitize(file, 1024, 10_000_000) {
+        let (again, rescan) = prescan::sanitize(&clean, 1024, 10_000_000)
+            .expect("the sanitized file is refused when sanitized again");
+        assert!(again == clean, "sanitizing twice changes the file");
+        let counts = |s: &prescan::Scan| (s.sheets, s.cells, s.dense, s.text, s.formula_work);
+        assert_eq!(counts(&scan), counts(&rescan));
+        assert_eq!(
+            (
+                rescan.damaged_names,
+                rescan.damaged_formulas,
+                rescan.hidden_records
+            ),
+            (0, 0, 0)
+        );
         // Not under catch_unwind: a calamine panic fails the test here.
-        let _ = calamine::Xls::new_with_options(
+        if let Ok(mut wb) = calamine::Xls::new_with_options(
             std::io::Cursor::new(clean),
             calamine::XlsOptions::default(),
-        );
+        ) {
+            use calamine::Reader;
+            let mut dense = 0u64;
+            for name in wb.sheet_names() {
+                let (r, c) = wb.worksheet_range(&name).unwrap().get_size();
+                let (fr, fc) = wb.worksheet_formula(&name).unwrap().get_size();
+                dense += (r * c + fr * fc) as u64;
+            }
+            assert!(
+                dense <= scan.dense,
+                "calamine holds {dense} dense cells, the pre-scan counted {}",
+                scan.dense
+            );
+        }
     }
     let r = read_xls(file, &Limits::default());
     if let Ok(wb) = &r {
@@ -1066,7 +1096,211 @@ fn regressions() -> Vec<(&'static str, Vec<u8>)> {
         "prescan-short-boundsheet",
         book(&biff::rec(0x0085, &[0; 5]), &cell),
     ));
+    out.push((
+        "prescan-sheet-walk-rewrites-a-boundsheet-offset",
+        rewriting_book(Rewrite::Dimensions),
+    ));
     out
+}
+
+// ------------------------------------------- one walk per byte (review H1)
+
+/// Pads the stream to `at` bytes with one record nobody reads.
+fn pad_to(g: &mut Vec<u8>, at: usize) {
+    let gap = at - g.len();
+    assert!((4..=65_539).contains(&gap), "{gap}");
+    g.extend(biff::rec(0x1234, &vec![0u8; gap - 4]));
+}
+
+/// A sheet without cells, and one whose two cells span 9,000 × 1,000
+/// (9 M dense cells, over the budget).
+fn benign_sheet() -> Vec<u8> {
+    let mut s = biff::bof(0x10);
+    s.extend(biff::rec(0x000A, &[]));
+    s
+}
+
+fn hostile_sheet() -> Vec<u8> {
+    let mut s = biff::bof(0x10);
+    s.extend(biff::rk(0, 0, 0, 1));
+    s.extend(biff::rk(8999, 999, 0, 2));
+    s.extend(biff::rec(0x000A, &[]));
+    s
+}
+
+/// Which repair of sheet A's walk lands on sheet B's `BOUNDSHEET` offset.
+#[derive(Clone, Copy, Debug)]
+enum Rewrite {
+    /// The offset bytes `00 02 00 00` read as a `DIMENSIONS` header, whose
+    /// type is overwritten: 0x0200 becomes 0xFFFF.
+    Dimensions,
+    /// A `LABEL` whose character count is the offset's high word: clamped
+    /// to 0, 0x0001_0200 becomes 0x0200.
+    Label,
+    /// A `FORMULA` whose expression length is the offset's low word: set
+    /// to 0, 0x0001_0200 becomes 0x0001_0000.
+    Formula,
+}
+
+/// Review H1: sheet A's `BOUNDSHEET` offset points into the globals, at
+/// bytes that frame a record over sheet B's `BOUNDSHEET` offset. The
+/// offset the pre-scan read for B names a sheet without cells; the offset
+/// A's repair would leave names the 9 M-cell sheet.
+fn rewriting_book(kind: Rewrite) -> Vec<u8> {
+    let mut g = biff::bof(5);
+    g.extend(biff::rec(0x0042, &0x04B0u16.to_le_bytes()));
+    let a_at = g.len() + 4;
+    g.extend(biff::rec(0x0085, &[0, 0, 0, 0, 0, 0, 1, 0, b'A']));
+    // The record header A's walk reads, at the end of a record of the
+    // globals (the DIMENSIONS one is B's offset itself).
+    let (fake, b_offset, benign_at, hostile_at) = match kind {
+        Rewrite::Dimensions => (None, 0x0200u32, 0x200, 0xFFFF),
+        Rewrite::Label => (Some(vec![0x04, 0x02, 9, 0]), 0x0001_0200, 0x1_0200, 0x200),
+        Rewrite::Formula => {
+            let mut f = vec![0x06, 0x00, 24, 0];
+            f.extend_from_slice(&[0; 16]);
+            (Some(f), 0x0001_0200, 0x1_0200, 0x1_0000)
+        }
+    };
+    let a_offset = match &fake {
+        Some(f) => {
+            g.extend(biff::rec(0x1234, f));
+            g.len() - f.len()
+        }
+        // B's record data: its offset.
+        None => g.len() + 4,
+    };
+    g[a_at..a_at + 4].copy_from_slice(&(a_offset as u32).to_le_bytes());
+    let mut b = b_offset.to_le_bytes().to_vec();
+    b.extend_from_slice(&[0, 0, 1, 0, b'B']);
+    g.extend(biff::rec(0x0085, &b));
+    g.extend(biff::rec(0x000A, &[]));
+    let mut sheets = [(benign_at, benign_sheet()), (hostile_at, hostile_sheet())];
+    sheets.sort();
+    for (at, sheet) in sheets {
+        pad_to(&mut g, at);
+        g.extend(sheet);
+    }
+    biff::file(g)
+}
+
+fn refused_as(file: &[u8], what: &str) {
+    let r = read(file);
+    assert!(
+        matches!(&r, Err(XlsError::Malformed(m)) if m.contains(what)),
+        "expected \"{what}\": {:?}",
+        r.map(|w| w.sheets.iter().map(|s| s.cells.len()).collect::<Vec<_>>())
+    );
+}
+
+/// Review H1 (2026-11-18): a sheet whose offset points into the globals
+/// made the pre-scan frame the bytes of another `BOUNDSHEET` as a record
+/// and repair it, so calamine walked a sheet the pre-scan never saw (9 M
+/// dense cells with `cells: 0, dense: 0` counted; any size in principle).
+/// One input per repair that can land on an offset.
+#[test]
+fn a_sheet_walk_cannot_rewrite_what_another_walk_read() {
+    for kind in [Rewrite::Dimensions, Rewrite::Label, Rewrite::Formula] {
+        let file = rewriting_book(kind);
+        refused_as(&file, "inside the workbook globals");
+    }
+    // A sheet at offset 0 (the globals themselves).
+    let mut stream = biff::stream(&[], &[("S", biff::number(0, 0, 15, 1.0))]);
+    let at = stream
+        .windows(4)
+        .position(|w| w == [0x85, 0, 10, 0])
+        .unwrap();
+    stream[at + 4..at + 8].copy_from_slice(&0u32.to_le_bytes());
+    refused_as(&biff::file(stream), "inside the workbook globals");
+}
+
+/// A stream of two sheets, `A` then `B`, and the offsets of the two
+/// `BOUNDSHEET` offset fields and of the two substreams.
+fn two_sheets(a: Vec<u8>, b: Vec<u8>) -> (Vec<u8>, [usize; 2], [usize; 2]) {
+    let stream = biff::stream(&[], &[("A", a), ("B", b)]);
+    let mut fields = Vec::new();
+    for (i, w) in stream.windows(4).enumerate() {
+        if w == [0x85, 0, 10, 0] {
+            fields.push(i + 4);
+        }
+    }
+    let at = |f: usize| u32::from_le_bytes(stream[f..f + 4].try_into().unwrap()) as usize;
+    let starts = [at(fields[0]), at(fields[1])];
+    (stream, [fields[0], fields[1]], starts)
+}
+
+/// Sheets that share bytes: the same substream twice, a sheet that starts
+/// inside another one (at one of its records, or at bytes inside a record
+/// that frame a `BOF` and the records the pre-scan repairs).
+#[test]
+fn sheets_that_share_bytes_are_refused() {
+    let cell = biff::number(0, 0, 15, 1.0);
+    // Two BOUNDSHEETs, one substream.
+    let (mut s, fields, starts) = two_sheets(cell.clone(), cell.clone());
+    s[fields[1]..fields[1] + 4].copy_from_slice(&(starts[0] as u32).to_le_bytes());
+    refused_as(&biff::file(s), "share bytes");
+
+    // B starts at a record inside A: not a BOF.
+    let (mut s, fields, starts) = two_sheets(cell.clone(), cell.clone());
+    let second = starts[0] + biff::bof(0x10).len();
+    s[fields[1]..fields[1] + 4].copy_from_slice(&(second as u32).to_le_bytes());
+    refused_as(&biff::file(s), "does not start with a BOF");
+
+    // B starts inside the data of a record of A, where the bytes frame a
+    // sheet with one of each record the pre-scan repairs: MERGEDCELLS
+    // with a count that lies, a LABEL longer than its record, a formula
+    // with PtgAttrSpace and one cut inside a token, DIMENSIONS.
+    let mut inner = biff::bof(0x10);
+    let mut merged = biff::merged(&[(0, 1, 0, 1)]);
+    merged[4..6].copy_from_slice(&9000u16.to_le_bytes());
+    inner.extend(merged);
+    let mut label = words(&[0, 0, 15, 500]);
+    label.extend_from_slice(&[0, b'x']);
+    inner.extend(biff::rec(0x0204, &label));
+    inner.extend(biff::formula(
+        1,
+        0,
+        15,
+        1.0,
+        &[0x1E, 1, 0, 0x19, 0x40, 0, 200],
+    ));
+    inner.extend(biff::formula(2, 0, 15, 1.0, &[0x44, 0, 0, 0]));
+    inner.extend(biff::rec(0x0200, &[0xFF; 14]));
+    inner.extend(biff::rec(0x000A, &[]));
+    let mut a = biff::rec(0x1234, &inner);
+    a.extend(&cell);
+    let (mut s, fields, starts) = two_sheets(a, cell.clone());
+    let inside = starts[0] + biff::bof(0x10).len() + 4;
+    s[fields[1]..fields[1] + 4].copy_from_slice(&(inside as u32).to_le_bytes());
+    let before = s.clone();
+    let file = biff::file(s);
+    refused_as(&file, "share bytes");
+    // On its own that inner sheet is repaired and opens.
+    let (s, _, _) = two_sheets(inner[biff::bof(0x10).len()..inner.len() - 4].to_vec(), cell);
+    assert_ne!(s, before);
+    let wb = read(&biff::file(s)).unwrap();
+    assert_eq!(wb.sheets.len(), 2);
+    assert_eq!(wb.sheets[0].merges.len(), 1);
+}
+
+/// The stream must end where a record ends, as calamine demands, and the
+/// structural rules refuse no file of the fixtures: every fixture and
+/// fuzz seed opens.
+#[test]
+fn fixtures_and_seeds_still_open() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut n = 0;
+    for dir in ["tests/fixtures/xls", "fuzz/seeds/xls"] {
+        for entry in std::fs::read_dir(root.join(dir)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "xls") {
+                let wb = read(&std::fs::read(&path).unwrap());
+                assert!(wb.is_ok(), "{}: {:?}", path.display(), wb.err());
+                n += 1;
+            }
+        }
+    }
+    assert!(n >= 12, "{n} files");
 }
 
 /// Writes [`regressions`] to `fuzz/regressions/xls/`:

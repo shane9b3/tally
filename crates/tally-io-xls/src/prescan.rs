@@ -45,6 +45,15 @@
 //!    the formula decoder's quadratic work, and the `CONTINUE` records of
 //!    one record (calamine keeps a slice per `CONTINUE` and takes the
 //!    shared strings' ones from the front of a vector, quadratically).
+//! 5. Makes sure the stream it hands on is the stream it validated
+//!    (review H1, docs/security.md). Every byte belongs to at most one
+//!    walk: a sheet starts at or after the end of the globals, with a
+//!    `BOF`, and no two sheets share a byte, so a repair made while
+//!    walking one sheet cannot rewrite what another walk read (a
+//!    `BOUNDSHEET` offset, a cell's row). And after any repair the
+//!    stream is scanned a second time without writing: nothing may be
+//!    left to repair, and the records, sheet offsets and counts must be
+//!    those of the first scan, or the file is refused.
 //!
 //! Residual risk: this models calamine [`AUDITED_CALAMINE`]'s decoder.
 //! calamine is pinned exactly and the model must be re-reviewed on every
@@ -827,6 +836,7 @@ fn scan_formula(
     enc: Enc,
     name_max: u64,
     sheet_max: u64,
+    w: &mut Writes,
 ) -> Formula {
     let n = rgce.len();
     let mut f = Formula {
@@ -899,7 +909,7 @@ fn scan_formula(
                             f.sound = false;
                             break;
                         }
-                        rgce[i + 2] = 0;
+                        put(rgce, i + 2, &[0], w);
                         (0, 3)
                     }
                     _ => break,
@@ -957,9 +967,66 @@ pub(crate) fn bof_is_pre_biff8(v: u16, dt: u16) -> bool {
     }
 }
 
+/// The in-place repairs of a scan. Every write to the stream goes through
+/// [`put`]: the first scan repairs, the second one (`verify`) only checks
+/// that nothing is left to repair.
+#[derive(Default)]
+struct Writes {
+    /// Do not write; count what would have been written.
+    verify: bool,
+    /// Writes that changed (or, verifying, would change) a byte.
+    changed: u64,
+}
+
+/// Writes `bytes` at `at`, or in a verifying scan notes that they differ.
+fn put(s: &mut [u8], at: usize, bytes: &[u8], w: &mut Writes) {
+    let old = &mut s[at..at + bytes.len()];
+    if old != bytes {
+        w.changed += 1;
+        if !w.verify {
+            old.copy_from_slice(bytes);
+        }
+    }
+}
+
+/// What a scan walked: a digest of every record framed (position, type,
+/// length, `CONTINUE`s) in the globals and in every sheet, of the sheet
+/// offsets and of where each walk ended.
+///
+/// A record's type is taken from the stream once the scan has dealt with
+/// the record (a hidden record counts as hidden), so the scan that
+/// repairs and the scan that verifies digest the same bytes.
+#[derive(PartialEq, Eq)]
+struct Trace {
+    digest: u64,
+    records: u64,
+    /// The record being dealt with: its type is not digested yet.
+    open: Option<usize>,
+}
+
+impl Trace {
+    fn add(&mut self, v: usize) {
+        self.digest = (self.digest ^ v as u64).wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    /// Digests the type of the record last framed, as the stream has it.
+    fn close(&mut self, s: &[u8]) {
+        if let Some(p) = self.open.take() {
+            self.add(u16_at(s, p).unwrap_or(0) as usize);
+        }
+    }
+    fn record(&mut self, s: &[u8], pos: usize, r: &Rec) {
+        self.close(s);
+        self.records += 1;
+        for v in [pos, r.len, r.cont.len(), r.next] {
+            self.add(v);
+        }
+        self.open = Some(pos);
+    }
+}
+
 /// Overwrites the type of the record whose data starts at `data`.
-fn hide(s: &mut [u8], data: usize) {
-    s[data - 4..data - 2].copy_from_slice(&HIDDEN_RECORD.to_le_bytes());
+fn hide(s: &mut [u8], data: usize, w: &mut Writes) {
+    put(s, data - 4, &HIDDEN_RECORD.to_le_bytes(), w);
 }
 
 /// Checks a `NAME` record (data at `d`, `len` bytes) against what
@@ -969,7 +1036,13 @@ fn hide(s: &mut [u8], data: usize) {
 /// keeps its index in the name table (formulas refer to names by index)
 /// and no reader takes a formula from it. Returns the name's length in
 /// characters and whether the record was repaired.
-fn scan_name(s: &mut [u8], d: usize, len: usize, pre_biff8: bool) -> Result<(u64, bool), Refusal> {
+fn scan_name(
+    s: &mut [u8],
+    d: usize,
+    len: usize,
+    pre_biff8: bool,
+    w: &mut Writes,
+) -> Result<(u64, bool), Refusal> {
     // The fixed part, and in BIFF8 the flags byte of the name.
     if len < if pre_biff8 { 14 } else { 15 } {
         return Err(bad("a NAME record is too short"));
@@ -981,7 +1054,7 @@ fn scan_name(s: &mut [u8], d: usize, len: usize, pre_biff8: bool) -> Result<(u64
         let fit = (len - 15) / per;
         if cch > fit {
             cch = fit;
-            s[d + 3] = fit as u8;
+            put(s, d + 3, &[fit as u8], w);
             repaired = true;
         }
     }
@@ -1018,7 +1091,7 @@ fn scan_name(s: &mut [u8], d: usize, len: usize, pre_biff8: bool) -> Result<(u64
         rgce.len() >= need
     };
     if !fits || repaired {
-        s[d + 4..d + 6].copy_from_slice(&[0, 0]);
+        put(s, d + 4, &[0, 0], w);
         repaired = true;
     }
     Ok((cch as u64, repaired))
@@ -1028,7 +1101,7 @@ fn scan_name(s: &mut [u8], d: usize, len: usize, pre_biff8: bool) -> Result<(u64
 /// a `u8`. Cuts the string (declared length at `at`, `len` bytes of
 /// record data from there) before the 256th `[`; no format code of Excel
 /// has that many.
-fn clamp_brackets(s: &mut [u8], at: usize, len: usize, pre_biff8: bool, enc: Enc) {
+fn clamp_brackets(s: &mut [u8], at: usize, len: usize, pre_biff8: bool, enc: Enc, w: &mut Writes) {
     let head = if pre_biff8 { 2 } else { 3 };
     if len < head {
         return;
@@ -1049,15 +1122,29 @@ fn clamp_brackets(s: &mut [u8], at: usize, len: usize, pre_biff8: bool, enc: Enc
             usize::from(s[o] == 0x5B)
         };
         if open > 255 {
-            s[at..at + 2].copy_from_slice(&(k as u16).to_le_bytes());
+            put(s, at, &(k as u16).to_le_bytes(), w);
             return;
         }
     }
 }
 
 /// Scans (and patches, see the module docs) the workbook stream.
-fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
+///
+/// Every byte belongs to at most one walk: the globals run from the start
+/// of the stream to their `EOF`; a sheet starts at or after that, with a
+/// `BOF`, and runs to its `EOF`; no two sheets share a byte. A repair
+/// therefore never touches bytes another walk read (a `BOUNDSHEET`
+/// offset, say), and a repair only ever writes inside the data, or the
+/// type, of the record it has just framed.
+fn scan_stream(s: &mut [u8], b: &Budgets, w: &mut Writes) -> Result<(Scan, Trace), Refusal> {
     let mut scan = Scan::default();
+    let mut trace = Trace {
+        digest: 0xCBF2_9CE4_8422_2325,
+        records: 0,
+        open: None,
+    };
+    // calamine fails the workbook where the stream ends inside a record.
+    let short = || bad("the workbook stream ends inside a record");
     let mut sheet_pos: Vec<usize> = Vec::new();
     let mut sst: Vec<u32> = Vec::new();
     let mut pre_biff8 = false;
@@ -1071,9 +1158,9 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
         let r = match r {
             Ok(r) => r,
             Err(FrameError::Continues) => return Err(too_many()),
-            // calamine fails the workbook.
-            Err(FrameError::Short) => break,
+            Err(FrameError::Short) => return Err(short()),
         };
+        trace.record(s, pos, &r);
         pos = r.next;
         let d = r.data;
         match r.typ {
@@ -1094,7 +1181,7 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
             0x002F if r.len < 2 => return Err(bad("a FILEPASS record is too short")),
             0x0042 => {
                 if r.len < 2 {
-                    hide(s, d);
+                    hide(s, d, w);
                     scan.hidden_records += 1;
                 } else {
                     // 1200 is UTF-16LE; an unknown code page fails the
@@ -1103,12 +1190,12 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                 }
             }
             0x0022 if r.len < 2 => {
-                hide(s, d);
+                hide(s, d, w);
                 scan.hidden_records += 1;
             }
             // EXTERNSHEET: the BIFF8 one starts with a count.
             0x0017 if !pre_biff8 && r.len < 2 => {
-                hide(s, d);
+                hide(s, d, w);
                 scan.hidden_records += 1;
             }
             0x0085 => {
@@ -1127,14 +1214,14 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                 scan.text += 24 + cch * enc.max(pre_biff8);
             }
             0x0018 => {
-                let (cch, repaired) = scan_name(s, d, r.len, pre_biff8)?;
+                let (cch, repaired) = scan_name(s, d, r.len, pre_biff8, w)?;
                 scan.damaged_names += u64::from(repaired);
                 name_max = name_max.max(cch * enc.max(pre_biff8));
                 scan.text += 48 + cch * enc.max(pre_biff8) + r.len as u64 * 40;
             }
             0x041E if r.len >= 2 => {
-                clamp_string(s, d + 2, r.len - 2, pre_biff8);
-                clamp_brackets(s, d + 2, r.len - 2, pre_biff8, enc);
+                clamp_string(s, d + 2, r.len - 2, pre_biff8, w);
+                clamp_brackets(s, d + 2, r.len - 2, pre_biff8, enc, w);
             }
             0x00FC => {
                 if r.cont.len() > MAX_SST_CONTINUES {
@@ -1154,13 +1241,27 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
             return Err(over("text bytes", MAX_TEXT_ESTIMATE));
         }
     }
+    // Where the globals end: no sheet may start before.
+    let globals_end = pos;
+    trace.close(s);
+    trace.add(globals_end);
     // Worksheets, walked from each BOUNDSHEET offset like calamine.
     let walk_budget = 2 * s.len() as u64 + (1 << 20);
     let mut walked = 0u64;
+    let mut ranges: Vec<(usize, usize)> = Vec::with_capacity(sheet_pos.len());
     for &start in &sheet_pos {
+        trace.add(start);
         if start > s.len() {
             // calamine slices the stream there.
             return Err(bad("a sheet starts past the end of the workbook stream"));
+        }
+        if start < globals_end {
+            return Err(bad("a sheet starts inside the workbook globals"));
+        }
+        // Every writer starts a substream with a BOF; without one the
+        // offset points into something else.
+        if !matches!(frame(s, start), Some(Ok(Rec { typ: 0x0809, .. }))) {
+            return Err(bad("a sheet does not start with a BOF record"));
         }
         let mut vals = BBox::default();
         let mut fmls = BBox::default();
@@ -1172,8 +1273,9 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
             let r = match r {
                 Ok(r) => r,
                 Err(FrameError::Continues) => return Err(too_many()),
-                Err(FrameError::Short) => break,
+                Err(FrameError::Short) => return Err(short()),
             };
+            trace.record(s, pos, &r);
             walked += (r.next - pos) as u64;
             if walked > walk_budget {
                 return Err(over("worksheet stream bytes walked", walk_budget));
@@ -1214,7 +1316,7 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                 // Only used for a reserve, computed with unchecked
                 // subtractions, and a length calamine does not expect
                 // fails the workbook: calamine never sees it.
-                0x0200 => hide(s, d),
+                0x0200 => hide(s, d, w),
                 0x0203 | 0x0205 | 0x027E if len >= 4 => {
                     let (r, c) = rc(s);
                     cell(&mut scan, &mut vals, r, c)?;
@@ -1222,12 +1324,12 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                 0x0204 | 0x00D6 if len >= 6 => {
                     let (r, c) = rc(s);
                     cell(&mut scan, &mut vals, r, c)?;
-                    let n = clamp_string(s, d + 6, len - 6, pre_biff8);
+                    let n = clamp_string(s, d + 6, len - 6, pre_biff8, w);
                     scan.text += 24 + n * enc.max(pre_biff8);
                 }
                 0x0207 => {
                     cell(&mut scan, &mut vals, fmla_pos.0, fmla_pos.1)?;
-                    let n = clamp_string(s, d, len, pre_biff8);
+                    let n = clamp_string(s, d, len, pre_biff8, w);
                     scan.text += 24 + n * enc.max(pre_biff8);
                 }
                 0x00FD if len >= 10 => {
@@ -1253,12 +1355,12 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                 0x00E5 => {
                     // The count is trusted over the bytes present.
                     if len < 2 {
-                        hide(s, d);
+                        hide(s, d, w);
                         scan.hidden_records += 1;
                     } else {
                         let fit = ((len - 2) / 8) as u16;
                         if u16_at(s, d).unwrap_or(0) > fit {
-                            s[d..d + 2].copy_from_slice(&fit.to_le_bytes());
+                            put(s, d, &fit.to_le_bytes(), w);
                         }
                     }
                 }
@@ -1282,6 +1384,7 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                             enc,
                             name_max,
                             sheet_max,
+                            w,
                         );
                         f.sound.then_some(f)
                     };
@@ -1291,7 +1394,7 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                         None => {
                             // An empty expression is an error for
                             // calamine, not a panic.
-                            s[d + 20..d + 22].copy_from_slice(&[0, 0]);
+                            put(s, d + 20, &[0, 0], w);
                             scan.damaged_formulas += 1;
                             (160, 1)
                         }
@@ -1309,17 +1412,27 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                 return Err(over("text bytes", MAX_TEXT_ESTIMATE));
             }
         }
+        trace.close(s);
+        trace.add(pos);
+        ranges.push((start, pos));
         scan.dense += vals.area() + fmls.area();
         if scan.dense > MAX_DENSE_CELLS {
             return Err(over("dense sheet area (cells)", MAX_DENSE_CELLS));
         }
     }
-    Ok(scan)
+    // No two sheets share a byte (each range holds at least its BOF).
+    // Excel and OpenOffice write one substream per sheet; two BOUNDSHEETs
+    // naming the same or overlapping bytes are not a file either writes.
+    ranges.sort_unstable();
+    if ranges.windows(2).any(|p| p[1].0 < p[0].1) {
+        return Err(bad("two sheets share bytes of the workbook stream"));
+    }
+    Ok((scan, trace))
 }
 
 /// Clamps an `XLUnicodeString`'s declared length at `at` (record data of
 /// `len` bytes) to the bytes present; returns the clamped length.
-fn clamp_string(s: &mut [u8], at: usize, len: usize, pre_biff8: bool) -> u64 {
+fn clamp_string(s: &mut [u8], at: usize, len: usize, pre_biff8: bool, w: &mut Writes) -> u64 {
     let expected = if pre_biff8 { 2 } else { 3 };
     if len < expected {
         return 0;
@@ -1327,7 +1440,7 @@ fn clamp_string(s: &mut [u8], at: usize, len: usize, pre_biff8: bool) -> u64 {
     let Some(cch) = u16_at(s, at) else { return 0 };
     let avail = (len - expected).min(u16::MAX as usize) as u16;
     let n = cch.min(avail);
-    s[at..at + 2].copy_from_slice(&n.to_le_bytes());
+    put(s, at, &n.to_le_bytes(), w);
     n as u64
 }
 
@@ -1355,12 +1468,30 @@ pub(crate) fn sanitize_with_offset(
     // the zero padding of the last sector behind it).
     let len = stream.len().max(4096);
     let (mut out, off) = build_container(stream);
-    let scan = scan_stream(
-        &mut out[off..off + len],
-        &Budgets {
-            max_sheets,
-            max_cells,
-        },
-    )?;
+    let budgets = Budgets {
+        max_sheets,
+        max_cells,
+    };
+    let stream = &mut out[off..off + len];
+    let mut w = Writes::default();
+    let (scan, trace) = scan_stream(stream, &budgets, &mut w)?;
+    if w.changed > 0 {
+        // Fix-point: what was repaired is scanned once more, without
+        // writing. The stream calamine and the formatting reader get must
+        // be the stream that was validated: nothing left to repair, the
+        // same records at the same places, the same sheets, the same
+        // counts against the budgets. (With no repair the first scan was
+        // that check.)
+        let inconsistent = || bad("the workbook stream did not stay as it was checked");
+        let mut v = Writes {
+            verify: true,
+            changed: 0,
+        };
+        let (again, trace2) = scan_stream(stream, &budgets, &mut v).map_err(|_| inconsistent())?;
+        let counts = |s: &Scan| (s.sheets, s.cells, s.dense, s.text, s.formula_work);
+        if v.changed > 0 || trace != trace2 || counts(&scan) != counts(&again) {
+            return Err(inconsistent());
+        }
+    }
     Ok((out, off, scan))
 }

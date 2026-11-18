@@ -47,6 +47,9 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   could make opening take minutes or use far more memory than the limits
   allow (Excel 5.0/95 formulas with padded strings; shared-string tables
   with empty continuation records) are now handled or refused at once.
+  A workbook whose sheets overlap each other or the workbook's own
+  header records, which could be used to get a sheet past those checks,
+  is refused.
 
 ## [0.1.3] - 2026-11-17
 

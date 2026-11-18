@@ -328,7 +328,7 @@ bytes, a cell record shorter than its fixed part, an unknown code page,
 sheet state or cached error code, an encrypted file) the file is refused
 with calamine's message, as before.
 
-Tests: `tally-io-xls::calamine_audit::*` (20 tests). They run calamine on
+Tests: `tally-io-xls::calamine_audit::*` (23 tests). They run calamine on
 the sanitized file outside `catch_unwind`, so a calamine panic fails them:
 every record type cut at every length in BIFF8 and BIFF5, every byte of
 those streams overwritten, 3,000 random stream edits and 24,000 random
@@ -362,6 +362,68 @@ was tried and did not lower the peak. What would is a smaller
 `Limits::max_bytes` or `MAX_TEXT_ESTIMATE` for `.xls` (halving
 `max_bytes` saves about 0.5 GB), which also refuses large legitimate
 files and is an owner decision (docs/TODO.md).
+
+#### Review of the audit: repairs and overlapping walks (H1, 2026-11-18)
+
+The audit added repairs in place (hidden records, emptied formulas,
+clamped counts) to a pre-scan that reads the sheet offsets in a first pass
+and then walks each sheet from its `BOUNDSHEET` offset, as calamine does.
+An offset may point anywhere. A review reproduced the consequence: sheet
+A's offset pointed at the data of sheet B's `BOUNDSHEET` record, whose
+offset 0x0200 reads as the header of an empty `DIMENSIONS` record; hiding
+that record turned B's offset into 0xFFFF. The pre-scan had walked B at
+0x200 (a sheet without cells: `cells: 0, dense: 0`), calamine walked B at
+0xFFFF, a sheet nothing had looked at: 9 M dense cells from a 68 KB file,
+and with two cells far apart any size (an allocation abort). Every repair
+could do the same to whatever bytes another walk had read: an offset, a
+cell's row, a length.
+
+Two properties now hold, each sufficient for this input:
+
+- **One walk per byte.** The globals run from the start of the stream to
+  their `EOF`. A sheet must start at or after that, with a `BOF` record,
+  and the byte ranges of the sheets (from the `BOF` to the `EOF` that ends
+  the walk) must not overlap; otherwise the file is refused ("a sheet
+  starts inside the workbook globals", "a sheet does not start with a BOF
+  record", "two sheets share bytes of the workbook stream"). Two
+  `BOUNDSHEET`s naming the same substream are refused too: Excel and
+  OpenOffice write one substream per sheet, each after the globals and
+  each starting with `BOF`, so no file they write is affected (every
+  fixture and fuzz seed still opens,
+  `calamine_audit::fixtures_and_seeds_still_open`). A repair only writes
+  the type or the data of the record just framed, never a length, so
+  within its own walk it cannot change the framing either. A stream that
+  ends inside a record, which calamine fails on, is now refused by the
+  pre-scan itself.
+- **Fix-point.** Every write goes through one function (`prescan::put`).
+  If a scan changed a byte, the stream is scanned a second time in a mode
+  that writes nothing: no write may be left to make, and the digest of
+  every record framed (position, length, `CONTINUE`s, type), the sheet
+  offsets, the ends of the walks and the counts against the budgets must
+  equal the first scan's, or the file is refused ("the workbook stream
+  did not stay as it was checked"). With the structural checks switched
+  off this alone refuses the reproduction. It also covers repairs added
+  later. Cost on a 255 MiB file with 10 M cell records: 0.11 s → 0.17 s
+  for the whole pre-scan, no extra memory.
+
+The container level has no such write: the stream is extracted, the
+canonical container is built around it, and repairs touch only the stream
+bytes inside it. The formatting, name and hyperlink readers do not write;
+they read the `BOUNDSHEET` offsets from the same sanitized bytes, which
+are now the validated ones, so they walk the substreams the pre-scan
+walked.
+
+Tests: `calamine_audit::a_sheet_walk_cannot_rewrite_what_another_walk_read`
+(the reproduction and the variants where a clamped `LABEL` length or an
+emptied formula length lands on the offset; a sheet at offset 0),
+`sheets_that_share_bytes_are_refused` (one substream twice, a sheet
+starting at a record of another, a sheet framed inside a record of
+another with one of each repaired record), and, in every test of that
+file, three checks on whatever the pre-scan accepts: sanitizing the
+sanitized file changes no byte and counts the same, and calamine holds no
+more dense cells than the pre-scan counted (also over 200,000 random
+stream edits and token streams). Regression file:
+`fuzz/regressions/xls/prescan-sheet-walk-rewrites-a-boundsheet-offset`.
 
 Residual risks: an allocation failure inside those 2.6 GB still aborts
 the process (the decoder cannot run in a separate process from the engine

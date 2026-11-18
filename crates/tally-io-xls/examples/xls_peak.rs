@@ -94,6 +94,9 @@ fn generate(scenario: &str) -> Vec<u8> {
     let at = s.len() as u32;
     s[bound..bound + 4].copy_from_slice(&at.to_le_bytes());
     bof(&mut s, 0x10);
+    // As in every real file: the pre-scan hides it, so its second,
+    // verifying scan runs.
+    rec(&mut s, 0x0200, &[0; 14]);
     let room = |s: &Vec<u8>| ((STREAM_BYTES - s.len() - 64) / 14) as u32;
     match scenario {
         "cells" => cells(&mut s, 10_000_000, 7_999_744, 0),
@@ -143,7 +146,9 @@ fn main() {
         // (without Tally's cells): where the peak of `read` comes from.
         Some(stage @ ("scan" | "calamine")) => {
             let bytes = std::fs::read(&args[2]).unwrap();
+            let t = Instant::now();
             let (clean, scan) = prescan::sanitize(&bytes, 1024, 10_000_000).unwrap();
+            println!("pre-scan: {:.3} s", t.elapsed().as_secs_f64());
             println!("{scan:?}");
             if stage == "calamine" {
                 let wb = calamine::Xls::new_with_options(
