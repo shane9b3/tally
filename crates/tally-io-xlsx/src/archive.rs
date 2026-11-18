@@ -63,7 +63,7 @@ fn le_u32(b: &[u8], i: usize) -> Option<u64> {
 }
 
 fn le_u64(b: &[u8], i: usize) -> Option<u64> {
-    let s = b.get(i..i + 8)?;
+    let s = b.get(i..i.checked_add(8)?)?;
     let mut a = [0u8; 8];
     a.copy_from_slice(s);
     Some(u64::from_le_bytes(a))
@@ -94,7 +94,7 @@ fn directory_extent<R: Read + Seek>(
             let in_tail = off
                 .checked_sub(tail_start)
                 .and_then(|o| usize::try_from(o).ok())
-                .and_then(|o| tail.get(o..o + ZIP64_EOCD_LEN));
+                .and_then(|o| tail.get(o..o.checked_add(ZIP64_EOCD_LEN)?));
             match in_tail {
                 Some(b) => rec.copy_from_slice(b),
                 None => {
