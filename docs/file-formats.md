@@ -773,8 +773,25 @@ mapping of `excel_serial_to_tally`); any other number is kept as it is.
 Only a cell without a usable format that calamine reports as a date or
 time (a code Tally cannot translate) gets a guessed `YYYY-MM-DD`,
 `HH:MM:SS`, `YYYY-MM-DD HH:MM:SS` or `[HH]:MM:SS` format. Rich-text runs
-in strings are flattened (the cell has its XF's font), as for XLSX
-(parity X3).
+in strings (`SST` entries with formatting runs, `RSTRING`) are flattened:
+the cell has its XF's font. The model has no formatting inside a cell
+(parity G6), so there is nothing to import the runs into; the XLSX and ODS
+readers flatten them too (parity X3).
+
+Date separators: a format code is kept as the file has it, so the US
+short date (the built-in format 14, or a `FORMAT` record `m/d/yyyy`) is
+`M/D/YYYY` and shows `3/15/2023`. OpenOffice reads the same code
+(`spBuiltInFormats_ENGLISH_US`, xlstyle.cxx) and then converts it from
+English (US) to the language of the *system* it runs on
+(`XclImpNumFmtBuffer::CreateScFormats` → `PutandConvertEntry`), which
+replaces the `/` of a date format by that locale's date separator
+(`ImpSvNumberformatScan::FinalScan`, `sOldDateSep`): on an English (US)
+system the cell shows `3/15/2023` as in Tally, on an English (Canada) or
+Dutch system (`-`) `3-15-2023`, on a German one (`.`) `3.15.2023`. Tally
+has no system locale (a document is English (US) unless the file says
+otherwise, and a `.xls` does not say), so the two differ wherever the
+system's date separator is not `/` (parity X26; test
+`crates/tally-io-xls/tests/date_formats.rs`).
 
 A formula whose cell has no value in the file (a text result without its
 `STRING` record) is kept as a formula without a cached value.
