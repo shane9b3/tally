@@ -12,6 +12,8 @@ export interface KeyLike {
   ctrlKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
+  /** `KeyboardEvent.getModifierState("AltGraph")`: AltGr is held (it types a character). */
+  altGraph?: boolean;
 }
 
 export interface Binding {
@@ -177,9 +179,24 @@ export interface KeyContext {
   mac?: boolean;
 }
 
+/**
+ * Whether the event types a character through AltGr rather than asking for
+ * a Ctrl+Alt shortcut. Windows reports AltGr as Ctrl+Alt, and Ctrl+Alt
+ * itself types the AltGr character there: on a Czech layout AltGr+F is `[`
+ * and AltGr+V is `@`, which must reach the text, not open Find & Replace or
+ * Paste Special. So Ctrl+Alt only counts as a shortcut when the key it
+ * produces is the binding's own letter (or no character at all).
+ */
+function typesAltGrCharacter(b: Binding, e: KeyLike): boolean {
+  if (e.altGraph) return true;
+  if (!(e.ctrlKey && e.altKey) || e.metaKey || b.codeOnly) return false;
+  return e.key.length === 1 && e.key.toLowerCase() !== b.key;
+}
+
 function matches(b: Binding, e: KeyLike): boolean {
   const mod = e.metaKey || e.ctrlKey;
   if (b.mod !== mod || b.shift !== e.shiftKey || (b.alt ?? false) !== e.altKey) return false;
+  if (typesAltGrCharacter(b, e)) return false;
   if (b.codeOnly) return b.code !== undefined && e.code === b.code;
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   return key === b.key || (b.code !== undefined && e.code === b.code);
@@ -200,6 +217,16 @@ export function resolveBinding(e: KeyLike, ctx: KeyContext, bindings: readonly B
 /** The command id for a key event in a context, or `null`. */
 export function resolveKey(e: KeyLike, ctx: KeyContext, bindings: readonly Binding[] = BINDINGS): string | null {
   return resolveBinding(e, ctx, bindings)?.command ?? null;
+}
+
+/**
+ * The keys a browser reloads the page with (F5, Ctrl+F5, Ctrl+R,
+ * Ctrl+Shift+R; ⌘R on macOS). The desktop app never lets the webview act
+ * on them: a reload would drop the document's unsaved state.
+ */
+export function isReloadKey(e: KeyLike): boolean {
+  if (e.key === "F5") return true;
+  return (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "r";
 }
 
 /** Whether the UI runs on macOS (platform-restricted bindings and labels). */

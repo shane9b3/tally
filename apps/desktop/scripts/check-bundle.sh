@@ -13,7 +13,9 @@ status=0
 for needle in "webMock" "mockV3" "__tally" "MockClient" \
   "That column is not in the AutoFilter." \
   "a conditional format needs a range and a rule" \
-  "block too large for MockClient"; do
+  "block too large for MockClient" \
+  "Budget & Plan.ods" \
+  "this menu item is not available"; do
   if grep -l -F -- "$needle" "$dir"/*.js >/dev/null 2>&1; then
     echo "check-bundle: '$needle' found in $(grep -l -F -- "$needle" "$dir"/*.js | tr '\n' ' ')" >&2
     status=1

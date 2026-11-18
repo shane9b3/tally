@@ -19,7 +19,9 @@
 //! the current tree and runs the same [`dispatch`] as a native selection,
 //! the calling webview standing in for the front document
 //! ([`in_app_route`]). The OS items become webview commands or window
-//! actions there ([`Native::in_app`]). Without a native menu there are no
+//! actions there ([`Native::in_app`]). Both commands refuse every call on
+//! the platforms with a native menu, and Quit is never accepted from a
+//! webview. Without a native menu there are no
 //! native accelerators: the webview's keymap handles the shortcuts
 //! (a hidden menu's accelerators would at best never fire while a webview
 //! has the focus, at worst fire a second time).
@@ -822,7 +824,13 @@ pub fn model(tree: &[Node], mac: bool) -> Vec<MenuNode> {
     tree.iter()
         .map(|n| {
             let (kind, enabled, checked, items) = match &n.kind {
-                Kind::Item => (MenuNodeKind::Item, true, None, Vec::new()),
+                // Quit (the macOS app menu) is never accepted from a window.
+                Kind::Item => (
+                    MenuNodeKind::Item,
+                    n.id != crate::closing::QUIT_ID,
+                    None,
+                    Vec::new(),
+                ),
                 Kind::Check(c) => (MenuNodeKind::Check, true, Some(*c), Vec::new()),
                 Kind::Separator => (MenuNodeKind::Separator, false, None, Vec::new()),
                 Kind::Submenu(inner) => (MenuNodeKind::Submenu, true, None, model(inner, mac)),
@@ -861,6 +869,9 @@ pub fn find<'a>(tree: &'a [Node], id: &str) -> Option<&'a Node> {
 pub fn in_app_bar() -> bool {
     crate::windows::chrome_for(std::env::consts::OS).custom_title_bar
 }
+
+/// The model last sent with `menu-changed` ([`changed`]).
+static LAST_MODEL: Mutex<Option<Vec<MenuNode>>> = Mutex::new(None);
 
 /// The UI language of the menu ([`set_locale`]).
 static LOCALE: Mutex<Option<Locale>> = Mutex::new(None);
@@ -991,6 +1002,15 @@ pub fn changed<R: Runtime>(app: &AppHandle<R>) {
     }
     let mac = cfg!(target_os = "macos");
     let model = model(&tree(locale(app), mac, &list), mac);
+    // Focus, title and tab changes call this often; most leave the menu as
+    // it was. A webview that starts later asks `menu_model` itself.
+    {
+        let mut last = LAST_MODEL.lock().unwrap_or_else(PoisonError::into_inner);
+        if last.as_ref() == Some(&model) {
+            return;
+        }
+        *last = Some(model.clone());
+    }
     for entry in &list {
         if let Err(e) = app.emit_to(entry.label.as_str(), MENU_CHANGED, &model) {
             eprintln!("tally: emitting {MENU_CHANGED} to {}: {e}", entry.label);
@@ -1120,7 +1140,8 @@ pub fn in_app_route(tree: &[Node], id: &str, caller: &str) -> Option<(Route, Str
         };
     }
     match route(id, Some(caller), None) {
-        Route::Ignore => None,
+        // Quit is the app menu's (macOS, native only): never from a webview.
+        Route::Ignore | Route::Quit => None,
         route => Some((route, id.to_owned())),
     }
 }
@@ -1230,10 +1251,22 @@ fn refused() -> ApiError {
     ApiError::invalid_argument("this menu item is not available")
 }
 
+/// The in-app bar's commands exist only where the bar does (Windows): with
+/// a native menu (macOS, Linux) a webview has no business reading the menu
+/// or choosing from it.
+fn require_in_app_bar(in_app_bar: bool) -> CmdResult<()> {
+    if in_app_bar {
+        Ok(())
+    } else {
+        Err(refused())
+    }
+}
+
 /// `menu_model()`: the application menu as it is now, for the in-app menu
-/// bar (document webviews only).
+/// bar (document webviews only; refused where the menu is native).
 #[tauri::command]
 pub async fn menu_model(app: AppHandle, webview: Webview) -> CmdResult<Vec<MenuNode>> {
+    require_in_app_bar(in_app_bar())?;
     crate::windows::require_doc_window(webview.label())?;
     Ok(model(&current_tree(&app), cfg!(target_os = "macos")))
 }
@@ -1242,9 +1275,10 @@ pub async fn menu_model(app: AppHandle, webview: Webview) -> CmdResult<Vec<MenuN
 /// calling document webview. The id must be an item of the current menu;
 /// the selection then takes the native menu's path ([`dispatch`]) with the
 /// caller as the front document and the caller's window as the front
-/// window.
+/// window. Refused where the menu is native (macOS, Linux).
 #[tauri::command]
 pub async fn menu_activate(app: AppHandle, webview: Webview, id: String) -> CmdResult<()> {
+    require_in_app_bar(in_app_bar())?;
     crate::limits::text_max("the menu item", &id, crate::limits::MAX_NAME_CHARS)?;
     let caller = webview.label().to_owned();
     crate::windows::require_doc_window(&caller)?;
@@ -1667,6 +1701,7 @@ mod tests {
                 "native.hide",
                 "native.hideOthers",
                 "native.showAll",
+                "app-quit",
                 "native.fullscreen",
                 "native.bringAllToFront"
             ]
@@ -1761,6 +1796,34 @@ mod tests {
             "os-open:/etc/passwd",
         ] {
             assert_eq!(in_app_route(&tree, id, "doc-1"), None, "{id}");
+        }
+        // With a native menu (macOS, Linux) the commands refuse everything.
+        assert!(require_in_app_bar(true).is_ok());
+        assert_eq!(
+            require_in_app_bar(false).map_err(|e| e.code),
+            Err(ApiError::INVALID_ARGUMENT.to_owned())
+        );
+        // And the macOS tree itself never yields Quit or the app-menu items:
+        // only what a window may do.
+        let mac_tree = super::tree(Locale::En, true, &list());
+        assert!(find(&mac_tree, crate::closing::QUIT_ID).is_some());
+        for id in [
+            crate::closing::QUIT_ID,
+            "native.services",
+            "native.hide",
+            "native.hideOthers",
+            "native.showAll",
+            "native.fullscreen",
+            "native.bringAllToFront",
+        ] {
+            assert_eq!(in_app_route(&mac_tree, id, "doc-1"), None, "{id}");
+        }
+        let mac_model = super::model(&mac_tree, true);
+        for m in flat_model(&mac_model) {
+            let offered = m.enabled && m.kind != MenuNodeKind::Submenu;
+            let route = in_app_route(&mac_tree, &m.id, "doc-1");
+            assert_eq!(route.is_some(), offered, "{}", m.id);
+            assert!(!matches!(route, Some((Route::Quit, _))), "{}", m.id);
         }
         // The macOS tree lists Hide, Services…; a window never gets them.
         let mac = super::tree(Locale::En, true, &list());

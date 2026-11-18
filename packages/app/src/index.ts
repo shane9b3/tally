@@ -8,7 +8,7 @@ export { AppController, writeClipboard, type ControllerOptions } from "./control
 export { buildCommands, currencyTarget, COMING_SOON, WAVE5_SOON, type CommandUi } from "./commands";
 export { t, setTranslations, translations, type Translations } from "./i18n";
 export { CommandRegistry, type Command, type CommandArgs } from "./registry";
-export { BINDINGS, isMacPlatform, platformBindings, resolveKey, resolveBinding, shortcutFor, type Binding, type KeyContext, type KeyLike } from "./keymap";
+export { BINDINGS, isReloadKey, isMacPlatform, platformBindings, resolveKey, resolveBinding, shortcutFor, type Binding, type KeyContext, type KeyLike } from "./keymap";
 export { pretty } from "./pretty";
 export { detectSumRange, sumFormula, sumScanRanges, rangeAddress } from "./sumRange";
 export { CURRENCY_FORMAT, EMPTY_PATCH, PERCENT_FORMAT, ZOOM_PRESETS } from "./formats";
@@ -18,8 +18,9 @@ export { useSelectionStore, toSelectionDto, fromSelectionDto, selectionRanges } 
 export { useEditStore, type EditOrigin } from "./stores/editStore";
 export { useUiStore, type Toast } from "./stores/uiStore";
 export { guardDecision, isSequence, proceedAfter, useSavePromptStore, type CloseKind, type CloseShell, type SaveChoice } from "./unsaved";
-export { MenuBar, typeAhead, type MenuBarProps, type MenuItemState } from "./chrome/MenuBar";
+export { MenuBar, ariaKeyShortcuts, typeAhead, type MenuBarProps, type MenuItemState } from "./chrome/MenuBar";
 export { useMenuModel, type MenuShell } from "./chrome/menuShell";
+export { NATIVE_MENU_COMMANDS, insertText, runTextCommand, textCommandOf, textTarget, type TextClipboard, type TextCommand } from "./chrome/textCommands";
 export { canReuseWindow, type ReuseState, type ThemeChoice, type WindowShell } from "./windows";
 export { allowedWhileReadOnly, displayTitle, readOnlyGate, ReadOnlyFeature, READ_ONLY_COMMANDS, useLockPromptStore } from "./readOnly";
 export { canDetach, cycleTab, openDocuments, tabByNumber, useTabsStore, TabsFeature, type TabShell, type TabsState, type TabInfo } from "./tabs";

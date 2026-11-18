@@ -86,7 +86,7 @@ test("mouse: click opens over the sheet, hover switches, an item runs its comman
   expect(await focusInGrid(page)).toBe(true);
   // Shortcut text is shown right-aligned and is not part of the item's name.
   await top(page, "File").click();
-  await expect(item(page, "File", "Save")).toHaveAttribute("aria-keyshortcuts", "Ctrl+S");
+  await expect(item(page, "File", "Save")).toHaveAttribute("aria-keyshortcuts", "Control+S");
   const label = (await item(page, "File", "Save").locator("span").nth(1).boundingBox())!;
   const accel = (await item(page, "File", "Save").locator("span").nth(2).boundingBox())!;
   expect(accel.x).toBeGreaterThan(label.x + 60);
@@ -214,4 +214,111 @@ test("the open menus pass axe", async ({ page }) => {
   const page2 = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"]).analyze();
   const serious2 = page2.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious2.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+});
+
+test("Cut, Copy, Paste and Select All act on a focused text field, not on the sheet behind it", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await ready(page);
+  const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+  const range = () => page.evaluate(() => window.__tally!.controller.selection.range);
+  const field = (sel: string) => page.evaluate((sel) => {
+    const el = (sel ? document.querySelector(sel) : document.activeElement) as HTMLInputElement | HTMLTextAreaElement;
+    return { value: el.value, start: el.selectionStart, end: el.selectionEnd, focused: document.activeElement === el };
+  }, sel);
+  const choose = async (name: string) => {
+    await top(page, "Edit").click();
+    await item(page, "Edit", name).click();
+    await expect(page.getByRole("menu")).toHaveCount(0);
+  };
+  // Something on the sheet that a sheet copy would take.
+  await page.keyboard.type("sheet");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ArrowUp");
+  const before = await range();
+
+  // The find bar's field: a plain text field.
+  const box = '[data-testid="find-input"]';
+  await page.evaluate(() => window.__tally!.controller.registry.run("edit.find"));
+  await page.locator(box).first().click();
+  await page.locator(box).first().fill("hello world");
+  await page.locator(box).first().evaluate((el: HTMLInputElement) => el.setSelectionRange(0, 5));
+  await choose("Copy");
+  expect(await clipboard()).toBe("hello");
+  expect(await field(box)).toMatchObject({ value: "hello world", focused: true });
+  await choose("Select All");
+  expect(await field(box)).toMatchObject({ start: 0, end: 11, focused: true });
+  expect(await range()).toEqual(before);
+  await choose("Cut");
+  expect(await clipboard()).toBe("hello world");
+  expect(await field(box)).toMatchObject({ value: "", focused: true });
+  await page.locator(box).first().fill("x");
+  await page.evaluate(() => navigator.clipboard.writeText("A1"));
+  await choose("Select All");
+  await choose("Paste");
+  // (Paste reads the clipboard first: it lands a moment later.)
+  await expect.poll(async () => (await field(box)).value).toBe("A1");
+  expect(await field(box)).toMatchObject({ focused: true });
+  expect(await activated(page)).toEqual([]);
+  await page.keyboard.press("Escape");
+
+  // A cell edit: the items act on the text being typed, and the edit stays open.
+  await page.evaluate(() => window.__tally!.controller.focusGrid());
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  const cell = await range();
+  await page.keyboard.type("abc");
+  const editing = () => page.evaluate(() => document.activeElement?.tagName === "TEXTAREA" && !!document.activeElement.closest(".tally-grid") && (document.activeElement as HTMLTextAreaElement).value !== "");
+  expect(await editing()).toBe(true);
+  await choose("Select All");
+  expect(await editing()).toBe(true);
+  expect(await field("")).toMatchObject({ value: "abc", start: 0, end: 3 });
+  expect(await range()).toEqual(cell);
+  await choose("Copy");
+  expect(await clipboard()).toBe("abc");
+  await choose("Cut");
+  expect(await field("")).toMatchObject({ value: "" });
+  await choose("Paste");
+  await expect.poll(async () => (await field("")).value).toBe("abc");
+  await choose("Paste");
+  await expect.poll(async () => (await field("")).value).toBe("abcabc");
+  expect(await range()).toEqual(cell);
+  expect(await activated(page)).toEqual([]);
+  await page.keyboard.press("Enter");
+
+  // On the idle sheet the same items are the sheet commands.
+  await page.evaluate(() => window.__tally!.controller.focusGrid());
+  await choose("Select All");
+  expect((await range()).r1).toBeGreaterThan(1000);
+  expect(await activated(page)).toEqual(["native.selectAll"]);
+});
+
+test("a read-only document greys Cut and Paste, but not in a text field", async ({ page }) => {
+  await ready(page, "/?titlebar=1&readonly=1&template=invoices");
+  await top(page, "Edit").click();
+  await expect(item(page, "Edit", "Cut")).toHaveAttribute("aria-disabled", "true");
+  await expect(item(page, "Edit", "Paste")).toHaveAttribute("aria-disabled", "true");
+  await expect(item(page, "Edit", "Copy")).not.toHaveAttribute("aria-disabled", "true");
+  await expect(item(page, "Edit", "Select All")).not.toHaveAttribute("aria-disabled", "true");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  // In the find bar's field they act on the text, so they are offered.
+  await page.evaluate(() => window.__tally!.controller.registry.run("edit.find"));
+  await expect(page.getByTestId("find-input")).toBeFocused();
+  await top(page, "Edit").click();
+  await expect(item(page, "Edit", "Cut")).not.toHaveAttribute("aria-disabled", "true");
+  await expect(item(page, "Edit", "Paste")).not.toHaveAttribute("aria-disabled", "true");
+});
+
+test("Alt+F4 with a menu open closes the menu and is left to the system", async ({ page }) => {
+  await ready(page);
+  await top(page, "Edit").click();
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => {
+    (window as unknown as { seen: boolean[] }).seen = [];
+    window.addEventListener("keydown", (e) => void (window as unknown as { seen: boolean[] }).seen.push(e.defaultPrevented));
+  });
+  await page.keyboard.press("Alt+F4");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { seen: boolean[] }).seen.at(-1))).toBe(false);
+  expect(await focusInGrid(page)).toBe(true);
 });

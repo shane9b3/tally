@@ -34,10 +34,19 @@ export interface TitleBarShell extends MenuShell {
 export interface TitleBarProps {
   shell: TitleBarShell;
   /** The app's state of a menu item (the command registry's enabled state and reason). */
-  itemState?: (id: string) => MenuItemState;
+  itemState?: (id: string, focus: Element | null) => MenuItemState;
+  /**
+   * Asked before an item goes to the shell: `true` when the app carried it
+   * out itself (Cut / Copy / Paste / Select All on a focused text field).
+   */
+  intercept?: (id: string) => boolean;
 }
 
-export function TitleBar({ shell, itemState }: TitleBarProps) {
+export function TitleBar({ shell, itemState, intercept }: TitleBarProps) {
+  const activate = (id: string): void => {
+    if (intercept?.(id)) return;
+    void shell.menuActivate(id).catch((e: unknown) => console.warn(`menu_activate ${id} failed`, e));
+  };
   const info = useDocStore((s) => s.info);
   const [maximized, setMaximized] = useState(false);
   const model = useMenuModel(shell);
@@ -58,7 +67,7 @@ export function TitleBar({ shell, itemState }: TitleBarProps) {
       <span className="tally-titlebar-logo" data-tauri-drag-region>
         T
       </span>
-      <MenuBar model={model} label="Menu" itemState={itemState} onActivate={(id) => void shell.menuActivate(id).catch((e: unknown) => console.warn(`menu_activate ${id} failed`, e))} />
+      <MenuBar model={model} label="Menu" itemState={itemState} onActivate={activate} />
       <span className="tally-titlebar-title" data-tauri-drag-region>
         {title}
       </span>

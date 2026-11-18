@@ -586,8 +586,8 @@ tab's webview fills the window, so the pop-ups paint over the sheet):
 
 | Command | Args | Returns | Notes |
 |---|---|---|---|
-| `menu_model` | — | `MenuNode[]` | The menus of the bar, in the UI language, with the Window menu's document list. Document webviews only. |
-| `menu_activate` | `id` | `void` | An item chosen in the caller's menu bar. `id` must be an item of the current model (not a submenu or separator, not a macOS-only item), else `invalid_argument`. The selection then runs the native menu's handler (`menu::dispatch`) with the caller as the front document and the caller's window as the front window: a command id comes back to the caller as `menu-action`; the Window items act on the caller's window; a document of the list is shown. |
+| `menu_model` | — | `MenuNode[]` | The menus of the bar, in the UI language, with the Window menu's document list. Document webviews only; `invalid_argument` where the menu is native (macOS, Linux). |
+| `menu_activate` | `id` | `void` | An item chosen in the caller's menu bar; `invalid_argument` where the menu is native (macOS, Linux). `id` must be an item of the current model (not a submenu or separator, not a macOS-only item), else `invalid_argument`. The selection then runs the native menu's handler (`menu::dispatch`) with the caller as the front document and the caller's window as the front window: a command id comes back to the caller as `menu-action`; the Window items act on the caller's window; a document of the list is shown. |
 
 `MenuNode` (generated, `packages/bridge/src/generated/MenuNode.ts`):
 `{ kind: "item" | "check" | "separator" | "submenu", id, label, accelerator: string | null, enabled, checked: boolean | null, items: MenuNode[] }`.
@@ -600,10 +600,28 @@ native menu leaves to the OS have ids `native.*`: `native.cut`, `.copy`,
 new model whenever `windows::refresh_window_menu` runs (the one place the
 menu changes: open, close, move, focus, title, language).
 
+`menu-changed` is only sent when the model differs from the last one sent
+(most focus and title changes leave it as it was).
+
+Cut / Copy / Paste / Select All from the bar follow the focus, as the OS's
+items do in a native menu: the bar gives the focus back before the item
+runs, and when that is a text field (formula bar, name box, find bar, a
+dialog input, an open cell editor) the webview carries the item out on its
+text (`AppController.menuTextCommand`, `chrome/textCommands.ts`) and
+`menu_activate` is not called; on the idle sheet the shell sends the sheet
+command. A read-only document greys Cut and Paste for the sheet, not for a
+text field.
+
 With no native menu on Windows there are no native accelerators either:
 the webview's keymap (`packages/app/src/keymap.ts`) handles every shortcut
 (`platform.nativeMenu` is `false`); `menuIds.test.ts` checks that every
-accelerator the model shows resolves to its command there. The browser
+accelerator the model shows resolves to its command there. Two rules of
+the keymap matter more now that it owns Ctrl+Alt shortcuts on Windows: a
+key event with AltGr (`getModifierState("AltGraph")`, or Ctrl+Alt producing
+a character other than the binding's letter) is text, never a command; and
+in the desktop app the webview's reload keys (F5, Ctrl+F5, Ctrl+R,
+Ctrl+Shift+R) are always `preventDefault`ed, also when no command takes
+them (while typing). The browser
 build mounts the same title bar over a mock shell with `?titlebar=1`
 (`packages/app/src/dev/mockMenu.ts`; its model `menuModel.json` is written
 and checked by a Rust test of `menu.rs`).

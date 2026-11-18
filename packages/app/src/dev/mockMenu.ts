@@ -10,15 +10,9 @@
  */
 import type { MenuNode } from "@tally/bridge";
 import type { MenuShell } from "../chrome/menuShell";
+import { NATIVE_MENU_COMMANDS as NATIVE } from "../chrome/textCommands";
 import model from "./menuModel.json";
 
-/** The clipboard items the OS handles in a native menu (`Native::in_app`, menu.rs). */
-const NATIVE: Readonly<Record<string, string>> = {
-  "native.cut": "edit.cut",
-  "native.copy": "edit.copy",
-  "native.paste": "edit.paste",
-  "native.selectAll": "edit.selectAll",
-};
 const FOCUS = "window.focus.";
 
 function find(nodes: readonly MenuNode[], id: string): MenuNode | undefined {

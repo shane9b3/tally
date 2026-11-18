@@ -97,6 +97,8 @@ import { UpdateFeature } from "./updater";
 import type { UpdateShell } from "@tally/bridge";
 import { W56Features } from "./data/w56";
 import { t } from "./i18n";
+import { isMacPlatform } from "./keymap";
+import { runTextCommand, textCommandOf, textTarget } from "./chrome/textCommands";
 import { useCsvPromptStore } from "./csvExport";
 import { displayTitle, lockedMessage, parseLock, readOnlyGate, ReadOnlyFeature } from "./readOnly";
 
@@ -1460,10 +1462,38 @@ export class AppController {
    * Paste from a menu (no DOM paste event): reads the system clipboard if
    * the browser allows, else uses the last copy made in this window.
    */
+  /** The clipboard could not be read (Edit ▸ Paste from a menu): name the key of this platform. */
+  pasteKeyHint = (): void => {
+    const text = t("msg.toast.pasteWithKey", "Use ⌘V to paste (the clipboard is not readable here).");
+    useUiStore.getState().pushToast("info", isMacPlatform() ? text : text.replace("⌘V", "Ctrl+V"));
+  };
+
+  /**
+   * A clipboard item of the in-app menu bar (`native.cut` / `.copy` /
+   * `.paste` / `.selectAll`): when the focus is in a text field (formula
+   * bar, name box, find bar, a dialog input, an open cell editor) it acts on
+   * that text, as the OS does for a native menu, and `true` is returned;
+   * `false`: the sheet is the target and the shell sends the sheet command.
+   */
+  /** Whether a clipboard item of the menu bar would act on the text field `focus` rather than on the sheet. */
+  menuTextTarget = (focus: Element | null): boolean => textTarget(useEditStore.getState().edit !== null, focus) !== null;
+
+  menuTextCommand = (id: string): boolean => {
+    const command = textCommandOf(id);
+    const el = command ? textTarget(useEditStore.getState().edit !== null) : null;
+    if (!command || !el) return false;
+    runTextCommand(el, command, {
+      readText: () => this.readClipboard().then((c) => c.text),
+      writeText: (text) => navigator.clipboard.writeText(text),
+      unreadable: this.pasteKeyHint,
+    });
+    return true;
+  };
+
   pasteFromClipboard = async (valuesOnly: boolean): Promise<void> => {
     const { text, token } = await this.readClipboard();
     if (text === null) {
-      useUiStore.getState().pushToast("info", t("msg.toast.pasteWithKey", "Use ⌘V to paste (the clipboard is not readable here)."));
+      this.pasteKeyHint();
       return;
     }
     await this.pasteData(text, token, valuesOnly);

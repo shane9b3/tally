@@ -80,7 +80,7 @@ describe("MenuBar", () => {
     expect(file.querySelectorAll('[role="separator"]').length).toBe(3);
     const save = byId("file.save");
     expect(save.getAttribute("role")).toBe("menuitem");
-    expect(save.getAttribute("aria-keyshortcuts")).toBe("Ctrl+S");
+    expect(save.getAttribute("aria-keyshortcuts")).toBe("Control+S");
     expect(save.textContent).toBe("SaveCtrl+S");
     expect(byId("menu/File/Export").getAttribute("aria-haspopup")).toBe("menu");
     hover(top("Edit"));

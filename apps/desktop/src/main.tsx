@@ -6,7 +6,7 @@
  * review 3, MEDIUM-7; `scripts/check-bundle.sh` verifies the built output).
  * A production bundle opened outside Tauri shows a short notice instead.
  */
-import { App, type AppController, type MenuItemState } from "@tally/app";
+import { App, NATIVE_MENU_COMMANDS, type AppController, type MenuItemState } from "@tally/app";
 import type { EngineClientV3, ShellClient } from "@tally/bridge";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -92,21 +92,27 @@ function mount(client: Client, titleBar: TitleBarShell | null): void {
     if (tauri) setWindowTitle(ctl, mac);
   };
   // The menu shows what the command registry knows: a command that is off now, and why.
-  const itemState = (id: string): MenuItemState => {
+  const itemState = (item: string, focus: Element | null): MenuItemState => {
+    // The OS's clipboard items stand for the sheet commands (a read-only document has Cut and Paste off).
+    const id = NATIVE_MENU_COMMANDS[item] ?? item;
     const registry = controller?.registry;
     if (!registry?.has(id) || registry.isEnabled(id)) return { enabled: true };
+    // In a text field they act on the text, whatever the sheet allows.
+    if (id !== item && controller?.menuTextTarget(focus)) return { enabled: true };
     return { enabled: false, reason: registry.reasonFor(id) };
   };
+  // Cut / Copy / Paste / Select All act on a focused text field, as the OS's menu items do.
+  const intercept = (id: string): boolean => controller?.menuTextCommand(id) ?? false;
   const root = document.getElementById("root");
   if (!root) return;
   if (titleBar) root.dataset.titlebar = "custom";
   // With the title bar's menu there is no native menu: the webview's keymap owns every shortcut.
-  const app = <App client={client} initialTemplate={params.get("template")} platform={{ trafficLights: tauri && mac, nativeMenu: tauri && !titleBar }} onReady={onReady} />;
+  const app = <App client={client} initialTemplate={params.get("template")} platform={{ trafficLights: tauri && mac, nativeMenu: tauri && !titleBar, desktop: tauri }} onReady={onReady} />;
   createRoot(root).render(
     <StrictMode>
       {titleBar ? (
         <>
-          <TitleBar shell={titleBar} itemState={itemState} />
+          <TitleBar shell={titleBar} itemState={itemState} intercept={intercept} />
           <div className="tally-app-host">{app}</div>
         </>
       ) : (

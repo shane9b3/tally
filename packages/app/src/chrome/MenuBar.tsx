@@ -31,12 +31,31 @@ export interface MenuBarProps {
   label: string;
   /** An item was chosen (the focus is back where it was before the bar took it). */
   onActivate: (id: string) => void;
-  /** The app's own state of an item, asked when its menu opens. */
-  itemState?: (id: string) => MenuItemState;
+  /**
+   * The app's own state of an item, asked when its menu opens. `focus` is
+   * what had the focus before the bar took it (where an item will act).
+   */
+  itemState?: (id: string, focus: Element | null) => MenuItemState;
 }
 
 const selector = (id: string): string => `[data-id=${JSON.stringify(id)}]`;
 const choosable = (menu: MenuNode): MenuNode[] => menu.items.filter((n) => n.kind !== "separator");
+
+/**
+ * Pure: the shell's accelerator text ("Ctrl+Shift+S") as an
+ * `aria-keyshortcuts` value, which wants `KeyboardEvent.key` names
+ * ("Control+Shift+S"); `undefined` for text that is not in that form (the
+ * macOS glyphs).
+ */
+export function ariaKeyShortcuts(accelerator: string | null): string | undefined {
+  if (!accelerator) return undefined;
+  // The key itself may be "+" or contain none; modifiers come first, joined by "+".
+  const parts = accelerator.split("+");
+  const key = parts.pop() ?? "";
+  // One character, or a key name (F12, Tab); not the macOS glyph form ("⇧⌘S").
+  if (!/^(.|F\d{1,2}|[A-Z][a-z]+)$/u.test(key) || !parts.every((p) => p === "Ctrl" || p === "Alt" || p === "Shift")) return undefined;
+  return [...parts.map((p) => (p === "Ctrl" ? "Control" : p)), key].join("+");
+}
 
 /** Pure: the item after `from` (wrapping) whose label starts with `char`; -1 when none. */
 export function typeAhead(labels: readonly string[], from: number, char: string): number {
@@ -125,7 +144,7 @@ export function MenuBar({ model, label, onActivate, itemState }: MenuBarProps) {
 
   const stateOf = (node: MenuNode): MenuItemState => {
     if (!node.enabled) return { enabled: false };
-    return node.kind === "submenu" ? { enabled: true } : (itemState?.(node.id) ?? { enabled: true });
+    return node.kind === "submenu" ? { enabled: true } : (itemState?.(node.id, returnTo.current) ?? { enabled: true });
   };
 
   const activate = (node: MenuNode): void => {
@@ -151,6 +170,12 @@ export function MenuBar({ model, label, onActivate, itemState }: MenuBarProps) {
     if (e.key === "Alt" || e.key === "F10") return;
     const el = e.target instanceof HTMLElement ? e.target.closest<HTMLElement>("[data-id]") : null;
     if (!el) return;
+    // Alt+F4 (close the window) and Alt+Space (the window menu) are the
+    // system's: the menus close and the key goes on.
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === "F4" || e.key === " " || e.code === "Space")) {
+      leave(true);
+      return;
+    }
     // While the bar has the focus no key reaches the app's keymap or the grid.
     e.stopPropagation();
     if (e.key === "Tab") {
@@ -250,7 +275,8 @@ export function MenuBar({ model, label, onActivate, itemState }: MenuBarProps) {
         toggle();
         return;
       }
-      altArmed = e.key === "Alt" && !e.ctrlKey && !e.shiftKey && !e.metaKey && (altArmed || !e.repeat);
+      // Not while an input method composes (Alt switches modes in some IMEs).
+      altArmed = e.key === "Alt" && !e.isComposing && !e.ctrlKey && !e.shiftKey && !e.metaKey && (altArmed || !e.repeat);
     };
     const up = (e: KeyboardEvent): void => {
       if (e.key !== "Alt" || !altArmed) return;
@@ -279,6 +305,20 @@ export function MenuBar({ model, label, onActivate, itemState }: MenuBarProps) {
     // `inside` and `live` are refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leave, remember, focusId]);
+
+  // A modal dialog that opens while a menu is open (a command's dialog, an
+  // update or save prompt) takes over: the menus close.
+  const anyOpen = path.length > 0;
+  useEffect(() => {
+    if (!anyOpen || typeof MutationObserver === "undefined") return;
+    const modal = () => document.querySelector('[aria-modal="true"]') !== null;
+    if (modal()) return;
+    const seen = new MutationObserver(() => {
+      if (modal()) leave(false);
+    });
+    seen.observe(document.body, { childList: true, subtree: true });
+    return () => seen.disconnect();
+  }, [anyOpen, leave]);
 
   const anchorOf = (id: string) => () => root.current?.querySelector<HTMLElement>(selector(id)) ?? null;
 
@@ -331,7 +371,7 @@ export function MenuBar({ model, label, onActivate, itemState }: MenuBarProps) {
         if (!menu) return null;
         const level = k + 1;
         return (
-          <Popup key={id} anchor={anchorOf(id)} side={k === 0 ? "below" : "right"} label={menu.label} id={id}>
+          <Popup key={id} anchor={anchorOf(id)} side={k === 0 ? "below" : "right"} label={menu.label} id={id} menu={menu}>
             {menu.items.map((node, j) => {
               if (node.kind === "separator") return <div key={`sep-${j}`} className={styles.separator} role="separator" />;
               const sub = node.kind === "submenu";
@@ -347,7 +387,7 @@ export function MenuBar({ model, label, onActivate, itemState }: MenuBarProps) {
                   aria-haspopup={sub ? "menu" : undefined}
                   aria-expanded={sub ? open : undefined}
                   aria-disabled={state.enabled ? undefined : true}
-                  aria-keyshortcuts={node.accelerator ?? undefined}
+                  aria-keyshortcuts={ariaKeyShortcuts(node.accelerator)}
                   title={state.enabled ? undefined : state.reason}
                   tabIndex={-1}
                   data-id={node.id}
@@ -387,13 +427,22 @@ export function MenuBar({ model, label, onActivate, itemState }: MenuBarProps) {
 }
 
 /** A menu's pop-up: below its bar item, or to the right of its parent item, kept inside the window. */
-function Popup({ anchor, side, label, id, children }: { anchor: () => HTMLElement | null; side: "below" | "right"; label: string; id: string; children: ReactNode }) {
+function Popup({ anchor, side, label, id, menu, children }: { anchor: () => HTMLElement | null; side: "below" | "right"; label: string; id: string; menu: MenuNode; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<CSSProperties>({ left: 0, top: 0 });
+  /** Bumped when the window is resized: the pop-up is placed again. */
+  const [resized, setResized] = useState(0);
+  useEffect(() => {
+    const onResize = () => setResized((n) => n + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   useLayoutEffect(() => {
     const a = anchor();
     const el = ref.current;
     if (!a || !el) return;
+    // Measure the natural size, not the one a previous placement clamped.
+    el.style.maxHeight = "none";
     const r = a.getBoundingClientRect();
     const m = 4;
     const vw = window.innerWidth;
@@ -405,10 +454,11 @@ function Popup({ anchor, side, label, id, children }: { anchor: () => HTMLElemen
     left = Math.max(m, Math.min(left, vw - m - w));
     let top = side === "below" ? r.bottom : r.top - 5;
     if (side === "right") top = Math.max(m, Math.min(top, vh - m - Math.min(el.offsetHeight, vh - 2 * m)));
+    el.style.maxHeight = "";
     setPos({ left, top, maxHeight: Math.max(96, vh - m - top) });
-    // Measured once per menu.
+    // Placed per menu, and again when its items (a new model) or the window change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, menu, resized]);
   return (
     <div ref={ref} className={styles.menu} style={pos} role="menu" aria-label={label} data-menu={id}>
       {children}

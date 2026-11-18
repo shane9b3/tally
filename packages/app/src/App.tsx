@@ -62,8 +62,10 @@ const ChartDataTableDialog = lazyPart(() => chunks.loadChartDataTable().then((m)
 export interface Platform {
   /** macOS overlay title bar: leave room for the traffic lights. */
   trafficLights: boolean;
-  /** A native menu owns the menu accelerators (Tauri). */
+  /** A native menu owns the menu accelerators (the desktop app on macOS and Linux). */
   nativeMenu: boolean;
+  /** The desktop app (not the browser build): the webview's reload keys are swallowed. */
+  desktop: boolean;
 }
 
 export interface AppProps {
@@ -134,7 +136,7 @@ export function App({ client, initialTemplate, platform, onReady }: AppProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctl]);
 
-  useKeymap(ctl, nativeMenu);
+  useKeymap(ctl, nativeMenu, platform?.desktop ?? false);
 
   return (
     <ControllerContext.Provider value={ctl}>
