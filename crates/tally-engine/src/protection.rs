@@ -798,6 +798,55 @@ pub fn check_scenario_change(
     }
 }
 
+/// Refuses a command that would take cell attributes Tally protects with
+/// the sheet: on a protected sheet Merge / Unmerge and the conditional
+/// format and validation commands are refused whatever the sheet allows
+/// (`ops::check_protection`, `ops_v03`), so a command that removes one as
+/// a side effect of clearing formats is refused too, as a whole and before
+/// anything changes. `merges`: the command also dissolves the merges
+/// whose top-left cell is in `ranges` (Delete Contents ▸ Formats); a merge
+/// that only reaches into a range never counts.
+///
+/// AOO itself only asks `ScViewFunc::SelectionEditable` in
+/// `ScViewFunc::DeleteContents` (viewfunc.cxx; `ScTable::
+/// IsSelectionEditable` tests `HASATTR_PROTECTED`), so there unlocked
+/// cells lose these attributes on a protected sheet; refusing is Tally's
+/// rule (parity-deviations G12).
+pub fn check_attr_removal(
+    wb: &Workbook,
+    ranges: &[CellRange],
+    merges: bool,
+) -> Result<(), ApiError> {
+    use tally_model::CellRangeLocal;
+    for r in ranges {
+        if sheet_protection(wb, r.sheet).is_none() {
+            continue;
+        }
+        let cut = CellRangeLocal {
+            r0: r.r0,
+            c0: r.c0,
+            r1: r.r1,
+            c1: r.c1,
+        };
+        let hit = |list: &[CellRangeLocal]| {
+            list.iter()
+                .any(|x| crate::condfmt::intersect_rect(x, &cut).is_some())
+        };
+        let origin_in = |m: &CellRangeLocal| {
+            cut.r0 <= m.r0 && m.r0 <= cut.r1 && cut.c0 <= m.c0 && m.c0 <= cut.c1
+        };
+        let takes = wb.sheet(r.sheet).is_some_and(|s| {
+            (merges && s.meta.merges.iter().any(origin_in))
+                || s.meta.cond_formats.iter().any(|cf| hit(&cf.ranges))
+                || s.meta.validations.iter().any(|v| hit(&v.ranges))
+        });
+        if takes {
+            return Err(protected_error());
+        }
+    }
+    Ok(())
+}
+
 /// Refuses formatting on a protected sheet unless allowed or unlocked.
 pub fn check_format(wb: &Workbook, ranges: &[CellRange]) -> Result<(), ApiError> {
     for r in ranges {

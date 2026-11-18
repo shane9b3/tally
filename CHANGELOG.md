@@ -10,6 +10,17 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 
 ## [Unreleased]
 
+### Changed
+- Clear formats (⌘M) also removes the conditional formatting and the
+  validity rules of the selected cells, as Default Formatting does in
+  OpenOffice. Merged cells stay merged.
+
+### Fixed
+- On a protected sheet, moving unlocked cells to another sheet with Cut
+  and Paste no longer removes their conditional formatting or validity
+  rules. The move is refused instead, as Delete Contents with Formats
+  already was; Clear formats is refused there in the same case.
+
 ## [0.1.3] - 2026-11-17
 
 ### Added

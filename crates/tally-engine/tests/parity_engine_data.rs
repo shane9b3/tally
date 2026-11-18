@@ -9,10 +9,10 @@ mod common;
 
 use common::{range, sel, Fixture};
 use tally_api::{
-    AggFn, CfRuleDto, CfRuleKind, CfStyleDto, CmpOp, CsvImportOptionsDto, DeleteContentsFlags,
-    DocumentService, ListSource, Op, PasteOptions, PastePayload, ScenarioDto, SheetCell,
-    SheetRange, StdCondition, StdConnector, StdFilterOp, StdFilterOptions, SubtotalGroup,
-    SubtotalOptions, ValidationDto, ValidationKind,
+    AggFn, CfRuleDto, CfRuleKind, CfStyleDto, ClearWhat, CmpOp, CsvImportOptionsDto,
+    DeleteContentsFlags, DocumentService, ListSource, Op, PasteOptions, PastePayload, ScenarioDto,
+    SheetCell, SheetRange, StdCondition, StdConnector, StdFilterOp, StdFilterOptions,
+    SubtotalGroup, SubtotalOptions, ValidationDto, ValidationKind,
 };
 use tally_types::{CellAddr, SheetId, Value};
 
@@ -632,6 +632,57 @@ fn g12_delete_contents_formats_on_a_protected_sheet() {
             ..DeleteContentsFlags::default()
         },
     };
+    let mut f = g12_protected();
+    let s = f.sheet;
+    let before = f.data();
+    // The direct commands are refused.
+    let r = f.apply(vec![Op::UnmergeCells {
+        sheet: s,
+        range: range("B3:C4"),
+    }]);
+    assert!(!r.errors.is_empty());
+    // And so is a Formats delete over the merge, the conditional format
+    // or the validation; nothing changes, the cell formats included.
+    for a1 in ["B3:C4", "E2", "G4:H5", "A1:H8"] {
+        let r = f.apply(vec![formats(a1, s)]);
+        assert_eq!(r.errors.len(), 1, "{a1}");
+        assert_eq!(r.errors[0].code, "protected", "{a1}");
+        assert_eq!(f.data(), before, "{a1}");
+    }
+    // A merge that only reaches into the range is not removed (G12), so
+    // it does not refuse it; neither do cells with none of the three.
+    let r = f.apply(vec![formats("C4:D4", s), formats("A6:H8", s)]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert!(!is_bold(&f, "D4") && !is_bold(&f, "A6"));
+    assert!(is_bold(&f, "A1"));
+    let d = f.data();
+    assert_eq!(d.sheets[0].merges, before.sheets[0].merges);
+    assert_eq!(
+        d.sheets[0].conditional_formats,
+        before.sheets[0].conditional_formats
+    );
+    assert_eq!(d.sheets[0].validations, before.sheets[0].validations);
+    // Not protected: everything goes, as before.
+    protect(&mut f, false);
+    let r = f.apply(vec![formats("A1:H8", s)]);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let d = f.data();
+    assert!(d.sheets[0].merges.is_empty());
+    assert!(d.sheets[0].conditional_formats.is_empty());
+    assert!(d.sheets[0].validations.is_empty());
+    assert!(!is_bold(&f, "A1"));
+}
+
+fn is_bold(f: &Fixture, a1: &str) -> bool {
+    let a = CellAddr::from_a1(f.sheet, a1).unwrap();
+    let wb = &f.svc.document(f.doc).unwrap().wb;
+    wb.styles.to_dto(wb.style_at(a)).bold
+}
+
+/// A protected sheet that allows Format Cells, with A1:H8 bold and
+/// unlocked (only the sheet's protection is in the way), a merge at
+/// B3:C4, a conditional format on E1:E4 and a validation on G1:G4.
+fn g12_protected() -> Fixture {
     let bold = |a1: &str, sheet| Op::ApplyStyle {
         sheet,
         ranges: vec![range(a1)],
@@ -639,11 +690,6 @@ fn g12_delete_contents_formats_on_a_protected_sheet() {
             bold: Some(true),
             ..Default::default()
         },
-    };
-    let is_bold = |f: &Fixture, a1: &str| {
-        let a = CellAddr::from_a1(f.sheet, a1).unwrap();
-        let wb = &f.svc.document(f.doc).unwrap().wb;
-        wb.styles.to_dto(wb.style_at(a)).bold
     };
     let mut f = Fixture::new();
     let s = f.sheet;
@@ -698,43 +744,137 @@ fn g12_delete_contents_formats_on_a_protected_sheet() {
         },
     ]);
     assert!(r.errors.is_empty(), "{:?}", r.errors);
-    let before = f.data();
-    // The direct commands are refused.
-    let r = f.apply(vec![Op::UnmergeCells {
-        sheet: s,
-        range: range("B3:C4"),
-    }]);
-    assert!(!r.errors.is_empty());
-    // And so is a Formats delete over the merge, the conditional format
-    // or the validation; nothing changes, the cell formats included.
-    for a1 in ["B3:C4", "E2", "G4:H5", "A1:H8"] {
-        let r = f.apply(vec![formats(a1, s)]);
-        assert_eq!(r.errors.len(), 1, "{a1}");
-        assert_eq!(r.errors[0].code, "protected", "{a1}");
-        assert_eq!(f.data(), before, "{a1}");
+    f
+}
+
+fn clear(a1: &str, sheet: SheetId, what: ClearWhat) -> Op {
+    Op::Clear {
+        sheet,
+        ranges: vec![range(a1)],
+        what,
     }
-    // A merge that only reaches into the range is not removed (G12), so
-    // it does not refuse it; neither do cells with none of the three.
-    let r = f.apply(vec![formats("C4:D4", s), formats("A6:H8", s)]);
+}
+
+/// G12: `Op::Clear` All and Formats follow the same rule as Delete
+/// Contents ▸ Formats on a protected sheet: both take the conditional
+/// formats and validations of the cells, so both are refused as a whole
+/// where there is one (nothing changes, contents included). Neither
+/// dissolves a merge, so a merge does not refuse them. Clear Contents is
+/// not concerned.
+#[test]
+fn g12_clear_all_and_formats_on_a_protected_sheet() {
+    for what in [ClearWhat::All, ClearWhat::Formats] {
+        let mut f = g12_protected();
+        let s = f.sheet;
+        f.set("E2", "7");
+        f.set("G4", "Paid");
+        f.set("B3", "merged");
+        f.set("A6", "plain");
+        let before = f.data();
+        for a1 in ["E2", "G4:H5", "A1:H8", "E4:G6"] {
+            let r = f.apply(vec![clear(a1, s, what)]);
+            assert_eq!(r.errors.len(), 1, "{what:?} {a1}");
+            assert_eq!(r.errors[0].code, "protected", "{what:?} {a1}");
+            assert_eq!(f.data(), before, "{what:?} {a1}");
+        }
+        // Several ranges: one with a validation refuses all of them.
+        let r = f.apply(vec![Op::Clear {
+            sheet: s,
+            ranges: vec![range("A6:B6"), range("G1")],
+            what,
+        }]);
+        assert_eq!(r.errors[0].code, "protected", "{what:?}");
+        assert_eq!(f.data(), before, "{what:?}");
+        // The merge stays, so it is not in the way; nor are plain cells.
+        let r = f.apply(vec![clear("B3:C4", s, what), clear("A6:D8", s, what)]);
+        assert!(r.errors.is_empty(), "{what:?} {:?}", r.errors);
+        assert!(!is_bold(&f, "B3") && !is_bold(&f, "A6"), "{what:?}");
+        assert!(is_bold(&f, "A1"), "{what:?}");
+        let d = f.data();
+        assert_eq!(d.sheets[0].merges, before.sheets[0].merges, "{what:?}");
+        assert_eq!(
+            d.sheets[0].conditional_formats, before.sheets[0].conditional_formats,
+            "{what:?}"
+        );
+        assert_eq!(
+            d.sheets[0].validations, before.sheets[0].validations,
+            "{what:?}"
+        );
+        let gone = what == ClearWhat::All;
+        assert_eq!(f.value("B3").is_empty(), gone, "{what:?}");
+        assert_eq!(f.value("A6").is_empty(), gone, "{what:?}");
+        // Contents alone never touch the three.
+        let r = f.apply(vec![clear("E1:G4", s, ClearWhat::Contents)]);
+        assert!(r.errors.is_empty(), "{what:?} {:?}", r.errors);
+        assert!(f.value("E2").is_empty(), "{what:?}");
+        let d = f.data();
+        assert_eq!(
+            d.sheets[0].conditional_formats, before.sheets[0].conditional_formats,
+            "{what:?}"
+        );
+        assert_eq!(
+            d.sheets[0].validations, before.sheets[0].validations,
+            "{what:?}"
+        );
+        // Not protected: the conditional format and the validation go,
+        // the merge stays.
+        protect(&mut f, false);
+        let r = f.apply(vec![clear("A1:H8", s, what)]);
+        assert!(r.errors.is_empty(), "{what:?} {:?}", r.errors);
+        let d = f.data();
+        assert_eq!(d.sheets[0].merges, before.sheets[0].merges, "{what:?}");
+        assert!(d.sheets[0].conditional_formats.is_empty(), "{what:?}");
+        assert!(d.sheets[0].validations.is_empty(), "{what:?}");
+        assert!(!is_bold(&f, "A1"), "{what:?}");
+    }
+}
+
+/// G12: Clear formats is AOO's Default Formatting (`SID_CELL_FORMAT_RESET`
+/// = `DeleteContents(IDF_HARDATTR | IDF_EDITATTR)`, cellsh3.cxx):
+/// `ScAttrArray::DeleteHardAttr` clears every pattern item but
+/// `ATTR_MERGE` / `ATTR_MERGE_FLAG`, so the conditional format
+/// (`ATTR_CONDITIONAL`) and the validation (`ATTR_VALIDDATA`) of the cells
+/// go with the formats, the merges and the contents stay; one undo step
+/// brings everything back.
+#[test]
+fn g12_clear_formats_takes_cf_and_validation_and_keeps_merges() {
+    let mut f = g12_protected();
+    let s = f.sheet;
+    protect(&mut f, false);
+    f.set("E2", "7");
+    f.set("B3", "merged");
+    let before = f.data();
+    // Part of each: the rest of the conditional format and of the
+    // validation stays.
+    let r = f.apply(vec![clear("B2:G3", s, ClearWhat::Formats)]);
     assert!(r.errors.is_empty(), "{:?}", r.errors);
-    assert!(!is_bold(&f, "D4") && !is_bold(&f, "A6"));
-    assert!(is_bold(&f, "A1"));
     let d = f.data();
     assert_eq!(d.sheets[0].merges, before.sheets[0].merges);
-    assert_eq!(
+    assert_eq!(d.sheets[0].conditional_formats.len(), 1);
+    assert_eq!(d.sheets[0].validations.len(), 1);
+    assert_ne!(
         d.sheets[0].conditional_formats,
         before.sheets[0].conditional_formats
     );
-    assert_eq!(d.sheets[0].validations, before.sheets[0].validations);
-    // Not protected: everything goes, as before.
-    protect(&mut f, false);
-    let r = f.apply(vec![formats("A1:H8", s)]);
+    assert_ne!(d.sheets[0].validations, before.sheets[0].validations);
+    assert!(!is_bold(&f, "E2") && is_bold(&f, "E1") && is_bold(&f, "E4"));
+    assert_eq!(f.value("E2"), n(7.0));
+    assert_eq!(f.value("B3"), Value::text("merged"));
+    // The validation no longer applies to G2, still does to G1.
+    f.set("G2", "anything");
+    assert_eq!(f.value("G2"), Value::text("anything"));
+    f.svc.undo(f.doc).unwrap();
+    // All of both.
+    let r = f.apply(vec![clear("A1:H8", s, ClearWhat::Formats)]);
     assert!(r.errors.is_empty(), "{:?}", r.errors);
     let d = f.data();
-    assert!(d.sheets[0].merges.is_empty());
+    assert_eq!(d.sheets[0].merges, before.sheets[0].merges);
     assert!(d.sheets[0].conditional_formats.is_empty());
     assert!(d.sheets[0].validations.is_empty());
-    assert!(!is_bold(&f, "A1"));
+    assert_eq!(f.value("E2"), n(7.0));
+    f.svc.undo(f.doc).unwrap();
+    f.svc.undo(f.doc).unwrap();
+    assert_eq!(f.data(), before);
 }
 
 /// T8 / review 6 L6: with several active scenarios over a cell (only a

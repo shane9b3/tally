@@ -491,6 +491,9 @@ pub fn precheck(wb: &Workbook, op: &Op) -> Result<(), ApiError> {
             }
             if matches!(what, ClearWhat::Formats | ClearWhat::All) {
                 check_format(wb, &ranges)?;
+                // Both take the conditional formats and validations of
+                // the cells with them (`apply_op_inner`); merges stay.
+                crate::protection::check_attr_removal(wb, &ranges, false)?;
             }
         }
         Op::ApplyStyle { sheet, ranges, .. } | Op::SetNumberFormat { sheet, ranges, .. } => {
@@ -757,9 +760,16 @@ fn apply_op_inner(
                     wb.pending.display_only.extend(ranges.iter().copied());
                     fx.layout(*sheet);
                 }
-                // "Delete all" removes the cell attributes, conditional
-                // formats and validations included (AOO `IDF_ATTRIB`,
-                // review 3, LOW).
+            }
+            // Clearing formats removes the cell attributes, conditional
+            // formats and validations included: both are pattern items in
+            // AOO (`ATTR_VALIDDATA`, `ATTR_CONDITIONAL`, scitems.hxx).
+            // "Delete all" is `IDF_ATTRIB` (review 3, LOW). Clear formats
+            // is AOO's Default Formatting, `SID_CELL_FORMAT_RESET` =
+            // `DeleteContents(IDF_HARDATTR | IDF_EDITATTR)` (cellsh3.cxx),
+            // whose `ScAttrArray::DeleteHardAttr` clears every pattern
+            // item but `ATTR_MERGE` / `ATTR_MERGE_FLAG`: merges stay.
+            if style {
                 let touches = wb.sheet(*sheet).is_some_and(|s| {
                     ranges.iter().any(|r| {
                         let l = local(r);

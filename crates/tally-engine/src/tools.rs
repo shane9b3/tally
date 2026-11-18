@@ -2198,27 +2198,10 @@ pub fn delete_contents(
     };
     if what.formats {
         check_format(wb, &ranges)?;
-        // Merge / Unmerge and the conditional format and validation
-        // commands are refused on a protected sheet whatever it allows
-        // (`ops::check_protection`, `ops_v03`), so removing one this way
-        // is too. As every protection test here, it refuses the whole
-        // command before anything changes; cell formats alone still go.
-        if crate::protection::sheet_protection(wb, sheet).is_some() {
-            let hit = |list: &[tally_model::CellRangeLocal]| {
-                list.iter().any(|r| {
-                    cuts.iter()
-                        .any(|l| crate::condfmt::intersect_rect(r, l).is_some())
-                })
-            };
-            let takes = wb.sheet(sheet).is_some_and(|s| {
-                s.meta.merges.iter().any(origin_in)
-                    || s.meta.cond_formats.iter().any(|cf| hit(&cf.ranges))
-                    || s.meta.validations.iter().any(|v| hit(&v.ranges))
-            });
-            if takes {
-                return Err(crate::protection::protected_error());
-            }
-        }
+        // Refused as a whole on a protected sheet, before anything
+        // changes, when it would remove a merge, a conditional format or
+        // a validation; cell formats alone still go.
+        crate::protection::check_attr_removal(wb, &ranges, true)?;
     }
     let mut changes = Vec::new();
     for r in &ranges {
