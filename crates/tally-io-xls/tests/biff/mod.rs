@@ -683,4 +683,121 @@ pub fn child_picture(pib: u32) -> Vec<u8> {
     art(0xF, 0, 0xF004, &body)
 }
 
+/// `PtgArea3d` on the `EXTERNSHEET` entry `ixti`; the column words carry
+/// the "relative" bits as given.
+pub fn ptg_area3d_on(ixti: u16, r0: u16, r1: u16, c0: u16, c1: u16) -> Vec<u8> {
+    let mut d = vec![0x3B];
+    d.extend(words(&[ixti, r0, r1, c0, c1]));
+    d
+}
+
+/// `PtgNum`.
+pub fn ptg_num(v: f64) -> Vec<u8> {
+    let mut d = vec![0x1F];
+    d.extend_from_slice(&v.to_le_bytes());
+    d
+}
+
+/// `PtgName`: the `NAME` record `index` (1-based).
+pub fn ptg_name(index: u32) -> Vec<u8> {
+    let mut d = vec![0x23];
+    d.extend_from_slice(&index.to_le_bytes());
+    d
+}
+
+/// The data of a defined `NAME` with option `flags`, local to sheet
+/// `itab` (1-based; 0 = the workbook), with the formula `rgce`.
+pub fn defined_name_data(name: &str, flags: u16, itab: u16, rgce: &[u8]) -> Vec<u8> {
+    let mut d = words(&[flags]);
+    d.extend_from_slice(&[0, name.encode_utf16().count() as u8]);
+    d.extend(words(&[rgce.len() as u16, 0, itab]));
+    d.extend_from_slice(&[0, 0, 0, 0]);
+    d.extend(utf16(name));
+    d.extend_from_slice(rgce);
+    d
+}
+
+/// A defined `NAME` record ([`defined_name_data`]).
+pub fn defined_name(name: &str, flags: u16, itab: u16, rgce: &[u8]) -> Vec<u8> {
+    rec(0x0018, &defined_name_data(name, flags, itab, rgce))
+}
+
+/// A hyperlink string: a 32-bit character count (with the NUL), UTF-16.
+pub fn hlink_string(s: &str) -> Vec<u8> {
+    let units: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut d = (units.len() as u32).to_le_bytes().to_vec();
+    d.extend(units.iter().flat_map(|u| u.to_le_bytes()));
+    d
+}
+
+/// The class id of a URL moniker.
+pub const URL_MONIKER: [u8; 16] = [
+    0xE0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B,
+];
+
+/// The start of an `HLINK` record's data: the cells `(r0, r1, c0, c1)`,
+/// the class id, the stream version and the flags.
+pub fn hlink_head(cells: (u16, u16, u16, u16), flags: u32) -> Vec<u8> {
+    let mut d = words(&[cells.0, cells.1, cells.2, cells.3]);
+    d.extend_from_slice(&[
+        0xD0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9,
+        0x0B,
+    ]);
+    d.extend_from_slice(&2u32.to_le_bytes());
+    d.extend_from_slice(&flags.to_le_bytes());
+    d
+}
+
+/// The data of an `HLINK` to a URL with a display name, optionally with a
+/// location in the target.
+pub fn hlink_url_data(cells: (u16, u16, u16, u16), url: &str, mark: Option<&str>) -> Vec<u8> {
+    let mut d = hlink_head(cells, 0x03 | 0x10 | if mark.is_some() { 0x08 } else { 0 });
+    d.extend(hlink_string("shown"));
+    d.extend_from_slice(&URL_MONIKER);
+    let units: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+    d.extend_from_slice(&(2 * units.len() as u32).to_le_bytes());
+    d.extend(units.iter().flat_map(|u| u.to_le_bytes()));
+    if let Some(m) = mark {
+        d.extend(hlink_string(m));
+    }
+    d
+}
+
+/// `HLINK` to a URL ([`hlink_url_data`]).
+pub fn hlink_url(cells: (u16, u16, u16, u16), url: &str, mark: Option<&str>) -> Vec<u8> {
+    rec(0x01B8, &hlink_url_data(cells, url, mark))
+}
+
+/// `HLINK` to a place in the workbook (`Sheet!A1` or a name).
+pub fn hlink_place(cells: (u16, u16, u16, u16), place: &str) -> Vec<u8> {
+    let mut d = hlink_head(cells, 0x08);
+    d.extend(hlink_string(place));
+    rec(0x01B8, &d)
+}
+
+/// The data of an `HLINK` to a file `up` directories above the
+/// workbook's.
+pub fn hlink_file_data(cells: (u16, u16, u16, u16), up: u16, path: &str) -> Vec<u8> {
+    let mut d = hlink_head(cells, 0x01);
+    d.extend_from_slice(&[
+        0x03, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x46,
+    ]);
+    d.extend_from_slice(&up.to_le_bytes());
+    d.extend_from_slice(&9u32.to_le_bytes());
+    d.extend_from_slice(b"FILE.XLS\0");
+    d.extend_from_slice(&[0; 24]);
+    let bytes: Vec<u8> = path.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    d.extend_from_slice(&(bytes.len() as u32 + 6).to_le_bytes());
+    d.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    d.extend_from_slice(&[3, 0]);
+    d.extend(bytes);
+    d
+}
+
+/// `HLINK` to a file ([`hlink_file_data`]).
+pub fn hlink_file(cells: (u16, u16, u16, u16), up: u16, path: &str) -> Vec<u8> {
+    rec(0x01B8, &hlink_file_data(cells, up, path))
+}
+
 pub mod books;

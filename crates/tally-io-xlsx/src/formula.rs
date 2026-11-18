@@ -369,6 +369,29 @@ pub fn excel_formula_to_of(
     Some(print_of(&f, origin, &r))
 }
 
+/// Converts the ExcelA1 text of the defined names of one workbook to
+/// model OpenFormula text (one sheet table for all of them). Used by the
+/// `.xls` reader (`tally-io-xls`).
+pub struct ExcelNameConverter(XlsxResolver);
+
+impl ExcelNameConverter {
+    /// A converter for a workbook with `sheet_names`.
+    pub fn new(sheet_names: &[String]) -> Self {
+        Self(XlsxResolver::new(sheet_names))
+    }
+
+    /// The text of a defined name (without `=`) local to `sheet` (or of
+    /// the workbook) → OpenFormula text with absolute sheet markers
+    /// (`of:=[$Sheet1.$A$1:.$B$10]`), or `None` when it does not parse.
+    pub fn to_of(&self, text: &str, sheet: Option<usize>) -> Option<String> {
+        if text.len() > 64 * 1024 {
+            return None;
+        }
+        let origin = CellAddr::new(sheet.unwrap_or(0) as SheetId, 0, 0);
+        excel_name_to_of(text, origin, &self.0)
+    }
+}
+
 /// Prints a parsed formula as model OpenFormula text (`of:=...`).
 pub(crate) fn print_of(f: &Formula, origin: CellAddr, r: &XlsxResolver) -> String {
     print(f, origin, Dialect::open_formula(), r)

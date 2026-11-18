@@ -260,9 +260,77 @@ pub fn page() -> Vec<u8> {
     file(stream(&g, &[("Page", one), ("Fit", two)]))
 }
 
+/// Defined names (of the workbook and of a sheet, a constant, a name
+/// built on another name, a union, a formula that is not read, a function
+/// name, a print area among them), a formula that uses a name, and
+/// hyperlinks (a URL over two cells, a URL with a location, a place in
+/// the workbook, a file).
+pub fn names() -> Vec<u8> {
+    let mut g = globals(&[], &[], &[]);
+    g.extend(externsheet(2));
+    // 1: Data = Main!$A$1:$B$1.
+    g.extend(defined_name("Data", 0, 0, &ptg_area3d_on(0, 0, 0, 0, 1)));
+    // 2: Rate = 0.25.
+    g.extend(defined_name("Rate", 0, 0, &ptg_num(0.25)));
+    // 3: the print area of the first sheet.
+    g.extend(builtin_name(0x06, 1, &ptg_area3d(0, 9, 0, 3)));
+    // 4: Local = 'Other sheet'!$C:$C, local to the second sheet.
+    g.extend(defined_name(
+        "Local",
+        0,
+        2,
+        &ptg_area3d_on(1, 0, 65_535, 2, 2),
+    ));
+    // 5: Double = Rate * 2.
+    let mut double = ptg_name(2);
+    double.extend(ptg_int(2));
+    double.push(0x05);
+    g.extend(defined_name("Double", 0, 0, &double));
+    // 6: Both = two areas, a union.
+    g.extend(defined_name(
+        "Both",
+        0,
+        0,
+        &ptg_union(&ptg_area3d_on(0, 0, 0, 0, 0), &ptg_area3d_on(1, 1, 1, 1, 1)),
+    ));
+    // 7: a formula with a function (NOW()): not read.
+    g.extend(defined_name("Stamp", 0, 0, &[0x21, 74, 0]));
+    // 8: a function name: not a name of the model.
+    g.extend(defined_name("Macro", 0x000E, 0, &[0x1E, 1, 0]));
+
+    let mut one = number(0, 0, 15, 1.0);
+    one.extend(number(0, 1, 15, 2.0));
+    one.extend(label(1, 0, 15, "site"));
+    one.extend(label(2, 0, 15, "place"));
+    one.extend(label(3, 0, 15, "file"));
+    // A5: =SUM(Data), B5: =Double+1.
+    let mut sum = vec![0x43, 1, 0, 0, 0];
+    sum.extend_from_slice(&[0x42, 1, 4, 0]);
+    one.extend(formula(4, 0, 15, 3.0, &sum));
+    let mut plus = vec![0x43, 5, 0, 0, 0];
+    plus.extend(ptg_int(1));
+    plus.push(0x03);
+    one.extend(formula(4, 1, 15, 1.5, &plus));
+    one.extend(window2(0x00B6));
+    one.extend(hlink_url((1, 1, 0, 1), "https://example.org/", None));
+    one.extend(hlink_url(
+        (5, 5, 0, 0),
+        "https://example.org/doc",
+        Some("part"),
+    ));
+    one.extend(hlink_place((2, 2, 0, 0), "'Other sheet'!B2"));
+    one.extend(hlink_file((3, 3, 0, 0), 1, "folder\\book.xls"));
+
+    let mut two = number(0, 2, 15, 5.0);
+    two.extend(window2(0x00B6));
+
+    file(stream(&g, &[("Main", one), ("Other sheet", two)]))
+}
+
 /// The fixtures by file name.
 pub fn all() -> Vec<(&'static str, Vec<u8>)> {
     vec![
+        ("names.xls", names()),
         ("formatted.xls", formatted()),
         ("pictures.xls", pictures()),
         ("notes.xls", notes()),

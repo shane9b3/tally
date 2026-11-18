@@ -290,7 +290,9 @@ it reads the BIFF8 formatting records calamine does not expose (`FONT`,
 record, `WINDOW2`, `PANE`, the page setup records (`SETUP`, the margins,
 `HEADER`, `FOOTER`, the print options, `WSBOOL`, the page breaks), the
 built-in `NAME`s `Print_Area` and `Print_Titles`, `MSODRAWINGGROUP` /
-`MSODRAWING` pictures, `NOTE` / `TXO`; docs/file-formats.md). Its rules:
+`MSODRAWING` pictures, `NOTE` / `TXO`, and since 2026-11-18 the defined
+names (`NAME` with `EXTERNSHEET` / `SUPBOOK`, `names.rs`) and the cell
+hyperlinks (`HLINK`, `hlink.rs`); docs/file-formats.md). Its rules:
 
 - It runs on the workbook stream the pre-scan extracted (strict chain
   walks, ≤ 256 MiB) and already walked, with the pre-scan's record
@@ -322,9 +324,49 @@ built-in `NAME`s `Print_Area` and `Print_Titles`, `MSODRAWINGGROUP` /
   direction), `max_images` (1,000), `max_image_bytes` (16 MiB),
   `max_total_image_bytes` (256 MiB, every placement counts, the bytes are
   shared `Arc<[u8]>`), `max_drawing_bytes` (64 MiB of `MSODRAWING` data),
-  `max_notes` (65,536). Print names kept: 2 × `max_sheets`, 8 areas each.
-  Past a limit the rest is left out with a warning and the file still
-  opens.
+  `max_notes` (65,536), `max_names` (65,535 `NAME` records, OpenOffice's
+  own count), `max_name_bytes` (16 MiB of names and name formulas kept
+  until the sheet names are known), `max_links` (1,000,000 cells with a
+  hyperlink in all sheets, 24 bytes each, counted before duplicates on a
+  cell are removed), `max_link_text_bytes` (16 MiB of link targets; a
+  link over a range shares one). Print names kept: 2 × `max_sheets`, 8
+  areas each. Past a limit the rest is left out with a warning and the
+  file still opens.
+- Defined names (`names.rs`). A `NAME` record that is too short, or whose
+  formula length reaches past it, still takes its index (other names
+  refer to names by index) and is not a name. `EXTERNSHEET` is cut to the
+  entries present (at most 65,536, read from at most 393 KiB of the
+  record and its continues); `SUPBOOK` records are one flag each (at most
+  65,536). A formula is decoded token by token within its declared
+  length: a token that is cut, an operator without operands, operands
+  left over, a sheet index without a sheet of this workbook, a name index
+  without a name, a number that is not finite and text with control
+  characters all skip the name; so does any token the decoder does not
+  know (functions, arrays, errors), so there is no table to index and no
+  recursion (the expression is reverse Polish, kept on a stack of
+  strings). The Excel text of a name is at most 8 KiB (`MAX_FORMULA_TEXT`;
+  past it the name is skipped), and the text moved while decoding is
+  charged to one budget for the workbook (`WORK_BUDGET`, 64 MiB): a
+  formula of 8,000 nested parentheses costs about 16 MB, and 300 of them
+  end the budget after four, after which every name with an operator is
+  skipped at its first one (plain references and constants cost nothing
+  and are still read). The decoded text goes through the XLSX reader's
+  formula parser (which has its own depth and size limits); names are
+  validated by the engine as for the other formats.
+- Hyperlinks (`hlink.rs`). The record and its continues are looked at up
+  to 64 KiB (a longer one is left out). Every field is read through a
+  checked cursor: a string's 32-bit length is multiplied and compared
+  with the bytes left before anything is read, and nothing is allocated
+  from a declared length. A target over 8 KiB, with a control character,
+  with an unknown moniker class or more than 64 directory levels up is
+  left out (counted in one warning). A link covers at most 10,000 cells
+  (else it is left out, as in the XLSX reader); the cells count against
+  `max_links` and, like formatted empty cells, only get the room the
+  value cells leave under `max_cells`. Targets are stored, never opened;
+  the engine drops `javascript:`, `data:` and `vbscript:` targets on
+  load (`ops_v03::check_url`), and a file path from the record becomes a
+  relative path or a `file:` URL without being resolved against the
+  disk.
 - Formatting never makes a file exceed `max_cells`. The pre-scan counts
   the value and formula records (each once, so never fewer than the cells
   that are materialized); empty cells that only carry a format (`BLANK`,
@@ -390,10 +432,18 @@ Tests: `tally-io-xls::hostile_formatting::*`
 `row_formats_of_a_hostile_sheet_are_bounded`),
 `tally-io-xls::formatting::*` (`blank_cells_respect_the_cell_budget`,
 `picture_budgets`, `biff5_opens_with_values_only_and_a_warning`),
-`tally-io-xls::layout_review::*` and `tally-io-xls::page_setup::*`. The
-`xls` and `open` fuzz targets reach the pass through `read_xls`; four
+`tally-io-xls::layout_review::*`, `tally-io-xls::page_setup::*`,
+`tally-io-xls::hostile_names_links::*`
+(`name_records_cut_at_every_length`, `name_lengths_and_indices_that_lie`,
+`every_token_as_a_name_formula`, `nested_name_formulas_are_bounded`,
+`name_limits_degrade_with_a_warning`, `hlink_records_cut_at_every_length`,
+`hlink_lengths_that_lie`, `link_limits_degrade_with_a_warning`,
+`many_links_on_the_same_cells_are_one_each`) and the unit tests of
+`names.rs` and `hlink.rs` (every cut, every byte as a token, every flag
+combination). The
+`xls` and `open` fuzz targets reach the pass through `read_xls`; five
 synthetic seeds (`fuzz/seeds/xls/formatted.xls`, `pictures.xls`,
-`notes.xls`, `page.xls`, generated from `tests/fixtures/xls/`, which
+`notes.xls`, `page.xls`, `names.xls`, generated from `tests/fixtures/xls/`, which
 `crates/tally-io-xls/tests/biff/books.rs` builds) exercise it. It has not
 been through a fuzz campaign yet.
 

@@ -50,7 +50,7 @@ use std::io::{Cursor, Read, Seek, Write};
 use tally_model::WorkbookData;
 
 pub use dates::{excel_serial_to_tally, tally_serial_to_excel};
-pub use formula::excel_formula_to_of;
+pub use formula::{excel_formula_to_of, ExcelNameConverter};
 pub use numfmt::{builtin_format_code, excel_to_ooo, is_date_format};
 pub use r1c1::{r1c1_formula_to_of, r1c1_to_a1};
 pub use sheet_v03::PageParts;

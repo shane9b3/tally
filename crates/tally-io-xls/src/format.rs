@@ -36,13 +36,15 @@ use std::sync::Arc;
 
 use tally_model::{
     AlignData, BorderLine, BordersData, CellProtectionData, CellRangeLocal, ChartAnchorData,
-    DimRun, FontData, HAlign, ImageData, MarginsData, NoteData, OrientationData, PageSetupData,
-    PaperData, SplitData, StyleData, StyleRun, UnderlineStyleData, VAlign, ViewOptionsData,
+    DimRun, FontData, HAlign, ImageData, LinkData, MarginsData, NoteData, OrientationData,
+    PageSetupData, PaperData, SplitData, StyleData, StyleRun, UnderlineStyleData, VAlign,
+    ViewOptionsData,
 };
 use tally_types::{MAX_COLS, MAX_ROWS};
 
+use crate::names::NameRecs;
 use crate::prescan::{bof_is_pre_biff8, record, u16_at, u32_at, Rec};
-use crate::Limits;
+use crate::{hlink, Limits};
 
 /// Columns of a BIFF8 sheet.
 const BIFF_COLS: usize = 256;
@@ -63,6 +65,8 @@ const APP_FONT_TWIPS: u16 = 200;
 const MAX_MARGIN_HMM: f64 = 127_000.0;
 /// Most areas of a `Print_Area` or `Print_Titles` name looked at.
 const MAX_NAME_AREAS: usize = 8;
+/// Most cells one hyperlink may cover (as in the XLSX reader).
+const MAX_LINK_CELLS: u64 = 10_000;
 
 /// What a cell format (XF) maps to.
 #[derive(Clone, Copy, Debug, Default)]
@@ -113,6 +117,8 @@ pub(crate) struct SheetFormat {
     pub images: Vec<ImageData>,
     /// Cell notes, sorted row-major.
     pub notes: Vec<NoteData>,
+    /// Cell hyperlinks, sorted row-major, one per cell.
+    pub links: Vec<LinkData>,
 }
 
 /// The formatting of a workbook.
@@ -128,6 +134,8 @@ pub(crate) struct Formatting {
     pub active_sheet: Option<u32>,
     /// One entry per `BOUNDSHEET`, in order.
     pub sheets: Vec<SheetFormat>,
+    /// The defined names, to be resolved with the sheet names.
+    pub names: NameRecs,
     /// What was skipped.
     pub warnings: Vec<String>,
 }
@@ -340,6 +348,9 @@ struct Dropped {
     drawing_bytes: bool,
     images: bool,
     notes: bool,
+    links: bool,
+    /// Hyperlinks that could not be read or cover too many cells.
+    bad_links: usize,
     walk: bool,
     unsupported_pictures: usize,
     other_shapes: usize,
@@ -854,6 +865,9 @@ struct Reader<'a> {
     images: usize,
     image_bytes: u64,
     notes: usize,
+    /// Cells with a hyperlink, and the bytes of the link targets.
+    links: usize,
+    link_bytes: u64,
 }
 
 /// A `NOTE` record: where the note is and which object holds its text.
@@ -1072,6 +1086,38 @@ impl Reader<'_> {
         });
     }
 
+    /// Puts a hyperlink on its cells: one entry per cell, sharing the
+    /// target. A link over more than [`MAX_LINK_CELLS`] cells is left out;
+    /// the cells and the target bytes count against the workbook's limits.
+    fn link(&mut self, out: &mut Vec<LinkData>, l: hlink::Hlink) {
+        let cells = u64::from(l.r1 - l.r0 + 1) * u64::from(l.c1 - l.c0 + 1);
+        if cells > MAX_LINK_CELLS {
+            self.dropped.bad_links += 1;
+            return;
+        }
+        let bytes = self.link_bytes.saturating_add(l.url.len() as u64);
+        if self.links >= self.limits.max_links || bytes > self.limits.max_link_text_bytes {
+            self.dropped.links = true;
+            return;
+        }
+        self.link_bytes = bytes;
+        let url: Arc<str> = Arc::from(l.url);
+        for row in l.r0..=l.r1 {
+            for col in l.c0..=l.c1 {
+                if self.links >= self.limits.max_links {
+                    self.dropped.links = true;
+                    return;
+                }
+                self.links += 1;
+                out.push(LinkData {
+                    row,
+                    col,
+                    url: url.clone(),
+                });
+            }
+        }
+    }
+
     fn sheet(&mut self, start: usize, walked: &mut u64, walk_budget: u64) -> SheetFormat {
         let s = self.s;
         let mut out = SheetFormat::default();
@@ -1094,6 +1140,7 @@ impl Reader<'_> {
         let mut last_obj: Option<(u16, u16)> = None;
         let mut note_texts: HashMap<u16, String> = HashMap::new();
         let mut note_recs: Vec<NoteRec> = Vec::new();
+        let mut link_buf: Vec<u8> = Vec::new();
         let mut seen_bof = false;
         let mut depth = 0usize;
         let mut pos = start;
@@ -1410,9 +1457,31 @@ impl Reader<'_> {
                         }
                     }
                 }
+                // HLINK: the cells and the target.
+                0x01B8 => {
+                    let link = if r.cont.is_empty() {
+                        hlink::parse(d)
+                    } else {
+                        link_buf.clear();
+                        append(s, &r, &mut link_buf, hlink::MAX_RECORD_BYTES)
+                            .then(|| hlink::parse(&link_buf))
+                            .flatten()
+                    };
+                    match link {
+                        Some(l) => self.link(&mut out.links, l),
+                        None => self.dropped.bad_links += 1,
+                    }
+                }
                 _ => {}
             }
         }
+
+        // Hyperlinks: row-major, one per cell (the first record wins, as
+        // in the XLSX reader).
+        if !out.links.is_sorted_by_key(|l| (l.row, l.col)) {
+            out.links.sort_by_key(|l| (l.row, l.col));
+        }
+        out.links.dedup_by_key(|l| (l.row, l.col));
 
         // Columns: OpenOffice's conversion (`XclTools::GetScColumnWidth`),
         // a width in 1/256 of the character width of font 0, rounded to
@@ -1890,6 +1959,8 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
     let mut group: Vec<u8> = Vec::new();
     let mut active: Option<u16> = None;
     let mut prints: Vec<PrintName> = Vec::new();
+    let mut names = NameRecs::default();
+    let mut extern_buf: Vec<u8> = Vec::new();
     let mut format_bytes = 0u64;
     let mut dropped = Dropped::default();
     let group_cap = usize::try_from(limits.max_total_image_bytes)
@@ -1989,7 +2060,8 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
                 }
             }
             0x003D => active = w(10).or(active),
-            // NAME: the print area and the print titles of a sheet.
+            // NAME: the print area and the print titles of a sheet; the
+            // other names are defined names.
             0x0018 => {
                 if let Some(p) = print_name(d) {
                     // One of each per sheet; they are applied in file
@@ -1998,6 +2070,16 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
                         prints.push(p);
                     }
                 }
+                names.name(d, limits);
+            }
+            // SUPBOOK and EXTERNSHEET: what the sheet indices of 3-D
+            // references in names stand for.
+            0x01AE => names.supbook(d),
+            0x0017 => {
+                extern_buf.clear();
+                // 65,536 entries of 6 bytes at most.
+                append(s, &r, &mut extern_buf, 2 + 6 * 65_536);
+                names.externsheet(&extern_buf);
             }
             0x0085 => {
                 if sheet_pos.len() < limits.max_sheets {
@@ -2114,6 +2196,8 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
         images: 0,
         image_bytes: 0,
         notes: 0,
+        links: 0,
+        link_bytes: 0,
     };
     // Sheets, walked from each BOUNDSHEET offset like the pre-scan (the
     // same budget: sheets may share or overlap their substreams).
@@ -2203,6 +2287,26 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
             limits.max_notes
         ));
     }
+    if d.links {
+        warnings.push(format!(
+            "Only the first {} cells with a hyperlink were read.",
+            limits.max_links
+        ));
+    }
+    if d.bad_links > 0 {
+        warnings.push(format!(
+            "{} hyperlink(s) with a target Tally does not read, or over more than 10,000 cells, \
+             were left out.",
+            d.bad_links
+        ));
+    }
+    if names.dropped {
+        warnings.push(format!(
+            "Only the first {} defined names ({} MiB) were read.",
+            limits.max_names,
+            limits.max_name_bytes / (1024 * 1024)
+        ));
+    }
     if d.unsupported_pictures > 0 {
         warnings.push(format!(
             "{} picture(s) in a format Tally does not show (EMF, WMF, PICT, BMP or TIFF) were \
@@ -2222,6 +2326,7 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
         default_font: default_family,
         active_sheet: active.map(u32::from),
         sheets,
+        names,
         warnings,
     }
 }

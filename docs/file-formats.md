@@ -766,6 +766,8 @@ XLSX reader maps the equivalent constructs, with its helpers (`pt_to_hmm`,
 | `NAME` with the built-in ids 0x06 (`Print_Area`) and 0x07 (`Print_Titles`) of a sheet | `page_setup.print_range`, `repeat_rows`, `repeat_cols` | Like `_xlnm.Print_Area` and `_xlnm.Print_Titles` in XLSX: one area is the print range (several areas are not kept); a title area over all 256 columns names rows, one over all 65,536 rows names columns. Only formulas made of `ptgArea3d`, `ptgRef3d`, `ptgUnion` and `ptgMemFunc` are read; the sheet is the one the name is local to |
 | `MSODRAWINGGROUP` (BLIP store), `MSODRAWING` (client anchors) | `images` | PNG and JPEG, recognized by their signature (as for XLSX media; some writers store a PNG in a JPEG record). The two-cell anchor (column + 1/1024, row + 1/256) is converted to position and size with the column widths and row heights the sheet is shown at. A BLIP stored directly in the store (without a store entry) takes its index like an entry. EMF, WMF, PICT, DIB and TIFF pictures are left out with one warning; text boxes, shapes, controls, charts and group shapes with the pictures in them (placed relative to the group) with another |
 | `NOTE` + the `TXO` of its object | `notes` (text, author, always shown) | |
+| `NAME` (other than the built-in ones), with `EXTERNSHEET` and `SUPBOOK` | `names` (name, workbook or sheet scope, formula) | `src/names.rs`. calamine's `defined_names()` is not used: it has no scope and only the first area of a formula. The name's parsed expression is decoded into Excel text and converted like an XLSX `definedName` (`tally_io_xlsx::ExcelNameConverter`). Decoded: references to cells and areas of one sheet of this workbook (`ptgRef3d`, `ptgArea3d` through an `EXTERNSHEET` entry of the workbook's own `SUPBOOK`), numbers, text, booleans, other names (`ptgName`), the arithmetic, comparison and text operators, union, intersection and range, parentheses. An area over all 65,536 rows (or all 256 columns) is a whole column (row) of the larger sheet, as in OpenOffice (`SetComplCol`, `SetComplRow`). A relative reference is stored as the cell it means for a formula in A1, which is the model's base cell. A name local to a sheet (`itab`) keeps its scope; a hidden name is a name, as in OpenOffice (#163146#). Left out with a count in one warning: a formula with a function, an array, an error value, a reference without a sheet, to another workbook, to a deleted sheet or across several sheets (OpenOffice reads these), and a name local to a sheet that is not there. Not names: function, macro and Visual Basic names (as in OpenOffice) and the built-in names (OpenOffice also lists `Print_Area`, `Print_Titles`, `_FilterDatabase`… as names; Tally keeps the print ranges in the page setup, like its XLSX reader). Invalid names are handled by the engine as for the other formats |
+| `HLINK` | `links` (one per cell, the target shared) | `src/hlink.rs`, put together as OpenOffice does (`XclImpHyperlink::ReadEmbeddedData`) and written like the XLSX reader's links. A URL moniker is the URL; a file moniker is the long (UTF-16) path, else the 8.3 one, with `\` as `/`: relative to the document with one `../` per level up, or `file:///C:/…` for a path with a drive and `file://server/share/…` for a UNC path (also when the target is stored as a string); a location is appended after `#`; a location alone is a place in the document, `#Sheet.A1` (the first `!` becomes `.`) or `#Name`. Display name and target frame are not kept. The link is on every cell of its range (at most 10,000 cells, else it is left out); of several records on one cell the first counts; the high byte of a column is ignored (#i80006#). Unlike OpenOffice, which only links text cells (`lclInsertUrl`), the link is a cell attribute whatever the cell holds, as for XLSX. Left out with a count in one warning: a record that is cut, has an unknown moniker or no target, a target over 8 KiB or with control characters, a path more than 64 levels up. The engine applies its own rules for link targets on load (no `javascript:`, `data:`, `vbscript:`) |
 
 Number formats decide what a number is, as for XLSX: under a format that
 shows a calendar date the value is a date serial (the 1900 leap-year
@@ -796,11 +798,11 @@ system's date separator is not `/` (parity X26; test
 A formula whose cell has no value in the file (a text result without its
 `STRING` record) is kept as a formula without a cached value.
 
-Not read: defined names other than the print area and print titles,
-hyperlinks (`HLINK`), named styles (`STYLE`), superscript and subscript,
-right-to-left sheets, conditional formats, data validation, outline
-groups, AutoFilter, protection passwords, charts, text boxes, shapes and
-grouped pictures.
+Not read: defined names whose formula uses a function (see `NAME`
+above), rich text inside a cell, named styles (`STYLE`), superscript and
+subscript, right-to-left sheets, conditional formats, data validation,
+outline groups, AutoFilter, protection passwords, charts, text boxes,
+shapes and grouped pictures.
 
 BIFF5 (Excel 5.0/95) files are read for their values and formulas only:
 their `XF`/`FONT` layouts differ, so the formatting pass is skipped and
@@ -816,12 +818,15 @@ skipped, and past a limit (65,536 fonts and cell formats, 16,384 number
 formats, 16 MiB of number format codes and font names in the styles, 256
 `COLINFO` per sheet, 1,048,576 `ROW` records, 10 M formatted cells, 4,096
 page breaks per sheet and direction, 1,000 pictures of at most 16 MiB each
-and 256 MiB together, 64 MiB of sheet drawing data, 65,536 notes) the rest
-is left out with a warning. Formatted empty cells get the room the value
-cells leave under the cell limit, so the formatting never turns a file
-that opens into one that does not.
+and 256 MiB together, 64 MiB of sheet drawing data, 65,536 notes, 65,535
+`NAME` records with 16 MiB of names and formulas, 1,000,000 cells with a
+hyperlink and 16 MiB of link targets) the rest
+is left out with a warning. Formatted empty cells and hyperlinks get the
+room the value cells leave under the cell limit, so the formatting never
+turns a file that opens into one that does not.
 Tests: `crates/tally-io-xls/tests/formatting.rs`, `layout_review.rs`,
-`page_setup.rs`, `hostile_formatting.rs` and `positions.rs`, on workbooks
+`page_setup.rs`, `names_links.rs`, `date_formats.rs`,
+`hostile_formatting.rs`, `hostile_names_links.rs` and `positions.rs`, on workbooks
 built in code
 (`tests/biff/`); `crates/tally-engine/tests/open_formats.rs`
 (`xls_opens_with_its_formatting`).

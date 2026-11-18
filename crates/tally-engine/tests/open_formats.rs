@@ -423,3 +423,56 @@ fn xls_opens_with_its_formatting() {
     assert_eq!(data.sheets[0].notes.len(), 2);
     assert_eq!(data.sheets[0].notes[0].text, "first note");
 }
+
+/// The defined names and the hyperlinks of an `.xls` reach the document:
+/// the names are defined (with their scope), formulas that use them
+/// calculate, and the links are on their cells.
+#[test]
+fn xls_opens_with_its_names_and_links() {
+    let mut svc = EngineService::with_default_codec();
+    let info = open(&mut svc, &repo("tests/fixtures/xls/names.xls"));
+    let (main, other) = (info.sheets[0].id, info.sheets[1].id);
+    let names = svc.names(info.doc).unwrap();
+    let mut got: Vec<(&str, Option<tally_types::SheetId>, &str)> = names
+        .iter()
+        .map(|n| (n.name.as_str(), n.scope, n.refers_to.as_str()))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("Both", None, "($Main.$A$1:$A$1~$'Other sheet'.$B$2:$B$2)",),
+            ("Data", None, "$Main.$A$1:$B$1"),
+            ("Double", None, "Rate*2"),
+            // A whole column of the BIFF sheet is a whole column here.
+            ("Local", Some(other), "$'Other sheet'.$C:$C"),
+            ("Rate", None, "0.25"),
+        ]
+    );
+    // =SUM(Data) and =Double+1, calculated (not only the stored results).
+    svc.recalc_all(info.doc).unwrap();
+    let wb = &svc.document(info.doc).unwrap().wb;
+    assert_eq!(wb.value(CellAddr::new(main, 4, 0)), Value::Number(3.0));
+    assert_eq!(wb.value(CellAddr::new(main, 4, 1)), Value::Number(1.5));
+    let data = wb.to_data();
+    let links: Vec<(u32, u32, &str)> = data.sheets[0]
+        .links
+        .iter()
+        .map(|l| (l.row, l.col, &*l.url))
+        .collect();
+    assert_eq!(
+        links,
+        [
+            (1, 0, "https://example.org/"),
+            (1, 1, "https://example.org/"),
+            (2, 0, "#'Other sheet'.B2"),
+            (3, 0, "../folder/book.xls"),
+            (5, 0, "https://example.org/doc#part"),
+        ]
+    );
+    // The print area next to the names is the sheet's, not a name.
+    assert!(data.sheets[0]
+        .page_setup
+        .as_ref()
+        .is_some_and(|p| p.print_range.is_some()));
+}

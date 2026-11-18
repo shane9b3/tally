@@ -25,10 +25,12 @@
 //! fails a file: what it cannot read is skipped with a warning in
 //! [`WorkbookData::warnings`](tally_model::WorkbookData::warnings), and
 //! empty cells that only carry a format get the room the value cells
-//! leave under [`Limits::max_cells`]. BIFF5 files open with their values
-//! only. Not read: defined names other than the print ranges, hyperlinks,
-//! named styles, charts and shapes (docs/file-formats.md). Export is not
-//! supported (docs/parity-deviations.md).
+//! leave under [`Limits::max_cells`]. The same pass reads the defined names
+//! (`NAME`; `names.rs`) and the cell hyperlinks (`HLINK`; `hlink.rs`).
+//! BIFF5 files open with their values only. Not read: rich text inside a
+//! cell, defined names whose formula uses functions, named styles, charts
+//! and shapes (docs/file-formats.md). Export is not supported
+//! (docs/parity-deviations.md).
 //!
 //! Hardening (docs/security.md): the file must start with the OLE2
 //! signature and be at most [`Limits::max_bytes`]. Before calamine runs,
@@ -53,6 +55,8 @@ use std::sync::Arc;
 use calamine::{Data, Reader, Xls, XlsOptions};
 
 mod format;
+mod hlink;
+mod names;
 pub mod prescan;
 use tally_model::{
     CellContentData, CellData, CellRangeLocal, DocSettings, SheetData, StyleData, WorkbookData,
@@ -106,6 +110,15 @@ pub struct Limits {
     pub max_drawing_bytes: usize,
     /// Most cell notes read (all sheets).
     pub max_notes: usize,
+    /// Most `NAME` records read (defined names; OpenOffice reads 65,535).
+    pub max_names: usize,
+    /// Most bytes of defined names and their formulas kept.
+    pub max_name_bytes: u64,
+    /// Most cells with a hyperlink (all sheets).
+    pub max_links: usize,
+    /// Most bytes of hyperlink targets kept (a link over a range shares
+    /// one target).
+    pub max_link_text_bytes: u64,
 }
 
 impl Default for Limits {
@@ -128,6 +141,10 @@ impl Default for Limits {
             max_total_image_bytes: tally_model::MAX_TOTAL_IMAGE_BYTES as u64,
             max_drawing_bytes: 64 * 1024 * 1024,
             max_notes: 65_536,
+            max_names: 65_535,
+            max_name_bytes: 16 * 1024 * 1024,
+            max_links: 1_000_000,
+            max_link_text_bytes: 16 * 1024 * 1024,
         }
     }
 }
@@ -382,6 +399,7 @@ fn decode(
     let mut text_total: u64 = 0;
     let mut sheets: Vec<SheetData> = Vec::with_capacity(names.len());
     let mut formula_failures = 0usize;
+    let mut links_dropped = false;
     for (si, meta) in metas.iter().enumerate() {
         let name = meta.name.clone();
         let range = wb
@@ -596,6 +614,14 @@ fn decode(
         sheet.tab_color = sf.tab_color;
         sheet.images = sf.images;
         sheet.notes = sf.notes;
+        // Hyperlinks count as cells, like the XLSX reader's.
+        let mut links = sf.links;
+        if links.len() as u64 > blanks.left {
+            links.truncate(blanks.left as usize);
+            links_dropped = true;
+        }
+        blanks.left -= links.len() as u64;
+        sheet.links = links;
         sheet.page_setup = sf.page_setup;
         sheet.row_breaks = sf.row_breaks;
         sheet.col_breaks = sf.col_breaks;
@@ -608,6 +634,14 @@ fn decode(
         }
         sheets.push(sheet);
     }
+    // Defined names, now that the sheets have their names.
+    let (defined_names, names_skipped) = formatting.names.resolve(&names);
+    if names_skipped > 0 {
+        warnings.push(format!(
+            "{names_skipped} defined name(s) with a formula Tally does not read from an .xls \
+             file (functions, references to other workbooks or to deleted sheets) were left out."
+        ));
+    }
     if formula_failures > 0 {
         warnings.push(format!(
             "{formula_failures} formula(s) could not be converted and were imported as values."
@@ -617,6 +651,12 @@ fn decode(
         warnings.push(format!(
             "The file has more than {} cells with its formatted empty cells: the formatting of \
              some empty cells was left out.",
+            limits.max_cells
+        ));
+    }
+    if links_dropped {
+        warnings.push(format!(
+            "The file has more than {} cells with its hyperlinks: some hyperlinks were left out.",
             limits.max_cells
         ));
     }
@@ -634,6 +674,7 @@ fn decode(
     Ok(WorkbookData {
         sheets,
         styles: styles.styles,
+        names: defined_names,
         settings,
         warnings,
         ..WorkbookData::default()
