@@ -30,8 +30,11 @@ export interface Binding {
   alt?: boolean;
   command: string;
   /**
-   * The native menu has the same accelerator, so inside Tauri the menu
-   * handles it (and the webview may never see the key).
+   * The native menu has the same accelerator, so with a native menu
+   * (macOS, Linux) the menu handles it (and the webview may never see the
+   * key). Windows has no native menu (the in-app menu bar only shows the
+   * accelerators), so there the keymap handles these too: every menu
+   * accelerator needs a binding here (menuIds.test.ts).
    */
   menu?: boolean;
   /** Also active while typing in a text field or editing a cell. */
@@ -100,6 +103,7 @@ export const BINDINGS: readonly Binding[] = [
   { key: "s", mod: true, shift: true, command: "file.saveAs", menu: true, global: true, label: "⇧⌘S" },
   { key: "n", mod: true, shift: false, command: "file.new", menu: true, global: true, label: "⌘N" },
   { key: "o", mod: true, shift: false, command: "file.open", menu: true, global: true, label: "⌘O" },
+  { key: "w", mod: true, shift: false, command: "file.close", menu: true, global: true, label: "⌘W" },
   { key: "=", code: "Equal", mod: true, shift: false, command: "view.zoomIn", menu: true, global: true, label: "⌘=" },
   { key: "+", code: "Equal", mod: true, shift: true, command: "view.zoomIn", global: true, label: "⌘+" },
   { key: "-", code: "Minus", mod: true, shift: false, command: "view.zoomOut", menu: true, global: true, label: "⌘−" },
@@ -167,7 +171,7 @@ function tabNumberBindings(): Binding[] {
 export interface KeyContext {
   /** Focus is in a text field (formula bar, name box, palette) or a cell edit is open. */
   typing: boolean;
-  /** Running inside Tauri with the native menu (menu accelerators win). */
+  /** A native menu owns the menu accelerators (the desktop app on macOS and Linux). */
   nativeMenu: boolean;
   /** macOS (platform-restricted bindings); absent counts as not macOS. */
   mac?: boolean;

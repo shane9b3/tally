@@ -6,12 +6,12 @@
  * review 3, MEDIUM-7; `scripts/check-bundle.sh` verifies the built output).
  * A production bundle opened outside Tauri shows a short notice instead.
  */
-import { App, type AppController } from "@tally/app";
+import { App, type AppController, type MenuItemState } from "@tally/app";
 import type { EngineClientV3, ShellClient } from "@tally/bridge";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { isTauri, makeTauriClient, setWindowTitle } from "./tauri";
-import { TitleBar } from "./TitleBar";
+import { isTauri, makeTauriClient, makeTitleBarShell, setWindowTitle } from "./tauri";
+import { TitleBar, type TitleBarShell } from "./TitleBar";
 
 type Client = EngineClientV3 & ShellClient & { recorded?: unknown[] };
 
@@ -22,7 +22,7 @@ const params = new URLSearchParams(location.search);
 declare global {
   interface Window {
     /** e2e/dev hook (dev browser builds only). */
-    __tally?: { client: Client; controller: AppController };
+    __tally?: { client: Client; controller: AppController; titleBar?: TitleBarShell & { activated: string[]; windowCalls: string[] } };
   }
 }
 
@@ -48,27 +48,65 @@ async function pickClient(): Promise<Client | null> {
   return null;
 }
 
-/** Windows (W5-5, §4 item 48): the custom title bar replaces the OS decorations. */
-async function customTitleBar(client: Client): Promise<boolean> {
-  if (!tauri) return false;
-  const chrome = (client as { windowChrome?: () => Promise<{ customTitleBar: boolean }> }).windowChrome;
-  return chrome ? await chrome().then((c) => c.customTitleBar, () => false) : false;
+/**
+ * Windows (W5-5, §4 item 48): the custom title bar (with the menu bar)
+ * replaces the OS decorations. `?titlebar=1` in a dev browser build mounts
+ * it over mocks (e2e).
+ */
+async function titleBarShell(client: Client): Promise<TitleBarShell | null> {
+  if (tauri) {
+    const chrome = (client as { windowChrome?: () => Promise<{ customTitleBar: boolean }> }).windowChrome;
+    const custom = chrome ? await chrome().then((c) => c.customTitleBar, () => false) : false;
+    return custom ? makeTitleBarShell() : null;
+  }
+  if (import.meta.env.DEV && params.get("titlebar") === "1") {
+    const dev = await import("@tally/app/dev");
+    const menu = dev.mockMenuShell(client as unknown as { emitMenuAction(id: string): void });
+    const windowCalls: string[] = [];
+    let maximized = false;
+    const call = (name: string) => () => Promise.resolve(void windowCalls.push(name));
+    const shell = Object.assign(menu, {
+      windowCalls,
+      minimize: call("minimize"),
+      close: call("close"),
+      toggleMaximize: () => {
+        maximized = !maximized;
+        windowCalls.push("toggleMaximize");
+        window.dispatchEvent(new Event("resize"));
+        return Promise.resolve();
+      },
+      isMaximized: () => Promise.resolve(maximized),
+    });
+    devTitleBar = shell;
+    return shell;
+  }
+  return null;
 }
+let devTitleBar: (TitleBarShell & { activated: string[]; windowCalls: string[] }) | undefined;
 
-function mount(client: Client, titleBar = false): void {
+function mount(client: Client, titleBar: TitleBarShell | null): void {
+  let controller: AppController | null = null;
   const onReady = (ctl: AppController): void => {
-    if (import.meta.env.DEV && !tauri) window.__tally = { client, controller: ctl };
+    controller = ctl;
+    if (import.meta.env.DEV && !tauri) window.__tally = { client, controller: ctl, titleBar: devTitleBar };
     if (tauri) setWindowTitle(ctl, mac);
+  };
+  // The menu shows what the command registry knows: a command that is off now, and why.
+  const itemState = (id: string): MenuItemState => {
+    const registry = controller?.registry;
+    if (!registry?.has(id) || registry.isEnabled(id)) return { enabled: true };
+    return { enabled: false, reason: registry.reasonFor(id) };
   };
   const root = document.getElementById("root");
   if (!root) return;
   if (titleBar) root.dataset.titlebar = "custom";
-  const app = <App client={client} initialTemplate={params.get("template")} platform={{ trafficLights: tauri && mac, nativeMenu: tauri }} onReady={onReady} />;
+  // With the title bar's menu there is no native menu: the webview's keymap owns every shortcut.
+  const app = <App client={client} initialTemplate={params.get("template")} platform={{ trafficLights: tauri && mac, nativeMenu: tauri && !titleBar }} onReady={onReady} />;
   createRoot(root).render(
     <StrictMode>
       {titleBar ? (
         <>
-          <TitleBar />
+          <TitleBar shell={titleBar} itemState={itemState} />
           <div className="tally-app-host">{app}</div>
         </>
       ) : (
@@ -80,7 +118,7 @@ function mount(client: Client, titleBar = false): void {
 
 void pickClient().then(async (client) => {
   if (client) {
-    mount(client, await customTitleBar(client));
+    mount(client, await titleBarShell(client));
     return;
   }
   const root = document.getElementById("root");

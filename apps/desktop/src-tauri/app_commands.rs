@@ -91,6 +91,8 @@ pub const APP_COMMANDS: &[&str] = &[
     "wb_print",
     "pick_image",
     "window_chrome",
+    "menu_model",
+    "menu_activate",
     "get_prefs",
     "set_prefs",
     "autosave_snapshot",

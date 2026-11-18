@@ -6,3 +6,4 @@
  */
 export { WebMockClient } from "./webMock";
 export { installMockTabs } from "./mockTabs";
+export { mockMenuShell, type MockMenuShell } from "./mockMenu";

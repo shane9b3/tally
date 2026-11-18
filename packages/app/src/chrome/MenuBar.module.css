@@ -1,0 +1,120 @@
+/* The in-app menu bar (MenuBar.tsx): a Windows-style bar and its pop-ups. */
+.root {
+  display: flex;
+  align-self: stretch;
+  flex: none;
+  min-width: 0;
+}
+
+.bar {
+  display: flex;
+  align-items: stretch;
+}
+
+.top {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--tally-radius-sm);
+  margin: 3px 0;
+  background: transparent;
+  color: var(--tally-text);
+  font: inherit;
+  font-size: var(--tally-font-size-sm);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.top:hover,
+.top:focus-visible,
+.topOpen {
+  background: var(--tally-gray-200);
+  outline: none;
+}
+
+.top:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--tally-accent);
+}
+
+.menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 220px;
+  max-width: 420px;
+  padding: 4px;
+  overflow-y: auto;
+  background: var(--tally-bg);
+  border: 1px solid var(--tally-border);
+  border-radius: var(--tally-radius-md);
+  box-shadow: var(--tally-shadow-pop);
+  display: flex;
+  flex-direction: column;
+  color: var(--tally-text);
+  font-family: var(--tally-font-family);
+  font-size: var(--tally-font-size);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: var(--tally-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.item:focus,
+.itemOpen {
+  background: var(--tally-gray-100);
+  outline: none;
+}
+
+.item[aria-disabled="true"] {
+  color: var(--tally-text-muted);
+}
+
+.check {
+  flex: none;
+  width: 16px;
+  color: var(--tally-accent-text);
+  font-size: var(--tally-font-size-sm);
+  text-align: center;
+}
+
+.label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.accel {
+  flex: none;
+  margin-left: 24px;
+  color: var(--tally-text-muted);
+  font-size: var(--tally-font-size-sm);
+}
+
+.arrow {
+  flex: none;
+  width: 10px;
+  color: var(--tally-text-muted);
+  text-align: right;
+}
+
+.separator {
+  flex: none;
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--tally-border-subtle);
+}

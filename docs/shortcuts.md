@@ -30,6 +30,7 @@ Generated from `packages/app/src/keymap.ts` (`BINDINGS`, `GRID_KEYS`) and `packa
 | ⇧⌘S | Save as… | `file.saveAs` |
 | ⌘N | New workbook | `file.new` |
 | ⌘O | Open… | `file.open` |
+| ⌘W | Close workbook | `file.close` |
 | ⌘= / ⌘+ | Zoom in | `view.zoomIn` |
 | ⌘− | Zoom out | `view.zoomOut` |
 | ⌘0 | Actual size | `view.zoomReset` |

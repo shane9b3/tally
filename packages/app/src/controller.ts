@@ -101,7 +101,7 @@ import { useCsvPromptStore } from "./csvExport";
 import { displayTitle, lockedMessage, parseLock, readOnlyGate, ReadOnlyFeature } from "./readOnly";
 
 export interface ControllerOptions {
-  /** Inside Tauri: the native menu owns its accelerators. */
+  /** A native menu owns its accelerators (the desktop app on macOS and Linux; Windows draws the menu in the window). */
   nativeMenu: boolean;
 }
 
@@ -1304,6 +1304,13 @@ export class AppController {
    * Cut: copies and marks the range; the next paste of that clipboard
    * moves it (`moveRange`, so references follow), as in Calc.
    */
+  /** Edit ▸ Select All (the in-app menu bar; the grid handles ⌘A itself): every cell of the sheet. */
+  selectAll = (): void => {
+    const active = this.selection.active;
+    useSelectionStore.getState().setSelection({ range: { r0: 0, c0: 0, r1: LAST_ROW, c1: LAST_COL }, active, anchor: { ...active } });
+    this.focusGrid();
+  };
+
   cut = async (): Promise<void> => {
     if (await this.w5.clipboard("cut")) return;
     if (!(await this.copy())) return;

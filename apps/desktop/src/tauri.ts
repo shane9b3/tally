@@ -1,8 +1,10 @@
 /** Desktop-only wiring: TauriClient and the window title. */
 import { displayTitle, useDocStore, type AppController, type PickedImage, type W5Shell, type WindowChrome } from "@tally/app";
+import type { MenuNode } from "@tally/bridge";
 import { TauriClient } from "@tally/bridge/tauri";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { TitleBarShell } from "./TitleBar";
 
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -34,6 +36,39 @@ export function makeTauriClient(): TauriClient & W5Shell & { windowChrome(): Pro
     /** `window_chrome` (windows.rs): whether to draw the custom title bar. */
     windowChrome: (): Promise<WindowChrome> => invoke<WindowChrome>("window_chrome"),
   });
+}
+
+/**
+ * What the Windows title bar drives (TitleBar.tsx). The window plugin is
+ * called without a label: Tauri acts on the window this webview is in now.
+ * The menu comes from the shell (`menu_model`, `menu-changed`, sent to this
+ * webview's label) and a chosen item goes back to it (`menu_activate`).
+ */
+export function makeTitleBarShell(): TitleBarShell {
+  const win = getCurrentWebviewWindow();
+  return {
+    minimize: () => invoke("plugin:window|minimize"),
+    toggleMaximize: () => invoke("plugin:window|toggle_maximize"),
+    close: () => invoke("plugin:window|close"),
+    isMaximized: () => invoke<boolean>("plugin:window|is_maximized"),
+    menuModel: () => invoke<MenuNode[]>("menu_model"),
+    menuActivate: (id) => invoke<void>("menu_activate", { id }),
+    onMenuChanged: (cb) => {
+      let off: (() => void) | null = null;
+      let cancelled = false;
+      win.listen<MenuNode[]>("menu-changed", (e) => cb(e.payload)).then(
+        (f) => {
+          if (cancelled) f();
+          else off = f;
+        },
+        (e: unknown) => console.warn("listening to menu-changed failed", e),
+      );
+      return () => {
+        cancelled = true;
+        off?.();
+      };
+    },
+  };
 }
 
 /**

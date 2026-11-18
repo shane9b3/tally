@@ -34,8 +34,10 @@
 //! Window chrome (W5-5, §4 item 48): on Windows the windows run without OS
 //! decorations and the React title bar in `apps/desktop/src/TitleBar.tsx`
 //! draws the caption buttons, driven by the `core:window:*` permissions of
-//! `capabilities/windows-titlebar.json`. `window_chrome` tells the UI which
-//! chrome to draw; [`setup`] restores the DWM shadow. macOS keeps its
+//! `capabilities/windows-titlebar.json`, and the menu bar (`menu.rs`: an
+//! undecorated Win32 window has no room for a native one, so Windows
+//! installs none). `window_chrome` tells the UI which chrome to draw;
+//! [`setup`] restores the DWM shadow. macOS keeps its
 //! overlay title bar and Linux its native one. The native window title is
 //! the shown tab's title, set here ([`update_window`]).
 
@@ -66,7 +68,8 @@ pub const TABS_CHANGED: &str = "tabs-changed";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowChrome {
-    /// The React title bar replaces the OS one.
+    /// The React title bar replaces the OS one, and its menu bar the native
+    /// menu (`menu::in_app_bar`).
     pub custom_title_bar: bool,
     /// `macos`, `windows`, `linux` or `other`.
     pub platform: &'static str,
@@ -469,17 +472,13 @@ pub fn reopen<R: Runtime>(app: &AppHandle<R>, has_visible_windows: bool) {
 }
 
 /// Rebuilds the Window menu's document list (every platform: the Window
-/// menu is the shell's own, not AppKit's `windowsMenu`). Runs on the main
+/// menu is the shell's own, not AppKit's `windowsMenu`) and tells the
+/// in-app menu bars (`menu::changed`). Runs on the main
 /// thread (inline when already there), so two refreshes from different
 /// threads never interleave their removes and appends.
 pub fn refresh_window_menu<R: Runtime>(app: &AppHandle<R>) {
     let handle = app.clone();
-    let result = app.run_on_main_thread(move || {
-        let list = handle.state::<Windows>().with(|r| r.window_list());
-        if let Err(e) = crate::menu::set_window_list(&handle, &list) {
-            eprintln!("tally: window menu: {e}");
-        }
-    });
+    let result = app.run_on_main_thread(move || crate::menu::changed(&handle));
     if let Err(e) = result {
         eprintln!("tally: window menu: {e}");
     }

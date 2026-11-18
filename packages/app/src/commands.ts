@@ -156,6 +156,7 @@ export function buildCommands(ctl: AppController, ui: CommandUi): Command[] {
     { id: "edit.copy", title: "Copy", kind: "Edit", shortcut: "⌘C", run: () => void ctl.copy() },
     { id: "edit.cut", title: "Cut", kind: "Edit", shortcut: "⌘X", run: ctl.cut },
     { id: "edit.paste", title: "Paste", kind: "Edit", shortcut: "⌘V", run: () => ctl.pasteFromClipboard(false) },
+    { id: "edit.selectAll", title: "Select all", kind: "Edit", keywords: ["everything", "whole sheet"], shortcut: "⌘A", run: ctl.selectAll },
     { id: "edit.pasteValues", title: "Paste values only", kind: "Edit", keywords: ["special", "plain", "text"], shortcut: "⇧⌘V", run: () => ctl.pasteFromClipboard(true) },
     { id: "edit.delete", title: "Clear contents", kind: "Edit", keywords: ["delete", "erase", "remove"], shortcut: "⌫", run: ctl.clearSelection },
     { id: "edit.clearFormats", title: "Clear formats", kind: "Edit", keywords: ["reset", "default", "plain"], run: async () => void (await ctl.clearFormats()) },

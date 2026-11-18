@@ -20,6 +20,11 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   and Paste no longer removes their conditional formatting or validity
   rules. The move is refused instead, as Delete Contents with Formats
   already was; Clear formats is refused there in the same case.
+- Windows: the menu bar (File, Edit, Insert, Format, Data, View, Sheet,
+  Tools, Window, Help) was missing. It is now at the top of the window,
+  next to the Tally logo, with the keyboard shortcuts shown beside the
+  items. Press Alt or F10 to reach it from the keyboard, then use the
+  arrow keys, Enter and Esc.
 
 ## [0.1.3] - 2026-11-17
 

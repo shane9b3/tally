@@ -297,6 +297,7 @@ and their args from the rule provider:
 | `menu-action` | `MenuActionEvent { id: string }` | `onMenuAction(cb)`; sent to the front document only (the shown tab of the most recently focused window) |
 | `close-requested` | `{ kind: "window" \| "quit" \| "tabs" }` | `onCloseRequested(cb)` (shell; `closing.rs`); sent to the one document being asked |
 | `prefs-changed` | `{ theme: "system" \| "light" \| "dark" \| null }` | `onPrefsChanged(cb)` (shell; `prefs.rs`); sent to the other document webviews |
+| `menu-changed` | `MenuNode[]` (below) | title bar (`apps/desktop/src/tauri.ts`; shell `menu.rs`); Windows only: the new menu model, sent to every document webview when the menu changes (open documents, front document, UI language) |
 | `tabs-changed` | `TabsState` (below) | `onTabsChanged(cb)` (shell; `windows.rs`); sent to every document webview on any change to the open documents |
 | `update-available` | `UpdateInfo` (below) | `onUpdateAvailable(cb)` (shell; `updater.rs`); an automatic check found an update; sent to the front document only |
 | `update-progress` | `{ received: number, total: number \| null }` | `onUpdateProgress(cb)` (shell); download progress, to the document that called `update_download` (one per whole percent) |
@@ -573,6 +574,39 @@ doubled, as muda reads it as a mnemonic marker on every platform), rebuilt on
 the main thread on open, close, move, focus and title changes. Native window
 titles follow the UI language ("Untitled") on `set_ui_language`. Those items are
 handled by the shell and never forwarded as `menu-action`.
+
+#### The in-app menu bar (Windows; `menu.rs`, `MenuBar.tsx`)
+
+The menu is defined once, as a tree (`menu::tree(locale, mac, documents)`).
+macOS and Linux build the native menu from it. Windows installs no native
+menu: its document windows have no OS frame (`decorations: false`), and a
+Win32 window without a non-client area cannot show a menu bar. There the
+title bar strip of each document webview draws the same tree (the shown
+tab's webview fills the window, so the pop-ups paint over the sheet):
+
+| Command | Args | Returns | Notes |
+|---|---|---|---|
+| `menu_model` | — | `MenuNode[]` | The menus of the bar, in the UI language, with the Window menu's document list. Document webviews only. |
+| `menu_activate` | `id` | `void` | An item chosen in the caller's menu bar. `id` must be an item of the current model (not a submenu or separator, not a macOS-only item), else `invalid_argument`. The selection then runs the native menu's handler (`menu::dispatch`) with the caller as the front document and the caller's window as the front window: a command id comes back to the caller as `menu-action`; the Window items act on the caller's window; a document of the list is shown. |
+
+`MenuNode` (generated, `packages/bridge/src/generated/MenuNode.ts`):
+`{ kind: "item" | "check" | "separator" | "submenu", id, label, accelerator: string | null, enabled, checked: boolean | null, items: MenuNode[] }`.
+`accelerator` is display text (`Ctrl+Shift+S`); `enabled` is the shell's
+(the webview also greys a command its registry has disabled). The items a
+native menu leaves to the OS have ids `native.*`: `native.cut`, `.copy`,
+`.paste` and `.selectAll` come back as `menu-action` with `edit.cut`,
+`edit.copy`, `edit.paste`, `edit.selectAll`; `native.minimize` and
+`native.maximize` act on the caller's window. `menu-changed` carries the
+new model whenever `windows::refresh_window_menu` runs (the one place the
+menu changes: open, close, move, focus, title, language).
+
+With no native menu on Windows there are no native accelerators either:
+the webview's keymap (`packages/app/src/keymap.ts`) handles every shortcut
+(`platform.nativeMenu` is `false`); `menuIds.test.ts` checks that every
+accelerator the model shows resolves to its command there. The browser
+build mounts the same title bar over a mock shell with `?titlebar=1`
+(`packages/app/src/dev/mockMenu.ts`; its model `menuModel.json` is written
+and checked by a Rust test of `menu.rs`).
 
 Closing a tab or window removes the autosave snapshots of its documents at
 once and closes them in the engine, forgetting their paths (what the in-app

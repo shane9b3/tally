@@ -2385,6 +2385,46 @@ pub struct MenuActionEvent {
     pub id: String,
 }
 
+/// What a [`MenuNode`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum MenuNodeKind {
+    /// A plain item.
+    Item,
+    /// An item with a check mark (`checked`).
+    Check,
+    /// A separator line (no id, no label).
+    Separator,
+    /// A submenu (`items`); the top-level nodes are the menus of the bar.
+    Submenu,
+}
+
+/// One node of the application menu as the shell defines it (`menu_model`,
+/// the `menu-changed` event): the in-app menu bar of the Windows title bar
+/// draws this tree and activates items by `id` (`menu_activate`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MenuNode {
+    /// What the node is.
+    pub kind: MenuNodeKind,
+    /// Item id (a command id, a shell id such as `window.nextTab`, or
+    /// `native.*` for the items the OS handles in a native menu); unique in
+    /// the tree; empty for separators.
+    pub id: String,
+    /// Label in the UI language.
+    pub label: String,
+    /// Shortcut text for display, e.g. "Ctrl+Shift+S".
+    pub accelerator: Option<String>,
+    /// Whether the shell accepts the item (`menu_activate`).
+    pub enabled: bool,
+    /// The check mark of a `check` item.
+    pub checked: Option<bool>,
+    /// The items of a submenu.
+    pub items: Vec<MenuNode>,
+}
+
 /// Error returned by every fallible API call (and by Tauri commands as
 /// `{ code, message }`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS, thiserror::Error)]
@@ -2576,6 +2616,7 @@ mod tests {
         Direction::export_all(&cfg).unwrap();
         DocChangedEvent::export_all(&cfg).unwrap();
         MenuActionEvent::export_all(&cfg).unwrap();
+        MenuNode::export_all(&cfg).unwrap();
         ApiError::export_all(&cfg).unwrap();
         NameInfo::export_all(&cfg).unwrap();
         AutoFilterInfo::export_all(&cfg).unwrap();

@@ -12,7 +12,7 @@ the expected result until G2.
 |---|---|---|
 | 0.1 | `pnpm install`, then `pnpm tauri dev` from the repo root. | One window "Tally", 1280×820, centred; cannot be resized below 900×600. |
 | 0.2 | macOS: look at the top-left. | Traffic lights sit inside the sidebar's top area (sidebar open) or before the document title (sidebar closed, ⌘\\); no native title text. Dragging the empty toolbar area or the sidebar top moves the window. |
-| 0.3 | Windows/Linux: look at the frame. | Native title bar and decorations; window title follows the document title. |
+| 0.3 | Windows/Linux: look at the frame. | Linux: native title bar and decorations; window title follows the document title. Windows: Tally's own title bar strip (logo, menus, title, caption buttons). |
 | 0.4 | Menu bar. | macOS: Tally, File, Edit, View, Sheet, Window. Windows/Linux: File, Edit, View, Sheet, Help. Accelerators shown as in the table in §6. |
 
 ## 1. Values and formulas (engine)

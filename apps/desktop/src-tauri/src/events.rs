@@ -7,6 +7,8 @@ use tauri::{AppHandle, Emitter, Runtime};
 pub const DOC_CHANGED: &str = "doc-changed";
 /// Event name for native menu selections.
 pub const MENU_ACTION: &str = "menu-action";
+/// Event name for a changed menu (the in-app menu bar's model, `menu.rs`).
+pub const MENU_CHANGED: &str = "menu-changed";
 
 /// Emits `doc-changed` for a change the UI did not initiate (volatile
 /// recalc, async load), to every webview (each filters by `doc`). Results of the UI's own apply/undo/redo are return

@@ -22,7 +22,7 @@
 .tally-titlebar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   height: var(--tally-titlebar-h);
   flex: none;
   padding-left: 10px;
@@ -48,15 +48,18 @@
   font-weight: 700;
 }
 
+/* The title takes the room the menus leave: it is the drag region. */
 .tally-titlebar-title {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+  padding: 0 8px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.tally-titlebar-spacer {
-  flex: 1;
-  align-self: stretch;
+  text-align: center;
+  line-height: calc(var(--tally-titlebar-h) - 1px);
+  color: var(--tally-text-muted, #5f6673);
 }
 
 .tally-caption {

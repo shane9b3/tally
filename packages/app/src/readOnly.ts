@@ -44,6 +44,7 @@ export const READ_ONLY_COMMANDS: ReadonlySet<string> = new Set([
   "file.close",
   "file.documentStats",
   "edit.copy",
+  "edit.selectAll",
   "edit.cancelClip",
   "edit.find",
   "edit.findNext",

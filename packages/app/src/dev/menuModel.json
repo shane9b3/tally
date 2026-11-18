@@ -1,0 +1,2319 @@
+[
+  {
+    "kind": "submenu",
+    "id": "menu/File",
+    "label": "File",
+    "accelerator": null,
+    "enabled": true,
+    "checked": null,
+    "items": [
+      {
+        "kind": "item",
+        "id": "file.new",
+        "label": "New",
+        "accelerator": "Ctrl+N",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.templates",
+        "label": "New from Template…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.open",
+        "label": "Open…",
+        "accelerator": "Ctrl+O",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.openReadOnly",
+        "label": "Open Read-Only…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "submenu",
+        "id": "menu/File/Open Recent",
+        "label": "Open Recent",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "file.clearRecent",
+            "label": "Clear Menu",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.save",
+        "label": "Save",
+        "accelerator": "Ctrl+S",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.saveAs",
+        "label": "Save As…",
+        "accelerator": "Ctrl+Shift+S",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.saveAsTemplate",
+        "label": "Save as Template…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "submenu",
+        "id": "menu/File/Export",
+        "label": "Export",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "file.exportXlsx",
+            "label": "Excel Workbook (.xlsx)…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "file.exportOds",
+            "label": "OpenDocument (.ods)…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "file.exportCsv",
+            "label": "CSV (.csv)…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "file.exportPdf",
+            "label": "PDF (.pdf)…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.printPreview",
+        "label": "Print Preview",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.print",
+        "label": "Print…",
+        "accelerator": "Ctrl+P",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.close",
+        "label": "Close",
+        "accelerator": "Ctrl+W",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      }
+    ]
+  },
+  {
+    "kind": "submenu",
+    "id": "menu/Edit",
+    "label": "Edit",
+    "accelerator": null,
+    "enabled": true,
+    "checked": null,
+    "items": [
+      {
+        "kind": "item",
+        "id": "edit.undo",
+        "label": "Undo",
+        "accelerator": "Ctrl+Z",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "edit.redo",
+        "label": "Redo",
+        "accelerator": "Ctrl+Shift+Z",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "native.cut",
+        "label": "Cut",
+        "accelerator": "Ctrl+X",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "native.copy",
+        "label": "Copy",
+        "accelerator": "Ctrl+C",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "native.paste",
+        "label": "Paste",
+        "accelerator": "Ctrl+V",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "edit.pasteValues",
+        "label": "Paste Values",
+        "accelerator": "Ctrl+Shift+V",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "edit.pasteSpecial",
+        "label": "Paste Special…",
+        "accelerator": "Ctrl+Alt+V",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "edit.delete",
+        "label": "Delete",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "native.selectAll",
+        "label": "Select All",
+        "accelerator": "Ctrl+A",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "submenu",
+        "id": "menu/Edit/Fill",
+        "label": "Fill",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "edit.fillDown",
+            "label": "Fill Down",
+            "accelerator": "Ctrl+D",
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "edit.fillRight",
+            "label": "Fill Right",
+            "accelerator": "Ctrl+R",
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "edit.fillUp",
+            "label": "Fill Up",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "edit.fillLeft",
+            "label": "Fill Left",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "edit.fillSheet",
+            "label": "Fill Sheets…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "edit.fillSeries",
+            "label": "Fill Series…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "edit.find",
+        "label": "Find…",
+        "accelerator": "Ctrl+F",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "edit.findReplace",
+        "label": "Find & Replace…",
+        "accelerator": "Ctrl+Alt+F",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "edit.editMode",
+        "label": "Edit Mode",
+        "accelerator": "Ctrl+Shift+M",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      }
+    ]
+  },
+  {
+    "kind": "submenu",
+    "id": "menu/Insert",
+    "label": "Insert",
+    "accelerator": null,
+    "enabled": true,
+    "checked": null,
+    "items": [
+      {
+        "kind": "item",
+        "id": "insert.function",
+        "label": "Function…",
+        "accelerator": "Ctrl+F2",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "insert.functionList",
+        "label": "Function List",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "insert.chart",
+        "label": "Chart…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "insert.image",
+        "label": "Image…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "insert.note",
+        "label": "Note",
+        "accelerator": "Shift+F2",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "insert.hyperlink",
+        "label": "Hyperlink…",
+        "accelerator": "Ctrl+Alt+K",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "insert.pageBreak",
+        "label": "Page Break Above Row",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "insert.colPageBreak",
+        "label": "Page Break Left of Column",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "insert.removePageBreak",
+        "label": "Remove Page Breaks at Cursor",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      }
+    ]
+  },
+  {
+    "kind": "submenu",
+    "id": "menu/Format",
+    "label": "Format",
+    "accelerator": null,
+    "enabled": true,
+    "checked": null,
+    "items": [
+      {
+        "kind": "item",
+        "id": "format.cells",
+        "label": "Cells…",
+        "accelerator": "Ctrl+1",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.stylesPanel",
+        "label": "Styles",
+        "accelerator": "Ctrl+F11",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "format.autoFormat",
+        "label": "AutoFormat…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "format.loadStyles",
+        "label": "Load Styles…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "format.bold",
+        "label": "Bold",
+        "accelerator": "Ctrl+B",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "format.italic",
+        "label": "Italic",
+        "accelerator": "Ctrl+I",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "format.underline",
+        "label": "Underline",
+        "accelerator": "Ctrl+U",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "format.strike",
+        "label": "Strikethrough",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "submenu",
+        "id": "menu/Format/Number Format",
+        "label": "Number Format",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "format.number.general",
+            "label": "General",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.number.number",
+            "label": "Number",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.number.thousands",
+            "label": "Number with Separators",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.currency",
+            "label": "Currency",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.percent",
+            "label": "Percent",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.number.date",
+            "label": "Date",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.number.time",
+            "label": "Time",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.number.scientific",
+            "label": "Scientific",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.number.text",
+            "label": "Text",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "separator",
+            "id": "",
+            "label": "",
+            "accelerator": null,
+            "enabled": false,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.number.custom",
+            "label": "Custom…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "submenu",
+        "id": "menu/Format/Borders",
+        "label": "Borders",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "format.borders.all",
+            "label": "All Borders",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.borders.outer",
+            "label": "Outer Borders",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.borders.inner",
+            "label": "Inner Borders",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "separator",
+            "id": "",
+            "label": "",
+            "accelerator": null,
+            "enabled": false,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.borders.top",
+            "label": "Top Border",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.borders.bottom",
+            "label": "Bottom Border",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.borders.left",
+            "label": "Left Border",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.borders.right",
+            "label": "Right Border",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "separator",
+            "id": "",
+            "label": "",
+            "accelerator": null,
+            "enabled": false,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "format.borders.none",
+            "label": "No Borders",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "format.merge",
+        "label": "Merge Cells",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "format.unmerge",
+        "label": "Unmerge Cells",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "format.conditional",
+        "label": "Conditional Formatting…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.validation",
+        "label": "Data Validation…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "format.fitRows",
+        "label": "Fit Row Height to Contents",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "submenu",
+        "id": "menu/Format/Chart",
+        "label": "Chart",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "chart.edit",
+            "label": "Edit Chart…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "chart.dataTable",
+            "label": "Data Table…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "chart.delete",
+            "label": "Delete Chart",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "edit.clearFormats",
+        "label": "Clear Formats",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      }
+    ]
+  },
+  {
+    "kind": "submenu",
+    "id": "menu/Data",
+    "label": "Data",
+    "accelerator": null,
+    "enabled": true,
+    "checked": null,
+    "items": [
+      {
+        "kind": "item",
+        "id": "data.sortAsc",
+        "label": "Sort Ascending",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.sortDesc",
+        "label": "Sort Descending",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.sort",
+        "label": "Sort…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.sortOptions",
+        "label": "Sort with Options…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "submenu",
+        "id": "menu/Data/Filter",
+        "label": "Filter",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "data.filter",
+            "label": "AutoFilter",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "data.standardFilter",
+            "label": "Standard Filter…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "data.advancedFilter",
+            "label": "Advanced Filter…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "separator",
+            "id": "",
+            "label": "",
+            "accelerator": null,
+            "enabled": false,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "data.resetFilter",
+            "label": "Reset Filter",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "data.clearFilters",
+            "label": "Clear Filters",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "data.refreshFilter",
+            "label": "Refresh Filter",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "item",
+        "id": "data.subtotals",
+        "label": "Subtotals…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.consolidate",
+        "label": "Consolidate…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.textToColumns",
+        "label": "Text to Columns…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.removeDuplicates",
+        "label": "Remove Duplicates…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.multipleOperations",
+        "label": "Multiple Operations…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "submenu",
+        "id": "menu/Data/Group and Outline",
+        "label": "Group and Outline",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "data.group",
+            "label": "Group…",
+            "accelerator": "F12",
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "data.ungroup",
+            "label": "Ungroup…",
+            "accelerator": "Ctrl+F12",
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "data.autoOutline",
+            "label": "AutoOutline",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "data.showOutlineLevel",
+            "label": "Show Level…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "data.clearOutline",
+            "label": "Remove Outline",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "submenu",
+        "id": "menu/Data/DataPilot",
+        "label": "DataPilot",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "data.dataPilot",
+            "label": "Start…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "data.refreshPivot",
+            "label": "Refresh",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.defineName",
+        "label": "Define Name…",
+        "accelerator": "Ctrl+F3",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.manageNames",
+        "label": "Manage Names…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.createNamesFromLabels",
+        "label": "Create Names from Labels…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.defineDatabaseRange",
+        "label": "Define Database Range…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.selectDatabaseRange",
+        "label": "Select Range…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.refreshRange",
+        "label": "Refresh Range",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "data.recalc",
+        "label": "Recalculate All",
+        "accelerator": "Ctrl+Shift+F9",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      }
+    ]
+  },
+  {
+    "kind": "submenu",
+    "id": "menu/View",
+    "label": "View",
+    "accelerator": null,
+    "enabled": true,
+    "checked": null,
+    "items": [
+      {
+        "kind": "submenu",
+        "id": "menu/View/Toolbars",
+        "label": "Toolbars",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "view.toolbar",
+            "label": "Toolbar",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "view.formattingBar",
+            "label": "Formatting Bar",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "view.formulaBar",
+            "label": "Formula Bar",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "view.statusBar",
+            "label": "Status Bar",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "separator",
+            "id": "",
+            "label": "",
+            "accelerator": null,
+            "enabled": false,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "view.customizeToolbars",
+            "label": "Customize Toolbars…",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "item",
+        "id": "view.toggleSidebar",
+        "label": "Toggle Sidebar",
+        "accelerator": "Ctrl+\\",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.glance",
+        "label": "At a Glance",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.navigator",
+        "label": "Navigator",
+        "accelerator": "F5",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.theme",
+        "label": "Theme: System / Light / Dark",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.showFormulas",
+        "label": "Show Formulas",
+        "accelerator": "Ctrl+`",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.valueHighlighting",
+        "label": "Value Highlighting",
+        "accelerator": "Ctrl+F8",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.zeroValues",
+        "label": "Zero Values",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.gridLines",
+        "label": "Grid Lines",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.headers",
+        "label": "Column and Row Headers",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.freeze",
+        "label": "Freeze Panes at Cursor",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.freezeRows",
+        "label": "Freeze Rows Above Cursor",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.freezeCols",
+        "label": "Freeze Columns Left of Cursor",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.unfreeze",
+        "label": "Unfreeze Panes",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.split",
+        "label": "Split Window",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.removeSplit",
+        "label": "Remove Split",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.pageBreaks",
+        "label": "Page Breaks",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.pageBreakPreview",
+        "label": "Page Break Preview",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "submenu",
+        "id": "menu/View/Locale",
+        "label": "Locale",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "view.locale.enUS",
+            "label": "English (US)",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "view.locale.enGB",
+            "label": "English (UK)",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "view.locale.deDE",
+            "label": "Deutsch (Deutschland)",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "view.locale.frFR",
+            "label": "Français (France)",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "view.locale.esES",
+            "label": "Español (España)",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "view.locale.jaJP",
+            "label": "日本語 (日本)",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.hideRows",
+        "label": "Hide Rows",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.showRows",
+        "label": "Show Rows",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.hideCols",
+        "label": "Hide Columns",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.showCols",
+        "label": "Show Columns",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.zoomIn",
+        "label": "Zoom In",
+        "accelerator": "Ctrl+=",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.zoomOut",
+        "label": "Zoom Out",
+        "accelerator": "Ctrl+-",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.zoomReset",
+        "label": "Actual Size",
+        "accelerator": "Ctrl+0",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.zoomDialog",
+        "label": "Zoom…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.zoomOptimal",
+        "label": "Optimal Zoom",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.zoomPageWidth",
+        "label": "Zoom to Page Width",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.zoomWholePage",
+        "label": "Zoom to Whole Page",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "view.fullScreen",
+        "label": "Full Screen",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      }
+    ]
+  },
+  {
+    "kind": "submenu",
+    "id": "menu/Sheet",
+    "label": "Sheet",
+    "accelerator": null,
+    "enabled": true,
+    "checked": null,
+    "items": [
+      {
+        "kind": "item",
+        "id": "sheet.insertCells",
+        "label": "Insert Cells…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.deleteCells",
+        "label": "Delete Cells…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.insert",
+        "label": "Insert Sheet",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.duplicate",
+        "label": "Copy Sheet…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.rename",
+        "label": "Rename Sheet…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.delete",
+        "label": "Delete Sheet",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.hide",
+        "label": "Hide Sheet",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.show",
+        "label": "Show Sheet…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.tabColor",
+        "label": "Tab Colour…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.selectAll",
+        "label": "Select All Sheets",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.deselectAll",
+        "label": "Deselect All Sheets",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.moveLeft",
+        "label": "Move Sheet Left",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "sheet.moveRight",
+        "label": "Move Sheet Right",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      }
+    ]
+  },
+  {
+    "kind": "submenu",
+    "id": "menu/Tools",
+    "label": "Tools",
+    "accelerator": null,
+    "enabled": true,
+    "checked": null,
+    "items": [
+      {
+        "kind": "item",
+        "id": "tools.protectSheet",
+        "label": "Protect Sheet…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "tools.protectDocument",
+        "label": "Protect Document…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "tools.goalSeek",
+        "label": "Goal Seek…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "tools.solver",
+        "label": "Solver…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "tools.scenarios",
+        "label": "Scenarios…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "submenu",
+        "id": "menu/Tools/Detective",
+        "label": "Detective",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": [
+          {
+            "kind": "item",
+            "id": "tools.tracePrecedents",
+            "label": "Trace Precedents",
+            "accelerator": "Shift+F7",
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "tools.removePrecedents",
+            "label": "Remove Precedents",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "tools.traceDependents",
+            "label": "Trace Dependents",
+            "accelerator": "Shift+F5",
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "tools.removeDependents",
+            "label": "Remove Dependents",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "tools.removeTraces",
+            "label": "Remove All Traces",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "separator",
+            "id": "",
+            "label": "",
+            "accelerator": null,
+            "enabled": false,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "tools.traceError",
+            "label": "Trace Error",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "tools.markInvalid",
+            "label": "Mark Invalid Data",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "tools.refreshTraces",
+            "label": "Refresh Traces",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "tools.autoRefreshTraces",
+            "label": "AutoRefresh",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          },
+          {
+            "kind": "item",
+            "id": "tools.detectiveFillMode",
+            "label": "Fill Mode",
+            "accelerator": null,
+            "enabled": true,
+            "checked": null,
+            "items": []
+          }
+        ]
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "tools.autoCorrect",
+        "label": "AutoCorrect Options…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "tools.autoInput",
+        "label": "AutoInput",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.properties",
+        "label": "Document Properties…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.documentStats",
+        "label": "Document Statistics…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "file.pageSetup",
+        "label": "Page Setup…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "tools.options",
+        "label": "Options…",
+        "accelerator": "Ctrl+,",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      }
+    ]
+  },
+  {
+    "kind": "submenu",
+    "id": "window-menu",
+    "label": "Window",
+    "accelerator": null,
+    "enabled": true,
+    "checked": null,
+    "items": [
+      {
+        "kind": "item",
+        "id": "native.minimize",
+        "label": "Minimize",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "native.maximize",
+        "label": "Maximize",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "window.nextTab",
+        "label": "Show Next Tab",
+        "accelerator": "Ctrl+Tab",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "window.prevTab",
+        "label": "Show Previous Tab",
+        "accelerator": "Ctrl+Shift+Tab",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "window.moveTabToNewWindow",
+        "label": "Move Tab to New Window",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "window.mergeAllWindows",
+        "label": "Merge All Windows",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "window.bringAllToFront",
+        "label": "Bring All to Front",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "separator",
+        "id": "",
+        "label": "",
+        "accelerator": null,
+        "enabled": false,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "check",
+        "id": "window.focus.doc-1",
+        "label": "Untitled 1",
+        "accelerator": null,
+        "enabled": true,
+        "checked": true,
+        "items": []
+      },
+      {
+        "kind": "check",
+        "id": "window.focus.doc-2",
+        "label": "Budget & Plan.ods",
+        "accelerator": null,
+        "enabled": true,
+        "checked": false,
+        "items": []
+      }
+    ]
+  },
+  {
+    "kind": "submenu",
+    "id": "menu/Help",
+    "label": "Help",
+    "accelerator": null,
+    "enabled": true,
+    "checked": null,
+    "items": [
+      {
+        "kind": "item",
+        "id": "help.shortcuts",
+        "label": "Keyboard Shortcuts",
+        "accelerator": "Ctrl+/",
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "help.checkUpdates",
+        "label": "Check for Updates…",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      },
+      {
+        "kind": "item",
+        "id": "help.about",
+        "label": "About Tally",
+        "accelerator": null,
+        "enabled": true,
+        "checked": null,
+        "items": []
+      }
+    ]
+  }
+]

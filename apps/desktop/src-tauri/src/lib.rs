@@ -41,7 +41,7 @@ pub fn run() {
     // document gets its own fork of it (per-document locks, `state.rs`).
     let service = assist::build_service();
 
-    let result = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // First: a second launch (a file association on Windows and Linux,
         // `open -n` on macOS) hands its files to this instance and quits.
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
@@ -67,8 +67,17 @@ pub fn run() {
         .manage(AppState::new(service))
         .manage(registry::Windows::default())
         .manage(dialogs::OsOpen::default())
-        .manage(updater::UpdaterState::default())
-        .menu(menu::build)
+        .manage(updater::UpdaterState::default());
+    // Windows draws the menu in its custom title bar (the in-app menu bar,
+    // fed by `menu_model`): an undecorated Win32 window cannot show a
+    // native menu bar, and the accelerators of a hidden one would compete
+    // with the webview's keymap. macOS and Linux install the native menu.
+    let builder = if menu::in_app_bar() {
+        builder
+    } else {
+        builder.menu(menu::build)
+    };
+    let result = builder
         .on_menu_event(menu::on_event)
         .on_window_event(closing::on_window_event)
         .register_uri_scheme_protocol(print::PRINT_SCHEME, print::protocol)
@@ -79,6 +88,13 @@ pub fn run() {
             // Tools ▸ Options ▸ Input ▸ "Year (two digits)" for the
             // documents of this session (`prefs.rs`).
             let saved_prefs = prefs::load(app.handle());
+            if menu::in_app_bar() {
+                // No native menu is built: take the menu's language here.
+                menu::set_locale(
+                    app.handle(),
+                    l10n::locale_of(&prefs::ui_language(&saved_prefs)),
+                );
+            }
             state.set_two_digit_year_default(prefs::two_digit_year(&saved_prefs));
             // Tools ▸ Options ▸ Calculate ▸ "Enable multi-threaded calculation".
             prefs::apply_multithreading(&saved_prefs);
@@ -198,6 +214,9 @@ pub fn run() {
             // W5-5 shell commands: pictures and the window chrome.
             images::pick_image,
             windows::window_chrome,
+            // The in-app menu bar of the Windows title bar (menu.rs).
+            menu::menu_model,
+            menu::menu_activate,
             // Wave 5 (W5-6): prefs, autosave and recovery, templates, UI language.
             prefs::get_prefs,
             prefs::set_prefs,

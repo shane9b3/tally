@@ -1,6 +1,6 @@
 //! Native-menu localisation (§4 item 47, shell part) and the UI-language
 //! commands: `set_ui_language(lang)` stores the language in `prefs.json` and
-//! rebuilds the native menu with `tally_l10n::t()` labels (the `cmd.<id>`
+//! rebuilds the menu (`menu::install`) with `tally_l10n::t()` labels (the `cmd.<id>`
 //! and `menu.*` keys of `ui/*.json`); `ui_strings(lang)` hands the webview a
 //! table (it ships its own copies but can refresh from here);
 //! `localized_function_names(lang)` returns the canonical ⇄ localized pairs.
@@ -94,12 +94,11 @@ pub async fn set_ui_language(app: AppHandle, lang: String) -> CmdResult<()> {
     let locale = locale_of(&lang);
     let next = prefs::with_string_key(&prefs::load(&app), "uiLanguage", locale.language())?;
     prefs::store(&app, &next)?;
-    let menu = crate::menu::build_localized(&app, locale)
+    crate::menu::install(&app, locale)
         .map_err(|e| ApiError::new(ApiError::INTERNAL, format!("menu: {e}")))?;
-    app.set_menu(menu)
-        .map_err(|e| ApiError::new(ApiError::INTERNAL, format!("menu: {e}")))?;
-    // The fresh menu's Window list (Windows/Linux); the other windows switch
-    // their own UI on `prefs-changed` (`prefs::broadcast_prefs`).
+    // The fresh menu's Window list and the in-app menu bars' model
+    // (Windows); the other windows switch their own UI on `prefs-changed`
+    // (`prefs::broadcast_prefs`).
     crate::windows::refresh_window_menu(&app);
     // "Untitled" in native window titles follows the language too.
     crate::windows::update_all_windows(&app);
