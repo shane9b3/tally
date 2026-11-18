@@ -253,7 +253,7 @@ tested by the malicious corpora in `crates/tally-io-xls/tests/fixtures.rs`,
 
 | Reader | Pre-checks | Budgets | Notes |
 |---|---|---|---|
-| XLS (`tally-io-xls`) | OLE2 signature; file ≤ 256 MiB; `prescan`: strict CFB chain walks, canonical container, BIFF budgets (see "Review 4 fixes") | ≤ 1024 sheets, ≤ 10 M cells, ≤ 512 MiB text/formula bytes; before calamine: ≤ 8 M dense cells, ≤ 256 MiB text estimate; formatting pass: see "XLS formatting reader" | calamine 0.38 decodes the rebuilt container and the sanitized BIFF stream under `catch_unwind` (a panic is `XlsError::Malformed`, never a crash); formulas are converted by Tally's own parser, nothing is evaluated from the file. Formatting (widths, heights, cell formats, pictures, notes) is read by Tally's own BIFF8 reader from the same sanitized stream. |
+| XLS (`tally-io-xls`) | OLE2 signature; file ≤ 256 MiB; `prescan`: strict CFB chain walks, canonical container, BIFF budgets (see "Review 4 fixes") | ≤ 1024 sheets, ≤ 10 M cells, ≤ 512 MiB text/formula bytes; before calamine: ≤ 8 M dense cells, ≤ 256 MiB text estimate, ≤ 65,536 `CONTINUE` records behind the shared strings and ≤ 1,048,576 behind any record; formatting pass: see "XLS formatting reader" | calamine 0.38 decodes the rebuilt container and the sanitized BIFF stream under `catch_unwind` (a panic is `XlsError::Malformed`, never a crash; the pre-scan was audited against 0.38 on 2026-11-18 and refuses or repairs every input known to make calamine panic, see "XLS pre-scan audit"); formulas are converted by Tally's own parser, nothing is evaluated from the file. Formatting (widths, heights, cell formats, pictures, notes) is read by Tally's own BIFF8 reader from the same sanitized stream. |
 | SXC (`tally-io-ods`) | zip `mimetype`; the ODS zip-bomb, XML depth/attribute and cell/text budgets | identical to ODS | names are mapped while reading; no extra allocation per element. |
 | HTML (`tally-io-html`) | input ≤ 64 MiB (`MAX_INPUT_BYTES`) | ≤ 1024 tables, ≤ 10 M cells, ≤ 64 KiB per cell, `colspan`/`rowspan` clamped to 1000 | a hand-written tokenizer: no DOM, no script execution, `<script>`/`<style>`/`<template>` bodies skipped, entities decoded without recursion; formulas stay text (the engine recognizes numbers and dates only). |
 | dBase (`tally-io-dbf`) | version byte, header length `= 32 + 32·fields + 1`, record length `= 1 + Σ field widths`, record count ≤ what the file holds (+1 for a truncated last record) | ≤ 2 M records, ≤ 1024 fields, ≤ 10 M cells, file ≤ 256 MiB | memo/binary fields are never followed (no `.dbt` is opened). |
@@ -281,6 +281,97 @@ rounds per cyclic component and at most 20M evaluations per recalc. The
 solver evaluates the sandbox at most 10,000 times per request, within
 `timeout_ms` (≤ 60 s, sampling included), and branch-and-bound is bounded
 by `max_iterations` (≤ 100,000) nodes and a depth of 1,000.
+
+### XLS pre-scan audit (calamine 0.38, 2026-11-18)
+
+`tally_io_xls::prescan` models calamine's decoder: it is only as good as
+its match with the calamine version in `Cargo.lock`. It was written against
+0.37 and re-checked against 0.38.0 on 2026-11-18 (`src/xls.rs`, `src/cfb.rs`,
+the `XlsEncoding` decoder, `src/utils.rs`, `Range::from_sparse`,
+`formats.rs`; the 0.37 → 0.38 diff and then every read of a length, offset
+or count in 0.38's xls path). **The pre-scan must be re-checked on every
+calamine upgrade**: diff those files, walk the table below again, extend
+`crates/tally-io-xls/tests/calamine_audit.rs`, and only then change
+`prescan::AUDITED_CALAMINE`. The test
+`calamine_audit::the_locked_calamine_is_the_audited_one` fails while
+`Cargo.lock` or `fuzz/Cargo.lock` hold another version.
+
+What changed in 0.38 for this path: a BIFF5 `PtgStr` is `cch` + bytes
+(0.37 read a flags byte, as in BIFF8); the workbook stream is looked up as
+`Workbook`, then `Book`, without case; legacy multi-byte code pages decode
+the bytes as they are; the DIFAT chain is bounded and short directory
+entries are skipped (not reachable: calamine only sees the container Tally
+writes); `oleps` and `style` are new and not called.
+
+| calamine assumes | Covered by |
+|---|---|
+| Container: sector chains end, FAT indices exist, the stream entry is `Workbook`/`Book` | unchanged: strict walks, canonical container (one FAT, no mini stream, `Root Entry` + `Workbook`); the stream name is matched without case, as 0.38 does |
+| `RecordIter`: a record and its `CONTINUE`s fit the stream; one 16-byte slice is kept per `CONTINUE` | same framing (`prescan::record`), now over exactly the bytes calamine reads (not the last sector's padding); **gap closed:** at most 1,048,576 `CONTINUE`s per record (`MAX_CONTINUES`; empty ones cost 16 bytes for 4 of file) |
+| `BOF` ≥ 2 bytes, `BOUNDSHEET` ≥ 6, `FILEPASS` ≥ 2 (read unchecked: panic) | **gap closed:** refused by the pre-scan (`Malformed`) |
+| `CODEPAGE` ≥ 2, `DATEMODE` ≥ 2, BIFF8 `EXTERNSHEET` ≥ 2 (panic) | **gap closed:** the record is hidden (type `0xFFFF`), the file opens with a warning |
+| `BOUNDSHEET` offset ≤ stream length (slice: panic, the fuzzer's `xls.rs:633`) | **gap closed:** refused by the pre-scan |
+| `NAME`: ≥ 14 bytes, name within the record (error: file refused), `cce` ≤ record length, a leading 3-D reference has all its operands (panic) | **gap closed:** name cut to the characters present, formula length set to 0, the record keeps its index (formulas name names by index); warning "N defined name(s) … were left out". Shorter than the fixed part (15 bytes in BIFF8): refused |
+| `FORMAT`: `String::with_capacity(cch)`; at most 255 `[` (a `u8` counter: panic with overflow checks) | declared length clamped to the bytes present (unchanged); **gap closed:** the code is cut before the 256th `[` |
+| `SST`: counts present when the flags say so, a string that continues does so in a non-empty `CONTINUE` (panic); `Vec::remove(0)` per `CONTINUE` | **gap closed:** the mirror now refuses what calamine cannot read ("the shared string table is damaged") and counts an empty `CONTINUE` between strings as the empty string calamine makes of it (the old mirror stopped there: later strings had other indices, their `LABELSST` cells were not counted, and two cells far apart passed the dense-area budget: 10 M dense cells from a 5.6 KB file, reproduced); at most 65,536 `CONTINUE`s (`MAX_SST_CONTINUES`, 0.4 s of moves at the limit, measured) |
+| Text: UTF-8 bytes per character | **gap closed:** 2 or 3 only under code page 1200; with any other `CODEPAGE` calamine decodes the bytes one by one (up to 6 per 16-bit character, twice the old bound): the bound is 6 then (3 before BIFF8) |
+| `DIMENSIONS`: 10, 14 or 16 bytes (else the file fails), `last - first` (unchecked), `reserve(rows × cols)` | the record is hidden (it was zeroed; a length calamine rejects now opens too) |
+| `MULRK`: `last - first + 1` in 16 bits (panic with overflow checks; wraps to columns past 65,535 without) | **gap closed:** refused unless the columns match the length |
+| `MERGEDCELLS`: `count × 8` bytes present (panic) | **gap closed:** count cut to the areas present; a record without a count is hidden |
+| `LABEL`, `RSTRING`, `STRING`: `with_capacity(cch)` | clamped (unchanged) |
+| `LABELSST`: index into the strings | counted as a cell whether or not the string exists (the bounding box can no longer depend on the string mirror) |
+| `FORMULA`: ≥ 22 bytes, `cce` ≤ the bytes present (panic, the fuzzer's `xls.rs:1531`), every token has its operands (panic), row < 65,535 in `PtgRef`/`PtgRef3d` and a name index ≥ 1 (overflow), `PtgAttrSpace` inserts `cch` characters one by one | **gap closed:** the token walk is exact (sizes per BIFF version, BIFF5 `PtgStr` as 0.38 reads it: with the 0.37 layout the walk lost its place behind a BIFF5 string and missed every `PtgAttrSpace`, 40 records of 8 KB took 180 s, reproduced); a formula calamine would panic on gets `cce` = 0, which calamine reports as undecodable: the cell keeps its cached value and is counted in the "formula(s) could not be converted" warning. 20–21 bytes: refused |
+| `Range::from_sparse`: dense `rows × cols` per sheet, values and formulas | dense-area, cell and walk budgets (unchanged) |
+| Not called by Tally: `workbook_properties` (`oleps`), `vba_project`, pictures (feature off), `worksheet_style` | — |
+
+Where calamine returns an error instead of panicking (an `XF` under 4
+bytes, a cell record shorter than its fixed part, an unknown code page,
+sheet state or cached error code, an encrypted file) the file is refused
+with calamine's message, as before.
+
+Tests: `tally-io-xls::calamine_audit::*` (20 tests). They run calamine on
+the sanitized file outside `catch_unwind`, so a calamine panic fails them:
+every record type cut at every length in BIFF8 and BIFF5, every byte of
+those streams overwritten, 3,000 random stream edits and 24,000 random
+token streams per run (400,000 each for the audit, no panic), the code
+pages 1200, 1252, 932, 65001 and 1201 against the text bound, and one test
+per row above. The hostile inputs are also regression files
+(`fuzz/regressions/xls/prescan-*`, generated by the ignored
+`write_regressions` test and compared with it on every run).
+
+Measured cost of the worst file inside the default limits
+(`cargo build --release -p tally-io-xls --example xls_peak`, peak memory
+footprint from `/usr/bin/time -l`, 2026-11-18, macOS arm64). Every file is
+255 MiB, the largest accepted:
+
+| File | Pre-scan | + calamine | Whole read |
+|---|---|---|---|
+| one cell, the rest padding | 0.8 GB | 1.1 GB | 1.1 GB |
+| 10 M `RK` cells over an 8 M-cell area | 0.8 GB | 1.6 GB | 2.1 GB |
+| the text bound used up (22,000 labels of 4,000 CJK characters) | 0.8 GB | 1.5 GB | 2.1 GB |
+| the text bound, then 6.2 M cells | 0.8 GB | 1.75 GB | 2.6 GB |
+
+So the "about 1 GB" this document used to state was low: a hostile (or
+simply very large) `.xls` can take 2.6 GB. Most of it is copies of the
+file: the caller's bytes, the canonical container, calamine's sector
+buffer and calamine's copy of the stream are four times the file (1.1 GB
+at the size limit) before any cell exists; cells cost 40 bytes each in
+calamine and the text exists up to three times (calamine's sheet, the
+copy `worksheet_range` returns, Tally's cells). No cheap, safe reduction
+was found: a reader that frees the container once calamine has read it
+was tried and did not lower the peak. What would is a smaller
+`Limits::max_bytes` or `MAX_TEXT_ESTIMATE` for `.xls` (halving
+`max_bytes` saves about 0.5 GB), which also refuses large legitimate
+files and is an owner decision (docs/TODO.md).
+
+Residual risks: an allocation failure inside those 2.6 GB still aborts
+the process (the decoder cannot run in a separate process from the engine
+today). The model is hand-written: a calamine code path it does not
+mirror exactly would show up as a guarded panic (an error message, and a
+finding for the fuzz workflow), or, for sizes, as memory beyond the table
+above. The stable tests are not coverage-guided; the `xls` fuzz target has
+not run against this version of the pre-scan yet. Debug and release
+builds differ inside calamine (overflow checks), the pre-scan treats both
+the same.
 
 ### XLS formatting reader
 
@@ -846,14 +937,15 @@ release-built reader.
 | M8 HTML 64 KiB per-cell cap not enforced | Text is cut at a char boundary to the remaining room | `tally-io-html::review4::cell_text_is_cut_at_the_cap` | 60 MB HTML: one 63 MB cell, 1.45 GB → 64 KiB |
 | LOW-P11 Trace Precedents scans every range | One budget of 5M stored cells per detective query (`detective::MAX_ERROR_SCAN_PER_QUERY`); past it targets are reported without the error flag | `tally-engine::detective::tests` | 427 × 1M-row ranges: 17.2 s → ≤ 5M cells scanned |
 
-Residual risks: the XLS pre-scan models calamine 0.37's decoder. calamine
-is now pinned `=0.38.0` (the upgrade for RUSTSEC-2026-0436); a re-check of
-the pre-scan against 0.38's decoder is not recorded and is still to do,
-as on every upgrade. A calamine allocation
-inside the budgets (≈ 8M × 32-byte dense cells plus one cloned sheet,
-plus the text bound) can still reach about 1 GB for a hostile file, and
-an allocation failure there would still abort, since the decoder cannot
-run in a separate process from the engine today. The solver's sampling
+Residual risks: the XLS pre-scan models calamine's decoder. calamine is
+pinned `=0.38.0` (the upgrade for RUSTSEC-2026-0436) and the pre-scan was
+re-checked against it on 2026-11-18 ("XLS pre-scan audit" in §3c, with
+the gaps that check found and closed); it must be re-checked on every
+upgrade, and a test fails until it is. A file inside the budgets can
+still take 2.6 GB (measured there; the copies of a 256 MiB file alone are
+1.1 GB), and an allocation failure there would still abort, since the
+decoder cannot run in a separate process from the engine today. The
+solver's sampling
 still recomputes all dependents of the variables in a full workbook copy
 (bounded by the deadline). Detective's Trace Error has no service API yet
 (engine function only).
@@ -947,6 +1039,18 @@ slice indexing on a truncated record). Those targets therefore call
 calamine's sources returns to the reader's guard; a panic anywhere else,
 including Tally's own code inside the guard, still aborts. The two inputs
 are kept in `fuzz/regressions/{xls,open}/` and must stay an `Err`.
+
+Since the audit of 2026-11-18 (§3c "XLS pre-scan audit") the pre-scan
+refuses or repairs every input it knows calamine to panic on, these two
+included (a sheet offset past the stream is now the pre-scan's "a sheet
+starts past the end of the workbook stream"; a formula longer than its
+record opens with the cached value). The guard and
+`tolerate_guarded_panics` stay: the pre-scan is a model, and a panic it
+did not foresee must remain an error message. Such a panic found by the
+fuzzer is now a finding for the pre-scan: add the input to
+`fuzz/regressions/xls/` and a row to the audit table.
+`tally-io-xls::calamine_audit::fuzz_inputs_never_panic_calamine` replays
+the `xls` seeds and regressions with calamine outside `catch_unwind`.
 
 ### Regressions on stable
 

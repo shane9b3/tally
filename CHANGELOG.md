@@ -35,6 +35,18 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   next to the Tally logo, with the keyboard shortcuts shown beside the
   items. Press Alt or F10 to reach it from the keyboard, then use the
   arrow keys, Enter and Esc.
+- Excel 97-2003 (`.xls`) files with small defects now open instead of
+  being reported as malformed: a defined name or a formula that is cut
+  short (the cell keeps its last calculated value, and a message says
+  what was left out), a few optional records that are too short, and a
+  workbook stream whose name is written in another case.
+
+### Security
+- `.xls` import: the checks that run before the file is decoded were
+  re-audited against the decoder in use. Two kinds of crafted file that
+  could make opening take minutes or use far more memory than the limits
+  allow (Excel 5.0/95 formulas with padded strings; shared-string tables
+  with empty continuation records) are now handled or refused at once.
 
 ## [0.1.3] - 2026-11-17
 

@@ -239,8 +239,8 @@ pub fn read_xls(bytes: &[u8], limits: &Limits) -> Result<WorkbookData, XlsError>
     let scanned = catch_unwind(AssertUnwindSafe(|| {
         prescan::sanitize_with_offset(bytes, limits.max_sheets, limits.max_cells)
     }));
-    let (data, stream_at, scanned_cells) = match scanned {
-        Ok(Ok((data, at, scan))) => (data, at, scan.cells),
+    let (data, stream_at, scan) = match scanned {
+        Ok(Ok((data, at, scan))) => (data, at, scan),
         Ok(Err(prescan::Refusal::Malformed(m))) => return Err(XlsError::Malformed(m)),
         Ok(Err(prescan::Refusal::Budget { what, limit })) => {
             return Err(XlsError::LimitExceeded { what, limit })
@@ -262,12 +262,16 @@ pub fn read_xls(bytes: &[u8], limits: &Limits) -> Result<WorkbookData, XlsError>
     // room the value cells leave (the pre-scan counted those, each record
     // once, so never fewer than are materialized): formatting never makes
     // a file exceed the cell limit.
-    let blank_budget = limits.max_cells.saturating_sub(scanned_cells);
+    let blank_budget = limits.max_cells.saturating_sub(scan.cells);
     let result = catch_unwind(AssertUnwindSafe(|| {
         decode(data, formatting, limits, blank_budget)
     }));
     match result {
-        Ok(r) => r,
+        // What the pre-scan had to leave out (damaged names and records).
+        Ok(r) => r.map(|mut wb| {
+            wb.warnings.extend(scan.warnings());
+            wb
+        }),
         Err(_) => Err(XlsError::Malformed(
             "the BIFF stream could not be decoded".into(),
         )),

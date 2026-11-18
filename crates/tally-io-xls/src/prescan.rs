@@ -1,10 +1,12 @@
 //! Tally-side validation of an `.xls` file before calamine sees it
-//! (security review 4, C4).
+//! (security review 4, C4; re-audited against calamine 0.38 on 2026-11-18,
+//! docs/security.md "XLS pre-scan audit").
 //!
-//! calamine 0.37 allocates from sizes it reads in the file (sector chains,
+//! calamine allocates from sizes it reads in the file (sector chains,
 //! `DIMENSIONS` reservations, string capacities, the bounding box of the
 //! cell coordinates) before any of Tally's budgets run, and an allocation
-//! failure aborts the process (`catch_unwind` does not catch it). This
+//! failure aborts the process (`catch_unwind` does not catch it). It also
+//! indexes records without checking their length, which panics. This
 //! module therefore:
 //!
 //! 1. Extracts the workbook stream itself from the OLE2 container with
@@ -14,23 +16,40 @@
 //!    file around it, so calamine's container code only ever sees a file
 //!    Tally wrote.
 //! 2. Walks the BIFF records the way calamine's `RecordIter` does and
-//!    neutralizes the fields calamine allocates from without a bound:
-//!    `DIMENSIONS` records are zeroed (calamine only uses them for a
-//!    `Vec::reserve`), declared string lengths of `LABEL`/`RSTRING`/
-//!    `STRING`/`FORMAT` records are clamped to the bytes actually present
-//!    (the decoded text is unchanged), and `PtgAttrSpace` counts in cell
-//!    formulas are set to 0 (cosmetic spaces that calamine inserts one by
-//!    one, quadratically).
-//! 3. Refuses a file whose remaining calamine-side cost exceeds a budget:
+//!    neutralizes what calamine would trip over where the file can still
+//!    be read faithfully: `DIMENSIONS` records are hidden (calamine only
+//!    uses them for a `Vec::reserve`), declared string lengths of
+//!    `LABEL`/`RSTRING`/`STRING`/`FORMAT` records are clamped to the bytes
+//!    actually present (the decoded text is unchanged), `PtgAttrSpace`
+//!    counts in cell formulas are set to 0 (cosmetic spaces that calamine
+//!    inserts one by one, quadratically), a cell formula that ends inside
+//!    a token (or holds a value calamine's arithmetic overflows on) gets
+//!    an empty expression, so calamine reports it as undecodable and the
+//!    cell keeps its cached value, a `NAME` whose name or formula is cut
+//!    short keeps its place in the name table with an empty formula, a
+//!    `MERGEDCELLS` count is cut to the areas present, and optional
+//!    records too short for their fixed fields (`CODEPAGE`, `DATEMODE`,
+//!    `EXTERNSHEET`, `MERGEDCELLS`) are hidden. "Hidden" means the record
+//!    type is overwritten with [`HIDDEN_RECORD`], which no reader knows.
+//! 3. Refuses a file calamine cannot read without panicking and that
+//!    cannot be repaired in place (a `BOF`, `BOUNDSHEET`, `FILEPASS`,
+//!    `NAME` or `FORMULA` record shorter than its fixed part, a sheet
+//!    offset past the stream, a `MULRK` that contradicts its length, a
+//!    damaged shared string table).
+//! 4. Refuses a file whose remaining calamine-side cost exceeds a budget:
 //!    the dense area of every sheet's value and formula bounding boxes
 //!    (calamine materializes `Range`s densely, all sheets at once), the
 //!    number of cell records, an upper bound on the text calamine builds
 //!    (shared strings, their copies per `LABELSST`, labels, decoded
-//!    formulas) and the formula decoder's quadratic work.
+//!    formulas; six bytes per character unless the code page is UTF-16),
+//!    the formula decoder's quadratic work, and the `CONTINUE` records of
+//!    one record (calamine keeps a slice per `CONTINUE` and takes the
+//!    shared strings' ones from the front of a vector, quadratically).
 //!
-//! Residual risk: this models calamine 0.37's decoder. calamine is pinned
-//! exactly (now `=0.38.0`) and the model must be re-reviewed on every
-//! upgrade (docs/security.md).
+//! Residual risk: this models calamine [`AUDITED_CALAMINE`]'s decoder.
+//! calamine is pinned exactly and the model must be re-reviewed on every
+//! upgrade (docs/security.md; `tests/calamine_audit.rs` fails when the
+//! locked version is not the audited one).
 //!
 //! The record framing here ([`record`]) is shared with the formatting
 //! reader (`format.rs`), which walks the same sanitized stream.
@@ -47,6 +66,20 @@ pub const MAX_TEXT_ESTIMATE: u64 = 256 * 1024 * 1024;
 /// Upper bound on calamine's formula decoder work (tokens × output length,
 /// summed over formulas).
 pub const MAX_FORMULA_WORK: u64 = 4_000_000_000;
+/// Most `CONTINUE` records behind one record. calamine and the framing
+/// here keep 16 bytes per `CONTINUE`, which may be empty (4 bytes of
+/// file); a stream of the largest size holds about 32,000 full ones.
+pub const MAX_CONTINUES: usize = 1 << 20;
+/// Most `CONTINUE` records behind the `SST`: calamine removes each from
+/// the front of a vector (about 8 n² bytes moved).
+pub const MAX_SST_CONTINUES: usize = 65_536;
+/// The calamine version the model in this module was checked against
+/// (docs/security.md "XLS pre-scan audit"). `tests/calamine_audit.rs`
+/// compares it with the lock files.
+pub const AUDITED_CALAMINE: &str = "0.38.0";
+/// The record type a hidden record gets: neither calamine nor the
+/// formatting reader knows it.
+pub const HIDDEN_RECORD: u16 = 0xFFFF;
 
 const ENDOFCHAIN: u32 = 0xFFFF_FFFE;
 const FREESECT: u32 = 0xFFFF_FFFF;
@@ -267,8 +300,8 @@ fn read_directory(file: &[u8]) -> Result<Directory<'_>, Refusal> {
     })
 }
 
-/// Extracts the workbook stream (`Workbook`, `Book`, `WORKBOOK`, `BOOK`,
-/// in calamine's order).
+/// Extracts the workbook stream: `Workbook`, then `Book`, compared without
+/// case as calamine 0.38 does (the first entry of that name).
 pub fn extract_workbook_stream(file: &[u8]) -> Result<Vec<u8>, Refusal> {
     let Directory {
         c,
@@ -301,8 +334,8 @@ pub fn extract_workbook_stream(file: &[u8]) -> Result<Vec<u8>, Refusal> {
         (Vec::new(), Vec::new())
     };
     let mut last_err = bad("no workbook stream");
-    for name in ["Workbook", "Book", "WORKBOOK", "BOOK"] {
-        let Some(d) = dirs.iter().find(|d| d.name == name) else {
+    for name in ["Workbook", "Book"] {
+        let Some(d) = dirs.iter().find(|d| d.name.eq_ignore_ascii_case(name)) else {
             continue;
         };
         if d.len > MAX_STREAM_BYTES as u64 {
@@ -472,20 +505,33 @@ pub(crate) struct Rec {
     pub(crate) next: usize,
 }
 
+/// Why a record cannot be framed.
+enum FrameError {
+    /// The stream ends inside the record (calamine fails the workbook).
+    Short,
+    /// More than [`MAX_CONTINUES`] `CONTINUE` records follow.
+    Continues,
+}
+
 /// Frames the record at `pos`; `None` at the end, `Err` on a short stream
-/// (calamine fails the workbook then).
+/// (calamine fails the workbook then) or past [`MAX_CONTINUES`] (the
+/// pre-scan refuses such a file, so no reader behind it gets there).
 pub(crate) fn record(s: &[u8], pos: usize) -> Option<Result<Rec, ()>> {
+    frame(s, pos).map(|r| r.map_err(|_| ()))
+}
+
+fn frame(s: &[u8], pos: usize) -> Option<Result<Rec, FrameError>> {
     let rest = s.len().saturating_sub(pos);
     if rest == 0 {
         return None;
     }
     if rest < 4 {
-        return Some(Err(()));
+        return Some(Err(FrameError::Short));
     }
     let typ = u16_at(s, pos).unwrap_or(0);
     let len = u16_at(s, pos + 2).unwrap_or(0) as usize;
     if rest < len + 4 {
-        return Some(Err(()));
+        return Some(Err(FrameError::Short));
     }
     let data = pos + 4;
     let mut next = data + len;
@@ -494,7 +540,10 @@ pub(crate) fn record(s: &[u8], pos: usize) -> Option<Result<Rec, ()>> {
         while s.len() - next > 4 && u16_at(s, next) == Some(0x003C) {
             let l = u16_at(s, next + 2).unwrap_or(0) as usize;
             if s.len() - next < l + 4 {
-                return Some(Err(()));
+                return Some(Err(FrameError::Short));
+            }
+            if cont.len() == MAX_CONTINUES {
+                return Some(Err(FrameError::Continues));
             }
             cont.push((next + 4, l));
             next += 4 + l;
@@ -548,13 +597,51 @@ impl Cur<'_> {
     }
 }
 
+/// An upper bound on the UTF-8 bytes calamine's string decoder produces.
+///
+/// With the UTF-16 code page (1200, the default and what every BIFF8 file
+/// declares) an 8-bit character is one unit below U+0100 (2 bytes) and a
+/// 16-bit one at most 3 bytes. With any other `CODEPAGE` calamine hands
+/// the bytes of the string (8-bit characters widened with a zero byte
+/// each) to that code page's decoder, which yields at most 3 bytes per
+/// input byte: 6 per character. The strings of a stream older than BIFF8
+/// have no high-byte flag and are decoded as they are: 3 per byte.
+#[derive(Clone, Copy)]
+struct Enc {
+    utf16: bool,
+}
+
+impl Enc {
+    /// Per character of a string whose high-byte flag is `hb`.
+    fn per(self, hb: bool) -> u64 {
+        match (self.utf16, hb) {
+            (true, false) => 2,
+            (true, true) => 3,
+            (false, _) => 6,
+        }
+    }
+    /// Per character of a string of a BIFF8 stream (whatever its flag) or
+    /// of an older one.
+    fn max(self, pre_biff8: bool) -> u64 {
+        if self.utf16 || pre_biff8 {
+            3
+        } else {
+            6
+        }
+    }
+}
+
 /// Bytes of text calamine builds for the shared strings, and each
-/// string's decoded-length bound (for `LABELSST` copies).
-fn scan_sst(s: &[u8], r: &Rec) -> (u64, Vec<u32>) {
+/// string's decoded-length bound (for `LABELSST` copies), exactly as
+/// calamine's `parse_sst` numbers them. Where calamine would fail or
+/// panic (a string cut short, an empty `CONTINUE` inside a string) the
+/// file is refused.
+fn scan_sst(s: &[u8], r: &Rec, enc: Enc) -> Result<(u64, Vec<u32>), Refusal> {
+    let damaged = || bad("the shared string table is damaged");
     let mut out = Vec::new();
     let mut total = 0u64;
     if r.len < 8 {
-        return (0, out);
+        return Err(damaged());
     }
     let mut c = Cur {
         s,
@@ -563,12 +650,24 @@ fn scan_sst(s: &[u8], r: &Rec) -> (u64, Vec<u32>) {
         cont: r.cont.iter(),
     };
     loop {
-        if c.left() == 0 && !c.next_cont() {
-            break;
+        if total > MAX_TEXT_ESTIMATE {
+            return Err(over("text bytes", MAX_TEXT_ESTIMATE));
+        }
+        if c.left() == 0 {
+            if !c.next_cont() {
+                break;
+            }
+            if c.left() == 0 {
+                // An empty CONTINUE between two strings is an empty
+                // string of its own for calamine.
+                total += 24;
+                out.push(0);
+                continue;
+            }
         }
         // read_rich_extended_string
         if c.left() < 3 {
-            break;
+            return Err(damaged());
         }
         let cch = u16::from_le_bytes([c.byte(0).unwrap_or(0), c.byte(1).unwrap_or(0)]) as usize;
         let flags = c.byte(2).unwrap_or(0);
@@ -578,24 +677,25 @@ fn scan_sst(s: &[u8], r: &Rec) -> (u64, Vec<u32>) {
         let mut ext = 0usize;
         if flags & 0x8 != 0 {
             let (Some(a), Some(b)) = (c.byte(0), c.byte(1)) else {
-                break;
+                return Err(damaged());
             };
             c_run = u16::from_le_bytes([a, b]) as usize;
             c.at += 2;
         }
         if flags & 0x4 != 0 {
             let v = (0..4).map(|i| c.byte(i)).collect::<Option<Vec<u8>>>();
-            let Some(v) = v else { break };
+            let Some(v) = v else {
+                return Err(damaged());
+            };
             ext = i32::from_le_bytes([v[0], v[1], v[2], v[3]]) as usize;
             c.at += 4;
         }
         let mut est = 0u64;
         let mut left = cch;
-        let mut ok = true;
         while left > 0 {
             let per = if hb { 2 } else { 1 };
             let n = (c.left() / per).min(left);
-            est += n as u64 * if hb { 3 } else { 2 };
+            est += n as u64 * enc.per(hb);
             c.at += n * per;
             left -= n;
             if left > 0 {
@@ -603,22 +703,18 @@ fn scan_sst(s: &[u8], r: &Rec) -> (u64, Vec<u32>) {
                     hb = c.byte(0).unwrap_or(0) & 1 != 0;
                     c.at += 1;
                 } else {
-                    ok = false;
-                    break;
+                    return Err(damaged());
                 }
             }
         }
         // The capacity is cch bytes whatever was decoded.
         total += 24 + est.max(cch as u64);
-        if !ok {
-            break;
-        }
         out.push(est.min(u32::MAX as u64) as u32);
         if !c.skip(c_run.saturating_mul(4)) || !c.skip(ext) {
-            break;
+            return Err(damaged());
         }
     }
-    (total, out)
+    Ok((total, out))
 }
 
 #[derive(Default)]
@@ -668,6 +764,37 @@ pub struct Scan {
     pub text: u64,
     /// Formula decoder work bound.
     pub formula_work: u64,
+    /// `NAME` records whose name or formula was cut short: they keep
+    /// their place in the name table, with an empty formula.
+    pub damaged_names: u64,
+    /// Cell formulas calamine cannot decode without panicking (cut inside
+    /// a token, or a value its arithmetic overflows on): their expression
+    /// was emptied, the cells keep their cached values.
+    pub damaged_formulas: u64,
+    /// Optional records too short for their fixed fields, hidden.
+    pub hidden_records: u64,
+}
+
+impl Scan {
+    /// What the pre-scan left out of the file, for the user. (Formulas
+    /// are reported by the reader, which counts every formula that is
+    /// imported as its value.)
+    pub fn warnings(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.damaged_names > 0 {
+            out.push(format!(
+                "{} defined name(s) in this file are damaged and were left out.",
+                self.damaged_names
+            ));
+        }
+        if self.hidden_records > 0 {
+            out.push(format!(
+                "{} damaged record(s) in this file were skipped.",
+                self.hidden_records
+            ));
+        }
+        out
+    }
 }
 
 struct Budgets {
@@ -679,44 +806,100 @@ fn over(what: &'static str, limit: u64) -> Refusal {
     Refusal::Budget { what, limit }
 }
 
-/// Upper bound of the text calamine's formula decoder emits for one
-/// formula, and its token count. Patches `PtgAttrSpace` counts to 0.
-fn scan_formula(rgce: &mut [u8], pre_biff8: bool, name_max: u64, sheet_max: u64) -> (u64, u64) {
-    let mut i = 0usize;
-    let mut out = 0u64;
-    let mut tokens = 0u64;
+/// What the scan of one cell formula found.
+struct Formula {
+    /// Upper bound of the text calamine's decoder emits.
+    emit: u64,
+    /// Tokens.
+    tokens: u64,
+    /// `false` if calamine would index past the end of the expression or
+    /// overflow (a panic, at least in a build with overflow checks).
+    sound: bool,
+}
+
+/// Walks a cell formula token by token exactly as calamine 0.38's
+/// `parse_formula` does and patches `PtgAttrSpace` counts to 0. Where
+/// calamine returns an error the walk stops (calamine reads no further);
+/// where it would panic the formula is reported as not sound.
+fn scan_formula(
+    rgce: &mut [u8],
+    pre_biff8: bool,
+    enc: Enc,
+    name_max: u64,
+    sheet_max: u64,
+) -> Formula {
     let n = rgce.len();
+    let mut f = Formula {
+        emit: 0,
+        tokens: 0,
+        sound: true,
+    };
+    let mut i = 0usize;
     while i < n {
         let ptg = rgce[i];
         i += 1;
-        tokens += 1;
+        f.tokens += 1;
+        let left = n - i;
+        // (text emitted, operand bytes calamine indexes without a check)
         let (emit, size): (u64, usize) = match ptg {
-            0x3a | 0x5a | 0x7a | 0x3c | 0x5c | 0x7c => (sheet_max + 20, 6),
+            0x3a | 0x5a | 0x7a => {
+                // calamine prints `row + 1` computed in 16 bits.
+                if u16_at(rgce, i + 2) == Some(0xFFFF) {
+                    f.sound = false;
+                }
+                (sheet_max + 20, 6)
+            }
+            0x3c | 0x5c | 0x7c => (sheet_max + 20, 6),
             0x3b | 0x5b | 0x7b | 0x3d | 0x5d | 0x7d => (sheet_max + 30, 10),
-            0x01 => (0, 4),
-            0x03..=0x11 => (2, 0),
-            0x12..=0x15 => (2, 0),
-            0x16 => (0, 0),
+            0x01 => {
+                if left < 4 {
+                    break;
+                }
+                (0, 4)
+            }
+            0x03..=0x15 => (2, 0),
+            // A missing argument emits nothing itself, but a function
+            // call adds a comma per argument.
+            0x16 => (1, 0),
             0x17 => {
+                // BIFF8: cch, flags, characters. Before BIFF8 (calamine
+                // 0.38): cch, bytes. A short string is an error.
                 let Some(&cch) = rgce.get(i) else { break };
-                let hb = rgce.get(i + 1).is_some_and(|f| f & 1 != 0);
-                let bytes = if hb { 2 * cch as usize } else { cch as usize };
-                (2 + 3 * cch as u64, 2 + bytes)
+                let cch = cch as usize;
+                let (per, size) = if pre_biff8 {
+                    (enc.max(true), 1 + cch)
+                } else {
+                    let Some(&flags) = rgce.get(i + 1) else { break };
+                    let hb = flags & 1 != 0;
+                    (enc.per(hb), 2 + if hb { 2 * cch } else { cch })
+                };
+                if left < size {
+                    break;
+                }
+                (2 + cch as u64 * per, size)
             }
             0x18 => (0, 5),
             0x19 => {
-                let Some(&etpg) = rgce.get(i) else { break };
+                let Some(&etpg) = rgce.get(i) else {
+                    f.sound = false;
+                    break;
+                };
                 match etpg {
                     0x01 | 0x02 | 0x08 | 0x20 | 0x21 => (0, 3),
                     0x04 => {
-                        let k = u16_at(rgce, i + 1).unwrap_or(0) as usize + 1;
-                        (0, 3 + 2 * k)
+                        let Some(k) = u16_at(rgce, i + 1) else {
+                            f.sound = false;
+                            break;
+                        };
+                        (0, 3 + 2 * (k as usize + 1))
                     }
                     0x10 => (5, 3),
                     0x40 | 0x41 => {
-                        if i + 2 < n {
-                            rgce[i + 2] = 0;
+                        if left < 3 {
+                            f.sound = false;
+                            break;
                         }
+                        rgce[i + 2] = 0;
                         (0, 3)
                     }
                     _ => break,
@@ -727,24 +910,41 @@ fn scan_formula(rgce: &mut [u8], pre_biff8: bool, name_max: u64, sheet_max: u64)
             0x1E => (5, 2),
             0x1F => (340, 8),
             0x20 | 0x40 | 0x60 => (10, 7),
-            0x21 | 0x41 | 0x61 => (40, 2),
+            0x21 | 0x41 | 0x61 => match u16_at(rgce, i) {
+                // Not in calamine's function table: an error.
+                Some(iftab) if iftab >= 485 => break,
+                _ => (40, 2),
+            },
             0x22 | 0x42 | 0x62 => (40 + 256, 3),
-            0x23 | 0x43 | 0x63 => (name_max.max(5), 4),
-            0x24 | 0x44 | 0x64 => (14, if pre_biff8 { 3 } else { 4 }),
+            0x23 | 0x43 | 0x63 => {
+                // calamine computes `index - 1` unsigned.
+                if u32_at(rgce, i) == Some(0) {
+                    f.sound = false;
+                }
+                (name_max.max(5), 4)
+            }
+            0x24 | 0x44 | 0x64 => {
+                // BIFF8: `row + 1` computed in 16 bits.
+                if !pre_biff8 && u16_at(rgce, i) == Some(0xFFFF) {
+                    f.sound = false;
+                }
+                (14, if pre_biff8 { 3 } else { 4 })
+            }
             0x25 | 0x45 | 0x65 => (26, if pre_biff8 { 6 } else { 8 }),
             0x2A | 0x4A | 0x6A => (5, if pre_biff8 { 3 } else { 4 }),
             0x2B | 0x4B | 0x6B => (5, if pre_biff8 { 6 } else { 8 }),
             0x39 | 0x59 => (10, 6),
-            // calamine fails the formula: a short error text.
-            _ => {
-                out += 200;
-                break;
-            }
+            // calamine fails the formula.
+            _ => break,
         };
-        out += emit;
+        if left < size {
+            f.sound = false;
+            break;
+        }
+        f.emit += emit;
         i += size;
     }
-    (out, tokens)
+    f
 }
 
 /// Whether a `BOF` with version `v` and substream type `dt` opens a
@@ -757,23 +957,131 @@ pub(crate) fn bof_is_pre_biff8(v: u16, dt: u16) -> bool {
     }
 }
 
+/// Overwrites the type of the record whose data starts at `data`.
+fn hide(s: &mut [u8], data: usize) {
+    s[data - 4..data - 2].copy_from_slice(&HIDDEN_RECORD.to_le_bytes());
+}
+
+/// Checks a `NAME` record (data at `d`, `len` bytes) against what
+/// calamine's `parse_lbl` and `parse_defined_names` index. A name or a
+/// formula that is cut short is repaired in place: the name is cut to the
+/// characters present and the formula length set to 0, so the record
+/// keeps its index in the name table (formulas refer to names by index)
+/// and no reader takes a formula from it. Returns the name's length in
+/// characters and whether the record was repaired.
+fn scan_name(s: &mut [u8], d: usize, len: usize, pre_biff8: bool) -> Result<(u64, bool), Refusal> {
+    // The fixed part, and in BIFF8 the flags byte of the name.
+    if len < if pre_biff8 { 14 } else { 15 } {
+        return Err(bad("a NAME record is too short"));
+    }
+    let mut repaired = false;
+    let mut cch = s[d + 3] as usize;
+    if !pre_biff8 {
+        let per = if s[d + 14] & 1 != 0 { 2 } else { 1 };
+        let fit = (len - 15) / per;
+        if cch > fit {
+            cch = fit;
+            s[d + 3] = fit as u8;
+            repaired = true;
+        }
+    }
+    // calamine takes the last `cce` bytes of the record as the formula
+    // and reads the operands of a leading 3-D reference unchecked.
+    let cce = u16_at(s, d + 4).unwrap_or(0) as usize;
+    let fits = cce <= len && {
+        let rgce = &s[d + len - cce..d + len];
+        let need = match rgce.first() {
+            None => 0,
+            Some(0x3a | 0x5a | 0x7a) => {
+                if pre_biff8 {
+                    18
+                } else {
+                    7
+                }
+            }
+            Some(0x3b | 0x5b | 0x7b) => {
+                if pre_biff8 {
+                    21
+                } else {
+                    11
+                }
+            }
+            Some(0x3c | 0x5c | 0x7c | 0x3d | 0x5d | 0x7d) => {
+                if pre_biff8 {
+                    13
+                } else {
+                    3
+                }
+            }
+            Some(_) => 1,
+        };
+        rgce.len() >= need
+    };
+    if !fits || repaired {
+        s[d + 4..d + 6].copy_from_slice(&[0, 0]);
+        repaired = true;
+    }
+    Ok((cch as u64, repaired))
+}
+
+/// calamine's date-format detection counts the `[` of a `FORMAT` code in
+/// a `u8`. Cuts the string (declared length at `at`, `len` bytes of
+/// record data from there) before the 256th `[`; no format code of Excel
+/// has that many.
+fn clamp_brackets(s: &mut [u8], at: usize, len: usize, pre_biff8: bool, enc: Enc) {
+    let head = if pre_biff8 { 2 } else { 3 };
+    if len < head {
+        return;
+    }
+    let cch = u16_at(s, at).unwrap_or(0) as usize;
+    let hb = !pre_biff8 && s[at + 2] & 1 != 0;
+    let per = if hb { 2 } else { 1 };
+    let chars = cch.min((len - head) / per);
+    let mut open = 0usize;
+    for k in 0..chars {
+        let o = at + head + k * per;
+        open += if hb && enc.utf16 {
+            usize::from(s[o] == 0x5B && s[o + 1] == 0)
+        } else if hb {
+            // Another code page decodes the two bytes one by one.
+            usize::from(s[o] == 0x5B) + usize::from(s[o + 1] == 0x5B)
+        } else {
+            usize::from(s[o] == 0x5B)
+        };
+        if open > 255 {
+            s[at..at + 2].copy_from_slice(&(k as u16).to_le_bytes());
+            return;
+        }
+    }
+}
+
 /// Scans (and patches, see the module docs) the workbook stream.
 fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
     let mut scan = Scan::default();
     let mut sheet_pos: Vec<usize> = Vec::new();
     let mut sst: Vec<u32> = Vec::new();
     let mut pre_biff8 = false;
+    let mut enc = Enc { utf16: true };
     let mut name_max = 0u64;
     let mut sheet_max = 0u64;
     let mut pos = 0usize;
+    let too_many = || over("CONTINUE records of one record", MAX_CONTINUES as u64);
     // Globals.
-    while let Some(r) = record(s, pos) {
-        let Ok(r) = r else { break };
+    while let Some(r) = frame(s, pos) {
+        let r = match r {
+            Ok(r) => r,
+            Err(FrameError::Continues) => return Err(too_many()),
+            // calamine fails the workbook.
+            Err(FrameError::Short) => break,
+        };
         pos = r.next;
         let d = r.data;
         match r.typ {
             0x0809 => {
                 // calamine's parse_bof.
+                if r.len < 2 {
+                    return Err(bad("a BOF record is too short"));
+                }
                 let v = u16_at(s, d).unwrap_or(0);
                 let dt = if r.len >= 4 {
                     u16_at(s, d + 2).unwrap_or(0)
@@ -782,26 +1090,60 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                 };
                 pre_biff8 = bof_is_pre_biff8(v, dt);
             }
+            // calamine reads these three unchecked.
+            0x002F if r.len < 2 => return Err(bad("a FILEPASS record is too short")),
+            0x0042 => {
+                if r.len < 2 {
+                    hide(s, d);
+                    scan.hidden_records += 1;
+                } else {
+                    // 1200 is UTF-16LE; an unknown code page fails the
+                    // workbook in calamine.
+                    enc.utf16 = u16_at(s, d) == Some(1200);
+                }
+            }
+            0x0022 if r.len < 2 => {
+                hide(s, d);
+                scan.hidden_records += 1;
+            }
+            // EXTERNSHEET: the BIFF8 one starts with a count.
+            0x0017 if !pre_biff8 && r.len < 2 => {
+                hide(s, d);
+                scan.hidden_records += 1;
+            }
             0x0085 => {
+                // lbPlyPos, hsState and dt are read unchecked; a sheet
+                // cannot be left out.
+                if r.len < 6 {
+                    return Err(bad("a BOUNDSHEET record is too short"));
+                }
                 scan.sheets += 1;
                 if scan.sheets > b.max_sheets {
                     return Err(over("sheets", b.max_sheets as u64));
                 }
                 sheet_pos.push(u32_at(s, d).unwrap_or(u32::MAX) as usize);
-                let cch = s.get(d + 6).copied().unwrap_or(0) as u64;
-                sheet_max = sheet_max.max(cch * 3);
-                scan.text += 24 + cch * 3;
+                let cch = if r.len > 6 { s[d + 6] as u64 } else { 0 };
+                sheet_max = sheet_max.max(cch * enc.max(pre_biff8));
+                scan.text += 24 + cch * enc.max(pre_biff8);
             }
             0x0018 => {
-                let cch = s.get(d + 3).copied().unwrap_or(0) as u64;
-                name_max = name_max.max(cch * 3);
-                scan.text += 48 + cch * 3 + r.len as u64 * 40;
+                let (cch, repaired) = scan_name(s, d, r.len, pre_biff8)?;
+                scan.damaged_names += u64::from(repaired);
+                name_max = name_max.max(cch * enc.max(pre_biff8));
+                scan.text += 48 + cch * enc.max(pre_biff8) + r.len as u64 * 40;
             }
-            0x041E => {
-                clamp_string(s, d + 2, r.len.saturating_sub(2), pre_biff8);
+            0x041E if r.len >= 2 => {
+                clamp_string(s, d + 2, r.len - 2, pre_biff8);
+                clamp_brackets(s, d + 2, r.len - 2, pre_biff8, enc);
             }
             0x00FC => {
-                let (t, v) = scan_sst(s, &r);
+                if r.cont.len() > MAX_SST_CONTINUES {
+                    return Err(over(
+                        "CONTINUE records of the shared strings",
+                        MAX_SST_CONTINUES as u64,
+                    ));
+                }
+                let (t, v) = scan_sst(s, &r, enc)?;
                 scan.text += t;
                 sst = v;
             }
@@ -817,8 +1159,8 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
     let mut walked = 0u64;
     for &start in &sheet_pos {
         if start > s.len() {
-            // calamine panics on the slice: the workbook is refused.
-            break;
+            // calamine slices the stream there.
+            return Err(bad("a sheet starts past the end of the workbook stream"));
         }
         let mut vals = BBox::default();
         let mut fmls = BBox::default();
@@ -826,8 +1168,12 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
         let mut seen_bof = false;
         let mut depth = 0usize;
         let mut pos = start;
-        while let Some(r) = record(s, pos) {
-            let Ok(r) = r else { break };
+        while let Some(r) = frame(s, pos) {
+            let r = match r {
+                Ok(r) => r,
+                Err(FrameError::Continues) => return Err(too_many()),
+                Err(FrameError::Short) => break,
+            };
             walked += (r.next - pos) as u64;
             if walked > walk_budget {
                 return Err(over("worksheet stream bytes walked", walk_budget));
@@ -865,12 +1211,10 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                         seen_bof = true;
                     }
                 }
-                0x0200 => {
-                    // Only used for a reserve: make it empty.
-                    for x in &mut s[d..d + len] {
-                        *x = 0;
-                    }
-                }
+                // Only used for a reserve, computed with unchecked
+                // subtractions, and a length calamine does not expect
+                // fails the workbook: calamine never sees it.
+                0x0200 => hide(s, d),
                 0x0203 | 0x0205 | 0x027E if len >= 4 => {
                     let (r, c) = rc(s);
                     cell(&mut scan, &mut vals, r, c)?;
@@ -879,41 +1223,81 @@ fn scan_stream(s: &mut [u8], b: &Budgets) -> Result<Scan, Refusal> {
                     let (r, c) = rc(s);
                     cell(&mut scan, &mut vals, r, c)?;
                     let n = clamp_string(s, d + 6, len - 6, pre_biff8);
-                    scan.text += 24 + 3 * n;
+                    scan.text += 24 + n * enc.max(pre_biff8);
                 }
                 0x0207 => {
                     cell(&mut scan, &mut vals, fmla_pos.0, fmla_pos.1)?;
                     let n = clamp_string(s, d, len, pre_biff8);
-                    scan.text += 24 + 3 * n;
+                    scan.text += 24 + n * enc.max(pre_biff8);
                 }
                 0x00FD if len >= 10 => {
+                    // Counted whether or not the string exists: the
+                    // bounding box must never be smaller than calamine's.
                     let (r, c) = rc(s);
+                    cell(&mut scan, &mut vals, r, c)?;
                     let i = u32_at(s, d + 6).unwrap_or(u32::MAX) as usize;
-                    if let Some(&t) = sst.get(i) {
-                        cell(&mut scan, &mut vals, r, c)?;
-                        scan.text += t as u64;
-                    }
+                    scan.text += sst.get(i).map_or(0, |t| u64::from(*t));
                 }
                 0x00BD if len >= 6 => {
+                    // calamine computes `last - first + 1` in 16 bits and
+                    // fails the workbook unless it matches the length.
                     let (r, c0) = rc(s);
-                    let k = (len - 6) / 6;
-                    for j in 0..k as u32 {
-                        cell(&mut scan, &mut vals, r, c0 + j)?;
+                    let last = u16_at(s, d + len - 2).unwrap_or(0) as u32;
+                    if last < c0 || 6 + 6 * (last - c0 + 1) as usize != len {
+                        return Err(bad("a MULRK record contradicts its length"));
+                    }
+                    for c in c0..=last {
+                        cell(&mut scan, &mut vals, r, c)?;
+                    }
+                }
+                0x00E5 => {
+                    // The count is trusted over the bytes present.
+                    if len < 2 {
+                        hide(s, d);
+                        scan.hidden_records += 1;
+                    } else {
+                        let fit = ((len - 2) / 8) as u16;
+                        if u16_at(s, d).unwrap_or(0) > fit {
+                            s[d..d + 2].copy_from_slice(&fit.to_le_bytes());
+                        }
                     }
                 }
                 0x0006 if len >= 20 => {
+                    if len < 22 {
+                        // No room for the expression's length, which
+                        // calamine reads unchecked.
+                        return Err(bad("a FORMULA record is too short"));
+                    }
                     let (r, c) = rc(s);
                     fmla_pos = (r, c);
                     cell(&mut scan, &mut vals, r, c)?;
                     fmls.add(r, c);
                     let cce = u16_at(s, d + 20).unwrap_or(0) as usize;
-                    let lo = (d + 22).min(d + len);
-                    let hi = (d + 22 + cce).min(d + len);
-                    let (emit, tokens) =
-                        scan_formula(&mut s[lo..hi], pre_biff8, name_max, sheet_max);
-                    let emit = emit + 64;
+                    let f = if cce > len - 22 {
+                        None
+                    } else {
+                        let f = scan_formula(
+                            &mut s[d + 22..d + 22 + cce],
+                            pre_biff8,
+                            enc,
+                            name_max,
+                            sheet_max,
+                        );
+                        f.sound.then_some(f)
+                    };
+                    // The formula text, or calamine's error text.
+                    let (emit, tokens) = match f {
+                        Some(f) => (f.emit + 160, f.tokens.max(1)),
+                        None => {
+                            // An empty expression is an error for
+                            // calamine, not a panic.
+                            s[d + 20..d + 22].copy_from_slice(&[0, 0]);
+                            scan.damaged_formulas += 1;
+                            (160, 1)
+                        }
+                    };
                     scan.text += 24 + emit;
-                    scan.formula_work = scan.formula_work.saturating_add(tokens.max(1) * emit);
+                    scan.formula_work = scan.formula_work.saturating_add(tokens * emit);
                     if scan.formula_work > MAX_FORMULA_WORK {
                         return Err(over("formula decoding work", MAX_FORMULA_WORK));
                     }
@@ -967,9 +1351,12 @@ pub(crate) fn sanitize_with_offset(
     max_cells: u64,
 ) -> Result<(Vec<u8>, usize, Scan), Refusal> {
     let stream = extract_workbook_stream(file)?;
+    // What calamine reads back: the stream, padded to 4,096 bytes (not
+    // the zero padding of the last sector behind it).
+    let len = stream.len().max(4096);
     let (mut out, off) = build_container(stream);
     let scan = scan_stream(
-        &mut out[off..],
+        &mut out[off..off + len],
         &Budgets {
             max_sheets,
             max_cells,
