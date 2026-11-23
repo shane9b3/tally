@@ -10,6 +10,8 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-23
+
 ### Added
 - Excel 97-2003 (.xls) files open with their named ranges (Insert, Names,
   Define): names of the whole workbook and names that belong to one

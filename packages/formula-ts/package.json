@@ -1,6 +1,6 @@
 {
   "name": "@tally/formula-ts",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "TypeScript formula lexer mirroring tally-formula (shared JSON fixtures), reference extraction for the editor.",
   "license": "Apache-2.0",
