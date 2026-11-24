@@ -15,6 +15,8 @@ showFormulas: boolean,
  */
 valueHighlighting: boolean, 
 /**
- * Numeric zero values are shown blank.
+ * Zero values are shown blank: the number 0 and FALSE, typed or
+ * calculated (`CellView.text` is empty, `kind` stays `number` /
+ * `bool`, so the cell still stops a neighbour's overflowing text).
  */
 hideZeroValues: boolean, };

@@ -1120,6 +1120,30 @@ mod hide_print_tests {
             shown(&mut svc, false),
             ["FALSE", "FALSE", "TRUE", "TRUE", "0", "false", "7"]
         );
+        // A hidden zero keeps its kind: the grid stops a neighbour's
+        // overflowing text at it, as the print does (`blocksOverflow` in
+        // packages/grid/src/renderer.ts).
+        let opts = tally_api::CellsOptions {
+            show_formulas: false,
+            value_highlighting: false,
+            hide_zero_values: true,
+        };
+        let hidden = RangeDto {
+            r0: 0,
+            c0: 0,
+            r1: 1,
+            c1: 0,
+        };
+        let kinds: Vec<tally_api::ValueKind> =
+            svc.cells_with(doc, sheet, &[hidden], &opts).unwrap()[0]
+                .cells
+                .iter()
+                .map(|v| v.kind)
+                .collect();
+        assert_eq!(
+            kinds,
+            [tally_api::ValueKind::Bool, tally_api::ValueKind::Bool]
+        );
     }
 
     /// AOO `ScCellFormat::GetString` (cellform.cxx) tests `bFormula`

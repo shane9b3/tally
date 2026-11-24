@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { iconCount } from "../src/cfIcons";
 import { EngineClientSource } from "../src/engineSource";
 import { Grid } from "../src/grid";
-import { drawStyleId } from "../src/renderer";
+import { blocksOverflow, drawStyleId } from "../src/renderer";
 import { cellSelection, reduceKey } from "../src/selection";
 import type { DirtySet, GridDataSource, GridProps } from "../src/types";
 
@@ -191,6 +191,25 @@ describe("Tools ▸ Options ▸ View on the canvas", () => {
     grid.flush();
     expect(clipMarks()).toBe(0);
     grid.destroy();
+  });
+
+  it("a hidden zero or FALSE stops the neighbour's text like any cell with content", () => {
+    // What `cells_with` returns for 0 / FALSE with Zero values off: no text, the kind kept.
+    const long = "A very long text that would overflow";
+    const hidden = (r: number, kind: "number" | "bool") => view(r, 2, "", { kind, num: null });
+    const { grid } = make({ source: new FixedSource([view(8, 1, long), hidden(8, "number"), view(9, 1, long), hidden(9, "bool")], styles) });
+    expect(clipMarks()).toBe(2);
+    grid.destroy();
+    calls.length = 0;
+    // An empty cell (formatting only) and a text cell that shows nothing do not.
+    const { grid: free } = make({ source: new FixedSource([view(8, 1, long), view(8, 2, ""), view(9, 1, long), view(9, 2, "", { kind: "text" })], styles) });
+    expect(clipMarks()).toBe(0);
+    free.destroy();
+    expect(blocksOverflow(hidden(0, "number"))).toBe(true);
+    expect(blocksOverflow(hidden(0, "bool"))).toBe(true);
+    expect(blocksOverflow(view(0, 0, "x"))).toBe(true);
+    expect(blocksOverflow(view(0, 0, ""))).toBe(false);
+    expect(blocksOverflow(undefined)).toBe(false);
   });
 });
 

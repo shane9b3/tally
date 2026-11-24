@@ -15,6 +15,9 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   Page, Sheet, Zero values for printing), cells that show FALSE are now
   left empty like cells that show 0, as in OpenOffice. Before, FALSE was
   still shown and printed.
+- With zero values switched off, a long text no longer runs across the
+  cell next to it when that cell holds a hidden 0 or FALSE. It is cut
+  off at the cell's edge, as on the printed page and in OpenOffice.
 - Printing with Notes switched on (Format, Page, Sheet): the pages that
   list the notes are now named in the language of the interface
   (Kommentare, Commentaires, Comentarios) where the header or footer
