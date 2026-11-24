@@ -306,3 +306,86 @@ describe("MockClient v0.3 stubs", () => {
     expect((await client.protectionInfo(doc, sheet)).sheetProtected).toBe(false);
   });
 });
+
+describe("MockClient Clear and cell attributes (as the engine's Op::Clear)", () => {
+  const rule = {
+    kind: { type: "cellValue" as const, op: "gt" as const, formulas: ["5"] },
+    style: { bold: true, italic: null, underline: null, strike: null, color: null, fill: null, borders: null, numberFormat: null, display: null },
+    stopIfTrue: false,
+  };
+  const validation = (ranges: { r0: number; c0: number; r1: number; c1: number }[]) => ({
+    id: 0,
+    ranges,
+    kind: { type: "list" as const, source: { type: "values" as const, items: ["a", "b"] } },
+    allowBlank: true,
+    showDropdown: true,
+    sortAscending: false,
+    inputHelp: null,
+    error: null,
+  });
+  /** A1:A10 conditionally formatted, C1:C10 validated, E1 a plain bold value. */
+  async function formatted() {
+    const s = await setup();
+    const res = await s.client.apply(
+      s.doc,
+      tx(
+        set(s.sheet, 0, 0, "7"),
+        set(s.sheet, 0, 4, "plain"),
+        { type: "applyStyle", sheet: s.sheet, ranges: [{ r0: 0, c0: 4, r1: 0, c1: 4 }], patch: { bold: true, italic: null, underline: null, strike: null, fontFamily: null, fontSizePt: null, color: null, fill: null, hAlign: null, vAlign: null, wrap: null, numberFormat: null } },
+        { type: "addConditionalFormat", sheet: s.sheet, ranges: [{ r0: 0, c0: 0, r1: 9, c1: 0 }], rules: [rule] },
+        { type: "addValidation", sheet: s.sheet, validation: validation([{ r0: 0, c0: 2, r1: 9, c1: 2 }]) },
+      ),
+    );
+    expect(res.errors).toEqual([]);
+    return s;
+  }
+  const clear = (sheet: number, what: "all" | "contents" | "formats", r0: number, c0: number, r1: number, c1: number): Op => ({ type: "clear", sheet, ranges: [{ r0, c0, r1, c1 }], what });
+
+  it("Clear formats takes the conditional formats and validations of the cells, and only those", async () => {
+    const { client, doc, sheet } = await formatted();
+    // A3:C4 cuts both in two; the value in A1 stays.
+    const res = await client.apply(doc, tx(clear(sheet, "formats", 2, 0, 3, 2)));
+    expect(res.errors).toEqual([]);
+    expect(res.layoutChanged).toContain(sheet);
+    expect((await client.conditionalFormats(doc, sheet)).map((cf) => cf.ranges)).toEqual([[{ r0: 0, c0: 0, r1: 1, c1: 0 }, { r0: 4, c0: 0, r1: 9, c1: 0 }]]);
+    expect((await client.validations(doc, sheet)).map((v) => v.ranges)).toEqual([[{ r0: 0, c0: 2, r1: 1, c1: 2 }, { r0: 4, c0: 2, r1: 9, c1: 2 }]]);
+    expect(await client.validationAt(doc, sheet, 2, 2)).toBeNull();
+    expect(await text(client, doc, sheet, 0, 0)).toBe("7");
+    // The whole column: the format has no cell left and goes.
+    await client.apply(doc, tx(clear(sheet, "formats", 0, 0, 99, 0)));
+    expect(await client.conditionalFormats(doc, sheet)).toEqual([]);
+    expect(await client.validations(doc, sheet)).toHaveLength(1);
+  });
+
+  it("Clear all takes them too; Clear contents leaves them", async () => {
+    const { client, doc, sheet } = await formatted();
+    await client.apply(doc, tx(clear(sheet, "contents", 0, 0, 9, 2)));
+    expect(await client.conditionalFormats(doc, sheet)).toHaveLength(1);
+    expect(await client.validations(doc, sheet)).toHaveLength(1);
+    await client.apply(doc, tx(clear(sheet, "all", 0, 0, 9, 2)));
+    expect(await client.conditionalFormats(doc, sheet)).toEqual([]);
+    expect(await client.validations(doc, sheet)).toEqual([]);
+  });
+
+  it("a protected sheet refuses Clear all / Clear formats over a conditional format or validation, as a whole", async () => {
+    const { client, doc, sheet } = await formatted();
+    await client.apply(doc, tx({ type: "protectSheet", sheet, password: null, options: null }));
+    for (const what of ["all", "formats"] as const) {
+      for (const col of [0, 2]) {
+        // E1 is in the selection as well: nothing of it may change.
+        const res = await client.apply(doc, tx({ type: "clear", sheet, ranges: [{ r0: 0, c0: 4, r1: 0, c1: 4 }, { r0: 5, c0: col, r1: 5, c1: col }], what }));
+        expect(res.errors).toMatchObject([{ opIndex: 0, code: "protected" }]);
+      }
+    }
+    expect(await client.conditionalFormats(doc, sheet)).toHaveLength(1);
+    expect(await client.validations(doc, sheet)).toHaveLength(1);
+    expect(await text(client, doc, sheet, 0, 4)).toBe("plain");
+    const [block] = await client.cells(doc, sheet, [{ r0: 0, c0: 4, r1: 0, c1: 4 }]);
+    expect(block?.cells[0]?.style).not.toBe(0);
+    // Clear contents, and a range with neither, are not this rule's business.
+    expect((await client.apply(doc, tx(clear(sheet, "contents", 0, 0, 9, 2)))).errors).toEqual([]);
+    expect((await client.apply(doc, tx(clear(sheet, "formats", 0, 4, 0, 4)))).errors).toEqual([]);
+    const [after] = await client.cells(doc, sheet, [{ r0: 0, c0: 4, r1: 0, c1: 4 }]);
+    expect(after?.cells[0]?.style).toBe(0);
+  });
+});

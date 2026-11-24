@@ -240,6 +240,9 @@ function parseKey(k: string): [number, number] {
   return [Number(k.slice(0, i)), Number(k.slice(i + 1))];
 }
 
+/** The engine's message for a change a protected sheet refuses (`protection::protected_error`). */
+export const PROTECTED_MESSAGE = "The cell or chart you're trying to change is protected. Unprotect the sheet first.";
+
 function apiError(code: string, message: string): ApiError {
   return { code, message };
 }
@@ -333,6 +336,45 @@ function cellCount(r: RangeDto): number {
 
 function inRange(r: RangeDto, row: number, col: number): boolean {
   return row >= r.r0 && row <= r.r1 && col >= r.c0 && col <= r.c1;
+}
+
+function rangesOverlap(a: RangeDto, b: RangeDto): boolean {
+  return a.r0 <= b.r1 && b.r0 <= a.r1 && a.c0 <= b.c1 && b.c0 <= a.c1;
+}
+
+/** `rg` without `cut` (up to four rectangles). */
+function subtractRange(rg: RangeDto, cut: RangeDto): RangeDto[] {
+  if (!rangesOverlap(rg, cut)) return [{ ...rg }];
+  const out: RangeDto[] = [];
+  if (cut.r0 > rg.r0) out.push({ ...rg, r1: cut.r0 - 1 });
+  if (cut.r1 < rg.r1) out.push({ ...rg, r0: cut.r1 + 1 });
+  const r0 = Math.max(rg.r0, cut.r0);
+  const r1 = Math.min(rg.r1, cut.r1);
+  if (cut.c0 > rg.c0) out.push({ r0, r1, c0: rg.c0, c1: cut.c0 - 1 });
+  if (cut.c1 < rg.c1) out.push({ r0, r1, c0: cut.c1 + 1, c1: rg.c1 });
+  return out;
+}
+
+/**
+ * Whether a conditional format or validation of `list` has a cell in one
+ * of `cuts` (what the engine's `protection::check_attr_removal` asks
+ * before Clear all / Clear formats on a protected sheet).
+ */
+export function attrsInRanges(list: readonly { ranges: RangeDto[] }[], cuts: readonly RangeDto[]): boolean {
+  return list.some((x) => x.ranges.some((rg) => cuts.some((cut) => rangesOverlap(rg, cut))));
+}
+
+/**
+ * `list` (conditional formats or validations) with the cells of `cuts`
+ * taken out: entries left without cells are dropped, untouched ones are
+ * returned as they are (the engine's `condfmt::remove_area`).
+ */
+export function withoutRanges<T extends { ranges: RangeDto[] }>(list: readonly T[], cuts: readonly RangeDto[]): T[] {
+  return list.flatMap((x): T[] => {
+    if (!attrsInRanges([x], cuts)) return [x];
+    const ranges = cuts.reduce<RangeDto[]>((acc, cut) => acc.flatMap((rg) => subtractRange(rg, cut)), x.ranges);
+    return ranges.length > 0 ? [{ ...x, ranges }] : [];
+  });
 }
 
 function validRange(r: RangeDto): boolean {
@@ -1871,8 +1913,22 @@ export class MockClient implements EngineClientV4, ShellClient, UpdateShell {
       }
       case "clear": {
         const sh = this.sheet(d, op.sheet);
+        for (const range of op.ranges) checkRange(range);
+        // Clear all and Clear formats take the conditional formats and
+        // validations of the cells with them (merges stay), and are
+        // refused as a whole on a protected sheet when there is one to
+        // take (the engine's `Op::Clear`, `protection::check_attr_removal`).
+        if (op.what !== "contents") {
+          const cfs = d.v3.cfs.get(sh.id) ?? [];
+          const validations = d.v3.validations.get(sh.id) ?? [];
+          if (attrsInRanges(cfs, op.ranges) || attrsInRanges(validations, op.ranges)) {
+            if (d.v3.protected.get(sh.id)) throw apiError("protected", PROTECTED_MESSAGE);
+            d.v3.cfs.set(sh.id, withoutRanges(cfs, op.ranges));
+            d.v3.validations.set(sh.id, withoutRanges(validations, op.ranges));
+            t.layout.add(sh.id);
+          }
+        }
         for (const range of op.ranges) {
-          checkRange(range);
           for (const [k, cell] of [...sh.cells]) {
             const [r, c] = parseKey(k);
             if (!inRange(range, r, c)) continue;
