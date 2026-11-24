@@ -76,7 +76,7 @@ pub struct NameTable {
 
 /// The dependency key of a name.
 pub fn name_key(name: &str) -> String {
-    name.to_lowercase()
+    tally_formula::name_key(name)
 }
 
 impl NameTable {
@@ -442,28 +442,17 @@ pub fn load_from_data(wb: &mut Workbook, names: &[tally_model::NameData], ids: &
                 None => continue,
             },
         };
-        let (name, alias) = if validate_name(wb, &n.name).is_ok() {
-            (n.name.clone(), None)
-        } else if tally_formula::is_narrow_grid_name(&n.name) {
-            // A legal name where the sheet is narrower (OpenOffice 4.1:
-            // 1,024 columns; Excel 97-2003: 256 columns, 65,536 rows) that
-            // is a cell here.
-            let mut candidate = format!("{}_", n.name);
-            while validate_name(wb, &candidate).is_err() {
-                candidate.push('_');
-                if candidate.len() > 255 {
-                    break;
-                }
-            }
-            if validate_name(wb, &candidate).is_err() {
-                dropped.push(n.name.clone());
-                continue;
-            }
-            (candidate, Some(n.name.clone()))
-        } else {
+        // A legal name where the sheet is narrower (OpenOffice 4.1: 1,024
+        // columns; Excel 97-2003: 256 columns, 65,536 rows) that is a cell
+        // here gets another spelling (`tally_formula::imported_name_spelling`,
+        // which the readers use to know what a name will be called).
+        let spelling =
+            tally_formula::imported_name_spelling(&n.name, |s| validate_name(wb, s).is_ok());
+        let Some(name) = spelling else {
             dropped.push(n.name.clone());
             continue;
         };
+        let alias = (name != n.name).then(|| n.name.clone());
         if wb
             .names
             .lookup(&name, scope)

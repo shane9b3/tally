@@ -77,6 +77,36 @@ pub fn defined_name_problem(
     }
 }
 
+/// The key under which a defined name is looked up: names differ by more
+/// than case.
+pub fn name_key(name: &str) -> String {
+    name.to_lowercase()
+}
+
+/// The spelling under which a name read from a file is defined: the
+/// name itself when `is_valid` accepts it; for a name that reads as a
+/// cell reference only in Tally's larger grid ([`is_narrow_grid_name`])
+/// the name with `_` appended until it is accepted (the file's spelling
+/// then stays an alias of it); `None` for a name that cannot be defined.
+/// Shared by the engine, which defines the names, and by the readers that
+/// must know which names of a file come out under one spelling.
+pub fn imported_name_spelling(name: &str, is_valid: impl Fn(&str) -> bool) -> Option<String> {
+    if is_valid(name) {
+        return Some(name.to_string());
+    }
+    if !is_narrow_grid_name(name) {
+        return None;
+    }
+    let mut candidate = format!("{name}_");
+    while !is_valid(&candidate) {
+        candidate.push('_');
+        if candidate.len() > 255 {
+            return None;
+        }
+    }
+    Some(candidate)
+}
+
 /// Columns of the Excel 97-2003 (BIFF8) sheet, the narrowest grid Tally
 /// reads names from.
 const NARROW_COLS: u32 = 256;

@@ -39,7 +39,8 @@
 //! moved while decoding is bounded by [`WORK_BUDGET`] for the workbook, so
 //! deeply nested expressions cannot make the pass quadratic.
 
-use std::collections::{HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use tally_model::NameData;
 use tally_types::{MAX_COLS, MAX_ROWS};
@@ -58,9 +59,10 @@ const WORK_BUDGET: u64 = 64 * 1024 * 1024;
 /// The formula of a name that stands for one that is not imported (see
 /// [`NameRecs::resolve`]).
 const NO_VALUE: &str = "of:=#NAME?";
-/// Most (sheet, used name) pairs looked at for the names of a workbook
-/// while a base sheet is searched beyond the usual ones.
-const SCAN_BUDGET: u64 = 4 * 1024 * 1024;
+/// Most sheets ruled out, over the names of a workbook, while the sheet
+/// for a name's base cell is chosen (one per sheet that has a namesake of
+/// a workbook name the name uses).
+const SCAN_BUDGET: u64 = 16 * 1024 * 1024;
 /// Most `SUPBOOK` records looked at.
 const MAX_SUPBOOKS: usize = 65_536;
 /// Most `EXTERNSHEET` entries looked at (the index is 16 bits wide).
@@ -85,6 +87,23 @@ struct RawName {
     /// than the format, called by name): that spelling. Such a record is
     /// not a name of the model.
     func: Option<String>,
+    /// The spelling of a record that is not a name of the model but has
+    /// one a formula could name: a function, macro or Visual Basic name,
+    /// a name past the limits. Cell formulas are text: such a record of a
+    /// sheet still stands before a name of the workbook spelled like it.
+    other: String,
+}
+
+impl RawName {
+    /// The record's spelling, a name of the model or not; empty when it
+    /// has none that can be read.
+    fn spelling(&self) -> &str {
+        if self.name.is_empty() {
+            &self.other
+        } else {
+            &self.name
+        }
+    }
 }
 
 /// What a `SUPBOOK` stands for.
@@ -121,8 +140,14 @@ pub(crate) struct NameRecs {
     addin_open: bool,
     /// `EXTERNNAME` records kept.
     extern_names: usize,
-    /// A limit cut the list.
+    /// Bytes of the spellings kept of the records past the byte limit.
+    spelling_bytes: u64,
+    /// There are more records than [`Limits::max_names`]: the rest was
+    /// not read.
     pub dropped: bool,
+    /// The records are more than [`Limits::max_name_bytes`]: from the
+    /// first that did not fit on, they are not names.
+    pub full: bool,
 }
 
 impl NameRecs {
@@ -160,8 +185,8 @@ impl NameRecs {
         self.extern_names += 1;
         // A record that is not a function name keeps its index.
         let mut name = extern_function(d).unwrap_or_default();
-        if self.bytes.saturating_add(name.len() as u64) > limits.max_name_bytes {
-            self.dropped = true;
+        if self.full || self.bytes.saturating_add(name.len() as u64) > limits.max_name_bytes {
+            self.full = true;
             name.clear();
         }
         self.bytes = self.bytes.saturating_add(name.len() as u64);
@@ -194,61 +219,127 @@ impl NameRecs {
             self.dropped = true;
             return;
         }
-        let raw = raw_name(d).unwrap_or_default();
-        let bytes = (raw.name.len()
-            + raw.rgce.as_ref().map_or(0, Vec::len)
-            + raw.extra.len()
-            + raw.func.as_ref().map_or(0, String::len)) as u64;
-        if self.bytes.saturating_add(bytes) > limits.max_name_bytes {
-            // The record keeps its index (other names may refer to it).
-            self.dropped = true;
-            self.names.push(RawName::default());
+        let mut raw = raw_name(d).unwrap_or_default();
+        let bytes =
+            (raw.spelling().len() + raw.rgce.as_ref().map_or(0, Vec::len) + raw.extra.len()) as u64;
+        if !self.full && self.bytes.saturating_add(bytes) > limits.max_name_bytes {
+            self.full = true;
+        }
+        if !self.full {
+            self.bytes += bytes;
+            self.names.push(raw);
             return;
         }
-        self.bytes += bytes;
-        self.names.push(raw);
+        // Past the limit, from the first record that did not fit on (not
+        // the ones that happen to be small): the record keeps its index
+        // (other names may refer to it) and, while a second allowance of
+        // the same size lasts, its spelling, so that it is known which
+        // names are not there.
+        let spelling = std::mem::take(&mut raw.name);
+        let mut kept = RawName {
+            itab: raw.itab,
+            other: if spelling.is_empty() {
+                raw.other
+            } else {
+                spelling
+            },
+            ..RawName::default()
+        };
+        let len = kept.other.len() as u64;
+        if self.spelling_bytes.saturating_add(len) > limits.max_name_bytes {
+            kept.other.clear();
+        } else {
+            self.spelling_bytes += len;
+        }
+        self.names.push(kept);
     }
 
-    /// The names of the model, in file order; how many were left out
-    /// because their formula is not one this reader decodes or because
-    /// they are not names Tally accepts; and whether names were left out
-    /// because the names and formulas kept reached
-    /// [`Limits::max_name_bytes`]. `sheets` are the workbook's sheet names
-    /// in `BOUNDSHEET` order.
+    /// The names of the model, in the order they are to be defined; how
+    /// many were left out because their formula is not one this reader
+    /// decodes or because they are not names Tally can define as the file
+    /// means them; and whether names were left out because the names and
+    /// formulas kept reached [`Limits::max_name_bytes`]. `sheets` are the
+    /// workbook's sheet names in `BOUNDSHEET` order.
     ///
     /// A formula names another name by its record; the model's formula
-    /// text names it by its spelling. The engine reads that spelling when
-    /// it loads the name, from the sheet of the name's base cell: that
-    /// sheet's own name if one is defined by then (the names load in this
-    /// order), else the workbook's; a spelling that is not defined yet is
-    /// looked up again from each cell that uses the name. So that the
-    /// text means the record wherever the name is used:
-    /// - a name that uses an earlier name of a sheet gets its base cell
-    ///   on that sheet (`NameData::base_cell`; the references of a name
-    ///   all name their sheet, so nothing else depends on it);
-    /// - a name that uses an earlier name of the workbook gets its base
-    ///   cell on a sheet without a name of that spelling;
-    /// - a name that uses a later name (or itself) is read from the cells
-    ///   that use it: the later name must be of the same sheet, or of the
-    ///   workbook with no namesake on a sheet the user is visible from;
-    /// - a record that is not the first of its spelling and scope is not
-    ///   the one that is defined.
-    ///
-    /// A name for which no base sheet does all of that is left out. And a
-    /// name of a sheet that is left out while the workbook has a name of
-    /// the same spelling is kept as a name without a value (`#NAME?`), so
-    /// that the cells of that sheet which use it (their formulas are
-    /// text) do not take the workbook's instead.
+    /// text names it by its spelling. The engine reads that spelling once,
+    /// when it defines the name, from the sheet of the name's base cell:
+    /// that sheet's own name if one is defined by then, else the
+    /// workbook's (a spelling that is not defined then would be looked up
+    /// again from every cell that uses the name). So that each spelling is
+    /// bound, then, to the record it stands for:
+    /// - The names are given in the order of their uses: a name after
+    ///   every name it uses. Names that use each other in a circle, or
+    ///   themselves, are left out (as text they would be bound from the
+    ///   cells that use them).
+    /// - Records are one name to the engine when they have one scope and
+    ///   one key ([`tally_io_xlsx::ExcelNameConverter::name_key`]: the
+    ///   spelling the engine defines the name under, case folded). Only
+    ///   the first such record can be defined, and only it can be used; a
+    ///   later one is left out, also when the first is.
+    /// - A name whose file spelling is defined under another one
+    ///   (`TAX2024` as `TAX2024_`) is left out when a record of the file
+    ///   is spelled like that other one: one of the two would answer to
+    ///   the other's spelling.
+    /// - A name that uses a name of a sheet has its base cell on that
+    ///   sheet (`NameData::base_cell`; the references of a name all name
+    ///   their sheet, so nothing else depends on it). One that uses a
+    ///   name of the workbook has it on a sheet that has no record of
+    ///   that key at all, read or not. A name for which no sheet does
+    ///   both for everything it uses is left out.
+    /// - A sheet's name that is not defined, whatever the reason, while
+    ///   the workbook's name of the same key is: it is given as a name of
+    ///   that sheet whose value is `#NAME?`, so that the cells of the
+    ///   sheet that use it (their formulas are text) do not take the
+    ///   workbook's.
     pub fn resolve(&self, sheets: &[String], limits: &Limits) -> (Vec<NameData>, usize, bool) {
-        // Per `NAME` record: the name it becomes and the records its
-        // formula uses.
-        let mut found: Vec<Option<(NameData, Vec<usize>)>> = Vec::new();
-        found.resize_with(self.names.len(), || None);
-        let mut skipped = 0usize;
-        let mut cut = false;
-        let mut kept_bytes = 0u64;
-        let mut work = WORK_BUDGET;
+        let count = self.names.len();
         let converter = tally_io_xlsx::ExcelNameConverter::new(sheets);
+        // The scope of a record: `Some(None)` the workbook, `Some(Some(s))`
+        // a sheet, `None` a sheet that is not there.
+        let scope = |raw: &RawName| match usize::from(raw.itab) {
+            0 => Some(None),
+            i if i <= sheets.len() => Some(Some(i as u32 - 1)),
+            _ => None,
+        };
+        // The key of every record whose spelling is a name's (a name, a
+        // macro, a record past the limits): what the engine would define
+        // it under.
+        let mut keys: Vec<Option<String>> = self
+            .names
+            .iter()
+            .map(|n| {
+                let spelling = if n.name.is_empty() { &n.other } else { &n.name };
+                (!spelling.is_empty() && converter.is_name(spelling))
+                    .then(|| converter.name_key(spelling))
+                    .flatten()
+            })
+            .collect();
+        // A name defined under another spelling than the file's, where a
+        // record of the file has that spelling: left out, and nothing in
+        // the workbook answers to its spelling.
+        let literal: HashSet<&str> = self
+            .names
+            .iter()
+            .zip(&keys)
+            .filter(|(n, _)| !converter.is_renamed(n.spelling()))
+            .filter_map(|(_, k)| k.as_deref())
+            .collect();
+        let clash: Vec<bool> = self
+            .names
+            .iter()
+            .zip(&keys)
+            .map(|(n, k)| {
+                converter.is_renamed(n.spelling())
+                    && k.as_deref().is_some_and(|k| literal.contains(k))
+            })
+            .collect();
+        drop(literal);
+        for (k, clash) in keys.iter_mut().zip(&clash) {
+            if *clash {
+                *k = None;
+            }
+        }
         // A name Tally would read as something else in a formula (a cell
         // of the BIFF8 sheet such as `A1`, `TRUE`, an R1C1 reference: none
         // of them a name Excel allows) is not imported, and neither is a
@@ -264,35 +355,55 @@ impl NameRecs {
         let valid: Vec<bool> = self
             .names
             .iter()
-            .map(|n| match &n.func {
+            .zip(&keys)
+            .map(|(n, k)| match &n.func {
                 Some(f) => {
                     f.get(6..).is_some_and(ftab::is_future) || converter.is_prefixed_function(f)
                 }
-                None => !n.name.is_empty() && converter.is_name(&n.name),
+                None => !n.name.is_empty() && k.is_some(),
             })
             .collect();
-        for (slot, (raw, ok)) in found.iter_mut().zip(self.names.iter().zip(&valid)) {
-            if raw.name.is_empty() {
+        // The first record of each key and scope, and the sheets that
+        // have a record of a key.
+        let mut first: HashMap<(&str, Option<u32>), usize> = HashMap::new();
+        let mut on_sheets: HashMap<&str, Vec<u32>> = HashMap::new();
+        for (i, (raw, k)) in self.names.iter().zip(&keys).enumerate() {
+            let (Some(k), Some(scope)) = (k.as_deref(), scope(raw)) else {
                 continue;
-            }
-            if !ok {
-                skipped += 1;
-                continue;
-            }
-            let sheet = match raw.itab {
-                0 => None,
-                i if usize::from(i) <= sheets.len() => Some(u32::from(i) - 1),
-                // Local to a sheet that is not there.
-                _ => {
-                    skipped += 1;
-                    continue;
+            };
+            if let std::collections::hash_map::Entry::Vacant(e) = first.entry((k, scope)) {
+                e.insert(i);
+                if let Some(s) = scope {
+                    on_sheets.entry(k).or_default().push(s);
                 }
-            };
+            }
+        }
+        // Per record: the name it becomes and the records its formula
+        // uses (each once).
+        let mut found: Vec<Option<(NameData, Vec<usize>)>> = Vec::new();
+        found.resize_with(count, || None);
+        // Records that are names with a formula and a scope: the ones
+        // that are counted when they are left out.
+        let mut counted = vec![false; count];
+        let mut cut = false;
+        let mut kept_bytes = 0u64;
+        let mut work = WORK_BUDGET;
+        for (i, (slot, raw)) in found.iter_mut().zip(&self.names).enumerate() {
             // No formula: an empty name, or one the pre-scan found damaged
-            // and emptied (it has its own warning). Not a name to import.
-            let Some(rgce) = raw.rgce.as_deref() else {
+            // and emptied, or one past the limits (they have their own
+            // warnings). Not a name to import.
+            let (false, Some(rgce)) = (raw.name.is_empty(), raw.rgce.as_deref()) else {
                 continue;
             };
+            counted[i] = true;
+            // Not a name, a name of a sheet that is not there, a later
+            // record of a name.
+            let (true, Some(sheet), Some(k)) = (valid[i], scope(raw), keys[i].as_deref()) else {
+                continue;
+            };
+            if first.get(&(k, sheet)) != Some(&i) {
+                continue;
+            }
             // Relative references are offsets from the cell that uses the
             // name. They are written for a formula in A1 when none points
             // up or left of it, else for one in the middle of the BIFF
@@ -307,186 +418,165 @@ impl NameRecs {
                 base = REBASE;
                 decoded = self.excel_text(formula, sheets, &valid, base, &mut work);
             }
-            let formula = decoded.and_then(|d| {
+            let Some((formula, mut uses)) = decoded.and_then(|d| {
                 let of = converter.to_of_at(&d.text, sheet.map(|s| s as usize), base)?;
                 Some((of, d.uses))
-            });
-            match formula {
-                Some((formula, uses)) => {
-                    // The text kept for the workbook is bounded: a small
-                    // file can spell a long name many times in many
-                    // formulas.
-                    kept_bytes = kept_bytes
-                        .saturating_add(raw.name.len() as u64)
-                        .saturating_add(formula.len() as u64);
-                    if kept_bytes > limits.max_name_bytes {
-                        cut = true;
-                        continue;
-                    }
-                    let name = NameData {
-                        name: raw.name.clone(),
-                        sheet,
-                        formula,
-                        base_cell: (base != (0, 0)).then(|| (sheet.unwrap_or(0), base.0, base.1)),
-                        usage: Default::default(),
-                    };
-                    *slot = Some((name, uses));
-                }
-                None => skipped += 1,
+            }) else {
+                continue;
+            };
+            // The text kept for the workbook is bounded: a small file
+            // can spell a long name many times in many formulas.
+            kept_bytes = kept_bytes
+                .saturating_add(raw.name.len() as u64)
+                .saturating_add(formula.len() as u64);
+            if kept_bytes > limits.max_name_bytes {
+                cut = true;
+                counted[i] = false;
+                continue;
             }
+            uses.sort_unstable();
+            uses.dedup();
+            let name = NameData {
+                name: raw.name.clone(),
+                sheet,
+                formula,
+                base_cell: (base != (0, 0)).then(|| (sheet.unwrap_or(0), base.0, base.1)),
+                usage: Default::default(),
+            };
+            *slot = Some((name, uses));
         }
-        // What the spelling of a name means (see above). The names a
-        // sheet may have of its own: the ones read, and the ones that may
-        // be kept without a value.
-        let key = |n: &NameData| (n.name.to_lowercase(), n.sheet);
-        let mut first: HashMap<(String, Option<u32>), usize> = HashMap::new();
-        for (i, f) in found.iter().enumerate() {
-            if let Some((n, _)) = f {
-                first.entry(key(n)).or_insert(i);
-            }
-        }
-        let mut on_sheet: HashSet<(String, u32)> = HashSet::new();
-        let mut on_any: HashSet<String> = HashSet::new();
-        for (raw, ok) in self.names.iter().zip(&valid) {
-            let s = usize::from(raw.itab);
-            if *ok && !raw.name.is_empty() && (1..=sheets.len()).contains(&s) {
-                on_sheet.insert((raw.name.to_lowercase(), s as u32 - 1));
-                on_any.insert(raw.name.to_lowercase());
-            }
-        }
-        let scan = std::cell::Cell::new(SCAN_BUDGET);
-        // The sheet for the base cell of the name of record `x`, on which
-        // every name it uses means its record; `None` when there is none.
-        let base_sheet = |x: usize, n: &NameData, uses: &[usize]| -> Option<u32> {
+        // The sheet for the base cell of each name: where every spelling
+        // in its formula is the record it uses. `mark` says per sheet
+        // which name it was last ruled out for.
+        let mut mark = vec![usize::MAX; sheets.len()];
+        let mut scan = SCAN_BUDGET;
+        let mut bases: Vec<Option<u32>> = vec![None; count];
+        let mut unbound: Vec<usize> = Vec::new();
+        for (x, f) in found.iter().enumerate() {
+            let Some((n, uses)) = f else {
+                continue;
+            };
+            let usual = n.base_cell.map_or(0, |b| b.0);
             let mut forced: Option<u32> = None;
+            let mut ok = true;
             for &u in uses {
                 // A record that is not imported is dealt with below.
                 let Some(Some((t, _))) = found.get(u) else {
                     continue;
                 };
-                if first.get(&key(t)) != Some(&u) {
-                    return None;
+                if let Some(s) = t.sheet {
+                    ok &= forced.is_none_or(|f| f == s);
+                    forced = Some(s);
                 }
-                match t.sheet {
-                    // An earlier name of a sheet: read from that sheet.
-                    Some(s) if u < x => {
-                        if forced.is_some_and(|f| f != s) {
-                            return None;
-                        }
-                        forced = Some(s);
-                    }
-                    // A later one: read from the cells that use the name.
-                    Some(s) if n.sheet != Some(s) => return None,
-                    Some(_) => {}
-                    None if u < x => {}
-                    None => {
-                        let spelling = t.name.to_lowercase();
-                        let shadowed = match n.sheet {
-                            Some(s) => on_sheet.contains(&(spelling, s)),
-                            None => on_any.contains(&spelling),
-                        };
-                        if shadowed {
-                            return None;
-                        }
+            }
+            // The sheets with a record of the key of a workbook name it
+            // uses are ruled out.
+            let mut any = false;
+            for &u in uses {
+                let (Some(Some((t, _))), Some(Some(k))) = (found.get(u), keys.get(u)) else {
+                    continue;
+                };
+                let Some(list) = on_sheets.get(k.as_str()).filter(|_| t.sheet.is_none()) else {
+                    continue;
+                };
+                match scan.checked_sub(list.len() as u64) {
+                    Some(left) => scan = left,
+                    None => ok = false,
+                }
+                if !ok {
+                    break;
+                }
+                any = true;
+                for &s in list {
+                    if let Some(m) = mark.get_mut(s as usize) {
+                        *m = x;
                     }
                 }
             }
-            // The earlier names of the workbook: not behind a name of the
-            // base sheet.
-            let clear = |b: u32| {
-                uses.iter().all(|&u| match found.get(u) {
-                    Some(Some((t, _))) if t.sheet.is_none() && u < x => {
-                        !on_sheet.contains(&(t.name.to_lowercase(), b))
-                    }
-                    _ => true,
-                })
+            let free = |b: u32| mark.get(b as usize).is_some_and(|m| *m != x);
+            let base = match (ok, forced) {
+                (false, _) => None,
+                (true, Some(b)) => free(b).then_some(b),
+                (true, None) if !any || free(usual) => Some(usual),
+                (true, None) => (0..sheets.len() as u32).find(|b| free(*b)),
             };
-            let usual = n.base_cell.map_or(0, |b| b.0);
-            match forced {
-                Some(b) => clear(b).then_some(b),
-                // The sheet it would have anyway, its own, the first; else
-                // any sheet, while the workbook's budget for looking lasts.
-                None => [usual, n.sheet.unwrap_or(0), 0]
-                    .into_iter()
-                    .find(|b| clear(*b))
-                    .or_else(|| {
-                        (0..sheets.len() as u32).find(|b| {
-                            let left = scan.get().checked_sub(uses.len() as u64);
-                            scan.set(left.unwrap_or(0));
-                            left.is_some() && clear(*b)
-                        })
-                    }),
+            match base {
+                Some(b) => bases[x] = Some(b),
+                None => unbound.push(x),
             }
-        };
-        let bases: Vec<Option<Option<u32>>> = found
-            .iter()
-            .enumerate()
-            .map(|(x, f)| f.as_ref().map(|(n, uses)| base_sheet(x, n, uses)))
-            .collect();
-        for (slot, base) in found.iter_mut().zip(bases) {
-            match (slot.as_mut(), base) {
-                (Some((n, _)), Some(Some(b))) => {
-                    let (_, row, col) = n.base_cell.unwrap_or((0, 0, 0));
-                    n.base_cell = ((b, row, col) != (0, 0, 0)).then_some((b, row, col));
-                }
-                (Some(_), Some(None)) => {
-                    *slot = None;
-                    skipped += 1;
-                }
-                _ => {}
-            }
+        }
+        for x in unbound {
+            found[x] = None;
         }
         // A name that uses a name that is not imported would be a formula
         // with an unknown name in it: it is left out too, and so on along
-        // the chain (each record is visited once).
-        let mut users: Vec<Vec<u32>> = vec![Vec::new(); found.len()];
+        // the chain. What is left is given in the order of its uses (the
+        // record with the lowest index first among those whose uses are
+        // all given); names in a circle never get there.
+        let mut users: Vec<Vec<u32>> = vec![Vec::new(); count];
+        let mut waiting = vec![0usize; count];
         for (i, f) in found.iter().enumerate() {
             for &u in f.iter().flat_map(|f| &f.1) {
                 if let Some(list) = users.get_mut(u) {
                     list.push(i as u32);
+                    waiting[i] += 1;
                 }
             }
         }
-        let mut gone: Vec<usize> = (0..found.len()).filter(|i| found[*i].is_none()).collect();
+        let mut gone: Vec<usize> = (0..count).filter(|i| found[*i].is_none()).collect();
         while let Some(i) = gone.pop() {
             for user in std::mem::take(&mut users[i]) {
                 if found[user as usize].take().is_some() {
-                    skipped += 1;
                     gone.push(user as usize);
                 }
             }
         }
-        // A sheet's name that is not imported, where the workbook has a
-        // name of the same spelling: without a name of the sheet, the
-        // cells of that sheet which use it (their formulas are text)
-        // would take the workbook's value. It stays a name of the sheet
-        // whose value is `#NAME?`.
-        let mut global: HashSet<String> = HashSet::new();
-        let mut kept: HashSet<(String, u32)> = HashSet::new();
-        for (n, _) in found.iter().flatten() {
-            match n.sheet {
-                Some(s) => kept.insert((n.name.to_lowercase(), s)),
-                None => global.insert(n.name.to_lowercase()),
-            };
-        }
-        for (slot, (raw, ok)) in found.iter_mut().zip(self.names.iter().zip(&valid)) {
-            let s = u32::from(raw.itab);
-            if slot.is_some() || !ok || raw.name.is_empty() || s == 0 || s as usize > sheets.len() {
+        let mut ready: BinaryHeap<Reverse<usize>> = (0..count)
+            .filter(|i| found[*i].is_some() && waiting[*i] == 0)
+            .map(Reverse)
+            .collect();
+        let mut names: Vec<NameData> = Vec::new();
+        let mut defined = vec![false; count];
+        while let Some(Reverse(i)) = ready.pop() {
+            let Some((mut n, _)) = found[i].take() else {
                 continue;
+            };
+            if let Some(b) = bases[i] {
+                let (_, row, col) = n.base_cell.unwrap_or((0, 0, 0));
+                n.base_cell = ((b, row, col) != (0, 0, 0)).then_some((b, row, col));
             }
-            let spelling = raw.name.to_lowercase();
-            if global.contains(&spelling) && kept.insert((spelling, s - 1)) {
-                let name = NameData {
-                    name: raw.name.clone(),
-                    sheet: Some(s - 1),
+            names.push(n);
+            defined[i] = true;
+            for user in std::mem::take(&mut users[i]) {
+                let w = &mut waiting[user as usize];
+                *w = w.saturating_sub(1);
+                if *w == 0 && found[user as usize].is_some() {
+                    ready.push(Reverse(user as usize));
+                }
+            }
+        }
+        // A sheet's name that is not defined where the workbook's name of
+        // the same key is: a name of the sheet without a value.
+        for (i, (raw, k)) in self.names.iter().zip(&keys).enumerate() {
+            let (Some(k), Some(Some(s))) = (k.as_deref(), scope(raw)) else {
+                continue;
+            };
+            let global = first.get(&(k, None)).is_some_and(|g| defined[*g]);
+            if global && first.get(&(k, Some(s))) == Some(&i) && !defined[i] {
+                names.push(NameData {
+                    name: raw.spelling().to_string(),
+                    sheet: Some(s),
                     formula: NO_VALUE.to_string(),
                     base_cell: None,
                     usage: Default::default(),
-                };
-                *slot = Some((name, Vec::new()));
+                });
             }
         }
-        let names = found.into_iter().flatten().map(|f| f.0).collect();
+        let skipped = counted
+            .iter()
+            .zip(&defined)
+            .filter(|(counted, defined)| **counted && !**defined)
+            .count();
         (names, skipped, cut)
     }
 
@@ -1115,8 +1205,13 @@ fn raw_name(d: &[u8]) -> Option<RawName> {
                         .get(..6)
                         .is_some_and(|p| p.eq_ignore_ascii_case("_xlfn."))
             });
-        return future.then(|| RawName {
-            func: Some(name),
+        if name.chars().any(char::is_control) {
+            return None;
+        }
+        return Some(RawName {
+            func: future.then(|| name.clone()),
+            other: name,
+            itab,
             ..RawName::default()
         });
     }
@@ -1138,6 +1233,7 @@ fn raw_name(d: &[u8]) -> Option<RawName> {
         rgce,
         extra,
         func: None,
+        other: String::new(),
     })
 }
 
@@ -1532,8 +1628,9 @@ mod tests {
         assert_eq!(skipped, 6);
 
         // Along a chain, whatever the order of the records: 1 uses 2, 2
-        // uses 3, 3 is an error value. A name that uses itself is left out
-        // with them only when it also uses one of them.
+        // uses 3, 3 is an error value. A name that uses itself is left
+        // out: its own spelling could only be looked up from the cells
+        // that use it.
         let mut n = recs();
         n.name(&record("First", &uses(2)), &limits);
         n.name(&record("Second", &uses(3)), &limits);
@@ -1541,8 +1638,8 @@ mod tests {
         n.name(&record("Loop", &uses(4)), &limits);
         let (names, skipped, _) = n.resolve(&sheets(), &Limits::default());
         let got: Vec<_> = names.iter().map(|n| n.name.as_str()).collect();
-        assert_eq!(got, ["Loop"]);
-        assert_eq!(skipped, 3);
+        assert_eq!(got, [""; 0]);
+        assert_eq!(skipped, 4);
     }
 
     #[test]
@@ -1565,11 +1662,19 @@ mod tests {
         let mut long = d.clone();
         long[4] = 200;
         assert_eq!(raw_name(&long).unwrap().rgce, None);
-        // Built-in, function, macro and Visual Basic names; no name.
+        // Built-in, function, macro and Visual Basic names; no name. The
+        // last three keep their spelling, which is not a name's.
         for flags in [0x20u8, 0x02, 0x04, 0x08] {
             let mut m = d.clone();
             m[0] = flags;
-            assert!(raw_name(&m).is_none());
+            let r = raw_name(&m);
+            assert!(r
+                .as_ref()
+                .is_none_or(|r| r.name.is_empty() && r.rgce.is_none()));
+            assert_eq!(
+                r.map(|r| (r.other, r.func)),
+                (flags != 0x20).then(|| ("Rate".to_string(), None))
+            );
         }
         let mut empty = d.clone();
         empty[3] = 0;
@@ -2024,7 +2129,9 @@ mod tests {
             "_xlfn.A B",
             "xlfn.IFERROR",
         ] {
-            assert!(named(name, 0x0E).is_none(), "{name}");
+            let r = named(name, 0x0E).unwrap();
+            assert!(r.func.is_none() && r.name.is_empty(), "{name}");
+            assert_eq!(r.other, name);
         }
         // Without those flags it is a name like any other.
         assert_eq!(named("_xlfn.IFERROR", 0).unwrap().func, None);
@@ -2095,7 +2202,7 @@ mod tests {
         n.externname(&full, &tiny);
         n.externname(&full, &tiny);
         assert_eq!(n.books[0].1, ["EDATE".to_string(), String::new()]);
-        assert!(n.dropped);
+        assert!(n.full && !n.dropped);
     }
 
     /// The value-only names `1`, `2` and `3` and the operators after them.
@@ -2282,11 +2389,10 @@ mod tests {
         assert_eq!(names.len(), 3);
         assert_eq!(skipped, 2);
 
-        // A name on a later record is read from the cells that use it:
-        // 1 on the later Loc of sheet 2 (from the workbook: left out),
-        // 2 the same from sheet 2 (kept), 3 on the later Loc of the
-        // workbook from the workbook (sheet 2 has its own: left out), 4
-        // the same from sheet 1 (kept), 7 on itself (kept).
+        // Names on later records: the names are given in the order of
+        // their uses, so each is defined after what it uses. 1 and 2 on
+        // the later Loc of sheet 2, 3 and 4 on the later Loc of the
+        // workbook, 7 on itself (left out).
         let mut n = recs();
         n.name(&record("Early", &uses(5)), &limits);
         n.name(&local("EarlyOn2", 2, &uses(5)), &limits);
@@ -2299,14 +2405,15 @@ mod tests {
         assert_eq!(
             names,
             [
-                s("EarlyOn2", Some(1), None),
-                s("EarlyOn1", Some(0), None),
                 s("Loc", Some(1), None),
+                s("Early", None, Some(1)),
+                s("EarlyOn2", Some(1), Some(1)),
                 s("Loc", None, None),
-                s("Loop", None, None),
+                s("EarlyAll", None, None),
+                s("EarlyOn1", Some(0), None),
             ]
         );
-        assert_eq!(skipped, 2);
+        assert_eq!(skipped, 1);
 
         // A sheet's name that is not read still stands before the
         // workbook's on its sheet (it is kept without a value): a name
@@ -2320,16 +2427,16 @@ mod tests {
         assert_eq!(
             names,
             [
-                s("Loc", Some(0), None),
                 s("Loc", None, None),
                 s("Quux", None, Some(1)),
                 s("Corge", Some(0), Some(1)),
+                s("Loc", Some(0), None),
             ]
         );
         assert_eq!(skipped, 1);
 
         // Two records of one spelling and scope: the first is the one
-        // that is defined, so a name on the second is left out.
+        // that is defined; the second is left out, and a name on it.
         let mut n = recs();
         n.name(&record("Twice", &[0x1E, 1, 0]), &limits);
         n.name(&record("twice", &[0x1E, 2, 0]), &limits);
@@ -2337,8 +2444,8 @@ mod tests {
         n.name(&record("OnSecond", &uses(2)), &limits);
         let (names, skipped) = resolved(&n);
         let kept: Vec<&str> = names.iter().map(|n| n.0.as_str()).collect();
-        assert_eq!(kept, ["Twice", "twice", "OnFirst"]);
-        assert_eq!(skipped, 1);
+        assert_eq!(kept, ["Twice", "OnFirst"]);
+        assert_eq!(skipped, 2);
 
         // A relative name keeps the row and column of its base cell.
         let mut n = recs();
@@ -2373,11 +2480,11 @@ mod tests {
         assert_eq!(
             got(&names),
             [
-                // A name of sheet 1 without a value.
-                ("Foo", Some(0), "of:=#NAME?"),
                 ("Foo", None, "of:=5"),
                 ("Foo", Some(1), "of:=6"),
                 ("Gone", None, "of:=2"),
+                // A name of sheet 1 without a value.
+                ("Foo", Some(0), "of:=#NAME?"),
             ]
         );
         // It is still counted as left out.
@@ -2476,5 +2583,128 @@ mod tests {
         };
         let (names, skipped, cut) = n.resolve(&sheets(), &tight);
         assert_eq!((names.len(), skipped, cut), (6, 0, true));
+    }
+
+    #[test]
+    fn records_that_are_one_name_to_the_engine() {
+        let limits = Limits::default();
+        let uses = |i: u8| vec![0x23, i, 0, 0, 0, 0x1E, 1, 0, 0x03];
+        let error = [0x1Cu8, 0x07];
+        // `TAX2024` is defined as `TAX2024_`: with a record spelled
+        // `TAX2024_` in the file, in any scope, it is left out, and what
+        // uses it; the other is a name like any other.
+        for order in [[0usize, 1], [1, 0]] {
+            let recs2 = [("TAX2024", 2u8), ("TAX2024_", 1)];
+            let mut n = recs();
+            for i in order {
+                n.name(&record(recs2[i].0, &[0x1E, recs2[i].1, 0]), &limits);
+            }
+            n.name(&record("OnFirst", &uses(1)), &limits);
+            n.name(&record("OnSecond", &uses(2)), &limits);
+            let (names, skipped) = resolved(&n);
+            let kept: Vec<(&str, &str)> = names.iter().map(|n| (&*n.0, &*n.2)).collect();
+            let on = if order[0] == 0 { "OnSecond" } else { "OnFirst" };
+            assert_eq!(kept, [("TAX2024_", "of:=1"), (on, "of:=TAX2024_+1")]);
+            assert_eq!(skipped, 2);
+        }
+        let mut n = recs();
+        n.name(&local("TAX2024", 1, &[0x1E, 2, 0]), &limits);
+        n.name(&local("tax2024_", 2, &[0x1E, 1, 0]), &limits);
+        let (names, skipped) = resolved(&n);
+        assert_eq!(got(&names), [("tax2024_", Some(1), "of:=1")]);
+        assert_eq!(skipped, 1);
+        // Without such a record it is a name.
+        let mut n = recs();
+        n.name(&record("TAX2024", &[0x1E, 2, 0]), &limits);
+        n.name(&record("TAX2025_", &[0x1E, 1, 0]), &limits);
+        assert_eq!(resolved(&n).0.len(), 2);
+
+        // The first record of a spelling and scope is not read: the later
+        // one is not defined in its place (a cell on the first would read
+        // it), and a name on either is left out.
+        let mut n = recs();
+        n.name(
+            &record("OnBoth", &[0x23, 2, 0, 0, 0, 0x23, 3, 0, 0, 0, 0x03]),
+            &limits,
+        );
+        n.name(&local("FOO", 2, &error), &limits);
+        n.name(&local("Foo", 2, &[0x1E, 4, 0]), &limits);
+        n.name(&record("OnLater", &uses(3)), &limits);
+        let (names, skipped) = resolved(&n);
+        assert_eq!(names.len(), 0);
+        assert_eq!(skipped, 4);
+
+        // A macro of a sheet, and a name of a sheet past the byte limit,
+        // spelled like a name of the workbook: names of their sheet
+        // without a value, so the sheet's cells do not read the
+        // workbook's. Not counted: they are not names of the file, or
+        // have the limit's own warning.
+        let mut n = recs();
+        n.name(&record("Mac", &[0x1E, 6, 0]), &limits);
+        let mut mac = local("Mac", 1, &[0x1E, 1, 0]);
+        mac[0] = 0x08;
+        n.name(&mac, &limits);
+        let (names, skipped) = resolved(&n);
+        assert_eq!(
+            got(&names),
+            [("Mac", None, "of:=6"), ("Mac", Some(0), "of:=#NAME?")]
+        );
+        assert_eq!(skipped, 0);
+        let tight = Limits {
+            max_name_bytes: 20,
+            ..Limits::default()
+        };
+        let mut n = recs();
+        n.name(&record("Foo", &[0x1E, 5, 0]), &tight);
+        let mut big = vec![0x1E, 1, 0];
+        for _ in 0..10 {
+            big.extend_from_slice(&[0x1E, 1, 0, 0x03]);
+        }
+        n.name(&local("Foo", 1, &big), &tight);
+        // After the first record that does not fit, no record is a name,
+        // however small.
+        n.name(&record("Tiny", &[0x1E, 1, 0]), &tight);
+        n.name(&local("Foo", 2, &[0x1E, 1, 0]), &tight);
+        assert!(n.full && !n.dropped);
+        let (names, skipped, cut) = n.resolve(&sheets(), &tight);
+        let kept: Vec<_> = names
+            .iter()
+            .map(|n| (&*n.name, n.sheet, &*n.formula))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                ("Foo", None, "of:=5"),
+                ("Foo", Some(0), "of:=#NAME?"),
+                // Its spelling fits the second allowance; the next does
+                // not, and nothing is known of it.
+                ("Foo", Some(1), "of:=#NAME?"),
+            ]
+        );
+        assert_eq!((skipped, cut), (0, false));
+    }
+
+    #[test]
+    fn names_are_given_in_the_order_of_their_uses() {
+        let limits = Limits::default();
+        let uses = |i: u8| vec![0x23, i, 0, 0, 0, 0x1E, 1, 0, 0x03];
+        let both = |i: u8, k: u8| vec![0x23, i, 0, 0, 0, 0x23, k, 0, 0, 0, 0x03];
+        // 1 uses 3 and 5, 2 uses 1, 3 uses 4; 6 and 7 use each other, 8
+        // uses 7, 9 uses itself and 5.
+        let mut n = recs();
+        n.name(&record("NA", &both(3, 5)), &limits);
+        n.name(&record("NB", &uses(1)), &limits);
+        n.name(&record("NC", &uses(4)), &limits);
+        n.name(&record("ND", &[0x1E, 1, 0]), &limits);
+        n.name(&record("NE", &[0x1E, 2, 0]), &limits);
+        n.name(&record("NF", &uses(7)), &limits);
+        n.name(&record("NG", &uses(6)), &limits);
+        n.name(&record("NH", &uses(7)), &limits);
+        n.name(&record("NI", &both(9, 5)), &limits);
+        let (names, skipped) = resolved(&n);
+        let order: Vec<&str> = names.iter().map(|n| n.0.as_str()).collect();
+        // The lowest record whose uses are all given comes next.
+        assert_eq!(order, ["ND", "NC", "NE", "NA", "NB"]);
+        assert_eq!(skipped, 4);
     }
 }

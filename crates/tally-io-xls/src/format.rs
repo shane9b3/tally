@@ -2304,8 +2304,14 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
     }
     if names.dropped {
         warnings.push(format!(
-            "Only the first {} defined names ({} MiB) were read.",
-            limits.max_names,
+            "Only the first {} defined names were read.",
+            limits.max_names
+        ));
+    }
+    if names.full {
+        warnings.push(format!(
+            "The defined names of this file are more than {} MiB: the names after the first \
+             that did not fit were left out.",
             limits.max_name_bytes / (1024 * 1024)
         ));
     }

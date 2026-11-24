@@ -122,7 +122,7 @@ fn name_lengths_and_indices_that_lie() {
     // 0xFFFF.
     for ixti in [2u16, 100, 0xFFFF] {
         g.extend(biff::defined_name(
-            "NoSheet",
+            &format!("NoSheet_{ixti}"),
             0,
             0,
             &biff::ptg_area3d_on(ixti, 0, 0, 0, 0),
@@ -145,14 +145,10 @@ fn name_lengths_and_indices_that_lie() {
         .collect();
     assert_eq!(
         got,
-        [
-            // A name may use itself: the engine reports the cycle.
-            ("Self", "of:=Self"),
-            ("Reversed", "of:=[$Main.$B$3:.$F$10]"),
-            ("Good", "of:=3"),
-        ]
+        [("Reversed", "of:=[$Main.$B$3:.$F$10]"), ("Good", "of:=3"),]
     );
-    assert!(has(&wb, "12 defined name(s)"), "{:?}", wb.warnings);
+    // A name that uses itself is left out with them.
+    assert!(has(&wb, "13 defined name(s)"), "{:?}", wb.warnings);
 
     // EXTERNSHEET: a count far beyond its entries, entries naming
     // SUPBOOKs that are not there, no SUPBOOK at all.
@@ -195,12 +191,12 @@ fn every_token_as_a_name_formula() {
         // calamine refuses a file whose name formula starts with a cut
         // 3-D reference (the decoder's own tests cover those bytes).
         if !(b >= 0x20 && matches!(b & 0x1F, 0x1A..=0x1D)) {
-            g.extend(biff::defined_name("One", 0, 0, &[b]));
+            g.extend(biff::defined_name(&format!("One_{b}"), 0, 0, &[b]));
         }
         let mut after = biff::ptg_area3d_on(0, 0, 1, 0, 1);
         after.push(b);
-        g.extend(biff::defined_name("After", 0, 0, &after));
-        g.extend(biff::defined_name("Twelve", 0, 0, &[b; 12]));
+        g.extend(biff::defined_name(&format!("After_{b}"), 0, 0, &after));
+        g.extend(biff::defined_name(&format!("Twelve_{b}"), 0, 0, &[b; 12]));
     }
     let wb = read(&book(&g, &[])).unwrap();
     assert!(has(&wb, "defined name(s)"));
@@ -208,7 +204,7 @@ fn every_token_as_a_name_formula() {
     let mut g = Vec::new();
     for bit in 0..16 {
         g.extend(biff::defined_name(
-            "Flagged",
+            &format!("Flagged_{bit}"),
             1 << bit,
             0,
             &biff::ptg_num(1.0),
@@ -227,8 +223,8 @@ fn nested_name_formulas_are_bounded() {
     let mut deep = biff::ptg_int(1);
     deep.extend(std::iter::repeat_n(0x15, 8_000));
     let mut g = Vec::new();
-    for _ in 0..300 {
-        g.extend(biff::defined_name("Deep", 0, 0, &deep));
+    for i in 0..300 {
+        g.extend(biff::defined_name(&format!("Deep_{i}"), 0, 0, &deep));
     }
     // Within the text limit but after the budget: left out too.
     let mut shallow = biff::ptg_int(1);
@@ -322,7 +318,13 @@ fn function_tokens_that_lie() {
         &[0x39, 2, 0, 1],
         &[0x60, 0, 0],
     ] {
-        g.extend(biff::defined_name("Cut", 0, 0, &cat(&[&one, cut])));
+        let name: String = cut.iter().map(|b| format!("{b:02X}")).collect();
+        g.extend(biff::defined_name(
+            &format!("Cut_{name}"),
+            0,
+            0,
+            &cat(&[&one, cut]),
+        ));
     }
     // More arguments than operands: a fixed count, the largest count, the
     // count of a call by name, "sum" of nothing.
@@ -385,7 +387,7 @@ fn function_tokens_that_lie() {
     ));
     for kind in 0..=255u8 {
         g.extend(biff::defined_name(
-            "Attr",
+            &format!("Attr_{kind}"),
             0,
             0,
             &cat(&[&one, &biff::ptg_attr(kind, 0xFFFF)]),
@@ -395,13 +397,13 @@ fn function_tokens_that_lie() {
     // and with four.
     for iftab in (0..600u16).chain([0x7FFF, 0x8000, 0x8004, 0xFFFF]) {
         g.extend(biff::defined_name(
-            "Fn",
+            &format!("Fn_{iftab}"),
             0,
             0,
             &cat(&[&one, &biff::ptg_func(iftab)]),
         ));
         g.extend(biff::defined_name(
-            "FnVar",
+            &format!("FnVar_{iftab}"),
             0,
             0,
             &cat(&[&one, &one, &one, &one, &biff::ptg_funcvar(4, iftab)]),
@@ -413,7 +415,7 @@ fn function_tokens_that_lie() {
     let values = biff::array_values(&[&[1.0, 2.0], &[3.0, 4.0]]);
     for cut in 0..values.len() {
         g.extend(biff::defined_name_with_arrays(
-            "Array",
+            &format!("Array_{cut}"),
             0,
             &array,
             &values[..cut],
@@ -432,7 +434,12 @@ fn function_tokens_that_lie() {
     // good ones: an attribute that changes nothing, a function with one
     // or four arguments.
     for name in &names {
-        assert!(["Attr", "Fn", "FnVar", "Plain"].contains(name), "{names:?}");
+        assert!(
+            ["Attr_", "Fn_", "FnVar_", "Plain"]
+                .iter()
+                .any(|p| name.starts_with(p)),
+            "{names:?}"
+        );
     }
     assert!(has(&wb, "defined name(s)"));
     // Every formula the reader kept is one the engine's parser reads.
@@ -487,7 +494,7 @@ fn externname_records_cut_and_garbled() {
             rgce.extend(biff::ptg_int(4));
             rgce.extend(biff::ptg_int(6));
             rgce.extend(biff::ptg_funcvar(3, 255));
-            g.extend(biff::defined_name("Call", 0, 0, &rgce));
+            g.extend(biff::defined_name(&format!("Call_{i}"), 0, 0, &rgce));
         }
         g.extend(biff::defined_name("Plain", 0, 0, &biff::ptg_num(7.0)));
         let bytes = biff::file(biff::stream(&g, &[("S", biff::number(0, 0, 15, 1.0))]));
@@ -526,9 +533,14 @@ fn nested_calls_are_bounded() {
     wide.extend(std::iter::repeat_n(0x16, 20_000));
     wide.extend(biff::ptg_funcvar(30, 4));
     let mut g = Vec::new();
-    for _ in 0..20 {
-        g.extend(biff::defined_name("Deep", 0, 0, &nested(20_000)));
-        g.extend(biff::defined_name("Wide", 0, 0, &wide));
+    for i in 0..20 {
+        g.extend(biff::defined_name(
+            &format!("Deep_{i}"),
+            0,
+            0,
+            &nested(20_000),
+        ));
+        g.extend(biff::defined_name(&format!("Wide_{i}"), 0, 0, &wide));
     }
     g.extend(biff::defined_name("Fits", 0, 0, &nested(1_500)));
     g.extend(biff::defined_name("Plain", 0, 0, &biff::ptg_num(7.0)));

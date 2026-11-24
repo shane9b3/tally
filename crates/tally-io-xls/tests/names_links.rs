@@ -334,10 +334,6 @@ fn names_of_one_spelling_in_two_scopes_and_token_trees() {
     assert_eq!(
         names(&wb),
         [
-            // The sheet's Foo is not read (PHONETIC): it stays a name of
-            // that sheet without a value, so the sheet's cells do not
-            // take the workbook's Foo.
-            ("Foo", Some(0), "of:=#NAME?"),
             ("Foo", None, "of:=5"),
             ("Loc", Some(1), "of:=7"),
             ("Loc", None, "of:=100"),
@@ -353,6 +349,10 @@ fn names_of_one_spelling_in_two_scopes_and_token_trees() {
             ("Pe", None, "of:=(1+2)%"),
             ("Pf", None, "of:=2^(3^2)"),
             ("Pg", None, "of:=(-2)^2"),
+            // The sheet's Foo is not read (PHONETIC): it stays a name of
+            // that sheet without a value, so the sheet's cells do not
+            // take the workbook's Foo.
+            ("Foo", Some(0), "of:=#NAME?"),
         ]
     );
     // Their base cell is on the sheet whose Loc they mean.

@@ -442,7 +442,37 @@ impl ExcelNameConverter {
                 _ => {}
             }
         });
-        (!unknown).then(|| print_of(&f, origin, &self.0))
+        if unknown {
+            return None;
+        }
+        // The engine reads this text back when it defines the name: text
+        // it would refuse (the printed form can be deeper than what was
+        // parsed) is not a name.
+        let text = print_of(&f, origin, &self.0);
+        parse(&text, origin, Dialect::open_formula(), &self.0)
+            .is_ok()
+            .then_some(text)
+    }
+
+    /// The key of the spelling under which the engine defines a name
+    /// spelled `name` in a file (`tally_formula::imported_name_spelling`:
+    /// the name, or for a name that is a cell only in Tally's larger grid
+    /// the name with `_` appended), folded as the engine looks names up;
+    /// `None` for a spelling that is not a name. Two names of one scope
+    /// with the same key are one name to the engine.
+    pub fn name_key(&self, name: &str) -> Option<String> {
+        let origin = CellAddr::new(0, 0, 0);
+        let spelling = tally_formula::imported_name_spelling(name, |s| {
+            tally_formula::defined_name_problem(s, origin, &self.0).is_none()
+        })?;
+        Some(tally_formula::name_key(&spelling))
+    }
+
+    /// Whether `name` is defined under another spelling (see
+    /// [`name_key`](Self::name_key)).
+    pub fn is_renamed(&self, name: &str) -> bool {
+        self.name_key(name)
+            .is_some_and(|k| k != tally_formula::name_key(name))
     }
 
     /// Whether `name` is a function an `.xlsx` formula spells with the

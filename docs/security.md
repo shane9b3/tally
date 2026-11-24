@@ -545,10 +545,21 @@ hyperlinks (`HLINK`, `hlink.rs`); docs/file-formats.md). Its rules:
   for the workbook: a formula can spell a 255-character name 30 times
   per call, so 765 KB of records were 31.5 MB of formula text before
   this cap (2026-11-24); the names past it are left out with a warning.
-  Which record a name's spelling means is decided without recursion
-  (one pass over the uses of each name; the search for a base sheet
-  beyond three candidates is charged to `SCAN_BUDGET`, 4 Mi (sheet,
-  use) pairs for the workbook).
+  Which record a name's spelling means is decided without recursion:
+  one key per record (two parses of its spelling), one pass over the
+  distinct uses of each name, a worklist for the names left out with
+  what they use, and a topological order with a heap (names in a
+  circle are left out); the choice of a base sheet marks the sheets
+  ruled out for a name and is charged to `SCAN_BUDGET` (16 Mi sheets
+  for the workbook, past which the name is left out). Measured in a
+  release build: 500 names with 900 uses of a workbook name that 1,023
+  of 1,024 sheets shadow, 91 ms; 16,000 names with 30 uses of each
+  other, 147 ms; a chain of 16,000, 26 ms; 4,000 records of one
+  250-letter spelling over 1,024 scopes, 79 ms. Past `max_name_bytes`
+  the records are cut as a prefix (from the first that does not fit,
+  no record is a name), with their spellings kept within a second
+  allowance of the same size so that a sheet's record still stands
+  before the workbook's namesake.
 - Hyperlinks (`hlink.rs`). The record and its continues are looked at up
   to 64 KiB (a longer one is left out). Every field is read through a
   checked cursor: a string's 32-bit length is multiplied and compared

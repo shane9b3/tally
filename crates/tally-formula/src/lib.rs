@@ -49,7 +49,9 @@ pub use ast::{
 pub use dialect::{ArgSep, Dialect, SheetSep};
 pub use explain::{explain, LabelSource, NoLabels};
 pub use lexer::{Token, TokenKind};
-pub use names::{defined_name_problem, is_narrow_grid_name, NameProblem};
+pub use names::{
+    defined_name_problem, imported_name_spelling, is_narrow_grid_name, name_key, NameProblem,
+};
 pub use parser::{parse, ParseError, MAX_ARGS, MAX_AST_DEPTH, MAX_FORMULA_LEN, MAX_NESTING};
 pub use printer::{pretty, print, print_expr};
 pub use resolver::{SimpleResolver, DEFAULT_FUNCTIONS};
