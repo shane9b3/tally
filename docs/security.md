@@ -489,8 +489,13 @@ hyperlinks (`HLINK`, `hlink.rs`); docs/file-formats.md). Its rules:
   formula length reaches past it, still takes its index (other names
   refer to names by index) and is not a name. `EXTERNSHEET` is cut to the
   entries present (at most 65,536, read from at most 393 KiB of the
-  record and its continues); `SUPBOOK` records are one flag each (at most
-  65,536). A formula is decoded token by token within its declared
+  record and its continues); `SUPBOOK` records are one kind each (the
+  workbook, the add-in functions, anything else; at most 65,536). An
+  `EXTERNNAME` is looked at only after the add-in `SUPBOOK`, and only for
+  a function's name (ASCII letters, digits, `.` and `_`; anything else,
+  a cut record or a DDE / OLE link keeps its index and names nothing);
+  these records count against `max_names` and `max_name_bytes` like the
+  names. A formula is decoded token by token within its declared
   length: a token that is cut, an operator without operands, operands
   left over, a sheet index without a sheet of this workbook, a name index
   without a name, a number that is not finite and text with control
@@ -499,9 +504,28 @@ hyperlinks (`HLINK`, `hlink.rs`); docs/file-formats.md). Its rules:
   `R1C1`: in formula text it would be a cell or a constant) or that uses
   a name that is not imported (propagated along chains with a worklist,
   each record once) all skip the name; so does any token the decoder does not
-  know (functions, arrays, errors), so there is no table to index and no
-  recursion (the expression is reverse Polish, kept on a stack of
-  strings). The Excel text of a name is at most 8 KiB (`MAX_FORMULA_TEXT`;
+  know (errors, references without a sheet). There is no
+  recursion: the expression is reverse Polish, kept on a stack of at
+  most 1,024 operands (`MAX_STACK`), each a string with a kind (an
+  expression, a left-out argument, a function's name). Function calls
+  (since 2026-11-24): a built-in function is looked up by its index in a
+  constant table (`ftab.rs`, a binary search; an index that is not in it,
+  a macro-sheet function or a macro command skips the name) and takes
+  its arguments from the stack: a count larger than the stack, a count
+  the function does not take, a function's name or a left-out argument
+  used as anything else, and a call by name (index 255) whose first
+  operand is not a function's name all skip the name. `tAttrChoose`'s
+  jump table is skipped with checked arithmetic (a table longer than
+  the formula skips the name); the other attributes are four bytes. An
+  array constant reads its values from the bytes after the expression,
+  every element with a bounds check and at least nine bytes of them, so
+  the 256 × 65,536 elements a header can announce cost nothing; an
+  empty or error element, a cut one, or text over the limit skip the
+  name. The text a function name contributes is either from the table
+  or validated as above, so the Excel text stays well formed; whether
+  Tally has the function is decided by the conversion
+  (`ExcelNameConverter::to_of_at` refuses a formula with an unknown
+  function). The Excel text of a name is at most 8 KiB (`MAX_FORMULA_TEXT`;
   past it the name is skipped), and the text moved while decoding is
   charged to one budget for the workbook (`WORK_BUDGET`, 64 MiB): a
   formula of 8,000 nested parentheses costs about 16 MB, and 300 of them
@@ -595,12 +619,16 @@ Tests: `tally-io-xls::hostile_formatting::*`
 `every_token_as_a_name_formula`, `nested_name_formulas_are_bounded`,
 `name_limits_degrade_with_a_warning`, `hlink_records_cut_at_every_length`,
 `hlink_lengths_that_lie`, `link_limits_degrade_with_a_warning`,
-`many_links_on_the_same_cells_are_one_each`) and the unit tests of
+`many_links_on_the_same_cells_are_one_each`, and for the function
+tokens `function_tokens_that_lie`, `externname_records_cut_and_garbled`,
+`nested_calls_are_bounded`, `function_name_limits_degrade_with_a_warning`)
+and the unit tests of
 `names.rs` and `hlink.rs` (every cut, every byte as a token, every flag
 combination). The
-`xls` and `open` fuzz targets reach the pass through `read_xls`; six
+`xls` and `open` fuzz targets reach the pass through `read_xls`; seven
 synthetic seeds (`fuzz/seeds/xls/formatted.xls`, `pictures.xls`,
-`notes.xls`, `page.xls`, `names.xls`, `widenames.xls`, generated from `tests/fixtures/xls/`, which
+`notes.xls`, `page.xls`, `names.xls`, `widenames.xls`, `funcnames.xls`
+(names with function tokens, since 2026-11-24), generated from `tests/fixtures/xls/`, which
 `crates/tally-io-xls/tests/biff/books.rs` builds) exercise it. It has not
 been through a fuzz campaign yet.
 

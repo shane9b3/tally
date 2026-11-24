@@ -652,6 +652,98 @@ pub fn externsheet(sheets: u16) -> Vec<u8> {
     out
 }
 
+/// [`externsheet`] with the add-in `SUPBOOK` after the workbook's own:
+/// one `EXTERNNAME` per name in `functions`, and one more `EXTERNSHEET`
+/// entry (index `sheets`) that points at it, for [`ptg_addin`].
+pub fn externsheet_with_addin(sheets: u16, functions: &[&str]) -> Vec<u8> {
+    let mut out = rec(0x01AE, &words(&[sheets, 0x0401]));
+    out.extend(rec(0x01AE, &words(&[1, 0x3A01])));
+    for f in functions {
+        out.extend(rec(0x0023, &externname_data(f)));
+    }
+    let mut d = words(&[sheets + 1]);
+    for i in 0..sheets {
+        d.extend(words(&[0, i, i]));
+    }
+    d.extend(words(&[1, 0xFFFE, 0xFFFE]));
+    out.extend(rec(0x0017, &d));
+    out
+}
+
+/// The data of an `EXTERNNAME` that names an add-in function: no flags,
+/// four bytes not used, the name (8-bit), the formula `#REF!`.
+pub fn externname_data(name: &str) -> Vec<u8> {
+    let mut d = vec![0, 0, 0, 0, 0, 0, name.len() as u8, 0];
+    d.extend_from_slice(name.as_bytes());
+    d.extend_from_slice(&[2, 0, 0x1C, 0x17]);
+    d
+}
+
+/// `PtgNameX`: the record `index` (1-based) of the `SUPBOOK` behind the
+/// `EXTERNSHEET` entry `ixti`.
+pub fn ptg_namex(ixti: u16, index: u32) -> Vec<u8> {
+    let mut d = vec![0x39];
+    d.extend(words(&[ixti]));
+    d.extend_from_slice(&index.to_le_bytes());
+    d
+}
+
+/// `PtgFunc`: the built-in function `iftab` with its fixed arguments.
+pub fn ptg_func(iftab: u16) -> Vec<u8> {
+    let mut d = vec![0x41];
+    d.extend(words(&[iftab]));
+    d
+}
+
+/// `PtgFuncVar`: the built-in function `iftab` with `argc` arguments
+/// (`iftab` 255: a call by name, the name being the first of them).
+pub fn ptg_funcvar(argc: u8, iftab: u16) -> Vec<u8> {
+    let mut d = vec![0x42, argc];
+    d.extend(words(&[iftab]));
+    d
+}
+
+/// `PtgAttr` of the type `kind` (0x02 `IF`, 0x08 a jump, 0x10 `SUM` with
+/// one argument, 0x40 spaces…) with its word.
+pub fn ptg_attr(kind: u8, word: u16) -> Vec<u8> {
+    let mut d = vec![0x19, kind];
+    d.extend(words(&[word]));
+    d
+}
+
+/// `PtgStr` (8-bit characters).
+pub fn ptg_str(s: &str) -> Vec<u8> {
+    let mut d = vec![0x17, s.len() as u8, 0];
+    d.extend_from_slice(s.as_bytes());
+    d
+}
+
+/// A defined `NAME` whose formula `rgce` has array constants, with their
+/// values `extra` after it.
+pub fn defined_name_with_arrays(name: &str, itab: u16, rgce: &[u8], extra: &[u8]) -> Vec<u8> {
+    let mut d = defined_name_data(name, 0, itab, rgce);
+    d.extend_from_slice(extra);
+    rec(0x0018, &d)
+}
+
+/// The values of an array constant of numbers, `rows` of equal length.
+pub fn array_values(rows: &[&[f64]]) -> Vec<u8> {
+    let cols = rows.first().map_or(1, |r| r.len());
+    let mut d = vec![(cols - 1) as u8];
+    d.extend(words(&[(rows.len() - 1) as u16]));
+    for v in rows.iter().flat_map(|r| r.iter()) {
+        d.push(0x01);
+        d.extend_from_slice(&v.to_le_bytes());
+    }
+    d
+}
+
+/// The hidden function `NAME` through which a formula calls a function
+/// newer than the format (`_xlfn.IFERROR`).
+pub fn future_function_name(name: &str) -> Vec<u8> {
+    defined_name(name, 0x000F, 0, &[0x1C, 0x1D])
+}
+
 /// A BLIP record directly in a BLIP store (no `FBSE` around it).
 pub fn bare_blip(blip_type: u16, inst: u16, data: &[u8]) -> Vec<u8> {
     let mut blip = vec![0u8; 16];

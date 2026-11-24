@@ -9,28 +9,44 @@
 //! defined-name conversion turns into the model's OpenFormula.
 //!
 //! Read are the formulas made of references to this workbook's sheets
-//! (`ptgRef3d`, `ptgArea3d`), numbers, text, booleans, other names and the
-//! operators (union, intersection and range included). A name whose
-//! formula holds anything else (a function, an array, an error, a
-//! reference to another workbook or to a deleted sheet, a reference
-//! without a sheet) is left out and counted. Built-in names (print ranges,
-//! filter ranges), function and macro names are not names of the model
-//! (the print ranges are read by the formatting pass itself).
+//! (`ptgRef3d`, `ptgArea3d`), numbers, text, booleans, other names, the
+//! operators (union, intersection and range included), function calls and
+//! array constants. A function is a built-in one by its index (`ptgFunc`,
+//! `ptgFuncVar`, the table in `ftab.rs`; `tAttrSum` is `SUM` with one
+//! argument), or one called by name (`ptgFuncVar` with index 255, whose
+//! first operand names it): an add-in function (`ptgNameX` to an
+//! `EXTERNNAME` of the add-in `SUPBOOK`) or a function newer than the
+//! format (`ptgName` to a hidden function `NAME` spelled `_xlfn.…`). The
+//! text carries Excel's function names, and the conversion decides
+//! whether Tally has the function, as for an `.xlsx`. A name whose
+//! formula holds anything else (a function that is not in the table or
+//! that Tally does not have, a macro function, an error, an empty or
+//! error element in an array, a reference to another workbook or to a
+//! deleted sheet, a reference without a sheet) is left out and counted.
+//! Built-in names (print ranges, filter ranges), function and macro names
+//! are not names of the model (the print ranges are read by the
+//! formatting pass itself).
 //!
 //! Hostile input: every length is checked against the record, a name
-//! keeps at most [`MAX_FORMULA_TEXT`] bytes of formula text, the names
-//! kept and their bytes are bounded by [`Limits`], and the text moved
-//! while decoding is bounded by [`WORK_BUDGET`] for the workbook, so
+//! keeps at most [`MAX_FORMULA_TEXT`] bytes of formula text, the decoder
+//! is a loop over the tokens with at most [`MAX_STACK`] pending operands
+//! (a function takes its arguments from them or the name is left out),
+//! the names kept and their bytes are bounded by [`Limits`], and the text
+//! moved while decoding is bounded by [`WORK_BUDGET`] for the workbook, so
 //! deeply nested expressions cannot make the pass quadratic.
 
 use tally_model::NameData;
 use tally_types::{MAX_COLS, MAX_ROWS};
 
+use crate::ftab;
 use crate::prescan::{u16_at, u32_at};
 use crate::Limits;
 
 /// Longest Excel text of one name's formula.
 const MAX_FORMULA_TEXT: usize = 8 * 1024;
+/// Most operands waiting for their operator or function while one formula
+/// is decoded (a call has at most 30 arguments in a file Excel wrote).
+const MAX_STACK: usize = 1024;
 /// Most bytes of text moved while decoding the names of a workbook.
 const WORK_BUDGET: u64 = 64 * 1024 * 1024;
 /// Most `SUPBOOK` records looked at.
@@ -50,6 +66,24 @@ struct RawName {
     /// The parsed expression; `None` when the record does not hold all of
     /// it.
     rgce: Option<Vec<u8>>,
+    /// What follows the expression in the record: the values of its array
+    /// constants.
+    extra: Vec<u8>,
+    /// For a hidden function name spelled `_xlfn.…` (a function newer
+    /// than the format, called by name): that spelling. Such a record is
+    /// not a name of the model.
+    func: Option<String>,
+}
+
+/// What a `SUPBOOK` stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Book {
+    /// The workbook itself.
+    Own,
+    /// The add-in functions; its `EXTERNNAME` records name them.
+    AddIn,
+    /// Another workbook, a DDE or OLE link.
+    Other,
 }
 
 /// An `EXTERNSHEET` entry: the `SUPBOOK` and the sheets it stands for.
@@ -67,20 +101,59 @@ pub(crate) struct NameRecs {
     /// Bytes of names and expressions kept.
     bytes: u64,
     xtis: Vec<Xti>,
-    /// Per `SUPBOOK`: it is the workbook itself.
-    internal: Vec<bool>,
+    /// Per `SUPBOOK`: what it is, and for the add-in one the function
+    /// names of its `EXTERNNAME` records (empty for a record that does
+    /// not name a function; it still takes its index).
+    books: Vec<(Book, Vec<String>)>,
+    /// The last `SUPBOOK` is kept and is the add-in one.
+    addin_open: bool,
+    /// `EXTERNNAME` records kept.
+    extern_names: usize,
     /// A limit cut the list.
     pub dropped: bool,
 }
 
 impl NameRecs {
     /// Notes a `SUPBOOK` record: `ctab`, then 0x0401 for the workbook
-    /// itself.
+    /// itself or 0x3A01 for the add-in functions.
     pub fn supbook(&mut self, d: &[u8]) {
-        if self.internal.len() < MAX_SUPBOOKS {
-            self.internal
-                .push(d.len() == 4 && u16_at(d, 2) == Some(0x0401));
+        self.addin_open = false;
+        if self.books.len() < MAX_SUPBOOKS {
+            let book = match (d.len(), u16_at(d, 2)) {
+                (4, Some(0x0401)) => Book::Own,
+                (4, Some(0x3A01)) => Book::AddIn,
+                _ => Book::Other,
+            };
+            self.addin_open = book == Book::AddIn;
+            self.books.push((book, Vec::new()));
         }
+    }
+
+    /// Notes an `EXTERNNAME` record of the add-in `SUPBOOK`: flags, four
+    /// bytes not used, the function's name. The records of other
+    /// `SUPBOOK`s (names in other workbooks, DDE and OLE links) are not
+    /// looked at.
+    pub fn externname(&mut self, d: &[u8], limits: &Limits) {
+        if !self.addin_open {
+            return;
+        }
+        let Some((_, list)) = self.books.last_mut() else {
+            return;
+        };
+        if self.extern_names >= limits.max_names {
+            self.dropped = true;
+            self.addin_open = false;
+            return;
+        }
+        self.extern_names += 1;
+        // A record that is not a function name keeps its index.
+        let mut name = extern_function(d).unwrap_or_default();
+        if self.bytes.saturating_add(name.len() as u64) > limits.max_name_bytes {
+            self.dropped = true;
+            name.clear();
+        }
+        self.bytes = self.bytes.saturating_add(name.len() as u64);
+        list.push(name);
     }
 
     /// Reads an `EXTERNSHEET` record (with its continues in `d`): a count,
@@ -110,7 +183,10 @@ impl NameRecs {
             return;
         }
         let raw = raw_name(d).unwrap_or_default();
-        let bytes = (raw.name.len() + raw.rgce.as_ref().map_or(0, Vec::len)) as u64;
+        let bytes = (raw.name.len()
+            + raw.rgce.as_ref().map_or(0, Vec::len)
+            + raw.extra.len()
+            + raw.func.as_ref().map_or(0, String::len)) as u64;
         if self.bytes.saturating_add(bytes) > limits.max_name_bytes {
             // The record keeps its index (other names may refer to it).
             self.dropped = true;
@@ -173,10 +249,14 @@ impl NameRecs {
             // up or left of it, else for one in the middle of the BIFF
             // sheet, from where every offset has a cell.
             let mut base = (0u32, 0u32);
-            let mut decoded = self.excel_text(rgce, sheets, &valid, base, &mut work);
+            let formula = Tokens {
+                rgce,
+                extra: &raw.extra,
+            };
+            let mut decoded = self.excel_text(formula, sheets, &valid, base, &mut work);
             if decoded.as_ref().is_some_and(|d| d.outside) {
                 base = REBASE;
-                decoded = self.excel_text(rgce, sheets, &valid, base, &mut work);
+                decoded = self.excel_text(formula, sheets, &valid, base, &mut work);
             }
             let formula = decoded.and_then(|d| {
                 let of = converter.to_of_at(&d.text, sheet.map(|s| s as usize), base)?;
@@ -223,7 +303,7 @@ impl NameRecs {
     /// sheet of this workbook.
     fn sheet_ref(&self, ixti: u16, sheets: &[String]) -> Option<String> {
         let x = self.xtis.get(usize::from(ixti))?;
-        if self.internal.get(usize::from(x.book)) != Some(&true) || x.first != x.last {
+        if self.books.get(usize::from(x.book))?.0 != Book::Own || x.first != x.last {
             return None;
         }
         let name = sheets.get(usize::from(x.first))?;
@@ -234,22 +314,38 @@ impl NameRecs {
         Some(format!("'{}'!", name.replace('\'', "''")))
     }
 
-    /// Decodes the reverse Polish expression `rgce` into Excel formula
-    /// text for a formula in the cell `base` (row, column); `None` for an
-    /// expression with a token this reader does not decode, a malformed
-    /// one, one that uses a name that is not one (`valid`, per `NAME`
-    /// record), or one past the text or work limits.
+    /// The function name a `ptgName` or `ptgNameX` stands for when it is
+    /// the first operand of a call by name: `book` is the `SUPBOOK` (the
+    /// workbook itself for a `ptgName`), `index` the 0-based record.
+    fn function_name(&self, book: usize, index: usize) -> Option<&str> {
+        match self.books.get(book)? {
+            (Book::Own, _) => self.names.get(index)?.func.as_deref(),
+            (Book::AddIn, list) => list.get(index).map(String::as_str),
+            (Book::Other, _) => None,
+        }
+        .filter(|n| !n.is_empty())
+    }
+
+    /// Decodes the reverse Polish expression of `formula` into Excel
+    /// formula text for a formula in the cell `base` (row, column); `None`
+    /// for an expression with a token this reader does not decode, a
+    /// malformed one, one that uses a name that is not one (`valid`, per
+    /// `NAME` record), or one past the text, operand or work limits.
     fn excel_text(
         &self,
-        rgce: &[u8],
+        formula: Tokens,
         sheets: &[String],
         valid: &[bool],
         base: (u32, u32),
         work: &mut u64,
     ) -> Option<Decoded> {
-        let mut stack: Vec<String> = Vec::new();
+        let Tokens { rgce, extra } = formula;
+        let mut stack: Vec<Item> = Vec::new();
         let mut outside = false;
         let mut uses: Vec<usize> = Vec::new();
+        // Where the next array constant's values are in `extra`; `None`
+        // once that is not known any more.
+        let mut next_extra = Some(0usize);
         // Charges `n` bytes of moved text to the workbook's budget.
         // Once it is spent it stays spent.
         let mut charge = |n: usize| -> Option<()> {
@@ -266,9 +362,9 @@ impl NameRecs {
             } else {
                 ptg
             };
-            let binary = |op: &str, stack: &mut Vec<String>| -> Option<usize> {
-                let b = stack.pop()?;
-                let a = stack.last_mut()?;
+            let binary = |op: &str, stack: &mut Vec<Item>| -> Option<usize> {
+                let b = stack.pop()?.into_value()?;
+                let a = stack.last_mut()?.value_mut()?;
                 a.push_str(op);
                 a.push_str(&b);
                 Some(b.len() + op.len())
@@ -297,7 +393,7 @@ impl NameRecs {
                 // Union: Excel text wants it in parentheses.
                 0x10 => {
                     charge(binary(",", &mut stack)?)?;
-                    let a = stack.last_mut()?;
+                    let a = stack.last_mut()?.value_mut()?;
                     charge(a.len())?;
                     a.insert(0, '(');
                     a.push(')');
@@ -305,7 +401,7 @@ impl NameRecs {
                 }
                 // Unary plus and minus, percent, parentheses.
                 0x12..=0x15 => {
-                    let a = stack.last_mut()?;
+                    let a = stack.last_mut()?.value_mut()?;
                     charge(a.len())?;
                     match id {
                         0x12 => a.insert(0, '+'),
@@ -318,76 +414,153 @@ impl NameRecs {
                     }
                     1
                 }
+                // An argument that is left out: `IF(A,,B)`.
+                0x16 => {
+                    stack.push(Item {
+                        text: String::new(),
+                        kind: Kind::Missing,
+                    });
+                    1
+                }
                 // Text: a length, option flags, the characters.
                 0x17 => {
                     let cch = usize::from(*rgce.get(p + 1)?);
                     let wide = rgce.get(p + 2)? & 1 != 0;
                     let len = if wide { 2 * cch } else { cch };
                     let chars = rgce.get(p + 3..(p + 3).checked_add(len)?)?;
-                    let text: String = if wide {
-                        let units: Vec<u16> = chars
-                            .chunks_exact(2)
-                            .map(|b| u16::from_le_bytes([b[0], b[1]]))
-                            .collect();
-                        String::from_utf16(&units).ok()?
-                    } else {
-                        chars.iter().map(|b| char::from(*b)).collect()
-                    };
-                    if text.chars().any(char::is_control) {
-                        return None;
-                    }
-                    stack.push(format!("\"{}\"", text.replace('"', "\"\"")));
+                    stack.push(Item::value(quoted(chars, wide)?));
                     3 + len
                 }
-                // Attributes: spaces and "volatile" change nothing; the
-                // others belong to functions.
-                0x19 => match *rgce.get(p + 1)? {
-                    0x01 | 0x40 | 0x41 => 4,
-                    _ => return None,
-                },
+                // Attributes: a type and a word. Spaces and "volatile"
+                // change nothing; `IF` and `CHOOSE` come with jumps for
+                // Excel's evaluation (the call itself follows as a
+                // function token), `CHOOSE` with a table of them after
+                // the word; "sum" is `SUM` with one argument.
+                0x19 => {
+                    let kind = *rgce.get(p + 1)?;
+                    let word = usize::from(u16_at(rgce, p + 2)?);
+                    match kind {
+                        0x01 | 0x02 | 0x08 | 0x40 | 0x41 => 4,
+                        0x04 => word.checked_add(1)?.checked_mul(2)?.checked_add(4)?,
+                        0x10 => {
+                            charge(call(&mut stack, "SUM", 1)?)?;
+                            4
+                        }
+                        _ => return None,
+                    }
+                }
                 0x1D => {
-                    stack.push(
+                    stack.push(Item::value(
                         if *rgce.get(p + 1)? != 0 {
                             "TRUE"
                         } else {
                             "FALSE"
                         }
                         .to_string(),
-                    );
+                    ));
                     2
                 }
                 0x1E => {
-                    stack.push(u16_at(rgce, p + 1)?.to_string());
+                    stack.push(Item::value(u16_at(rgce, p + 1)?.to_string()));
                     3
                 }
                 0x1F => {
-                    let b = rgce.get(p + 1..p + 9)?;
-                    let v = f64::from_le_bytes(b.try_into().ok()?);
-                    if !v.is_finite() {
-                        return None;
-                    }
-                    // Exponent form keeps a huge or tiny number short.
-                    stack.push(if v != 0.0 && !(1e-5..1e15).contains(&v.abs()) {
-                        format!("{v:E}")
-                    } else {
-                        v.to_string()
-                    });
+                    stack.push(Item::value(number(rgce.get(p + 1..p + 9)?)?));
                     9
                 }
-                // Another name, by its 1-based index.
-                0x23 => {
-                    let i = usize::try_from(u32_at(rgce, p + 1)?).ok()?.checked_sub(1)?;
-                    if valid.get(i) != Some(&true) {
+                // An array constant: seven bytes not used; its values
+                // follow the expression.
+                0x20 => {
+                    rgce.get(p + 1..p + 8)?;
+                    let text = array(extra, &mut next_extra)?;
+                    charge(text.len())?;
+                    stack.push(Item::value(text));
+                    8
+                }
+                // A built-in function with a fixed number of arguments.
+                0x21 => {
+                    let (name, min, max) = ftab::function(u16_at(rgce, p + 1)?)?;
+                    if min != max {
                         return None;
                     }
-                    stack.push(self.names.get(i)?.name.clone());
-                    uses.push(i);
+                    charge(call(&mut stack, name, usize::from(min))?)?;
+                    3
+                }
+                // A function with its number of arguments (bit 7: a
+                // prompt, not part of the count) and its index (bit 15: a
+                // macro command, not a function).
+                0x22 => {
+                    let argc = usize::from(rgce.get(p + 1)? & 0x7F);
+                    let iftab = u16_at(rgce, p + 2)?;
+                    if iftab == 255 {
+                        // A call by name: the first operand is the name.
+                        let at = stack.len().checked_sub(argc)?;
+                        let first = stack.get(at)?;
+                        if first.kind != Kind::Func {
+                            return None;
+                        }
+                        let name = first.text.clone();
+                        charge(call(&mut stack, &name, argc.checked_sub(1)?)?)?;
+                        let result = stack.pop()?;
+                        *stack.get_mut(at)? = result;
+                    } else {
+                        let (name, min, max) = ftab::function(iftab)?;
+                        if !(usize::from(min)..=usize::from(max)).contains(&argc) {
+                            return None;
+                        }
+                        charge(call(&mut stack, name, argc)?)?;
+                    }
+                    4
+                }
+                // Another name, by its 1-based index; or the name of a
+                // function for a call by name.
+                0x23 => {
+                    let i = usize::try_from(u32_at(rgce, p + 1)?).ok()?.checked_sub(1)?;
+                    let raw = self.names.get(i)?;
+                    if let Some(f) = &raw.func {
+                        charge(f.len())?;
+                        stack.push(Item {
+                            text: f.clone(),
+                            kind: Kind::Func,
+                        });
+                    } else {
+                        if valid.get(i) != Some(&true) {
+                            return None;
+                        }
+                        charge(raw.name.len())?;
+                        stack.push(Item::value(raw.name.clone()));
+                        uses.push(i);
+                    }
                     5
                 }
                 // ptgMemArea, ptgMemErr, ptgMemNoMem and ptgMemFunc only
                 // announce the reference expression that follows.
-                0x26..=0x28 => 7,
+                // ptgMemArea has its rectangles (a count, eight bytes
+                // each) where the array constants have their values.
+                0x26 => {
+                    next_extra = next_extra.and_then(|at| {
+                        let n = usize::from(u16_at(extra, at)?);
+                        let end = at.checked_add(2)?.checked_add(n.checked_mul(8)?)?;
+                        (end <= extra.len()).then_some(end)
+                    });
+                    7
+                }
+                0x27 | 0x28 => 7,
                 0x29 => 3,
+                // ptgNameX: an `EXTERNSHEET` index and a 1-based index
+                // into the records of its `SUPBOOK`. Read for the name of
+                // a function only.
+                0x39 => {
+                    let x = self.xtis.get(usize::from(u16_at(rgce, p + 1)?))?;
+                    let i = usize::try_from(u32_at(rgce, p + 3)?).ok()?.checked_sub(1)?;
+                    let name = self.function_name(usize::from(x.book), i)?;
+                    charge(name.len())?;
+                    stack.push(Item {
+                        text: name.to_string(),
+                        kind: Kind::Func,
+                    });
+                    7
+                }
                 // ptgRef3d: sheet, row, column.
                 0x3A => {
                     let sheet = self.sheet_ref(u16_at(rgce, p + 1)?, sheets)?;
@@ -396,7 +569,7 @@ impl NameRecs {
                     let cell = Corner::new(row, col, base);
                     outside |= cell.outside;
                     cell.push(&mut t);
-                    stack.push(t);
+                    stack.push(Item::value(t));
                     7
                 }
                 // ptgArea3d: sheet, rows, columns.
@@ -406,24 +579,195 @@ impl NameRecs {
                     let (c0, c1) = (u16_at(rgce, p + 7)?, u16_at(rgce, p + 9)?);
                     let mut t = sheet;
                     outside |= push_area(&mut t, (r0, r1), (c0, c1), base);
-                    stack.push(t);
+                    stack.push(Item::value(t));
                     11
                 }
                 _ => return None,
             };
-            if stack.last().is_some_and(|t| t.len() > MAX_FORMULA_TEXT) {
+            if stack.len() > MAX_STACK
+                || stack
+                    .last()
+                    .is_some_and(|t| t.text.len() > MAX_FORMULA_TEXT)
+            {
                 return None;
             }
-            p += step;
+            p = p.checked_add(step)?;
         }
         // Exactly the declared bytes, and one result.
-        let text = stack.pop()?;
+        let text = stack.pop()?.into_value()?;
         (p == rgce.len() && stack.is_empty()).then_some(Decoded {
             text,
             outside,
             uses,
         })
     }
+}
+
+/// A formula of a `NAME` record: the parsed expression and what follows
+/// it in the record.
+#[derive(Clone, Copy)]
+struct Tokens<'a> {
+    rgce: &'a [u8],
+    extra: &'a [u8],
+}
+
+/// What an operand of the decoder is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// An expression.
+    Value,
+    /// An argument that is left out: only an argument of a call.
+    Missing,
+    /// The name of a function: only the first operand of a call by name.
+    Func,
+}
+
+/// An operand waiting for its operator or function.
+#[derive(Debug)]
+struct Item {
+    text: String,
+    kind: Kind,
+}
+
+impl Item {
+    fn value(text: String) -> Self {
+        Self {
+            text,
+            kind: Kind::Value,
+        }
+    }
+
+    /// The text of an expression.
+    fn into_value(self) -> Option<String> {
+        (self.kind == Kind::Value).then_some(self.text)
+    }
+
+    fn value_mut(&mut self) -> Option<&mut String> {
+        (self.kind == Kind::Value).then_some(&mut self.text)
+    }
+}
+
+/// Replaces the last `argc` operands by the call `name(…)` with them as
+/// its arguments; the bytes of text moved. `None` when there are not that
+/// many operands, one of them is a function's name, the text would be
+/// over the limit, or the only argument is a left-out one (as text that
+/// would be a call without arguments).
+fn call(stack: &mut Vec<Item>, name: &str, argc: usize) -> Option<usize> {
+    let at = stack.len().checked_sub(argc)?;
+    let args = stack.get(at..)?;
+    if args.iter().any(|a| a.kind == Kind::Func)
+        || (argc == 1 && args.iter().any(|a| a.kind == Kind::Missing))
+    {
+        return None;
+    }
+    // The name, the parentheses, the commas, the arguments.
+    let len = args
+        .iter()
+        .fold(name.len().saturating_add(2).saturating_add(argc), |n, a| {
+            n.saturating_add(a.text.len())
+        });
+    if len > MAX_FORMULA_TEXT {
+        return None;
+    }
+    let mut text = String::with_capacity(len);
+    text.push_str(name);
+    text.push('(');
+    for (i, a) in stack.drain(at..).enumerate() {
+        if i > 0 {
+            text.push(',');
+        }
+        text.push_str(&a.text);
+    }
+    text.push(')');
+    stack.push(Item::value(text));
+    Some(len)
+}
+
+/// Characters of a formula (8-bit, or UTF-16 when `wide`) as a text
+/// constant of Excel formula text; `None` for text that cannot be written
+/// in a formula.
+fn quoted(chars: &[u8], wide: bool) -> Option<String> {
+    let text: String = if wide {
+        let units: Vec<u16> = chars
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        String::from_utf16(&units).ok()?
+    } else {
+        chars.iter().map(|b| char::from(*b)).collect()
+    };
+    if text.chars().any(char::is_control) {
+        return None;
+    }
+    Some(format!("\"{}\"", text.replace('"', "\"\"")))
+}
+
+/// The eight bytes of a number as formula text; `None` for one that is
+/// not finite.
+fn number(b: &[u8]) -> Option<String> {
+    let v = f64::from_le_bytes(b.try_into().ok()?);
+    if !v.is_finite() {
+        return None;
+    }
+    // Exponent form keeps a huge or tiny number short.
+    Some(if v != 0.0 && !(1e-5..1e15).contains(&v.abs()) {
+        format!("{v:E}")
+    } else {
+        v.to_string()
+    })
+}
+
+/// The array constant at `*next` of `extra` as Excel text (`{1,2;3,4}`),
+/// moving `*next` past it: columns − 1 (a byte), rows − 1 (a word), then
+/// row by row a type byte with a number (1), a text (2: a length word,
+/// option flags, the characters) or a boolean (4), the fixed ones eight
+/// bytes wide. `None` for an array that is cut, that has an empty or an
+/// error element (not read), or whose text is over the limit. Every
+/// element read takes bytes of `extra`, which bounds the loop.
+fn array(extra: &[u8], next: &mut Option<usize>) -> Option<String> {
+    let mut at = (*next)?;
+    let cols = usize::from(*extra.get(at)?) + 1;
+    let rows = usize::from(u16_at(extra, at.checked_add(1)?)?) + 1;
+    at = at.checked_add(3)?;
+    let mut t = String::from("{");
+    for r in 0..rows {
+        if r > 0 {
+            t.push(';');
+        }
+        for c in 0..cols {
+            if c > 0 {
+                t.push(',');
+            }
+            let body = at.checked_add(1)?;
+            let fixed = body.checked_add(8)?;
+            at = match *extra.get(at)? {
+                0x01 => {
+                    t.push_str(&number(extra.get(body..fixed)?)?);
+                    fixed
+                }
+                0x02 => {
+                    let cch = usize::from(u16_at(extra, body)?);
+                    let wide = extra.get(body.checked_add(2)?)? & 1 != 0;
+                    let from = body.checked_add(3)?;
+                    let to = from.checked_add(if wide { cch.checked_mul(2)? } else { cch })?;
+                    t.push_str(&quoted(extra.get(from..to)?, wide)?);
+                    to
+                }
+                0x04 => {
+                    let b = extra.get(body..fixed)?;
+                    t.push_str(if b.first()? & 1 != 0 { "TRUE" } else { "FALSE" });
+                    fixed
+                }
+                _ => return None,
+            };
+            if t.len() > MAX_FORMULA_TEXT {
+                return None;
+            }
+        }
+    }
+    t.push('}');
+    *next = Some(at);
+    Some(t)
 }
 
 /// The base cell (row, column) for names with a relative reference that
@@ -442,20 +786,20 @@ struct Decoded {
     uses: Vec<usize>,
 }
 
-/// The fields of a `NAME` record; `None` when it is too short for them.
-fn raw_name(d: &[u8]) -> Option<RawName> {
-    let flags = u16_at(d, 0)?;
-    let cch = usize::from(*d.get(3)?);
-    let cce = usize::from(u16_at(d, 4)?);
-    let itab = u16_at(d, 8)?;
-    // Function, Visual Basic, macro, built-in and "big" names.
-    if flags & (0x0002 | 0x0004 | 0x0008 | 0x0020 | 0x1000) != 0 || cch == 0 {
-        return None;
-    }
-    let wide = d.get(14)? & 1 != 0;
-    let len = if wide { 2 * cch } else { cch };
-    let chars = d.get(15..15 + len)?;
-    let name: String = if wide {
+/// Whether `name` can be written as a function's name in formula text:
+/// ASCII letters, digits, `.` and `_`, not starting with a digit or a
+/// dot.
+fn is_function_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_')
+}
+
+/// Characters of a record (8-bit, or UTF-16 when `wide`) as text.
+fn record_text(chars: &[u8], wide: bool) -> String {
+    if wide {
         let units: Vec<u16> = chars
             .chunks_exact(2)
             .map(|b| u16::from_le_bytes([b[0], b[1]]))
@@ -463,7 +807,51 @@ fn raw_name(d: &[u8]) -> Option<RawName> {
         String::from_utf16_lossy(&units)
     } else {
         chars.iter().map(|b| char::from(*b)).collect()
-    };
+    }
+}
+
+/// The function an `EXTERNNAME` record of the add-in `SUPBOOK` names;
+/// `None` for a record that is cut, is a DDE or OLE link, or whose name
+/// cannot be a function's.
+fn extern_function(d: &[u8]) -> Option<String> {
+    // Built-in, "wants advice", picture, OLE and OLE link.
+    if u16_at(d, 0)? & 0x001F != 0 {
+        return None;
+    }
+    let cch = usize::from(*d.get(6)?);
+    let wide = d.get(7)? & 1 != 0;
+    let len = if wide { 2 * cch } else { cch };
+    let name = record_text(d.get(8..8 + len)?, wide);
+    is_function_name(&name).then_some(name)
+}
+
+/// The fields of a `NAME` record; `None` when it is too short for them.
+fn raw_name(d: &[u8]) -> Option<RawName> {
+    let flags = u16_at(d, 0)?;
+    let cch = usize::from(*d.get(3)?);
+    let cce = usize::from(u16_at(d, 4)?);
+    let itab = u16_at(d, 8)?;
+    // Built-in and "big" names.
+    if flags & (0x0020 | 0x1000) != 0 || cch == 0 {
+        return None;
+    }
+    let wide = d.get(14)? & 1 != 0;
+    let len = if wide { 2 * cch } else { cch };
+    let name = record_text(d.get(15..15 + len)?, wide);
+    // Function, Visual Basic and macro names are not names of the model.
+    // One spelled `_xlfn.…` is how a formula calls a function newer than
+    // the format; the others are macros.
+    if flags & (0x0002 | 0x0004 | 0x0008) != 0 {
+        let future = name.len() > 6
+            && name
+                .get(..6)
+                .is_some_and(|p| p.eq_ignore_ascii_case("_xlfn."))
+            && is_function_name(&name);
+        return future.then(|| RawName {
+            func: Some(name),
+            ..RawName::default()
+        });
+    }
     if name.chars().any(char::is_control) {
         return None;
     }
@@ -472,7 +860,17 @@ fn raw_name(d: &[u8]) -> Option<RawName> {
         .then(|| d.get(at..at + cce))
         .flatten()
         .map(<[u8]>::to_vec);
-    Some(RawName { name, itab, rgce })
+    let extra = match &rgce {
+        Some(_) => d.get(at + cce..).unwrap_or_default().to_vec(),
+        None => Vec::new(),
+    };
+    Some(RawName {
+        name,
+        itab,
+        rgce,
+        extra,
+        func: None,
+    })
 }
 
 /// Appends a column's letters.
@@ -603,8 +1001,14 @@ mod tests {
 
     /// Decoded for a formula in A1, every name being a good one.
     fn text(n: &NameRecs, rgce: &[u8]) -> Option<String> {
+        text_with(n, rgce, &[])
+    }
+
+    /// [`text`] for an expression followed by `extra` in its record.
+    fn text_with(n: &NameRecs, rgce: &[u8], extra: &[u8]) -> Option<String> {
         let valid = vec![true; n.names.len()];
-        n.excel_text(rgce, &sheets(), &valid, (0, 0), &mut WORK_BUDGET.clone())
+        let formula = Tokens { rgce, extra };
+        n.excel_text(formula, &sheets(), &valid, (0, 0), &mut WORK_BUDGET.clone())
             .map(|d| d.text)
     }
 
@@ -666,15 +1070,17 @@ mod tests {
         for ixti in [2u16, 3, 4, 5, 0xFFFF] {
             assert_eq!(text(&n, &area(ixti, 0, 0, 0, 0)), None, "ixti {ixti}");
         }
-        // A function, an error, a 2-D reference, an array, a missing
-        // argument, `IF`'s attribute.
+        // A macro-sheet function, an error, a 2-D reference, an array
+        // without its values, a missing argument and `IF`'s attribute on
+        // their own, an attribute that is not one.
         for rgce in [
-            &[0x21u8, 10, 0][..],
+            &[0x21u8, 54, 0][..],
             &[0x1C, 7],
             &[0x24, 0, 0, 0, 0],
             &[0x20, 0, 0, 0, 0, 0, 0, 0],
             &[0x16],
             &[0x19, 0x02, 0, 0],
+            &[0x1E, 1, 0, 0x19, 0x20, 0, 0],
         ] {
             assert_eq!(text(&n, rgce), None, "{rgce:?}");
         }
@@ -729,7 +1135,16 @@ mod tests {
         assert!(text(&n, &parens).is_some());
         let mut work = 10_000u64;
         assert_eq!(
-            n.excel_text(&parens, &sheets(), &[], (0, 0), &mut work),
+            n.excel_text(
+                Tokens {
+                    rgce: &parens,
+                    extra: &[]
+                },
+                &sheets(),
+                &[],
+                (0, 0),
+                &mut work
+            ),
             None
         );
         assert!(work <= 10_000);
@@ -748,7 +1163,8 @@ mod tests {
     fn relative_references_are_offsets() {
         let n = recs();
         let at = |rgce: &[u8], base: (u32, u32)| {
-            n.excel_text(rgce, &sheets(), &[], base, &mut WORK_BUDGET.clone())
+            let formula = Tokens { rgce, extra: &[] };
+            n.excel_text(formula, &sheets(), &[], base, &mut WORK_BUDGET.clone())
                 .map(|d| (d.text, d.outside))
         };
         // Row −1 (0xFFFF), same column, both relative: no cell from A1,
@@ -848,12 +1264,12 @@ mod tests {
         assert_eq!(skipped, 6);
 
         // Along a chain, whatever the order of the records: 1 uses 2, 2
-        // uses 3, 3 has a function. A name that uses itself is left out
+        // uses 3, 3 is an error value. A name that uses itself is left out
         // with them only when it also uses one of them.
         let mut n = recs();
         n.name(&record("First", &uses(2)), &limits);
         n.name(&record("Second", &uses(3)), &limits);
-        n.name(&record("Third", &[0x21, 74, 0]), &limits);
+        n.name(&record("Third", &[0x1C, 0x07]), &limits);
         n.name(&record("Loop", &uses(4)), &limits);
         let (names, skipped) = n.resolve(&sheets());
         let got: Vec<_> = names.iter().map(|n| n.name.as_str()).collect();
@@ -890,5 +1306,492 @@ mod tests {
         let mut empty = d.clone();
         empty[3] = 0;
         assert!(raw_name(&empty).is_none());
+    }
+
+    /// The data of an `EXTERNNAME` record that names a function.
+    fn extern_name(name: &str) -> Vec<u8> {
+        let mut d = vec![0, 0, 0, 0, 0, 0, name.len() as u8, 0];
+        d.extend_from_slice(name.as_bytes());
+        // Its formula: `#REF!`.
+        d.extend_from_slice(&[2, 0, 0x1C, 0x17]);
+        d
+    }
+
+    /// [`recs`] with the add-in `SUPBOOK` (its functions: 1 `EDATE`, 2 a
+    /// record that is not a function, 3 `NOSUCHFUNCTION`; the
+    /// `EXTERNSHEET` entry 3 points at it) and the names 1 `Rate` and
+    /// 2 `_xlfn.IFERROR`, a hidden function name.
+    fn recs_with_functions() -> NameRecs {
+        let mut n = recs();
+        let limits = Limits::default();
+        n.supbook(&[1, 0, 1, 0x3A]);
+        n.externname(&extern_name("EDATE"), &limits);
+        n.externname(&extern_name("not a function"), &limits);
+        n.externname(&extern_name("NOSUCHFUNCTION"), &limits);
+        n.name(&record("Rate", &[0x1E, 5, 0]), &limits);
+        let mut future = record("_xlfn.IFERROR", &[0x1C, 0x1D]);
+        future[0] = 0x0F;
+        n.name(&future, &limits);
+        n
+    }
+
+    const ONE: [u8; 3] = [0x1E, 1, 0];
+    const TWO: [u8; 3] = [0x1E, 2, 0];
+    const THREE: [u8; 3] = [0x1E, 3, 0];
+    /// `ptgNameX` to the add-in function `i` (1-based).
+    fn addin(i: u8) -> [u8; 7] {
+        [0x39, 3, 0, i, 0, 0, 0]
+    }
+
+    #[test]
+    fn functions() {
+        let n = recs_with_functions();
+        let t = |parts: &[&[u8]]| text(&n, &parts.concat());
+        // `SUM` with one argument is an attribute.
+        assert_eq!(
+            t(&[&area(0, 0, 9, 0, 1), &[0x19, 0x10, 0, 0]]).as_deref(),
+            Some("SUM('One'!$A$1:$B$10)")
+        );
+        // With more, a function with its count; in each token class.
+        for ptg in [0x22u8, 0x42, 0x62] {
+            assert_eq!(
+                t(&[&ONE, &TWO, &[ptg, 2, 4, 0]]).as_deref(),
+                Some("SUM(1,2)")
+            );
+        }
+        // Fixed counts, nested: ABS(ROUND(1.5,0)).
+        for ptg in [0x21u8, 0x41, 0x61] {
+            let mut rgce = vec![0x1F];
+            rgce.extend_from_slice(&1.5f64.to_le_bytes());
+            rgce.extend_from_slice(&[0x1E, 0, 0, ptg, 27, 0, ptg, 24, 0]);
+            assert_eq!(text(&n, &rgce).as_deref(), Some("ABS(ROUND(1.5,0))"));
+        }
+        assert_eq!(t(&[&[0x21, 74, 0]]).as_deref(), Some("NOW()"));
+        // IF with its jumps, also behind "volatile" and spaces.
+        assert_eq!(
+            t(&[
+                &[0x19, 0x01, 0, 0],
+                &ONE,
+                &[0x19, 0x02, 7, 0],
+                &[0x19, 0x40, 0, 1],
+                &TWO,
+                &[0x19, 0x08, 10, 0],
+                &THREE,
+                &[0x19, 0x08, 3, 0],
+                &[0x22, 3, 1, 0],
+            ])
+            .as_deref(),
+            Some("IF(1,2,3)")
+        );
+        // CHOOSE with its jump table (two choices: three words).
+        assert_eq!(
+            t(&[
+                &ONE,
+                &[0x19, 0x04, 2, 0, 6, 0, 13, 0, 20, 0],
+                &TWO,
+                &[0x19, 0x08, 10, 0],
+                &THREE,
+                &[0x19, 0x08, 3, 0],
+                &[0x22, 3, 100, 0],
+            ])
+            .as_deref(),
+            Some("CHOOSE(1,2,3)")
+        );
+        // An argument that is left out; the prompt bit is not a count.
+        assert_eq!(
+            t(&[&ONE, &[0x16], &THREE, &[0x22, 0x83, 1, 0]]).as_deref(),
+            Some("IF(1,,3)")
+        );
+        // Functions called by name: an add-in one, a newer one.
+        assert_eq!(
+            t(&[&addin(1), &ONE, &TWO, &[0x22, 3, 255, 0]]).as_deref(),
+            Some("EDATE(1,2)")
+        );
+        assert_eq!(
+            t(&[&[0x23, 2, 0, 0, 0], &ONE, &TWO, &[0x22, 3, 255, 0]]).as_deref(),
+            Some("_xlfn.IFERROR(1,2)")
+        );
+        // … inside an expression, with a name as an argument.
+        assert_eq!(
+            t(&[
+                &ONE,
+                &addin(1),
+                &[0x23, 1, 0, 0, 0],
+                &TWO,
+                &[0x22, 3, 255, 0],
+                &[0x03],
+            ])
+            .as_deref(),
+            Some("1+EDATE(Rate,2)")
+        );
+    }
+
+    #[test]
+    fn array_constants() {
+        let n = recs();
+        let array = [0x20u8, 0, 0, 0, 0, 0, 0, 0];
+        // Two columns, two rows: 1, "a"; TRUE, 2.5.
+        let mut extra = vec![1, 1, 0, 0x01];
+        extra.extend_from_slice(&1f64.to_le_bytes());
+        extra.extend_from_slice(&[0x02, 1, 0, 0, b'a']);
+        extra.extend_from_slice(&[0x04, 1, 0, 0, 0, 0, 0, 0, 0, 0x01]);
+        extra.extend_from_slice(&2.5f64.to_le_bytes());
+        assert_eq!(
+            text_with(&n, &array, &extra).as_deref(),
+            Some("{1,\"a\";TRUE,2.5}")
+        );
+        // Every cut of the values.
+        for cut in 0..extra.len() {
+            assert_eq!(text_with(&n, &array, &extra[..cut]), None, "{cut}");
+        }
+        // Two arrays take their values in order, also in the other token
+        // classes; a third has none.
+        let mut two = extra.clone();
+        two.extend_from_slice(&[0, 0, 0, 0x02, 1, 0, 1, b'b', 0]);
+        let mut rgce = array.to_vec();
+        rgce.extend_from_slice(&[0x40, 0, 0, 0, 0, 0, 0, 0, 0x08]);
+        assert_eq!(
+            text_with(&n, &rgce, &two).as_deref(),
+            Some("{1,\"a\";TRUE,2.5}&{\"b\"}")
+        );
+        rgce.extend_from_slice(&[0x60, 0, 0, 0, 0, 0, 0, 0, 0x08]);
+        assert_eq!(text_with(&n, &rgce, &two), None);
+        // After a ptgMemArea with one rectangle, whose bytes come first.
+        let mut mem = vec![0x26, 0, 0, 0, 0, 0, 0];
+        mem.extend_from_slice(&array);
+        let mut after = vec![1, 0, 9, 9, 9, 9, 9, 9, 9, 9];
+        after.extend_from_slice(&[0, 0, 0, 0x04, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(text_with(&n, &mem, &after).as_deref(), Some("{FALSE}"));
+        // … and not when the rectangles are not all there.
+        assert_eq!(text_with(&n, &mem, &after[..9]), None);
+        // An empty element, an error element, an unknown type; a token
+        // that is cut.
+        for kind in [0x00u8, 0x10, 0x03, 0xFF] {
+            let e = [0, 0, 0, kind, 0, 0, 0, 0, 0, 0, 0, 0];
+            assert_eq!(text_with(&n, &array, &e), None, "{kind}");
+        }
+        assert_eq!(text_with(&n, &array[..7], &extra), None);
+        // 256 columns × 65,536 rows announced over a few bytes.
+        let mut big = vec![0xFF, 0xFF, 0xFF];
+        for _ in 0..100 {
+            big.push(0x04);
+            big.extend_from_slice(&[0; 8]);
+        }
+        assert_eq!(text_with(&n, &array, &big), None);
+        // Text that cannot be written in a formula; an array whose text
+        // is over the limit.
+        assert_eq!(text_with(&n, &array, &[0, 0, 0, 0x02, 1, 0, 0, 7]), None);
+        let mut long = vec![0xFF, 0xFF, 0x00];
+        for _ in 0..20_000 {
+            long.push(0x01);
+            long.extend_from_slice(&1f64.to_le_bytes());
+        }
+        assert_eq!(text_with(&n, &array, &long), None);
+    }
+
+    #[test]
+    fn calls_that_are_not_decoded() {
+        let n = recs_with_functions();
+        let t = |parts: &[&[u8]]| text(&n, &parts.concat());
+        // An index that is not a worksheet function: a macro-sheet one,
+        // one past the table, a macro command (bit 15).
+        for i in [53u16, 54, 151, 380, 500, 0x7FFF] {
+            let [lo, hi] = i.to_le_bytes();
+            assert_eq!(t(&[&ONE, &[0x21, lo, hi]]), None, "{i}");
+            assert_eq!(t(&[&ONE, &[0x22, 1, lo, hi]]), None, "{i}");
+        }
+        assert_eq!(t(&[&ONE, &[0x22, 1, 4, 0x80]]), None);
+        // More arguments than operands.
+        assert_eq!(t(&[&[0x21, 24, 0]]), None);
+        assert_eq!(t(&[&ONE, &[0x21, 27, 0]]), None);
+        assert_eq!(t(&[&ONE, &[0x22, 5, 4, 0]]), None);
+        assert_eq!(t(&[&ONE, &[0x22, 0x7F, 4, 0]]), None);
+        assert_eq!(t(&[&[0x19, 0x10, 0, 0]]), None);
+        // A count the function does not take: ABS with two arguments, IF
+        // with one, a fixed-count token for a function without a fixed
+        // count.
+        assert_eq!(t(&[&ONE, &TWO, &[0x22, 2, 24, 0]]), None);
+        assert_eq!(t(&[&ONE, &[0x22, 1, 1, 0]]), None);
+        assert_eq!(t(&[&ONE, &[0x21, 4, 0]]), None);
+        // Operands left over.
+        assert_eq!(t(&[&ONE, &TWO, &[0x21, 24, 0]]), None);
+        // A call by name without a name: no operand, a number as the
+        // first one, the name not first, a name that is not a function's.
+        assert_eq!(t(&[&[0x22, 0, 255, 0]]), None);
+        assert_eq!(t(&[&[0x22, 1, 255, 0]]), None);
+        assert_eq!(t(&[&ONE, &[0x22, 1, 255, 0]]), None);
+        assert_eq!(t(&[&ONE, &addin(1), &[0x22, 2, 255, 0]]), None);
+        assert_eq!(t(&[&[0x23, 1, 0, 0, 0], &ONE, &[0x22, 2, 255, 0]]), None);
+        // An add-in record that is not a function, one that is not
+        // there, index 0; a `ptgNameX` into this workbook or into no
+        // `SUPBOOK`.
+        for namex in [
+            addin(2),
+            addin(4),
+            addin(0),
+            [0x39, 0, 0, 1, 0, 0, 0],
+            [0x39, 9, 0, 1, 0, 0, 0],
+        ] {
+            assert_eq!(t(&[&namex, &ONE, &[0x22, 2, 255, 0]]), None, "{namex:?}");
+        }
+        // A function's name is only that: not a result, an operand or an
+        // argument.
+        assert_eq!(t(&[&addin(1)]), None);
+        assert_eq!(t(&[&addin(1), &[0x15]]), None);
+        assert_eq!(t(&[&addin(1), &ONE, &[0x03]]), None);
+        assert_eq!(t(&[&ONE, &addin(1), &[0x03]]), None);
+        assert_eq!(t(&[&addin(1), &[0x19, 0x10, 0, 0]]), None);
+        assert_eq!(t(&[&addin(1), &addin(1), &[0x22, 2, 255, 0]]), None);
+        // A left-out argument is only an argument, and not the only one.
+        assert_eq!(t(&[&ONE, &[0x16], &[0x03]]), None);
+        assert_eq!(t(&[&[0x16], &[0x12]]), None);
+        assert_eq!(t(&[&[0x16], &[0x22, 1, 4, 0]]), None);
+        assert_eq!(t(&[&[0x16], &[0x19, 0x10, 0, 0]]), None);
+        assert_eq!(
+            t(&[&[0x16], &[0x16], &[0x22, 2, 4, 0]]).as_deref(),
+            Some("SUM(,)")
+        );
+        // A jump table that is not all there, or far longer than the
+        // formula.
+        assert_eq!(t(&[&ONE, &[0x19, 0x04, 2, 0, 6, 0]]), None);
+        assert_eq!(t(&[&ONE, &[0x19, 0x04, 0xFF, 0xFF]]), None);
+        assert_eq!(t(&[&ONE, &[0x19, 0x04]]), None);
+    }
+
+    #[test]
+    fn calls_cut_anywhere_and_every_byte() {
+        let n = recs_with_functions();
+        // IF(SUM(area), EDATE(1,), {1}) & _xlfn.IFERROR(CHOOSE(1,2,3), 2)
+        let full = [
+            &area(0, 0, 9, 0, 1)[..],
+            &[0x19, 0x10, 0, 0],
+            &[0x19, 0x02, 7, 0],
+            &addin(1),
+            &ONE,
+            &[0x16],
+            &[0x22, 3, 255, 0],
+            &[0x19, 0x08, 10, 0],
+            &[0x20, 0, 0, 0, 0, 0, 0, 0],
+            &[0x22, 3, 1, 0],
+            &[0x23, 2, 0, 0, 0],
+            &ONE,
+            &[0x19, 0x04, 2, 0, 6, 0, 13, 0, 20, 0],
+            &TWO,
+            &THREE,
+            &[0x22, 3, 100, 0],
+            &TWO,
+            &[0x22, 3, 255, 0],
+            &[0x08],
+        ]
+        .concat();
+        let mut extra = vec![0, 0, 0, 0x01];
+        extra.extend_from_slice(&1f64.to_le_bytes());
+        assert_eq!(
+            text_with(&n, &full, &extra).as_deref(),
+            Some("IF(SUM('One'!$A$1:$B$10),EDATE(1,),{1})&_xlfn.IFERROR(CHOOSE(1,2,3),2)")
+        );
+        // A cut between two tokens can leave a whole formula; no cut
+        // leaves this one.
+        for cut in 0..full.len() {
+            let got = text_with(&n, &full[..cut], &extra);
+            assert!(got.is_none_or(|t| !t.contains("IFERROR")), "{cut}");
+        }
+        for at in 0..full.len() {
+            for b in 0..=255u8 {
+                let mut m = full.clone();
+                m[at] = b;
+                let _ = text_with(&n, &m, &extra);
+            }
+        }
+        for at in 0..extra.len() {
+            for b in 0..=255u8 {
+                let mut m = extra.clone();
+                m[at] = b;
+                let _ = text_with(&n, &full, &m);
+            }
+        }
+    }
+
+    #[test]
+    fn nested_calls_and_pending_operands_are_bounded() {
+        let n = recs_with_functions();
+        // 1 in 30,000 × ABS(…): the text limit ends it.
+        let nested = |depth: usize| {
+            let mut rgce = ONE.to_vec();
+            for _ in 0..depth {
+                rgce.extend_from_slice(&[0x21, 24, 0]);
+            }
+            rgce
+        };
+        assert_eq!(text(&n, &nested(30_000)), None);
+        // Within the text limit the decoding is a loop, and the work is
+        // charged.
+        assert!(text(&n, &nested(1_500)).is_some());
+        let mut work = 10_000u64;
+        let formula = Tokens {
+            rgce: &nested(1_500),
+            extra: &[],
+        };
+        assert_eq!(
+            n.excel_text(formula, &sheets(), &[], (0, 0), &mut work),
+            None
+        );
+        assert!(work <= 10_000);
+        // Operands that pile up: left-out arguments, numbers, function
+        // names.
+        for token in [&[0x16u8][..], &ONE, &addin(1)] {
+            let mut rgce = Vec::new();
+            for _ in 0..MAX_STACK {
+                rgce.extend_from_slice(token);
+            }
+            let _ = text(&n, &rgce);
+            rgce.extend_from_slice(token);
+            rgce.extend_from_slice(&[0x22, 30, 4, 0]);
+            assert_eq!(text(&n, &rgce), None);
+        }
+        // The widest call there is: 127 arguments is more than a function
+        // takes.
+        let mut wide = Vec::new();
+        for _ in 0..127 {
+            wide.extend_from_slice(&ONE);
+        }
+        wide.extend_from_slice(&[0x22, 127, 4, 0]);
+        assert_eq!(text(&n, &wide), None);
+        // A deeply nested name goes through the conversion without a deep
+        // stack: imported or left out, never a crash.
+        let mut deep = recs();
+        let limits = Limits::default();
+        let rgce = nested(1_500);
+        let mut d = vec![0, 0, 0, 4];
+        d.extend_from_slice(&(rgce.len() as u16).to_le_bytes());
+        d.extend_from_slice(&[0; 9]);
+        d.extend_from_slice(b"Deep");
+        d.extend_from_slice(&rgce);
+        deep.name(&d, &limits);
+        let (names, skipped) = deep.resolve(&sheets());
+        assert_eq!(names.len() + skipped, 1);
+    }
+
+    #[test]
+    fn names_with_functions_resolve() {
+        let mut n = recs_with_functions();
+        let limits = Limits::default();
+        let name = |n: &mut NameRecs, name: &str, parts: &[&[u8]]| {
+            n.name(&record(name, &parts.concat()), &limits);
+        };
+        // 3: Total = SUM(One!$A$1:$B$10) * Rate.
+        name(
+            &mut n,
+            "Total",
+            &[
+                &area(0, 0, 9, 0, 1),
+                &[0x19, 0x10, 0, 0],
+                &[0x23, 1, 0, 0, 0],
+                &[0x05],
+            ],
+        );
+        // 4: Later = EDATE(Rate, 1) (an add-in function).
+        name(
+            &mut n,
+            "Later",
+            &[&addin(1), &[0x23, 1, 0, 0, 0], &ONE, &[0x22, 3, 255, 0]],
+        );
+        // 5: Safe = IFERROR(Total, 0) (a newer function).
+        name(
+            &mut n,
+            "Safe",
+            &[
+                &[0x23, 2, 0, 0, 0],
+                &[0x23, 3, 0, 0, 0],
+                &[0x1E, 0, 0],
+                &[0x22, 3, 255, 0],
+            ],
+        );
+        // 6: an add-in function Tally does not have; 7: a worksheet
+        // function it does not have (PHONETIC); 8: a name on 7.
+        name(&mut n, "NoAddIn", &[&addin(3), &ONE, &[0x22, 2, 255, 0]]);
+        name(&mut n, "NoBuiltIn", &[&ONE, &[0x21, 0x68, 0x01]]);
+        name(&mut n, "OnNoBuiltIn", &[&[0x23, 7, 0, 0, 0], &[0x12]]);
+        let (names, skipped) = n.resolve(&sheets());
+        let got: Vec<_> = names
+            .iter()
+            .map(|n| (n.name.as_str(), n.formula.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Rate", "of:=5"),
+                ("Total", "of:=SUM([$One.$A$1:.$B$10])*Rate"),
+                ("Later", "of:=EDATE(Rate;1)"),
+                ("Safe", "of:=COM.MICROSOFT.IFERROR(Total;0)"),
+            ]
+        );
+        // The function name itself is not a name and is not counted.
+        assert_eq!(skipped, 3);
+    }
+
+    #[test]
+    fn function_names_of_the_file() {
+        // Hidden function names: only the `_xlfn.` ones are functions,
+        // with any of the function, Visual Basic and macro flags.
+        let named = |name: &str, flags: u8| {
+            let mut d = record(name, &[0x1C, 0x1D]);
+            d[0] = flags;
+            raw_name(&d)
+        };
+        for flags in [0x02u8, 0x08, 0x0E, 0x0F] {
+            let r = named("_xlfn.IFERROR", flags).unwrap();
+            assert_eq!(r.func.as_deref(), Some("_xlfn.IFERROR"));
+            assert!(r.name.is_empty() && r.rgce.is_none());
+        }
+        for name in ["MyMacro", "_xlfn.", "_xlfn.A(", "_xlfn.A B", "xlfn.IFERROR"] {
+            assert!(named(name, 0x0E).is_none(), "{name}");
+        }
+        // Without those flags it is a name like any other.
+        assert_eq!(named("_xlfn.IFERROR", 0).unwrap().func, None);
+        // EXTERNNAME: cut anywhere, links, names that are not functions.
+        let full = extern_name("EDATE");
+        assert_eq!(extern_function(&full).as_deref(), Some("EDATE"));
+        for cut in 0..13 {
+            assert_eq!(extern_function(&full[..cut]), None, "{cut}");
+        }
+        for flags in [0x01u8, 0x02, 0x04, 0x08, 0x10] {
+            let mut d = full.clone();
+            d[0] = flags;
+            assert_eq!(extern_function(&d), None);
+        }
+        for name in ["", "1A", "A1(", "A B", "A,B", ".A", "É"] {
+            assert_eq!(extern_function(&extern_name(name)), None, "{name}");
+        }
+        let mut wide = vec![0, 0, 0, 0, 0, 0, 2, 1];
+        wide.extend_from_slice(&[b'P', 0, b'I', 0]);
+        assert_eq!(extern_function(&wide).as_deref(), Some("PI"));
+        // The records of a `SUPBOOK` that is not the add-in one are not
+        // kept, and the limits hold.
+        let mut n = NameRecs::default();
+        n.externname(&full, &Limits::default());
+        n.supbook(&[2, 0, 1, 4]);
+        n.externname(&full, &Limits::default());
+        n.supbook(&[1, 0, 1, 0x3A]);
+        let two = Limits {
+            max_names: 2,
+            ..Limits::default()
+        };
+        for _ in 0..5 {
+            n.externname(&full, &two);
+        }
+        let kept: Vec<usize> = n.books.iter().map(|b| b.1.len()).collect();
+        assert_eq!(kept, [0, 2]);
+        assert!(n.dropped);
+        let mut n = NameRecs::default();
+        n.supbook(&[1, 0, 1, 0x3A]);
+        let tiny = Limits {
+            max_name_bytes: 7,
+            ..Limits::default()
+        };
+        n.externname(&full, &tiny);
+        n.externname(&full, &tiny);
+        assert_eq!(n.books[0].1, ["EDATE".to_string(), String::new()]);
+        assert!(n.dropped);
     }
 }

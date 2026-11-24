@@ -2075,6 +2075,8 @@ pub(crate) fn read(s: &[u8], limits: &Limits) -> Formatting {
             // SUPBOOK and EXTERNSHEET: what the sheet indices of 3-D
             // references in names stand for.
             0x01AE => names.supbook(d),
+            // EXTERNNAME: the add-in functions formulas call by name.
+            0x0023 => names.externname(d, limits),
             0x0017 => {
                 extern_buf.clear();
                 // 65,536 entries of 6 bytes at most.

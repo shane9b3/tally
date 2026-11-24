@@ -447,6 +447,8 @@ fn xls_opens_with_its_names_and_links() {
             // A whole column of the BIFF sheet is a whole column here.
             ("Local", Some(other), "$'Other sheet'.$C:$C"),
             ("Rate", None, "0.25"),
+            // A name whose formula is a function.
+            ("Stamp", None, "NOW()"),
         ]
     );
     // =SUM(Data) and =Double+1, calculated (not only the stored results).
@@ -475,6 +477,68 @@ fn xls_opens_with_its_names_and_links() {
         .page_setup
         .as_ref()
         .is_some_and(|p| p.print_range.is_some()));
+}
+
+/// The names of an `.xls` whose formula calls functions (built-in ones by
+/// their index, `SUM` as an attribute, `IF` and `CHOOSE` with their jumps,
+/// an add-in function and a newer function by name, an array constant)
+/// are defined, and the cells that use them calculate; the stored results
+/// in the file are all 0.
+#[test]
+fn xls_names_with_functions_calculate() {
+    let mut svc = EngineService::with_default_codec();
+    let info = open(&mut svc, &repo("tests/fixtures/xls/funcnames.xls"));
+    let (main, other) = (info.sheets[0].id, info.sheets[1].id);
+    let names = svc.names(info.doc).unwrap();
+    let mut listed: Vec<(&str, Option<tally_types::SheetId>)> =
+        names.iter().map(|n| (n.name.as_str(), n.scope)).collect();
+    listed.sort_unstable();
+    assert_eq!(
+        listed,
+        [
+            ("Choice", None),
+            ("Data", None),
+            ("Half", None),
+            ("Plus", None),
+            ("Rounded", None),
+            ("Safe", None),
+            ("Size", None),
+            ("Sparse", None),
+            ("Table", None),
+            ("Top", Some(other)),
+            ("Total", None),
+        ]
+    );
+    // The two names with a function Tally does not read are reported.
+    assert!(
+        info.warnings
+            .iter()
+            .any(|w| w.starts_with("2 defined name(s)")),
+        "{:?}",
+        info.warnings
+    );
+    svc.recalc_all(info.doc).unwrap();
+    let wb = &svc.document(info.doc).unwrap().wb;
+    let number = |sheet, r: u32, c: u32, want: f64| match wb.value(CellAddr::new(sheet, r, c)) {
+        Value::Number(n) => assert!((n - want).abs() < 1e-9, "({r}, {c}): {n} != {want}"),
+        other => panic!("({r}, {c}): {other:?}"),
+    };
+    // Row 3: Total = SUM(A1:B1), Plus = SUM(Data, 10), Size = IF(Total >
+    // 2, "big", "small"), Rounded = ABS(ROUND(-2.567, 1)), Sparse =
+    // IF(A1 > 5, , 7).
+    number(main, 2, 0, 3.0);
+    number(main, 2, 1, 13.0);
+    assert_eq!(wb.value(CellAddr::new(main, 2, 2)), Value::text("big"));
+    number(main, 2, 3, 2.6);
+    number(main, 2, 4, 7.0);
+    // Row 4: Safe = IFERROR(1 / 0, -1), Half = QUOTIENT(7, 2),
+    // SUM(Table) over {1,2;3,4}, Choice = CHOOSE(2, 10, 20).
+    number(main, 3, 0, -1.0);
+    number(main, 3, 1, 3.0);
+    number(main, 3, 2, 10.0);
+    number(main, 3, 3, 20.0);
+    // The second sheet's own name: Top = MAX(C1:C3).
+    number(other, 2, 0, 9.0);
 }
 
 /// Names that Excel 97-2003 allows and that are cells in Tally's larger

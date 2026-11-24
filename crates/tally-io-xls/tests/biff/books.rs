@@ -261,7 +261,7 @@ pub fn page() -> Vec<u8> {
 }
 
 /// Defined names (of the workbook and of a sheet, a constant, a name
-/// built on another name, a union, a formula that is not read, a function
+/// built on another name, a union, a formula with a function, a function
 /// name, a print area among them), a formula that uses a name, and
 /// hyperlinks (a URL over two cells, a URL with a location, a place in
 /// the workbook, a file).
@@ -293,7 +293,7 @@ pub fn names() -> Vec<u8> {
         0,
         &ptg_union(&ptg_area3d_on(0, 0, 0, 0, 0), &ptg_area3d_on(1, 1, 1, 1, 1)),
     ));
-    // 7: a formula with a function (NOW()): not read.
+    // 7: a formula with a function (NOW()).
     g.extend(defined_name("Stamp", 0, 0, &[0x21, 74, 0]));
     // 8: a function name: not a name of the model.
     g.extend(defined_name("Macro", 0x000E, 0, &[0x1E, 1, 0]));
@@ -386,9 +386,177 @@ pub fn wide_names() -> Vec<u8> {
     file(stream(&g, &[("Main", s)]))
 }
 
+/// Names whose formula calls functions, and the cells that use them
+/// (their stored results are all 0). `Main` has A1 = 1 and B1 = 2,
+/// `Other sheet` C1 = 5 and C2 = 9.
+///
+/// 1 `Data` = Main!$A$1:$B$1, 2 `Total` = SUM(Data area) (the "sum"
+/// attribute), 3 `Plus` = SUM(Data, 10), 4 `Size` = IF(Total > 2, "big",
+/// "small") with its jumps, 5 `Rounded` = ABS(ROUND(-2.567, 1)), 6
+/// `Sparse` = IF(Main!$A$1 > 5, , 7) (an argument left out), 7 `Top` =
+/// MAX('Other sheet'!$C$1:$C$3), local to the second sheet, 8 the hidden
+/// function name `_xlfn.IFERROR`, 9 `Safe` = IFERROR(1 / 0, -1), 10
+/// `Half` = QUOTIENT(7, 2) (an add-in function), 11 `Table` = {1,2;3,4},
+/// 12 `Choice` = CHOOSE(2, 10, 20) with its jump table, 13 `Stamp` =
+/// PHONETIC(Main!$A$1) (a function Tally does not have: left out), 14
+/// `Macro` = a macro-sheet function (index 54: left out).
+pub fn function_names() -> Vec<u8> {
+    let cat = |parts: &[&[u8]]| parts.concat();
+    let name = |i: u32| ptg_name(i);
+    let mut g = globals(&[], &[], &[]);
+    g.extend(externsheet_with_addin(2, &["QUOTIENT"]));
+    let data = ptg_area3d_on(0, 0, 0, 0, 1);
+    g.extend(defined_name("Data", 0, 0, &data));
+    g.extend(defined_name(
+        "Total",
+        0,
+        0,
+        &cat(&[&data, &ptg_attr(0x10, 0)]),
+    ));
+    g.extend(defined_name(
+        "Plus",
+        0,
+        0,
+        &cat(&[&name(1), &ptg_int(10), &ptg_funcvar(2, 4)]),
+    ));
+    g.extend(defined_name(
+        "Size",
+        0,
+        0,
+        &cat(&[
+            &name(2),
+            &ptg_int(2),
+            &[0x0D],
+            &ptg_attr(0x02, 10),
+            &ptg_str("big"),
+            &ptg_attr(0x08, 15),
+            &ptg_str("small"),
+            &ptg_attr(0x08, 3),
+            &ptg_funcvar(3, 1),
+        ]),
+    ));
+    g.extend(defined_name(
+        "Rounded",
+        0,
+        0,
+        &cat(&[
+            &ptg_num(2.567),
+            &[0x13],
+            &ptg_int(1),
+            &ptg_func(27),
+            &ptg_func(24),
+        ]),
+    ));
+    g.extend(defined_name(
+        "Sparse",
+        0,
+        0,
+        &cat(&[
+            &[0x3A, 0, 0, 0, 0, 0, 0],
+            &ptg_int(5),
+            &[0x0D],
+            &ptg_attr(0x02, 5),
+            &[0x16],
+            &ptg_attr(0x08, 10),
+            &ptg_int(7),
+            &ptg_attr(0x08, 3),
+            &ptg_funcvar(3, 1),
+        ]),
+    ));
+    g.extend(defined_name(
+        "Top",
+        0,
+        2,
+        &cat(&[&ptg_area3d_on(1, 0, 2, 2, 2), &ptg_funcvar(1, 7)]),
+    ));
+    g.extend(future_function_name("_xlfn.IFERROR"));
+    g.extend(defined_name(
+        "Safe",
+        0,
+        0,
+        &cat(&[
+            &name(8),
+            &ptg_int(1),
+            &ptg_int(0),
+            &[0x06],
+            &ptg_int(1),
+            &[0x13],
+            &ptg_funcvar(3, 255),
+        ]),
+    ));
+    g.extend(defined_name(
+        "Half",
+        0,
+        0,
+        &cat(&[
+            &ptg_namex(2, 1),
+            &ptg_int(7),
+            &ptg_int(2),
+            &ptg_funcvar(3, 255),
+        ]),
+    ));
+    g.extend(defined_name_with_arrays(
+        "Table",
+        0,
+        &[0x60, 0, 0, 0, 0, 0, 0, 0],
+        &array_values(&[&[1.0, 2.0], &[3.0, 4.0]]),
+    ));
+    g.extend(defined_name(
+        "Choice",
+        0,
+        0,
+        &cat(&[
+            &ptg_int(2),
+            &[0x19, 0x04, 2, 0, 6, 0, 13, 0, 20, 0],
+            &ptg_int(10),
+            &ptg_attr(0x08, 10),
+            &ptg_int(20),
+            &ptg_attr(0x08, 3),
+            &ptg_funcvar(3, 100),
+        ]),
+    ));
+    g.extend(defined_name(
+        "Stamp",
+        0,
+        0,
+        &cat(&[&[0x3A, 0, 0, 0, 0, 0, 0], &ptg_func(360)]),
+    ));
+    g.extend(defined_name("Macro", 0, 0, &ptg_func(54)));
+
+    // A name in a cell formula: PtgName (value class) with its index.
+    let used = |i: u8| vec![0x43, i, 0, 0, 0];
+    let mut one = number(0, 0, 15, 1.0);
+    one.extend(number(0, 1, 15, 2.0));
+    // Row 3: Total, Plus, Size, Rounded, Sparse.
+    for (col, i) in [(0, 2), (1, 3), (2, 4), (3, 5), (4, 6)] {
+        one.extend(formula(2, col, 15, 0.0, &used(i)));
+    }
+    // Row 4: Safe, Half, SUM(Table), Choice.
+    one.extend(formula(3, 0, 15, 0.0, &used(9)));
+    one.extend(formula(3, 1, 15, 0.0, &used(10)));
+    one.extend(formula(
+        3,
+        2,
+        15,
+        0.0,
+        &cat(&[&used(11), &ptg_funcvar(1, 4)]),
+    ));
+    one.extend(formula(3, 3, 15, 0.0, &used(12)));
+    one.extend(window2(0x00B6));
+
+    let mut two = number(0, 2, 15, 5.0);
+    two.extend(number(1, 2, 15, 9.0));
+    // A3 = Top (the name of this sheet).
+    two.extend(formula(2, 0, 15, 0.0, &used(7)));
+    two.extend(window2(0x00B6));
+
+    file(stream(&g, &[("Main", one), ("Other sheet", two)]))
+}
+
 /// The fixtures by file name.
 pub fn all() -> Vec<(&'static str, Vec<u8>)> {
     vec![
+        ("funcnames.xls", function_names()),
         ("widenames.xls", wide_names()),
         ("names.xls", names()),
         ("formatted.xls", formatted()),

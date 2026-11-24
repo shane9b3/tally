@@ -28,9 +28,8 @@
 //! leave under [`Limits::max_cells`]. The same pass reads the defined names
 //! (`NAME`; `names.rs`) and the cell hyperlinks (`HLINK`; `hlink.rs`).
 //! BIFF5 files open with their values only. Not read: rich text inside a
-//! cell, defined names whose formula uses functions, named styles, charts
-//! and shapes (docs/file-formats.md). Export is not supported
-//! (docs/parity-deviations.md).
+//! cell, named styles, charts and shapes (docs/file-formats.md). Export is
+//! not supported (docs/parity-deviations.md).
 //!
 //! Hardening (docs/security.md): the file must start with the OLE2
 //! signature and be at most [`Limits::max_bytes`]. Before calamine runs,
@@ -55,6 +54,7 @@ use std::sync::Arc;
 use calamine::{Data, Reader, Xls, XlsOptions};
 
 mod format;
+mod ftab;
 mod hlink;
 mod names;
 pub mod prescan;
@@ -643,8 +643,8 @@ fn decode(
     if names_skipped > 0 {
         warnings.push(format!(
             "{names_skipped} defined name(s) with a formula Tally does not read from an .xls \
-             file (functions, references to other workbooks or to deleted sheets), or with a \
-             name that is a cell reference here, were left out."
+             file (functions Tally does not have, macros, references to other workbooks or to \
+             deleted sheets), or with a name that is a cell reference here, were left out."
         ));
     }
     if formula_failures > 0 {

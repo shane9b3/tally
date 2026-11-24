@@ -418,19 +418,31 @@ impl ExcelNameConverter {
     /// written for a formula in the cell `base` (row, column) of its sheet
     /// (the first sheet for a name of the workbook): the model's
     /// `NameData::base_cell`.
+    ///
+    /// Function names are Excel's and resolve as in an `.xlsx` (`_xlfn.`
+    /// prefixes, the add-in spellings). A formula that calls a function
+    /// Tally does not have is `None`: the text comes from function tokens
+    /// of a binary file, and the reader leaves such a name out rather than
+    /// keep a call that can only be `#NAME?`.
     pub fn to_of_at(&self, text: &str, sheet: Option<usize>, base: (u32, u32)) -> Option<String> {
         if text.len() > 64 * 1024 {
             return None;
         }
         let origin = CellAddr::new(sheet.unwrap_or(0) as SheetId, base.0, base.1);
         let mut f = parse_excel(text, origin, &self.0).ok()?;
+        let mut unknown = false;
         for_each_expr_mut(&mut f.expr, |e| {
             biff8_name(e, origin);
-            if let Expr::Ref(re) = e {
-                mark_sheets_abs(re);
+            match e {
+                Expr::Ref(re) => mark_sheets_abs(re),
+                Expr::Call {
+                    func: FuncRef::Unknown(_),
+                    ..
+                } => unknown = true,
+                _ => {}
             }
         });
-        Some(print_of(&f, origin, &self.0))
+        (!unknown).then(|| print_of(&f, origin, &self.0))
     }
 
     /// Whether `name` can stand in the formula text given to

@@ -63,17 +63,16 @@ fn defined_names_are_read() {
                 None,
                 "of:=([$Main.$A$1:.$A$1]~[$'Other sheet'.$B$2:.$B$2])"
             ),
+            ("Stamp", None, "of:=NOW()"),
         ]
     );
-    // The name with a function is reported; the function name and the
-    // print area are not names (the print area is the sheet's).
-    let left_out: Vec<&String> = wb
-        .warnings
-        .iter()
-        .filter(|w| w.contains("defined name"))
-        .collect();
-    assert_eq!(left_out.len(), 1, "{:?}", wb.warnings);
-    assert!(left_out[0].starts_with("1 defined name(s)"));
+    // The function name and the print area are not names (the print area
+    // is the sheet's), and nothing is reported about them.
+    assert!(
+        !wb.warnings.iter().any(|w| w.contains("defined name")),
+        "{:?}",
+        wb.warnings
+    );
     let page = wb.sheets[0].page_setup.as_ref().unwrap();
     assert_eq!(
         page.print_range.map(|r| (r.r0, r.c0, r.r1, r.c1)),
@@ -327,4 +326,238 @@ fn names_that_are_cells_only_in_the_larger_grid_are_kept() {
     // A reference inside the Excel 97-2003 sheet stays a reference, also
     // in its last column and next to its last row.
     assert_eq!(formula(3, 0), "of:=[.IV65535]+[.A1]");
+}
+
+/// The workbook with `globals` (after an `EXTERNSHEET` whose entry 2 is
+/// the add-in functions `functions`), and how many names its warning says
+/// were left out.
+fn function_book(functions: &[&str], globals: &[u8]) -> (WorkbookData, usize) {
+    let mut g = biff::globals(&[], &[], &[]);
+    g.extend(biff::externsheet_with_addin(2, functions));
+    g.extend_from_slice(globals);
+    let wb = read(&biff::file(biff::stream(
+        &g,
+        &[
+            ("Main", biff::number(0, 0, 15, 1.0)),
+            ("Other sheet", biff::number(0, 0, 15, 2.0)),
+        ],
+    )));
+    let left_out = wb
+        .warnings
+        .iter()
+        .find(|w| w.contains("defined name(s) with a formula"))
+        .map_or(0, |w| w.split(' ').next().unwrap().parse().unwrap());
+    (wb, left_out)
+}
+
+#[test]
+fn names_with_functions_are_read() {
+    let wb = read(&biff::books::function_names());
+    assert_eq!(
+        names(&wb),
+        [
+            ("Data", None, "of:=[$Main.$A$1:.$B$1]"),
+            // SUM with one argument (an attribute) and with two.
+            ("Total", None, "of:=SUM([$Main.$A$1:.$B$1])"),
+            ("Plus", None, "of:=SUM(Data;10)"),
+            // IF with its jumps; fixed argument counts, nested.
+            ("Size", None, "of:=IF(Total>2;\"big\";\"small\")"),
+            ("Rounded", None, "of:=ABS(ROUND(-2.567;1))"),
+            // An argument that is left out.
+            ("Sparse", None, "of:=IF([$Main.$A$1]>5;;7)"),
+            // A name of the second sheet.
+            ("Top", Some(1), "of:=MAX([$'Other sheet'.$C$1:.$C$3])"),
+            // A function newer than the format and an add-in function,
+            // both called by name.
+            ("Safe", None, "of:=COM.MICROSOFT.IFERROR(1/0;-1)"),
+            ("Half", None, "of:=QUOTIENT(7;2)"),
+            ("Table", None, "of:={1;2|3;4}"),
+            ("Choice", None, "of:=CHOOSE(2;10;20)"),
+        ]
+    );
+    // PHONETIC (not a function of Tally) and the macro-sheet function
+    // are counted; the hidden function name is not a name.
+    let left_out: Vec<&String> = wb
+        .warnings
+        .iter()
+        .filter(|w| w.contains("defined name"))
+        .collect();
+    assert_eq!(left_out.len(), 1, "{:?}", wb.warnings);
+    assert!(left_out[0].starts_with("2 defined name(s)"));
+    // The cells name them.
+    let formula = |sheet: usize, r: u32, c: u32| {
+        let cell = wb.sheets[sheet]
+            .cells
+            .iter()
+            .find(|x| (x.row, x.col) == (r, c))
+            .unwrap();
+        match &cell.content {
+            CellContentData::Formula { text, .. } => text.to_string(),
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(formula(0, 2, 0), "of:=Total");
+    assert_eq!(formula(0, 3, 2), "of:=SUM(Table)");
+    assert_eq!(formula(1, 2, 0), "of:=Top");
+}
+
+#[test]
+fn function_tokens_in_every_class_and_with_spaces() {
+    let cat = |parts: &[&[u8]]| parts.concat();
+    let mut g = Vec::new();
+    // The reference, value and array classes of both function tokens.
+    for (i, base) in [0x20u8, 0x40, 0x60].into_iter().enumerate() {
+        g.extend(biff::defined_name(
+            &format!("Fixed{i}"),
+            0,
+            0,
+            &cat(&[&biff::ptg_num(1.5), &[0x13], &[base | 0x01, 24, 0]]),
+        ));
+        g.extend(biff::defined_name(
+            &format!("Counted{i}"),
+            0,
+            0,
+            &cat(&[
+                &biff::ptg_int(1),
+                &biff::ptg_int(2),
+                &[base | 0x02, 2, 6, 0],
+            ]),
+        ));
+    }
+    // Volatile and space attributes around a call; no arguments at all.
+    g.extend(biff::defined_name(
+        "Spaced",
+        0,
+        0,
+        &cat(&[
+            &biff::ptg_attr(0x01, 0),
+            &biff::ptg_attr(0x40, 0x0100),
+            &biff::ptg_func(74),
+            &biff::ptg_attr(0x41, 0x0100),
+            &biff::ptg_func(25),
+        ]),
+    ));
+    g.extend(biff::defined_name("None", 0, 0, &biff::ptg_funcvar(0, 4)));
+    // A function over a union, and a percentage.
+    g.extend(biff::defined_name(
+        "Mixed",
+        0,
+        0,
+        &cat(&[
+            &biff::ptg_union(
+                &biff::ptg_area3d_on(0, 0, 0, 0, 0),
+                &biff::ptg_area3d_on(1, 1, 1, 1, 1),
+            ),
+            &biff::ptg_attr(0x10, 0),
+            &biff::ptg_int(50),
+            &[0x14, 0x05],
+        ]),
+    ));
+    let (wb, left_out) = function_book(&[], &g);
+    assert_eq!(
+        names(&wb),
+        [
+            ("Fixed0", None, "of:=ABS(-1.5)"),
+            ("Counted0", None, "of:=MIN(1;2)"),
+            ("Fixed1", None, "of:=ABS(-1.5)"),
+            ("Counted1", None, "of:=MIN(1;2)"),
+            ("Fixed2", None, "of:=ABS(-1.5)"),
+            ("Counted2", None, "of:=MIN(1;2)"),
+            ("Spaced", None, "of:=INT(NOW())"),
+            ("None", None, "of:=SUM()"),
+            (
+                "Mixed",
+                None,
+                "of:=SUM(([$Main.$A$1:.$A$1]~[$'Other sheet'.$B$2:.$B$2]))*50%"
+            ),
+        ]
+    );
+    assert_eq!(left_out, 0);
+}
+
+#[test]
+fn functions_that_are_not_read_leave_their_names_out() {
+    let cat = |parts: &[&[u8]]| parts.concat();
+    let one = biff::ptg_int(1);
+    let mut g = Vec::new();
+    // 1–3: an index past the table, a macro-sheet function, a macro
+    // command.
+    g.extend(biff::defined_name(
+        "Past",
+        0,
+        0,
+        &cat(&[&one, &biff::ptg_func(500)]),
+    ));
+    g.extend(biff::defined_name("Halt", 0, 0, &biff::ptg_func(54)));
+    g.extend(biff::defined_name(
+        "Command",
+        0,
+        0,
+        &cat(&[&one, &biff::ptg_funcvar(1, 0x8004)]),
+    ));
+    // 4, 5: worksheet functions Tally does not have, by index and by
+    // name.
+    g.extend(biff::defined_name(
+        "Phonetic",
+        0,
+        0,
+        &cat(&[&one, &biff::ptg_func(360)]),
+    ));
+    g.extend(biff::defined_name(
+        "AddIn",
+        0,
+        0,
+        &cat(&[&biff::ptg_namex(2, 2), &one, &biff::ptg_funcvar(2, 255)]),
+    ));
+    // 6: a macro function of the workbook (not a name, not counted),
+    // and 7: a call of it.
+    g.extend(biff::defined_name("MyMacro", 0x000E, 0, &[0x1C, 0x1D]));
+    g.extend(biff::defined_name(
+        "Calls",
+        0,
+        0,
+        &cat(&[&biff::ptg_name(6), &one, &biff::ptg_funcvar(2, 255)]),
+    ));
+    // 8: a name on a name that is left out; 9: a count the function does
+    // not take; 10: a call by name without a name; 11: more arguments
+    // than there are operands.
+    g.extend(biff::defined_name(
+        "OnPhonetic",
+        0,
+        0,
+        &cat(&[&biff::ptg_name(4), &[0x12]]),
+    ));
+    g.extend(biff::defined_name(
+        "TwoForAbs",
+        0,
+        0,
+        &cat(&[&one, &one, &biff::ptg_funcvar(2, 24)]),
+    ));
+    g.extend(biff::defined_name(
+        "NoName",
+        0,
+        0,
+        &cat(&[&one, &biff::ptg_funcvar(1, 255)]),
+    ));
+    g.extend(biff::defined_name(
+        "TooFew",
+        0,
+        0,
+        &cat(&[&one, &biff::ptg_funcvar(9, 4)]),
+    ));
+    // An add-in function Tally has, next to them, is read.
+    g.extend(biff::defined_name(
+        "Kept",
+        0,
+        0,
+        &cat(&[
+            &biff::ptg_namex(2, 1),
+            &one,
+            &one,
+            &biff::ptg_funcvar(3, 255),
+        ]),
+    ));
+    let (wb, left_out) = function_book(&["GCD", "NOSUCHFUNCTION"], &g);
+    assert_eq!(names(&wb), [("Kept", None, "of:=GCD(1;1)")]);
+    assert_eq!(left_out, 10, "{:?}", wb.warnings);
 }

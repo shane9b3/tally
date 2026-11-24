@@ -10,6 +10,14 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 
 ## [Unreleased]
 
+### Added
+- Excel 97-2003 (.xls) files open with the named ranges whose formula
+  uses a function, such as a name defined as SUM(Sheet1!A1:A10) or
+  IF(Rate>0, Rate, 0.2), and with names that are a list of values such
+  as {1,2;3,4}. Before, these names were left out and the cells that use
+  them showed #NAME?. A name is still left out, with a message that says
+  how many, when it calls a macro or a function Tally does not have.
+
 ### Fixed
 - With zero values switched off (View, Zero values on screen; Format,
   Page, Sheet, Zero values for printing), cells that show FALSE are now

@@ -278,6 +278,306 @@ fn name_limits_degrade_with_a_warning() {
     assert_eq!(wb.warnings, Vec::<String>::new());
 }
 
+/// [`book`] with the add-in functions `functions` behind the `EXTERNSHEET`
+/// entry 2.
+fn function_book(functions: &[&str], globals: &[u8]) -> Vec<u8> {
+    let mut g = biff::globals(&[], &[], &[]);
+    g.extend(biff::externsheet_with_addin(2, functions));
+    g.extend_from_slice(globals);
+    biff::file(biff::stream(
+        &g,
+        &[
+            ("Main", biff::number(0, 0, 15, 1.0)),
+            ("Other", biff::number(0, 0, 15, 2.0)),
+        ],
+    ))
+}
+
+/// The names of `wb`, and that a plain name after the hostile ones is
+/// among them.
+fn names_with_the_last(wb: &WorkbookData) -> Vec<&str> {
+    let names: Vec<&str> = wb.names.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(names.last(), Some(&"Plain"), "{names:?}");
+    names
+}
+
+#[test]
+fn function_tokens_that_lie() {
+    let cat = |parts: &[&[u8]]| parts.concat();
+    let one = biff::ptg_int(1);
+    let mut g = Vec::new();
+    // Function tokens cut by the end of the formula (after an operand:
+    // calamine only looks at the first token of a name).
+    for cut in [
+        &[0x41u8][..],
+        &[0x41, 24],
+        &[0x42],
+        &[0x42, 1],
+        &[0x42, 1, 4],
+        &[0x19],
+        &[0x19, 0x10],
+        &[0x19, 0x10, 0],
+        &[0x19, 0x04, 1],
+        &[0x19, 0x04, 1, 0, 0],
+        &[0x39, 2, 0, 1],
+        &[0x60, 0, 0],
+    ] {
+        g.extend(biff::defined_name("Cut", 0, 0, &cat(&[&one, cut])));
+    }
+    // More arguments than operands: a fixed count, the largest count, the
+    // count of a call by name, "sum" of nothing.
+    g.extend(biff::defined_name("Few1", 0, 0, &biff::ptg_func(27)));
+    g.extend(biff::defined_name(
+        "Few2",
+        0,
+        0,
+        &cat(&[&one, &biff::ptg_funcvar(0x7F, 4)]),
+    ));
+    g.extend(biff::defined_name(
+        "Few3",
+        0,
+        0,
+        &cat(&[&biff::ptg_namex(2, 1), &biff::ptg_funcvar(0x7F, 255)]),
+    ));
+    g.extend(biff::defined_name("Few4", 0, 0, &biff::ptg_attr(0x10, 0)));
+    // A call by name without a name, with a name that is nowhere, with
+    // no operand at all; a function's name that is never called.
+    g.extend(biff::defined_name(
+        "NoName1",
+        0,
+        0,
+        &cat(&[&one, &biff::ptg_funcvar(1, 255)]),
+    ));
+    g.extend(biff::defined_name(
+        "NoName2",
+        0,
+        0,
+        &cat(&[
+            &biff::ptg_namex(2, u32::MAX),
+            &one,
+            &biff::ptg_funcvar(2, 255),
+        ]),
+    ));
+    g.extend(biff::defined_name(
+        "NoName3",
+        0,
+        0,
+        &cat(&[
+            &biff::ptg_namex(0xFFFF, 1),
+            &one,
+            &biff::ptg_funcvar(2, 255),
+        ]),
+    ));
+    g.extend(biff::defined_name(
+        "NoName4",
+        0,
+        0,
+        &biff::ptg_funcvar(0, 255),
+    ));
+    g.extend(biff::defined_name("NoCall", 0, 0, &biff::ptg_namex(2, 1)));
+    // A jump table of 65,536 words in a formula of five bytes; an
+    // attribute of every type.
+    g.extend(biff::defined_name(
+        "Jumps",
+        0,
+        0,
+        &cat(&[&one, &biff::ptg_attr(0x04, 0xFFFF)]),
+    ));
+    for kind in 0..=255u8 {
+        g.extend(biff::defined_name(
+            "Attr",
+            0,
+            0,
+            &cat(&[&one, &biff::ptg_attr(kind, 0xFFFF)]),
+        ));
+    }
+    // Every function index of the table and around it, with one operand
+    // and with four.
+    for iftab in (0..600u16).chain([0x7FFF, 0x8000, 0x8004, 0xFFFF]) {
+        g.extend(biff::defined_name(
+            "Fn",
+            0,
+            0,
+            &cat(&[&one, &biff::ptg_func(iftab)]),
+        ));
+        g.extend(biff::defined_name(
+            "FnVar",
+            0,
+            0,
+            &cat(&[&one, &one, &one, &one, &biff::ptg_funcvar(4, iftab)]),
+        ));
+    }
+    // An array constant without its values, with values that are cut, and
+    // with 256 × 65,536 elements announced.
+    let array = [0x60u8, 0, 0, 0, 0, 0, 0, 0];
+    let values = biff::array_values(&[&[1.0, 2.0], &[3.0, 4.0]]);
+    for cut in 0..values.len() {
+        g.extend(biff::defined_name_with_arrays(
+            "Array",
+            0,
+            &array,
+            &values[..cut],
+        ));
+    }
+    g.extend(biff::defined_name_with_arrays(
+        "Huge",
+        0,
+        &array,
+        &[0xFF, 0xFF, 0xFF, 0x01, 0, 0, 0, 0, 0, 0, 0, 0],
+    ));
+    g.extend(biff::defined_name("Plain", 0, 0, &biff::ptg_num(7.0)));
+    let wb = read(&function_book(&["GCD"], &g)).unwrap();
+    let names = names_with_the_last(&wb);
+    // Nothing of the hostile part is a name, except the calls that are
+    // good ones: an attribute that changes nothing, a function with one
+    // or four arguments.
+    for name in &names {
+        assert!(["Attr", "Fn", "FnVar", "Plain"].contains(name), "{names:?}");
+    }
+    assert!(has(&wb, "defined name(s)"));
+    // Every formula the reader kept is one the engine's parser reads.
+    assert!(wb.names.iter().all(|n| n.formula.starts_with("of:=")));
+}
+
+#[test]
+fn externname_records_cut_and_garbled() {
+    // EXTERNNAME cut at every length, with every flag, with a name
+    // length that lies, with names that are not functions; one after
+    // another in the add-in SUPBOOK, in a SUPBOOK that is not one, and
+    // with no SUPBOOK at all.
+    let full = biff::externname_data("GCD");
+    let mut records = Vec::new();
+    for cut in 0..=full.len() {
+        records.extend(biff::rec(0x0023, &full[..cut]));
+    }
+    for bit in 0..16 {
+        let mut d = full.clone();
+        d[..2].copy_from_slice(&(1u16 << bit).to_le_bytes());
+        records.extend(biff::rec(0x0023, &d));
+    }
+    for len in [0u8, 4, 200, 255] {
+        for wide in [0u8, 1] {
+            let mut d = full.clone();
+            d[6] = len;
+            d[7] = wide;
+            records.extend(biff::rec(0x0023, &d));
+        }
+    }
+    for name in ["", "A1(", "1+1", "SUM(1)+", "a b", "\"", "'", "É"] {
+        records.extend(biff::rec(0x0023, &biff::externname_data(name)));
+    }
+    let count = 4 + 5 + 16 + 8 + 8 + 1;
+    for supbook in [Some(0x3A01u16), Some(0x0401), Some(0x1234), None] {
+        let mut g = biff::globals(&[], &[], &[]);
+        g.extend(biff::rec(0x01AE, &[1, 0, 1, 4]));
+        if let Some(kind) = supbook {
+            let mut d = 1u16.to_le_bytes().to_vec();
+            d.extend_from_slice(&kind.to_le_bytes());
+            g.extend(biff::rec(0x01AE, &d));
+        }
+        g.extend_from_slice(&records);
+        let mut ext = 2u16.to_le_bytes().to_vec();
+        for w in [0u16, 0, 0, 1, 0xFFFE, 0xFFFE] {
+            ext.extend_from_slice(&w.to_le_bytes());
+        }
+        g.extend(biff::rec(0x0017, &ext));
+        // A call of every record by name.
+        for i in 0..=count + 2 {
+            let mut rgce = biff::ptg_namex(1, i);
+            rgce.extend(biff::ptg_int(4));
+            rgce.extend(biff::ptg_int(6));
+            rgce.extend(biff::ptg_funcvar(3, 255));
+            g.extend(biff::defined_name("Call", 0, 0, &rgce));
+        }
+        g.extend(biff::defined_name("Plain", 0, 0, &biff::ptg_num(7.0)));
+        let bytes = biff::file(biff::stream(&g, &[("S", biff::number(0, 0, 15, 1.0))]));
+        let wb = read(&bytes).unwrap();
+        let names = names_with_the_last(&wb);
+        // Only records that name the function whole are functions: every
+        // call that is read is GCD(4;6).
+        for n in &wb.names {
+            assert!(
+                n.name == "Plain" || n.formula == "of:=GCD(4;6)",
+                "{supbook:?}: {n:?}"
+            );
+        }
+        if supbook != Some(0x3A01) {
+            assert_eq!(names, ["Plain"], "{supbook:?}");
+        } else {
+            assert!(names.len() > 1);
+        }
+    }
+}
+
+#[test]
+fn nested_calls_are_bounded() {
+    // 20 names of 1 inside 20,000 × ABS(…) each (past the text limit
+    // after about 1,600), 20 of 20,000 left-out arguments for one SUM,
+    // and one of 1,500 nested calls that fits the text limit: the
+    // decoding is a loop, the conversion has its own depth limit.
+    let nested = |depth: usize| {
+        let mut rgce = biff::ptg_int(1);
+        for _ in 0..depth {
+            rgce.extend(biff::ptg_func(24));
+        }
+        rgce
+    };
+    let mut wide = biff::ptg_int(1);
+    wide.extend(std::iter::repeat_n(0x16, 20_000));
+    wide.extend(biff::ptg_funcvar(30, 4));
+    let mut g = Vec::new();
+    for _ in 0..20 {
+        g.extend(biff::defined_name("Deep", 0, 0, &nested(20_000)));
+        g.extend(biff::defined_name("Wide", 0, 0, &wide));
+    }
+    g.extend(biff::defined_name("Fits", 0, 0, &nested(1_500)));
+    g.extend(biff::defined_name("Plain", 0, 0, &biff::ptg_num(7.0)));
+    let started = std::time::Instant::now();
+    let wb = read(&function_book(&[], &g)).unwrap();
+    let names = names_with_the_last(&wb);
+    assert!(
+        names.iter().all(|n| ["Fits", "Plain"].contains(n)),
+        "{names:?}"
+    );
+    assert!(has(&wb, "defined name(s)"), "{:?}", wb.warnings);
+    assert!(started.elapsed().as_secs() < 60);
+}
+
+#[test]
+fn function_name_limits_degrade_with_a_warning() {
+    // The EXTERNNAME records count against the limit of names: past it
+    // the calls of the later ones are left out, and the file opens.
+    let functions: Vec<String> = (0..10).map(|_| "GCD".to_string()).collect();
+    let functions: Vec<&str> = functions.iter().map(String::as_str).collect();
+    let mut g = Vec::new();
+    for i in 1..=10u32 {
+        let mut rgce = biff::ptg_namex(2, i);
+        rgce.extend(biff::ptg_int(4));
+        rgce.extend(biff::ptg_int(6));
+        rgce.extend(biff::ptg_funcvar(3, 255));
+        g.extend(biff::defined_name(&format!("Call_{i}"), 0, 0, &rgce));
+    }
+    let bytes = function_book(&functions, &g);
+    let wb = read(&bytes).unwrap();
+    assert_eq!(wb.names.len(), 10);
+    assert_eq!(wb.warnings, Vec::<String>::new());
+    let limits = Limits {
+        max_names: 12,
+        ..Limits::default()
+    };
+    let wb = read_with(&bytes, &limits).unwrap();
+    assert_eq!(wb.names.len(), 10);
+    let limits = Limits {
+        max_names: 4,
+        ..Limits::default()
+    };
+    let wb = read_with(&bytes, &limits).unwrap();
+    // Four function names and four names are kept: Call_1 … Call_4.
+    let names: Vec<&str> = wb.names.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(names, ["Call_1", "Call_2", "Call_3", "Call_4"]);
+    assert!(has(&wb, "Only the first 4 defined names"));
+}
+
 #[test]
 fn hlink_records_cut_at_every_length() {
     let samples = [
