@@ -209,6 +209,9 @@ describe("Tools ▸ Options ▸ View on the canvas", () => {
     expect(blocksOverflow(hidden(0, "bool"))).toBe(true);
     expect(blocksOverflow(view(0, 0, "x"))).toBe(true);
     expect(blocksOverflow(view(0, 0, ""))).toBe(false);
+    // A formula that shows nothing is a cell: ="" stops the text, as in AOO.
+    expect(blocksOverflow(view(0, 0, "", { kind: "text", flags: 1 }))).toBe(true);
+    expect(blocksOverflow(view(0, 0, "", { kind: "text" }))).toBe(false);
     expect(blocksOverflow(undefined)).toBe(false);
   });
 });

@@ -229,14 +229,15 @@ function isEmptyCell(cell: CellView | undefined): boolean {
  * Whether a cell stops a neighbour's text from running over it. A cell
  * with text does, and so does a number or logical value that shows
  * nothing: a 0 or FALSE with View ▸ Zero values off (the engine blanks the
- * text and keeps the kind) or a format like `;;;`. AOO lets text extend
+ * text and keeps the kind) or a format like `;;;`. A formula that shows
+ * nothing (`=""`, `=IF(A1;"x";"")`) does too. AOO lets text extend
  * only over cells that do not exist (`ScDocument::FillInfo`, fillinfo.cxx:
  * `bEmptyCellText` is cleared for every cell found), on screen and in
  * print, and Tally's print clips there too.
  */
 export function blocksOverflow(cell: CellView | undefined): boolean {
   if (cell === undefined || cell.kind === "empty") return false;
-  return cell.text !== "" || cell.kind === "number" || cell.kind === "bool";
+  return cell.text !== "" || cell.kind === "number" || cell.kind === "bool" || (cell.flags & CELL_FLAGS.formula) !== 0;
 }
 
 export interface MainFrame {

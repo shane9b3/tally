@@ -628,8 +628,17 @@ mod pdf {
             .skip(page.repeat_rows.len())
             .map(|(i, r)| (r.0, i))
             .collect();
+        // What stops a neighbour's text: a cell that shows something, and
+        // a number, logical value or formula that shows nothing (a format
+        // like `;;;`, `=""`). AOO extends text only over cells that do not
+        // exist (`ScDocument::FillInfo`); the grid has the same rule
+        // (`blocksOverflow`, packages/grid/src/renderer.ts).
         let has_content = |r: u32, c: u32| {
-            views.get(&(r, c)).is_some_and(|v| !v.text.is_empty()) || sheet.is_merge_covered(r, c)
+            views.get(&(r, c)).is_some_and(|v| {
+                !v.text.is_empty()
+                    || matches!(v.kind, ValueKind::Number | ValueKind::Bool)
+                    || v.flags & cell_flags::FORMULA != 0
+            }) || sheet.is_merge_covered(r, c)
         };
         // Headers.
         if headers {
@@ -1044,6 +1053,68 @@ mod hide_print_tests {
         assert_eq!(
             svc.cells(doc, sheet, &cell(0, 1)).unwrap()[0].cells[0].text,
             "secret"
+        );
+    }
+
+    /// A long text stops at a neighbour that is a cell, also one that
+    /// shows nothing: a formula giving "" or a number behind `;;;`. Only
+    /// cells that do not exist are free (AOO `ScDocument::FillInfo`).
+    #[test]
+    fn text_overflow_stops_at_cells_that_show_nothing() {
+        let mut svc = EngineService::new();
+        let info = svc.new_workbook(None).unwrap();
+        let (doc, sheet) = (info.doc, info.sheets[0].id);
+        let long = "A text much longer than one column of the sheet is wide";
+        let set = |r: u32, c: u32, input: &str| Op::SetCellInput {
+            sheet,
+            r,
+            c,
+            input: input.into(),
+        };
+        svc.apply(
+            doc,
+            tx(vec![
+                set(0, 0, long),
+                set(1, 0, long),
+                set(1, 1, "=\"\""),
+                set(2, 0, long),
+                set(2, 1, "5"),
+                Op::SetNumberFormat {
+                    sheet,
+                    ranges: cell(2, 1),
+                    code: ";;;".into(),
+                },
+                // Keeps column C on the page for row 0 to run into.
+                set(3, 2, "x"),
+            ]),
+        )
+        .unwrap();
+        let opts = PrintOptionsDto {
+            sheets: PrintSheets::Active,
+            selection: None,
+            suppress_empty_pages: true,
+            page_from: None,
+            page_to: None,
+            active_sheet: None,
+            page_ranges: None,
+            notes_title: None,
+        };
+        let info = svc.prepare_print_job(doc, &opts, &[]).unwrap();
+        let job = svc.job(info.job).unwrap();
+        let room: Vec<f32> = job.job.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Text { text, overflow, .. } if text == long => Some(overflow.1),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(room.len(), 3, "{room:?}");
+        assert!(room[0] > 0.0, "free cells give room: {room:?}");
+        assert_eq!(
+            &room[1..],
+            [0.0, 0.0],
+            "a cell that shows nothing gives none"
         );
     }
 

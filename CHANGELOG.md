@@ -33,6 +33,9 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 - With zero values switched off, a long text no longer runs across the
   cell next to it when that cell holds a hidden 0 or FALSE. It is cut
   off at the cell's edge, as on the printed page and in OpenOffice.
+- A long text no longer runs across a cell that holds a formula showing
+  nothing, such as ="" or =IF(A1>0;"x";""). It is cut off at that cell's
+  edge on screen and on the printed page, as in OpenOffice.
 - Printing with Notes switched on (Format, Page, Sheet): the pages that
   list the notes are now named in the language of the interface
   (Kommentare, Commentaires, Comentarios) where the header or footer
