@@ -395,11 +395,7 @@ fn protect_dotted_names(src: &mut String) -> (String, Vec<String>) {
         return (String::new(), Vec::new());
     }
     // An identifier the formula does not contain.
-    let mut prefix = String::from("zz_dotted_name_");
-    while src.to_ascii_lowercase().contains(&prefix) {
-        prefix.push('z');
-        prefix.push('_');
-    }
+    let prefix = free_prefix(src);
     let mut names = Vec::new();
     let mut out = String::with_capacity(src.len());
     let mut at = 0;
@@ -412,6 +408,37 @@ fn protect_dotted_names(src: &mut String) -> (String, Vec<String>) {
     out.push_str(src.get(at..).unwrap_or_default());
     *src = out;
     (prefix, names)
+}
+
+/// `zz_dotted_name_` and a number of `z_` such that no identifier of
+/// `src` is that text followed by digits, in any case. One pass over the
+/// text, and the shortest free count: a hostile formula made of `z_z_z_…`
+/// must cost neither a scan per repetition nor a stand-in as long as
+/// itself for every dotted name (security review).
+fn free_prefix(src: &str) -> String {
+    const BASE: &str = "zz_dotted_name_";
+    let lower = src.to_ascii_lowercase();
+    let mut taken = std::collections::BTreeSet::new();
+    let mut rest = lower.as_str();
+    while let Some(i) = rest.find(BASE) {
+        let tail = &rest[i + BASE.len()..];
+        let run = tail
+            .as_bytes()
+            .chunks_exact(2)
+            .take_while(|c| c == b"z_")
+            .count();
+        taken.insert(run);
+        // The run holds no other start of BASE (`z_z_` never has `zz`).
+        rest = &tail[run * 2..];
+    }
+    // The counts in use are distinct runs of the text, so the first free
+    // one is small (below the square root of the text's length).
+    let free = (0..).find(|n| !taken.contains(n)).unwrap_or(0);
+    let mut prefix = String::from(BASE);
+    for _ in 0..free {
+        prefix.push_str("z_");
+    }
+    prefix
 }
 
 /// Puts a name with a dot back for its stand-in
@@ -749,6 +776,49 @@ mod tests {
         let (bad, ok) = excel_to_of("SUM(Table1[Col])", at("A1"), &r);
         assert!(!ok);
         assert_eq!(bad, "of:=SUM(Table1[Col])");
+    }
+
+    /// The stand-in for a dotted name is no identifier of the text, is
+    /// found in one pass and stays short: a long run of `z_` must not cost
+    /// a scan each (security review; 64 KiB took seconds, far more in a
+    /// debug build) or make every stand-in as long as the text.
+    #[test]
+    fn dotted_name_prefix_is_free_short_and_linear() {
+        let r = XlsxResolver::new(&["Sheet1".to_string(), "Data".to_string()]);
+        for (src, want) in [
+            ("=Data.A1", "zz_dotted_name_"),
+            ("=ZZ_Dotted_Name_0+Data.A1", "zz_dotted_name_z_"),
+            (
+                "=zz_dotted_name_z_z_1+zz_dotted_name_z_+zzz_dotted_name_",
+                "zz_dotted_name_z_z_z_",
+            ),
+            ("=zz_dotted_name_z_z_z_z_0+Data.A1", "zz_dotted_name_"),
+        ] {
+            assert_eq!(free_prefix(src), want, "{src}");
+        }
+        for (x, want) in [
+            ("ZZ_Dotted_Name_0+Data.A1", "of:=ZZ_Dotted_Name_0+#NAME?"),
+            (
+                "zz_dotted_name_z_0+zz_dotted_name_0+Data.A1",
+                "of:=zz_dotted_name_z_0+zz_dotted_name_0+#NAME?",
+            ),
+            (
+                "zz_dotted_name_z_z_0+Data.A1+Tax.Rate",
+                "of:=zz_dotted_name_z_z_0+#NAME?+Tax.Rate",
+            ),
+        ] {
+            let (got, ok) = excel_to_of(x, CellAddr::new(0, 2, 2), &r);
+            assert!(ok, "{x}");
+            assert_eq!(got, want, "{x}");
+        }
+        let long = format!("=Data.A1+zz_dotted_name_{}", "z_".repeat(2_000_000));
+        let t = std::time::Instant::now();
+        assert_eq!(free_prefix(&long), "zz_dotted_name_");
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            t.elapsed()
+        );
     }
 
     /// Excel reads a space before `(` after a name as intersection, never
