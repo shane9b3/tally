@@ -335,6 +335,7 @@ pub(crate) fn parse_excel(
     let mut src = String::with_capacity(text.len() + 1);
     src.push('=');
     src.push_str(&text);
+    let dotted = protect_dotted_names(&mut src);
     let mut f = parse(
         &src,
         origin,
@@ -346,7 +347,95 @@ pub(crate) fn parse_excel(
     )?;
     for_each_expr_mut(&mut f.expr, import_weeknum);
     for_each_expr_mut(&mut f.expr, import_convert);
+    for_each_expr_mut(&mut f.expr, |e| dotted_name(e, &dotted, origin, r));
     Ok(f)
+}
+
+/// Excel allows a dot in a defined name, and its sheet references use
+/// `!`: `Main.A1` in a formula of an Excel file is a name, never a cell
+/// of the sheet `Main`. The formula parser also takes a sheet and a dot
+/// in Excel text (for what is typed), so such a token is replaced by a
+/// stand-in identifier before parsing; [`dotted_name`] puts the name
+/// back. Returns the stand-in prefix and the names, in order.
+fn protect_dotted_names(src: &mut String) -> (String, Vec<String>) {
+    // Only text with a dot before what could start a cell address.
+    let b = src.as_bytes();
+    let candidate = (1..b.len().saturating_sub(1)).any(|i| {
+        b[i] == b'.'
+            && (b[i + 1].is_ascii_alphabetic() || b[i + 1] == b'$')
+            && (b[i - 1].is_ascii_alphanumeric()
+                || matches!(b[i - 1], b'_' | b'\'')
+                || b[i - 1] >= 0x80)
+    });
+    if !candidate {
+        return (String::new(), Vec::new());
+    }
+    let unquoted = |t: &str, what: char| {
+        let mut quoted = false;
+        t.chars().any(|c| {
+            quoted ^= c == '\'';
+            c == what && !quoted
+        })
+    };
+    let spans: Vec<std::ops::Range<usize>> = tally_formula::tokenize(src, Dialect::excel_a1())
+        .into_iter()
+        .filter(|t| {
+            matches!(
+                t.kind,
+                tally_formula::TokenKind::CellRef | tally_formula::TokenKind::RangeRef
+            )
+        })
+        .map(|t| t.span)
+        .filter(|s| {
+            src.get(s.clone())
+                .is_some_and(|t| unquoted(t, '.') && !unquoted(t, '!'))
+        })
+        .collect();
+    if spans.is_empty() {
+        return (String::new(), Vec::new());
+    }
+    // An identifier the formula does not contain.
+    let mut prefix = String::from("zz_dotted_name_");
+    while src.to_ascii_lowercase().contains(&prefix) {
+        prefix.push('z');
+        prefix.push('_');
+    }
+    let mut names = Vec::new();
+    let mut out = String::with_capacity(src.len());
+    let mut at = 0;
+    for s in spans {
+        out.push_str(src.get(at..s.start).unwrap_or_default());
+        out.push_str(&format!("{prefix}{}", names.len()));
+        names.push(src.get(s.clone()).unwrap_or_default().to_string());
+        at = s.end;
+    }
+    out.push_str(src.get(at..).unwrap_or_default());
+    *src = out;
+    (prefix, names)
+}
+
+/// Puts a name with a dot back for its stand-in
+/// ([`protect_dotted_names`]). In the model's formula text the dot is the
+/// sheet separator, so a name that reads as a cell of a sheet there
+/// (`Main.A1`) cannot be defined (`defined_name_problem`) and cannot be
+/// written: the formula gets `#NAME?` in its place, not another cell's
+/// value. A dotted name that is a name there too (`Tax.Rate`) stays.
+fn dotted_name(e: &mut Expr, dotted: &(String, Vec<String>), origin: CellAddr, r: &XlsxResolver) {
+    let Expr::Name(tally_formula::NameRef::Unresolved(t)) = e else {
+        return;
+    };
+    let name = t
+        .strip_prefix(dotted.0.as_str())
+        .filter(|_| !dotted.0.is_empty())
+        .and_then(|i| i.parse::<usize>().ok())
+        .and_then(|i| dotted.1.get(i));
+    match name {
+        Some(name) if tally_formula::defined_name_problem(name, origin, r).is_none() => {
+            *e = Expr::Name(tally_formula::NameRef::Unresolved(Arc::from(name.as_str())));
+        }
+        Some(_) => *e = Expr::Err(tally_types::ErrorKind::Name),
+        None => {}
+    }
 }
 
 /// ExcelA1 formula text (as a BIFF/OOXML file stores it, without `=`)
@@ -468,11 +557,11 @@ impl ExcelNameConverter {
         Some(tally_formula::name_key(&spelling))
     }
 
-    /// Whether `name` is defined under another spelling (see
-    /// [`name_key`](Self::name_key)).
-    pub fn is_renamed(&self, name: &str) -> bool {
-        self.name_key(name)
-            .is_some_and(|k| k != tally_formula::name_key(name))
+    /// The key of `name` as a file spells it, folded as the engine looks
+    /// names up: the key a name defined under another spelling still
+    /// answers to (its alias).
+    pub fn spelling_key(&self, name: &str) -> String {
+        tally_formula::name_key(name)
     }
 
     /// Whether `name` is a function an `.xlsx` formula spells with the
@@ -630,6 +719,29 @@ mod tests {
             ("SUM(Sheet1:Data!A1)", "of:=SUM([Sheet1.A1:Data.A1])"),
         ];
         for (x, want) in cases {
+            let (got, ok) = excel_to_of(x, at("C3"), &r);
+            assert!(ok, "{x}");
+            assert_eq!(got, want, "{x}");
+        }
+        // A name with a dot is a name in Excel text; where the model's
+        // text would read it as a cell of a sheet, it is `#NAME?`.
+        for (x, want) in [
+            ("Data.A1+0", "of:=#NAME?+0"),
+            ("data.IW1", "of:=#NAME?"),
+            ("SUM(Sheet1.B2,1)", "of:=SUM(#NAME?;1)"),
+            ("Tax.Rate*2", "of:=Tax.Rate*2"),
+            ("Nosheet.A1+0", "of:=#NAME?+0"),
+            ("$Data.$A$1*Tax.Rate+0.5", "of:=#NAME?*Tax.Rate+0.5"),
+            ("Data.A1:B2", "of:=#NAME?"),
+            ("'Data'.A1", "of:=#NAME?"),
+            ("zz_dotted_name_0+Data.A1", "of:=zz_dotted_name_0+#NAME?"),
+            (
+                "_xlfn.STDEV.S(A1:A2)",
+                // A function with dots in its name is not a name.
+                "of:=_xlfn.STDEV.S([.A1:.A2])",
+            ),
+            ("Data!A1+0", "of:=[Data.A1]+0"),
+        ] {
             let (got, ok) = excel_to_of(x, at("C3"), &r);
             assert!(ok, "{x}");
             assert_eq!(got, want, "{x}");

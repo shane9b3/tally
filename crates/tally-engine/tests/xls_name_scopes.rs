@@ -492,6 +492,133 @@ fn a_deep_name_of_a_sheet_and_its_workbook_namesake() {
     }
 }
 
+/// The engine keeps a name it respells (`K70000` as `K70000_`) under the
+/// key of the file's spelling too, and keys are lower case: the Kelvin
+/// sign's is `k`. A name spelled with it and `70000` has the key the
+/// respelled one still answers to.
+#[test]
+fn a_spelling_with_the_key_of_another_names_alias() {
+    const KELVIN: &str = "\u{212a}70000";
+    // K70000 / workbook = 2, (Kelvin)70000 / workbook = 1, X = rec1 + 0,
+    // Y = rec2 + 0; and the two records the other way round. Neither is
+    // a name: each would answer to the other's spelling.
+    for (tag, a, b) in [
+        ("kelvin-1", "K70000", KELVIN),
+        ("kelvin-2", KELVIN, "K70000"),
+    ] {
+        let recs = [
+            r(a, 0, ptg_int(2)),
+            r(b, 0, ptg_int(1)),
+            r("X", 0, plus(1, 0)),
+            r("Y", 0, plus(2, 0)),
+            r("Good", 0, ptg_int(3)),
+        ];
+        let cells = [
+            (0, 0, 1, used(1)),
+            (0, 0, 2, used(2)),
+            (0, 0, 3, used(3)),
+            (0, 0, 4, used(4)),
+            (0, 0, 5, used(5)),
+        ];
+        let o = open(tag, &book(&recs, &S2, &cells, &[]));
+        for col in 1..=4 {
+            assert!(
+                is_error(&o.val(0, 0, col)),
+                "{tag} {col}: {:?}",
+                o.val(0, 0, col)
+            );
+        }
+        assert_eq!(o.val(0, 0, 5), num(3.0));
+        // All four are counted, and the engine left nothing out unseen.
+        assert_eq!(left_out(&o), 4, "{tag}: {:?}", o.warnings);
+        assert!(
+            !o.warnings.iter().any(|w| w.contains("defined twice")),
+            "{:?}",
+            o.warnings
+        );
+    }
+    // K70000 / Main is not read, K70000 / workbook = 5, (Kelvin)70000 /
+    // Main = 7: the Main cell on rec1 must not show 7 or 5.
+    let recs = [
+        r("K70000", 1, bad()),
+        r("K70000", 0, ptg_int(5)),
+        r(KELVIN, 1, ptg_int(7)),
+    ];
+    let cells = [(0, 0, 1, used(1)), (0, 0, 2, used(3)), (1, 0, 1, used(2))];
+    let o = open("kelvin-3", &book(&recs, &S2, &cells, &[]));
+    assert!(is_error(&o.val(0, 0, 1)), "{:?}", o.val(0, 0, 1));
+    assert!(is_error(&o.val(0, 0, 2)), "{:?}", o.val(0, 0, 2));
+    assert!(is_error(&o.val(1, 0, 1)), "{:?}", o.val(1, 0, 1));
+    // Alone, each is a name.
+    for (tag, name, listed) in [
+        ("kelvin-4", "K70000", "K70000_"),
+        ("kelvin-5", KELVIN, KELVIN),
+    ] {
+        let recs = [r(name, 0, ptg_int(2)), r("X", 0, plus(1, 0))];
+        let cells = [(0, 0, 1, used(1)), (0, 0, 2, used(2))];
+        let o = open(tag, &book(&recs, &S2, &cells, &[]));
+        assert_eq!(o.val(0, 0, 1), num(2.0), "{tag}");
+        assert_eq!(o.val(0, 0, 2), num(2.0), "{tag}");
+        assert!(o.names().iter().any(|n| n.0 == listed), "{tag}");
+    }
+    // Lower cases that are one, upper cases that are not (the two sharp
+    // s): not one name, so neither is defined.
+    let recs = [
+        r("Stra\u{df}e", 0, ptg_int(1)),
+        r("STRA\u{1e9e}E", 0, ptg_int(2)),
+        r("STRASSE", 0, ptg_int(4)),
+    ];
+    let cells = [(0, 0, 1, used(1)), (0, 0, 2, used(2)), (0, 0, 3, used(3))];
+    let o = open("eszett", &book(&recs, &S2, &cells, &[]));
+    assert!(is_error(&o.val(0, 0, 1)));
+    assert!(is_error(&o.val(0, 0, 2)));
+    assert_eq!(o.val(0, 0, 3), num(4.0));
+}
+
+/// Excel allows a dot in a defined name, and `Main.A1` there is that
+/// name, never the cell A1 of the sheet `Main`; in Tally's formulas it
+/// would be the cell. Such a name cannot be defined: the cells that use
+/// it show `#NAME?`, not the value of that cell.
+#[test]
+fn a_name_spelled_like_a_cell_of_a_sheet() {
+    let recs = [
+        r("Main.A1", 0, ptg_int(1)),
+        r("Other.IW1", 0, ptg_int(8)),
+        r("\u{e4}b.A1", 0, ptg_int(2)),
+        // A dot that makes no cell of a sheet: a name like any other.
+        r("Tax.Rate", 0, ptg_num(0.25)),
+        r("OnTax", 0, [ptg_name(4), ptg_int(4), vec![0x05]].concat()),
+        r("OnMain", 0, plus(1, 0)),
+    ];
+    let cells = [
+        (0, 0, 1, used(1)),
+        (0, 0, 2, used(2)),
+        (0, 0, 3, used(3)),
+        (0, 0, 4, used(4)),
+        (0, 0, 5, used(5)),
+        (0, 0, 6, used(6)),
+        // In a larger formula: Main.A1 + 1.
+        (0, 1, 1, [used(1), ptg_int(1), vec![0x03]].concat()),
+    ];
+    let nums = [(0, 0, 0, 999.0), (2, 0, 0, 999.0)];
+    let sheets = ["Main", "Other", "\u{c4}B"];
+    let o = open("dotted", &book(&recs, &sheets, &cells, &nums));
+    for (row, col) in [(0, 1), (0, 2), (0, 3), (0, 6), (1, 1)] {
+        assert_eq!(
+            o.val(0, row, col),
+            Value::Error(ErrorKind::Name),
+            "row {row} column {col}"
+        );
+    }
+    assert_eq!(o.val(0, 0, 4), num(0.25));
+    assert_eq!(o.val(0, 0, 5), num(1.0));
+    assert_eq!(
+        o.names(),
+        [("OnTax".to_string(), None), ("Tax.Rate".to_string(), None)]
+    );
+    assert_eq!(left_out(&o), 4, "{:?}", o.warnings);
+}
+
 // ---------------------------------------------------------------- oracle
 
 struct Rng(u64);
@@ -588,7 +715,11 @@ fn oracle(seed: u64, books: u32, pool: &[&'static str]) -> (u32, u32, u32) {
                 r(g.name, g.itab, rg)
             })
             .collect();
-        let low = |g: &Gen| g.name.to_lowercase();
+        // Two spellings are one name when they differ by case only, in
+        // both directions: `Foo` and `FOO`, but not `K70000` and the
+        // same with a Kelvin sign (one lower case, two upper cases), nor
+        // `Straße` and `STRASSE`.
+        let low = |g: &Gen| (g.name.to_lowercase(), g.name.to_uppercase());
         let mut cells = Vec::new();
         let mut expect = Vec::new();
         for i in 0..n {
@@ -633,6 +764,24 @@ fn oracle(seed: u64, books: u32, pool: &[&'static str]) -> (u32, u32, u32) {
 
 const PLAIN: [&str; 4] = ["Foo", "FOO", "Bar", "Baz"];
 const RESPELLED: [&str; 5] = ["Foo", "FOO", "Bar", "TAX2024", "TAX2024_"];
+/// `K70000` is defined as `K70000_` and still answers to `k70000`,
+/// which is also the lower case of the name with a Kelvin sign.
+const KELVIN: [&str; 5] = ["K70000", "\u{212a}70000", "k70000", "K70000_", "Foo"];
+/// Spellings whose lower and upper cases do not pair up.
+const UNICODE: [&str; 12] = [
+    "Stra\u{df}e",
+    "STRASSE",
+    "STRA\u{1e9e}E",
+    "\u{130}x",
+    "ix",
+    "\u{131}x",
+    "\u{1c5}a",
+    "\u{1c4}a",
+    "\u{39f}\u{3a3}",
+    "\u{3bf}\u{3c3}",
+    "K70000",
+    "\u{212a}70000",
+];
 
 #[test]
 fn random_names_show_their_record_or_an_error() {
@@ -643,18 +792,24 @@ fn random_names_show_their_record_or_an_error() {
     let (cells, right, errors) = oracle(0x0123_4567_89AB_CDEF, 500, &PLAIN);
     assert_eq!(cells, right + errors);
     assert!(right * 4 > cells, "{right} of {cells}");
+    let (cells, right, errors) = oracle(0x61C8_8646_80B5_83EB, 500, &KELVIN);
+    assert_eq!(cells, right + errors);
+    assert!(right > 0);
+    let (cells, right, errors) = oracle(0x61C8_8646_80B5_83EB, 1_000, &UNICODE);
+    assert_eq!(cells, right + errors);
+    assert!(right * 4 > cells, "{right} of {cells}");
 }
 
 /// The same over more workbooks and seeds:
 /// `cargo test -p tally-engine --features io --test xls_name_scopes -- --ignored`.
 #[test]
-#[ignore = "slow: 40,000 workbooks"]
+#[ignore = "slow: 80,000 workbooks"]
 fn random_names_show_their_record_or_an_error_at_length() {
     let mut seed = 0xDEAD_BEEF_CAFE_1234u64;
     let (mut cells, mut right) = (0, 0);
     for k in 0..20 {
         seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(k) | 1;
-        for pool in [&PLAIN[..], &RESPELLED[..]] {
+        for pool in [&PLAIN[..], &RESPELLED[..], &KELVIN[..], &UNICODE[..]] {
             let (c, r, _) = oracle(seed, 1_000, pool);
             cells += c;
             right += r;

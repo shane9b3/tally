@@ -434,6 +434,11 @@ pub fn base_cell_of(wb: &Workbook, def: &NameDef) -> Option<(u32, u32, u32)> {
 pub fn load_from_data(wb: &mut Workbook, names: &[tally_model::NameData], ids: &[SheetId]) {
     let mut renamed: Vec<String> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
+    // Names that are not defined although their spelling is good: a
+    // second name of a spelling and scope, a formula that does not parse.
+    // A reader that counts on its names being defined (the `.xls` one
+    // binds names to each other through them) must not lose one unseen.
+    let mut undefined: Vec<String> = Vec::new();
     for n in names.iter().take(MAX_NAMES) {
         let scope = match n.sheet {
             None => None,
@@ -459,6 +464,7 @@ pub fn load_from_data(wb: &mut Workbook, names: &[tally_model::NameData], ids: &
             .and_then(|id| wb.names.get(id))
             .is_some_and(|e| e.def.is_some())
         {
+            undefined.push(n.name.clone());
             continue;
         }
         let first = ids.first().copied().unwrap_or(1);
@@ -479,6 +485,7 @@ pub fn load_from_data(wb: &mut Workbook, names: &[tally_model::NameData], ids: &
             Dialect::open_formula(),
             &crate::workbook::OdfResolver(wb),
         ) else {
+            undefined.push(n.name.clone());
             continue;
         };
         let id = wb.names.define(
@@ -500,6 +507,21 @@ pub fn load_from_data(wb: &mut Workbook, names: &[tally_model::NameData], ids: &
             "Names that read as cell references in Tally's larger grid were \
              renamed (formulas from the file still resolve them): {}",
             renamed.join(", ")
+        ));
+    }
+    if !undefined.is_empty() {
+        // Their number, and the first few.
+        let shown: Vec<&str> = undefined.iter().take(20).map(String::as_str).collect();
+        wb.import_warnings.push(format!(
+            "{} name(s) are defined twice or have a formula that cannot be read, and were \
+             left out: {}{}",
+            undefined.len(),
+            shown.join(", "),
+            if undefined.len() > shown.len() {
+                ", …"
+            } else {
+                ""
+            }
         ));
     }
     if !dropped.is_empty() {

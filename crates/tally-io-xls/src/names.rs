@@ -40,7 +40,7 @@
 //! deeply nested expressions cannot make the pass quadratic.
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap};
 
 use tally_model::NameData;
 use tally_types::{MAX_COLS, MAX_ROWS};
@@ -277,10 +277,9 @@ impl NameRecs {
     ///   spelling the engine defines the name under, case folded). Only
     ///   the first such record can be defined, and only it can be used; a
     ///   later one is left out, also when the first is.
-    /// - A name whose file spelling is defined under another one
-    ///   (`TAX2024` as `TAX2024_`) is left out when a record of the file
-    ///   is spelled like that other one: one of the two would answer to
-    ///   the other's spelling.
+    /// - A record is left out when another name's spelling has one of
+    ///   the keys the record would answer to (`TAX2024`, defined as
+    ///   `TAX2024_`, next to a `TAX2024_`; see the comment below).
     /// - A name that uses a name of a sheet has its base cell on that
     ///   sheet (`NameData::base_cell`; the references of a name all name
     ///   their sheet, so nothing else depends on it). One that uses a
@@ -315,26 +314,53 @@ impl NameRecs {
                     .flatten()
             })
             .collect();
-        // A name defined under another spelling than the file's, where a
-        // record of the file has that spelling: left out, and nothing in
-        // the workbook answers to its spelling.
-        let literal: HashSet<&str> = self
-            .names
-            .iter()
-            .zip(&keys)
-            .filter(|(n, _)| !converter.is_renamed(n.spelling()))
-            .filter_map(|(_, k)| k.as_deref())
-            .collect();
-        let clash: Vec<bool> = self
+        // What a defined name answers to. The engine keeps a name under
+        // the key of the spelling it defines it as, and for a name it
+        // respells also under the key of the file's spelling (an alias);
+        // a spelling in a formula is looked up by its key among the
+        // names of the sheet, then of the workbook, defined spellings
+        // before aliases (`NameTable::lookup`, `visible`). A key is the
+        // lower case of a spelling, and lower case joins spellings that
+        // are not one name (`K` and the Kelvin sign, `ß` and `ẞ`). So a
+        // record is a name only if no spelling of the file that is
+        // another name (a different lower or upper case) has one of its
+        // two keys as its own: else that other spelling, in a cell or a
+        // name of any scope, would find this one. Such a record is left
+        // out, and nothing in the workbook answers to its spelling; what
+        // is left answers to its own spellings only, and two records
+        // with a key in common are one name in two cases.
+        let spelled: Vec<Option<(String, String)>> = self
             .names
             .iter()
             .zip(&keys)
             .map(|(n, k)| {
-                converter.is_renamed(n.spelling())
-                    && k.as_deref().is_some_and(|k| literal.contains(k))
+                k.as_ref().map(|_| {
+                    (
+                        converter.spelling_key(n.spelling()),
+                        n.spelling().to_uppercase(),
+                    )
+                })
             })
             .collect();
-        drop(literal);
+        // Per key of a file spelling: its upper case, and whether
+        // spellings with another upper case have that key too.
+        let mut classes: HashMap<&str, (&str, bool)> = HashMap::new();
+        for (low, up) in spelled.iter().flatten() {
+            let class = classes.entry(low).or_insert((up, false));
+            class.1 |= class.0 != up;
+        }
+        let clash: Vec<bool> = spelled
+            .iter()
+            .zip(&keys)
+            .map(|(s, k)| match (s, k) {
+                (Some((low, _)), Some(k)) => {
+                    classes.get(low.as_str()).is_some_and(|c| c.1)
+                        || (k != low && classes.contains_key(k.as_str()))
+                }
+                _ => false,
+            })
+            .collect();
+        drop(classes);
         for (k, clash) in keys.iter_mut().zip(&clash) {
             if *clash {
                 *k = None;

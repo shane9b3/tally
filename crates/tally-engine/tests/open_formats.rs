@@ -479,6 +479,101 @@ fn xls_opens_with_its_names_and_links() {
         .is_some_and(|p| p.print_range.is_some()));
 }
 
+/// Excel allows a dot in a defined name. In a formula of an `.xlsx`,
+/// `Main.A1` is that name, never the cell A1 of the sheet `Main` (Excel
+/// writes `Main!A1` for the cell); Tally cannot define a name its own
+/// formulas would read as a cell, so the formula shows `#NAME?`, not the
+/// cell's value. A dotted name that is no cell (`Tax.Rate`) works.
+#[test]
+fn xlsx_name_spelled_like_a_cell_of_a_sheet() {
+    use tally_model::NameData;
+    let formula = |col: u32, text: &str| CellData {
+        row: 0,
+        col,
+        content: CellContentData::Formula {
+            text: text.into(),
+            cached: None,
+        },
+        style: None,
+    };
+    let name = |name: &str, formula: &str| NameData {
+        name: name.into(),
+        formula: formula.into(),
+        ..NameData::default()
+    };
+    let wb = WorkbookData {
+        sheets: vec![SheetData {
+            name: "Main".into(),
+            cells: vec![
+                CellData {
+                    row: 0,
+                    col: 0,
+                    content: CellContentData::Value(Value::Number(999.0)),
+                    style: None,
+                },
+                formula(1, "of:=Main_A1+0"),
+                formula(2, "of:=Tax_Rate*4"),
+                formula(3, "of:=SUM(Main_A1;[.A1])"),
+            ],
+            ..SheetData::default()
+        }],
+        names: vec![name("Main_A1", "of:=1"), name("Tax_Rate", "of:=0.25")],
+        ..WorkbookData::default()
+    };
+    let mut cur = Cursor::new(Vec::new());
+    tally_io_xlsx::write_xlsx(&wb, &mut cur).unwrap();
+    // The names as Excel would have them: with a dot.
+    let dotted = repack(
+        &cur.into_inner(),
+        |_, bytes| {
+            let text = String::from_utf8(bytes.clone()).ok();
+            Some(match text {
+                Some(t) if t.contains("Main_A1") || t.contains("Tax_Rate") => t
+                    .replace("Main_A1", "Main.A1")
+                    .replace("Tax_Rate", "Tax.Rate")
+                    .into_bytes(),
+                _ => bytes,
+            })
+        },
+        &[],
+    );
+    let mut found = 0;
+    for part in ["xl/workbook.xml", "xl/worksheets/sheet1.xml"] {
+        let mut zip = zip::ZipArchive::new(Cursor::new(&dotted)).unwrap();
+        let mut text = String::new();
+        zip.by_name(part)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        found += usize::from(text.contains("Main.A1"));
+    }
+    assert_eq!(
+        found, 2,
+        "the definition and the formula are in the package"
+    );
+    let dir = temp_dir("dotted-name");
+    let path = dir.join("dotted.xlsx");
+    std::fs::write(&path, dotted).unwrap();
+    let mut svc = EngineService::with_default_codec();
+    let info = open(&mut svc, &path);
+    svc.recalc_all(info.doc).unwrap();
+    let no_name = Value::Error(tally_types::ErrorKind::Name);
+    assert_eq!(value(&svc, &info, 0, 1), no_name);
+    assert_eq!(value(&svc, &info, 0, 2), Value::Number(1.0));
+    assert_eq!(value(&svc, &info, 0, 3), no_name);
+    let names = svc.names(info.doc).unwrap();
+    let listed: Vec<&str> = names.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(listed, ["Tax.Rate"]);
+    assert!(
+        info.warnings
+            .iter()
+            .any(|w| w.contains("Invalid names were dropped") && w.contains("Main.A1")),
+        "{:?}",
+        info.warnings
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// The names of an `.xls` whose formula calls functions (built-in ones by
 /// their index, `SUM` as an attribute, `IF` and `CHOOSE` with their jumps,
 /// an add-in function and a newer function by name, an array constant)

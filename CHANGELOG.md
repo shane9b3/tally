@@ -19,6 +19,13 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   how many, when it calls a macro or a function Tally does not have.
 
 ### Fixed
+- Excel files (.xlsx and .xls) with a named range whose name looks like
+  a cell on a sheet, such as a name Main.A1 in a workbook that has a
+  sheet called Main: formulas that use the name showed the value of
+  that cell (A1 on Main) instead. Tally cannot keep such a name, because
+  in its own formulas Main.A1 is that cell; the formulas now show #NAME?
+  and a message names the name that was left out. Names with a dot that
+  do not look like a cell, such as Tax.Rate, work as before.
 - With zero values switched off (View, Zero values on screen; Format,
   Page, Sheet, Zero values for printing), cells that show FALSE are now
   left empty like cells that show 0, as in OpenOffice. Before, FALSE was
