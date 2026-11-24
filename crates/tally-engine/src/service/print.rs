@@ -165,7 +165,7 @@ mod pdf {
     };
     use tally_io_pdf::{FontSpec, HAlign, Item, LineStyle, PageJob, PrintJob, Rect, VAlign};
     use tally_model::{BorderLine, BorderStyle, HAlign as HA, StyleData, VAlign as VA};
-    use tally_types::{CellAddr, SheetId, Value};
+    use tally_types::{CellAddr, SheetId};
 
     use crate::document::Document;
     use crate::print::{hmm_to_pt, HfBlock, PageSpec, HF_LINE_HMM};
@@ -733,12 +733,12 @@ mod pdf {
                 }
                 // Hide zeros leaves a printed formula alone (AOO
                 // `ScCellFormat::GetString`: `bFormula` is tested before
-                // `bNullVals`).
+                // `bNullVals`). FALSE is a zero there, as on screen
+                // (`view::is_zero_value`).
                 let as_formula = setup.print_formulas && v.flags & cell_flags::FORMULA != 0;
                 if !setup.print_zero_values
                     && !as_formula
-                    && v.kind == ValueKind::Number
-                    && matches!(wb.value(addr), Value::Number(n) if n == 0.0)
+                    && crate::service::view::is_zero_value(&wb.value(addr))
                 {
                     continue;
                 }
@@ -1043,6 +1043,81 @@ mod hide_print_tests {
         assert_eq!(
             svc.cells(doc, sheet, &cell(0, 1)).unwrap()[0].cells[0].text,
             "secret"
+        );
+    }
+
+    /// "Zero values" off hides FALSE, typed or calculated, like the number
+    /// 0, in print and on screen: a logical value is the number 0 in AOO
+    /// and `ScCellFormat::GetString` (cellform.cxx) erases every value of
+    /// 0.0 when `!bNullVals`. TRUE, text and other numbers stay.
+    #[test]
+    fn hide_zeros_hides_false_in_print_and_on_screen() {
+        let mut svc = EngineService::new();
+        let info = svc.new_workbook(None).unwrap();
+        let (doc, sheet) = (info.doc, info.sheets[0].id);
+        let inputs = ["FALSE", "=1>2", "TRUE", "=1<2", "0", "false", "7"];
+        let mut ops: Vec<Op> = inputs
+            .iter()
+            .zip(0u32..)
+            .map(|(t, r)| Op::SetCellInput {
+                sheet,
+                r,
+                c: 0,
+                input: (*t).into(),
+            })
+            .collect();
+        // "false" in a text cell is text, not a zero.
+        ops.insert(
+            0,
+            Op::SetNumberFormat {
+                sheet,
+                ranges: vec![RangeDto {
+                    r0: 5,
+                    c0: 0,
+                    r1: 5,
+                    c1: 0,
+                }],
+                code: "@".into(),
+            },
+        );
+        svc.apply(doc, tx(ops)).unwrap();
+        assert_eq!(
+            printed(&mut svc, doc),
+            ["Sheet1", "Page 1", "FALSE", "FALSE", "TRUE", "TRUE", "0", "false", "7"],
+            "zero values are printed by default"
+        );
+        let mut setup = svc.page_setup(doc, sheet).unwrap();
+        setup.print_zero_values = Some(false);
+        svc.apply(doc, tx(vec![Op::SetPageSetup { sheet, setup }]))
+            .unwrap();
+        assert_eq!(
+            printed(&mut svc, doc),
+            ["Sheet1", "Page 1", "TRUE", "TRUE", "false", "7"]
+        );
+        // The grid with View ▸ Zero values off shows the same cells.
+        let shown = |svc: &mut EngineService, hide_zero_values: bool| -> Vec<String> {
+            let opts = tally_api::CellsOptions {
+                show_formulas: false,
+                value_highlighting: false,
+                hide_zero_values,
+            };
+            let all = RangeDto {
+                r0: 0,
+                c0: 0,
+                r1: 6,
+                c1: 0,
+            };
+            svc.cells_with(doc, sheet, &[all], &opts).unwrap()[0]
+                .cells
+                .iter()
+                .map(|v| v.text.clone())
+                .filter(|t| !t.is_empty())
+                .collect()
+        };
+        assert_eq!(shown(&mut svc, true), ["TRUE", "TRUE", "false", "7"]);
+        assert_eq!(
+            shown(&mut svc, false),
+            ["FALSE", "FALSE", "TRUE", "TRUE", "0", "false", "7"]
         );
     }
 

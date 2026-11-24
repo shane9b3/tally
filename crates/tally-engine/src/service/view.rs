@@ -554,6 +554,25 @@ pub const HIGHLIGHT_FORMULA: u32 = 0x0080_00ff;
 /// AOO value highlighting: text constants.
 pub const HIGHLIGHT_TEXT: u32 = 0x0000_00ff;
 
+/// Whether "Zero values" off (View options on screen, Format ▸ Page ▸
+/// Sheet in print) blanks a cell with this value: the number 0 and FALSE.
+///
+/// AOO `ScCellFormat::GetString` (sc/source/core/tool/cellform.cxx), used
+/// for the screen and the printer alike (`ScOutputData::bShowNullValues`,
+/// output2.cxx): a value cell is erased when `!bNullVals && nValue == 0.0`
+/// and a formula cell when `IsValue()` and its result is 0.0. A logical
+/// value is the number 1 or 0 there, so FALSE, typed or calculated, goes
+/// with the zeros. One exception in AOO is not modelled: a formula result
+/// of logical type under a number format with a text section (`@`) keeps
+/// its FALSE.
+pub fn is_zero_value(v: &Value) -> bool {
+    match v {
+        Value::Number(n) => *n == 0.0,
+        Value::Bool(b) => !*b,
+        _ => false,
+    }
+}
+
 /// Applies the View options of `cells_with` to blocks from [`cells`]:
 /// formula text instead of results, value highlighting colours (RGBA) and
 /// blank zero values.
@@ -615,12 +634,9 @@ pub fn apply_cells_options(
                     }
                 }
             }
-            if opts.hide_zero_values && v.kind == ValueKind::Number {
-                let addr = CellAddr::new(sheet, v.r, v.c);
-                if matches!(wb.value(addr), Value::Number(n) if n == 0.0) {
-                    v.text.clear();
-                    v.num = None;
-                }
+            if opts.hide_zero_values && is_zero_value(&wb.value(CellAddr::new(sheet, v.r, v.c))) {
+                v.text.clear();
+                v.num = None;
             }
         }
     }

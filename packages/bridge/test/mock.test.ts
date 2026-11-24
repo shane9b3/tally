@@ -307,6 +307,19 @@ describe("MockClient v0.3 stubs", () => {
   });
 });
 
+describe("MockClient zero values", () => {
+  it("hiding zero values blanks 0 and FALSE, as the engine", async () => {
+    const { client, doc, sheet } = await setup();
+    await client.apply(doc, tx(set(sheet, 0, 0, "0"), set(sheet, 1, 0, "FALSE"), set(sheet, 2, 0, "=A1"), set(sheet, 3, 0, "TRUE"), set(sheet, 4, 0, "7")));
+    const shown = async (hideZeroValues: boolean) => {
+      const [b] = await client.cellsWith(doc, sheet, [{ r0: 0, c0: 0, r1: 4, c1: 0 }], { showFormulas: false, valueHighlighting: false, hideZeroValues });
+      return [...(b?.cells ?? [])].sort((x, y) => x.r - y.r).map((v) => v.text);
+    };
+    expect(await shown(false)).toEqual(["0", "FALSE", "0", "TRUE", "7"]);
+    expect(await shown(true)).toEqual(["", "", "", "TRUE", "7"]);
+  });
+});
+
 describe("MockClient Clear and cell attributes (as the engine's Op::Clear)", () => {
   const rule = {
     kind: { type: "cellValue" as const, op: "gt" as const, formulas: ["5"] },

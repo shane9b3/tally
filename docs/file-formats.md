@@ -1001,7 +1001,7 @@ on pages after each sheet's own pages when the page setup asks for them
 (one line `A1: text` per note of the printed area; the pages count in the
 page total and carry the header and footer, with "Comments" as the sheet
 name, as in AOO). With formulas printed, hiding zero values does not hide
-a formula. Without a print
+a formula; otherwise it hides FALSE like the number 0, as in AOO. Without a print
 range a sheet prints from A1 to the last cell with content (or with a
 note, when notes are printed),
 extended by fills and borders as AOO's `ScTable::GetPrintArea` does: a run

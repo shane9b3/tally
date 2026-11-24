@@ -1564,7 +1564,8 @@ export class MockClient implements EngineClientV4, ShellClient, UpdateShell {
           v.num = null;
           continue;
         }
-        if (opts.hideZeroValues && v.kind === "number" && v.num === 0) {
+        // FALSE is a zero too (the engine's `view::is_zero_value`, AOO `ScCellFormat::GetString`).
+        if (opts.hideZeroValues && ((v.kind === "number" && v.num === 0) || (v.kind === "bool" && v.text === "FALSE"))) {
           v.text = "";
           v.num = null;
         }

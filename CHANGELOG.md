@@ -10,6 +10,12 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 
 ## [Unreleased]
 
+### Fixed
+- With zero values switched off (View, Zero values on screen; Format,
+  Page, Sheet, Zero values for printing), cells that show FALSE are now
+  left empty like cells that show 0, as in OpenOffice. Before, FALSE was
+  still shown and printed.
+
 ## [0.1.4] - 2026-11-23
 
 ### Added
