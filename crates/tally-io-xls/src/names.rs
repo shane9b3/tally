@@ -18,7 +18,11 @@
 //! `EXTERNNAME` of the add-in `SUPBOOK`) or a function newer than the
 //! format (`ptgName` to a hidden function `NAME` spelled `_xlfn.…`). The
 //! text carries Excel's function names, and the conversion decides
-//! whether Tally has the function, as for an `.xlsx`. A name whose
+//! whether Tally has the function, as for an `.xlsx`. The tokens are a
+//! tree: operands get the parentheses the text needs to be read as that
+//! tree. A name used in a formula is a record; [`NameRecs::resolve`]
+//! sees to it that its spelling means that record in the model, or
+//! leaves the name out. A name whose
 //! formula holds anything else (a function that is not in the table or
 //! that Tally does not have, a macro function, an error, an empty or
 //! error element in an array, a reference to another workbook or to a
@@ -35,6 +39,8 @@
 //! moved while decoding is bounded by [`WORK_BUDGET`] for the workbook, so
 //! deeply nested expressions cannot make the pass quadratic.
 
+use std::collections::{HashMap, HashSet};
+
 use tally_model::NameData;
 use tally_types::{MAX_COLS, MAX_ROWS};
 
@@ -49,6 +55,12 @@ const MAX_FORMULA_TEXT: usize = 8 * 1024;
 const MAX_STACK: usize = 1024;
 /// Most bytes of text moved while decoding the names of a workbook.
 const WORK_BUDGET: u64 = 64 * 1024 * 1024;
+/// The formula of a name that stands for one that is not imported (see
+/// [`NameRecs::resolve`]).
+const NO_VALUE: &str = "of:=#NAME?";
+/// Most (sheet, used name) pairs looked at for the names of a workbook
+/// while a base sheet is searched beyond the usual ones.
+const SCAN_BUDGET: u64 = 4 * 1024 * 1024;
 /// Most `SUPBOOK` records looked at.
 const MAX_SUPBOOKS: usize = 65_536;
 /// Most `EXTERNSHEET` entries looked at (the index is 16 bits wide).
@@ -197,16 +209,44 @@ impl NameRecs {
         self.names.push(raw);
     }
 
-    /// The names of the model, in file order, and how many were left out
+    /// The names of the model, in file order; how many were left out
     /// because their formula is not one this reader decodes or because
-    /// they are not names Tally accepts. `sheets` are the workbook's sheet
-    /// names in `BOUNDSHEET` order.
-    pub fn resolve(&self, sheets: &[String]) -> (Vec<NameData>, usize) {
+    /// they are not names Tally accepts; and whether names were left out
+    /// because the names and formulas kept reached
+    /// [`Limits::max_name_bytes`]. `sheets` are the workbook's sheet names
+    /// in `BOUNDSHEET` order.
+    ///
+    /// A formula names another name by its record; the model's formula
+    /// text names it by its spelling. The engine reads that spelling when
+    /// it loads the name, from the sheet of the name's base cell: that
+    /// sheet's own name if one is defined by then (the names load in this
+    /// order), else the workbook's; a spelling that is not defined yet is
+    /// looked up again from each cell that uses the name. So that the
+    /// text means the record wherever the name is used:
+    /// - a name that uses an earlier name of a sheet gets its base cell
+    ///   on that sheet (`NameData::base_cell`; the references of a name
+    ///   all name their sheet, so nothing else depends on it);
+    /// - a name that uses an earlier name of the workbook gets its base
+    ///   cell on a sheet without a name of that spelling;
+    /// - a name that uses a later name (or itself) is read from the cells
+    ///   that use it: the later name must be of the same sheet, or of the
+    ///   workbook with no namesake on a sheet the user is visible from;
+    /// - a record that is not the first of its spelling and scope is not
+    ///   the one that is defined.
+    ///
+    /// A name for which no base sheet does all of that is left out. And a
+    /// name of a sheet that is left out while the workbook has a name of
+    /// the same spelling is kept as a name without a value (`#NAME?`), so
+    /// that the cells of that sheet which use it (their formulas are
+    /// text) do not take the workbook's instead.
+    pub fn resolve(&self, sheets: &[String], limits: &Limits) -> (Vec<NameData>, usize, bool) {
         // Per `NAME` record: the name it becomes and the records its
         // formula uses.
         let mut found: Vec<Option<(NameData, Vec<usize>)>> = Vec::new();
         found.resize_with(self.names.len(), || None);
         let mut skipped = 0usize;
+        let mut cut = false;
+        let mut kept_bytes = 0u64;
         let mut work = WORK_BUDGET;
         let converter = tally_io_xlsx::ExcelNameConverter::new(sheets);
         // A name Tally would read as something else in a formula (a cell
@@ -217,10 +257,19 @@ impl NameRecs {
         // (`TAX2024`: legal in Excel 97-2003, a cell in the larger grid)
         // is one: the conversion reads it as a name, and the engine keeps
         // it under another spelling with this one as an alias.
+        //
+        // For a hidden function name (`_xlfn.…`): it is a function Excel
+        // 2007 added, or one an `.xlsx` formula spells with that prefix.
+        // Not `_xlfn.SUM`, and not a function only Tally has.
         let valid: Vec<bool> = self
             .names
             .iter()
-            .map(|n| !n.name.is_empty() && converter.is_name(&n.name))
+            .map(|n| match &n.func {
+                Some(f) => {
+                    f.get(6..).is_some_and(ftab::is_future) || converter.is_prefixed_function(f)
+                }
+                None => !n.name.is_empty() && converter.is_name(&n.name),
+            })
             .collect();
         for (slot, (raw, ok)) in found.iter_mut().zip(self.names.iter().zip(&valid)) {
             if raw.name.is_empty() {
@@ -264,6 +313,16 @@ impl NameRecs {
             });
             match formula {
                 Some((formula, uses)) => {
+                    // The text kept for the workbook is bounded: a small
+                    // file can spell a long name many times in many
+                    // formulas.
+                    kept_bytes = kept_bytes
+                        .saturating_add(raw.name.len() as u64)
+                        .saturating_add(formula.len() as u64);
+                    if kept_bytes > limits.max_name_bytes {
+                        cut = true;
+                        continue;
+                    }
                     let name = NameData {
                         name: raw.name.clone(),
                         sheet,
@@ -274,6 +333,107 @@ impl NameRecs {
                     *slot = Some((name, uses));
                 }
                 None => skipped += 1,
+            }
+        }
+        // What the spelling of a name means (see above). The names a
+        // sheet may have of its own: the ones read, and the ones that may
+        // be kept without a value.
+        let key = |n: &NameData| (n.name.to_lowercase(), n.sheet);
+        let mut first: HashMap<(String, Option<u32>), usize> = HashMap::new();
+        for (i, f) in found.iter().enumerate() {
+            if let Some((n, _)) = f {
+                first.entry(key(n)).or_insert(i);
+            }
+        }
+        let mut on_sheet: HashSet<(String, u32)> = HashSet::new();
+        let mut on_any: HashSet<String> = HashSet::new();
+        for (raw, ok) in self.names.iter().zip(&valid) {
+            let s = usize::from(raw.itab);
+            if *ok && !raw.name.is_empty() && (1..=sheets.len()).contains(&s) {
+                on_sheet.insert((raw.name.to_lowercase(), s as u32 - 1));
+                on_any.insert(raw.name.to_lowercase());
+            }
+        }
+        let scan = std::cell::Cell::new(SCAN_BUDGET);
+        // The sheet for the base cell of the name of record `x`, on which
+        // every name it uses means its record; `None` when there is none.
+        let base_sheet = |x: usize, n: &NameData, uses: &[usize]| -> Option<u32> {
+            let mut forced: Option<u32> = None;
+            for &u in uses {
+                // A record that is not imported is dealt with below.
+                let Some(Some((t, _))) = found.get(u) else {
+                    continue;
+                };
+                if first.get(&key(t)) != Some(&u) {
+                    return None;
+                }
+                match t.sheet {
+                    // An earlier name of a sheet: read from that sheet.
+                    Some(s) if u < x => {
+                        if forced.is_some_and(|f| f != s) {
+                            return None;
+                        }
+                        forced = Some(s);
+                    }
+                    // A later one: read from the cells that use the name.
+                    Some(s) if n.sheet != Some(s) => return None,
+                    Some(_) => {}
+                    None if u < x => {}
+                    None => {
+                        let spelling = t.name.to_lowercase();
+                        let shadowed = match n.sheet {
+                            Some(s) => on_sheet.contains(&(spelling, s)),
+                            None => on_any.contains(&spelling),
+                        };
+                        if shadowed {
+                            return None;
+                        }
+                    }
+                }
+            }
+            // The earlier names of the workbook: not behind a name of the
+            // base sheet.
+            let clear = |b: u32| {
+                uses.iter().all(|&u| match found.get(u) {
+                    Some(Some((t, _))) if t.sheet.is_none() && u < x => {
+                        !on_sheet.contains(&(t.name.to_lowercase(), b))
+                    }
+                    _ => true,
+                })
+            };
+            let usual = n.base_cell.map_or(0, |b| b.0);
+            match forced {
+                Some(b) => clear(b).then_some(b),
+                // The sheet it would have anyway, its own, the first; else
+                // any sheet, while the workbook's budget for looking lasts.
+                None => [usual, n.sheet.unwrap_or(0), 0]
+                    .into_iter()
+                    .find(|b| clear(*b))
+                    .or_else(|| {
+                        (0..sheets.len() as u32).find(|b| {
+                            let left = scan.get().checked_sub(uses.len() as u64);
+                            scan.set(left.unwrap_or(0));
+                            left.is_some() && clear(*b)
+                        })
+                    }),
+            }
+        };
+        let bases: Vec<Option<Option<u32>>> = found
+            .iter()
+            .enumerate()
+            .map(|(x, f)| f.as_ref().map(|(n, uses)| base_sheet(x, n, uses)))
+            .collect();
+        for (slot, base) in found.iter_mut().zip(bases) {
+            match (slot.as_mut(), base) {
+                (Some((n, _)), Some(Some(b))) => {
+                    let (_, row, col) = n.base_cell.unwrap_or((0, 0, 0));
+                    n.base_cell = ((b, row, col) != (0, 0, 0)).then_some((b, row, col));
+                }
+                (Some(_), Some(None)) => {
+                    *slot = None;
+                    skipped += 1;
+                }
+                _ => {}
             }
         }
         // A name that uses a name that is not imported would be a formula
@@ -296,7 +456,38 @@ impl NameRecs {
                 }
             }
         }
-        (found.into_iter().flatten().map(|f| f.0).collect(), skipped)
+        // A sheet's name that is not imported, where the workbook has a
+        // name of the same spelling: without a name of the sheet, the
+        // cells of that sheet which use it (their formulas are text)
+        // would take the workbook's value. It stays a name of the sheet
+        // whose value is `#NAME?`.
+        let mut global: HashSet<String> = HashSet::new();
+        let mut kept: HashSet<(String, u32)> = HashSet::new();
+        for (n, _) in found.iter().flatten() {
+            match n.sheet {
+                Some(s) => kept.insert((n.name.to_lowercase(), s)),
+                None => global.insert(n.name.to_lowercase()),
+            };
+        }
+        for (slot, (raw, ok)) in found.iter_mut().zip(self.names.iter().zip(&valid)) {
+            let s = u32::from(raw.itab);
+            if slot.is_some() || !ok || raw.name.is_empty() || s == 0 || s as usize > sheets.len() {
+                continue;
+            }
+            let spelling = raw.name.to_lowercase();
+            if global.contains(&spelling) && kept.insert((spelling, s - 1)) {
+                let name = NameData {
+                    name: raw.name.clone(),
+                    sheet: Some(s - 1),
+                    formula: NO_VALUE.to_string(),
+                    base_cell: None,
+                    usage: Default::default(),
+                };
+                *slot = Some((name, Vec::new()));
+            }
+        }
+        let names = found.into_iter().flatten().map(|f| f.0).collect();
+        (names, skipped, cut)
     }
 
     /// The sheet of an `EXTERNSHEET` index, quoted for Excel text: one
@@ -317,8 +508,9 @@ impl NameRecs {
     /// The function name a `ptgName` or `ptgNameX` stands for when it is
     /// the first operand of a call by name: `book` is the `SUPBOOK` (the
     /// workbook itself for a `ptgName`), `index` the 0-based record.
-    fn function_name(&self, book: usize, index: usize) -> Option<&str> {
+    fn function_name(&self, book: usize, index: usize, valid: &[bool]) -> Option<&str> {
         match self.books.get(book)? {
+            (Book::Own, _) if valid.get(index) != Some(&true) => None,
             (Book::Own, _) => self.names.get(index)?.func.as_deref(),
             (Book::AddIn, list) => list.get(index).map(String::as_str),
             (Book::Other, _) => None,
@@ -362,56 +554,60 @@ impl NameRecs {
             } else {
                 ptg
             };
-            let binary = |op: &str, stack: &mut Vec<Item>| -> Option<usize> {
-                let b = stack.pop()?.into_value()?;
-                let a = stack.last_mut()?.value_mut()?;
-                a.push_str(op);
-                a.push_str(&b);
-                Some(b.len() + op.len())
-            };
             let step = match id {
                 0x03..=0x0F | 0x11 => {
-                    let op = match id {
-                        0x03 => "+",
-                        0x04 => "-",
-                        0x05 => "*",
-                        0x06 => "/",
-                        0x07 => "^",
-                        0x08 => "&",
-                        0x09 => "<",
-                        0x0A => "<=",
-                        0x0B => "=",
-                        0x0C => ">=",
-                        0x0D => ">",
-                        0x0E => "<>",
-                        0x0F => " ",
-                        _ => ":",
+                    let (op, prec) = match id {
+                        0x03 => ("+", ADD),
+                        0x04 => ("-", ADD),
+                        0x05 => ("*", MUL),
+                        0x06 => ("/", MUL),
+                        0x07 => ("^", POW),
+                        0x08 => ("&", CONCAT),
+                        0x09 => ("<", COMPARE),
+                        0x0A => ("<=", COMPARE),
+                        0x0B => ("=", COMPARE),
+                        0x0C => (">=", COMPARE),
+                        0x0D => (">", COMPARE),
+                        0x0E => ("<>", COMPARE),
+                        0x0F => (" ", REFERENCE),
+                        _ => (":", REFERENCE),
                     };
-                    charge(binary(op, &mut stack)?)?;
+                    charge(binary(&mut stack, op, prec)?)?;
                     1
                 }
                 // Union: Excel text wants it in parentheses.
                 0x10 => {
-                    charge(binary(",", &mut stack)?)?;
-                    let a = stack.last_mut()?.value_mut()?;
-                    charge(a.len())?;
-                    a.insert(0, '(');
-                    a.push(')');
+                    charge(binary(&mut stack, ",", REFERENCE)?)?;
+                    charge(wrap(stack.last_mut()?))?;
                     1
                 }
-                // Unary plus and minus, percent, parentheses.
+                // Unary plus and minus, percent, parentheses. An operand
+                // that binds less than the operator gets parentheses, so
+                // the text means what the tokens do.
                 0x12..=0x15 => {
-                    let a = stack.last_mut()?.value_mut()?;
-                    charge(a.len())?;
-                    match id {
-                        0x12 => a.insert(0, '+'),
-                        0x13 => a.insert(0, '-'),
-                        0x14 => a.push('%'),
-                        _ => {
-                            a.insert(0, '(');
-                            a.push(')');
-                        }
+                    let a = stack.last_mut()?;
+                    if a.kind != Kind::Value {
+                        return None;
                     }
+                    let own = match id {
+                        0x12 | 0x13 => PREFIX,
+                        0x14 => POSTFIX,
+                        _ => ATOM,
+                    };
+                    // The file's own parentheses are kept as they are.
+                    if a.prec < own || id == 0x15 {
+                        charge(wrap(a))?;
+                    }
+                    if id != 0x15 {
+                        charge(a.text.len())?;
+                    }
+                    match id {
+                        0x12 => a.text.insert(0, '+'),
+                        0x13 => a.text.insert(0, '-'),
+                        0x14 => a.text.push('%'),
+                        _ => {}
+                    }
+                    a.prec = own;
                     1
                 }
                 // An argument that is left out: `IF(A,,B)`.
@@ -419,6 +615,7 @@ impl NameRecs {
                     stack.push(Item {
                         text: String::new(),
                         kind: Kind::Missing,
+                        prec: ATOM,
                     });
                     1
                 }
@@ -465,7 +662,14 @@ impl NameRecs {
                     3
                 }
                 0x1F => {
-                    stack.push(Item::value(number(rgce.get(p + 1..p + 9)?)?));
+                    // A negative number is a number behind a minus sign.
+                    let text = number(rgce.get(p + 1..p + 9)?)?;
+                    let prec = if text.starts_with('-') { PREFIX } else { ATOM };
+                    stack.push(Item {
+                        text,
+                        kind: Kind::Value,
+                        prec,
+                    });
                     9
                 }
                 // An array constant: seven bytes not used; its values
@@ -517,16 +721,17 @@ impl NameRecs {
                 0x23 => {
                     let i = usize::try_from(u32_at(rgce, p + 1)?).ok()?.checked_sub(1)?;
                     let raw = self.names.get(i)?;
+                    if valid.get(i) != Some(&true) {
+                        return None;
+                    }
                     if let Some(f) = &raw.func {
                         charge(f.len())?;
                         stack.push(Item {
                             text: f.clone(),
                             kind: Kind::Func,
+                            prec: ATOM,
                         });
                     } else {
-                        if valid.get(i) != Some(&true) {
-                            return None;
-                        }
                         charge(raw.name.len())?;
                         stack.push(Item::value(raw.name.clone()));
                         uses.push(i);
@@ -553,11 +758,12 @@ impl NameRecs {
                 0x39 => {
                     let x = self.xtis.get(usize::from(u16_at(rgce, p + 1)?))?;
                     let i = usize::try_from(u32_at(rgce, p + 3)?).ok()?.checked_sub(1)?;
-                    let name = self.function_name(usize::from(x.book), i)?;
+                    let name = self.function_name(usize::from(x.book), i, valid)?;
                     charge(name.len())?;
                     stack.push(Item {
                         text: name.to_string(),
                         kind: Kind::Func,
+                        prec: ATOM,
                     });
                     7
                 }
@@ -622,18 +828,39 @@ enum Kind {
     Func,
 }
 
+/// How tightly the outermost operator of an operand's text binds, in the
+/// order of the formula parser the text goes to (`tally_formula`:
+/// comparisons, `&`, `+ -`, `* /`, `^`, prefix signs, `%`). Text without
+/// an operator outside parentheses (a constant, a reference, a name, a
+/// call, an array, anything in parentheses) is an [`ATOM`]. The result
+/// of a reference operator (range, intersection) is [`REFERENCE`], lower
+/// than everything: it gets parentheses under any operator.
+const REFERENCE: u8 = 0;
+const COMPARE: u8 = 1;
+const CONCAT: u8 = 2;
+const ADD: u8 = 3;
+const MUL: u8 = 4;
+const POW: u8 = 5;
+const PREFIX: u8 = 6;
+const POSTFIX: u8 = 7;
+const ATOM: u8 = u8::MAX;
+
 /// An operand waiting for its operator or function.
 #[derive(Debug)]
 struct Item {
     text: String,
     kind: Kind,
+    /// See [`ATOM`].
+    prec: u8,
 }
 
 impl Item {
+    /// A constant, a reference, a name, a call.
     fn value(text: String) -> Self {
         Self {
             text,
             kind: Kind::Value,
+            prec: ATOM,
         }
     }
 
@@ -641,10 +868,45 @@ impl Item {
     fn into_value(self) -> Option<String> {
         (self.kind == Kind::Value).then_some(self.text)
     }
+}
 
-    fn value_mut(&mut self) -> Option<&mut String> {
-        (self.kind == Kind::Value).then_some(&mut self.text)
+/// Puts an operand in parentheses; the bytes of text moved.
+fn wrap(item: &mut Item) -> usize {
+    item.text.insert(0, '(');
+    item.text.push(')');
+    item.prec = ATOM;
+    item.text.len()
+}
+
+/// Replaces the last two operands by `left op right`; the bytes of text
+/// moved. The tokens are a tree, the text is read by precedence: an
+/// operand whose own operator binds less than `op` gets parentheses, and
+/// so does a right operand that binds the same (`1-(2-3)`), a left one
+/// too under `^`, and anything that is not an [`ATOM`] under `^` or a
+/// reference operator (no reliance on how `-2^2` or `2^3^2` is read).
+/// Parentheses the file has (`ptgParen`) make an atom, so they are not
+/// doubled.
+fn binary(stack: &mut Vec<Item>, op: &str, prec: u8) -> Option<usize> {
+    let mut b = stack.pop()?;
+    let a = stack.last_mut()?;
+    if a.kind != Kind::Value || b.kind != Kind::Value {
+        return None;
     }
+    let (left, right) = match prec {
+        REFERENCE | POW => (a.prec != ATOM, b.prec != ATOM),
+        _ => (a.prec < prec, b.prec <= prec),
+    };
+    let mut moved = op.len();
+    if left {
+        moved = moved.saturating_add(wrap(a));
+    }
+    if right {
+        wrap(&mut b);
+    }
+    a.text.push_str(op);
+    a.text.push_str(&b.text);
+    a.prec = prec;
+    Some(moved.saturating_add(b.text.len()))
 }
 
 /// Replaces the last `argc` operands by the call `name(…)` with them as
@@ -822,7 +1084,9 @@ fn extern_function(d: &[u8]) -> Option<String> {
     let wide = d.get(7)? & 1 != 0;
     let len = if wide { 2 * cch } else { cch };
     let name = record_text(d.get(8..8 + len)?, wide);
-    is_function_name(&name).then_some(name)
+    // One of the add-in functions of Excel 97-2003, as it spells them:
+    // not a built-in function's name, and not one only Tally has.
+    ftab::is_addin(&name).then_some(name)
 }
 
 /// The fields of a `NAME` record; `None` when it is too short for them.
@@ -842,11 +1106,15 @@ fn raw_name(d: &[u8]) -> Option<RawName> {
     // One spelled `_xlfn.…` is how a formula calls a function newer than
     // the format; the others are macros.
     if flags & (0x0002 | 0x0004 | 0x0008) != 0 {
-        let future = name.len() > 6
-            && name
-                .get(..6)
-                .is_some_and(|p| p.eq_ignore_ascii_case("_xlfn."))
-            && is_function_name(&name);
+        // Exactly one prefix, and a name after it; which functions are
+        // read is decided when the names are resolved.
+        let future = is_function_name(&name)
+            && name.strip_prefix("_xlfn.").is_some_and(|rest| {
+                !rest.is_empty()
+                    && !rest
+                        .get(..6)
+                        .is_some_and(|p| p.eq_ignore_ascii_case("_xlfn."))
+            });
         return future.then(|| RawName {
             func: Some(name),
             ..RawName::default()
@@ -1209,7 +1477,7 @@ mod tests {
             &limits,
         );
         n.name(&record("Down", &[0x3A, 0, 0, 1, 0, 0x00, 0xC0]), &limits);
-        let (names, skipped) = n.resolve(&sheets());
+        let (names, skipped, _) = n.resolve(&sheets(), &Limits::default());
         assert_eq!(skipped, 0);
         let got: Vec<_> = names
             .iter()
@@ -1245,7 +1513,7 @@ mod tests {
         // 9, 10: good names.
         n.name(&record("Good", &[0x1E, 2, 0]), &limits);
         n.name(&record("OnGood", &uses(9)), &limits);
-        let (names, skipped) = n.resolve(&sheets());
+        let (names, skipped, _) = n.resolve(&sheets(), &Limits::default());
         let got: Vec<_> = names
             .iter()
             .map(|n| (n.name.as_str(), n.formula.as_str()))
@@ -1271,7 +1539,7 @@ mod tests {
         n.name(&record("Second", &uses(3)), &limits);
         n.name(&record("Third", &[0x1C, 0x07]), &limits);
         n.name(&record("Loop", &uses(4)), &limits);
-        let (names, skipped) = n.resolve(&sheets());
+        let (names, skipped, _) = n.resolve(&sheets(), &Limits::default());
         let got: Vec<_> = names.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(got, ["Loop"]);
         assert_eq!(skipped, 3);
@@ -1668,7 +1936,7 @@ mod tests {
         d.extend_from_slice(b"Deep");
         d.extend_from_slice(&rgce);
         deep.name(&d, &limits);
-        let (names, skipped) = deep.resolve(&sheets());
+        let (names, skipped, _) = deep.resolve(&sheets(), &Limits::default());
         assert_eq!(names.len() + skipped, 1);
     }
 
@@ -1712,7 +1980,7 @@ mod tests {
         name(&mut n, "NoAddIn", &[&addin(3), &ONE, &[0x22, 2, 255, 0]]);
         name(&mut n, "NoBuiltIn", &[&ONE, &[0x21, 0x68, 0x01]]);
         name(&mut n, "OnNoBuiltIn", &[&[0x23, 7, 0, 0, 0], &[0x12]]);
-        let (names, skipped) = n.resolve(&sheets());
+        let (names, skipped, _) = n.resolve(&sheets(), &Limits::default());
         let got: Vec<_> = names
             .iter()
             .map(|n| (n.name.as_str(), n.formula.as_str()))
@@ -1744,7 +2012,18 @@ mod tests {
             assert_eq!(r.func.as_deref(), Some("_xlfn.IFERROR"));
             assert!(r.name.is_empty() && r.rgce.is_none());
         }
-        for name in ["MyMacro", "_xlfn.", "_xlfn.A(", "_xlfn.A B", "xlfn.IFERROR"] {
+        // Not: a macro, no name after the prefix, two prefixes, a
+        // prefix in other letters, characters a function name has not.
+        for name in [
+            "MyMacro",
+            "_xlfn.",
+            "_xlfn._xlfn.SUM",
+            "_xlfn._XLFN.SUM",
+            "_XLFN.IFERROR",
+            "_xlfn.A(",
+            "_xlfn.A B",
+            "xlfn.IFERROR",
+        ] {
             assert!(named(name, 0x0E).is_none(), "{name}");
         }
         // Without those flags it is a name like any other.
@@ -1760,12 +2039,36 @@ mod tests {
             d[0] = flags;
             assert_eq!(extern_function(&d), None);
         }
-        for name in ["", "1A", "A1(", "A B", "A,B", ".A", "É"] {
+        // Only the add-in functions of Excel 97-2003 as it spells them:
+        // not a built-in function, not a spelling only Tally has, not a
+        // function of a later Excel, not another case.
+        for name in [
+            "",
+            "1A",
+            "A1(",
+            "A B",
+            "A,B",
+            ".A",
+            "É",
+            "SUM",
+            "IF",
+            "TRUE",
+            "PI",
+            "N",
+            "AND",
+            "EASTERSUNDAY",
+            "MULTIPLE.OPERATIONS",
+            "CONVERT_ADD",
+            "ERRORTYPE",
+            "IFERROR",
+            "_xlfn.IFERROR",
+            "edate",
+        ] {
             assert_eq!(extern_function(&extern_name(name)), None, "{name}");
         }
-        let mut wide = vec![0, 0, 0, 0, 0, 0, 2, 1];
-        wide.extend_from_slice(&[b'P', 0, b'I', 0]);
-        assert_eq!(extern_function(&wide).as_deref(), Some("PI"));
+        let mut wide = vec![0, 0, 0, 0, 0, 0, 3, 1];
+        wide.extend_from_slice(&[b'G', 0, b'C', 0, b'D', 0]);
+        assert_eq!(extern_function(&wide).as_deref(), Some("GCD"));
         // The records of a `SUPBOOK` that is not the add-in one are not
         // kept, and the limits hold.
         let mut n = NameRecs::default();
@@ -1793,5 +2096,385 @@ mod tests {
         n.externname(&full, &tiny);
         assert_eq!(n.books[0].1, ["EDATE".to_string(), String::new()]);
         assert!(n.dropped);
+    }
+
+    /// The value-only names `1`, `2` and `3` and the operators after them.
+    fn rpn(n: &NameRecs, tokens: &[&[u8]]) -> Option<String> {
+        text(n, &tokens.concat())
+    }
+
+    #[test]
+    fn operands_get_the_parentheses_the_text_needs() {
+        let n = recs();
+        let t = |tokens: &[&[u8]]| rpn(&n, tokens);
+        let (add, sub, mul, div, pow, cat) =
+            ([0x03u8], [0x04u8], [0x05u8], [0x06u8], [0x07u8], [0x08u8]);
+        let (neg, plus, pct, paren, lt) = ([0x13u8], [0x12u8], [0x14u8], [0x15u8], [0x09u8]);
+        let cases: &[(&[&[u8]], &str)] = &[
+            // A lower operator under a higher one.
+            (&[&ONE, &TWO, &add, &THREE, &mul], "(1+2)*3"),
+            (&[&ONE, &TWO, &THREE, &add, &mul], "1*(2+3)"),
+            (&[&ONE, &TWO, &cat, &THREE, &add], "(1&2)+3"),
+            (&[&ONE, &TWO, &lt, &THREE, &cat], "(1<2)&3"),
+            // The same precedence: the left operand as it is, the right
+            // one in parentheses.
+            (&[&ONE, &TWO, &sub, &THREE, &sub], "1-2-3"),
+            (&[&ONE, &TWO, &THREE, &sub, &sub], "1-(2-3)"),
+            (&[&ONE, &TWO, &div, &THREE, &div], "1/2/3"),
+            (&[&ONE, &TWO, &THREE, &div, &div], "1/(2/3)"),
+            (&[&ONE, &TWO, &THREE, &mul, &div], "1/(2*3)"),
+            (&[&ONE, &TWO, &THREE, &add, &add], "1+(2+3)"),
+            // A higher operator under a lower one needs none.
+            (&[&ONE, &TWO, &mul, &THREE, &add], "1*2+3"),
+            (&[&ONE, &TWO, &THREE, &mul, &add], "1+2*3"),
+            // Powers and signs: nothing is left to how they are read.
+            (&[&TWO, &THREE, &pow, &TWO, &pow], "(2^3)^2"),
+            (&[&TWO, &THREE, &TWO, &pow, &pow], "2^(3^2)"),
+            (&[&TWO, &TWO, &pow, &neg], "-(2^2)"),
+            (&[&TWO, &neg, &TWO, &pow], "(-2)^2"),
+            (&[&TWO, &TWO, &neg, &pow], "2^(-2)"),
+            (&[&TWO, &pct, &TWO, &pow], "(2%)^2"),
+            (&[&ONE, &TWO, &add, &neg], "-(1+2)"),
+            (&[&ONE, &TWO, &add, &plus], "+(1+2)"),
+            (&[&ONE, &TWO, &mul, &neg], "-(1*2)"),
+            (&[&ONE, &neg, &neg], "--1"),
+            (&[&ONE, &neg, &TWO, &mul], "-1*2"),
+            (&[&ONE, &TWO, &neg, &sub], "1--2"),
+            // Percent.
+            (&[&ONE, &TWO, &add, &pct], "(1+2)%"),
+            (&[&ONE, &neg, &pct], "(-1)%"),
+            (&[&ONE, &pct, &neg], "-1%"),
+            (&[&ONE, &pct, &pct], "1%%"),
+            (&[&ONE, &TWO, &pct, &mul], "1*2%"),
+            // The file's own parentheses are kept and not doubled.
+            (&[&ONE, &TWO, &add, &paren, &THREE, &mul], "(1+2)*3"),
+            (&[&ONE, &paren, &paren], "((1))"),
+            (&[&ONE, &TWO, &mul, &paren, &THREE, &add], "(1*2)+3"),
+            (&[&TWO, &TWO, &pow, &paren, &neg], "-(2^2)"),
+        ];
+        for (tokens, want) in cases {
+            assert_eq!(t(tokens).as_deref(), Some(*want), "{tokens:?}");
+        }
+        // A negative number is a sign and a number.
+        let minus_two = {
+            let mut d = vec![0x1F];
+            d.extend_from_slice(&(-2f64).to_le_bytes());
+            d
+        };
+        assert_eq!(t(&[&minus_two, &TWO, &pow]).as_deref(), Some("(-2)^2"));
+        assert_eq!(t(&[&minus_two, &pct]).as_deref(), Some("(-2)%"));
+        assert_eq!(t(&[&ONE, &minus_two, &sub]).as_deref(), Some("1--2"));
+        assert_eq!(t(&[&minus_two, &[0x21, 24, 0]]).as_deref(), Some("ABS(-2)"));
+        // Reference operators: their result is in parentheses under any
+        // operator, and so is an operand of theirs that is not a plain
+        // reference; arguments need none.
+        let (a, b) = (area(0, 0, 5, 0, 5), area(0, 1, 1, 1, 1));
+        let cell = [0x3Au8, 0, 0, 0, 0, 0, 0];
+        assert_eq!(
+            t(&[&a, &b, &[0x0F], &ONE, &add]).as_deref(),
+            Some("('One'!$A$1:$F$6 'One'!$B$2:$B$2)+1")
+        );
+        assert_eq!(
+            t(&[&a, &b, &[0x0F], &cell, &[0x0F]]).as_deref(),
+            Some("('One'!$A$1:$F$6 'One'!$B$2:$B$2) 'One'!$A$1")
+        );
+        assert_eq!(
+            t(&[&cell, &cell, &[0x11], &neg]).as_deref(),
+            Some("-('One'!$A$1:'One'!$A$1)")
+        );
+        assert_eq!(
+            t(&[&a, &b, &[0x0F], &[0x19, 0x10, 0, 0]]).as_deref(),
+            Some("SUM('One'!$A$1:$F$6 'One'!$B$2:$B$2)")
+        );
+        assert_eq!(
+            t(&[&a, &b, &[0x10], &[0x19, 0x10, 0, 0]]).as_deref(),
+            Some("SUM(('One'!$A$1:$F$6,'One'!$B$2:$B$2))")
+        );
+    }
+
+    /// (name, sheet, formula) of the resolved names, and how many were
+    /// left out.
+    fn resolved(n: &NameRecs) -> (Vec<(String, Option<u32>, String)>, usize) {
+        let (names, skipped, cut) = n.resolve(&sheets(), &Limits::default());
+        assert!(!cut);
+        let names = names
+            .into_iter()
+            .map(|n| (n.name, n.sheet, n.formula))
+            .collect();
+        (names, skipped)
+    }
+
+    /// `record` local to the sheet `itab` (1-based).
+    fn local(name: &str, itab: u8, rgce: &[u8]) -> Vec<u8> {
+        let mut d = record(name, rgce);
+        d[8] = itab;
+        d
+    }
+
+    fn got(names: &[(String, Option<u32>, String)]) -> Vec<(&str, Option<u32>, &str)> {
+        names
+            .iter()
+            .map(|n| (n.0.as_str(), n.1, n.2.as_str()))
+            .collect()
+    }
+
+    /// (name, sheet, the sheet of its base cell).
+    type Based = (String, Option<u32>, Option<u32>);
+
+    #[test]
+    fn a_name_means_the_record_it_names() {
+        let limits = Limits::default();
+        let uses = |i: u8| vec![0x23, i, 0, 0, 0, 0x1E, 1, 0, 0x03];
+        let both = |i: u8, k: u8| vec![0x23, i, 0, 0, 0, 0x23, k, 0, 0, 0, 0x03];
+        // (name, sheet, the sheet of its base cell) of what is read.
+        let bases = |n: &NameRecs| -> (Vec<Based>, usize) {
+            let (names, skipped, _) = n.resolve(&sheets(), &Limits::default());
+            let names = names
+                .into_iter()
+                .map(|n| (n.name, n.sheet, n.base_cell.map(|b| b.0)))
+                .collect();
+            (names, skipped)
+        };
+        let s = |name: &str, sheet: Option<u32>, base: Option<u32>| (name.to_string(), sheet, base);
+        // 1: Loc of sheet 2 = 7; 2: Loc of the workbook = 100. Names on
+        // record 1 are read from sheet 2, wherever they are names of: 3
+        // Bar of the workbook, 4 Baz of sheet 2, 5 Qux of sheet 1. Names
+        // on record 2 are read from a sheet without a Loc of its own: 6
+        // Quux of the workbook, 7 Corge of sheet 1, 8 Grault of sheet 2.
+        // 9: on Bar. 10: on both Locs, which no one sheet tells apart.
+        let mut n = recs();
+        n.name(&local("Loc", 2, &[0x1E, 7, 0]), &limits);
+        n.name(&record("Loc", &[0x1E, 100, 0]), &limits);
+        n.name(&record("Bar", &uses(1)), &limits);
+        n.name(&local("Baz", 2, &uses(1)), &limits);
+        n.name(&local("Qux", 1, &uses(1)), &limits);
+        n.name(&record("Quux", &uses(2)), &limits);
+        n.name(&local("Corge", 1, &uses(2)), &limits);
+        n.name(&local("Grault", 2, &uses(2)), &limits);
+        n.name(&record("OnBar", &uses(3)), &limits);
+        n.name(&record("Mixed", &both(1, 2)), &limits);
+        let (names, skipped) = bases(&n);
+        assert_eq!(
+            names,
+            [
+                s("Loc", Some(1), None),
+                s("Loc", None, None),
+                s("Bar", None, Some(1)),
+                s("Baz", Some(1), Some(1)),
+                s("Qux", Some(0), Some(1)),
+                s("Quux", None, None),
+                s("Corge", Some(0), None),
+                s("Grault", Some(1), None),
+                s("OnBar", None, None),
+            ]
+        );
+        assert_eq!(skipped, 1);
+
+        // A name of every sheet's own and of the workbook: a name on the
+        // workbook's has no sheet to be read from.
+        let mut n = recs();
+        n.name(&local("Loc", 1, &[0x1E, 7, 0]), &limits);
+        n.name(&local("Loc", 2, &[0x1E, 8, 0]), &limits);
+        n.name(&record("Loc", &[0x1E, 100, 0]), &limits);
+        n.name(&record("Quux", &uses(3)), &limits);
+        n.name(&record("Two", &both(1, 2)), &limits);
+        let (names, skipped) = bases(&n);
+        assert_eq!(names.len(), 3);
+        assert_eq!(skipped, 2);
+
+        // A name on a later record is read from the cells that use it:
+        // 1 on the later Loc of sheet 2 (from the workbook: left out),
+        // 2 the same from sheet 2 (kept), 3 on the later Loc of the
+        // workbook from the workbook (sheet 2 has its own: left out), 4
+        // the same from sheet 1 (kept), 7 on itself (kept).
+        let mut n = recs();
+        n.name(&record("Early", &uses(5)), &limits);
+        n.name(&local("EarlyOn2", 2, &uses(5)), &limits);
+        n.name(&record("EarlyAll", &uses(6)), &limits);
+        n.name(&local("EarlyOn1", 1, &uses(6)), &limits);
+        n.name(&local("Loc", 2, &[0x1E, 7, 0]), &limits);
+        n.name(&record("Loc", &[0x1E, 100, 0]), &limits);
+        n.name(&record("Loop", &uses(7)), &limits);
+        let (names, skipped) = bases(&n);
+        assert_eq!(
+            names,
+            [
+                s("EarlyOn2", Some(1), None),
+                s("EarlyOn1", Some(0), None),
+                s("Loc", Some(1), None),
+                s("Loc", None, None),
+                s("Loop", None, None),
+            ]
+        );
+        assert_eq!(skipped, 2);
+
+        // A sheet's name that is not read still stands before the
+        // workbook's on its sheet (it is kept without a value): a name
+        // on the workbook's is read from the other sheet.
+        let mut n = recs();
+        n.name(&local("Loc", 1, &[0x1C, 0x07]), &limits);
+        n.name(&record("Loc", &[0x1E, 100, 0]), &limits);
+        n.name(&record("Quux", &uses(2)), &limits);
+        n.name(&local("Corge", 1, &uses(2)), &limits);
+        let (names, skipped) = bases(&n);
+        assert_eq!(
+            names,
+            [
+                s("Loc", Some(0), None),
+                s("Loc", None, None),
+                s("Quux", None, Some(1)),
+                s("Corge", Some(0), Some(1)),
+            ]
+        );
+        assert_eq!(skipped, 1);
+
+        // Two records of one spelling and scope: the first is the one
+        // that is defined, so a name on the second is left out.
+        let mut n = recs();
+        n.name(&record("Twice", &[0x1E, 1, 0]), &limits);
+        n.name(&record("twice", &[0x1E, 2, 0]), &limits);
+        n.name(&record("OnFirst", &uses(1)), &limits);
+        n.name(&record("OnSecond", &uses(2)), &limits);
+        let (names, skipped) = resolved(&n);
+        let kept: Vec<&str> = names.iter().map(|n| n.0.as_str()).collect();
+        assert_eq!(kept, ["Twice", "twice", "OnFirst"]);
+        assert_eq!(skipped, 1);
+
+        // A relative name keeps the row and column of its base cell.
+        let mut n = recs();
+        n.name(&local("Loc", 2, &[0x1E, 7, 0]), &limits);
+        let mut up = vec![0x3A, 0, 0, 0xFF, 0xFF, 0x00, 0xC0];
+        up.extend_from_slice(&[0x23, 1, 0, 0, 0, 0x03]);
+        n.name(&record("Up", &up), &limits);
+        let (names, _, _) = n.resolve(&sheets(), &limits);
+        assert_eq!(names[1].base_cell, Some((1, 0x8000, 0x80)));
+        assert_eq!(names[1].formula, "of:=[$One.DY32768]+Loc");
+    }
+
+    #[test]
+    fn a_sheets_name_that_is_left_out_does_not_become_the_workbooks() {
+        let limits = Limits::default();
+        let error = [0x1Cu8, 0x07];
+        // 1: Foo of sheet 1, not read; 2: Foo of the workbook = 5; 3: Foo
+        // of sheet 2, read; 4: Solo of sheet 1, not read, without a
+        // namesake; 5: Both of sheet 1 and 6: Both of the workbook,
+        // neither read; 7: Gone of a sheet that is not there, 8: Gone of
+        // the workbook.
+        let mut n = recs();
+        n.name(&local("Foo", 1, &error), &limits);
+        n.name(&record("Foo", &[0x1E, 5, 0]), &limits);
+        n.name(&local("Foo", 2, &[0x1E, 6, 0]), &limits);
+        n.name(&local("Solo", 1, &error), &limits);
+        n.name(&local("Both", 1, &error), &limits);
+        n.name(&record("Both", &error), &limits);
+        n.name(&local("Gone", 9, &[0x1E, 1, 0]), &limits);
+        n.name(&record("Gone", &[0x1E, 2, 0]), &limits);
+        let (names, skipped) = resolved(&n);
+        assert_eq!(
+            got(&names),
+            [
+                // A name of sheet 1 without a value.
+                ("Foo", Some(0), "of:=#NAME?"),
+                ("Foo", None, "of:=5"),
+                ("Foo", Some(1), "of:=6"),
+                ("Gone", None, "of:=2"),
+            ]
+        );
+        // It is still counted as left out.
+        assert_eq!(skipped, 5);
+
+        // Also for a name of a sheet that is left out because of what it
+        // uses, and for one whose formula the pre-scan emptied; once per
+        // sheet and spelling.
+        let mut n = recs();
+        n.name(&record("Rate", &[0x1E, 5, 0]), &limits);
+        n.name(&local("Rate", 1, &[0x23, 9, 0, 0, 0]), &limits);
+        n.name(&local("RATE", 1, &error), &limits);
+        let mut empty = local("Rate", 2, &[]);
+        empty[4] = 0;
+        n.name(&empty, &limits);
+        let (names, skipped) = resolved(&n);
+        assert_eq!(
+            got(&names),
+            [
+                ("Rate", None, "of:=5"),
+                ("Rate", Some(0), "of:=#NAME?"),
+                ("Rate", Some(1), "of:=#NAME?"),
+            ]
+        );
+        assert_eq!(skipped, 2);
+    }
+
+    #[test]
+    fn functions_called_by_name_are_the_ones_excel_has() {
+        let limits = Limits::default();
+        let call = |i: u8| vec![0x23, i, 0, 0, 0, 0x1E, 1, 0, 0x1E, 2, 0, 0x22, 3, 255, 0];
+        let names = [
+            // Excel 2007's, which an .xlsx spells without the prefix.
+            ("_xlfn.IFERROR", true),
+            ("_xlfn.SUMIFS", true),
+            // Later ones, which an .xlsx spells with it.
+            ("_xlfn.BITAND", true),
+            ("_xlfn.XOR", true),
+            // A built-in function, a Tally spelling, nothing, a function
+            // of Excel 2007 in other letters.
+            ("_xlfn.SUM", false),
+            ("_xlfn.IF", false),
+            ("_xlfn.EASTERSUNDAY", false),
+            ("_xlfn.ERRORTYPE", false),
+            ("_xlfn.NOSUCH", false),
+            ("_xlfn.iferror", false),
+            ("_xlfn.ORG.OPENOFFICE.CONVERT", false),
+        ];
+        let mut n = recs();
+        for (name, _) in names {
+            let mut d = record(name, &[0x1C, 0x1D]);
+            d[0] = 0x0E;
+            n.name(&d, &limits);
+        }
+        for i in 0..names.len() {
+            n.name(&record(&format!("Call{i}"), &call(i as u8 + 1)), &limits);
+        }
+        let (got, skipped) = resolved(&n);
+        let want: Vec<String> = names
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.1)
+            .map(|(i, _)| format!("Call{i}"))
+            .collect();
+        let kept: Vec<&str> = got.iter().map(|n| n.0.as_str()).collect();
+        assert_eq!(kept, want);
+        assert_eq!(skipped, names.len() - want.len());
+        assert_eq!(got[0].2, "of:=COM.MICROSOFT.IFERROR(1;2)");
+        assert_eq!(got[2].2, "of:=BITAND(1;2)");
+    }
+
+    #[test]
+    fn the_text_kept_for_the_names_is_bounded() {
+        // A name of 200 letters, and names that spell it 30 times each:
+        // about 6 KiB of formula from 150 bytes of record.
+        let long = "L".repeat(200);
+        let mut rgce = Vec::new();
+        for _ in 0..30 {
+            rgce.extend_from_slice(&[0x23, 1, 0, 0, 0]);
+        }
+        rgce.extend_from_slice(&[0x22, 30, 0x50, 0x01]);
+        let mut n = recs();
+        let limits = Limits::default();
+        n.name(&record(&long, &[0x1E, 1, 0]), &limits);
+        for i in 0..20 {
+            n.name(&record(&format!("Item_{i}"), &rgce), &limits);
+        }
+        let (names, skipped, cut) = n.resolve(&sheets(), &limits);
+        assert_eq!((names.len(), skipped, cut), (21, 0, false));
+        let each = names[1].formula.len() as u64;
+        assert!(each > 6_000, "{each}");
+        // Room for the long name and five of the others.
+        let tight = Limits {
+            max_name_bytes: 300 + 5 * (each + 6),
+            ..Limits::default()
+        };
+        let (names, skipped, cut) = n.resolve(&sheets(), &tight);
+        assert_eq!((names.len(), skipped, cut), (6, 0, true));
     }
 }

@@ -553,9 +553,81 @@ pub fn function_names() -> Vec<u8> {
     file(stream(&g, &[("Main", one), ("Other sheet", two)]))
 }
 
+/// Names of one spelling in two scopes, and formulas whose tokens have no
+/// parentheses where their text needs them (Excel always writes them; the
+/// stored results are all 0). `Main` has A1 = 1, `Other` A1 = 2.
+///
+/// 1 `Foo` of `Main` = PHONETIC(Main!A1) (not read), 2 `Foo` of the
+/// workbook = 5, 3 `Loc` of `Other` = 7, 4 `Loc` of the workbook = 100, 5
+/// `Bar` of the workbook = record 3 + 1 (a sheet's name used from the
+/// workbook), 6 `Baz` of `Other` = record 3 + 1. Then, as token
+/// trees: 7 `Pa` = (1 + 2) * 3, 8 `Pb` = (2 ^ 3) ^ 2, 9 `Pc` = 1 - (2 -
+/// 3), 10 `Pd` = -(2 ^ 2), 11 `Pe` = (1 + 2) %, 12 `Pf` = 2 ^ (3 ^ 2), 13
+/// `Pg` = the number -2, squared. 14 `Mix` = record 3 + record 4 (both
+/// Locs in one formula: left out).
+///
+/// `Main`: B1 = record 1, C1 = record 5, D1 = record 4, E1 = record 14;
+/// B2…H2 = records
+/// 7…13. `Other`: B1 = record 6, C1 = record 3, D1 = record 2.
+pub fn scoped_names() -> Vec<u8> {
+    let cat = |parts: &[&[u8]]| parts.concat();
+    let (one, two, three) = (ptg_int(1), ptg_int(2), ptg_int(3));
+    let plus_one = |i: u32| cat(&[&ptg_name(i), &ptg_int(1), &[0x03]]);
+    let mut g = globals(&[], &[], &[]);
+    g.extend(externsheet(2));
+    g.extend(defined_name(
+        "Foo",
+        0,
+        1,
+        &cat(&[&[0x3A, 0, 0, 0, 0, 0, 0], &ptg_func(360)]),
+    ));
+    g.extend(defined_name("Foo", 0, 0, &ptg_int(5)));
+    g.extend(defined_name("Loc", 0, 2, &ptg_int(7)));
+    g.extend(defined_name("Loc", 0, 0, &ptg_int(100)));
+    g.extend(defined_name("Bar", 0, 0, &plus_one(3)));
+    g.extend(defined_name("Baz", 0, 2, &plus_one(3)));
+    let trees: [(&str, Vec<u8>); 7] = [
+        ("Pa", cat(&[&one, &two, &[0x03], &three, &[0x05]])),
+        ("Pb", cat(&[&two, &three, &[0x07], &two, &[0x07]])),
+        ("Pc", cat(&[&one, &two, &three, &[0x04, 0x04]])),
+        ("Pd", cat(&[&two, &two, &[0x07, 0x13]])),
+        ("Pe", cat(&[&one, &two, &[0x03, 0x14]])),
+        ("Pf", cat(&[&two, &three, &two, &[0x07, 0x07]])),
+        ("Pg", cat(&[&ptg_num(-2.0), &two, &[0x07]])),
+    ];
+    for (name, rgce) in &trees {
+        g.extend(defined_name(name, 0, 0, rgce));
+    }
+    g.extend(defined_name(
+        "Mix",
+        0,
+        0,
+        &cat(&[&ptg_name(3), &ptg_name(4), &[0x03]]),
+    ));
+
+    // A name in a cell formula: PtgName (value class) with its index.
+    let used = |i: u8| vec![0x43, i, 0, 0, 0];
+    let mut main = number(0, 0, 15, 1.0);
+    for (col, i) in [(1, 1), (2, 5), (3, 4), (4, 14)] {
+        main.extend(formula(0, col, 15, 0.0, &used(i)));
+    }
+    for k in 0..7u8 {
+        main.extend(formula(1, u16::from(k) + 1, 15, 0.0, &used(7 + k)));
+    }
+    main.extend(window2(0x00B6));
+    let mut other = number(0, 0, 15, 2.0);
+    for (col, i) in [(1, 6), (2, 3), (3, 2)] {
+        other.extend(formula(0, col, 15, 0.0, &used(i)));
+    }
+    other.extend(window2(0x00B6));
+
+    file(stream(&g, &[("Main", main), ("Other", other)]))
+}
+
 /// The fixtures by file name.
 pub fn all() -> Vec<(&'static str, Vec<u8>)> {
     vec![
+        ("scopednames.xls", scoped_names()),
         ("funcnames.xls", function_names()),
         ("widenames.xls", wide_names()),
         ("names.xls", names()),

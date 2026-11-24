@@ -328,6 +328,164 @@ fn names_that_are_cells_only_in_the_larger_grid_are_kept() {
     assert_eq!(formula(3, 0), "of:=[.IV65535]+[.A1]");
 }
 
+#[test]
+fn names_of_one_spelling_in_two_scopes_and_token_trees() {
+    let wb = read(&biff::books::scoped_names());
+    assert_eq!(
+        names(&wb),
+        [
+            // The sheet's Foo is not read (PHONETIC): it stays a name of
+            // that sheet without a value, so the sheet's cells do not
+            // take the workbook's Foo.
+            ("Foo", Some(0), "of:=#NAME?"),
+            ("Foo", None, "of:=5"),
+            ("Loc", Some(1), "of:=7"),
+            ("Loc", None, "of:=100"),
+            // `Bar` (the workbook's) and `Baz` are on the Loc of the
+            // second sheet: read from that sheet (see below).
+            ("Bar", None, "of:=Loc+1"),
+            ("Baz", Some(1), "of:=Loc+1"),
+            // The text has the parentheses the token tree means.
+            ("Pa", None, "of:=(1+2)*3"),
+            ("Pb", None, "of:=(2^3)^2"),
+            ("Pc", None, "of:=1-(2-3)"),
+            ("Pd", None, "of:=-(2^2)"),
+            ("Pe", None, "of:=(1+2)%"),
+            ("Pf", None, "of:=2^(3^2)"),
+            ("Pg", None, "of:=(-2)^2"),
+        ]
+    );
+    // Their base cell is on the sheet whose Loc they mean.
+    let base = |name: &str| {
+        let n = wb.names.iter().find(|n| n.name == name).unwrap();
+        n.base_cell
+    };
+    assert_eq!(base("Bar"), Some((1, 0, 0)));
+    assert_eq!(base("Baz"), Some((1, 0, 0)));
+    assert_eq!(base("Pa"), None);
+    // Foo of the sheet and Mix (on both Locs) are counted.
+    assert!(
+        wb.warnings
+            .iter()
+            .any(|w| w.starts_with("2 defined name(s)")),
+        "{:?}",
+        wb.warnings
+    );
+}
+
+#[test]
+fn by_name_calls_of_functions_excel_does_not_call_by_name() {
+    // Add-in records spelled like a built-in function, like a function
+    // only Tally has, or in another case; and hidden function names with
+    // a prefix on a built-in function, with two prefixes, on nothing.
+    let addins = [
+        "SUM",
+        "IF",
+        "TRUE",
+        "PI",
+        "N",
+        "AND",
+        "EASTERSUNDAY",
+        "MULTIPLE.OPERATIONS",
+        "CONVERT_ADD",
+        "ERRORTYPE",
+        "quotient",
+        "QUOTIENT",
+    ];
+    let futures = [
+        "_xlfn.SUM",
+        "_xlfn._xlfn.SUM",
+        "_xlfn.TRUE",
+        "_xlfn.EASTERSUNDAY",
+        "_xlfn.NOSUCH",
+        "_XLFN.IFERROR",
+        "_xlfn.IFERROR",
+    ];
+    let mut g = Vec::new();
+    for f in futures {
+        g.extend(biff::future_function_name(f));
+    }
+    let call = |name: Vec<u8>| {
+        let mut rgce = name;
+        rgce.extend(biff::ptg_int(7));
+        rgce.extend(biff::ptg_int(2));
+        rgce.extend(biff::ptg_funcvar(3, 255));
+        rgce
+    };
+    for i in 0..addins.len() {
+        let rgce = call(biff::ptg_namex(2, i as u32 + 1));
+        g.extend(biff::defined_name(&format!("AddIn_{i}"), 0, 0, &rgce));
+    }
+    for i in 0..futures.len() {
+        let rgce = call(biff::ptg_name(i as u32 + 1));
+        g.extend(biff::defined_name(&format!("Future_{i}"), 0, 0, &rgce));
+    }
+    let (wb, left_out) = function_book(&addins, &g);
+    // Only the last of each list is a function Excel calls by name.
+    assert_eq!(
+        names(&wb),
+        [
+            ("AddIn_11", None, "of:=QUOTIENT(7;2)"),
+            ("Future_6", None, "of:=COM.MICROSOFT.IFERROR(7;2)"),
+        ]
+    );
+    assert_eq!(left_out, addins.len() + futures.len() - 2);
+}
+
+#[test]
+fn renamed_and_added_table_rows() {
+    // USDOLLAR is OpenOffice's (and an .xlsx's) DOLLAR; ERROR.TYPE is not
+    // Tally's ERRORTYPE (other numbers), in an .xlsx neither: left out.
+    let mut g = biff::defined_name(
+        "Usd",
+        0,
+        0,
+        &[biff::ptg_int(2), biff::ptg_funcvar(1, 204)].concat(),
+    );
+    g.extend(biff::defined_name(
+        "Kind",
+        0,
+        0,
+        &[biff::ptg_func(10), biff::ptg_func(261)].concat(),
+    ));
+    let (wb, left_out) = function_book(&[], &g);
+    assert_eq!(names(&wb), [("Usd", None, "of:=DOLLAR(2)")]);
+    assert_eq!(left_out, 1);
+}
+
+#[test]
+fn the_text_of_the_names_is_bounded() {
+    // 4,100 names that each spell a 255-letter name 30 times: 31 MB of
+    // formula text from a file of 765 KB. The names and formulas kept are
+    // bounded like the records (16 MiB); the rest is left out with a
+    // warning.
+    let long = "L".repeat(255);
+    let mut g = biff::defined_name(&long, 0, 0, &biff::ptg_int(1));
+    let mut rgce = Vec::new();
+    for _ in 0..30 {
+        rgce.extend(biff::ptg_name(1));
+    }
+    rgce.extend(biff::ptg_funcvar(30, 336));
+    for i in 0..4_100 {
+        g.extend(biff::defined_name(&format!("Item_{i}"), 0, 0, &rgce));
+    }
+    let wb = read(&book(&g, &[]));
+    let total: usize = wb
+        .names
+        .iter()
+        .map(|n| n.name.len() + n.formula.len())
+        .sum();
+    assert!(total <= 16 * 1024 * 1024, "{total}");
+    assert!(wb.names.len() > 2_000, "{}", wb.names.len());
+    assert!(
+        wb.warnings
+            .iter()
+            .any(|w| w.contains("more than 16 MiB of text")),
+        "{:?}",
+        wb.warnings
+    );
+}
+
 /// The workbook with `globals` (after an `EXTERNSHEET` whose entry 2 is
 /// the add-in functions `functions`), and how many names its warning says
 /// were left out.

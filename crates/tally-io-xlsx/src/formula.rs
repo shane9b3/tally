@@ -445,6 +445,20 @@ impl ExcelNameConverter {
         (!unknown).then(|| print_of(&f, origin, &self.0))
     }
 
+    /// Whether `name` is a function an `.xlsx` formula spells with the
+    /// `_xlfn.` prefix, exactly as given (`_xlfn.DAYS`; not
+    /// `_xlfn.SUM`, which only resolves because the prefix is ignored on
+    /// a name without one, and not `IFERROR`, which has none).
+    pub fn is_prefixed_function(&self, name: &str) -> bool {
+        let reg = tally_functions::registry();
+        name.starts_with("_xlfn.")
+            && reg
+                .lookup_ooxml(name)
+                .and_then(|id| reg.get(id))
+                .and_then(|d| d.ooxml_name)
+                .is_some_and(|o| o.eq_ignore_ascii_case(name))
+    }
+
     /// Whether `name` can stand in the formula text given to
     /// [`to_of`](Self::to_of) as a defined name. Either it is a name by
     /// the engine's rule (`tally_formula::defined_name_problem`: not a

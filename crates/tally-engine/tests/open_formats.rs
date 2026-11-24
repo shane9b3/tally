@@ -541,6 +541,74 @@ fn xls_names_with_functions_calculate() {
     number(other, 2, 0, 9.0);
 }
 
+/// An `.xls` formula names a name by its record, Tally's by its spelling
+/// (a sheet's own name first, then the workbook's). Where the two would
+/// differ the result is `#NAME?`, never another name's value: a sheet's
+/// name that is not read does not become the workbook's namesake, a
+/// workbook name on a sheet's name means that sheet's wherever it is used,
+/// and a name on both namesakes is left out. And a formula whose
+/// tokens carry no parentheses calculates as the token tree, not as its
+/// text without them.
+#[test]
+fn xls_names_bind_to_their_record_and_keep_their_token_tree() {
+    let mut svc = EngineService::with_default_codec();
+    let info = open(&mut svc, &repo("tests/fixtures/xls/scopednames.xls"));
+    let (main, other) = (info.sheets[0].id, info.sheets[1].id);
+    let names = svc.names(info.doc).unwrap();
+    let mut listed: Vec<(&str, Option<tally_types::SheetId>)> =
+        names.iter().map(|n| (n.name.as_str(), n.scope)).collect();
+    listed.sort_unstable();
+    assert_eq!(
+        listed,
+        [
+            ("Bar", None),
+            ("Baz", Some(other)),
+            ("Foo", None),
+            // The sheet's Foo, kept without a value.
+            ("Foo", Some(main)),
+            ("Loc", None),
+            ("Loc", Some(other)),
+            ("Pa", None),
+            ("Pb", None),
+            ("Pc", None),
+            ("Pd", None),
+            ("Pe", None),
+            ("Pf", None),
+            ("Pg", None),
+        ]
+    );
+    svc.recalc_all(info.doc).unwrap();
+    let wb = &svc.document(info.doc).unwrap().wb;
+    let value = |sheet, r: u32, c: u32| wb.value(CellAddr::new(sheet, r, c));
+    let number = |sheet, r: u32, c: u32, want: f64| match value(sheet, r, c) {
+        Value::Number(n) => assert!((n - want).abs() < 1e-9, "({r}, {c}): {n} != {want}"),
+        other => panic!("({r}, {c}): {other:?}"),
+    };
+    let no_name = Value::Error(tally_types::ErrorKind::Name);
+    // Main!B1 = the sheet's Foo (not read): not the workbook's 5.
+    assert_eq!(value(main, 0, 1), no_name);
+    // Main!C1 = Bar = the Loc of the other sheet + 1: not 101 with the
+    // workbook's Loc.
+    number(main, 0, 2, 8.0);
+    // Main!E1 = Mix = that Loc + the workbook's Loc: left out.
+    assert_eq!(value(main, 0, 4), no_name);
+    // Main!D1 = the workbook's Loc.
+    number(main, 0, 3, 100.0);
+    // Other!B1 = Baz = that sheet's Loc + 1, C1 = that Loc, D1 = the
+    // workbook's Foo (this sheet has none).
+    number(other, 0, 1, 8.0);
+    number(other, 0, 2, 7.0);
+    number(other, 0, 3, 5.0);
+    // Main!B2…H2: (1 + 2) * 3, (2 ^ 3) ^ 2, 1 - (2 - 3), -(2 ^ 2),
+    // (1 + 2) %, 2 ^ (3 ^ 2), (-2) ^ 2.
+    for (col, want) in [9.0, 64.0, 2.0, -4.0, 0.03, 512.0, 4.0]
+        .into_iter()
+        .enumerate()
+    {
+        number(main, 1, col as u32 + 1, want);
+    }
+}
+
 /// Names that Excel 97-2003 allows and that are cells in Tally's larger
 /// grid (`TAX2024`, `FYE2025`, `A70000`) are kept: the engine lists them
 /// with a trailing `_` and resolves the file's spelling, so the formulas

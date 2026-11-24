@@ -112,7 +112,9 @@ pub struct Limits {
     pub max_notes: usize,
     /// Most `NAME` records read (defined names; OpenOffice reads 65,535).
     pub max_names: usize,
-    /// Most bytes of defined names and their formulas kept.
+    /// Most bytes of defined names and their formulas kept: of the
+    /// records as they are read, and again of the names with the formula
+    /// text they become (a formula can spell a long name many times).
     pub max_name_bytes: u64,
     /// Most cells with a hyperlink (all sheets).
     pub max_links: usize,
@@ -639,7 +641,14 @@ fn decode(
         sheets.push(sheet);
     }
     // Defined names, now that the sheets have their names.
-    let (defined_names, names_skipped) = formatting.names.resolve(&names);
+    let (defined_names, names_skipped, names_cut) = formatting.names.resolve(&names, limits);
+    if names_cut {
+        warnings.push(format!(
+            "The defined names of this file and their formulas are more than {} MiB of text: \
+             the names past that were left out.",
+            limits.max_name_bytes / (1024 * 1024)
+        ));
+    }
     if names_skipped > 0 {
         warnings.push(format!(
             "{names_skipped} defined name(s) with a formula Tally does not read from an .xls \

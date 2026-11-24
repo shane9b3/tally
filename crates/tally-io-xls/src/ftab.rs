@@ -11,9 +11,29 @@
 //! decoded by the reader itself. "30" is "as many as a BIFF8 call can
 //! have".
 //!
+//! Two rows differ from that source:
+//! - 204 `USDOLLAR` is given as `DOLLAR`: OpenOffice reads it as its
+//!   DOLLAR function (`formulabase.cxx`: `{ "DOLLAR", "USDOLLAR", 204,
+//!   204, 1, 2, … FUNCFLAG_IMPORTONLY }`; the binary filter,
+//!   `main/sc/source/filter/excel/xlformula.cxx`: `{ ocCurrency, 204, 1,
+//!   2, … EXC_FUNCFLAG_IMPORTONLY }`), and an `.xlsx` has no `USDOLLAR`.
+//! - 379 `RTD` takes 3 to 30 arguments, not exactly 3: its topics repeat
+//!   (Microsoft's description of the function: `RTD(ProgID, server,
+//!   topic1, [topic2], …)`), and [MS-XLS] stores it with a count
+//!   (`ptgFuncVar`).
+//!
+//! 261 `ERROR.TYPE` keeps Excel's name although OpenOffice reads it as
+//! its ERRORTYPE (`xlformula.cxx`: `{ ocErrorType, 261, 1, 1, … }`): that
+//! function returns OpenOffice's error numbers (532 for `#DIV/0!`, where
+//! Excel's returns 2), the `.xlsx` reader does not map it either, and a
+//! name that calls it is left out rather than calculated differently.
+//!
 //! The names are Excel's (English), the ones an `.xlsx` formula uses, so
 //! the XLSX reader's conversion maps them to Tally's functions; whether
 //! Tally has a function is decided there, not here.
+//!
+//! [`ADDINS`] and [`FUTURE`] are the functions a BIFF8 formula calls by
+//! name (index 255), from the same source.
 
 /// (index, Excel name, fewest arguments, most arguments), by index.
 #[rustfmt::skip]
@@ -51,7 +71,7 @@ const FTAB: &[(u16, &str, u8, u8)] = &[
     (169, "COUNTA", 0, 30), (183, "PRODUCT", 0, 30), (184, "FACT", 1, 1),
     (189, "DPRODUCT", 3, 3), (190, "ISNONTEXT", 1, 1), (193, "STDEVP", 1, 30),
     (194, "VARP", 1, 30), (195, "DSTDEVP", 3, 3), (196, "DVARP", 3, 3), (197, "TRUNC", 1, 2),
-    (198, "ISLOGICAL", 1, 1), (199, "DCOUNTA", 3, 3), (204, "USDOLLAR", 1, 2),
+    (198, "ISLOGICAL", 1, 1), (199, "DCOUNTA", 3, 3), (204, "DOLLAR", 1, 2),
     (205, "FINDB", 2, 3), (206, "SEARCHB", 2, 3), (207, "REPLACEB", 4, 4), (208, "LEFTB", 1, 2),
     (209, "RIGHTB", 1, 2), (210, "MIDB", 3, 3), (211, "LENB", 1, 1), (212, "ROUNDUP", 2, 2),
     (213, "ROUNDDOWN", 2, 2), (214, "ASC", 1, 1), (215, "DBCS", 1, 1), (216, "RANK", 2, 3),
@@ -91,8 +111,66 @@ const FTAB: &[(u16, &str, u8, u8)] = &[
     (370, "THAIDIGIT", 1, 1), (371, "THAIMONTHOFYEAR", 1, 1), (372, "THAINUMSOUND", 1, 1),
     (373, "THAINUMSTRING", 1, 1), (374, "THAISTRINGLENGTH", 1, 1), (375, "ISTHAIDIGIT", 1, 1),
     (376, "ROUNDBAHTDOWN", 1, 1), (377, "ROUNDBAHTUP", 1, 1), (378, "THAIYEAR", 1, 1),
-    (379, "RTD", 3, 3),
+    (379, "RTD", 3, 30),
 ];
+
+/// The functions of Excel 97-2003's add-ins (the Analysis ToolPak and the
+/// Euro tool), which a formula calls by name through an `EXTERNNAME` of
+/// the add-in `SUPBOOK`: the rows marked `FUNCFLAG_EXTERNAL` (and
+/// `FUNCLIB_EUROTOOL`) of `formulabase.cxx`. Sorted.
+#[rustfmt::skip]
+const ADDINS: &[&str] = &[
+    "ACCRINT", "ACCRINTM", "AMORDEGRC", "AMORLINC", "BESSELI", "BESSELJ", "BESSELK", "BESSELY",
+    "BIN2DEC", "BIN2HEX", "BIN2OCT", "COMPLEX", "CONVERT", "COUPDAYBS", "COUPDAYS",
+    "COUPDAYSNC", "COUPNCD", "COUPNUM", "COUPPCD", "CUMIPMT", "CUMPRINC", "DEC2BIN", "DEC2HEX",
+    "DEC2OCT", "DELTA", "DISC", "DOLLARDE", "DOLLARFR", "DURATION", "EDATE", "EFFECT",
+    "EOMONTH", "ERF", "ERFC", "EUROCONVERT", "FACTDOUBLE", "FVSCHEDULE", "GCD", "GESTEP",
+    "HEX2BIN", "HEX2DEC", "HEX2OCT", "IMABS", "IMAGINARY", "IMARGUMENT", "IMCONJUGATE", "IMCOS",
+    "IMDIV", "IMEXP", "IMLN", "IMLOG10", "IMLOG2", "IMPOWER", "IMPRODUCT", "IMREAL", "IMSIN",
+    "IMSQRT", "IMSUB", "IMSUM", "INTRATE", "ISEVEN", "ISODD", "LCM", "MDURATION", "MROUND",
+    "MULTINOMIAL", "NETWORKDAYS", "NOMINAL", "OCT2BIN", "OCT2DEC", "OCT2HEX", "ODDFPRICE",
+    "ODDFYIELD", "ODDLPRICE", "ODDLYIELD", "PRICE", "PRICEDISC", "PRICEMAT", "QUOTIENT",
+    "RANDBETWEEN", "RECEIVED", "SERIESSUM", "SQRTPI", "TBILLEQ", "TBILLPRICE", "TBILLYIELD",
+    "WEEKNUM", "WORKDAY", "XIRR", "XNPV", "YEARFRAC", "YIELD", "YIELDDISC", "YIELDMAT",
+];
+
+/// The functions Excel 2007 added that an `.xlsx` formula spells without
+/// a prefix and an `.xls` file calls by name as `_xlfn.…`
+/// (`saFuncTableOox` of `formulabase.cxx`). Later functions have the
+/// prefix in an `.xlsx` too, and the XLSX reader's own table says which
+/// those are. Sorted.
+const FUTURE: &[&str] = &[
+    "AVERAGEIF",
+    "AVERAGEIFS",
+    "COUNTIFS",
+    "CUBEKPIMEMBER",
+    "CUBEMEMBER",
+    "CUBEMEMBERPROPERTY",
+    "CUBERANKEDMEMBER",
+    "CUBESET",
+    "CUBESETCOUNT",
+    "CUBEVALUE",
+    "IFERROR",
+    "SUMIFS",
+];
+
+/// Whether `name` (as the file spells it: upper case) is a function of
+/// Excel 97-2003's add-ins.
+pub(crate) fn is_addin(name: &str) -> bool {
+    ADDINS.binary_search(&name).is_ok()
+}
+
+/// Whether `name` (upper case, without `_xlfn.`) is a function Excel
+/// 2007 added that an `.xlsx` spells without the prefix.
+pub(crate) fn is_future(name: &str) -> bool {
+    FUTURE.binary_search(&name).is_ok()
+}
+
+/// Whether `name` is the Excel name of a built-in function of the table.
+#[cfg(test)]
+fn is_builtin(name: &str) -> bool {
+    FTAB.iter().any(|f| f.1 == name)
+}
 
 /// The function with the index `iftab`: its Excel name and its fewest and
 /// most arguments.
@@ -124,10 +202,29 @@ mod tests {
         assert_eq!(function(74), Some(("NOW", 0, 0)));
         assert_eq!(function(100), Some(("CHOOSE", 2, 30)));
         assert_eq!(function(345), Some(("SUMIF", 2, 3)));
-        assert_eq!(function(379), Some(("RTD", 3, 3)));
+        assert_eq!(function(379), Some(("RTD", 3, 30)));
+        assert_eq!(function(204), Some(("DOLLAR", 1, 2)));
+        assert_eq!(function(261), Some(("ERROR.TYPE", 1, 1)));
         // Macro-sheet functions, the call by name, indices past the table.
         for i in [53u16, 54, 55, 151, 255, 380, 0x7FFF, 0xFFFF] {
             assert_eq!(function(i), None, "{i}");
         }
+    }
+
+    #[test]
+    fn the_functions_called_by_name() {
+        for list in [ADDINS, FUTURE] {
+            assert!(list.windows(2).all(|w| w[0] < w[1]));
+            // None of them is a built-in function with an index.
+            for name in list {
+                assert!(!is_builtin(name), "{name}");
+            }
+        }
+        assert!(is_addin("EDATE") && is_addin("GCD") && is_addin("WEEKNUM"));
+        assert!(is_future("IFERROR") && is_future("SUMIFS"));
+        for name in ["SUM", "IF", "TRUE", "PI", "N", "edate", "EASTERSUNDAY", ""] {
+            assert!(!is_addin(name) && !is_future(name), "{name}");
+        }
+        assert!(is_builtin("SUM") && is_builtin("DOLLAR") && !is_builtin("EDATE"));
     }
 }

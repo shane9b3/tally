@@ -492,8 +492,11 @@ hyperlinks (`HLINK`, `hlink.rs`); docs/file-formats.md). Its rules:
   record and its continues); `SUPBOOK` records are one kind each (the
   workbook, the add-in functions, anything else; at most 65,536). An
   `EXTERNNAME` is looked at only after the add-in `SUPBOOK`, and only for
-  a function's name (ASCII letters, digits, `.` and `_`; anything else,
-  a cut record or a DDE / OLE link keeps its index and names nothing);
+  a function's name (one of a constant list of 94 add-in functions;
+  anything else, a cut record or a DDE / OLE link keeps its index and
+  names nothing; a hidden function `NAME` is a function only as
+  `_xlfn.` and a name of ASCII letters, digits, `.` and `_` that is a
+  function Excel 2007 added or one the XLSX reader spells that way);
   these records count against `max_names` and `max_name_bytes` like the
   names. A formula is decoded token by token within its declared
   length: a token that is cut, an operator without operands, operands
@@ -521,7 +524,11 @@ hyperlinks (`HLINK`, `hlink.rs`); docs/file-formats.md). Its rules:
   every element with a bounds check and at least nine bytes of them, so
   the 256 × 65,536 elements a header can announce cost nothing; an
   empty or error element, a cut one, or text over the limit skip the
-  name. The text a function name contributes is either from the table
+  name. Each operand carries the precedence of its outermost operator,
+  and gets parentheses where the text would otherwise be read as another
+  tree (the bytes moved are charged like the rest), so a formula without
+  `ptgParen` tokens cannot import with another meaning than its tokens.
+  The text a function name contributes is either from the table
   or validated as above, so the Excel text stays well formed; whether
   Tally has the function is decided by the conversion
   (`ExcelNameConverter::to_of_at` refuses a formula with an unknown
@@ -533,7 +540,15 @@ hyperlinks (`HLINK`, `hlink.rs`); docs/file-formats.md). Its rules:
   skipped at its first one (plain references and constants cost nothing
   and are still read). The decoded text goes through the XLSX reader's
   formula parser (which has its own depth and size limits); names are
-  validated by the engine as for the other formats.
+  validated by the engine as for the other formats. The names kept with
+  their converted formulas are at most `max_name_bytes` (16 MiB) of text
+  for the workbook: a formula can spell a 255-character name 30 times
+  per call, so 765 KB of records were 31.5 MB of formula text before
+  this cap (2026-11-24); the names past it are left out with a warning.
+  Which record a name's spelling means is decided without recursion
+  (one pass over the uses of each name; the search for a base sheet
+  beyond three candidates is charged to `SCAN_BUDGET`, 4 Mi (sheet,
+  use) pairs for the workbook).
 - Hyperlinks (`hlink.rs`). The record and its continues are looked at up
   to 64 KiB (a longer one is left out). Every field is read through a
   checked cursor: a string's 32-bit length is multiplied and compared
@@ -625,10 +640,11 @@ tokens `function_tokens_that_lie`, `externname_records_cut_and_garbled`,
 and the unit tests of
 `names.rs` and `hlink.rs` (every cut, every byte as a token, every flag
 combination). The
-`xls` and `open` fuzz targets reach the pass through `read_xls`; seven
+`xls` and `open` fuzz targets reach the pass through `read_xls`; eight
 synthetic seeds (`fuzz/seeds/xls/formatted.xls`, `pictures.xls`,
 `notes.xls`, `page.xls`, `names.xls`, `widenames.xls`, `funcnames.xls`
-(names with function tokens, since 2026-11-24), generated from `tests/fixtures/xls/`, which
+and `scopednames.xls` (names with function tokens, names of one
+spelling in two scopes; since 2026-11-24), generated from `tests/fixtures/xls/`, which
 `crates/tally-io-xls/tests/biff/books.rs` builds) exercise it. It has not
 been through a fuzz campaign yet.
 
