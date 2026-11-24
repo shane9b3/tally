@@ -116,6 +116,15 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 unwrap_used = "warn"
 
+# jiff's CRC-32 (`jiff_core::util::crc32`, run when a time zone file is
+# parsed) indexes a 16 KiB `const` table 16 times in one function. Without
+# optimization every use copies the table to the stack: a 256 KiB frame on
+# whichever thread reads the local clock first. Optimized, the function
+# needs no stack to speak of (release builds were never affected).
+# `crates/tally-numfmt/tests/clock_stack.rs` checks this.
+[profile.dev.package.jiff-core]
+opt-level = 1
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
