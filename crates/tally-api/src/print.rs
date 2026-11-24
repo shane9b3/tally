@@ -63,6 +63,14 @@ pub struct PrintOptionsDto {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub page_ranges: Option<Vec<[u32; 2]>>,
+    /// What the sheet-name field (`&[SHEET]`) shows on the pages of
+    /// printed notes, in the language of the user interface (AOO
+    /// `STR_NOTES`); `None` or empty is the English "Comments". The
+    /// desktop shell fills it in from the UI language when the caller
+    /// leaves it out.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub notes_title: Option<String>,
 }
 
 impl Default for PrintOptionsDto {
@@ -76,6 +84,7 @@ impl Default for PrintOptionsDto {
             page_to: None,
             active_sheet: None,
             page_ranges: None,
+            notes_title: None,
         }
     }
 }

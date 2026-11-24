@@ -1140,8 +1140,21 @@ fn area_of(wb: &Workbook, s: &Sheet, selection: Option<CellRange>) -> Option<Cel
 /// Most characters of one note on a notes page.
 const MAX_NOTE_CHARS: usize = 2000;
 /// What the sheet-name field shows on a notes page (AOO `STR_NOTES`,
-/// set in `ScPrintFunc::DoPrint` before the notes pages).
+/// set in `ScPrintFunc::DoPrint` before the notes pages), when the print
+/// options bring no text in the UI language
+/// (`PrintOptionsDto::notes_title`; AOO reads `STR_NOTES` from its
+/// localized resources).
 pub const NOTES_PAGE_NAME: &str = "Comments";
+/// Most characters of [`PrintOptionsDto::notes_title`] that are used.
+const MAX_NOTES_TITLE_CHARS: usize = 100;
+
+/// The sheet name of the notes pages of a job.
+fn notes_page_name(opts: &PrintOptionsDto) -> String {
+    match opts.notes_title.as_deref().map(str::trim) {
+        Some(t) if !t.is_empty() => t.chars().take(MAX_NOTES_TITLE_CHARS).collect(),
+        _ => NOTES_PAGE_NAME.to_string(),
+    }
+}
 
 /// The notes pages of a sheet (page setup "Notes"): one line per note
 /// inside the printed `areas`, `A1: text`, in row order, after the sheet's
@@ -1462,7 +1475,7 @@ pub fn layout(
                 .map(|s| s.name.to_string())
                 .unwrap_or_default()
         } else {
-            NOTES_PAGE_NAME.to_string()
+            notes_page_name(opts)
         };
         let resolve = |h: &tally_model::HeaderFooterData| {
             [
@@ -1629,6 +1642,7 @@ mod tests {
             page_to: None,
             active_sheet: None,
             page_ranges: None,
+            notes_title: None,
         }
     }
 
@@ -1804,6 +1818,19 @@ mod tests {
         assert_eq!(p[1].header.as_ref().unwrap()[2], "Page 2 of 2");
         assert_eq!(p[1].header.as_ref().unwrap()[1], NOTES_PAGE_NAME);
         assert_eq!(p[1].header_block, p[0].header_block);
+        // The options bring the heading in the UI language; the sheet's
+        // own pages keep the sheet name, and an empty text is the English.
+        let mut o = opts();
+        o.notes_title = Some("Kommentare".into());
+        let (de, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!(de[0].header.as_ref().unwrap()[1], "Sheet1");
+        assert_eq!(de[1].header.as_ref().unwrap()[1], "Kommentare");
+        o.notes_title = Some("  ".into());
+        let (blank, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!(blank[1].header.as_ref().unwrap()[1], NOTES_PAGE_NAME);
+        o.notes_title = Some("x".repeat(500));
+        let (long, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!(long[1].header.as_ref().unwrap()[1], "x".repeat(100));
         // The page range picks the notes page like any other.
         let mut o = opts();
         o.page_from = Some(2);

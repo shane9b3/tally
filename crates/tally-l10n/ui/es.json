@@ -724,6 +724,7 @@
   "print.preview": "Vista previa de impresión",
   "print.page": "Página",
   "print.pageOf": "Página {n} de {total}",
+  "print.notesPage": "Comentarios",
   "print.pages": "Páginas",
   "print.printer": "Impresora",
   "print.copies": "Copias",

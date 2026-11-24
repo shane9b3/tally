@@ -75,6 +75,9 @@ pub const MAX_SORT_KEYS: usize = 64;
 pub const MAX_PATH: usize = 4096;
 /// Longest locale tag.
 pub const MAX_LOCALE: usize = 64;
+/// Longest `PrintOptionsDto::notes_title`, in bytes (the engine uses 100
+/// characters of it).
+pub const MAX_NOTES_TITLE: usize = 400;
 /// Most series in one chart (`addChart`, `updateChart`).
 pub const MAX_CHART_SERIES: usize = 255;
 /// Most fields (row + column + page + data) in one pivot table.
@@ -455,6 +458,9 @@ pub fn print_options(opts: &PrintOptionsDto) -> CmdResult<()> {
             print_page("page_ranges", a)?;
             print_page("page_ranges", b)?;
         }
+    }
+    if let Some(title) = &opts.notes_title {
+        text_max("the notes page title", title, MAX_NOTES_TITLE)?;
     }
     Ok(())
 }
@@ -1012,6 +1018,7 @@ mod tests {
             page_to: to,
             active_sheet: None,
             page_ranges: None,
+            notes_title: None,
         };
         assert!(print_options(&opts(Some(1), Some(MAX_PRINT_PAGES))).is_ok());
         assert!(print_options(&opts(None, Some(MAX_PRINT_PAGES + 1))).is_err());

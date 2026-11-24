@@ -39,4 +39,12 @@ activeSheet?: number | null,
  * job ("1-3,5" is `[[1, 3], [5, 5]]`), or all. Pages keep their job
  * order and numbering; ranges past the end select nothing.
  */
-pageRanges?: Array<[number, number]> | null, };
+pageRanges?: Array<[number, number]> | null, 
+/**
+ * What the sheet-name field (`&[SHEET]`) shows on the pages of
+ * printed notes, in the language of the user interface (AOO
+ * `STR_NOTES`); `None` or empty is the English "Comments". The
+ * desktop shell fills it in from the UI language when the caller
+ * leaves it out.
+ */
+notesTitle?: string | null, };

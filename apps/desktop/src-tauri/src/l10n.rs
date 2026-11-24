@@ -86,6 +86,22 @@ pub fn ui_table(locale: Locale) -> BTreeMap<&'static str, &'static str> {
         .collect()
 }
 
+/// The UI key of the sheet name printed on the pages of notes (AOO
+/// `STR_NOTES`).
+pub const NOTES_PAGE_KEY: &str = "print.notesPage";
+
+/// Print options with the texts the engine prints in the UI language
+/// (the heading of the notes pages); a text the caller sent is kept.
+pub fn print_options(
+    locale: Locale,
+    mut opts: tally_api::PrintOptionsDto,
+) -> tally_api::PrintOptionsDto {
+    if opts.notes_title.is_none() {
+        opts.notes_title = Some(tally_l10n::t(locale, NOTES_PAGE_KEY).to_owned());
+    }
+    opts
+}
+
 /// `set_ui_language(lang)`: stores the language and rebuilds the (app-wide)
 /// menu.
 #[tauri::command]
@@ -139,6 +155,30 @@ mod tests {
         assert_eq!(submenu_label(Locale::Es, "Nope"), "Nope");
         assert_eq!(locale_of("de-AT"), Locale::De);
         assert_eq!(locale_of("xx"), Locale::En);
+    }
+
+    /// The notes pages of a print are headed in the UI language (AOO
+    /// `STR_NOTES`); every locale has the text, and a caller's own is kept.
+    #[test]
+    fn print_options_bring_the_notes_heading_of_the_locale() {
+        use tally_api::PrintOptionsDto;
+        let title = |l| print_options(l, PrintOptionsDto::default()).notes_title;
+        assert_eq!(title(Locale::En).as_deref(), Some("Comments"));
+        assert_eq!(title(Locale::De).as_deref(), Some("Kommentare"));
+        assert_eq!(title(Locale::Fr).as_deref(), Some("Commentaires"));
+        assert_eq!(title(Locale::Es).as_deref(), Some("Comentarios"));
+        for l in tally_l10n::locales() {
+            assert!(tally_l10n::ui_keys().contains(&NOTES_PAGE_KEY));
+            assert_ne!(tally_l10n::t(*l, NOTES_PAGE_KEY), NOTES_PAGE_KEY, "{l}");
+        }
+        let own = PrintOptionsDto {
+            notes_title: Some("Remarks".into()),
+            ..PrintOptionsDto::default()
+        };
+        assert_eq!(
+            print_options(Locale::De, own).notes_title.as_deref(),
+            Some("Remarks")
+        );
     }
 
     #[test]

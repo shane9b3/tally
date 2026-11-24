@@ -1242,6 +1242,7 @@ impl DocumentService for EngineService {
             page_to: None,
             active_sheet: None,
             page_ranges: None,
+            notes_title: None,
         };
         let ctx = crate::print::HfContext::now(&d.wb, &d.title, None);
         stats.pages = crate::print::layout(&d.wb, &opts, &ctx)

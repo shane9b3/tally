@@ -969,6 +969,7 @@ mod hide_print_tests {
             page_to: None,
             active_sheet: None,
             page_ranges: None,
+            notes_title: None,
         };
         let info = svc.prepare_print_job(doc, &opts, &[]).unwrap();
         let job = svc.job(info.job).unwrap();
@@ -1211,6 +1212,7 @@ mod hide_print_tests {
             page_to: None,
             active_sheet: None,
             page_ranges: None,
+            notes_title: None,
         };
         let info = svc.prepare_print_job(doc, &opts, &[]).unwrap();
         assert_eq!(info.layout.pages.len(), 2);

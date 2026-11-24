@@ -179,7 +179,8 @@ pub async fn print_layout(
     opts: PrintOptionsDto,
 ) -> CmdResult<PrintLayoutDto> {
     limits::print_options(&opts)?;
-    blocking(app, move |_, st| {
+    blocking(app, move |app, st| {
+        let opts = crate::l10n::print_options(crate::l10n::current_locale(app), opts);
         with_doc(st, doc, |s| s.print_layout(doc, &opts))
     })
     .await
@@ -202,7 +203,8 @@ pub async fn prepare_print_job(
 ) -> CmdResult<PrintJobInfo> {
     limits::print_options(&opts)?;
     limits::chart_svgs(&charts)?;
-    blocking(app, move |_, st| {
+    blocking(app, move |app, st| {
+        let opts = crate::l10n::print_options(crate::l10n::current_locale(app), opts);
         with_doc(st, doc, |s| s.prepare_print_job(doc, &opts, &charts))
     })
     .await

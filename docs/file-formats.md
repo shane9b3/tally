@@ -999,7 +999,7 @@ optional gridlines and row/column headers, headers and footers with
 from the top of its area; lines past a fixed height are left off), charts from the SVGs the UI supplies, notes
 on pages after each sheet's own pages when the page setup asks for them
 (one line `A1: text` per note of the printed area; the pages count in the
-page total and carry the header and footer, with "Comments" as the sheet
+page total and carry the header and footer, with "Comments", in the language of the user interface, as the sheet
 name, as in AOO). With formulas printed, hiding zero values does not hide
 a formula; otherwise it hides FALSE like the number 0, as in AOO. Without a print
 range a sheet prints from A1 to the last cell with content (or with a

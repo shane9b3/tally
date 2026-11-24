@@ -22,6 +22,7 @@ fn opts() -> PrintOptionsDto {
         page_to: None,
         active_sheet: None,
         page_ranges: None,
+        notes_title: None,
     }
 }
 

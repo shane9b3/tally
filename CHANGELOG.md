@@ -15,6 +15,10 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
   Page, Sheet, Zero values for printing), cells that show FALSE are now
   left empty like cells that show 0, as in OpenOffice. Before, FALSE was
   still shown and printed.
+- Printing with Notes switched on (Format, Page, Sheet): the pages that
+  list the notes are now named in the language of the interface
+  (Kommentare, Commentaires, Comentarios) where the header or footer
+  shows the sheet name. Before, they always said Comments.
 
 ## [0.1.4] - 2026-11-23
 

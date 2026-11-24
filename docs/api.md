@@ -347,7 +347,7 @@ registered command. The shell-only `wb_export_pdf` and `wb_print` take a job id.
 | `navigator` | `doc` | `NavigatorDto` | `navigator(doc)` | `navigator(doc)` |
 | `document_statistics` | `doc` | `DocumentStatsDto` (`pages`: the printed pages of the visible sheets at their page setup, empty pages suppressed) | `document_statistics(doc)` | `documentStatistics(doc)` |
 | `custom_sort_lists` | `doc` | `string[][]` (Tools ▸ Options ▸ Sort Lists; set with `setCustomSortLists`) | `custom_sort_lists(doc)` | `customSortLists(doc)` |
-| `print_layout` | `doc, opts: PrintOptionsDto` | `PrintLayoutDto` | `print_layout(doc, &opts)` | `printLayout(doc, opts)` |
+| `print_layout` | `doc, opts: PrintOptionsDto` (`notesTitle`: the sheet name of the notes pages; when absent the shell sends the UI language's `print.notesPage`, the engine alone uses "Comments") | `PrintLayoutDto` | `print_layout(doc, &opts)` | `printLayout(doc, opts)` |
 | `page_breaks` | `doc, sheet` | `PageBreaksDto` | `page_breaks(doc, sheet)` | `pageBreaks(doc, sheet)` |
 | `prepare_print_job` | `doc, opts: PrintOptionsDto, charts: ChartSvgDto[]` (≤ 4 MB per SVG) | `PrintJobInfo` (`{ job, layout }`; an LRU of 4 jobs) | `prepare_print_job(doc, &opts, &charts)` | `preparePrintJob(doc, opts, charts)` |
 | `print_job_page_png` | `job, page, dpi` | `string` (base64 PNG) | `print_job_page_png(job, page, dpi)` | `printJobPagePng(job, page, dpi)` |
