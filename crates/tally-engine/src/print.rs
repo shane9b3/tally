@@ -1148,11 +1148,30 @@ pub const NOTES_PAGE_NAME: &str = "Comments";
 /// Most characters of [`PrintOptionsDto::notes_title`] that are used.
 const MAX_NOTES_TITLE_CHARS: usize = 100;
 
-/// The sheet name of the notes pages of a job.
+/// The sheet name of the notes pages of a job: the first line of the
+/// title the options bring, without control characters and bidirectional
+/// formatting characters (a sheet name has neither, and the text goes
+/// into the page header and the PDF as it is), cut to
+/// [`MAX_NOTES_TITLE_CHARS`]; "Comments" when nothing is left.
 fn notes_page_name(opts: &PrintOptionsDto) -> String {
-    match opts.notes_title.as_deref().map(str::trim) {
-        Some(t) if !t.is_empty() => t.chars().take(MAX_NOTES_TITLE_CHARS).collect(),
-        _ => NOTES_PAGE_NAME.to_string(),
+    let is_line_break = |c: char| {
+        matches!(
+            c,
+            '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+        )
+    };
+    let is_bidi = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
+    let raw = opts.notes_title.as_deref().unwrap_or("");
+    let line = raw.split(is_line_break).next().unwrap_or("");
+    let clean: String = line
+        .chars()
+        .filter(|c| !c.is_control() && !is_bidi(*c))
+        .collect();
+    let clean: String = clean.trim().chars().take(MAX_NOTES_TITLE_CHARS).collect();
+    if clean.trim().is_empty() {
+        NOTES_PAGE_NAME.to_string()
+    } else {
+        clean.trim_end().to_string()
     }
 }
 
@@ -1831,6 +1850,25 @@ mod tests {
         o.notes_title = Some("x".repeat(500));
         let (long, _) = layout(&wb, &o, &HfContext::default()).unwrap();
         assert_eq!(long[1].header.as_ref().unwrap()[1], "x".repeat(100));
+        // Only the first line, without control and bidi characters; a
+        // title of line breaks alone is no title.
+        let name = |t: &str| {
+            notes_page_name(&PrintOptionsDto {
+                notes_title: Some(t.into()),
+                ..opts()
+            })
+        };
+        assert_eq!(name("Kommen\u{7}tare\nzwei\ndrei"), "Kommentare");
+        assert_eq!(name("\u{202e}Notes\u{2066}\u{2069}\u{202c} \r\nx"), "Notes");
+        assert_eq!(name("A\tB\u{2028}C"), "AB");
+        assert_eq!(name(&"\n".repeat(41)), NOTES_PAGE_NAME);
+        assert_eq!(name("\u{202e}\u{0} \n real"), NOTES_PAGE_NAME);
+        let cut = name(&format!("{}\u{1}{}", "é".repeat(99), "zz"));
+        assert_eq!(cut, format!("{}z", "é".repeat(99)));
+        o.notes_title = Some("Kommentare\nx\ny".into());
+        let (multi, _) = layout(&wb, &o, &HfContext::default()).unwrap();
+        assert_eq!(multi[1].header.as_ref().unwrap()[1], "Kommentare");
+        assert_eq!(multi[1].header_block, de[1].header_block);
         // The page range picks the notes page like any other.
         let mut o = opts();
         o.page_from = Some(2);

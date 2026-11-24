@@ -91,12 +91,15 @@ pub fn ui_table(locale: Locale) -> BTreeMap<&'static str, &'static str> {
 pub const NOTES_PAGE_KEY: &str = "print.notesPage";
 
 /// Print options with the texts the engine prints in the UI language
-/// (the heading of the notes pages); a text the caller sent is kept.
+/// (the heading of the notes pages); a text the caller sent is kept,
+/// unless it is blank (empty, white space or control characters only),
+/// which is no text: the engine would print its English one.
 pub fn print_options(
     locale: Locale,
     mut opts: tally_api::PrintOptionsDto,
 ) -> tally_api::PrintOptionsDto {
-    if opts.notes_title.is_none() {
+    let blank = |t: &String| t.chars().all(|c| c.is_whitespace() || c.is_control());
+    if opts.notes_title.as_ref().is_none_or(blank) {
         opts.notes_title = Some(tally_l10n::t(locale, NOTES_PAGE_KEY).to_owned());
     }
     opts
@@ -170,6 +173,18 @@ mod tests {
         for l in tally_l10n::locales() {
             assert!(tally_l10n::ui_keys().contains(&NOTES_PAGE_KEY));
             assert_ne!(tally_l10n::t(*l, NOTES_PAGE_KEY), NOTES_PAGE_KEY, "{l}");
+        }
+        // A blank text is no text.
+        for blank in ["", "   ", "\t\n", "\u{0}"] {
+            let o = PrintOptionsDto {
+                notes_title: Some(blank.into()),
+                ..PrintOptionsDto::default()
+            };
+            assert_eq!(
+                print_options(Locale::Fr, o).notes_title.as_deref(),
+                Some("Commentaires"),
+                "{blank:?}"
+            );
         }
         let own = PrintOptionsDto {
             notes_title: Some("Remarks".into()),
