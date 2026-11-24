@@ -5,7 +5,7 @@
  * per-box change, and the browser mock's "Hide all" / "Hide when printing"
  * model.
  */
-import type { Op, StyleDto } from "@tally/bridge";
+import { PROTECTED_MESSAGE, type Op, type StyleDto } from "@tally/bridge";
 import { describe, expect, it } from "vitest";
 import { WebMockClient } from "../src/dev/webMock";
 import { applyV3Op, emptyV3, isHiddenCell, isHidePrint, isLocked, protectionRefusal } from "../src/dev/mockV3";
@@ -125,7 +125,7 @@ describe("the browser mock's Clear formats / Clear all (the engine's Op::Clear)"
     for (const what of ["formats", "all"] as const) {
       for (const col of [0, 1]) {
         const res = await tx([{ type: "clear", sheet, ranges: [{ r0: 0, c0: col, r1: 0, c1: col }], what }]);
-        expect(res.errors).toMatchObject([{ opIndex: 0, code: "protected" }]);
+        expect(res.errors).toMatchObject([{ opIndex: 0, code: "protected", message: PROTECTED_MESSAGE }]);
       }
     }
     expect(await c.conditionalFormats(doc, sheet)).toHaveLength(1);
@@ -135,5 +135,41 @@ describe("the browser mock's Clear formats / Clear all (the engine's Op::Clear)"
     expect((await tx([{ type: "clear", sheet, ranges: [{ r0: 0, c0: 0, r1: 0, c1: 0 }], what: "contents" }])).errors).toEqual([]);
     const [b] = await c.cells(doc, sheet, [{ r0: 0, c0: 0, r1: 0, c1: 0 }]);
     expect(b?.cells.find((v) => v.text !== "")).toBeUndefined();
+  });
+
+  it("a Clear with a range outside the grid is refused and takes nothing; one that takes a format reports the layout", async () => {
+    const { c, doc, sheet, tx } = await book();
+    for (const bad of [{ r0: 0, c0: 0, r1: 2_000_000, c1: 1 }, { r0: 3, c0: 0, r1: 0, c1: 1 }, { r0: -1, c0: 0, r1: 3, c1: 1 }]) {
+      // A good range first: nothing of the op may be applied.
+      const res = await tx([{ type: "clear", sheet, ranges: [a1a4, bad], what: "formats" }]);
+      expect(res.errors).toMatchObject([{ opIndex: 0, code: "invalid_argument" }]);
+      expect((await c.conditionalFormats(doc, sheet)).map((cf) => cf.ranges)).toEqual([[a1a4]]);
+      expect(await c.validations(doc, sheet)).toHaveLength(1);
+    }
+    // No format in the range: cells only. With one: the layout changed too (as the engine reports).
+    expect((await tx([{ type: "clear", sheet, ranges: [{ r0: 0, c0: 5, r1: 0, c1: 5 }], what: "formats" }])).layoutChanged).not.toContain(sheet);
+    expect((await tx([{ type: "clear", sheet, ranges: [{ r0: 0, c0: 0, r1: 0, c1: 0 }], what: "formats" }])).layoutChanged).toContain(sheet);
+  });
+
+  // The engine's `ops::check_protection` for `Op::Clear`: `check_edit` for
+  // Contents / All, `check_format` (`format_cells || all_unlocked`) for Formats / All.
+  it("with locked cells, Clear formats needs the sheet's Format cells permission; Clear contents and Clear all need unlocked cells", async () => {
+    const options = { selectLocked: true, selectUnlocked: true, insertRows: false, insertCols: false, deleteRows: false, deleteCols: false, formatCells: true, sort: false, autoFilter: false };
+    const plain = { r0: 0, c0: 3, r1: 0, c1: 3 };
+    const { c, doc, sheet, tx } = await book();
+    await tx([{ type: "setCellInput", sheet, r: 0, c: 3, input: "x" }]);
+    await tx([{ type: "protectSheet", sheet, password: null, options }]);
+    expect((await tx([{ type: "clear", sheet, ranges: [plain], what: "formats" }])).errors).toEqual([]);
+    expect((await tx([{ type: "clear", sheet, ranges: [plain], what: "contents" }])).errors).toMatchObject([{ code: "protected" }]);
+    expect((await tx([{ type: "clear", sheet, ranges: [plain], what: "all" }])).errors).toMatchObject([{ code: "protected" }]);
+    // The permission does not reach conditional formats and validations.
+    expect((await tx([{ type: "clear", sheet, ranges: [a1a4], what: "formats" }])).errors).toMatchObject([{ code: "protected", message: PROTECTED_MESSAGE }]);
+    expect(await c.conditionalFormats(doc, sheet)).toHaveLength(1);
+    // Without the permission, locked cells refuse Clear formats too.
+    await tx([{ type: "unprotectSheet", sheet, password: null }]);
+    await tx([{ type: "protectSheet", sheet, password: null, options: { ...options, formatCells: false } }]);
+    expect((await tx([{ type: "clear", sheet, ranges: [plain], what: "formats" }])).errors).toMatchObject([{ code: "protected" }]);
+    const [b] = await c.cells(doc, sheet, [plain]);
+    expect(b?.cells[0]?.text).toBe("x");
   });
 });

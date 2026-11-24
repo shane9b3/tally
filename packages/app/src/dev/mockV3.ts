@@ -17,7 +17,7 @@ import type {
   RangeDto,
   ValidationDto,
 } from "@tally/bridge";
-import { attrsInRanges, withoutRanges } from "@tally/bridge";
+import { attrsInRanges, PROTECTED_MESSAGE, rangeInGrid, withoutRanges } from "@tally/bridge";
 import { defaultPageSetup } from "../v03";
 
 export interface SheetProtection {
@@ -141,14 +141,19 @@ export function protectionRefusal(x: V3Ext, op: Op): string | null {
   const msg = "The cell is protected.";
   const written = writtenCells(op);
   if (written) {
-    for (const rg of written) {
+    // Clear formats is formatting, not an edit: the sheet's "format cells"
+    // permission allows it on locked cells too (the engine's
+    // `ops::check_protection`: `check_edit` for Contents / All,
+    // `check_format` = `format_cells || all_unlocked` for Formats / All).
+    const formatOnly = op.type === "clear" && op.what === "formats" && p.options.formatCells;
+    for (const rg of formatOnly ? [] : written) {
       for (let r = rg.r0; r <= Math.min(rg.r1, rg.r0 + 2000); r++) {
         for (let c = rg.c0; c <= Math.min(rg.c1, rg.c0 + 200); c++) if (isLocked(x, sheet, { r, c })) return msg;
       }
     }
     // Clear all / Clear formats would take the conditional formats and
     // validations of the cells along (the engine's `check_attr_removal`).
-    if (op.type === "clear" && op.what !== "contents" && (attrsInRanges(x.cfs[sheet] ?? [], op.ranges) || attrsInRanges(x.validations[sheet] ?? [], op.ranges))) return "The sheet is protected.";
+    if (op.type === "clear" && op.what !== "contents" && (attrsInRanges(x.cfs[sheet] ?? [], op.ranges) || attrsInRanges(x.validations[sheet] ?? [], op.ranges))) return PROTECTED_MESSAGE;
     return null;
   }
   switch (op.type) {
@@ -253,7 +258,7 @@ export function passes(v: ValidationDto, input: string, listItems: readonly stri
 export const DEFAULT_VALIDATION_MESSAGE = "The value you entered is not valid.";
 
 /** Per-op outcome of the v0.3 side model. */
-export type V3Outcome = { kind: "pass" } | { kind: "handled"; touched: RangeDto[]; layout: boolean; sheetsChanged?: boolean } | { kind: "error"; code: string; message: string };
+export type V3Outcome = { kind: "pass"; /** The side model changed too: the sheet's layout is to be reported changed. */ layout?: boolean } | { kind: "handled"; touched: RangeDto[]; layout: boolean; sheetsChanged?: boolean } | { kind: "error"; code: string; message: string };
 
 /** Applies a v0.3 op to the side model, or `pass` for ops the mock itself applies. */
 export function applyV3Op(x: V3Ext, op: Op, now: () => string = () => new Date().toISOString().slice(0, 19)): V3Outcome {
@@ -263,11 +268,14 @@ export function applyV3Op(x: V3Ext, op: Op, now: () => string = () => new Date()
       // Clear all and Clear formats take the conditional formats and
       // validations of the cells with them; merges stay (the engine's
       // `Op::Clear`, AOO's Default Formatting). The cells are the mock's.
-      if (op.what !== "contents") {
-        x.cfs[op.sheet] = withoutRanges(x.cfs[op.sheet] ?? [], op.ranges);
-        x.validations[op.sheet] = withoutRanges(x.validations[op.sheet] ?? [], op.ranges);
-      }
-      return { kind: "pass" };
+      // A range the mock will refuse (`invalid_argument`) changes nothing here either.
+      if (op.what === "contents" || !op.ranges.every(rangeInGrid)) return { kind: "pass" };
+      const cfs = x.cfs[op.sheet] ?? [];
+      const validations = x.validations[op.sheet] ?? [];
+      if (!attrsInRanges(cfs, op.ranges) && !attrsInRanges(validations, op.ranges)) return { kind: "pass" };
+      x.cfs[op.sheet] = withoutRanges(cfs, op.ranges);
+      x.validations[op.sheet] = withoutRanges(validations, op.ranges);
+      return { kind: "pass", layout: true };
     }
     case "addConditionalFormat": {
       if (op.rules.length === 0 || op.ranges.length === 0) return err("invalid_argument", "a conditional format needs a range and a rule");

@@ -317,6 +317,9 @@ describe("MockClient zero values", () => {
     };
     expect(await shown(false)).toEqual(["0", "FALSE", "0", "TRUE", "7"]);
     expect(await shown(true)).toEqual(["", "", "", "TRUE", "7"]);
+    // The kind stays: the grid stops a neighbour's overflowing text at such a cell.
+    const [b] = await client.cellsWith(doc, sheet, [{ r0: 0, c0: 0, r1: 2, c1: 0 }], { showFormulas: false, valueHighlighting: false, hideZeroValues: true });
+    expect([...(b?.cells ?? [])].sort((x, y) => x.r - y.r).map((v) => v.kind)).toEqual(["number", "bool", "number"]);
   });
 });
 
@@ -378,6 +381,40 @@ describe("MockClient Clear and cell attributes (as the engine's Op::Clear)", () 
     await client.apply(doc, tx(clear(sheet, "all", 0, 0, 9, 2)));
     expect(await client.conditionalFormats(doc, sheet)).toEqual([]);
     expect(await client.validations(doc, sheet)).toEqual([]);
+  });
+
+  it("undo and redo of Clear formats / Clear all bring the conditional formats and validations back and take them again", async () => {
+    const { client, doc, sheet } = await formatted();
+    const ranges = async () => [(await client.conditionalFormats(doc, sheet)).map((cf) => cf.ranges), (await client.validations(doc, sheet)).map((v) => v.ranges)];
+    const before = await ranges();
+    await client.apply(doc, tx(clear(sheet, "formats", 2, 0, 3, 2)));
+    const cut = await ranges();
+    expect(cut).not.toEqual(before);
+    await client.apply(doc, tx(clear(sheet, "all", 0, 0, 9, 2)));
+    expect(await ranges()).toEqual([[], []]);
+    await client.undo(doc);
+    expect(await ranges()).toEqual(cut);
+    expect(await text(client, doc, sheet, 0, 0)).toBe("7");
+    await client.undo(doc);
+    expect(await ranges()).toEqual(before);
+    await client.redo(doc);
+    expect(await ranges()).toEqual(cut);
+    await client.redo(doc);
+    expect(await ranges()).toEqual([[], []]);
+    await client.undoSteps(doc, 2);
+    expect(await ranges()).toEqual(before);
+    // A step that took none leaves them alone.
+    await client.apply(doc, tx(set(sheet, 5, 5, "x")));
+    await client.undo(doc);
+    expect(await ranges()).toEqual(before);
+  });
+
+  it("a Clear with a range outside the grid takes nothing", async () => {
+    const { client, doc, sheet } = await formatted();
+    const res = await client.apply(doc, tx({ type: "clear", sheet, ranges: [{ r0: 0, c0: 0, r1: 9, c1: 2 }, { r0: 0, c0: 0, r1: 2_000_000, c1: 0 }], what: "formats" }));
+    expect(res.errors).toMatchObject([{ opIndex: 0, code: "invalid_argument" }]);
+    expect(await client.conditionalFormats(doc, sheet)).toHaveLength(1);
+    expect(await client.validations(doc, sheet)).toHaveLength(1);
   });
 
   it("a protected sheet refuses Clear all / Clear formats over a conditional format or validation, as a whole", async () => {

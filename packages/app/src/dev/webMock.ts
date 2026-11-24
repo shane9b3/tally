@@ -60,7 +60,7 @@ import { pageStyleOn, planLoadStyles } from "../styles/loadStyles";
 import { applyW5Op, BLANK_PNG, chartDataFor, chartsTouched, dependentsOf, emptyW5, listedChart, pageBreaksFor, precedentsOf, printLayoutFor, refsIn, renderPagePng, suggestChartFor, type W5Ext } from "./mockW5";
 import { parseAbsoluteRef } from "../dataOps";
 import { nextUnlocked as walkUnlocked } from "./nextUnlocked";
-import { mixInputs, pasteArea } from "@tally/bridge";
+import { mixInputs, pasteArea, rangeInGrid } from "@tally/bridge";
 import { previewCall, WIZARD_FUNCTIONS, type MockValue } from "./mockWizard";
 import type {
   FunctionInfo,
@@ -1296,8 +1296,11 @@ export class WebMockClient extends MockClient {
       }
       const o = applyV3Op(x, op);
       // Cleared formats are Default again, whatever named style the cells had.
-      if (op.type === "clear" && op.what !== "contents") setStyleCells(this.docExt(doc).w56, op.sheet, op.ranges, null);
-      if (o.kind === "pass") kept.push({ op, index: i });
+      if (op.type === "clear" && op.what !== "contents" && op.ranges.every(rangeInGrid)) setStyleCells(this.docExt(doc).w56, op.sheet, op.ranges, null);
+      if (o.kind === "pass") {
+        kept.push({ op, index: i });
+        if (o.layout && "sheet" in op && typeof op.sheet === "number") layout.add(op.sheet);
+      }
       else if (o.kind === "error") errors.push({ opIndex: i, code: o.code, message: o.message });
       else {
         const sheet = "sheet" in op && typeof op.sheet === "number" ? op.sheet : this.firstSheet(doc);

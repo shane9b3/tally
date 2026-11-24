@@ -140,8 +140,16 @@ interface DocState {
   nextSheetId: number;
 }
 
+/** The conditional formats and validations of a document (the part of `MockV3` that Clear changes). */
+interface CellAttrs {
+  cfs: MockV3["cfs"];
+  validations: MockV3["validations"];
+}
+
 interface UndoEntry {
   state: DocState;
+  /** The cell attributes to go back to, when the step took some away (Clear all / Clear formats). */
+  attrs?: CellAttrs;
   label: string | null;
   selectionBefore: SelectionDto | null;
   selectionAfter: SelectionDto | null;
@@ -162,7 +170,7 @@ interface Checkpoint {
   redo: UndoEntry[];
 }
 
-/** v0.3 state of a mock document (not part of undo). */
+/** v0.3 state of a mock document (not part of undo, except what Clear takes: `UndoEntry.attrs`). */
 interface MockV3 {
   cfs: Map<SheetId, ConditionalFormatDto[]>;
   validations: Map<SheetId, ValidationDto[]>;
@@ -1669,6 +1677,7 @@ export class MockClient implements EngineClientV4, ShellClient, UpdateShell {
       if (touched.any()) {
         d.undo.push({
           state: before,
+          ...(touched.attrsBefore ? { attrs: touched.attrsBefore } : {}),
           label: tx.label,
           selectionBefore: tx.selectionBefore,
           selectionAfter: tx.selectionAfter,
@@ -1688,7 +1697,7 @@ export class MockClient implements EngineClientV4, ShellClient, UpdateShell {
       this.assertEditable(doc);
       const entry = d.undo.pop();
       if (!entry) throw apiError("invalid_argument", "nothing to undo");
-      d.redo.push({ ...entry, state: d.state });
+      d.redo.push({ ...entry, state: d.state, ...this.swapAttrs(d, entry) });
       return this.restore(d, entry.state, entry.selectionBefore);
     });
   }
@@ -1699,9 +1708,22 @@ export class MockClient implements EngineClientV4, ShellClient, UpdateShell {
       this.assertEditable(doc);
       const entry = d.redo.pop();
       if (!entry) throw apiError("invalid_argument", "nothing to redo");
-      d.undo.push({ ...entry, state: d.state });
+      d.undo.push({ ...entry, state: d.state, ...this.swapAttrs(d, entry) });
       return this.restore(d, entry.state, entry.selectionAfter);
     });
+  }
+
+  /**
+   * Puts back the conditional formats and validations an undo / redo entry
+   * holds and returns the current ones for the opposite entry (nothing when
+   * the step did not change them).
+   */
+  private swapAttrs(d: MockDoc, entry: UndoEntry): { attrs?: CellAttrs } {
+    if (!entry.attrs) return {};
+    const attrs: CellAttrs = { cfs: d.v3.cfs, validations: d.v3.validations };
+    d.v3.cfs = entry.attrs.cfs;
+    d.v3.validations = entry.attrs.validations;
+    return { attrs };
   }
 
   /** The app's undo depth (`setUndoDepth`), shared by every document of this client. */
@@ -1924,6 +1946,8 @@ export class MockClient implements EngineClientV4, ShellClient, UpdateShell {
           const validations = d.v3.validations.get(sh.id) ?? [];
           if (attrsInRanges(cfs, op.ranges) || attrsInRanges(validations, op.ranges)) {
             if (d.v3.protected.get(sh.id)) throw apiError("protected", PROTECTED_MESSAGE);
+            // Undo brings them back (`UndoEntry.attrs`).
+            t.attrsBefore ??= { cfs: structuredClone(d.v3.cfs), validations: structuredClone(d.v3.validations) };
             d.v3.cfs.set(sh.id, withoutRanges(cfs, op.ranges));
             d.v3.validations.set(sh.id, withoutRanges(validations, op.ranges));
             t.layout.add(sh.id);
@@ -2211,6 +2235,8 @@ class Touched {
   readonly cells = new Map<SheetId, RangeDto[]>();
   readonly layout = new Set<SheetId>();
   sheetsChanged = false;
+  /** The conditional formats and validations before the first op that took some away. */
+  attrsBefore: CellAttrs | null = null;
 
   cell(sheet: SheetId, range: RangeDto): void {
     const list = this.cells.get(sheet) ?? [];
@@ -2319,8 +2345,13 @@ function checkPos(r: number, c: number): void {
   }
 }
 
+/** Whether `r` is a well-formed range inside the grid (what every range op checks first). */
+export function rangeInGrid(r: RangeDto): boolean {
+  return validRange(r) && r.r0 >= 0 && r.c0 >= 0;
+}
+
 function checkRange(r: RangeDto): void {
-  if (!validRange(r) || r.r0 < 0 || r.c0 < 0) throw apiError("invalid_argument", "range is outside the grid");
+  if (!rangeInGrid(r)) throw apiError("invalid_argument", "range is outside the grid");
 }
 
 function setInput(sh: MockSheet, r: number, c: number, input: string): void {
