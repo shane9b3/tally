@@ -35,6 +35,7 @@ import type {
   StylePatch,
   ViewOptionsDto,
 } from "@tally/bridge";
+import { withoutRanges } from "@tally/bridge";
 import { completionFor, matchingItems } from "../autocorrect/autoinput";
 import { absoluteRef } from "../dataOps";
 import { applyOutlineOp, autoOutlineGroups, emptyOutlineModel, hiddenByOutline, type OutlineModel } from "./mockOutline";
@@ -55,6 +56,12 @@ export interface W56Ext {
   nextScenario: number;
   /** User-defined cell styles (the built-in ones are generated). */
   styles: CellStyleDto[];
+  /**
+   * The cells a named style was applied to, per sheet (the mock's cells
+   * carry attributes only): what Delete style needs to know. Not moved
+   * with inserted or deleted rows and columns.
+   */
+  styleCells?: Record<number, { name: string; ranges: RangeDto[] }[]>;
   dbRanges: DatabaseRangeDto[];
   /** The sort each database range keeps (by lower-case name), re-run by Refresh Range. */
   dbSorts?: Record<string, { keys: SortKey[]; hasHeader: boolean; caseSensitive: boolean }>;
@@ -94,6 +101,8 @@ export function emptyW56(): W56Ext {
 /** What the mock gives the op emulation. */
 export interface W56Ctx {
   cells(sheet: number, range: RangeDto): Promise<CellView[]>;
+  /** The styles of `CellView.style` ids. */
+  styles(ids: number[]): Promise<StyleDto[]>;
   inputs(sheet: number, range: RangeDto): Promise<string[][]>;
   used(sheet: number): Promise<RangeDto | null>;
   sheetName(sheet: number): string;
@@ -564,6 +573,103 @@ export function templateCellStyles(): CellStyleDto[] {
   ];
 }
 
+const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/**
+ * `style` re-based from `oldBase` onto `newBase`, as the engine's
+ * `cellstyles::rebase`: every attribute it shares with the old base
+ * follows the new one, the rest is its own and stays.
+ */
+function rebaseStyle(oldBase: StyleDto, style: StyleDto, newBase: StyleDto): StyleDto {
+  const out = { ...style } as Record<string, unknown>;
+  const [o, n] = [oldBase as Record<string, unknown>, newBase as Record<string, unknown>];
+  for (const k of new Set([...Object.keys(style), ...Object.keys(oldBase), ...Object.keys(newBase)])) {
+    if (k === "id" || k === "styleName") continue;
+    if (sameValue(out[k], o[k]) && !sameValue(o[k], n[k])) out[k] = n[k] ?? null;
+  }
+  return out as unknown as StyleDto;
+}
+
+/**
+ * The patch that re-bases a cell from `oldBase` onto `newBase` (`null`:
+ * nothing to change), over the attributes `applyCellStyle` gives a cell
+ * here. A cell attribute that differs from the old base is direct
+ * formatting and stays. No patch can say "no font family", so a family
+ * taken from the old base stays when the new base has none.
+ */
+function rebasePatch(oldBase: StyleDto, cell: StyleDto, newBase: StyleDto): StylePatch | null {
+  const next = rebaseStyle(oldBase, cell, newBase);
+  const patch = styleToPatch(next);
+  let changed = false;
+  for (const k of Object.keys(patch)) {
+    if (sameValue((next as Record<string, unknown>)[k], (cell as Record<string, unknown>)[k])) (patch as Record<string, unknown>)[k] = null;
+    else changed = true;
+  }
+  if (!changed) return null;
+  if (cell.fill !== null && next.fill === null) patch.clearFill = true;
+  if (cell.color !== null && next.color === null) patch.clearColor = true;
+  return patch;
+}
+
+/**
+ * Notes that `ranges` of `sheet` now use the named style `name` (`null`
+ * or `Default`: none, as after Clear formats / Clear all).
+ */
+export function setStyleCells(x: W56Ext, sheet: number, ranges: readonly RangeDto[], name: string | null): void {
+  const list = withoutRanges(x.styleCells?.[sheet] ?? [], ranges);
+  if (name !== null && name !== "Default") list.push({ name, ranges: ranges.map((r) => ({ ...r })) });
+  x.styleCells = { ...x.styleCells, [sheet]: list };
+}
+
+/**
+ * `Op::DeleteCellStyle` as the engine does it (`cellstyles::delete`, AOO
+ * `ScViewFunc::RemoveStyleSheetInUse`): the cells of the style take
+ * Default and keep their direct formatting; its children move to its
+ * parent and lose what they inherited from it, and their own children
+ * and cells follow. Returns the `applyStyle` ops for the cells.
+ */
+async function deleteCellStyle(x: W56Ext, name: string, ctx: W56Ctx): Promise<Op[]> {
+  const table = cellStylesOf(x);
+  const gone = table.find((s) => s.name === name)!;
+  const resolved = (n: string): StyleDto => (table.find((s) => s.name === n) ?? table[0]!).style;
+  const parent = gone.parent ?? "Default";
+  x.styles = x.styles.filter((s) => s.name !== name);
+  // [style, what it was, what its cells are based on now]
+  const changed: [string, StyleDto, StyleDto][] = [[name, gone.style, resolved("Default")]];
+  const queue = [{ name, was: gone.style, now: resolved(parent), parent }];
+  const seen = new Set([name]);
+  for (let p = queue.shift(); p; p = queue.shift()) {
+    for (const child of cellStylesOf(x).filter((s) => s.parent === p!.name && !seen.has(s.name))) {
+      seen.add(child.name);
+      const style = rebaseStyle(p.was, child.style, p.now);
+      x.styles = [...x.styles.filter((s) => s.name !== child.name), { ...child, parent: p.parent, style }];
+      if (sameValue(style, child.style)) continue;
+      changed.push([child.name, child.style, style]);
+      queue.push({ name: child.name, was: child.style, now: style, parent: child.name });
+    }
+  }
+  const ops: Op[] = [];
+  for (const [sheet, list] of Object.entries(x.styleCells ?? {}).map(([k, v]) => [Number(k), v] as const)) {
+    for (const [style, was, now] of changed) {
+      const byPatch = new Map<string, RangeDto[]>();
+      for (const range of list.filter((e) => e.name === style).flatMap((e) => e.ranges)) {
+        const cells = await ctx.cells(sheet, range);
+        const styles = new Map((await ctx.styles([...new Set(cells.map((v) => v.style))])).map((s) => [s.id, s]));
+        for (const v of cells) {
+          const cell = styles.get(v.style);
+          const patch = cell ? rebasePatch(was, cell, now) : null;
+          if (!patch) continue;
+          const key = JSON.stringify(patch);
+          byPatch.set(key, [...(byPatch.get(key) ?? []), { r0: v.r, c0: v.c, r1: v.r, c1: v.c }]);
+        }
+      }
+      for (const [key, ranges] of byPatch) ops.push({ type: "applyStyle", sheet, ranges, patch: JSON.parse(key) as StylePatch });
+    }
+    x.styleCells = { ...x.styleCells, [sheet]: list.filter((e) => e.name !== name) };
+  }
+  return ops;
+}
+
 export function cellStylesOf(x: W56Ext): CellStyleDto[] {
   const custom = x.styles.filter((s) => !builtinStyles().some((b) => b.name === s.name));
   const overridden = builtinStyles().map((b) => x.styles.find((s) => s.name === b.name) ?? b);
@@ -1001,12 +1107,13 @@ export async function applyW56Op(x: W56Ext, op: Op, ctx: W56Ctx): Promise<W56Out
     }
     case "deleteCellStyle": {
       if (builtinStyles().some((b) => b.name === op.name)) return err("invalid_argument", "built-in styles cannot be deleted");
-      x.styles = x.styles.filter((q) => q.name !== op.name);
-      return handled([], null);
+      if (!cellStylesOf(x).some((q) => q.name === op.name)) return err("not_found", `style ${op.name} not found`);
+      return handled(await deleteCellStyle(x, op.name, ctx), null);
     }
     case "applyCellStyle": {
       const s = cellStylesOf(x).find((q) => q.name === op.name);
       if (!s) return err("not_found", `style ${op.name} not found`);
+      setStyleCells(x, op.sheet, op.ranges, op.name);
       return handled([{ type: "applyStyle", sheet: op.sheet, ranges: op.ranges, patch: styleToPatch(s.style) }], op.sheet, op.ranges);
     }
     case "applyAutoFormatCustom": {

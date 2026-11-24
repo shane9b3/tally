@@ -108,6 +108,57 @@ describe("mock data tools", () => {
     expect(await col(1, 4)).toEqual(["0:Qty", "1:10", "2:15", "3:20"]);
   });
 
+  // The engine's `delete_style_moves_cells_to_default_and_children_to_the_parent` (parity G8).
+  it("deleting a cell style: its cells take Default and keep direct formatting, children move to the parent", async () => {
+    const { c, doc, tx, sheet } = await setup();
+    const row = 8;
+    const at = (col: number) => ({ r0: row, c0: col, r1: row, c1: col });
+    const styleAt = async (col: number) => {
+      const [b] = await c.cells(doc, sheet, [at(col)]);
+      const [st] = await c.styles(doc, [b!.cells[0]!.style]);
+      return st!;
+    };
+    const result = (await c.cellStyles(doc)).find((s) => s.name === "Result")!;
+    // Mid (parent Result): red text on top of bold / italic / underline; Leaf (parent Mid): a fill.
+    const mid = { name: "Mid", parent: "Result", builtin: false, style: { ...result.style, color: 0xff0000ff } };
+    const leaf = { name: "Leaf", parent: "Mid", builtin: false, style: { ...mid.style, fill: 0x00ff00ff } };
+    await tx([{ type: "defineCellStyle", style: mid }, { type: "defineCellStyle", style: leaf }]);
+    for (const [col, name] of [[0, "Mid"], [1, "Mid"], [2, "Leaf"], [3, "Result"]] as const) {
+      await tx([{ type: "setCellInput", sheet, r: row, c: col, input: "1" }, { type: "applyCellStyle", sheet, ranges: [at(col)], name }]);
+    }
+    // Direct formatting on the second cell.
+    const none = { bold: null, italic: null, underline: null, strike: null, fontFamily: null, fontSizePt: null, color: null, fill: null, hAlign: null, vAlign: null, wrap: null, numberFormat: null };
+    await tx([{ type: "applyStyle", sheet, ranges: [at(1)], patch: { ...none, fill: 0xffff00ff } }]);
+    expect(await styleAt(0)).toMatchObject({ bold: true, color: 0xff0000ff });
+
+    expect((await tx([{ type: "deleteCellStyle", name: "Heading" }])).errors[0]?.code).toBe("invalid_argument");
+    expect((await tx([{ type: "deleteCellStyle", name: "Nope" }])).errors[0]?.code).toBe("not_found");
+    const res = await tx([{ type: "deleteCellStyle", name: "Mid" }]);
+    expect(res.errors).toEqual([]);
+
+    // Cells of the deleted style: Default, not the parent.
+    expect(await styleAt(0)).toMatchObject({ bold: false, italic: false, underline: false, color: null, fill: null });
+    // Direct formatting survives.
+    expect(await styleAt(1)).toMatchObject({ bold: false, color: null, fill: 0xffff00ff });
+    // The child hangs under Result now, without Mid's red, and its cells follow.
+    const styles = await c.cellStyles(doc);
+    expect(styles.some((s) => s.name === "Mid")).toBe(false);
+    expect(styles.find((s) => s.name === "Leaf")).toMatchObject({ parent: "Result", style: { bold: true, color: null, fill: 0x00ff00ff } });
+    expect(await styleAt(2)).toMatchObject({ bold: true, italic: true, color: null, fill: 0x00ff00ff });
+    // Cells of other styles are left alone.
+    expect(await styleAt(3)).toMatchObject({ bold: true, italic: true, underline: true });
+
+    // One undo step brings the style, the child and the cells back.
+    await c.undo(doc);
+    expect((await c.cellStyles(doc)).find((s) => s.name === "Leaf")).toMatchObject({ parent: "Mid", style: { color: 0xff0000ff } });
+    expect(await styleAt(0)).toMatchObject({ bold: true, color: 0xff0000ff });
+
+    // Cells whose formats were cleared no longer belong to the style.
+    await tx([{ type: "clear", sheet, ranges: [at(2)], what: "formats" }, { type: "applyStyle", sheet, ranges: [at(2)], patch: { ...none, bold: true, fill: 0x00ff00ff } }]);
+    await tx([{ type: "deleteCellStyle", name: "Leaf" }]);
+    expect(await styleAt(2)).toMatchObject({ bold: true, fill: 0x00ff00ff });
+  });
+
   it("scenarios store and restore values, cell styles and sheet state are reported", async () => {
     const { c, doc, tx, sheet, col } = await setup();
     const res = await tx([{ type: "createScenario", sheet, scenario: { id: 0, name: "High", comment: "", ranges: [{ r0: 1, c0: 1, r1: 1, c1: 1 }], borderColor: null, displayBorder: true, copyBack: true, copyStyles: false, preventChanges: false, active: false } }]);

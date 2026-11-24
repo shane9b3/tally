@@ -55,7 +55,7 @@ import { MockDetective, type DetSnapshot } from "./mockDetective";
 import { signedFormulaInput } from "./mockSignedInput";
 import { applyCfPatch, evaluateFormat, type CfDecoration } from "./mockCf";
 import { applyV3Op, cellKey, DEFAULT_VALIDATION_MESSAGE, emptyV3, isHiddenCell, isHidePrint, MOCK_LOCALES, passes, protectionRefusal, validationAt, type V3Ext } from "./mockV3";
-import { applyW56Op, autocompleteOf, builtinStyles, cellStylesOf, decorateSheets, emptyW56, navigatorOf, pivotFieldItemsOf, pivotHitAt, stdFilterHidden, templateCellStyles, type W56Ctx, type W56Ext } from "./mockW56";
+import { applyW56Op, autocompleteOf, builtinStyles, cellStylesOf, decorateSheets, emptyW56, navigatorOf, pivotFieldItemsOf, pivotHitAt, setStyleCells, stdFilterHidden, templateCellStyles, type W56Ctx, type W56Ext } from "./mockW56";
 import { pageStyleOn, planLoadStyles } from "../styles/loadStyles";
 import { applyW5Op, BLANK_PNG, chartDataFor, chartsTouched, dependentsOf, emptyW5, listedChart, pageBreaksFor, precedentsOf, printLayoutFor, refsIn, renderPagePng, suggestChartFor, type W5Ext } from "./mockW5";
 import { parseAbsoluteRef } from "../dataOps";
@@ -730,6 +730,7 @@ export class WebMockClient extends MockClient {
     const inputs = async (sheet: number, range: RangeDto): Promise<string[][]> => (await this.snapshot(doc, sheet, range)).inputs;
     return {
       cells: (sheet, range) => this.cellsOf(doc, sheet, range),
+      styles: (ids) => this.styles(doc, ids),
       inputs,
       used: async (sheet) => (await super.sheetLayout(doc, sheet)).used,
       sheetName: (sheet) => [...(this.sheetNames.get(doc) ?? [])].find(([, id]) => id === sheet)?.[0]?.replace(/^./, (ch) => ch.toUpperCase()) ?? `Sheet${sheet}`,
@@ -1294,6 +1295,8 @@ export class WebMockClient extends MockClient {
         }
       }
       const o = applyV3Op(x, op);
+      // Cleared formats are Default again, whatever named style the cells had.
+      if (op.type === "clear" && op.what !== "contents") setStyleCells(this.docExt(doc).w56, op.sheet, op.ranges, null);
       if (o.kind === "pass") kept.push({ op, index: i });
       else if (o.kind === "error") errors.push({ opIndex: i, code: o.code, message: o.message });
       else {
