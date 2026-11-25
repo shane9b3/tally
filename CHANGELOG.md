@@ -10,6 +10,8 @@ rename `[Unreleased]` to the version and start a new empty `[Unreleased]`.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-25
+
 ### Added
 - Excel 97-2003 (.xls) files open with the named ranges whose formula
   uses a function, such as a name defined as SUM(Sheet1!A1:A10) or

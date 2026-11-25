@@ -1,4 +1,4 @@
-# Tally TODO (as of 2026-11-18, v0.1.3 released at dc56298)
+# Tally TODO (as of 2026-11-25, v0.1.5)
 
 Status: waves 1–5 complete, integrated end to end, and review round 4 (security +
 correctness) fixed. Engineering work for the feature set is done; what remains is the
